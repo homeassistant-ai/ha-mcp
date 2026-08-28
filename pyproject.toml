@@ -28,10 +28,10 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp==3.4.6",
+    "fastmcp==3.4.7",
     "httpx[socks]==0.28.1",
     "pydantic==2.13.4",
-    "python-dotenv==1.2.2",
+    "python-dotenv==1.2.3",
     "truststore==0.10.4",
     # websockets is deliberately ABSENT from this list: ha-mcp ships its own
     # private copy (src/ha_mcp/_vendor/websockets, pinned in the vendor
@@ -255,8 +255,9 @@ markers = [
     "error_handling: error handling and edge case tests",
     "cleanup: tests that create entities needing cleanup",
     "performance: performance measurement and regression tests",
-    "external_only: skips on HAOS inaddon tier (server runs in a separate addon container, so in-process env monkeypatching doesn't reach it)",
+    "external_only: in-process-server tiers only; skips inaddon, stdio, container-embedded, and HAOS-embedded servers",
     "inaddon_only: only runs on HAOS inaddon tier",
+    "beta_haos_only: beta HAOS image lanes with Supervisor/Core version expectations configured",
 ]
 asyncio_mode = "auto"
 

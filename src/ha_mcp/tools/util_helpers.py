@@ -131,13 +131,17 @@ def parse_json_param(
     )
 
 
-def _loads_if_json_container_str(value: Any) -> Any:
+def loads_if_json_container_str(value: Any) -> Any:
     """Parse a JSON-encoded object/array string into its container value.
 
     A string that starts like an object or array but contains malformed JSON
     raises with the decoder location so ValidationErrorMiddleware can return
     an actionable error. Jinja templates and other strings pass through
     unchanged, leaving Pydantic to select the expected parameter type.
+
+    Public (not module-private): also reused by ``policy/evaluator.py`` to
+    normalize stringified args before policy evaluation, outside the
+    Pydantic-validator role ``JSON_STRING_COERCION`` below wraps it in.
     """
     if isinstance(value, str):
         try:
@@ -165,7 +169,7 @@ def _loads_if_json_container_str(value: Any) -> Any:
 # MCP client stacks (Claude Desktop stdio among them) pass model-emitted
 # stringified objects through unrepaired, so the strict schema boundary alone
 # rejects previously-valid traffic.
-JSON_STRING_COERCION = BeforeValidator(_loads_if_json_container_str)
+JSON_STRING_COERCION = BeforeValidator(loads_if_json_container_str)
 
 
 def _parse_json_to_str_list(s: str, param_name: str) -> list[str]:

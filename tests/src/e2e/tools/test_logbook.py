@@ -375,10 +375,58 @@ async def test_logs_error_log_source(mcp_client):
     assert "total_lines" in data, "Response should contain total_lines"
     assert "returned_lines" in data, "Response should contain returned_lines"
     assert data["limit"] == 20, f"Limit should be 20, got {data['limit']}"
+    # Pagination contract (#2279): the fetch is a bounded window, so the
+    # response has to say how big it was and whether history remains.
+    assert data["offset"] == 0
+    assert data["window_lines"] == 20
+    assert isinstance(data["has_more"], bool), (
+        f"has_more should be a bool, got {data['has_more']!r}"
+    )
 
     logger.info(
         f"Retrieved {data['returned_lines']} of {data['total_lines']} log lines"
     )
+
+
+@pytest.mark.asyncio
+async def test_logs_error_log_pagination_advances(mcp_client):
+    """Following ``next_offset`` moves through history instead of looping.
+
+    On Supervisor-backed installs an offset past the start of the journal
+    clamps to the oldest entry rather than returning nothing, so a has_more
+    derived from window fullness stays true forever and an agent paging on the
+    hint gets the same window over and over (#2279). Walk the pages the way an
+    agent would: each page must be new content, and the walk must either end or
+    keep advancing. The page count is deliberately small and no termination is
+    required — how much history exists is a property of the lane, not of this
+    contract.
+    """
+    logger.info("Testing error_log pagination")
+
+    seen: list[str] = []
+    offset = 0
+    async with MCPAssertions(mcp_client) as mcp:
+        for _ in range(3):
+            raw_data = await mcp.call_tool_success(
+                "ha_get_logs",
+                {"source": "error_log", "limit": 100, "offset": offset},
+            )
+            page = get_logbook_data(raw_data)
+            assert page["offset"] == offset
+            if page["log"]:
+                assert page["log"] not in seen, (
+                    f"Page at offset={offset} repeats a window already returned"
+                )
+                seen.append(page["log"])
+            if not page["has_more"]:
+                logger.info(f"Paging ended after {len(seen)} page(s)")
+                return
+            assert page["next_offset"] > offset, (
+                f"next_offset {page['next_offset']} must advance past {offset}"
+            )
+            offset = page["next_offset"]
+
+    logger.info(f"Walked {len(seen)} distinct page(s), more history remains")
 
 
 @pytest.mark.asyncio

@@ -134,7 +134,12 @@ def _non_loopback_origins(redirect_uris: list[str]) -> set[tuple[str, str, int]]
 
 
 def _refresh_identity_is_reproducible(redirect_uris: list[str]) -> bool:
-    """Return whether every callback maps to one stable non-loopback origin."""
+    """Return whether every callback maps to one stable non-loopback origin.
+
+    Read only by ``oauth_indirect.translated_client_id_for_refresh``, which
+    handles refresh tokens minted before the signed envelope shipped (#2248).
+    Registration no longer gates the advertised grant types on it.
+    """
     if len(_non_loopback_origins(redirect_uris)) != 1:
         return False
     return not any(
@@ -166,14 +171,16 @@ def _redirect_uris_error(value: Any) -> tuple[str, str] | None:
     return None
 
 
-def _active_grant_types(hass: HomeAssistant, redirect_uris: list[str]) -> list[str]:
-    """Return only grant types implemented by the active proxy mode."""
+def _active_grant_types(hass: HomeAssistant) -> list[str]:
+    """Return only grant types implemented by the active proxy mode.
+
+    ha_auth promises refresh for EVERY valid registration (#2248): translated
+    identities refresh off the signed envelope the token leg mints, and
+    untranslated ones refresh at core directly. none mode's auto-approve token
+    endpoint has no refresh cycle, so it must not promise one.
+    """
     domain_data = hass.data.get(DOMAIN)
-    if (
-        isinstance(domain_data, dict)
-        and domain_data.get("oauth_mode") == MODE_HA_AUTH
-        and _refresh_identity_is_reproducible(redirect_uris)
-    ):
+    if isinstance(domain_data, dict) and domain_data.get("oauth_mode") == MODE_HA_AUTH:
         return ["authorization_code", "refresh_token"]
     return ["authorization_code"]
 
@@ -247,7 +254,7 @@ class DcrRegisterView(HomeAssistantView):
             "client_id_issued_at": int(time.time()),
             "redirect_uris": uris,
             "token_endpoint_auth_method": "none",
-            "grant_types": _active_grant_types(self._hass, uris),
+            "grant_types": _active_grant_types(self._hass),
             "response_types": ["code"],
         }
         for field in ("client_name", "application_type", "scope"):

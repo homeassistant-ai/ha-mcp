@@ -809,7 +809,10 @@ def test_select_scene_ids_registry_succeeded_zero_ha_managed_skips_all() -> None
         ("scene.y", "Y", "uid-y", 100),
     ]
     sids, integration_skipped = SceneSearchMixin._select_scene_ids_to_fetch(
-        scored, configs={}, homeassistant_scene_uids=set(), registry_failed=False
+        scored,
+        homeassistant_scene_uids=set(),
+        registry_failed=False,
+        slug_to_storage_id={},
     )
     assert sids == []
     assert integration_skipped == 2
@@ -824,7 +827,10 @@ def test_select_scene_ids_registry_failed_attempts_all() -> None:
         ("scene.y", "Y", "uid-y", 100),
     ]
     sids, integration_skipped = SceneSearchMixin._select_scene_ids_to_fetch(
-        scored, configs={}, homeassistant_scene_uids=set(), registry_failed=True
+        scored,
+        homeassistant_scene_uids=set(),
+        registry_failed=True,
+        slug_to_storage_id={},
     )
     assert sorted(sids) == ["uid-x", "uid-y"]
     assert integration_skipped == 0
@@ -840,28 +846,35 @@ def test_select_scene_ids_mixed_ha_and_integration_splits_correctly() -> None:
     ]
     sids, integration_skipped = SceneSearchMixin._select_scene_ids_to_fetch(
         scored,
-        configs={},
         homeassistant_scene_uids={"uid-x"},
         registry_failed=False,
+        slug_to_storage_id={},
     )
     assert sids == ["uid-x"]
     assert integration_skipped == 2
 
 
-def test_select_scene_ids_skips_already_fetched_configs() -> None:
-    """Scenes whose config is already in the bulk-fetched dict are
-    skipped from the per-id fetch regardless of integration / HA status."""
+def test_select_scene_ids_translates_a_renamed_scenes_slug_to_its_storage_key() -> None:
+    """A scene renamed in the UI must still be recognised as HA-managed.
+
+    Scenes are enumerated by entity-id slug, but the HA-managed set holds
+    storage keys, and Home Assistant never re-keys storage on a rename. Without
+    the registry translation the two never match, so every renamed HA scene is
+    miscounted as integration-managed and its config is never fetched -- it
+    silently drops out of config-body search results.
+    """
     scored = [
-        ("scene.x", "X", "uid-x", 100),
-        ("scene.y", "Y", "uid-y", 100),
+        ("scene.led_desk_strip_night_light", "LED", "led_desk_strip_night_light", 100)
     ]
+
     sids, integration_skipped = SceneSearchMixin._select_scene_ids_to_fetch(
         scored,
-        configs={"uid-x": {"name": "X"}},
-        homeassistant_scene_uids={"uid-x", "uid-y"},
+        homeassistant_scene_uids={"night_light_led_desk_strip"},
         registry_failed=False,
+        slug_to_storage_id={"led_desk_strip_night_light": "night_light_led_desk_strip"},
     )
-    assert sids == ["uid-y"]
+
+    assert sids == ["led_desk_strip_night_light"]
     assert integration_skipped == 0
 
 

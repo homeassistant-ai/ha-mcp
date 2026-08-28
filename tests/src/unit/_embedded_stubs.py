@@ -613,25 +613,23 @@ def install() -> None:
         async_register_api=_llm_async_register_api,
     )
     _pin_llm_on_helpers()
-    # voluptuous_openapi (an HA-core runtime dependency, not installed in this
-    # test environment). Pass-through conversion: the unit tests assert wiring,
-    # not the real JSON-schema -> voluptuous translation.
+    # HA Core's schema conversion dependency differs across supported releases:
+    # stable uses voluptuous_openapi while 2026.9+ provides Probatio. Pass-through
+    # conversion keeps these unit tests focused on wiring; compatibility selection
+    # itself is covered in test_llm_api.
     setmod(
         "voluptuous_openapi",
         convert_to_voluptuous=lambda schema: {"_converted": schema},
+    )
+    setmod(
+        "probatio",
+        from_openapi=lambda schema: {"_converted": schema},
     )
     # aiohttp_client + event helpers for the periodic auto-update check
     # (embedded_setup fetches PyPI; embedded_entry registers the interval).
     setmod(
         "homeassistant.helpers.aiohttp_client",
         async_get_clientsession=MagicMock(name="async_get_clientsession"),
-    )
-    # Shared httpx client helper (#1745 llm_api): the SDK receives it as
-    # http_client so session opens never build a client (and its blocking
-    # SSL setup) inside the event loop.
-    setmod(
-        "homeassistant.helpers.httpx_client",
-        get_async_client=MagicMock(name="get_async_client"),
     )
     setmod(
         "homeassistant.helpers.event",

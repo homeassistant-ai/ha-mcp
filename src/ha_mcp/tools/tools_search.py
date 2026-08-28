@@ -983,6 +983,15 @@ def _normalize_component_config_record(
     out["score"] = rec.get("score")
     out["match_in_name"] = bool(rec.get("match_in_name"))
     out["match_in_config"] = bool(rec.get("match_in_config"))
+    # True when Home Assistant's reference graph named this config as
+    # referencing the queried entity (#2258). Independent of
+    # ``match_in_config``: a config the graph confirms but whose body was
+    # unreadable carries this flag alone. Always False on the component route,
+    # which consults no graph because its in-process scan already reads the
+    # YAML and has no fetch budget, so it has neither blind spot the graph
+    # covers. Read it as "the graph named this one", never as "the graph found
+    # nothing".
+    out["match_in_references"] = bool(rec.get("match_in_references"))
     if include_config:
         config = rec.get("config")
         if config is None and "options" in rec:
@@ -1766,6 +1775,10 @@ class SearchTools:
                     "script sequences, scene contents, helper bodies, "
                     "dashboard cards) in one call. Use this for any "
                     "find-something-in-HA question — entity OR config. "
+                    "Pass the exact entity_id, not a name fragment, when "
+                    "checking what a rename or delete would break: that form "
+                    "reports automations, scripts and scenes referencing it "
+                    "even when their configuration could not be read. "
                     "Omit `query` to enumerate by `domain_filter`, "
                     "`area_filter`, and/or `state_filter` alone "
                     "(registry-listing mode); configuration-body search is "
@@ -1947,8 +1960,7 @@ class SearchTools:
                     "Per-call override for the per-id config-fetch wall-clock "
                     "budget (seconds). Replaces the per-type "
                     "HAMCP_*_CONFIG_TIME_BUDGET defaults for the automation, "
-                    "script, AND scene branches when their bulk-fetch falls "
-                    "through to per-id Attempt-C. Use when a `partial: True` "
+                    "script, AND scene branches. Use when a `partial: True` "
                     "response names time-budget skipping. Stateless per-call: "
                     "one caller raising the budget doesn't affect others. "
                     "None = use the per-type env defaults."

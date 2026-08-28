@@ -49,11 +49,17 @@ class _FakeURL:
         return self._url
 
 
+CORE_TOKEN_BODY = b'{"access_token":"x"}'
+
+
 class _CoreTokenResponse:
     """Async context manager response returned by the core token stub."""
 
-    status = 200
     content_type = "application/json"
+
+    def __init__(self, body: bytes = CORE_TOKEN_BODY, status: int = 200) -> None:
+        self._body = body
+        self.status = status
 
     async def __aenter__(self):
         return self
@@ -62,21 +68,34 @@ class _CoreTokenResponse:
         return None
 
     async def read(self):
-        return b'{"access_token":"x"}'
+        return self._body
 
 
 class _CoreTokenSession:
-    """Capture token-forward POSTs and optionally raise a transport error."""
+    """Capture token-forward POSTs and optionally raise a transport error.
 
-    def __init__(self, *, error: Exception | None = None) -> None:
+    ``body`` and ``status`` are what core answers with — pass a body carrying a
+    ``refresh_token`` to exercise the #2248 envelope rewrite, and a non-200
+    status to pin that only successes are rewritten.
+    """
+
+    def __init__(
+        self,
+        *,
+        error: Exception | None = None,
+        body: bytes = CORE_TOKEN_BODY,
+        status: int = 200,
+    ) -> None:
         self.error = error
+        self.body = body
+        self.status = status
         self.calls = []
 
     def post(self, url, *, data, timeout):
         self.calls.append({"url": url, "data": data, "timeout": timeout})
         if self.error is not None:
             raise self.error
-        return _CoreTokenResponse()
+        return _CoreTokenResponse(self.body, self.status)
 
 
 if "yarl" not in sys.modules:
@@ -531,20 +550,28 @@ class TestTokenView:
 
 
 class TestBindAutoApproveViews:
-    def test_first_bind_registers_two_views(self):
+    def test_first_bind_registers_three_views(self):
         hass = _make_hass()
         hass.http = MagicMock()
         aa.bind_autoapprove_views(hass)
-        assert hass.http.register_view.call_count == 2
+        assert hass.http.register_view.call_count == 3
+        bound = {type(call.args[0]) for call in hass.http.register_view.call_args_list}
+        # /revoke is advertised by the ha_auth document (#2248), so a bundle
+        # missing it would advertise a 404 route.
+        assert bound == {
+            aa.AutoApproveAuthorizeView,
+            aa.AutoApproveTokenView,
+            aa.AutoApproveRevokeView,
+        }
         assert hass.data.get(aa._AUTOAPPROVE_VIEWS_REGISTERED_KEY) is True
 
     def test_second_bind_is_a_noop(self):
-        # aiohttp cannot rebind a view — a re-enable must reuse the bound pair.
+        # aiohttp cannot rebind a view — a re-enable must reuse the bound set.
         hass = _make_hass()
         hass.http = MagicMock()
         aa.bind_autoapprove_views(hass)
         aa.bind_autoapprove_views(hass)
-        assert hass.http.register_view.call_count == 2
+        assert hass.http.register_view.call_count == 3
 
 
 # ---------------------------------------------------------------------------
@@ -819,7 +846,7 @@ async def test_ha_auth_token_timeout_returns_temporarily_unavailable(
     )
 
     assert resp.status == 503
-    assert await resp.json() == {"error": "temporarily_unavailable"}
+    assert (await resp.json())["error"] == "temporarily_unavailable"
 
 
 async def test_ha_auth_token_untranslated_redirects_to_core(
@@ -1027,13 +1054,16 @@ async def test_none_mode_malformed_redirect_still_400s(unified_view_client_facto
     assert resp.status == 400
 
 
-async def test_ha_auth_refresh_loopback_only_dcr_client_gets_invalid_grant(
+async def test_ha_auth_refresh_pre_envelope_loopback_dcr_gets_invalid_grant(
     unified_view_client_factory,
 ):
-    """A loopback-only DCR identity cannot refresh (the token is bound to an
-    ephemeral loopback origin) — answer invalid_grant HERE instead of 307ing a
-    guaranteed failure into core's failed-login accounting (#2213 review
-    round 2)."""
+    """A PRE-#2248 loopback-only refresh token still gets a local invalid_grant.
+
+    The bare token names no identity and the registration cannot re-derive the
+    ephemeral loopback origin core bound it to, so answer here instead of
+    307ing a guaranteed failure into core's failed-login accounting (#2213
+    review round 2). One re-authorize mints an envelope-carrying token, which
+    test_ha_auth_refresh_envelope_restores_core_token_and_identity covers."""
     session = _CoreTokenSession()
     dcr_key = b"d" * 32
     client_id = oauth_dcr.mint_client_id(
@@ -1058,10 +1088,11 @@ async def test_ha_auth_refresh_loopback_only_dcr_client_gets_invalid_grant(
     assert session.calls == []  # never reached core
 
 
-async def test_ha_auth_refresh_multi_origin_dcr_client_gets_invalid_grant(
+async def test_ha_auth_refresh_pre_envelope_multi_origin_dcr_gets_invalid_grant(
     unified_view_client_factory,
 ):
-    """Reject Spark refresh locally when its request origin cannot be re-derived."""
+    """Reject a pre-#2248 Spark refresh locally: no envelope, no re-derivable
+    origin. The error names the one-time re-authorize that fixes it."""
     session = _CoreTokenSession()
     dcr_key = b"d" * 32
     client_id = oauth_dcr.mint_client_id(
@@ -1085,22 +1116,20 @@ async def test_ha_auth_refresh_multi_origin_dcr_client_gets_invalid_grant(
         allow_redirects=False,
     )
 
+    body = await resp.json()
     assert resp.status == 400
-    assert await resp.json() == {
-        "error": "invalid_grant",
-        "error_description": "re-authorize: this client's registration has no "
-        "single reproducible web origin, so a refresh without redirect_uri "
-        "is unavailable",
-    }
+    assert body["error"] == "invalid_grant"
+    assert "predates the signed identity envelope" in body["error_description"]
     assert session.calls == []  # never reached core
 
 
-async def test_ha_auth_refresh_hybrid_registration_gets_local_invalid_grant(
+async def test_ha_auth_refresh_pre_envelope_hybrid_gets_local_invalid_grant(
     unified_view_client_factory,
 ):
-    """#2217 review: a hybrid (web + loopback) registration refresh answers
-    invalid_grant locally — the derivation returns UNREPRODUCIBLE; core is
-    never contacted with a possibly mismatched identity."""
+    """#2217 review: a hybrid (web + loopback) registration refreshing a
+    pre-#2248 token answers invalid_grant locally — the derivation returns
+    UNREPRODUCIBLE; core is never contacted with a possibly mismatched
+    identity."""
     session = _CoreTokenSession()
     dcr_key = b"d" * 32
     client_id = oauth_dcr.mint_client_id(
@@ -1125,14 +1154,14 @@ async def test_ha_auth_refresh_hybrid_registration_gets_local_invalid_grant(
     assert session.calls == []
 
 
-async def test_ha_auth_refresh_multi_origin_cimd_client_gets_invalid_grant(
+async def test_ha_auth_refresh_pre_envelope_multi_origin_cimd_gets_invalid_grant(
     unified_view_client_factory, monkeypatch
 ):
     """#2217 review sweep (the consensus defect): a VERIFIED CIMD identity
-    with no reproducible origin answers invalid_grant locally, exactly like
-    the equivalent DCR blob — previously only blobs hit the guard, so these
-    refreshes were 307'd into core's failed-login accounting on every token
-    expiry."""
+    with no reproducible origin answers invalid_grant locally on a pre-#2248
+    token, exactly like the equivalent DCR blob — previously only blobs hit
+    the guard, so these refreshes were 307'd into core's failed-login
+    accounting on every token expiry."""
 
     async def fetch_redirects(_session, _client_id):
         return [
@@ -1228,3 +1257,834 @@ async def test_ha_auth_refresh_uses_isolated_cimd_session(
 
     assert resp.status == 307
     assert deriver.await_args.args[0] is cimd_session
+
+
+# ---------------------------------------------------------------------------
+# ha_auth refresh-token envelope (issue #2248)
+# ---------------------------------------------------------------------------
+
+DCR_KEY = b"d" * 32
+LOOPBACK_CALLBACK = "http://127.0.0.1:19877/mcp/oauth/callback"
+CORE_BODY_WITH_REFRESH = (
+    b'{"access_token":"core-access","token_type":"Bearer",'
+    b'"expires_in":1800,"refresh_token":"core-refresh"}'
+)
+
+
+def _pin_core_token_base(monkeypatch) -> None:
+    """Point the server-side forward at a fixed core base URL."""
+    monkeypatch.setattr(
+        oauth_ha_auth,
+        "core_token_base_url",
+        lambda _hass: "https://core.example",
+    )
+
+
+@pytest.mark.parametrize(
+    ("presented_redirect", "presented_origin"),
+    [
+        # The port the client registered, then an RFC 8252 runtime port.
+        (LOOPBACK_CALLBACK, "http://127.0.0.1:19877"),
+        ("http://127.0.0.1:54321/mcp/oauth/callback", "http://127.0.0.1:54321"),
+    ],
+)
+async def test_ha_auth_code_leg_wraps_refresh_token_for_loopback_client(
+    unified_view_client_factory, monkeypatch, presented_redirect, presented_origin
+):
+    """The code leg hands a loopback client an envelope, not core's raw token.
+
+    Core binds the grant to the translated runtime origin, which a
+    redirect_uri-less refresh cannot re-derive (the #2248 bug). Recording it in
+    the token is what closes that.
+    """
+    session = _CoreTokenSession(body=CORE_BODY_WITH_REFRESH)
+    client_id = oauth_dcr.mint_client_id(DCR_KEY, [LOOPBACK_CALLBACK])
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": "code-1",
+            "client_id": client_id,
+            "redirect_uri": presented_redirect,
+        },
+    )
+
+    assert resp.status == 200
+    assert session.calls[0]["data"]["client_id"] == presented_origin
+    body = await resp.json()
+    assert body["access_token"] == "core-access"
+    assert body["expires_in"] == 1800
+    assert oauth_ha_auth.unwrap_refresh_token(
+        DCR_KEY, body["refresh_token"], client_id
+    ) == ("core-refresh", presented_origin)
+
+
+@pytest.mark.parametrize(
+    "redirect_uris",
+    [
+        pytest.param([LOOPBACK_CALLBACK], id="loopback-only"),
+        pytest.param(
+            [
+                "https://oauth-redirect.googleusercontent.com/r/ha-mcp",
+                "https://oauth-redirect-sandbox.googleusercontent.com/r/ha-mcp",
+            ],
+            id="multi-origin",
+        ),
+        pytest.param(
+            [LOOPBACK_CALLBACK, "https://a.example/cb"],
+            id="hybrid",
+        ),
+    ],
+)
+async def test_ha_auth_refresh_envelope_restores_core_token_and_identity(
+    unified_view_client_factory, monkeypatch, redirect_uris
+):
+    """A redirect_uri-less refresh proxies with the envelope's exact pair.
+
+    Every registration shape the pre-#2248 derivation had to reject refreshes
+    here: the identity comes out of the envelope, never out of the registered
+    list, so there is nothing left to be ambiguous about.
+    """
+    session = _CoreTokenSession()
+    client_id = oauth_dcr.mint_client_id(DCR_KEY, redirect_uris)
+    envelope = oauth_ha_auth.wrap_refresh_token(
+        DCR_KEY, "core-refresh", "http://127.0.0.1:54321", client_id
+    )
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": envelope,
+            "client_id": client_id,
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 200
+    assert len(session.calls) == 1
+    forwarded = session.calls[0]["data"]
+    assert forwarded["client_id"] == "http://127.0.0.1:54321"
+    assert forwarded["refresh_token"] == "core-refresh"
+
+
+async def test_ha_auth_refresh_envelope_wins_over_a_presented_redirect_uri(
+    unified_view_client_factory, monkeypatch
+):
+    """The recorded identity beats a redirect the client happens to send.
+
+    Core bound the token to the envelope's client_id; translating the presented
+    redirect instead would forward a different identity and fail.
+    """
+    session = _CoreTokenSession()
+    client_id = oauth_dcr.mint_client_id(DCR_KEY, [LOOPBACK_CALLBACK])
+    envelope = oauth_ha_auth.wrap_refresh_token(
+        DCR_KEY, "core-refresh", "http://127.0.0.1:54321", client_id
+    )
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": envelope,
+            "client_id": client_id,
+            "redirect_uri": "http://127.0.0.1:60999/mcp/oauth/callback",
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 200
+    assert session.calls[0]["data"]["client_id"] == "http://127.0.0.1:54321"
+
+
+async def test_ha_auth_refresh_tampered_envelope_is_answered_locally(
+    unified_view_client_factory,
+):
+    """A forged envelope is answered here, not relayed and not re-derived.
+
+    It carries our prefix, so it is INVALID rather than ABSENT: core cannot
+    redeem it either, and the pre-envelope derivation would answer a message
+    about registration shape that has nothing to do with what happened.
+    """
+    session = _CoreTokenSession()
+    client_id = oauth_dcr.mint_client_id(DCR_KEY, ["https://a.example/cb"])
+    envelope = oauth_ha_auth.wrap_refresh_token(
+        DCR_KEY, "core-refresh", "https://a.example", client_id
+    )
+    body, _, signature = envelope.rpartition(".")
+    tampered = f"{body}.{'B' if signature[0] != 'B' else 'C'}{signature[1:]}"
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": tampered,
+            "client_id": client_id,
+        },
+        allow_redirects=False,
+    )
+
+    payload = await resp.json()
+    assert resp.status == 400
+    assert payload["error"] == "invalid_grant"
+    assert "could not be verified" in payload["error_description"]
+    assert session.calls == []
+
+
+async def test_ha_auth_refresh_envelope_rejected_for_another_client_id(
+    unified_view_client_factory,
+):
+    """An envelope presented under a different client_id is not honoured.
+
+    A single-web-origin registration is used deliberately: its pre-envelope
+    derivation would 307 into core, so a plain invalid_grant here can only
+    come from the envelope's own verification.
+    """
+    session = _CoreTokenSession()
+    minted_for = oauth_dcr.mint_client_id(DCR_KEY, [LOOPBACK_CALLBACK])
+    other_client = oauth_dcr.mint_client_id(DCR_KEY, ["https://a.example/cb"])
+    envelope = oauth_ha_auth.wrap_refresh_token(
+        DCR_KEY, "core-refresh", "http://127.0.0.1:54321", minted_for
+    )
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": envelope,
+            "client_id": other_client,
+        },
+        allow_redirects=False,
+    )
+
+    payload = await resp.json()
+    assert resp.status == 400
+    assert payload["error"] == "invalid_grant"
+    assert "could not be verified" in payload["error_description"]
+    assert session.calls == []
+
+
+async def test_ha_auth_non_200_core_response_is_relayed_unwrapped(
+    unified_view_client_factory, monkeypatch
+):
+    """Only a 200 gets its refresh_token wrapped; errors relay byte for byte."""
+    session = _CoreTokenSession(body=CORE_BODY_WITH_REFRESH, status=400)
+    client_id = oauth_dcr.mint_client_id(DCR_KEY, [LOOPBACK_CALLBACK])
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": "code-1",
+            "client_id": client_id,
+            "redirect_uri": LOOPBACK_CALLBACK,
+        },
+    )
+
+    assert resp.status == 400
+    assert (await resp.json())["refresh_token"] == "core-refresh"
+
+
+# ---------------------------------------------------------------------------
+# ha_auth code leg: same-origin CIMD identities that cannot refresh (#2248)
+# ---------------------------------------------------------------------------
+
+CIMD_CLIENT_ID = "https://app.example/cimd.json"
+CIMD_SAME_ORIGIN_REDIRECT = "https://app.example/cb"
+HYBRID_CIMD_REDIRECTS = [CIMD_SAME_ORIGIN_REDIRECT, "https://eu.example/cb"]
+
+
+def _pin_cimd_document(monkeypatch, redirect_uris: list[str]) -> None:
+    """Serve ``redirect_uris`` for every CIMD lookup on both token legs."""
+
+    async def fetch_redirects(_session, _client_id):
+        return list(redirect_uris)
+
+    monkeypatch.setattr(oauth_ha_auth, "fetch_cimd_redirects", fetch_redirects)
+
+
+async def test_ha_auth_code_leg_proxies_a_hybrid_cimd_same_origin_exchange(
+    unified_view_client_factory, monkeypatch
+):
+    """A hybrid CIMD identity presenting its same-origin redirect gets wrapped.
+
+    The authorize leg's same-origin fast path returns the client_id without
+    fetching, so this exchange used to 307 and hand back core's RAW refresh
+    token — whose redirect-less refresh then derived UNREPRODUCIBLE (two web
+    origins) and answered invalid_grant forever, under a message claiming
+    re-authorizing would help. The code leg now pays that one fetch, proxies,
+    and records the identity in the token instead.
+    """
+    session = _CoreTokenSession(body=CORE_BODY_WITH_REFRESH)
+    _pin_cimd_document(monkeypatch, HYBRID_CIMD_REDIRECTS)
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, cimd_session=object(), dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": "code-1",
+            "client_id": CIMD_CLIENT_ID,
+            "redirect_uri": CIMD_SAME_ORIGIN_REDIRECT,
+        },
+    )
+
+    assert resp.status == 200
+    assert len(session.calls) == 1  # proxied, not 307'd
+    assert session.calls[0]["data"]["client_id"] == CIMD_CLIENT_ID
+    body = await resp.json()
+    assert oauth_ha_auth.unwrap_refresh_token(
+        DCR_KEY, body["refresh_token"], CIMD_CLIENT_ID
+    ) == ("core-refresh", CIMD_CLIENT_ID)
+
+
+async def test_ha_auth_refresh_of_a_hybrid_cimd_envelope_keeps_the_client_id(
+    unified_view_client_factory, monkeypatch
+):
+    """The refresh leg of that exchange proxies the untranslated client_id.
+
+    The envelope names the identity core bound the grant to — here the
+    client_id itself — so the derivation that would answer UNREPRODUCIBLE is
+    never consulted.
+    """
+    session = _CoreTokenSession()
+    _pin_cimd_document(monkeypatch, HYBRID_CIMD_REDIRECTS)
+    _pin_core_token_base(monkeypatch)
+    envelope = oauth_ha_auth.wrap_refresh_token(
+        DCR_KEY, "core-refresh", CIMD_CLIENT_ID, CIMD_CLIENT_ID
+    )
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, cimd_session=object(), dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": envelope,
+            "client_id": CIMD_CLIENT_ID,
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 200
+    forwarded = session.calls[0]["data"]
+    assert forwarded["client_id"] == CIMD_CLIENT_ID
+    assert forwarded["refresh_token"] == "core-refresh"
+
+
+async def test_ha_auth_code_leg_still_307s_a_same_origin_only_cimd_client(
+    unified_view_client_factory, monkeypatch
+):
+    """A CIMD document with only same-origin redirects keeps the 307.
+
+    Its redirect-less refresh re-derives PASSTHROUGH, so there is nothing to
+    record and core must keep seeing the client's own address.
+    """
+    session = _CoreTokenSession(body=CORE_BODY_WITH_REFRESH)
+    _pin_cimd_document(monkeypatch, [CIMD_SAME_ORIGIN_REDIRECT])
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, cimd_session=object(), dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": "code-1",
+            "client_id": CIMD_CLIENT_ID,
+            "redirect_uri": CIMD_SAME_ORIGIN_REDIRECT,
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 307
+    assert resp.headers["Location"] == "/auth/token"
+    assert session.calls == []
+
+
+async def test_ha_auth_refresh_leg_rewraps_a_rotated_core_refresh_token(
+    unified_view_client_factory, monkeypatch
+):
+    """A refresh that rotates core's token comes back wrapped again.
+
+    ``rewrite_token_response_body`` runs on EVERY forwarded 200, not just the
+    code leg, so a core that starts rotating refresh tokens does not hand the
+    client a bare one it could never refresh with.
+    """
+    session = _CoreTokenSession(
+        body=b'{"access_token":"core-access-2","refresh_token":"core-refresh-2"}'
+    )
+    client_id = oauth_dcr.mint_client_id(DCR_KEY, [LOOPBACK_CALLBACK])
+    envelope = oauth_ha_auth.wrap_refresh_token(
+        DCR_KEY, "core-refresh-1", "http://127.0.0.1:54321", client_id
+    )
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": envelope,
+            "client_id": client_id,
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["access_token"] == "core-access-2"
+    assert oauth_ha_auth.unwrap_refresh_token(
+        DCR_KEY, body["refresh_token"], client_id
+    ) == ("core-refresh-2", "http://127.0.0.1:54321")
+
+
+async def test_ha_auth_refresh_without_a_dcr_key_forwards_instead_of_raising(
+    unified_view_client_factory,
+):
+    """ha_auth with no DCR signing key skips the envelope check entirely.
+
+    Registration mints the key, so ha_auth can be live before any client has
+    registered. The envelope path must simply not run rather than fail.
+    """
+    session = _CoreTokenSession()
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=None
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": "core-opaque-refresh-token",
+            "client_id": CLAUDE_CLIENT_ID,
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 307
+    assert resp.headers["Location"] == "/auth/token"
+    assert session.calls == []
+
+
+# ---------------------------------------------------------------------------
+# ha_auth revocation (RFC 7009 action=revoke, issue #2248)
+# ---------------------------------------------------------------------------
+
+
+async def test_ha_auth_revoke_unwraps_the_envelope_before_forwarding(
+    unified_view_client_factory, monkeypatch
+):
+    """Core must revoke ITS token, not the envelope we handed the client.
+
+    ``/auth/token`` answers 200 to ``action=revoke`` even for a token it has
+    never seen, so forwarding the envelope would report success while leaving
+    the session live. Core's real revoke answer is an empty 200; the stub
+    returns a token-shaped body instead to pin that the response rewrite is
+    skipped on this path rather than wrapping something that is not a grant.
+    """
+    session = _CoreTokenSession(body=CORE_BODY_WITH_REFRESH)
+    client_id = oauth_dcr.mint_client_id(DCR_KEY, [LOOPBACK_CALLBACK])
+    envelope = oauth_ha_auth.wrap_refresh_token(
+        DCR_KEY, "core-refresh", "http://127.0.0.1:54321", client_id
+    )
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={"action": "revoke", "token": envelope},
+        allow_redirects=False,
+    )
+
+    assert resp.status == 200
+    assert session.calls[0]["data"]["token"] == "core-refresh"
+    assert (await resp.json())["refresh_token"] == "core-refresh"
+
+
+async def test_ha_auth_revoke_of_a_plain_token_is_unchanged(
+    unified_view_client_factory,
+):
+    """A revoke carrying no envelope 307s to core exactly as it did before."""
+    session = _CoreTokenSession()
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        "/api/ha_mcp_tools/oauth/token",
+        data={"action": "revoke", "token": "core-opaque-refresh-token"},
+        allow_redirects=False,
+    )
+
+    assert resp.status == 307
+    assert resp.headers["Location"] == "/auth/token"
+    assert session.calls == []
+
+
+# ---------------------------------------------------------------------------
+# ha_auth scoped RFC 7009 revocation endpoint (issue #2248)
+# ---------------------------------------------------------------------------
+
+
+REVOKE_URL = f"{OAUTH_BASE}/revoke"
+
+
+async def test_scoped_revoke_forwards_the_unwrapped_envelope(
+    unified_view_client_factory, monkeypatch
+):
+    """The envelope is swapped for core's own token before core sees it.
+
+    Core's ``/auth/revoke`` answers 200 for a token it has never seen, so a
+    client posting the envelope there directly would be told its session was
+    revoked while it stayed live. Fronting the endpoint is what makes the
+    answer true.
+    """
+    session = _CoreTokenSession(body=b"")
+    client_id = oauth_dcr.mint_client_id(DCR_KEY, [LOOPBACK_CALLBACK])
+    envelope = oauth_ha_auth.wrap_refresh_token(
+        DCR_KEY, "core-refresh", "http://127.0.0.1:54321", client_id
+    )
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        REVOKE_URL, data={"token": envelope}, allow_redirects=False
+    )
+
+    assert resp.status == 200
+    assert len(session.calls) == 1
+    assert session.calls[0]["url"] == "https://core.example/auth/revoke"
+    assert session.calls[0]["data"]["token"] == "core-refresh"
+
+
+async def test_scoped_revoke_of_a_plain_token_307s_to_core(
+    unified_view_client_factory,
+):
+    """A token that is not ours reaches core unchanged, from the client.
+
+    Nothing needs rewriting, so core observes the CLIENT's address exactly as
+    the token view's 307 leg preserves it, via a relative Location.
+    """
+    session = _CoreTokenSession(body=b"")
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        REVOKE_URL,
+        data={"token": "core-opaque-refresh-token"},
+        allow_redirects=False,
+    )
+
+    assert resp.status == 307
+    assert resp.headers["Location"] == "/auth/revoke"
+    assert resp.headers["Cache-Control"] == "no-store"
+    assert session.calls == []
+
+
+async def test_scoped_revoke_without_a_dcr_key_307s_to_core(
+    unified_view_client_factory,
+):
+    """No signing key means no envelope could have been minted, so nothing to
+    unwrap — the revocation 307s like any other unrecognised token."""
+    session = _CoreTokenSession(body=b"")
+    client = await unified_view_client_factory(mode="ha_auth", session=session)
+
+    resp = await client.post(
+        REVOKE_URL, data={"token": "hamcp-rt-whatever.sig"}, allow_redirects=False
+    )
+
+    assert resp.status == 307
+    assert session.calls == []
+
+
+@pytest.mark.parametrize("mode", ["none", "legacy"])
+async def test_scoped_revoke_404s_outside_ha_auth(unified_view_client_factory, mode):
+    """Only ha_auth hands out an envelope, so only ha_auth fronts revocation."""
+    client = await unified_view_client_factory(mode=mode)
+
+    resp = await client.post(
+        REVOKE_URL, data={"token": "anything"}, allow_redirects=False
+    )
+
+    assert resp.status == 404
+    assert (await resp.json())["error"] == "not_found"
+
+
+async def test_scoped_revoke_404s_when_the_entry_is_unloaded():
+    """A bound view outlives its config entry; with no cfg it must 404."""
+    view = aa.AutoApproveRevokeView(_make_hass())
+    resp = await view.post(_token_request({"token": "anything"}))
+    assert resp.status == 404
+
+
+async def test_scoped_revoke_transport_error_returns_temporarily_unavailable(
+    unified_view_client_factory, monkeypatch
+):
+    """A failed forward is a 503, not a fabricated revocation success.
+
+    RFC 7009 2.2.1 gives that status a specific meaning on this endpoint --
+    the token must be assumed to still exist -- and lets the server name the
+    retry delay, so the client does not have to guess or give up.
+    """
+    session = _CoreTokenSession(error=TimeoutError(), body=b"")
+    client_id = oauth_dcr.mint_client_id(DCR_KEY, [LOOPBACK_CALLBACK])
+    envelope = oauth_ha_auth.wrap_refresh_token(
+        DCR_KEY, "core-refresh", "http://127.0.0.1:54321", client_id
+    )
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        REVOKE_URL, data={"token": envelope}, allow_redirects=False
+    )
+
+    assert resp.status == 503
+    assert (await resp.json())["error"] == "temporarily_unavailable"
+    assert resp.headers["Retry-After"] == aa._REVOKE_RETRY_AFTER
+
+
+# ---------------------------------------------------------------------------
+# Revoking an envelope the signing key can no longer verify (#2249 review)
+# ---------------------------------------------------------------------------
+
+
+TOKEN_URL = f"{OAUTH_BASE}/token"
+ROTATED_DCR_KEY = b"r" * 32
+# Both spellings core accepts a revocation in, and the core path each reaches.
+REVOKE_SURFACES = {"token-action": "/auth/token", "scoped-revoke": "/auth/revoke"}
+
+
+def _revoke_post(client, surface: str, token: str):
+    """POST ``token`` as a revocation at one of the two surfaces."""
+    if surface == "token-action":
+        return client.post(
+            TOKEN_URL,
+            data={"action": "revoke", "token": token},
+            allow_redirects=False,
+        )
+    return client.post(REVOKE_URL, data={"token": token}, allow_redirects=False)
+
+
+def _prefixed(payload: bytes) -> str:
+    """A ``hamcp-rt-`` value over ``payload``, signed with nothing we minted."""
+    encoded = oauth_ha_auth._b64url_encode(payload)
+    return f"hamcp-rt-{encoded}.not-a-real-signature"
+
+
+@pytest.mark.parametrize("surface", sorted(REVOKE_SURFACES))
+@pytest.mark.parametrize("unverifiable", ["tampered", "rotated-key"])
+async def test_revocation_forwards_an_unverifiable_envelope(
+    unified_view_client_factory, monkeypatch, surface, unverifiable
+):
+    """Core must see ITS token even when the envelope no longer verifies.
+
+    Rotating the DCR signing key — which is what removing and re-adding the
+    integration does — invalidates every envelope already in a client's hands.
+    Treating those as "not ours" would 307 the ``hamcp-rt-`` string to core,
+    whose revoke endpoint answers 200 for any token it cannot resolve: the
+    client is told the session died while core's grant stays live for its full
+    90 days (#2249 review). Tampering takes the same branch and is pinned with
+    it, because forwarding an unverified body is exactly what has to be safe
+    here — RFC 7009 authorizes the bearer, and core's endpoint is anonymous
+    and idempotent.
+    """
+    signing_key = ROTATED_DCR_KEY if unverifiable == "rotated-key" else DCR_KEY
+    envelope = oauth_ha_auth.wrap_refresh_token(
+        signing_key,
+        "core-refresh",
+        "http://127.0.0.1:54321",
+        oauth_dcr.mint_client_id(DCR_KEY, [LOOPBACK_CALLBACK]),
+    )
+    if unverifiable == "tampered":
+        body, _, signature = envelope.rpartition(".")
+        envelope = f"{body}.{'B' if signature[0] != 'B' else 'C'}{signature[1:]}"
+    session = _CoreTokenSession(body=b"")
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await _revoke_post(client, surface, envelope)
+
+    assert resp.status == 200
+    assert len(session.calls) == 1
+    assert session.calls[0]["url"] == f"https://core.example{REVOKE_SURFACES[surface]}"
+    assert session.calls[0]["data"]["token"] == "core-refresh"
+
+
+@pytest.mark.parametrize("surface", sorted(REVOKE_SURFACES))
+@pytest.mark.parametrize(
+    "token",
+    [
+        pytest.param("hamcp-rt-nodot", id="no-separator"),
+        pytest.param("hamcp-rt-###.not-a-real-signature", id="undecodable-base64"),
+        pytest.param(_prefixed(b"not json"), id="not-json"),
+        pytest.param(_prefixed(b'["not","an","object"]'), id="json-array"),
+        pytest.param(_prefixed(b'{"v":1,"t":42}'), id="int-t"),
+    ],
+)
+async def test_revocation_307s_a_prefixed_value_carrying_no_token(
+    unified_view_client_factory, surface, token
+):
+    """Our prefix over an unreadable body is not a token we can substitute.
+
+    The best-effort unwrap gives up rather than inventing a value, so these
+    reach core exactly as presented and core answers them — no outbound call
+    is made from here.
+    """
+    session = _CoreTokenSession(body=b"")
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await _revoke_post(client, surface, token)
+
+    assert resp.status == 307
+    assert resp.headers["Location"] == REVOKE_SURFACES[surface]
+    assert session.calls == []
+
+
+@pytest.mark.parametrize("surface", sorted(REVOKE_SURFACES))
+async def test_revocation_307s_an_over_long_prefixed_value(
+    unified_view_client_factory, surface
+):
+    """Past the cap the body is never decoded, so there is nothing to swap in.
+
+    The value is a well-formed envelope under another key — only its SIZE
+    stops it being parsed, which is the point of the cap on an anonymous view.
+    """
+    oversized = oauth_ha_auth.wrap_refresh_token(
+        ROTATED_DCR_KEY,
+        "T" * oauth_ha_auth.MAX_REVOKE_ENVELOPE_LEN,
+        "http://127.0.0.1:54321",
+        "cid",
+    )
+    session = _CoreTokenSession(body=b"")
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await _revoke_post(client, surface, oversized)
+
+    assert len(oversized) > oauth_ha_auth.MAX_REVOKE_ENVELOPE_LEN
+    assert resp.status == 307
+    assert session.calls == []
+
+
+@pytest.mark.parametrize("surface", sorted(REVOKE_SURFACES))
+async def test_revocation_503_names_the_retry_delay_on_both_surfaces(
+    unified_view_client_factory, monkeypatch, surface
+):
+    """RFC 7009 §2.2.1 attaches the retry contract to the REQUEST, not the URL.
+
+    ``action=revoke`` on /token is the same revocation as one posted to the
+    scoped view, so it cannot answer a barer 503 than the scoped view does
+    (#2249 review).
+    """
+    envelope = oauth_ha_auth.wrap_refresh_token(
+        DCR_KEY,
+        "core-refresh",
+        "http://127.0.0.1:54321",
+        oauth_dcr.mint_client_id(DCR_KEY, [LOOPBACK_CALLBACK]),
+    )
+    session = _CoreTokenSession(error=TimeoutError(), body=b"")
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await _revoke_post(client, surface, envelope)
+
+    assert resp.status == 503
+    assert (await resp.json())["error"] == "temporarily_unavailable"
+    assert resp.headers["Retry-After"] == aa._REVOKE_RETRY_AFTER
+
+
+async def test_non_revocation_token_503_carries_no_retry_after(
+    unified_view_client_factory, monkeypatch
+):
+    """A refresh that core never answered gets a bare 503.
+
+    RFC 6749 gives an ordinary token failure no retry contract, so the header
+    belongs to revocation alone — the envelope here forces the same proxy leg,
+    which is what makes this the exact counterpart of the test above.
+    """
+    client_id = oauth_dcr.mint_client_id(DCR_KEY, [LOOPBACK_CALLBACK])
+    envelope = oauth_ha_auth.wrap_refresh_token(
+        DCR_KEY, "core-refresh", "http://127.0.0.1:54321", client_id
+    )
+    session = _CoreTokenSession(error=TimeoutError())
+    _pin_core_token_base(monkeypatch)
+    client = await unified_view_client_factory(
+        mode="ha_auth", session=session, dcr_key=DCR_KEY
+    )
+
+    resp = await client.post(
+        TOKEN_URL,
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": envelope,
+            "client_id": client_id,
+        },
+        allow_redirects=False,
+    )
+
+    assert resp.status == 503
+    assert "Retry-After" not in resp.headers
+
+
+def test_ha_auth_document_advertises_the_scoped_revocation_endpoint():
+    """#2248: the client holds an envelope, so revocation must come to us.
+
+    None mode issues no refresh token at all, so its document keeps quiet —
+    advertising a route that 404s there would be worse than silence.
+    """
+    from custom_components.ha_mcp_tools import mcp_webhook
+
+    base = "https://ha.example"
+    ha_auth_doc = mcp_webhook._authorization_server_document(base)
+    assert ha_auth_doc["revocation_endpoint"] == f"{base}{OAUTH_BASE}/revoke"
+    assert ha_auth_doc["revocation_endpoint_auth_methods_supported"] == ["none"]
+
+    none_doc = mcp_webhook._none_mode_authorization_server_document(base)
+    assert "revocation_endpoint" not in none_doc
+    legacy_doc = mcp_webhook._legacy_authorization_server_document(base)
+    assert "revocation_endpoint" not in legacy_doc

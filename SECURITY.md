@@ -39,6 +39,15 @@ secrecy and is designed for loopback HTTP or LAN HTTP with a high-entropy
 `MCP_SECRET_PATH`. Any peer that can reach the configured path is treated as
 trusted — securing the local network is outside ha-mcp's scope.
 
+On app (add-on) installs, ha-mcp additionally talks to the Supervisor REST
+API at `http://supervisor` with the Supervisor-issued token. That transport
+is the platform's contract, not a choice this project can harden: Supervisor
+serves its API over plain HTTP only (`web.TCPSite(..., port=80)` in
+`supervisor/api/__init__.py` — no TLS endpoint, no IPC socket), on the
+internal `hassio` docker network that is not reachable from the LAN. The
+isolation of that internal network is the boundary protecting the token, and
+it is enforced by the Home Assistant OS platform, not by ha-mcp.
+
 For internet-facing deployments use the OAuth entrypoint (`ha-mcp-oauth`) or,
 for gating access behind an external identity provider instead of per-user HA
 tokens, the OIDC entrypoint (`ha-mcp-oidc`; see [docs/oidc.md](docs/oidc.md)),
@@ -189,10 +198,24 @@ mode** option in the entry options:
   system-generated users are rejected. This is distinct from the beta OAuth mode
   below — no bespoke authorization server or self-issued token is involved, and
   revoking the user's Home Assistant token/session revokes access.
-  The component-scoped authorize/token endpoints front Core's own `/auth/*`
-  (a browser redirect and a server-side token forward) so the URLs clients
-  cache are the component's — Core remains the authorization authority and
-  performs its own validation on every request. For URL-shaped client
+  The component-scoped authorize/token/revoke endpoints front Core's own
+  `/auth/*` (a browser redirect, a server-side token forward, and an RFC 7009
+  revocation forward) so the URLs clients cache are the component's — Core
+  remains the authorization authority and performs its own validation on every
+  request. Revocation is fronted because the refresh token the client holds is
+  a signed envelope naming the identity Core bound the grant to, and Core
+  answers 200 for a token it does not recognise: posting the envelope to Core
+  directly would report a revocation that never happened. The scoped endpoint
+  is anonymous exactly as Core's own is (RFC 7009 authorizes the bearer of the
+  token, not a client identity). It makes no outbound request for a token that
+  is not one of its own envelopes; a prefixed one is forwarded even when its
+  signature does not verify, which is what keeps revocation working after the
+  signing key rotates (removing and re-adding the integration mints a new one).
+  That grants a forger nothing: possession is the only authorization a
+  revocation needs, and Core's revocation endpoint is anonymous and idempotent,
+  so an unverified body could just as well have been posted to Core directly.
+  The refresh path is the strict one — an envelope whose signature it cannot
+  verify is answered locally and never forwarded. For URL-shaped client
   identities Core would reject (cross-origin Client ID Metadata Document
   clients), the component validates the CIMD document itself per the MCP
   2026-07-28 requirements (https-only fetch with no redirects, 10 KiB cap,

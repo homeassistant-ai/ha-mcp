@@ -19,6 +19,7 @@ before adding a gate:
 | Marker | Runs on |
 |---|---|
 | `haos_only` | HAOS backends only (`HAOS_TEST_IMAGE_PATH` set). **Auto-applied** to everything under `src/e2e/haos_only/` — no marker needed there |
+| `beta_haos_only` | HAOS beta-image lanes where Supervisor/Core version expectations are configured. If any expectation is set, the test runs so partial configuration fails visibly |
 | `container_only` | the testcontainer backend only (includes the container-embedded lane) |
 | `embedded_only` | the embedded testcontainer backend only (`E2E_BACKEND=embedded`) — the one lane whose session container has ha-mcp installed inside the HA image. Skips everywhere else, including `haos_embedded` |
 | `external_only` | anywhere the server-under-test runs IN the pytest process: plain testcontainer and HAOS external. Skips stdio, inaddon, container-embedded and HAOS-embedded, which cannot be reconfigured via test-process env / monkeypatch or reach an in-process mock. The name is historical — it does NOT mean "HAOS external only" |
@@ -39,6 +40,10 @@ testcontainer run).
   EVERY lane by `_install_custom_component`. A test may therefore rely on
   component-gated behaviour with no marker — e.g. a config entry's
   `unique_id`, which Home Assistant's own API never exposes on any endpoint.
+  Consequence for `ha_search`: a query-driven call is served by the component's
+  in-process scan, not the legacy REST path, so a test written for legacy-only
+  behaviour passes *vacuously*. Naming a `search_types` the component does not
+  serve (`"dashboard"`) sends the whole call down the legacy path.
 - **The in-process "server" config entry** of that same component (#1527) is
   the embedded backend only, seeded separately. That one IS lane-specific.
 
@@ -49,8 +54,16 @@ rather than assume the e2e's always-present case.
 ## Test Patterns
 
 - Tests expecting tool **success**: use `mcp.call_tool_success()` inside `MCPAssertions` context
-- Tests expecting tool **failure**: use `safe_call_tool()` directly (catches `ToolError`, returns parsed dict)
-- Service availability checks should use `safe_call_tool` to probe, not `call_tool_success`
+- Tests expecting tool **failure**: use `mcp.call_tool_failure()` inside `MCPAssertions`
+  context. It rejects any result `assert_mcp_success()` would accept — including the
+  tools that succeed with no `success` key (`pending_restart`, bulk-operation payloads)
+  — so it genuinely proves the call failed. Prefer also passing `expected_error` to pin
+  *which* failure; about half the current call sites omit it and assert on the returned
+  dict themselves instead, which is equally fine.
+- `safe_call_tool()` is for calls whose outcome the test does **not** assert: `finally`
+  cleanup (so a cleanup failure cannot mask the real assertion) and service-availability
+  probes. It swallows `ToolError` and returns a parsed dict, so using it for an expected
+  failure means nothing verifies the call failed at all.
 
 ## E2E Test Patterns
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -94,9 +95,9 @@ def _fake_session(
     init_result = SimpleNamespace(instructions=instructions)
 
     @asynccontextmanager
-    async def fake_mcp_session(url, http_client=None):
+    async def fake_mcp_session(url):
+        """Stand in for ``_mcp_session``: record the url, yield the fake session."""
         session.url = url
-        session.http_client = http_client
         if raise_on_open is not None:
             raise raise_on_open
         if delay:
@@ -105,6 +106,30 @@ def _fake_session(
 
     monkeypatch.setattr(llm_api, "_mcp_session", fake_mcp_session)
     return session
+
+
+def _spy_httpx_async_client(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Patch ``httpx.AsyncClient`` to record its constructor kwargs.
+
+    ``verify`` has no public accessor on a constructed client (it is only
+    reachable via private ``_transport`` internals), so pinning it needs
+    capturing the call itself rather than introspecting the result. Returns
+    the dict the next construction's kwargs land in; a real subclass (not a
+    bare Mock) so callers still get a fully functioning client, since
+    ``AsyncExitStack`` drives real ``__aenter__``/``aclose`` on it.
+    """
+    import httpx
+
+    captured: dict[str, Any] = {}
+
+    class _SpyAsyncClient(httpx.AsyncClient):
+        def __init__(self, **kwargs: Any) -> None:
+            """Record the constructor kwargs, then build a real client."""
+            captured.update(kwargs)
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _SpyAsyncClient)
+    return captured
 
 
 def _make_api(hass, mode: str = EXPOSURE_FULL) -> Any:
@@ -260,7 +285,95 @@ class TestRegistrationLifecycle:
 
         assert fake_llm_apis(hass) == {}
         assert DATA_LLM_API_UNSUB not in hass.data.get(DOMAIN, {})
-        assert "no importable 'mcp' client SDK" in caplog.text
+        assert "required LLM dependency is not importable" in caplog.text
+
+
+class TestSchemaConversionCompatibility:
+    @pytest.fixture(autouse=True)
+    def _clear_schema_converter_cache(self):
+        llm_api._schema_converter.cache_clear()
+        yield
+        llm_api._schema_converter.cache_clear()
+
+    def test_prefers_stable_core_converter_when_available(self, monkeypatch):
+        schema = {"type": "object"}
+        legacy = SimpleNamespace(
+            convert_to_voluptuous=lambda value: {"voluptuous_openapi": value}
+        )
+
+        def _import_module(name):
+            assert name == "voluptuous_openapi"
+            return legacy
+
+        monkeypatch.setattr(llm_api.importlib, "import_module", _import_module)
+
+        assert llm_api.convert_to_voluptuous(schema) == {"voluptuous_openapi": schema}
+
+    def test_falls_back_to_probatio_on_newer_core(self, monkeypatch):
+        schema = {"type": "object"}
+        probatio = SimpleNamespace(from_openapi=lambda value: {"probatio": value})
+
+        def _import_module(name):
+            if name == "voluptuous_openapi":
+                raise ModuleNotFoundError(
+                    "No module named 'voluptuous_openapi'",
+                    name="voluptuous_openapi",
+                )
+            assert name == "probatio"
+            return probatio
+
+        monkeypatch.setattr(llm_api.importlib, "import_module", _import_module)
+
+        assert llm_api.convert_to_voluptuous(schema) == {"probatio": schema}
+
+    def test_reraises_nested_module_not_found(self, monkeypatch):
+        def _import_module(name):
+            assert name == "voluptuous_openapi"
+            raise ModuleNotFoundError(
+                "No module named 'legacy_dependency'",
+                name="legacy_dependency",
+            )
+
+        monkeypatch.setattr(llm_api.importlib, "import_module", _import_module)
+
+        with pytest.raises(ModuleNotFoundError, match="legacy_dependency"):
+            llm_api.convert_to_voluptuous({"type": "object"})
+
+    async def test_converter_import_is_warmed_once_off_event_loop(self, monkeypatch):
+        main_thread = threading.get_ident()
+        imports: list[tuple[str, int]] = []
+        legacy = SimpleNamespace(
+            convert_to_voluptuous=lambda value: {"voluptuous_openapi": value}
+        )
+
+        def _import_module(name):
+            imports.append((name, threading.get_ident()))
+            if name.startswith("mcp."):
+                return SimpleNamespace()
+            if name == "voluptuous_openapi":
+                return legacy
+            if name == "probatio":
+                raise ModuleNotFoundError("No module named 'probatio'", name="probatio")
+            raise AssertionError(name)
+
+        async def _executor(func, *args):
+            return await asyncio.to_thread(func, *args)
+
+        hass = _make_hass()
+        hass.async_add_executor_job = AsyncMock(side_effect=_executor)
+        monkeypatch.setattr(llm_api.importlib, "import_module", _import_module)
+
+        assert await llm_api.async_probe_mcp_sdk(hass)
+        schema = {"type": "object"}
+        assert llm_api.convert_to_voluptuous(schema) == {"voluptuous_openapi": schema}
+        assert llm_api.convert_to_voluptuous(schema) == {"voluptuous_openapi": schema}
+
+        assert [name for name, _ in imports] == [
+            "mcp.client.session",
+            "mcp.client.streamable_http",
+            "voluptuous_openapi",
+        ]
+        assert all(thread_id != main_thread for _, thread_id in imports)
 
 
 class TestFullModeInstance:
@@ -690,19 +803,32 @@ class TestModeDefault:
         assert [t.name for t in instance.tools] == ["ha_search_tools", "ha_call_tool"]
 
 
-class TestSharedHttpClientPassthrough:
-    async def test_canonical_sdk_receives_hass_shared_client(self, monkeypatch):
-        # The blocking-SSL-setup fix (live-found by HA's event-loop monitor):
-        # sessions must hand HA's shared httpx client to the SDK so it never
-        # constructs its own inside the loop. Faked at the sys.modules level
-        # so _mcp_session's REAL wiring runs.
+class TestLoopbackHttpClientTimeout:
+    async def test_sdk_receives_a_dedicated_client_with_generous_timeout(
+        self, monkeypatch
+    ):
+        """_mcp_session's own client must carry the generous timeout, not httpx's default."""
+        # Regression test (kpop-timeout investigation): _mcp_session used to
+        # hand the SDK Home Assistant's shared httpx client
+        # (helpers.httpx_client.get_async_client). HA never configures that
+        # client with an explicit timeout, so it silently carried httpx's own
+        # hardcoded 5-second default — and the SDK applies no timeout of its
+        # own when a caller-provided client is passed, so that 5s became the
+        # REAL wire-level ceiling for every tool call regardless of how
+        # generous _CALL_TOOL_TIMEOUT_SECONDS looked. _mcp_session must
+        # instead build its own client with an explicit, generous timeout.
+        # Faked at the sys.modules level so _mcp_session's REAL wiring runs.
         import sys
         from types import ModuleType
 
+        import httpx
+
         opened: dict[str, Any] = {}
+        constructed_kwargs = _spy_httpx_async_client(monkeypatch)
 
         @asynccontextmanager
         async def _canonical_client(url, http_client=None):
+            """Stand in for the SDK's own ``streamable_http_client``; record ``http_client``."""
             opened["url"] = url
             opened["http_client"] = http_client
             yield "read-stream", "write-stream", lambda: None
@@ -711,16 +837,21 @@ class TestSharedHttpClientPassthrough:
         fake_transport.streamable_http_client = _canonical_client  # type: ignore[attr-defined]
 
         class _FakeClientSession:
+            """Stand in for ``mcp.client.session.ClientSession``."""
+
             def __init__(self, read_stream, write_stream):
-                pass
+                """No-op: this fake needs no stream state."""
 
             async def __aenter__(self):
+                """Enter as-is; no setup needed."""
                 return self
 
             async def __aexit__(self, *exc_info):
+                """Exit without suppressing exceptions."""
                 return False
 
             async def initialize(self):
+                """Return a canned initialize result."""
                 return SimpleNamespace(instructions="hi")
 
         fake_session_mod = ModuleType("mcp.client.session")
@@ -729,17 +860,31 @@ class TestSharedHttpClientPassthrough:
         monkeypatch.setitem(sys.modules, "mcp.client.streamable_http", fake_transport)
         monkeypatch.setitem(sys.modules, "mcp.client.session", fake_session_mod)
 
-        shared_client = object()
-        async with llm_api._mcp_session(
-            "http://127.0.0.1:9584/private_x", shared_client
-        ):
-            pass
+        async with llm_api._mcp_session("http://127.0.0.1:9584/private_x"):
+            used_client = opened["http_client"]
+            assert isinstance(used_client, httpx.AsyncClient)
+            assert used_client.timeout == httpx.Timeout(
+                llm_api._CALL_TOOL_TIMEOUT_SECONDS
+            )
+            # Not httpx's hardcoded default — the exact bug being fixed.
+            assert used_client.timeout != httpx.Timeout(5.0)
+            # Must never consult HTTP_PROXY/NO_PROXY for a loopback call: an
+            # env proxy would both misroute the request and leak url's
+            # embedded secret_path to the proxy (review finding).
+            assert used_client.trust_env is False
+            assert not used_client.is_closed
+            # verify has no public accessor on a constructed client (review
+            # finding) - pin it via the AsyncClient spy's captured kwargs
+            # instead of introspecting private transport internals.
+            assert constructed_kwargs["verify"] is False
 
-        assert opened["http_client"] is shared_client
+        # Scoped to this one session: closed when the session exits.
+        assert used_client.is_closed
 
 
 class TestPreRenameSdkFallback:
     async def test_falls_back_to_deprecated_client_name(self, monkeypatch):
+        """On a pre-rename SDK, _mcp_session must fall back to the deprecated client name."""
         # A pip-spec override can install an older ha-mcp whose fastmcp pins
         # a pre-rename mcp SDK: mcp.client.streamable_http then exposes only
         # streamablehttp_client. _mcp_session must import-fall-back to it and
@@ -752,8 +897,10 @@ class TestPreRenameSdkFallback:
         opened: dict[str, Any] = {}
 
         @asynccontextmanager
-        async def _old_name_client(url):
+        async def _old_name_client(url, httpx_client_factory=None):
+            """Stand in for the deprecated ``streamablehttp_client``; record its args."""
             opened["url"] = url
+            opened["httpx_client_factory"] = httpx_client_factory
             yield "read-stream", "write-stream", lambda: None
 
         fake_transport = ModuleType("mcp.client.streamable_http")
@@ -788,3 +935,69 @@ class TestPreRenameSdkFallback:
 
         assert opened["url"] == "http://127.0.0.1:9584/private_x"
         assert opened["streams"] == ("read-stream", "write-stream")
+        # Regression (review finding on #2276): the deprecated entry point
+        # takes no http_client, but it DOES accept a factory for the client
+        # it builds internally — _mcp_session must hand it one that keeps
+        # this fallback off environment proxies too, not just the canonical
+        # path.
+        assert opened["httpx_client_factory"] is llm_api._loopback_httpx_client_factory
+
+    async def test_loopback_factory_builds_a_client_that_ignores_env_proxies(
+        self, monkeypatch
+    ):
+        """The fallback factory's client must also disable env-proxy trust and TLS setup."""
+        constructed_kwargs = _spy_httpx_async_client(monkeypatch)
+
+        client = llm_api._loopback_httpx_client_factory()
+        try:
+            assert client.trust_env is False
+            # verify has no public accessor (review finding) - pin it via
+            # the spy's captured kwargs instead of private transport
+            # internals.
+            assert constructed_kwargs["verify"] is False
+        finally:
+            await client.aclose()
+
+    async def test_loopback_factory_zero_args_gets_a_real_timeout_not_none(self):
+        """Calling the factory with no timeout must not build an unbounded client."""
+        # Regression (review finding on #2276): the factory forwarded
+        # timeout=None straight to httpx.AsyncClient, which disables EVERY
+        # timeout rather than applying a sane default — unlike the
+        # reference create_mcp_http_client this substitutes for, which
+        # treats None as "no timeout was supplied" and fills in its own
+        # default. A future caller invoking this factory with no timeout
+        # (as this test does) must not get an unbounded loopback client.
+        client = llm_api._loopback_httpx_client_factory()
+        try:
+            assert client.timeout.connect is not None
+            assert client.timeout.read is not None
+        finally:
+            await client.aclose()
+
+    async def test_loopback_factory_works_on_pre_1_24_sdks(self, monkeypatch):
+        """The factory must not depend on constants absent from pre-1.24 SDKs."""
+        # Regression (round-2 review finding on #2276): the first fix
+        # imported MCP_DEFAULT_TIMEOUT/MCP_DEFAULT_SSE_READ_TIMEOUT from
+        # mcp.shared._httpx_utils to mirror create_mcp_http_client's None
+        # handling - but those constants don't exist before mcp 1.24, and
+        # this factory only ever runs on SDKs old enough to lack
+        # streamable_http_client (the canonical name), which is exactly
+        # that pre-1.24 range. The unconditional import broke the fallback
+        # on every real install it serves. Fake the module down to the
+        # old-SDK shape (create_mcp_http_client only, no MCP_DEFAULT_*
+        # constants) to prove the factory no longer needs anything beyond
+        # that — the same way test_falls_back_to_deprecated_client_name
+        # fakes the transport module for the equivalent old-SDK shape.
+        import sys
+        from types import ModuleType
+
+        fake_httpx_utils = ModuleType("mcp.shared._httpx_utils")
+        fake_httpx_utils.__all__ = ["create_mcp_http_client"]  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "mcp.shared._httpx_utils", fake_httpx_utils)
+
+        client = llm_api._loopback_httpx_client_factory()
+        try:
+            assert client.timeout.connect is not None
+            assert client.timeout.read is not None
+        finally:
+            await client.aclose()

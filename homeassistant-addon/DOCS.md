@@ -517,8 +517,8 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 > Tools marked **(beta — dev channel only)** are gated behind feature flags and ship with the dev channel add-on only. See [docs/beta.md](https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/beta.md) for setup and caveats.
 
 ### Apps (add-ons)
-- `ha_get_app` — Get Home Assistant Apps (formerly known as add-ons, and this tool as ha_get_addon) - list installed, available, or get details for one.
-- `ha_manage_app` — Manage a Home Assistant App (formerly known as an add-on, and this tool as ha_manage_addon) — update its configuration or call its internal API.
+- `ha_get_app` — Get installed or available Home Assistant apps (add-ons), or details for one.
+- `ha_manage_app` — Manage Home Assistant apps (add-ons) or proxy an app API.
 
 ### Areas & Floors
 - `ha_list_floors_areas` — List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
@@ -631,7 +631,7 @@ The add-on provides 88+ MCP tools for controlling Home Assistant:
 - `ha_search` — Search for entities (lights, sensors, switches, climate, etc.) by name, domain, or area — AND inside automation/script/scene/helper/dashboard configurations — in one call.
 
 ### Service & Device Control
-- `ha_bulk_control` — Manage multiple entity actions in one request.
+- `ha_bulk_control` — Manage explicit operations or one deterministic structural bulk action.
 - `ha_call_event` — Execute a custom event on the Home Assistant event bus.
 - `ha_call_service` — Execute Home Assistant services to control entities and trigger automations.
 - `ha_get_operation_status` — Get the status of one or more device operations with real-time WebSocket verification.

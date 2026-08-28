@@ -244,6 +244,49 @@ def _worker_startup_failure(exc: BaseException) -> EmbeddedServerError:
     return failure
 
 
+def _install_log_filters_if_available() -> None:
+    """Attach the shared MCP SDK/fastmcp log-noise filters, if this ha-mcp has them.
+
+    Mirrors the ``register_browser_landing`` guard just above ``_serve``'s call
+    site: the installed server version is user-controlled (channel choice,
+    pip-spec override), so an older ha-mcp without ``ha_mcp.log_filters`` must
+    keep serving -- the filters are simply absent there, as they are today.
+
+    Only a ``ModuleNotFoundError`` for exactly ``ha_mcp.log_filters`` is that
+    "older ha-mcp" case and is swallowed silently. Anything else -- a version
+    mismatch in a third-party dependency this import touches (fastmcp,
+    pydantic), which ``_purge_ha_mcp_modules`` deliberately does NOT
+    reinstall per config entry, so a stale one left over from a previous
+    install can break this import -- is logged instead of silently doing
+    nothing: log cosmetics must never block startup, but they also must
+    never fail invisibly.
+    """
+    try:
+        from ha_mcp.log_filters import install_sdk_log_filters
+    except ModuleNotFoundError as err:
+        if err.name != "ha_mcp.log_filters":
+            _LOGGER.warning(
+                "Could not install MCP SDK log-noise filters (missing "
+                "dependency %s); continuing without them: %s",
+                err.name,
+                err,
+            )
+        return
+    except ImportError as err:
+        _LOGGER.warning(
+            "Could not install MCP SDK log-noise filters; continuing without them: %s",
+            err,
+        )
+        return
+    try:
+        install_sdk_log_filters()
+    except Exception as err:
+        _LOGGER.warning(
+            "Could not install MCP SDK log-noise filters; continuing without them: %s",
+            err,
+        )
+
+
 class EmbeddedServerManager:
     """Manage the lifecycle of the in-process ha-mcp server for one config entry."""
 
@@ -676,6 +719,14 @@ class EmbeddedServerManager:
     async def _async_ensure_package(
         self, *, defer_mutations: bool = False
     ) -> str | None:
+        """Use the externally managed package or ensure a managed install."""
+        if self._hass.config.skip_pip:
+            return await self._async_externally_managed_package_version()
+        return await self._async_ensure_managed_package(defer_mutations=defer_mutations)
+
+    async def _async_ensure_managed_package(
+        self, *, defer_mutations: bool = False
+    ) -> str | None:
         """Ensure ``ha-mcp`` is importable, installing the pip spec if needed.
 
         Returns the installed version that the worker is about to run, for the
@@ -844,6 +895,85 @@ class EmbeddedServerManager:
         if not deferred and stored_spec != self._pip_spec:
             self._store_installed_spec()
         return version
+
+    async def _async_externally_managed_package_version(self) -> str:
+        """Validate and return the package supplied outside Home Assistant.
+
+        skip_pip means the surrounding system owns this interpreter. This
+        path therefore performs metadata/importability reads only: it never
+        calls Home Assistant's requirements manager, UV, or the config-entry
+        marker writers used by manual and automatic installs.
+        """
+        importable_version: str | None = await self._hass.async_add_executor_job(
+            _installed_ha_mcp_version
+        )
+        stable_version: str | None = await self._hass.async_add_executor_job(
+            _installed_dist_version, DIST_NAME_STABLE
+        )
+        dev_version: str | None = await self._hass.async_add_executor_job(
+            _installed_dist_version, DIST_NAME_DEV
+        )
+        target_dist = dist_for_channel(self._channel)
+        target_version = (
+            stable_version if target_dist == DIST_NAME_STABLE else dev_version
+        )
+        other_dist = (
+            DIST_NAME_DEV if target_dist == DIST_NAME_STABLE else DIST_NAME_STABLE
+        )
+        other_version = (
+            dev_version if target_dist == DIST_NAME_STABLE else stable_version
+        )
+
+        if importable_version is None:
+            raise EmbeddedServerError(
+                "Home Assistant was started with skip_pip enabled, so HA-MCP "
+                "will not install the externally managed server package. Use "
+                f"the system package manager to install {target_dist} "
+                f"{MIN_EMBEDDED_SERVER_VERSION} or newer, then reload this "
+                "integration.",
+                kind="package",
+            )
+
+        if stable_version is not None and dev_version is not None:
+            raise EmbeddedServerError(
+                f"Both {DIST_NAME_STABLE} {stable_version} and "
+                f"{DIST_NAME_DEV} {dev_version} are installed while skip_pip "
+                "is enabled. They share the ha_mcp import package, so HA-MCP "
+                "cannot safely select one without modifying the environment. "
+                "Use the system package manager to leave exactly one installed, "
+                "then reload this integration.",
+                kind="package",
+            )
+
+        if target_version is None:
+            raise EmbeddedServerError(
+                f"The configured {self._channel} channel expects {target_dist}, "
+                f"but only {other_dist} {other_version} is installed while "
+                "skip_pip is enabled. Use the system package manager to install "
+                f"{target_dist} {MIN_EMBEDDED_SERVER_VERSION} or newer, or "
+                f"change the HA-MCP release channel to match {other_dist}, then "
+                "reload this integration.",
+                kind="package",
+            )
+
+        if not _is_compatible_embedded_version(target_version):
+            raise EmbeddedServerError(
+                f"The externally managed {target_dist} {target_version} is "
+                "incompatible while skip_pip is enabled; this in-process "
+                f"component requires {MIN_EMBEDDED_SERVER_VERSION} or newer. "
+                "Upgrade it with the system package manager, then reload this "
+                "integration.",
+                kind="package",
+            )
+
+        _LOGGER.info(
+            "HA-MCP externally managed %s package ready (version %s; "
+            "skip_pip enabled, channel %s)",
+            target_dist,
+            target_version,
+            self._channel,
+        )
+        return target_version
 
     async def _async_remove_legacy_target(
         self, target_dist: str, installed_version: str | None
@@ -1581,6 +1711,12 @@ class EmbeddedServerManager:
             pass
         else:
             register_browser_landing(server.mcp, self._secret_path)
+
+        # Parity with the CLI HTTP runner: demote the MCP SDK/fastmcp log
+        # noise (routine stateless teardown, benign tool-validation
+        # tracebacks, disconnect-caused "session crashed" tracebacks) that
+        # every other HTTP launcher already filters.
+        _install_log_filters_if_available()
 
         # Own the uvicorn server instead of calling mcp.run_async(): cancelling
         # run_async's task does NOT release the listening socket in-process

@@ -127,6 +127,35 @@ class TestCustomFilesystemPaths:
             )
             await _set_allowed_paths(base_url, token, [])
 
+    async def test_exact_file_grants_root_read_write_live(
+        self, mcp_client_fs, ha_container_with_fresh_config
+    ):
+        base_url = ha_container_with_fresh_config["base_url"]
+        token = await _bootstrap_token(base_url)
+        fname = "sensor.yaml"
+        try:
+            sr = await _set_allowed_paths(base_url, token, [fname])
+            assert sr.get("success") is True, sr
+            assert sr.get("paths") == [fname], sr
+
+            async with MCPAssertions(mcp_client_fs) as mcp:
+                written = await mcp.call_tool_success(
+                    "ha_write_file",
+                    {
+                        "path": fname,
+                        "content": "# 2268 exact-file test\n",
+                        "overwrite": True,
+                    },
+                )
+                assert written.get("success") is True, written
+                read = await mcp.call_tool_success("ha_read_file", {"path": fname})
+                assert "# 2268 exact-file test" in read.get("content", ""), read
+        finally:
+            await safe_call_tool(
+                mcp_client_fs, "ha_delete_file", {"path": fname, "confirm": True}
+            )
+            await _set_allowed_paths(base_url, token, [])
+
     async def test_deny_floor_blocks_storage_even_with_custom_dir(
         self, mcp_client_fs, ha_container_with_fresh_config
     ):

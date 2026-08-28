@@ -2,8 +2,8 @@
 """Build the HAOS test image used by the HAOS E2E tier (#1281).
 
 The script boots a vanilla HAOS qcow2 inside QEMU/KVM, runs first-user
-onboarding to obtain a long-lived access token, registers the ha-mcp addon
-repository, installs the addons listed in ``ADDONS``, performs the HACS
+onboarding to obtain OAuth credentials, registers the ha-mcp app (add-on)
+repository, installs the apps listed in ``ADDONS``, performs the HACS
 bootstrap, then powers HAOS off and emits an uncompressed qcow2 image.
 
 Invoke from a Linux host with /dev/kvm available — both the local developer
@@ -19,11 +19,13 @@ import argparse
 import json
 import logging
 import os
+import re
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -34,10 +36,9 @@ from typing import Any
 
 LOG = logging.getLogger("haos_image_build")
 
-# Pin both the HAOS release and the addon set. Renovate watches the comment
-# annotation below for the HAOS bump; the addon list is hand-curated in #1281
-# and intentionally short for v1. Once the canary is stable, follow-up PRs can
-# expand the list and migrate more existing E2E tests over.
+# Pin both the HAOS release and app set. Renovate watches the annotation below
+# for the HAOS bump; the app set is hand-curated to cover distinct E2E shapes
+# without unnecessarily inflating the cached image.
 #
 # renovate: datasource=github-releases depName=home-assistant/operating-system
 HAOS_VERSION = "18.2"
@@ -76,6 +77,14 @@ SSH_HOST_PORT = int(os.environ.get("HAOS_BUILD_SSH_PORT", "12222"))
 # HAOS_BUILD_OVMF on other distros (Fedora ships it under /usr/share/edk2,
 # Arch under /usr/share/edk2-ovmf).
 OVMF_CODE_PATH = os.environ.get("HAOS_BUILD_OVMF", "/usr/share/OVMF/OVMF_CODE.fd")
+
+# Optional image variant used by the Supervisor-beta E2E lanes. The normal
+# shared image leaves these settings unset and keeps following stable. Both
+# beta lanes resolve their Supervisor minimum and exact Core version from
+# beta.json; the in-app lane saves the shared cache.
+SUPERVISOR_CHANNEL = os.environ.get("HAOS_BUILD_SUPERVISOR_CHANNEL")
+SUPERVISOR_MIN_VERSION = os.environ.get("HAOS_BUILD_SUPERVISOR_MIN_VERSION")
+CORE_VERSION = os.environ.get("HAOS_BUILD_CORE_VERSION")
 
 
 @dataclass(frozen=True)
@@ -329,6 +338,14 @@ def _attempt_budget(deadline: float, want: float) -> float:
     return max(0.1, min(want, deadline - time.monotonic()))
 
 
+def _remaining_deadline_budget(deadline: float, operation: str) -> float:
+    """Return positive time remaining or fail before starting an operation."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError(f"{operation} exceeded its deadline")
+    return remaining
+
+
 def _wait_any_port(
     ports: tuple[int, ...], host: str = "127.0.0.1", timeout: float = 180.0
 ) -> int:
@@ -486,14 +503,19 @@ def stop_qemu(proc: subprocess.Popen[bytes], ws: HAWebSocket | None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def onboard(base_url: str) -> str:
-    """Create the first user and return a short-lived access token.
+@dataclass(repr=False)
+class OAuthCredentials:
+    """Refreshable credentials used throughout a potentially long image build."""
 
-    The token only needs to live for the duration of the build session
-    (addon installs, HACS bootstrap, shutdown). The canary test re-derives
-    its own token at runtime by logging in with the known username/password
-    via /auth/login_flow — that way no token needs to be baked into the
-    pre-built qcow2.
+    access_token: str
+    refresh_token: str
+
+
+def onboard(base_url: str) -> OAuthCredentials:
+    """Create the first user and return refreshable OAuth credentials.
+
+    The canary logs in at runtime using the known CI account, so the build does
+    not copy an OAuth access or refresh token value into the emitted qcow2.
     """
     LOG.info("Onboarding first user")
     resp = _http(
@@ -520,7 +542,16 @@ def onboard(base_url: str) -> str:
             "code": auth_code,
         },
     )
-    return token_resp["access_token"]
+    access_token = token_resp.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise RuntimeError("OAuth authorization exchange returned no access token")
+    refresh_token = token_resp.get("refresh_token")
+    if not isinstance(refresh_token, str) or not refresh_token:
+        raise RuntimeError("OAuth authorization exchange returned no refresh token")
+    return OAuthCredentials(
+        access_token=access_token,
+        refresh_token=refresh_token,
+    )
 
 
 class HAWebSocket:
@@ -539,28 +570,55 @@ class HAWebSocket:
     procedural build flow doesn't need an asyncio rewrite.
     """
 
-    def __init__(self, base_url: str, token: str) -> None:
+    def __init__(self, base_url: str, credentials: OAuthCredentials) -> None:
+        self._base_url = base_url
         self._ws_url = (
             base_url.replace("http://", "ws://").replace("https://", "wss://")
             + "/api/websocket"
         )
-        self._token = token
+        self._credentials = credentials
         self._ws = None  # type: ignore[var-annotated]
         self._next_id = 0
 
     def __enter__(self) -> HAWebSocket:
+        self._connect()
+        return self
+
+    def _connect(self, *, deadline: float | None = None) -> None:
+        """Open and authenticate a WebSocket within an optional deadline."""
         # Imported lazily so the module still imports on systems without the
         # websockets package (e.g. local lint without the build venv).
         from websockets.sync.client import connect
 
-        self._ws = connect(self._ws_url, open_timeout=30, close_timeout=10)
+        if deadline is None:
+            open_timeout: float = 30
+            close_timeout: float = 10
+        else:
+            remaining = _remaining_deadline_budget(deadline, "WebSocket connect")
+            open_timeout = min(30.0, remaining)
+            close_timeout = min(10.0, remaining)
+        self._ws = connect(
+            self._ws_url,
+            open_timeout=open_timeout,
+            close_timeout=close_timeout,
+        )
         # HA WS handshake: server sends auth_required → client sends auth →
         # server replies auth_ok or auth_invalid.
-        auth_req = json.loads(self._ws.recv())
+        auth_req = json.loads(self._recv_auth_frame(deadline))
         if auth_req.get("type") != "auth_required":
             raise RuntimeError(f"Unexpected WS handshake message: {auth_req}")
-        self._ws.send(json.dumps({"type": "auth", "access_token": self._token}))
-        auth_resp = json.loads(self._ws.recv())
+        auth_message = json.dumps(
+            {"type": "auth", "access_token": self._credentials.access_token}
+        )
+        if deadline is None:
+            self._ws.send(auth_message)
+        else:
+            self._send_with_deadline(
+                auth_message,
+                deadline=deadline,
+                operation="WebSocket authentication send",
+            )
+        auth_resp = json.loads(self._recv_auth_frame(deadline))
         if auth_resp.get("type") != "auth_ok":
             raise RuntimeError(f"WS auth rejected: {auth_resp}")
         LOG.info(
@@ -568,7 +626,14 @@ class HAWebSocket:
             self._ws_url,
             auth_resp.get("ha_version"),
         )
-        return self
+
+    def _recv_auth_frame(self, deadline: float | None) -> str | bytes:
+        """Receive one authentication frame within an optional deadline."""
+        if deadline is None:
+            return self._ws.recv()
+        return self._ws.recv(
+            timeout=_remaining_deadline_budget(deadline, "WebSocket authentication")
+        )
 
     def __exit__(self, *_: object) -> None:
         if self._ws is not None:
@@ -577,12 +642,43 @@ class HAWebSocket:
             except (OSError, RuntimeError) as e:
                 LOG.debug("WS close error (already-closed or transport): %r", e)
 
-    def reconnect(self) -> None:
+    def _refresh_access_token(self, *, timeout: float | None = None) -> None:
+        """Exchange the refresh token before opening a replacement WebSocket."""
+        form = {
+            "client_id": self._base_url,
+            "grant_type": "refresh_token",
+            "refresh_token": self._credentials.refresh_token,
+        }
+        if timeout is None:
+            token_resp = _http("POST", f"{self._base_url}/auth/token", form=form)
+        else:
+            token_resp = _http(
+                "POST",
+                f"{self._base_url}/auth/token",
+                form=form,
+                timeout=timeout,
+            )
+        access_token = token_resp.get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            raise RuntimeError("OAuth refresh returned no access token")
+        rotated_refresh_token = token_resp.get("refresh_token")
+        if rotated_refresh_token is not None:
+            if not isinstance(rotated_refresh_token, str) or not rotated_refresh_token:
+                raise RuntimeError("OAuth refresh returned an invalid refresh token")
+            self._credentials.refresh_token = rotated_refresh_token
+        self._credentials.access_token = access_token
+
+    def reconnect(self, *, deadline: float | None = None) -> None:
         """Tear down the current WS and re-establish + re-auth.
 
-        Used after /core/restart: HA Core kicks every WS connection on
-        restart, so any subsequent supervisor_api call needs a fresh
-        connection (the access_token survives the restart).
+        Used after /core/restart: HA Core kicks every WS connection on restart.
+        The initial OAuth access token expires after 30 minutes, so reconnects
+        exchange the retained refresh token before opening and authenticating
+        the replacement socket.
+
+        When a deadline is supplied, token refresh, socket connection and
+        authentication, readiness probes, and backoff sleeps all share that
+        absolute deadline.
 
         ``_wait_http_ok(/manifest.json)`` confirms HA Core's HTTP layer
         is up before we get here, but Core's WS layer can be accepting
@@ -597,6 +693,8 @@ class HAWebSocket:
         registered, so callers can fire-and-trust their next
         supervisor_api call.
         """
+        if deadline is not None:
+            _remaining_deadline_budget(deadline, "WebSocket reconnect")
         if self._ws is not None:
             try:
                 self._ws.close()
@@ -604,8 +702,18 @@ class HAWebSocket:
                 LOG.debug("WS close error during reconnect: %r", e)
             self._ws = None
         self._next_id = 0
-        self.__enter__()
-        self._wait_supervisor_api_ready()
+        if deadline is None:
+            self._refresh_access_token()
+            self._connect()
+            self._wait_supervisor_api_ready()
+            return
+        self._refresh_access_token(
+            timeout=_remaining_deadline_budget(deadline, "OAuth token refresh")
+        )
+        self._connect(deadline=deadline)
+        self._wait_supervisor_api_ready(
+            timeout=_remaining_deadline_budget(deadline, "Supervisor API readiness")
+        )
 
     def _wait_supervisor_api_ready(self, timeout: float = 60.0) -> None:
         """Poll ``supervisor/api`` until Core's dispatcher accepts it.
@@ -618,12 +726,20 @@ class HAWebSocket:
         keeps a wedged restart from hanging the whole build.
         """
         start = time.monotonic()
+        deadline = start + timeout
         delay = 1.0
         attempts = 0
-        while True:
+        last_error: WSCommandError | None = None
+        while (remaining := deadline - time.monotonic()) > 0:
             attempts += 1
             try:
-                self.supervisor_api("/supervisor/info", method="get", timeout=10.0)
+                self.supervisor_api(
+                    "/supervisor/info",
+                    method="get",
+                    timeout=min(10.0, remaining),
+                )
+                if time.monotonic() >= deadline:
+                    break
                 if attempts > 1:
                     LOG.info(
                         "supervisor/api ready after %d attempts (%.1fs)",
@@ -637,21 +753,91 @@ class HAWebSocket:
                     # renamed endpoint, etc.) — propagate so a regression
                     # isn't masked as "still booting".
                     raise
+                last_error = e
                 elapsed = time.monotonic() - start
-                if elapsed >= timeout:
-                    raise RuntimeError(
-                        f"hassio supervisor/api WS handler did not register "
-                        f"within {timeout:.0f}s after Core restart "
-                        f"(attempts={attempts})"
-                    ) from e
+                remaining = timeout - elapsed
+                if remaining <= 0:
+                    break
                 LOG.debug(
                     "Waiting for hassio supervisor/api handler "
                     "(attempt %d, elapsed %.1fs)",
                     attempts,
                     elapsed,
                 )
-                time.sleep(delay)
+                time.sleep(min(delay, remaining))
                 delay = min(delay * 1.5, 5.0)
+        raise TimeoutError(
+            f"hassio supervisor/api WS handler did not register "
+            f"within {timeout:.0f}s after Core restart (attempts={attempts})"
+        ) from last_error
+
+    def _raise_unknown_send_outcome(
+        self,
+        connection: Any,
+        *,
+        operation: str,
+    ) -> None:
+        """Invalidate a socket after a timed-out send may have been dispatched."""
+        try:
+            connection.close_socket()
+        except (OSError, RuntimeError) as exc:
+            LOG.debug("WS close error after timed-out send: %r", exc)
+        finally:
+            if self._ws is connection:
+                self._ws = None
+        raise TimeoutError(
+            f"{operation} exceeded its deadline after dispatch; "
+            "command outcome is unknown"
+        )
+
+    def _send_with_deadline(
+        self,
+        message: str,
+        *,
+        deadline: float,
+        operation: str,
+    ) -> None:
+        """Send one frame within a deadline, cancelling a stalled socket write."""
+        connection = self._ws
+        if connection is None:
+            raise ConnectionError(f"WebSocket is not connected for {operation}")
+        _remaining_deadline_budget(deadline, operation)
+        send_errors: list[Exception] = []
+        dispatch_lock = threading.Lock()
+        send_state = {"cancelled": False, "started": False}
+
+        def send() -> None:
+            try:
+                with dispatch_lock:
+                    if send_state["cancelled"]:
+                        return
+                    _remaining_deadline_budget(deadline, operation)
+                    send_state["started"] = True
+                connection.send(message)
+            except Exception as exc:
+                send_errors.append(exc)
+
+        worker = threading.Thread(target=send, name="haos-ws-send", daemon=True)
+        worker.start()
+        worker.join(max(0.0, deadline - time.monotonic()))
+        timed_out_after_dispatch = worker.is_alive()
+        if timed_out_after_dispatch:
+            with dispatch_lock:
+                if not send_state["started"]:
+                    send_state["cancelled"] = True
+                    raise TimeoutError(
+                        f"{operation} exceeded its deadline before dispatch"
+                    )
+        elif send_errors:
+            raise send_errors[0]
+        else:
+            with dispatch_lock:
+                timed_out_after_dispatch = (
+                    send_state["started"] and time.monotonic() >= deadline
+                )
+
+        if timed_out_after_dispatch:
+            self._raise_unknown_send_outcome(connection, operation=operation)
 
     def supervisor_api(
         self,
@@ -665,7 +851,11 @@ class HAWebSocket:
         Raises RuntimeError on a non-success response (HA's WS contract uses
         ``{"id": N, "type": "result", "success": false, "error": {...}}``).
         """
-        assert self._ws is not None
+        if self._ws is None:
+            raise ConnectionError(
+                f"WebSocket is not connected for supervisor/api {method} {endpoint}"
+            )
+        deadline = time.monotonic() + timeout
         self._next_id += 1
         msg_id = self._next_id
         msg: dict[str, Any] = {
@@ -677,34 +867,108 @@ class HAWebSocket:
         }
         if data is not None:
             msg["data"] = data
-        self._ws.send(json.dumps(msg))
+        message = json.dumps(msg)
+        self._send_with_deadline(
+            message,
+            deadline=deadline,
+            operation=f"supervisor/api {method} {endpoint} send",
+        )
         # Skip any out-of-band messages (events on subscriptions etc.) and
         # match by id.
         while True:
-            resp = json.loads(self._ws.recv())
-            if resp.get("id") != msg_id:
-                continue
-            if not resp.get("success", True):
-                err = resp.get("error") or {}
-                code = err.get("code") if isinstance(err, dict) else None
-                raise WSCommandError(
-                    f"supervisor/api {method} {endpoint} failed: {err}",
-                    code=code,
+            result = _parse_supervisor_api_frame(
+                self._ws.recv(
+                    timeout=_remaining_deadline_budget(
+                        deadline,
+                        f"supervisor/api {method} {endpoint} receive",
+                    )
+                ),
+                msg_id=msg_id,
+                method=method,
+                endpoint=endpoint,
+            )
+            if result is not None:
+                _remaining_deadline_budget(
+                    deadline,
+                    f"supervisor/api {method} {endpoint} receive",
                 )
-            return resp.get("result", {}) or {}
+                return result
 
 
 class WSCommandError(RuntimeError):
     """Supervisor/Core WS-level failure with the structured error code.
 
-    Carries the ``error.code`` field from the WS response so callers can
-    branch on it (e.g. retry on ``"unknown_command"`` after a Core
-    restart) without parsing the str() representation of the exception.
+    Carries the ``error.code`` and raw ``error.message`` fields from the WS
+    response so callers can distinguish a proxy interruption from a permanent
+    Supervisor rejection without parsing the exception string.
     """
 
-    def __init__(self, message: str, *, code: str | None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None,
+        supervisor_message: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.supervisor_message = supervisor_message
+
+
+def _parse_supervisor_api_frame(
+    raw: str | bytes,
+    *,
+    msg_id: int,
+    method: str,
+    endpoint: str,
+) -> dict[str, Any] | None:
+    """Validate one WebSocket frame and return a matching command result."""
+    try:
+        resp = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"supervisor/api {method} {endpoint} returned an invalid "
+            f"WebSocket result: {exc} (raw={raw!r})"
+        ) from exc
+    if not isinstance(resp, dict):
+        raise RuntimeError(
+            f"supervisor/api {method} {endpoint} returned an invalid "
+            f"WebSocket result: expected an object, got {resp!r}"
+        )
+    if resp.get("id") != msg_id:
+        return None
+    if resp.get("type") != "result" or not isinstance(resp.get("success"), bool):
+        raise RuntimeError(
+            f"supervisor/api {method} {endpoint} returned an invalid "
+            f"WebSocket result frame: {resp!r}"
+        )
+    if not resp["success"]:
+        err = resp.get("error") or {}
+        raw_code = err.get("code") if isinstance(err, dict) else None
+        code = raw_code if isinstance(raw_code, str) else None
+        supervisor_message = (
+            err.get("message")
+            if isinstance(err, dict) and isinstance(err.get("message"), str)
+            else None
+        )
+        raise WSCommandError(
+            f"supervisor/api {method} {endpoint} failed: {err}",
+            code=code,
+            supervisor_message=supervisor_message,
+        )
+    result = resp.get("result")
+    if result is None:
+        return {}
+    if not isinstance(result, dict):
+        raise RuntimeError(
+            f"supervisor/api {method} {endpoint} returned an invalid "
+            f"WebSocket result payload: {result!r}"
+        )
+    return result
+
+
+class _SupervisorReadinessTimeout(TimeoutError):
+    """Supervisor readiness exhausted its deadline before all constraints held."""
 
 
 def _add_repository(ws: HAWebSocket, repo_url: str) -> None:
@@ -752,6 +1016,7 @@ try:
         TimeoutError,
         _WebSocketException,
     )
+
 except ImportError:
     _SUPERVISOR_WAIT_TRANSIENT_ERRORS = (WSCommandError, OSError, TimeoutError)
 
@@ -1602,85 +1867,455 @@ def install_screenshot_engine(ws: HAWebSocket) -> str:
     return slug
 
 
-def _wait_supervisor_ready(ws: HAWebSocket, *, update_timeout: float = 600.0) -> None:
-    """Wait for the Supervisor to respond AND finish self-updating.
+_CORE_VERSION_RE = re.compile(r"^\d{4}\.\d{1,2}\.\d+(?:\.dev\d+|b\d+)?$")
 
-    HAOS pins only the OS version (HAOS_VERSION); the Supervisor it bundles
-    self-updates asynchronously after boot to the latest version on its
-    channel. Until that finishes, ``need_update`` is True and every store
-    operation guarded by ``JobCondition.SUPERVISOR_UPDATED`` (the first one
-    here is ``_add_repository`` -> POST /store/repositories, right after this
-    call) is rejected with "supervisor needs to be updated first". That race
-    is what broke the publish bake intermittently: a run that hit the store
-    before the self-update landed failed at add_repository; a run that caught
-    a later channel version sailed past it and failed elsewhere.
 
-    Poll /supervisor/info until ``update_available`` clears (the running
-    version reaches ``version_latest``) so the caller's store calls run
-    against an up-to-date Supervisor. The Supervisor version still floats to
-    the channel head per build: there is no clean way to pin the bundled
-    Supervisor offline (it ships as a container layer in the HAOS image, and
-    ``need_update`` is evaluated against the live channel), so this makes the
-    bake deterministic in outcome, not in the Supervisor version it lands on.
+def _supervisor_version_key(version: object) -> tuple[int, int, int, int, int]:
+    """Return a comparable key for Supervisor's calendar version."""
+    if not isinstance(version, str):
+        raise RuntimeError(f"Supervisor returned an invalid version: {version!r}")
+    match = re.fullmatch(
+        r"(\d{4})\.(\d{1,2})\.(\d+)(?:\.dev(\d+))?",
+        version,
+    )
+    if match is None:
+        raise RuntimeError(f"Supervisor returned an invalid version: {version!r}")
+    year, month, patch, dev = match.groups()
+    # A final release sorts after its development builds.
+    return (
+        int(year),
+        int(month),
+        int(patch),
+        int(dev is None),
+        int(dev or 0),
+    )
+
+
+def _is_transient_supervisor_error(exc: BaseException) -> bool:
+    """Return whether a Supervisor restart can plausibly produce ``exc``."""
+    if not isinstance(exc, WSCommandError):
+        return True
+    if exc.code == "unknown_command":
+        return True
+    return exc.code == "unknown_error" and exc.supervisor_message == ""
+
+
+def _is_transient_supervisor_readiness_error(exc: BaseException) -> bool:
+    """Return whether readiness polling can retry a Supervisor failure.
+
+    Mutation responses stay strict because their outcome can be ambiguous. A
+    read during a known restart window may also observe Supervisor's setup
+    state before the API becomes ready again.
     """
-    info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
-    LOG.info(
-        "Supervisor ready: version=%s version_latest=%s arch=%s",
-        info.get("version"),
-        info.get("version_latest"),
-        info.get("arch"),
+    return _is_transient_supervisor_error(exc) or (
+        isinstance(exc, WSCommandError)
+        and exc.code == "unknown_error"
+        and (exc.supervisor_message or "").startswith(
+            "System is not ready with state: "
+        )
     )
-    if not info.get("update_available") and info.get("version_latest"):
-        return
 
-    LOG.info(
-        "Supervisor self-update pending (%s -> %s); waiting before store ops...",
-        info.get("version"),
-        info.get("version_latest"),
+
+def _supervisor_info_ready(
+    info: dict[str, Any],
+    *,
+    expected_channel: str | None,
+    minimum_version: str | None,
+) -> bool:
+    """Return whether Supervisor meets the requested channel and version floor."""
+    if expected_channel is not None and info.get("channel") != expected_channel:
+        return False
+    if info.get("update_available") or not info.get("version_latest"):
+        return False
+    if minimum_version is None:
+        return True
+    return _supervisor_version_key(info.get("version")) >= _supervisor_version_key(
+        minimum_version
     )
+
+
+def _reconnect_supervisor_during_wait(
+    ws: HAWebSocket, *, deadline: float
+) -> BaseException | None:
+    """Best-effort reconnect while Supervisor/Core restarts."""
+    try:
+        ws.reconnect(deadline=deadline)
+    except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as reconnect_err:
+        if not _is_transient_supervisor_readiness_error(reconnect_err):
+            raise
+        # Handler-start timeouts and transport failures are expected while
+        # Supervisor/Core restarts; keep them visible in CI logs.
+        LOG.warning("reconnect during update wait failed: %r", reconnect_err)
+        return reconnect_err
+    return None
+
+
+def _supervisor_readiness_probe_budget(deadline: float, *, delay: bool) -> float | None:
+    """Return the next readiness request budget within the deadline."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return None
+    if delay:
+        time.sleep(min(10.0, remaining))
+        remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return None
+    return min(30.0, remaining)
+
+
+def _wait_supervisor_ready(
+    ws: HAWebSocket,
+    *,
+    update_timeout: float = 600.0,
+    expected_channel: str | None = None,
+    minimum_version: str | None = None,
+) -> dict[str, Any]:
+    """Wait until Supervisor satisfies update and image-variant constraints.
+
+    HAOS pins only the OS version; its bundled Supervisor self-updates
+    asynchronously after boot. A ready response must advertise
+    ``version_latest`` and have no pending update. When supplied,
+    ``expected_channel`` and ``minimum_version`` further constrain the running
+    Supervisor.
+
+    ``install_addons`` relies on this readiness before its first store
+    operation. Beta image configuration uses the same predicate after channel
+    selection and update.
+    """
     deadline = time.monotonic() + update_timeout
-    last_version = info.get("version")
+    info: dict[str, Any] = {}
+    last_version: object = None
     last_error: BaseException | None = None
-    while time.monotonic() < deadline:
-        time.sleep(10.0)
+    first_success = True
+    first_probe = True
+    while (
+        request_timeout := _supervisor_readiness_probe_budget(
+            deadline, delay=not first_probe
+        )
+    ) is not None:
+        first_probe = False
         try:
-            info = ws.supervisor_api("/supervisor/info", method="get", timeout=30.0)
+            info = ws.supervisor_api(
+                "/supervisor/info",
+                method="get",
+                timeout=request_timeout,
+            )
         except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as e:
-            # A Supervisor self-update restarts Supervisor; Core may return a
-            # structured WSCommandError OR drop the WS transport during that
-            # restart window. Record the error so a persistent failure is
-            # reported in the timeout message, then best-effort reconnect and
-            # keep polling.
+            if not _is_transient_supervisor_readiness_error(e):
+                raise
+            # A Supervisor self-update can return a transient command error or
+            # drop the WebSocket. Preserve the failure for timeout diagnostics,
+            # then best-effort reconnect and keep polling.
             last_error = e
             LOG.debug("Transient error polling /supervisor/info: %r", e)
-            try:
-                ws.reconnect()
-            except _SUPERVISOR_WAIT_TRANSIENT_ERRORS + (RuntimeError,) as reconnect_err:
-                # Handshake-stage WS errors (InvalidStatus / InvalidHandshake /
-                # ConnectionClosed) raise WebSocketException, which is NOT a
-                # subclass of OSError / RuntimeError / TimeoutError — covered
-                # here via _SUPERVISOR_WAIT_TRANSIENT_ERRORS. RuntimeError stays
-                # for symmetry with the poll-catch above (generic Supervisor
-                # restart-window RuntimeError that isn't a WSCommandError).
-                # WARNING level: surface the reconnect failure in CI logs. A
-                # one-off failure is harmless (the loop keeps polling until the
-                # deadline); a persistent one would otherwise only show up as
-                # the *poll* error in the final TimeoutError, so WARNING makes
-                # the reconnect pattern visible.
-                LOG.warning("reconnect during update wait failed: %r", reconnect_err)
+            reconnect_err = _reconnect_supervisor_during_wait(ws, deadline=deadline)
+            if reconnect_err is not None:
+                last_error = reconnect_err
             continue
+        if time.monotonic() >= deadline:
+            break
         version = info.get("version")
-        if version != last_version:
+        ready = _supervisor_info_ready(
+            info,
+            expected_channel=expected_channel,
+            minimum_version=minimum_version,
+        )
+        if first_success:
+            LOG.info(
+                "Supervisor ready: version=%s version_latest=%s arch=%s",
+                info.get("version"),
+                info.get("version_latest"),
+                info.get("arch"),
+            )
+            first_success = False
+            if ready:
+                return info
+            LOG.info(
+                "Supervisor self-update pending (%s -> %s); waiting before store ops...",
+                info.get("version"),
+                info.get("version_latest"),
+            )
+        elif version != last_version:
             LOG.info("Supervisor version changed: %s -> %s", last_version, version)
-            last_version = version
-        if not info.get("update_available") and info.get("version_latest"):
+        last_version = version
+        if ready:
             LOG.info("Supervisor self-update complete: version=%s", version)
-            return
+            return info
     last_err_suffix = f"; last error: {last_error!r}" if last_error else ""
-    raise TimeoutError(
+    raise _SupervisorReadinessTimeout(
         f"Supervisor did not finish self-updating within {update_timeout:.0f}s "
         f"(last version={last_version}, "
         f"latest={info.get('version_latest')}{last_err_suffix})"
+    )
+
+
+def _wait_core_version(
+    ws: HAWebSocket,
+    expected_version: str,
+    *,
+    timeout: float = 600.0,
+) -> dict[str, Any]:
+    """Reconnect until Supervisor reports the requested Core version."""
+    deadline = time.monotonic() + timeout
+    last_info: dict[str, Any] | None = None
+    last_error: BaseException | None = None
+
+    while time.monotonic() < deadline:
+        try:
+            ws.reconnect(deadline=deadline)
+            request_timeout = min(
+                30.0,
+                _remaining_deadline_budget(deadline, "Core version check"),
+            )
+            last_info = ws.supervisor_api(
+                "/core/info", method="get", timeout=request_timeout
+            )
+        except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
+            if not _is_transient_supervisor_readiness_error(exc):
+                raise
+            last_error = exc
+            LOG.debug("Core still restarting after update: %r", exc)
+        else:
+            if last_info.get("version") == expected_version:
+                return last_info
+            LOG.info(
+                "Core update still settling: running=%s expected=%s",
+                last_info.get("version"),
+                expected_version,
+            )
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(5.0, remaining))
+
+    last_err_suffix = f"; last error: {last_error!r}" if last_error else ""
+    raise TimeoutError(
+        "Core did not install the requested version within "
+        f"{timeout:.0f}s (expected={expected_version!r}, "
+        f"info={last_info!r}{last_err_suffix})"
+    )
+
+
+def _reconnect_during_supervisor_update(
+    ws: HAWebSocket,
+    *,
+    context: str,
+    deadline: float,
+) -> BaseException | None:
+    """Best-effort reconnect during a Supervisor restart window."""
+    try:
+        ws.reconnect(deadline=deadline)
+    except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
+        if not _is_transient_supervisor_readiness_error(exc):
+            raise
+        LOG.warning("Reconnect %s failed: %r", context, exc)
+        return exc
+    return None
+
+
+def _wait_supervisor_channel_metadata(
+    ws: HAWebSocket,
+    *,
+    channel: str,
+    minimum_version: str | None,
+    deadline: float,
+) -> bool:
+    """Wait for channel metadata and return whether Supervisor needs updating."""
+    last_info: dict[str, Any] | None = None
+    last_error: BaseException | None = None
+    while (request_timeout := deadline - time.monotonic()) > 0:
+        try:
+            last_info = ws.supervisor_api(
+                "/supervisor/info", method="get", timeout=min(30.0, request_timeout)
+            )
+        except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
+            if not _is_transient_supervisor_readiness_error(exc):
+                raise
+            last_error = exc
+            LOG.debug("Transient Supervisor reload failure: %r", exc)
+            reconnect_error = _reconnect_during_supervisor_update(
+                ws,
+                context="during Supervisor channel reload",
+                deadline=deadline,
+            )
+            if reconnect_error is not None:
+                last_error = reconnect_error
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(5.0, remaining))
+            continue
+
+        latest = last_info.get("version_latest")
+        latest_is_usable = minimum_version is None or (
+            isinstance(latest, str)
+            and _supervisor_version_key(latest)
+            >= _supervisor_version_key(minimum_version)
+        )
+        if last_info.get("channel") == channel and latest_is_usable:
+            if _supervisor_info_ready(
+                last_info,
+                expected_channel=channel,
+                minimum_version=minimum_version,
+            ):
+                return False
+            if last_info.get("update_available"):
+                return True
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(5.0, remaining))
+
+    last_err_suffix = f"; last error: {last_error!r}" if last_error else ""
+    raise TimeoutError(
+        "Supervisor channel metadata did not become ready before the "
+        f"image-build deadline: channel={channel!r}, "
+        f"minimum={minimum_version!r}, info={last_info!r}{last_err_suffix}"
+    )
+
+
+def _apply_supervisor_image_update(
+    ws: HAWebSocket,
+    *,
+    channel: str,
+    minimum_version: str | None,
+    deadline: float,
+    timeout: float,
+) -> None:
+    """Install and wait for the Supervisor version advertised by its channel."""
+    try:
+        ws.supervisor_api("/supervisor/update", method="post", timeout=timeout)
+    except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
+        if not _is_transient_supervisor_error(exc):
+            raise
+        # Selected bridge/transport errors are inconclusive during a Supervisor
+        # restart; readiness polling below establishes the actual outcome.
+        LOG.info("Supervisor update outcome inconclusive during restart: %r", exc)
+
+    while True:
+        try:
+            _wait_supervisor_ready(
+                ws,
+                update_timeout=max(deadline - time.monotonic(), 0.0),
+                expected_channel=channel,
+                minimum_version=minimum_version,
+            )
+            return
+        except _SupervisorReadinessTimeout:
+            raise
+        except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
+            if not _is_transient_supervisor_readiness_error(exc):
+                raise
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    "Supervisor did not reconnect before the beta-image deadline"
+                ) from exc
+            LOG.debug("Supervisor still restarting after update: %r", exc)
+            _reconnect_during_supervisor_update(
+                ws,
+                context="after Supervisor update",
+                deadline=deadline,
+            )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    "Supervisor did not reconnect before the beta-image deadline"
+                ) from exc
+            time.sleep(min(5.0, remaining))
+
+
+def _configure_core_image_variant(
+    ws: HAWebSocket,
+    *,
+    base_url: str,
+    core_version: str,
+) -> None:
+    """Install and verify the requested Home Assistant Core version."""
+    core_info = ws.supervisor_api("/core/info", method="get", timeout=30.0)
+    if core_info.get("version") == core_version:
+        LOG.info("Core beta already installed: version=%s", core_version)
+        return
+
+    LOG.info(
+        "Updating Core for beta image: %s -> %s",
+        core_info.get("version"),
+        core_version,
+    )
+    try:
+        ws.supervisor_api(
+            "/core/update",
+            method="post",
+            data={"version": core_version, "backup": False},
+            timeout=1800.0,
+        )
+    except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
+        if not _is_transient_supervisor_error(exc):
+            raise
+        # Updating Core may close the transport or make Core's Supervisor bridge
+        # return a blank unknown_error after dispatch. Exact-version polling below
+        # establishes the actual outcome.
+        LOG.info("Core update outcome inconclusive; polling version: %r", exc)
+
+    _wait_http_ok(f"{base_url}/manifest.json", timeout=600.0)
+    _wait_core_version(ws, core_version, timeout=600.0)
+    LOG.info("Core beta installed: version=%s", core_version)
+
+
+def _configure_supervisor_image_variant(
+    ws: HAWebSocket,
+    *,
+    base_url: str | None = None,
+    channel: str | None,
+    minimum_version: str | None,
+    core_version: str | None = None,
+    timeout: float = 600.0,
+) -> None:
+    """Configure a Supervisor channel/minimum and exact Core image variant."""
+    if channel is None and minimum_version is None and core_version is None:
+        return
+    if channel is None:
+        raise ValueError("Image variant settings require a Supervisor channel")
+    if channel not in {"stable", "beta"}:
+        raise ValueError(f"Unsupported Supervisor channel: {channel!r}")
+    if minimum_version is not None:
+        _supervisor_version_key(minimum_version)
+    if core_version is not None and _CORE_VERSION_RE.fullmatch(core_version) is None:
+        raise ValueError(f"Invalid Core version: {core_version!r}")
+    if core_version is not None and base_url is None:
+        raise ValueError("A Core image variant requires the Home Assistant base URL")
+
+    LOG.info(
+        "Configuring Supervisor image variant: channel=%s minimum=%s",
+        channel,
+        minimum_version or "any",
+    )
+    ws.supervisor_api(
+        "/supervisor/options",
+        method="post",
+        data={"channel": channel},
+        timeout=30.0,
+    )
+    ws.supervisor_api("/supervisor/reload", method="post", timeout=120.0)
+
+    deadline = time.monotonic() + timeout
+    if _wait_supervisor_channel_metadata(
+        ws,
+        channel=channel,
+        minimum_version=minimum_version,
+        deadline=deadline,
+    ):
+        _apply_supervisor_image_update(
+            ws,
+            channel=channel,
+            minimum_version=minimum_version,
+            deadline=deadline,
+            timeout=timeout,
+        )
+
+    if core_version is None:
+        return
+
+    _configure_core_image_variant(
+        ws,
+        base_url=base_url,
+        core_version=core_version,
     )
 
 
@@ -1998,12 +2633,12 @@ def install_addons(ws: HAWebSocket) -> dict[str, str]:
 
 
 def install_hacs(ws: HAWebSocket, base_url: str) -> None:
-    """Bootstrap HACS via the Get HACS addon.
+    """Install HACS via the Get HACS app (add-on).
 
-    The supported HAOS install path: register the Get HACS repo, install +
-    run the addon, which writes HACS files into /config/custom_components/.
-    A core restart picks up the new component; the HACS config flow then
-    completes on first boot of the canary test.
+    The supported HAOS path registers the Get HACS repository, installs and
+    runs the app, and writes HACS into ``/config/custom_components``. A Core
+    restart loads the component. ``bake_test_state`` later overlays the seeded
+    HACS config entry used by the emitted image's runtime canary.
 
     HACS-driven custom-component churn is the largest source of E2E flake
     the testcontainer suite cannot reproduce (#1281), so it must be in the
@@ -2055,9 +2690,16 @@ def build(work_dir: Path, output: Path) -> None:
     try:
         _wait_any_port((HA_HOST_PORT, HA_ALT_HOST_PORT), timeout=180)
         base_url = _discover_ha_base_url(timeout=600)
-        token = onboard(base_url)
-        _check_core_auth(base_url, token)
-        with HAWebSocket(base_url, token) as ws:
+        credentials = onboard(base_url)
+        _check_core_auth(base_url, credentials.access_token)
+        with HAWebSocket(base_url, credentials) as ws:
+            _configure_supervisor_image_variant(
+                ws,
+                base_url=base_url,
+                channel=SUPERVISOR_CHANNEL,
+                minimum_version=SUPERVISOR_MIN_VERSION,
+                core_version=CORE_VERSION,
+            )
             install_addons(ws)
             install_hacs(ws, base_url)
             install_ha_mcp_dev_addon(ws)
@@ -2070,9 +2712,6 @@ def build(work_dir: Path, output: Path) -> None:
             # access token and starts it).
             install_screenshot_engine(ws)
             install_advanced_ssh(ws)
-            # TODO(#1281 follow-up): integrations (ESPHome companion, Node-RED
-            # companion, Local Calendar, Sun verification) and mock RTSP/MQTT
-            # feeders. The canary test only needs addon lifecycle for now.
             stop_qemu(qemu, ws)
     except Exception:
         LOG.exception("Image build failed — leaving qcow2 in %s for inspection", qcow2)

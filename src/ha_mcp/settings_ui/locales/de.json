@@ -285,7 +285,7 @@
     "backup.bulk.confirm": "Alle Backups löschen, die übereinstimmen: {filters}?",
     "backup.bulk.deleted": "Gelöschte Backups: {count}",
     "filesystem.custom.title": "Benutzerdefinierte Dateisystem-Verzeichnisse (erweitert)",
-    "filesystem.custom.help": "Zusätzliche Verzeichnisse (eines pro Zeile), die Datei-Tools <strong>lesen und schreiben</strong> können. Relative Konfigurationspfade und erlaubte HAOS-Geschwister-Volumes werden unterstützt. Wirkt sofort.",
+    "filesystem.custom.help": "Zusätzliche Pfade (einer pro Zeile), die Dateitools <strong>lesen und schreiben</strong> dürfen. Relative Konfigurationspfade und erlaubte HAOS-Geschwistervolumen werden unterstützt. Jeder Eintrag erlaubt diesen Pfad und alles darunter; konfigurationsrelative Dateinamen wie <code>sensor.yaml</code> können direkt eingegeben werden. Gilt sofort.",
     "filesystem.custom.blocked": "Immer blockiert: {paths}, Pfad-Traversierung (<code>..</code>) und absolute Pfade außerhalb erlaubter HAOS-Volumes.",
     "filesystem.custom.enable_first": "Aktiviere zuerst Beta-Funktionen und Dateisystem-Tools oben zum Bearbeiten.",
     "filesystem.custom.unavailable": "Benutzerdefinierte Verzeichnisse sind derzeit nicht verfügbar.",
@@ -501,7 +501,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Massensteuerung",
-      "description": "Verwalte mehrere Entitätsaktionen in einer Anfrage."
+      "description": "Verwalte explizite Operationen oder eine deterministische strukturelle Massenaktion."
     },
     "ha_call_event": {
       "title": "Ereignis aufrufen",
@@ -653,7 +653,7 @@
     },
     "ha_get_app": {
       "title": "Apps (Add-ons) abrufen",
-      "description": "Home Assistant-Apps abrufen (früher als Add-ons bekannt, und dieses Tool als ha_get_addon) – installierte oder verfügbare auflisten oder abrufen"
+      "description": "Installierte oder verfügbare Home Assistant Apps (Add-ons) oder Details zu einer abrufen."
     },
     "ha_get_automation_traces": {
       "title": "Traces abrufen",
@@ -741,7 +741,7 @@
     },
     "ha_manage_app": {
       "title": "App (Add-on) verwalten",
-      "description": "Eine Home Assistant-App verwalten (früher als Add-on bekannt, und dieses Tool als ha_manage_addon) – Konfiguration aktualisieren o"
+      "description": "Home Assistant Apps (Add-ons) verwalten oder eine App-API proxyn."
     },
     "ha_manage_backup": {
       "title": "Backups verwalten",

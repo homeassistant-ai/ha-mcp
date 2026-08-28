@@ -156,7 +156,14 @@ def _non_loopback_origins(redirect_uris: list[str]) -> set[tuple[str, str, int]]
 
 
 def _refresh_identity_is_reproducible(redirect_uris: list[str]) -> bool:
-    """Return whether every callback maps to exactly one stable web origin."""
+    """Return whether every callback maps to exactly one stable web origin.
+
+    Read only by ``oauth_ha_auth.translated_client_id_for_refresh``, which
+    handles refresh tokens minted before the signed envelope shipped (#2248).
+    Registration no longer gates the advertised grant types on this: an
+    envelope records the translated identity at mint time, so a registration
+    shape that cannot be re-derived is still refreshable.
+    """
     if len(_non_loopback_origins(redirect_uris)) != 1:
         return False
     return not any(
@@ -188,23 +195,21 @@ def _redirect_uris_error(value: Any) -> tuple[str, str] | None:
     return None
 
 
-def _active_grant_types(hass: HomeAssistant, redirect_uris: list[str]) -> list[str]:
+def _active_grant_types(hass: HomeAssistant) -> list[str]:
     """Grant types the ACTIVE mode actually implements (RFC 7591 honesty).
 
     none mode's auto-approve token endpoint rejects refresh grants and its AS
     document advertises only ``authorization_code`` — the registration response
-    must not promise more. ha_auth forwards to core, but refresh is advertised
-    only when every callback maps to exactly one reproducible non-loopback
-    origin. Multiple web origins and ephemeral loopback origins cannot be
-    reconstructed for a redirect_uri-less refresh grant without server state.
+    must not promise more. ha_auth forwards to core and promises refresh for
+    EVERY valid registration (#2248): a translated identity refreshes off the
+    signed envelope the token leg mints, and an untranslated one refreshes at
+    core directly. The registration shape no longer decides it — the envelope
+    carries the identity, so ephemeral loopback ports and multi-origin
+    registrations refresh like anything else.
     """
     domain_data = hass.data.get(DOMAIN)
     cfg = domain_data.get(DATA_WEBHOOK) if isinstance(domain_data, dict) else None
-    if (
-        isinstance(cfg, dict)
-        and cfg.get("resource_server") is not None
-        and _refresh_identity_is_reproducible(redirect_uris)
-    ):
+    if isinstance(cfg, dict) and cfg.get("resource_server") is not None:
         return ["authorization_code", "refresh_token"]
     return ["authorization_code"]
 
@@ -284,7 +289,7 @@ class DcrRegisterView(HomeAssistantView):
             "client_id_issued_at": int(time.time()),
             "redirect_uris": uris,
             "token_endpoint_auth_method": "none",
-            "grant_types": _active_grant_types(self._hass, uris),
+            "grant_types": _active_grant_types(self._hass),
             "response_types": ["code"],
         }
         # Echo benign metadata the client sent (RFC 7591 §3.2.1 lets the AS

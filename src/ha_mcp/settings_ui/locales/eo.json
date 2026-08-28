@@ -285,7 +285,7 @@
     "backup.bulk.confirm": "Forigi ĉiujn sekurkopiojn kongruantajn: {filters}?",
     "backup.bulk.deleted": "Forigitaj {count} sekurkopio(j)n",
     "filesystem.custom.title": "Propraj dosiersistemaj dosierujoj (altnivela)",
-    "filesystem.custom.help": "Ekstraj dosierujoj (unu po linio), kiujn dosieraj iloj povas <strong>legi kaj skribi</strong>. Relativaj agordaj vojoj kaj permesitaj HAOS-frataj volumoj estas subtenataj. Aplikiĝas tuj.",
+    "filesystem.custom.help": "Ekstraj vojoj (po unu en ĉiu linio) al kiuj dosieraj iloj rajtas <strong>legi kaj skribi</strong>. Relativaj agordaj vojoj kaj permesitaj frataj volumoj de HAOS estas subtenataj. Ĉiu eniro permesas tiun vojon kaj ĉion sub ĝi; agord-relativaj dosiernomoj, kiel <code>sensor.yaml</code>, povas esti enmetitaj rekte. Aplikiĝas tuj.",
     "filesystem.custom.blocked": "Ĉiam blokita: {paths}, trairo de vojo (<code>..</code>), kaj absolutaj vojoj ekster permesitaj HAOS-volumoj.",
     "filesystem.custom.enable_first": "Ebligu beta-funkciojn kaj dosiersistemajn ilojn supre por redakti.",
     "filesystem.custom.unavailable": "Propraj dosierujoj estas nuntempe neatingeblaj.",
@@ -470,7 +470,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Amasa Kontrolo",
-      "description": "Mastrumi plurajn entajn agojn en unu peto."
+      "description": "Administri eksplicitajn operaciojn aŭ unu determinisman strukturan amasagadon."
     },
     "ha_call_event": {
       "title": "Voki Eventon",
@@ -622,7 +622,7 @@
     },
     "ha_get_app": {
       "title": "Akiri programojn (aldonaĵojn)",
-      "description": "Akiri Home Assistant programojn (antaŭe konataj kiel aldonaĵoj, kaj ĉi tiu ilo kiel ha_get_addon) - listigi instalitajn, disponeblajn, aŭ akiri d"
+      "description": "Akiri instalitajn aŭ disponeblajn Home Assistant-aplikaĵojn (aldonaĵojn), aŭ detalojn pri unu."
     },
     "ha_get_automation_traces": {
       "title": "Akiri Aŭtomatigajn Spurojn",
@@ -710,7 +710,7 @@
     },
     "ha_manage_app": {
       "title": "Administri programon (aldonaĵon)",
-      "description": "Administri Home Assistant programon (antaŭe konatan kiel aldonaĵo, kaj ĉi tiu ilo kiel ha_manage_addon) — ĝisdatigi ties agordon o"
+      "description": "Administri Home Assistant-aplikaĵojn (aldonaĵojn) aŭ proksiigi aplikaĵan API-on."
     },
     "ha_manage_backup": {
       "title": "Administri Rezervojn",

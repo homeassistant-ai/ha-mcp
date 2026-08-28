@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from ha_mcp import __version__
+from ha_mcp.client.rest_client import ErrorLogPage
 from ha_mcp.tools.tools_bug_report import (
     _detect_mcp_transport,
     _extract_client_info,
@@ -64,7 +65,9 @@ class TestBugReportTool:
         client = MagicMock()
         client.get_config = AsyncMock()
         client.get_states = AsyncMock()
-        client.get_error_log = AsyncMock(return_value="")
+        client.get_error_log = AsyncMock(
+            return_value=ErrorLogPage(text="", has_more=False)
+        )
         return client
 
     @pytest.fixture
@@ -724,8 +727,9 @@ class TestBugReportTool:
         template — the gap that made #1694 a multi-round diagnosis."""
         mock_client.get_config.return_value = {"version": "2026.6.4"}
         mock_client.get_states.return_value = []
-        mock_client.get_error_log.return_value = (
-            "WARNING InsecureKeyLengthWarning: The HMAC key is 0 bytes long"
+        mock_client.get_error_log.return_value = ErrorLogPage(
+            text="WARNING InsecureKeyLengthWarning: The HMAC key is 0 bytes long",
+            has_more=False,
         )
 
         result = await ha_report_issue_func()
@@ -744,7 +748,7 @@ class TestBugReportTool:
         a dangling empty header, and core_error_log is an empty string."""
         mock_client.get_config.return_value = {"version": "2026.6.4"}
         mock_client.get_states.return_value = []
-        mock_client.get_error_log.return_value = ""
+        mock_client.get_error_log.return_value = ErrorLogPage(text="", has_more=False)
 
         result = await ha_report_issue_func()
 
@@ -1102,13 +1106,16 @@ class TestFetchCoreErrorLog:
         lines survive."""
         client = MagicMock()
         client.get_error_log = AsyncMock(
-            return_value=(
-                "invalid authentication from localhost\n"
-                "InsecureKeyLengthWarning: The HMAC key is 0 bytes long\n"
-                "Bearer eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJhYmMifQ.sIgNature_xyz123\n"
-                "token=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n"
-                "client_secret: kX9pQ4mZ2vL8nR3sT6uW1yA5cB7dF0gH\n"
-                "http://user:hunter2@ha:8123/private_axAloe89imJfMt8RgkwuVA\n"
+            return_value=ErrorLogPage(
+                text=(
+                    "invalid authentication from localhost\n"
+                    "InsecureKeyLengthWarning: The HMAC key is 0 bytes long\n"
+                    "Bearer eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJhYmMifQ.sIgNature_xyz123\n"
+                    "token=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n"
+                    "client_secret: kX9pQ4mZ2vL8nR3sT6uW1yA5cB7dF0gH\n"
+                    "http://user:hunter2@ha:8123/private_axAloe89imJfMt8RgkwuVA\n"
+                ),
+                has_more=False,
             )
         )
         out = await _fetch_core_error_log(client)
@@ -1131,7 +1138,10 @@ class TestFetchCoreErrorLog:
 
         client = MagicMock()
         client.get_error_log = AsyncMock(
-            return_value="x" * (_CORE_LOG_MAX_CHARS + 4000) + "TAIL_MARKER\n"
+            return_value=ErrorLogPage(
+                text="x" * (_CORE_LOG_MAX_CHARS + 4000) + "TAIL_MARKER\n",
+                has_more=True,
+            )
         )
         out = await _fetch_core_error_log(client)
         assert "TAIL_MARKER" in out  # keeps the most recent lines
@@ -1139,9 +1149,25 @@ class TestFetchCoreErrorLog:
         assert len(out) <= _CORE_LOG_MAX_CHARS + 200  # only the marker overhead
 
     @pytest.mark.asyncio
+    async def test_requests_the_bounded_window(self):
+        """Pinned because the fetch is wrapped in a deliberately broad except:
+        a signature drift would otherwise surface as a silently empty log
+        section rather than a failure (#2279)."""
+        from ha_mcp.tools.tools_bug_report import _CORE_LOG_WINDOW_LINES
+
+        client = MagicMock()
+        client.get_error_log = AsyncMock(
+            return_value=ErrorLogPage(text="a line\n", has_more=False)
+        )
+        assert "a line" in await _fetch_core_error_log(client)
+        client.get_error_log.assert_awaited_once_with(lines=_CORE_LOG_WINDOW_LINES)
+
+    @pytest.mark.asyncio
     async def test_empty_when_log_empty(self):
         client = MagicMock()
-        client.get_error_log = AsyncMock(return_value="")
+        client.get_error_log = AsyncMock(
+            return_value=ErrorLogPage(text="", has_more=False)
+        )
         assert await _fetch_core_error_log(client) == ""
 
     @pytest.mark.asyncio

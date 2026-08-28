@@ -208,7 +208,14 @@ class TestRegisteredBulkToolCompatibility:
         from ha_mcp.tools.tools_service import register_service_tools
 
         mcp = FastMCP("test")
-        register_service_tools(mcp, MagicMock(), device_tools=device_tools)
+        # get_states is awaited by the operations-mode group-safety check
+        # (tools_service._reject_operations_group_member_conflicts) before
+        # every dispatch; an empty state list means it finds no group/member
+        # conflicts and falls through, which is what every test in this
+        # class actually wants to exercise.
+        client = MagicMock()
+        client.get_states = AsyncMock(return_value=[])
+        register_service_tools(mcp, client, device_tools=device_tools)
         return await mcp.get_tool("ha_bulk_control")
 
     @pytest.mark.asyncio

@@ -1,4 +1,11 @@
-"""Shared two-tier config fetching (bulk REST, then budgeted per-id) for deep search."""
+"""Shared budgeted per-id config fetching for deep search.
+
+Home Assistant exposes no bulk config endpoint for automations, scripts or
+scenes: each ``components/config/*`` module registers a single view whose url
+requires a ``{config_key}`` path segment, so a keyless GET matches no route.
+Configs are therefore read one id at a time, in parallel batches under a
+wall-clock budget.
+"""
 
 import asyncio
 import logging
@@ -146,54 +153,7 @@ def is_timeout_error(exc: BaseException) -> bool:
 
 
 class ConfigFetchMixin(ScoringMixin):
-    """REST bulk + budgeted individual config fetch, and scoring of fetched entries."""
-
-    @staticmethod
-    def _index_configs(
-        items: list[dict[str, Any]],
-        id_of: Callable[[dict[str, Any]], str | None],
-    ) -> dict[str, dict[str, Any]]:
-        """Build a ``{id: config}`` map, skipping items with no usable id."""
-        configs: dict[str, dict[str, Any]] = {}
-        for item in items:
-            key = id_of(item)
-            if key:
-                configs[key] = item
-        return configs
-
-    async def _bulk_fetch_configs(
-        self,
-        rest_endpoint: str,
-        id_of: Callable[[dict[str, Any]], str | None],
-        rest_timeout: float,
-        label: str,
-    ) -> dict[str, dict[str, Any]] | None:
-        """Bulk-fetch all configs of one domain from its REST endpoint.
-
-        Returns ``{id: config}`` (possibly empty) on success, or ``None`` when
-        the fetch failed (the caller then falls back to budgeted individual
-        fetches). An empty-but-successful REST list returns ``{}`` (not
-        ``None``) so the caller skips the individual-fetch fallback exactly as
-        it would for a populated response.
-
-        There is deliberately NO WebSocket fallback here: the
-        ``config/<domain>/config/list`` and ``<domain>/config/list`` command
-        types this used to try have never existed in HA core, so every legacy
-        config search fired paired ``unknown_command`` rejections that
-        ``send_websocket_message`` logged as ERRORs — the recurring
-        "WebSocket message failed: Command failed: Unknown command." log spam
-        of issue #1889.
-        """
-        try:
-            resp = await asyncio.wait_for(
-                self.client._request("GET", rest_endpoint),
-                timeout=rest_timeout,
-            )
-            if isinstance(resp, list):
-                return self._index_configs(resp, id_of)
-        except Exception as e:
-            logger.debug(f"{label} REST bulk fetch failed: {e}")
-        return None
+    """Budgeted per-id config fetch, and scoring of fetched entries."""
 
     async def _individual_fetch_budgeted(
         self,
@@ -204,6 +164,7 @@ class ConfigFetchMixin(ScoringMixin):
         budget: float,
         label: str,
         plural: str,
+        deprioritize: set[str] | None = None,
     ) -> tuple[dict[str, dict[str, Any]], int, int, int, int]:
         """Fetch configs individually in parallel batches under a wall-clock budget.
 
@@ -237,7 +198,24 @@ class ConfigFetchMixin(ScoringMixin):
         to find matches INSIDE configs (conditions/actions), not just by name,
         so name-prioritizing would skip the configs most likely to contain
         non-obvious matches. See #879.
+
+        ``deprioritize`` moves the named ids to the BACK of the queue while
+        keeping every id in it (relative order preserved within each group).
+        The automation, script and scene callers pass the ids Home Assistant's
+        reference graph already confirmed reference the queried entity: their
+        match status is settled without reading the body, so under budget
+        pressure the budget belongs to the ids that are NOT in the set, which
+        are the ones that may hide a templated reference the graph cannot see.
+        Same principle as the name-score rule above, applied to a different
+        signal. Ordering only, never dropping, so a budget covering every id
+        produces byte-identical results either way; under a short budget a
+        deprioritized id comes back with ``config: None`` when the caller
+        asked for bodies.
         """
+        if deprioritize:
+            ids = [i for i in ids if i not in deprioritize] + [
+                i for i in ids if i in deprioritize
+            ]
         configs: dict[str, dict[str, Any]] = {}
         budget_start = time.perf_counter()
         total_to_fetch = len(ids)

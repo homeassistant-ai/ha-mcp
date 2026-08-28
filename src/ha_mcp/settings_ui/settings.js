@@ -509,6 +509,7 @@ async function applyInfoChrome() {
       // worker onto the freshly installed code.
       const rbtn = document.getElementById('restartBtn');
       rbtn.style.display = '';
+      restartTargetEmbedded = true;
       rbtn.textContent = t('actions.restart_server', {}, 'Restart HA-MCP Server');
       if (noticeEl) {
         noticeEl.textContent = t(
@@ -653,6 +654,10 @@ function markRestartRequired() {
 // again); otherwise stays true through the restart cycle until the
 // page reloads.
 let restartInProgress = false;
+// True when the restart button drives the embedded (custom component) server
+// rather than the app (add-on) — the wait/give-up copy must name the right
+// thing (issue #2279 feedback: the embedded flow said "app" throughout).
+let restartTargetEmbedded = false;
 
 async function _fetchSettingsInfo() {
   // Read ``/api/settings/info`` once; return the parsed JSON or null
@@ -682,7 +687,8 @@ async function _probeAddonRestarted(previousInstanceId) {
     const info = await _fetchSettingsInfo();
     if (info) {
       if (previousInstanceId) {
-        if (info.instance_id && info.instance_id !== previousInstanceId) {
+        const current = restartTargetEmbedded ? info.worker_id : info.instance_id;
+        if (current && current !== previousInstanceId) {
           return true;
         }
         // Same instance_id (or field missing on the response) — keep
@@ -706,7 +712,9 @@ async function _runRestartReloadCycle(previousInstanceId) {
   // instance and we reload before the new one is up.
   btn.textContent = t('status.restarting', {}, 'Restarting…');
   await new Promise(r => setTimeout(r, RESTART_PROBE_INITIAL_GRACE_MS));
-  btn.textContent = t('status.waiting_addon', {}, 'Waiting for App (add-on) to come back online…');
+  btn.textContent = restartTargetEmbedded
+    ? t('status.waiting_server', {}, 'Waiting for the HA-MCP server to come back online…')
+    : t('status.waiting_addon', {}, 'Waiting for App (add-on) to come back online…');
   const restarted = await _probeAddonRestarted(previousInstanceId);
   if (restarted) {
     window.location.reload();
@@ -715,7 +723,9 @@ async function _runRestartReloadCycle(previousInstanceId) {
     // never actually fired (silent supervisor failure → instance_id
     // never flipped) OR supervisor is genuinely slower than the cap.
     // Surface a clear next-step instead of silently doing nothing.
-    btn.textContent = t('errors.addon_not_back', {}, 'App (add-on) did not come back online. Reload the page manually.');
+    btn.textContent = restartTargetEmbedded
+      ? t('errors.server_not_back', {}, 'The HA-MCP server did not come back online. Reload the page manually.')
+      : t('errors.addon_not_back', {}, 'App (add-on) did not come back online. Reload the page manually.');
     btn.disabled = false;
     restartInProgress = false;
   }
@@ -733,7 +743,12 @@ async function restartAddon() {
   // null is fine — the probe degrades to the old "any 200 means up"
   // mode rather than refusing to reload.
   const info = await _fetchSettingsInfo();
-  const previousInstanceId = info?.instance_id ?? null;
+  // Embedded restarts reload the config entry inside the surviving HA
+  // process, so instance_id never flips there; worker_id is pinned to the
+  // server instance and flips exactly when the reload completes.
+  const previousInstanceId = restartTargetEmbedded
+    ? (info?.worker_id ?? null)
+    : (info?.instance_id ?? null);
   try {
     const resp = await fetch('./api/settings/restart', {method: 'POST'});
     if (!resp.ok && resp.status < 500) {
@@ -769,6 +784,10 @@ async function restartAddon() {
     restartChannel.postMessage({
       type: 'restart-initiated',
       previousInstanceId,
+      // Receivers may get this before their own init has classified the
+      // deployment; without the sender's flag they would compare an
+      // embedded worker_id baseline against instance_id and time out.
+      targetEmbedded: restartTargetEmbedded,
     });
   }
   await _runRestartReloadCycle(previousInstanceId);
@@ -787,10 +806,15 @@ if (restartChannel) {
       restartInProgress = true;
       const btn = document.getElementById('restartBtn');
       if (btn) btn.disabled = true;
-      // Use the originating tab's baseline ``instance_id`` so every
-      // tab waits for the SAME ``instance_id`` flip before reloading.
-      // Falls back to null → "any 200 = ready" mode if the originator
-      // couldn't capture one.
+      // Use the originating tab's baseline so every tab waits for the
+      // SAME identity flip before reloading, and adopt its deployment
+      // classification too: this listener can fire before this tab's own
+      // init resolved it, and an embedded worker_id baseline compared
+      // against instance_id would never flip. Falls back to null →
+      // "any 200 = ready" mode if the originator couldn't capture one.
+      if (typeof data.targetEmbedded === 'boolean') {
+        restartTargetEmbedded = data.targetEmbedded;
+      }
       _runRestartReloadCycle(data.previousInstanceId ?? null);
     }
   });

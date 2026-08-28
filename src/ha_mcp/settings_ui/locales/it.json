@@ -285,7 +285,7 @@
     "backup.bulk.confirm": "Eliminare tutti i backup che corrispondono a: {filters}?",
     "backup.bulk.deleted": "Backup eliminati: {count}",
     "filesystem.custom.title": "Cartelle personalizzate del filesystem (avanzato)",
-    "filesystem.custom.help": "Cartelle aggiuntive (una per riga) che gli strumenti per i file possono <strong>leggere e scrivere</strong>. Sono supportati i percorsi relativi alla configurazione e i volumi HAOS adiacenti consentiti. Ha effetto immediato.",
+    "filesystem.custom.help": "Percorsi aggiuntivi (uno per riga) che gli strumenti di file possono <strong>leggere e scrivere</strong>. Sono supportati i percorsi di configurazione relativi e i volumi aff Infatti HAOS consentiti. Ogni voce consente l'accesso a quel percorso e a tutto ciò che si trova al di sotto; i nomi di file relativi alla configurazione, come <code>sensor.yaml</code>, possono essere inseriti direttamente. Ha effetto immediato.",
     "filesystem.custom.blocked": "Sempre bloccati: {paths}, il path traversal (<code>..</code>) e i percorsi assoluti al di fuori dei volumi HAOS consentiti.",
     "filesystem.custom.enable_first": "Attiva le funzioni beta e gli strumenti per il filesystem qui sopra per poter modificare.",
     "filesystem.custom.unavailable": "Le cartelle personalizzate non sono al momento disponibili.",
@@ -501,7 +501,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Controllo in blocco",
-      "description": "Gestisci più azioni di entità in una singola richiesta."
+      "description": "Gestisci operazioni esplicite o un'azione di gruppo strutturale deterministica."
     },
     "ha_call_event": {
       "title": "Invia un evento",
@@ -653,7 +653,7 @@
     },
     "ha_get_app": {
       "title": "Ottieni app (componenti aggiuntivi)",
-      "description": "Ottieni le app di Home Assistant (precedentemente note come componenti aggiuntivi, e questo strumento come ha_get_addon) - elenca quelle installate, disponibili o ottieni dettagli"
+      "description": "Ottieni le app (componenti aggiuntivi) di Home Assistant installate o disponibili, oppure i dettagli per una."
     },
     "ha_get_automation_traces": {
       "title": "Ottieni le tracce delle automazioni",
@@ -741,7 +741,7 @@
     },
     "ha_manage_app": {
       "title": "Gestisci app (componente aggiuntivo)",
-      "description": "Gestisci un'app di Home Assistant (precedentemente nota come componente aggiuntivo, e questo strumento come ha_manage_addon) — aggiorna la sua configurazione o"
+      "description": "Gestisci le app (componenti aggiuntivi) di Home Assistant o fai da proxy per l'API di un'app."
     },
     "ha_manage_backup": {
       "title": "Gestisci i backup",

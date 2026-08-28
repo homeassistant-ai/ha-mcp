@@ -95,10 +95,14 @@ class TestGroupLifecycle:
                 },
             )
             search_record = next(
-                entity
-                for entity in search_data["entities"]
-                if entity["entity_id"] == f"group.{object_id}"
+                (
+                    entity
+                    for entity in search_data["entities"]
+                    if entity["entity_id"] == f"group.{object_id}"
+                ),
+                None,
             )
+            assert search_record is not None, search_data
             assert search_record["is_group"] is True
             assert search_record["member_entity_ids"] == [
                 "light.bed_light",

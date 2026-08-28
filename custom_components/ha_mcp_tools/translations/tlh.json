@@ -1,0 +1,161 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "HA-MCP component le'",
+                "description": "Doch Dachel DaneHbogh yIwIv. Home Assistant qoDaq ha-mcp turwI' naQ QapmoH **HA-MCP Server**, 'ej Home Assistant webhook vegh latlhvaD 'ang. jomlu'meH mIwvam luwIv lo'wI'pu' HochHom. nIteb Qap turwI'vam, 'ej jomlu'meH mIw latlh Hoch (add-on, Docker, uvx/PyPI, stdio) qa'chu'; Dalo'chugh, mIwvetlh latlh yIQapmoHQo'. 'a'baqa' YAML je choHmeH patmey le' chel **HA-MCP 'a'baqa' & YAML janmey**; ha-mcp 'a'baqa'/YAML janmey wIvlu'bogh Dachu'chugh neH poQlu'. latlh DaqDaq (add-on, Docker, uvx) Qapchugh ha-mcp turwI'lIj, turwI' De' 'ay' DapoQbe' - 'a'baqa' & YAML De' 'ay'vam neH yIchel, 'ej janmeyvetlh Dalo'chugh neH yIchel. turwI' Segh HochvaD Qap, 'ej pa'QDI' vay' DaH chellaH.",
+                "menu_options": {
+                    "server": "HA-MCP Server (chup)",
+                    "tools": "HA-MCP 'a'baqa' & YAML janmey (wIvlaH)"
+                }
+            },
+            "tools": {
+                "title": "HA-MCP 'a'baqa' & YAML janmey",
+                "description": "'a'baqa' YAML config je choHmeH patmey chaw' le' ghajbogh cher. ha-mcp 'a'baqa'/YAML choHmeH janmey wIvlu'bogh Dachu'chugh neH poQlu' (DuH SeHwI'mey; motlh chu'Ha'lu') - turwI' Segh HochvaD, HA-MCP Server QaptaHboghvaD je Qap. De' 'ay'vam chellaH pagh teqlaH vay' poH Hoch."
+            },
+            "server": {
+                "title": "HA-MCP Server",
+                "description": "Home Assistant qoDaq ha-mcp turwI' naQ QapmoH, 'ej Home Assistant webhook vegh HopDaq 'ang (Nabu Casa proxy ghap vegh naw'laH). nIteb Qap turwI'vam, 'ej add-on, Docker, uvx/PyPI, stdio jomlu'meH mIwmey qa'chu' - latlh ha-mcp turwI' retlhDaq yIQapmoHQo'. QapchoHmeH **ngeH** yIwIv; ghIq integration DuHmeyDaq port, binding, chaw' 'olmeH mIw je DachoHlaH."
+            }
+        },
+        "abort": {
+            "already_configured": "De' 'ay'vam cherlu'pu'.",
+            "unsupported_home_assistant": "Home Assistant {required} ghap Dotlh chu' law' poQ HA-MCP Server QaptaHbogh, 'ach {installed} lo' patvam. componentvam HA-MCP File & YAML Tools De' 'ay' Dalo'taHlaH; add-on Docker container ghapDaq Qapbogh ha-mcp turwI' Hur retlhDaq Qap."
+        }
+    },
+    "options": {
+        "step": {
+            "tools_info": {
+                "title": "HA-MCP 'a'baqa' & YAML janmey",
+                "description": "ha-mcp 'a'baqa'/YAML janmey wIvlu'bogh lo'bogh 'a'baqa' YAML choHmeH patmey le' yIcher. ha-mcp turwI' DuHmey UI-Daq DuHmeyvam leghlu' je, 'ej SIbI' Qap; pagh Dataghqa'moHnIS. Daqmey pegh (chovnatlh .storage) 'ej Hung veH ngoqmey (homeassistant, http, frontend, lovelace) bottaH botwI' bIngHom; juSlaH pagh.",
+                "data": {
+                    "allowed_dirs": "'a'baqa' ghajwI' Daqmey latlh",
+                    "extra_yaml_keys": "YAML ghItlhmeH lIwmey chelbogh"
+                },
+                "data_description": {
+                    "allowed_dirs": "config ghajwI' Daq'e' bopbogh Daqmey; HochvaD laDmeH ghItlhmeH je chaw' noblu' (chovnatlh pyscript). Daq veghlu'bogh 'ej config HurDaq 'oHbogh De' 'ay'mey luteqlu'.",
+                    "extra_yaml_keys": "ngoqmey jen'e' ghItlhlaH ha_config_set_yaml, ngoqmey motlh chellu'bogh retlhDaq; jomlu'bogh patvamDaq YAML wa'DIch lo'bogh integrationsvaD (chovnatlh alert2). Hung veH ngoqmey luteqlu'."
+                }
+            },
+            "init": {
+                "title": "HA-MCP Server",
+                "description": "HA-MCP turwI' yIcher. {panel_hint}polDI' choHmeyvam lo'lu'.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
+                "data": {
+                    "channel": "Dotlh He",
+                    "auto_update": "nuv vangnISbe'taHvIS turwI' yIchu'moH",
+                    "server_port": "MCP turwI' Qum lojmIt",
+                    "bind_host": "rarmeH naw'",
+                    "webhook_auth": "chaw' 'olmeH mIw",
+                    "oauth_client_id_override": "OAuth ngo': Client ID le' (wIvlaH)",
+                    "oauth_client_secret_override": "OAuth ngo': Client Secret le' (wIvlaH)",
+                    "oauth_regenerate": "OAuth ngo': DaH Client ID/Secret yIchenqa'moH",
+                    "pip_spec": "ghunwI': ha-mcp package le' yIlo'",
+                    "server_url": "Home Assistant URL ('Itlh)",
+                    "external_url": "URL Hur (wIvlaH)",
+                    "webhook_id_override": "webhook pegh le' (wIvlaH)",
+                    "secret_path_override": "naw' He le' (wIvlaH)",
+                    "regenerate_secrets": "DaH rarmeH peghmey yIchenqa'moH",
+                    "enable_webhook": "webhook vegh Hop naw' yIQotlhHa'",
+                    "enable_llm_api": "Qum-agent LLM API",
+                    "llm_api_exposure": "Qum-agentvaD janmey 'angmeH mIw",
+                    "enable_startup_notification": "QapchoH QIn yIQotlhHa'",
+                    "enable_sidebar_panel": "Dop UI DuHmey jIH yIQotlhHa'"
+                },
+                "data_description": {
+                    "channel": "Dotlh Qapchu'bogh wIvlu'chugh, release Qapchu'bogh chu'qu' jomlu'; ghunmeH Dotlh wIvlu'chugh, development build chu'qu' jomlu'. turwI' chu'moHmeH pat chu'lu'chugh, integration pagh Home Assistant taghqa'moHlu'DI', 'ej roD nuDlu'DI', He wIvlu'bogh build chu'qu' jom pat. bIngDaq ghunwI' package le' wIvlu'chugh, wa'DIch 'oH 'ej turwI' chu'moHmeH pat chu'Ha'moH.",
+                    "auto_update": "chu'lu'chugh, integration pagh Home Assistant taghqa'moHlu'DI', 'ej roD nuDlu'DI', He wIvlu'bogh release chu'qu' jom turwI' chu'moHmeH pat. chu'Ha'lu'chugh, Dotlh jomlu'bogh lo'taH turwI', latlhlogh DuHvam Dachu'pa'. ha-mcp turwI' package neH SeH; HACS vegh ghoS HA-MCP Custom Component De' chu'.",
+                    "server_port": "Qum lojmItvamDaq 'Ij turwI'vam. 9583 lo' ha-mcp add-on, vaj 9584 motlh lo' turwI'vam, cha' turwI'pu' retlhDaq QaplaHmeH - add-on Dalo'be'chugh, Qum lojmIt tlhab Dalo'laH.",
+                    "bind_host": "MCP turwI' Qum lojmItvaD rarlaHbogh ghotpu' SeH. add-on rur DuH motlh: SIr'o' Sumvo' naw'laH vay', 'ej pegh He 'oH chaw'e'. Home Assistant jan neHvo' rarmeH loopback yIwIv - webhook URL Dop jIH je QaptaH.",
+                    "webhook_auth": "webhook URL-Daq ghoSmeH, paghDaq chaw' ghaj 'e' 'ol MCP nIqHommey. pegh URL lo'lu'chugh, chaw' 'oH URL'e'. Home Assistant sign-in lo'lu'chugh, Home Assistant loHwI' mab lo'ta' claude.ai rur nIqHom (OAuth). OAuth ngo' lo'lu'chugh, integrationvam Client ID Secret je chenmoH; Google Gemini Spark rur nIqHom poQboghDaq lanlu'. Dachu'DI' pagh Dachu'Ha'DI' Home Assistant Dataghqa'moHnIS.",
+                    "oauth_client_id_override": "OAuth ngo' Client ID chenmoH pat; 'oH qa' DuHvam. chIm yIpol Client ID DaH lo'lu'bogh polmeH. chaw' 'olmeH mIw 'oHtaH OAuth ngo' neH lo'lu'.",
+                    "oauth_client_secret_override": "OAuth ngo' Client Secret chenmoH pat; 'oH qa' DuHvam. chIm yIpol Client Secret DaH lo'lu'bogh polmeH. chaw' 'olmeH mIw 'oHtaH OAuth ngo' neH lo'lu'.",
+                    "oauth_regenerate": "wa'logh vang: OAuth ngo' mIwvamvaD Client ID Secret je chu' chenmoH. repair QIn poQbogh Home Assistant Dataghqa'moHpu'DI' neH QapchoH - Home Assistant Dataghqa'moHpa', Client ID Secret je ngo' QaptaH, 'ej chu' Qapbe'. bIngDaq override 'ay'mey cha' chImmoH je.",
+                    "pip_spec": "chIm yIpol. ha-mcp build le' neH wa'logh nIDmeH lo' (chovnatlh pre-release pin); release He qa', 'ej chImmoHlu'pa' turwI' chu'moHmeH pat chu'Ha'moH.",
+                    "server_url": "Home AssistantlIj naw'meH turwI' QaptaHbogh lo'bogh URL (motlh patvam'e'). chIm yIpol patvam Qum lojmIt SSL DuHmey jevo' chenmoHmeH; latlh He poQ turwI' neHchugh, De' yIlan.",
+                    "external_url": "rarmeH URL wa'DIch 'anglu' - domainlIj proxy ghap 'emDaq ba'chugh Home Assistant, URLvam yIlo'. scheme ngaSbogh Quv wa'DIch naQ yIlan. Home Assistant neH ghoS net poQ - web leghwI'Daq DapoSmoHDI', HA login jIH Daghaj net poQ - 'ej :8123 rur port ghajbe'nIS (latlh port je), pagh Hop MCP nIqHommey naw'laHbe'. chIm yIpol; vaj Nabu Casa Quv Sum ghap wIv pat.",
+                    "webhook_id_override": "rarmeH URL (/api/webhook/...)Daq webhook pegh chenmoH pat; peghvetlh qa' DuHvam. chaw' 'oH URL'e' - nI'bogh, ghItlh Qatlhbogh De' yIlo'. chIm yIpol pegh DaH lo'lu'bogh polmeH.",
+                    "secret_path_override": "turwI' Qum lojmItDaq naw'meH He pIQ chenmoH pat; Hevetlh pegh, 'ej Hevetlh qa' DuHvam. rap chut: chaw' 'oH He'e'. chIm yIpol He DaH lo'lu'bogh polmeH.",
+                    "regenerate_secrets": "wa'logh vang: webhook pegh chu' chenmoH pat, 'ej turwI' Qum lojmItDaq naw'meH He pIQ chenmoHqa' pat, vaj SIbI' QapHa' rarmeH URLmey ngo'. bIngDaq override 'ay'mey cha' chImmoH je.",
+                    "enable_webhook": "Sum neH mIw lo'meH yIchu'Ha': Home Assistant webhook qonta'be'lu'chu', vaj turwI'Daq Home Assistant vegh naw'laH pagh - Nabu Casa je. turwI' Qum lojmIt vegh naw'lu'meH He pIQ Dop jIH je QaptaH.",
+                    "enable_llm_api": "Home Assistant Qum agentsvaD janmey naQ yInob (OpenAI, Google, Ollama, ...): chu'lu'taHvIS, Control Home Assistant bIngDaq 'HA-MCP Server' wIvlaH agents, 'ej Assist chat ghogh jevo' janmey SeHlaH. chu'moHlu' neHchugh wIvlaH; agentDaq wIvbe'lu'pa' pagh 'anglu'. lo'meH paq: {llm_api_docs_url}",
+                    "llm_api_exposure": "Qum agentsvaD noblu'bogh jan ghom SeH. jan nej (motlh) agent context mach pol: janmey lungu'lu'bogh, nej/lo' meta-janmey je ghajbogh API mach. jan tetlh naQ 'ang mIw naQ - context tIn ghajbogh modelvaD qaq. cha' mIwmey wIvlu'chugh, cha' mIwmey retlhDaq qonta'lu', vaj Control Home Assistant bIngDaq mIwvam wIvlaH Hoch agent. HA-MCP DuHmey jIHDaq Hoch jan 'angmeH DuH SeHlu'; De' latlh: {llm_api_docs_url}",
+                    "enable_startup_notification": "turwI' QapchoH Hochlogh QIn yI'ang; loHwI' neHvaD DuHmey Daqmey 'ang. tamtaH QapchoHmeH yIchu'Ha' - Home Assistant QonoSDaq rarmeH URLmey leghlu'taH.",
+                    "enable_sidebar_panel": "DopDaq HA-MCP DuHmey jIH yI'ang (loHwI' neH). Dop De' 'ay' teqmeH yIchu'Ha' - jIHvamDaq turwI' DuHmey tu'lu'taH."
+                }
+            }
+        }
+    },
+    "issues": {
+        "server_start_failed": {
+            "title": "QapchoHlaHbe' HA-MCP turwI' QaptaHbogh",
+            "description": "Home Assistant qoDaq HA-MCP turwI' QaptaHbogh QapchoHmoHlaHbe'lu':\n\n{detail}\n\nHome Assistant QonoSmey yInuD; ghIq nIDqa'meH integration yItaghqa'moH (pagh Qagh mung yItI' 'ej yItaghqa'moH)."
+        },
+        "server_package_install_failed": {
+            "title": "HA-MCP turwI' QaptaHbogh package jomlaHbe'lu'",
+            "description": "HA-MCP turwI' QaptaHboghvaD ha-mcp package jomlu'DI' Qagh qaS:\n\n{detail}\n\nbIngDaq compatibility Qagh, jomlu'DI' Qagh ghap QIjlu'bogh yItI'; ghIq nIDqa'meH integration yItaghqa'moH."
+        },
+        "component_outdated": {
+            "title": "HACS vegh HA-MCP Custom Component yIchu'moH",
+            "description": "HA-MCP Custom Component {required} ghap chu' law' poQ ha-mcp turwI' jomlu'bogh, 'ach {installed} Daghaj. HACS vegh component yIchu'moH (HA-MCP Custom Component De' 'ay' yIpoS, 'ej De' chu' 'anglu'be'chugh 'Update information' yIlo'), ghIq Home Assistant yItaghqa'moH. qaStaHvIS QaptaH turwI', 'ach component chu'moHlu'pa' DuHmey chu' 'op Qapbe'laH."
+        },
+        "server_update_held": {
+            "title": "component chu'moHghach loS HA-MCP turwI' chu'moHghach",
+            "description": "ha-mcp turwI' {latest} tu'lu', 'ach HA-MCP Custom Component chu'moH je releasevetlh ({shipped}; {running} Dalo'taH). turwI' Dotlh'e' nIDbe'pu'bogh component QaptaHbogh QapchoHmoHlu'be'meH, component chu'moHlu'pa' turwI' chu'moHghach pat jomQo'.\n\nHACS vegh component yIchu'moH (HA-MCP Custom Component De' 'ay' yIpoS, 'ej De' chu' 'anglu'be'chugh 'Update information' yIlo'), ghIq Home Assistant yItaghqa'moH - ghIq nuv vangnISbe'taHvIS turwI' chu'moHghach jomlu'. turwI' chu'moHghach DaH jom DaneHchugh, HA-MCP turwI' chu'moHghach DolDaq jom leQ yIwIv."
+        },
+        "legacy_hacs_source": {
+            "title": "repository ngo'vo' jomlu' component",
+            "description": "componentvamvaD ha-mcp turwI' repository wa'DIch Hotlh HACS, vaj component Dotlh mI' (2.x) QInmey je 'angbe' 'ej turwI' Dotlh mI' QInmey je 'ang. chu'moHtaH HACS, 'ach pongmey muj pol. tI'meH: HACSvo' repositoryvam yIteq (integration DuHmey config De' 'ay'mey je pollu'), repository le' 'oHmeH homeassistant-ai/ha-mcp-integration yIchel, componentvo' yIjomqa', 'ej Home Assistant yItaghqa'moH."
+        },
+        "legacy_oauth_restart": {
+            "title": "OAuth ngo' choH lo'meH Home Assistant yItaghqa'moH",
+            "description": "OAuth ngo' chaw' 'olmeH mIw /authorize /token web endpoints ghajbogh'e' qon; Home Assistant naQ taghqa'moHlu'DI' neH rarlaH pagh rarHa'laH - mIwvam Dachu'pu'chugh, Dachu'Ha'pu'chugh, pagh Client ID/Secret DachoHpu'chugh je, rap ghu'. choH lo'meH Home Assistant yItaghqa'moH (Settings - System - Restart); Home Assistant Dataghqa'moHpa' QaptaH mIw ngo'."
+        }
+    },
+    "selector": {
+        "server_channel": {
+            "options": {
+                "stable": "Dotlh Qapchu'bogh (chup)",
+                "dev": "ghunmeH Dotlh (build chu'qu')"
+            }
+        },
+        "server_webhook_auth": {
+            "options": {
+                "none": "webhook URL pegh (motlh)",
+                "ha_auth": "Home Assistant lo'taHvIS yI'el (OAuth)",
+                "legacy": "OAuth ngo' (Client ID/Secret; Google Gemini SparkvaD)"
+            }
+        },
+        "llm_api_exposure": {
+            "options": {
+                "tool_search": "jan nej (mach, motlh)",
+                "full": "janmey naQ",
+                "both": "cha' mIwmey (Hoch agentvaD yIwIv)"
+            }
+        }
+    },
+    "entity": {
+        "update": {
+            "server_update": {
+                "name": "chu'moH"
+            }
+        }
+    },
+    "common": {
+        "connect_direct_access": "Home Assistant janvo' naw' pIQ: {url}",
+        "connect_local_lan": "SIr'o' Sum/LAN (rarmeH naw'Daq \"Local network\" wIvlu'chugh): {url}",
+        "connect_remote_url": "Daq Hopvo' rarmeH URL: {url}",
+        "connect_urls_label": "rarmeH URLmey:",
+        "connect_urls_pending": "turwI' QapchoHpu'DI', naDev rarmeH URLmey 'anglu', 'ej Home Assistant QonoSDaq 'anglu' je.",
+        "connect_webhook_disabled": "Daq Hopvo' webhook lo'bogh naw' Qotlhlu' (Daq Sumvo' neH naw'lu').",
+        "oauth_creds_pending": "turwI' QapchoHpu'DI', naDev Client ID, Client Secret je 'anglu'.",
+        "oauth_not_serving": "wej Dochmeyvam laj OAuth ngo' — Home Assistant Dataghqa'moH 'e' tlhoblu'DI', QapchoHmeH Dochmeyvam Home Assistant yItaghqa'moH.",
+        "oauth_select_legacy_mode": "DungDaq chaw' 'olmeH mIwvaD OAuth ngo' yIwIv 'ej Client ID Client Secret je chenmoHlu'meH yIpol.",
+        "panel_hint": "janmey Davu'meH 'ej turwI' DuHmey DachermeH [HA-MCP SeHlaw](/ha-mcp) yIpoSmoH.",
+        "tools_module_installed": "'a'baqa' & YAML janmey bobcho' (Beta/'Itlh; wIvlaH): jomlu'pu'",
+        "tools_module_not_installed": "'a'baqa' & YAML janmey bobcho' (Beta/'Itlh; wIvlaH): jomlu'be' — navvamDaq \"De' 'ay' chel\" yI'uy, 'ej bobcho'vam DachelmeH \"HA-MCP File & YAML Tools\" yIwIv",
+        "tools_module_not_loaded": "'a'baqa' & YAML janmey bobcho' (Beta/'Itlh; wIvlaH): jomlu'pu' 'ach QaptaHbe' — navvamDaq \"HA-MCP File & YAML Tools\" De' 'ay' yIQotlhHa' pagh yItaghqa'moH",
+        "version_line": "component {component_version} - ha-mcp turwI' {server_version} ({channel} Dotlh He)",
+        "version_not_installed": "wej jomlu'",
+        "version_unknown": "Sovbe'lu'"
+    }
+}

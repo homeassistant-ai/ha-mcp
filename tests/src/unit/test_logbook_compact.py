@@ -1,6 +1,6 @@
 """Unit tests for compact logbook entry filtering (issue #683)."""
 
-from ha_mcp.tools.tools_utility import COMPACT_LOGBOOK_FIELDS, _compact_logbook_entries
+from ha_mcp.tools.log_common import COMPACT_LOGBOOK_FIELDS, _compact_logbook_entries
 
 
 class TestCompactLogbookEntries:

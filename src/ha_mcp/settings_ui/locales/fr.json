@@ -285,7 +285,7 @@
     "backup.bulk.confirm": "Supprimer toutes les sauvegardes correspondant à : {filters} ?",
     "backup.bulk.deleted": "{count} sauvegarde(s) supprimée(s)",
     "filesystem.custom.title": "Répertoires de système de fichiers personnalisés (avancé)",
-    "filesystem.custom.help": "Répertoires supplémentaires (un par ligne) que les outils de fichiers peuvent <strong>lire et écrire</strong>. Les chemins de configuration relatifs et les volumes frères HAOS autorisés sont pris en charge. S'applique immédiatement.",
+    "filesystem.custom.help": "Chemins supplémentaires (un par ligne) que les outils de fichiers peuvent <strong>lire et écrire</strong>. Les chemins de configuration relatifs et les volumes frères HAOS autorisés sont pris en charge. Chaque entrée autorise ce chemin et tout ce qu'il contient ; les noms de fichiers relatifs à la configuration, tels que <code>sensor.yaml</code>, peuvent être saisis directement. S'applique immédiatement.",
     "filesystem.custom.blocked": "Toujours bloqués : {paths}, les traversées de chemin (<code>..</code>) et les chemins absolus en dehors des volumes HAOS autorisés.",
     "filesystem.custom.enable_first": "Activez d'abord les fonctionnalités bêta et les outils de système de fichiers ci-dessus pour modifier.",
     "filesystem.custom.unavailable": "Les répertoires personnalisés sont actuellement indisponibles.",
@@ -501,7 +501,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Contrôle groupé",
-      "description": "Gérer plusieurs actions d'entité en une seule requête."
+      "description": "Gérer des opérations explicites ou une action groupée structurelle déterministe."
     },
     "ha_call_event": {
       "title": "Déclencher un événement",
@@ -653,7 +653,7 @@
     },
     "ha_get_app": {
       "title": "Obtenir des applications (add-ons)",
-      "description": "Obtenir les applications Home Assistant (anciennement connues sous le nom d'add-ons, et cet outil sous le nom de ha_get_addon) — lister les applications installées, disponibles, ou obtenir d"
+      "description": "Obtenez les applications (add-ons) Home Assistant installées ou disponibles, ou les détails de l'une d'entre elles."
     },
     "ha_get_automation_traces": {
       "title": "Obtenir les traces",
@@ -741,7 +741,7 @@
     },
     "ha_manage_app": {
       "title": "Gérer l'application (add-on)",
-      "description": "Gérer une application Home Assistant (anciennement connue sous le nom d'add-on, et cet outil sous le nom de ha_manage_addon) — mettre à jour sa configuration ou"
+      "description": "Gérez les applications (add-ons) Home Assistant ou agissez comme proxy pour l'API d'une application."
     },
     "ha_manage_backup": {
       "title": "Gérer les sauvegardes",

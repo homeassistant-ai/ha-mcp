@@ -188,11 +188,12 @@ All three behaviors advertise proxy-owned endpoints under `/api/mcp_proxy/oauth`
 - `/api/mcp_proxy/oauth/authorize` — mode-dispatched authorization endpoint
 - `/api/mcp_proxy/oauth/token` — mode-dispatched token endpoint
 - `/api/mcp_proxy/oauth/register` — stateless DCR endpoint, advertised in `ha_auth` and none mode
+- `/api/mcp_proxy/oauth/revoke` — RFC 7009 revocation endpoint, advertised and served in `ha_auth` mode only (404 elsewhere)
 
 The same authorize/token URLs behave according to the active mode:
 
 - **None mode:** accepts any valid HTTPS or RFC 8252 loopback redirect, auto-approves without a page, and issues a cosmetic token. DCR registrations advertise only the authorization-code grant.
-- **`ha_auth`:** validates CIMD or signed DCR identities before sending the browser/token exchange into Home Assistant core. DCR advertises refresh only when the registered redirects have one reproducible web origin.
+- **`ha_auth`:** validates CIMD or signed DCR identities before sending the browser/token exchange into Home Assistant core. DCR advertises refresh for every registration: a forwarded token response comes back with its refresh token wrapped in a signed envelope naming the identity core bound it to, so loopback-callback and multi-origin clients refresh without re-authorizing. The proxy also fronts token revocation on its own scoped revocation endpoint, so a wrapped refresh token is unwrapped before Home Assistant sees it and is really revoked. Revocation accepts a wrapped token even when its signature no longer verifies — after the signing key rotates, which is what removing and re-adding the integration does — because possession of a token is the only authorization revoking it needs, and Home Assistant's own revocation endpoint is anonymous and idempotent. Sessions authorized before this version carry no envelope: they re-authorize once, then refresh normally.
 - **`legacy`:** serves the existing consent and credentialed token flow on the scoped URLs. The host-root `/authorize` and `/token` routes remain compatibility aliases but are not advertised; legacy does not advertise DCR.
 
 **Hosted Claude environment requirements:** Hosted Claude surfaces reach your server from Anthropic's backend, not from your browser. Three environment rules apply that no server-side setting can work around:

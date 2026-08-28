@@ -19,10 +19,12 @@ from ..errors import ErrorCode, create_error_response
 from ..redaction import redact_flow_schema, redaction_enabled
 from .config_entry_flow_form import (
     _MENU_SELECTION_KEYS,
+    _PER_STEP_VALUES_KEY,
     _auto_confirm_form_payload,
     _handle_form_step,
     _ReuseState,
     _success_warnings,
+    validate_step_values,
 )
 from .config_entry_flow_menu import (
     _flow_step_budget,
@@ -493,6 +495,27 @@ def _raise_reconfigure_no_answer(
     )
 
 
+def _empty_forms_suggestions(supplied_keys: list[str]) -> list[str]:
+    """Guidance for a flow that consumed none of the caller's keys.
+
+    ``step_values`` is a directive rather than a field, so "check the field
+    names" is the wrong advice when it is what the caller supplied: the likely
+    mistake is a step_id the flow never presents, not a misspelled field.
+    """
+    if _PER_STEP_VALUES_KEY in supplied_keys:
+        return [
+            "Check each step_values step_id against the steps this flow "
+            "actually presents — a step_id the flow never reaches applies "
+            "nothing — and check the field names inside each entry with "
+            "ha_get_integration(entry_id=..., include_schema=True).",
+        ]
+    return [
+        "Check the field names against the flow's data_schema — "
+        "ha_get_integration(entry_id=..., include_schema=True) "
+        "shows the accepted fields — then retry with corrected keys.",
+    ]
+
+
 def _finish_flow_entry(
     flow_id: str,
     current_step: dict[str, Any],
@@ -521,12 +544,7 @@ def _finish_flow_entry(
                 "Flow completed without consuming any of the supplied "
                 "config keys — every form step was submitted empty, so "
                 "the flow saved its defaults, not your values",
-                suggestions=[
-                    "Check the field names against the flow's data_schema — "
-                    "ha_get_integration(entry_id=..., include_schema=True) "
-                    "shows the accepted fields — then retry with corrected "
-                    "keys.",
-                ],
+                suggestions=_empty_forms_suggestions(supplied_keys),
                 context={
                     "flow_id": flow_id,
                     "supplied_keys": supplied_keys,
@@ -685,12 +703,14 @@ def _flow_form_payload(
     remaining_config: dict[str, Any],
     ignored_config_keys: set[str],
     reuse_state: _ReuseState,
+    keep_current_values: bool,
 ) -> tuple[dict[str, Any], bool]:
     """Build one generic flow form payload.
 
     Returns the payload and whether the step consumed at least one caller key
     — not which ones; ``remaining_config`` and ``ignored_config_keys`` carry
-    that.
+    that. A value the step backfills under ``keep_current_values`` is the
+    step's own data, so it never counts as a consumed caller key.
     """
     consumed_form_keys: set[str] = set()
     form_data = _auto_confirm_form_payload(current_step)
@@ -702,6 +722,7 @@ def _flow_form_payload(
             ignored_config_keys,
             consumed_form_keys,
             reuse_state,
+            keep_current_values=keep_current_values,
         )
     return form_data, bool(consumed_form_keys)
 
@@ -757,6 +778,7 @@ async def _handle_flow_steps(
     helper_type: str | None = None,
     *,
     is_reconfigure: bool = False,
+    keep_current_values: bool = False,
 ) -> dict[str, Any]:
     """Walk a multi-step config flow handling menu and form steps.
 
@@ -793,6 +815,22 @@ async def _handle_flow_steps(
             the caller can react. Under ``is_reconfigure`` no schema is
             fetched (the live step already carries the right one) and the
             value is used only to name the integration in error prose.
+        keep_current_values: Whether this flow edits an existing object
+            (options, reconfigure, subentry reconfigure) rather than creating
+            one. Its steps arrive pre-filled with the stored values and the HA
+            UI's save posts every box back, so a declared field the caller
+            named no key for is submitted with the step's own value instead of
+            being dropped — which is what stopped a one-field options patch
+            from resetting everything it did not mention (issue #2254). A
+            field the caller explicitly set to ``None`` is a clear: for an
+            optional field with no schema default that means consuming the key
+            and omitting it, the only way such a field can be emptied;
+            everything else submits the ``None`` so Home Assistant validates
+            it, since omitting a defaulted field would substitute its static
+            default rather than clear it. Backfilled
+            values are the step's data, so they neither count towards the
+            "consumed at least one caller key" test below nor satisfy the
+            reconfigure "consumed EVERY key" one.
         is_reconfigure: Whether this is the official reconfigure flow — the
             same mode HA uses for reauth, so both ``reconfigure_successful``
             and ``reauth_successful`` count as its success aborts. In this
@@ -817,6 +855,7 @@ async def _handle_flow_steps(
     """
     if submit_fn is None:
         submit_fn = client.submit_config_flow_step
+    validate_step_values(config)
     remaining_config = dict(config)
     current_step = initial_step
     last_menu_choice: str | None = None
@@ -893,6 +932,7 @@ async def _handle_flow_steps(
                 remaining_config=remaining_config,
                 ignored_config_keys=ignored_config_keys,
                 reuse_state=reuse_state,
+                keep_current_values=keep_current_values,
             )
             if consumed_any:
                 any_form_key_consumed = True
@@ -1040,6 +1080,7 @@ async def _handle_config_subentry_flow_steps(
     config: dict[str, Any],
     *,
     is_reconfigure: bool,
+    keep_current_values: bool = False,
 ) -> dict[str, Any]:
     """Walk a config subentry flow and accept HA's reconfigure-success abort.
 
@@ -1057,7 +1098,13 @@ async def _handle_config_subentry_flow_steps(
     read as "done" to an agent. This is a behaviour change for
     ``ha_config_set_helper(helper_type="config_subentry", subentry_id=...)``
     callers who previously relied on the warning.
+
+    ``keep_current_values`` carries the same edit-mode contract as in
+    :func:`_handle_flow_steps` (issue #2254): reconfiguring a subentry
+    resubmits the step's own value for every declared field the caller named
+    no key for, so a partial patch stops wiping the rest of the subentry.
     """
+    validate_step_values(config)
     remaining_config = dict(config)
     current_step = initial_step
     last_menu_choice: str | None = None
@@ -1124,6 +1171,7 @@ async def _handle_config_subentry_flow_steps(
                 remaining_config,
                 ignored_config_keys,
                 reuse_state=reuse_state,
+                keep_current_values=keep_current_values,
             )
             logger.debug(
                 "Config subentry flow step %s: form submit (step_id=%s, keys=%s)",

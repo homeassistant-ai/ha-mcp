@@ -49,17 +49,16 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
-from collections.abc import AsyncIterator, Iterable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterable
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
+from functools import cache
 from typing import TYPE_CHECKING, Any, cast
 
 import voluptuous as vol
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import llm
-from homeassistant.helpers.httpx_client import get_async_client
-from voluptuous_openapi import convert_to_voluptuous
 
 from .const import (
     DATA_LLM_API_UNSUB,
@@ -72,6 +71,7 @@ from .const import (
 )
 
 if TYPE_CHECKING:
+    import httpx
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.util.json import JsonObjectType
     from mcp import types as mcp_types
@@ -127,6 +127,25 @@ _FALLBACK_DENY_TOOLS = frozenset(
 _SEARCH_TOOL_NAME = "ha_search_tools"
 _CALL_TOOL_NAME = "ha_call_tool"
 _SEARCH_RESULT_LIMIT = 8
+
+
+@cache
+def _schema_converter() -> Callable[[Any], Any]:
+    """Resolve the Core-provided schema converter once, off the event loop."""
+    try:
+        legacy = importlib.import_module("voluptuous_openapi")
+    except ModuleNotFoundError as err:
+        if err.name != "voluptuous_openapi":
+            raise
+        probatio = importlib.import_module("probatio")
+        return cast(Callable[[Any], Any], probatio.from_openapi)
+    return cast(Callable[[Any], Any], legacy.convert_to_voluptuous)
+
+
+def convert_to_voluptuous(schema: Any) -> vol.Schema:
+    """Convert an OpenAPI schema on stable and Probatio-based HA Core."""
+    return cast(vol.Schema, _schema_converter()(schema))
+
 
 # Used when the server's initialize result carries no instructions (it always
 # should — ha-mcp ships server-level instructions — but never render an empty
@@ -199,74 +218,152 @@ def _is_transport_failure(err: BaseException) -> bool:
 
 
 def _import_mcp_sdk() -> None:
-    """Import the mcp client SDK modules (blocking; run on the executor).
+    """Import lazy LLM dependencies (blocking; run on the executor).
 
-    Raises ImportError when the SDK is not importable — the caller decides
-    whether that skips registration (SDK missing entirely) or surfaces as a
-    conversation error.
+    Raises ImportError when the MCP SDK or Core's schema converter is not
+    importable — the caller decides whether that skips registration or
+    surfaces as a conversation error.
     """
     importlib.import_module("mcp.client.session")
     importlib.import_module("mcp.client.streamable_http")
+    _schema_converter()
 
 
 async def async_probe_mcp_sdk(hass: HomeAssistant) -> bool:
-    """Return True when the mcp client SDK imports (first import off-loop)."""
+    """Return True when lazy LLM dependencies import (first import off-loop)."""
     try:
         await hass.async_add_executor_job(_import_mcp_sdk)
     except ImportError as err:
         _LOGGER.warning(
-            "The installed server package provides no importable 'mcp' client "
-            "SDK (%s); the conversation-agent LLM API will not be available",
+            "A required LLM dependency is not importable (%s); the "
+            "conversation-agent LLM API will not be available",
             err,
         )
         return False
     return True
 
 
+def _loopback_httpx_client_factory(
+    headers: dict[str, str] | None = None,
+    timeout: httpx.Timeout | None = None,
+    auth: httpx.Auth | None = None,
+) -> httpx.AsyncClient:
+    """``httpx_client_factory`` for the pre-rename SDK's ``streamablehttp_client``.
+
+    That deprecated entry point takes no ``http_client`` — it always builds
+    its own via this factory — but the factory itself IS overridable, so the
+    same ``verify=False`` / ``trust_env=False`` posture as the canonical path
+    in :func:`_mcp_session` still applies: this fallback is loopback-only
+    too, so a real SSL context is pure waste and this call must never be
+    diverted through an environment proxy (which would also leak the URL's
+    embedded ``secret_path`` to it).
+
+    ``timeout`` mirrors ``create_mcp_http_client`` (the factory this
+    substitutes for): a ``None`` here means "no timeout was supplied", not
+    "disable timeouts" — the real ``streamablehttp_client`` caller always
+    passes an explicit ``httpx.Timeout``, but a bare ``None`` reaching
+    ``httpx.AsyncClient`` directly disables every timeout outright (review
+    finding), which is the wrong zero-argument default for a fallback aimed
+    at unknown old environments.
+
+    The substitute value is inlined rather than imported from
+    ``mcp.shared._httpx_utils``: this factory only ever runs on SDKs old
+    enough to lack ``streamable_http_client`` (the canonical name this
+    module tries first), and ``MCP_DEFAULT_TIMEOUT`` /
+    ``MCP_DEFAULT_SSE_READ_TIMEOUT`` don't exist before mcp 1.24 either — an
+    import would raise on every SDK version this fallback actually serves
+    (round-2 review finding: the first attempt at this fix broke the exact
+    path it was meant to harden). ``create_mcp_http_client``'s own ``None``
+    default on those older SDKs is this same flat ``httpx.Timeout(30.0)``,
+    with no separate read timeout (the ``read=300`` shape is itself a 1.24+
+    addition) — matched here rather than guessed at.
+    """
+    import httpx
+
+    if timeout is None:
+        timeout = httpx.Timeout(30.0)
+
+    return httpx.AsyncClient(
+        headers=headers, timeout=timeout, auth=auth, verify=False, trust_env=False
+    )
+
+
 @asynccontextmanager
 async def _mcp_session(
     url: str,
-    http_client: Any = None,
 ) -> AsyncIterator[tuple[ClientSession, mcp_types.InitializeResult]]:
     """Open an initialized MCP session against the loopback server.
 
     Imports resolve from ``sys.modules`` — :func:`async_probe_mcp_sdk` did the
     real (blocking) import on the executor before the API was registered.
 
-    ``http_client`` is Home Assistant's shared httpx client
-    (``helpers.httpx_client.get_async_client``). Passing it is what keeps
-    this loop-safe: without it the SDK constructs its own httpx client per
-    session, whose SSL setup loads the CA bundle SYNCHRONOUSLY inside HA's
-    event loop (live-found — HA's blocking-call monitor flagged this exact
-    line). HA's shared client is built against the process-cached SSL
-    context, and the SDK does not close caller-owned clients (HA core's mcp
-    integration relies on the same contract).
+    Builds a throwaway httpx client scoped to this one session rather than
+    reusing Home Assistant's shared one (``helpers.httpx_client.
+    get_async_client`` — the prior approach): the SDK applies NO timeout of
+    its own when a caller-provided client is passed, so whatever timeout
+    THAT client happens to carry becomes the real wire-level ceiling. HA's
+    shared client is built with no explicit ``timeout=``, so it silently
+    carries httpx's own hardcoded 5-second default — capping every tool call
+    at 5 seconds of read-idle no matter how generous
+    ``_CALL_TOOL_TIMEOUT_SECONDS`` / ``_LIST_TOOLS_TIMEOUT_SECONDS`` looked
+    (live-found investigating a ~60s Assist-pipeline hang: a real tool doing
+    real work never got anywhere near its own asyncio budget).
+
+    ``verify=False`` is not a security relaxation: ``url`` is always
+    ``http://127.0.0.1:<port>...`` (see ``async_register_llm_api``) — a
+    plain-HTTP loopback call that never negotiates TLS — so building a real
+    SSL context would be pure waste. It also keeps this loop-safe the same
+    way the shared client did: an SSL context built with ``verify=True``
+    loads the system CA bundle SYNCHRONOUSLY (live-found — HA's
+    blocking-call monitor flagged this exact line when the SDK built its own
+    default client), and skipping verification skips that load entirely.
+
+    ``trust_env=False`` for the same "this is loopback, not the network"
+    reason: httpx defaults to reading ``HTTP_PROXY``/``NO_PROXY`` from the
+    environment, and ``127.0.0.1`` is not exempt unless ``NO_PROXY``
+    explicitly lists it. Under an ``HTTP_PROXY`` that doesn't, this call
+    would leave the loopback listener entirely and go out through the
+    configured proxy instead — which also hands the proxy ``url``'s
+    embedded ``secret_path`` (the private endpoint credential). Disabling
+    env trust removes both failure modes; nothing here should ever consult
+    a proxy.
+
+    The client is entered on the exit stack so it closes with the rest of
+    the session.
     """
     from mcp.client.session import ClientSession
 
-    try:
-        from mcp.client.streamable_http import streamable_http_client
+    async with AsyncExitStack() as stack:
+        try:
+            from mcp.client.streamable_http import streamable_http_client
+        except ImportError:
+            # Pre-rename SDK (an older ha-mcp resolved by a pip-spec override
+            # pins an older fastmcp/mcp): same call shape, deprecated name,
+            # and no http_client kwarg — but it does accept a factory for the
+            # client it builds internally, so _loopback_httpx_client_factory
+            # keeps this fallback on the same verify=False/trust_env=False
+            # posture as the canonical path below.
+            from mcp.client.streamable_http import streamablehttp_client
 
-        transport = (
-            streamable_http_client(url=url, http_client=http_client)
-            if http_client is not None
-            else streamable_http_client(url=url)
+            transport = streamablehttp_client(
+                url=url, httpx_client_factory=_loopback_httpx_client_factory
+            )
+        else:
+            import httpx
+
+            http_client = await stack.enter_async_context(
+                httpx.AsyncClient(
+                    verify=False,
+                    trust_env=False,
+                    timeout=httpx.Timeout(_CALL_TOOL_TIMEOUT_SECONDS),
+                )
+            )
+            transport = streamable_http_client(url=url, http_client=http_client)
+
+        read_stream, write_stream, _ = await stack.enter_async_context(transport)
+        session = await stack.enter_async_context(
+            ClientSession(read_stream, write_stream)
         )
-    except ImportError:
-        # Pre-rename SDK (an older ha-mcp resolved by a pip-spec override
-        # pins an older fastmcp/mcp): same call shape, deprecated name, but
-        # no http_client kwarg — it builds its own client, so on those old
-        # SDKs the blocking-SSL-setup warning is the accepted cost.
-        from mcp.client.streamable_http import (
-            streamablehttp_client,
-        )
-
-        transport = streamablehttp_client(url=url)
-
-    async with (
-        transport as (read_stream, write_stream, _),
-        ClientSession(read_stream, write_stream) as session,
-    ):
         init_result = await session.initialize()
         yield session, init_result
 
@@ -350,7 +447,7 @@ async def _forward_tool_call(
     try:
         async with (
             asyncio.timeout(_CALL_TOOL_TIMEOUT_SECONDS),
-            _mcp_session(server_url, get_async_client(hass)) as (session, _init),
+            _mcp_session(server_url) as (session, _init),
         ):
             result = await session.call_tool(name, arguments)
     except _transport_errors() as err:
@@ -496,7 +593,7 @@ class HaMcpLlmApi(llm.API):
         try:
             async with (
                 asyncio.timeout(_LIST_TOOLS_TIMEOUT_SECONDS),
-                _mcp_session(self.server_url, get_async_client(self.hass)) as (
+                _mcp_session(self.server_url) as (
                     session,
                     init_result,
                 ),
@@ -538,9 +635,7 @@ class HaMcpLlmApi(llm.API):
     def _convert_parameters(self, tool: Any) -> vol.Schema | None:
         """Convert one tool's JSON schema, or None (logged) when it fails."""
         try:
-            # cast: voluptuous_openapi is an untyped (ignored) import, so the
-            # call returns Any; its documented return type is vol.Schema.
-            return cast(vol.Schema, convert_to_voluptuous(tool.inputSchema))
+            return convert_to_voluptuous(tool.inputSchema)
         except Exception:
             # One unconvertible schema must not take down the whole
             # toolset for the conversation — skip that tool, loudly.

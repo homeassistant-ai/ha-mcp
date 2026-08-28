@@ -285,7 +285,7 @@
     "backup.bulk.confirm": "Smazat všechny zálohy odpovídající: {filters}?",
     "backup.bulk.deleted": "Smazáno {count} záloh",
     "filesystem.custom.title": "Vlastní adresáře souborového systému (pokročilé)",
-    "filesystem.custom.help": "Další adresáře (jeden na řádek), do kterých mohou souborové nástroje <strong>číst a zapisovat</strong>. Podporovány jsou relativní cesty konfigurace a povolené sourozenecké svazky HAOS. Projeví se okamžitě.",
+    "filesystem.custom.help": "Další cesty (jedna na řádek), ke kterým mohou nástroje pro práci se soubory <strong>číst a zapisovat</strong>. Podporovány jsou relativní cesty ke konfiguraci a povolené vedlejší svazky HAOS. Každá položka umožňuje přístup k dané cestě a všemu pod ní; názvy souborů relativní ke konfiguraci, jako například <code>sensor.yaml</code>, lze zadat přímo. Projeví se okamžitě.",
     "filesystem.custom.blocked": "Vždy blokováno: {paths}, procházení cest (<code>..</code>) a absolutní cesty mimo povolené svazky HAOS.",
     "filesystem.custom.enable_first": "Povolte beta funkce a nástroje souborového systému výše pro úpravy.",
     "filesystem.custom.unavailable": "Vlastní adresáře jsou momentálně nedostupné.",
@@ -470,7 +470,7 @@
   "tools": {
     "ha_bulk_control": {
       "title": "Hromadné ovládání",
-      "description": "Správa více akcí entit v jednom požadavku."
+      "description": "Spravujte explicitní operace nebo jednu deterministickou strukturální hromadnou akce."
     },
     "ha_call_event": {
       "title": "Vyvolat událost",
@@ -622,7 +622,7 @@
     },
     "ha_get_app": {
       "title": "Získat aplikace (doplňky)",
-      "description": "Získat aplikace Home Assistant (dříve známé jako doplňky a tento nástroj jako ha_get_addon) – vypsat nainstalované, dostupné nebo získat d"
+      "description": "Získat nainstalované nebo dostupné aplikace (doplňky) Home Assistant, nebo podrobnosti o jedné z nich."
     },
     "ha_get_automation_traces": {
       "title": "Získat trasování automatizací",
@@ -710,7 +710,7 @@
     },
     "ha_manage_app": {
       "title": "Spravovat aplikaci (doplněk)",
-      "description": "Spravovat aplikaci Home Assistant (dříve známou jako doplněk a tento nástroj jako ha_manage_addon) – aktualizovat její konfiguraci o"
+      "description": "Spravovat aplikace (doplňky) Home Assistant nebo zajistit proxy pro API aplikace."
     },
     "ha_manage_backup": {
       "title": "Spravovat zálohy",

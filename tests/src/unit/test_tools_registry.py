@@ -185,6 +185,30 @@ class TestRegisterAllToolsResilience:
             registry.register_all_tools()
 
 
+class TestModuleSplitExpansion:
+    """A legacy ENABLED_TOOL_MODULES name keeps its pre-split tool surface."""
+
+    @staticmethod
+    def _registry(enabled: str) -> ToolsRegistry:
+        server = SimpleNamespace(
+            client=MagicMock(name="client"),
+            mcp=MagicMock(name="mcp"),
+            smart_tools=MagicMock(name="smart_tools"),
+            device_tools=MagicMock(name="device_tools"),
+        )
+        return ToolsRegistry(server, enabled_modules=enabled)
+
+    def test_tools_utility_filter_keeps_the_split_off_log_tools(self):
+        """ha_get_logs moved to tools_logs in the #2279 split; a config that
+        filters on tools_utility must not silently lose it on upgrade."""
+        modules = self._registry("tools_utility")._get_enabled_module_list()
+        assert modules == {"tools_utility", "tools_logs"}
+
+    def test_expansion_does_not_leak_into_unrelated_filters(self):
+        modules = self._registry("tools_search")._get_enabled_module_list()
+        assert modules == {"tools_search"}
+
+
 class TestDevModeSettingsFallback:
     def test_is_dev_mode_enabled_defaults_off_without_field(self, monkeypatch):
         # During an in-process package update an older Settings instance
