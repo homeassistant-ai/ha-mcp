@@ -1,15 +1,17 @@
 """Multi-layer smoke tests for backend dispatch correctness.
 
 The e2e CI lanes set env vars that ``conftest.ha_container_with_fresh_config``
-reads to choose a backend:
+reads to choose a backend. Every HAOS lane below is a job of the one
+``haos-e2e-tests.yml`` workflow (the beta lanes are jobs of
+``haos-e2e-beta-tests.yml``):
 
 | Lane                          | HAOS_TEST_IMAGE_PATH | HAOS_TEST_MODE | expected backend |
 | ----------------------------- | -------------------- | -------------- | ---------------- |
 | e2e-tests.yml (testcontainer) | unset                | unset          | ``container``    |
-| haos-e2e-tests.yml (external) | set                  | unset          | ``haos``         |
-| haos-e2e-stdio-tests.yml      | set                  | ``stdio``      | ``haos_stdio``   |
-| haos-e2e-inaddon-tests.yml    | set                  | ``inaddon``    | ``haos_inaddon`` |
-| haos-e2e-embedded-tests.yml   | set                  | ``embedded``   | ``haos_embedded``|
+| ``haos-e2e`` (external)       | set                  | unset          | ``haos``         |
+| ``haos-e2e-stdio``            | set                  | ``stdio``      | ``haos_stdio``   |
+| ``haos-e2e-inaddon``          | set                  | ``inaddon``    | ``haos_inaddon`` |
+| ``haos-e2e-embedded``         | set                  | ``embedded``   | ``haos_embedded``|
 
 The testcontainer ``embedded`` backend (#1527) is a fourth variant selected by a
 separate axis, ``E2E_BACKEND=embedded`` (not ``HAOS_TEST_MODE``): same container

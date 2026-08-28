@@ -1,5 +1,6 @@
-# Build-script dependencies. Installed in CI by the haos-e2e-tests and
-# build-haos-test-image workflows before invoking build_image.py.
+# Build-script dependencies. Installed in CI by the haos-e2e-tests,
+# haos-e2e-beta-tests and build-haos-test-image workflows before invoking
+# build_image.py.
 #
 # HA's REST API does not expose most Supervisor endpoints (PATHS_ADMIN in
 # homeassistant/components/hassio/http.py only allows backups + logs +
