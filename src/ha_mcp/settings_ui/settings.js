@@ -784,6 +784,10 @@ async function restartAddon() {
     restartChannel.postMessage({
       type: 'restart-initiated',
       previousInstanceId,
+      // Receivers may get this before their own init has classified the
+      // deployment; without the sender's flag they would compare an
+      // embedded worker_id baseline against instance_id and time out.
+      targetEmbedded: restartTargetEmbedded,
     });
   }
   await _runRestartReloadCycle(previousInstanceId);
@@ -802,10 +806,15 @@ if (restartChannel) {
       restartInProgress = true;
       const btn = document.getElementById('restartBtn');
       if (btn) btn.disabled = true;
-      // Use the originating tab's baseline ``instance_id`` so every
-      // tab waits for the SAME ``instance_id`` flip before reloading.
-      // Falls back to null → "any 200 = ready" mode if the originator
-      // couldn't capture one.
+      // Use the originating tab's baseline so every tab waits for the
+      // SAME identity flip before reloading, and adopt its deployment
+      // classification too: this listener can fire before this tab's own
+      // init resolved it, and an embedded worker_id baseline compared
+      // against instance_id would never flip. Falls back to null →
+      // "any 200 = ready" mode if the originator couldn't capture one.
+      if (typeof data.targetEmbedded === 'boolean') {
+        restartTargetEmbedded = data.targetEmbedded;
+      }
       _runRestartReloadCycle(data.previousInstanceId ?? null);
     }
   });
