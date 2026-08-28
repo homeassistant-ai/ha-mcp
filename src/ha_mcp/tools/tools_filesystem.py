@@ -140,6 +140,10 @@ _LIVE_TOOLS_PROBE_TTL_S = 30.0
 _LIVE_TOOLS_PROBE_CACHE: weakref.WeakKeyDictionary[Any, tuple[bool, float]] = (
     weakref.WeakKeyDictionary()
 )
+# Per-client refresh locks for the memo above (see ``_probe_tools_services``).
+_LIVE_TOOLS_PROBE_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = (
+    weakref.WeakKeyDictionary()
+)
 
 
 def _monotonic() -> float:
@@ -403,6 +407,7 @@ def _reset_caller_token_cache() -> None:
     _CALLER_TOKEN_CACHE.clear()
     _CALLER_TOKEN_LOCKS.clear()
     _LIVE_TOOLS_PROBE_CACHE.clear()
+    _LIVE_TOOLS_PROBE_LOCKS.clear()
 
 
 def is_filesystem_tools_enabled() -> bool:
@@ -465,9 +470,17 @@ async def _probe_tools_services(client: Any) -> bool:
     cached = _LIVE_TOOLS_PROBE_CACHE.get(client)
     if cached is not None and (_monotonic() - cached[1]) < _LIVE_TOOLS_PROBE_TTL_S:
         return cached[0]
-    verdict = await _is_mcp_tools_available(client)
-    _LIVE_TOOLS_PROBE_CACHE[client] = (verdict, _monotonic())
-    return verdict
+    # Serialize the refresh per client: concurrent gated calls arriving on an
+    # expired entry would otherwise each pass the miss check and each fetch the
+    # full service registry — one probe per caller instead of one per window.
+    lock = _LIVE_TOOLS_PROBE_LOCKS.setdefault(client, asyncio.Lock())
+    async with lock:
+        cached = _LIVE_TOOLS_PROBE_CACHE.get(client)
+        if cached is not None and (_monotonic() - cached[1]) < _LIVE_TOOLS_PROBE_TTL_S:
+            return cached[0]
+        verdict = await _is_mcp_tools_available(client)
+        _LIVE_TOOLS_PROBE_CACHE[client] = (verdict, _monotonic())
+        return verdict
 
 
 async def _assert_mcp_tools_available(client: Any) -> None:

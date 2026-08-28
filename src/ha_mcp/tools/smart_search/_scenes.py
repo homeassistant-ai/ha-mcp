@@ -6,6 +6,7 @@ from typing import Any
 
 from ...client.rest_client import (
     HomeAssistantAPIError,
+    SceneResolution,
     SceneStorageConfigNotFoundError,
 )
 from ._config import (
@@ -229,11 +230,29 @@ class SceneSearchMixin(ConfigFetchMixin):
         the ``_individual_fetch_budgeted`` classification: ``None`` (success),
         ``"yaml_skipped"``, ``"timeout"`` or ``"failed"``.
         """
+        # Hand the client the resolution this scan already made instead of the
+        # bare storage key. The client's own resolver treats its input as an
+        # entity-id slug ("scene.<input>" registry/state lookups), so a bare
+        # storage key that differs from the name-derived slug misses BOTH
+        # lookups and every not-a-storage-scene 404 degrades to the bare
+        # "vanished" case — round-6 of #2302's no-component lane caught exactly
+        # that on the seeded YAML-with-id scene. Passing the resolution keeps
+        # the 404 classification working AND drops the per-scene registry
+        # round-trip the internal re-resolve used to pay. ``registry_hit``
+        # mirrors whether the registry walk mapped this slug; on the
+        # registry-failed attempt-all path it is False and the client's state
+        # check (by the real slug, which is what ``sid`` is) still separates
+        # existing-but-not-storage from genuinely gone.
+        resolution = SceneResolution(
+            storage_key=slug_to_storage_id.get(sid, sid),
+            registry_hit=sid in slug_to_storage_id,
+            platform=None,
+        )
         try:
             config_resp = await asyncio.wait_for(
                 # Fetch by STORAGE key (what the endpoint indexes on),
                 # return under the SLUG (what the scoring pass looks up).
-                self.client.get_scene_config(slug_to_storage_id.get(sid, sid)),
+                self.client.get_scene_config(sid, resolution=resolution),
                 timeout=INDIVIDUAL_CONFIG_TIMEOUT,
             )
             return (sid, config_resp.get("config", {}), None)

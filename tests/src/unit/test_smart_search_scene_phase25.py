@@ -88,10 +88,14 @@ class TestSceneRegistryAugmentation:
         """
 
         # The per-id endpoint is keyed by STORAGE id, while the search
-        # enumerates scenes by entity-id SLUG. Fetching the slug 404s; only a
-        # request for the storage id returns the config.
-        async def _get_scene_config(scene_id: str) -> dict[str, Any]:
-            if scene_id != "night_light_led_desk_strip":
+        # enumerates scenes by entity-id SLUG. The scan passes the slug as the
+        # caller identifier and its registry-walk resolution alongside; the
+        # client GETs ``resolution.storage_key``. Only the storage id returns
+        # the config — anything else 404s, exactly like the real endpoint.
+        async def _get_scene_config(scene_id: str, **kwargs: Any) -> dict[str, Any]:
+            resolution = kwargs.get("resolution")
+            fetch_key = resolution.storage_key if resolution is not None else scene_id
+            if fetch_key != "night_light_led_desk_strip":
                 raise HomeAssistantAPIError("API error: 404 - Resource not found", 404)
             return {
                 "config": {
@@ -329,7 +333,7 @@ class TestSceneIntegrationFilter:
         flagged partial when the only "missing" scenes were Hue."""
 
         # Only the HA-managed scene has a per-id config to return.
-        async def _get_scene(sid: str) -> dict[str, Any]:
+        async def _get_scene(sid: str, **kwargs: Any) -> dict[str, Any]:
             if sid == "movie_night":
                 return {
                     "config": {
@@ -367,7 +371,7 @@ class TestSceneIntegrationFilter:
         the real failure and the reason names both buckets so an
         operator can tell them apart."""
 
-        async def _get_scene(sid: str) -> dict[str, Any]:
+        async def _get_scene(sid: str, **kwargs: Any) -> dict[str, Any]:
             if sid == "movie_night":
                 # The HA-managed scene fails the per-id fetch — real
                 # failure, must contribute to partial.
@@ -658,6 +662,20 @@ class TestSceneYamlDefined404Classification:
         # unscanned, which is exactly what the partial_reason has to say.
         assert len(results) == 1, f"name match must survive the 404; got {results}"
         assert results[0]["config"] is None
+        # The seam that makes the classification work in PRODUCTION, not just
+        # against this mock: the scan must hand the client its own resolution.
+        # The client's internal resolver treats its input as an entity-id slug,
+        # so a bare storage key that differs from the name-derived slug misses
+        # the registry AND state lookups and every structural 404 degrades to
+        # the bare "vanished" case (#2302 round-6, seeded YAML-with-id scene).
+        call_kwargs = mock_client.get_scene_config.await_args.kwargs
+        resolution = call_kwargs.get("resolution")
+        assert resolution is not None, (
+            "the scan must pass its registry-walk resolution to "
+            f"get_scene_config; got kwargs {call_kwargs}"
+        )
+        assert resolution.registry_hit is True
+        assert resolution.storage_key == "movie_night"
 
     async def test_bare_404_lands_in_failed_slot_with_a_sample(
         self, mock_client

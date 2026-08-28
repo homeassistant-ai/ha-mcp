@@ -305,6 +305,7 @@ dev = [
     "ruff>=0.12.12",
     "testcontainers>=4.13.0",
     "ast-grep-cli>=0.42.0",
+    "pyyaml>=6.0",
 ]
 
 # Semantic versioning configuration

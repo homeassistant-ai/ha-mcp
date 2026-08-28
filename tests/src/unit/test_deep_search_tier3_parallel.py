@@ -281,7 +281,7 @@ class TestAttemptCParallelFetch:
             # Script/scene per-id calls go through a dedicated client method;
             # the fixture's `_request`/`send_websocket_message` exceptions
             # already block their registry walk.
-            async def _typed_individual(sid: str) -> dict:
+            async def _typed_individual(sid: str, **kwargs: object) -> dict:
                 return await _count_individual()
 
             setattr(
@@ -1086,7 +1086,7 @@ class TestSceneTimeoutClassification:
         scenes = self._scene_entities()
         mock_client.get_states = AsyncMock(return_value=scenes)
 
-        async def _slow_scene(sid: str) -> dict:
+        async def _slow_scene(sid: str, **kwargs: object) -> dict:
             await asyncio.sleep(0.2)
             return {"config": {"name": "slow"}}
 
@@ -1131,7 +1131,7 @@ class TestSceneTimeoutClassification:
         scenes = self._scene_entities()
         mock_client.get_states = AsyncMock(return_value=scenes)
 
-        async def _slow_scene(sid: str) -> dict:
+        async def _slow_scene(sid: str, **kwargs: object) -> dict:
             await asyncio.sleep(0.2)
             return {"config": {"name": "slow"}}
 
@@ -1685,7 +1685,7 @@ class TestFailedSampleThroughDeepSearch:
         ]
         mock_client.get_states = AsyncMock(return_value=scenes)
 
-        async def _scene_500(sid: str) -> dict:
+        async def _scene_500(sid: str, **kwargs: object) -> dict:
             # aiohttp's generic production 500 body (see the script mirror).
             raise HomeAssistantAPIError(
                 "API error: 500 - 500 Internal Server Error", status_code=500
@@ -1831,7 +1831,7 @@ class TestFailedSampleThroughDeepSearch:
         scenes = self._one_scene()
         mock_client.get_states = AsyncMock(return_value=scenes)
 
-        async def _not_a_storage_scene(sid: str) -> dict:
+        async def _not_a_storage_scene(sid: str, **kwargs: object) -> dict:
             raise SceneStorageConfigNotFoundError(sid, platform="homeassistant")
 
         mock_client.get_scene_config = AsyncMock(side_effect=_not_a_storage_scene)
@@ -1870,7 +1870,7 @@ class TestFailedSampleThroughDeepSearch:
         scenes = self._one_scene()
         mock_client.get_states = AsyncMock(return_value=scenes)
 
-        async def _scene_404(sid: str) -> dict:
+        async def _scene_404(sid: str, **kwargs: object) -> dict:
             raise HomeAssistantAPIError("API error: 404 - Not Found", status_code=404)
 
         mock_client.get_scene_config = AsyncMock(side_effect=_scene_404)
