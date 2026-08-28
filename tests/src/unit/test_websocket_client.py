@@ -194,8 +194,6 @@ class TestSendCommandErrorContract:
         left its future in ``_pending_requests`` until a response with that id
         arrived — which a hung handler never sends — leaking one entry per
         cancelled call."""
-        import asyncio
-
         client = self._prepare_client()
         sent = asyncio.Event()
 
