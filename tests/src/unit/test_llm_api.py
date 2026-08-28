@@ -960,3 +960,30 @@ class TestPreRenameSdkFallback:
             assert client.timeout.read is not None
         finally:
             await client.aclose()
+
+    async def test_loopback_factory_works_on_pre_1_24_sdks(self, monkeypatch):
+        # Regression (round-2 review finding on #2276): the first fix
+        # imported MCP_DEFAULT_TIMEOUT/MCP_DEFAULT_SSE_READ_TIMEOUT from
+        # mcp.shared._httpx_utils to mirror create_mcp_http_client's None
+        # handling - but those constants don't exist before mcp 1.24, and
+        # this factory only ever runs on SDKs old enough to lack
+        # streamable_http_client (the canonical name), which is exactly
+        # that pre-1.24 range. The unconditional import broke the fallback
+        # on every real install it serves. Fake the module down to the
+        # old-SDK shape (create_mcp_http_client only, no MCP_DEFAULT_*
+        # constants) to prove the factory no longer needs anything beyond
+        # that — the same way test_falls_back_to_deprecated_client_name
+        # fakes the transport module for the equivalent old-SDK shape.
+        import sys
+        from types import ModuleType
+
+        fake_httpx_utils = ModuleType("mcp.shared._httpx_utils")
+        fake_httpx_utils.__all__ = ["create_mcp_http_client"]  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "mcp.shared._httpx_utils", fake_httpx_utils)
+
+        client = llm_api._loopback_httpx_client_factory()
+        try:
+            assert client.timeout.connect is not None
+            assert client.timeout.read is not None
+        finally:
+            await client.aclose()

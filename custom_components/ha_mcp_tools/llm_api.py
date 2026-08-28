@@ -265,15 +265,23 @@ def _loopback_httpx_client_factory(
     ``httpx.AsyncClient`` directly disables every timeout outright (review
     finding), which is the wrong zero-argument default for a fallback aimed
     at unknown old environments.
+
+    The substitute value is inlined rather than imported from
+    ``mcp.shared._httpx_utils``: this factory only ever runs on SDKs old
+    enough to lack ``streamable_http_client`` (the canonical name this
+    module tries first), and ``MCP_DEFAULT_TIMEOUT`` /
+    ``MCP_DEFAULT_SSE_READ_TIMEOUT`` don't exist before mcp 1.24 either — an
+    import would raise on every SDK version this fallback actually serves
+    (round-2 review finding: the first attempt at this fix broke the exact
+    path it was meant to harden). ``create_mcp_http_client``'s own ``None``
+    default on those older SDKs is this same flat ``httpx.Timeout(30.0)``,
+    with no separate read timeout (the ``read=300`` shape is itself a 1.24+
+    addition) — matched here rather than guessed at.
     """
     import httpx
-    from mcp.shared._httpx_utils import (
-        MCP_DEFAULT_SSE_READ_TIMEOUT,
-        MCP_DEFAULT_TIMEOUT,
-    )
 
     if timeout is None:
-        timeout = httpx.Timeout(MCP_DEFAULT_TIMEOUT, read=MCP_DEFAULT_SSE_READ_TIMEOUT)
+        timeout = httpx.Timeout(30.0)
 
     return httpx.AsyncClient(
         headers=headers, timeout=timeout, auth=auth, verify=False, trust_env=False
