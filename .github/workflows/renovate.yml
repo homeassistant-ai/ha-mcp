@@ -62,7 +62,7 @@ jobs:
         uses: renovatebot/github-action@e09d604f8f803bb527bd8321ed5be06c460b8682 # v46.2.2
         with:
           configurationFile: renovate.json
-          renovate-version: 44.46.2
+          renovate-version: 44.50.1
           token: ${{ steps.app-token.outputs.token }}
         env:
           LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
