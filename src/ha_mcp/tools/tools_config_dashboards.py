@@ -1837,7 +1837,10 @@ class DashboardConfigTools:
                 "feature is disabled the config is returned with a warning; if "
                 "the engine is configured but the render fails, the call errors "
                 "(the screenshot is the requested payload). Ignored in "
-                "list/search mode."
+                "list/search mode. When you already have the config and only "
+                "need the render, use the dedicated ha_get_dashboard_screenshot "
+                "tool (registered when the same beta feature is on) — it "
+                "returns images without echoing the config."
             ),
         ] = False,
         view_path: Annotated[
@@ -1903,6 +1906,10 @@ class DashboardConfigTools:
           ha_config_set_dashboard(python_transform=...) addressing
           config['views'][view_index] validates unchanged. An unknown
           view_path errors and lists the available view paths.
+          include_screenshot=True also returns rendered image(s) of the
+          dashboard (beta feature); when you only need the render and not
+          the config, use the dedicated ha_get_dashboard_screenshot tool
+          instead.
 
         MODE 4 — Search all: mode="search" with query=<entity_id or text>
           Answers "which dashboards contain this entity/card" by walking every
@@ -2810,7 +2817,9 @@ class DashboardConfigTools:
                 "dashboard so you can see what it looks like in a single call "
                 "(the dashboard creation/iteration loop). Requires the "
                 "'dashboard screenshot' beta feature + engine add-on/sidecar; "
-                "if unavailable, the write result is returned with a warning."
+                "if unavailable, the write result is returned with a warning. "
+                "For visual re-checks after the write (no config round-trip), "
+                "use the dedicated ha_get_dashboard_screenshot tool instead."
             ),
         ] = False,
         view_path: Annotated[
@@ -2841,6 +2850,10 @@ class DashboardConfigTools:
         to get updated structure. Chain multiple ops in ONE expression when possible.
 
         TIP: Use ha_config_get_dashboard(entity_id=...) to get the path for any card.
+
+        TIP: return_screenshot=True bundles rendered image(s) with the write result
+        (beta feature); for visual re-checks after the write, use the dedicated
+        ha_get_dashboard_screenshot tool instead of re-sending config.
 
         PYTHON TRANSFORM EXAMPLES (RECOMMENDED):
         - Update card icon: 'config["views"][0]["cards"][0]["icon"] = "mdi:thermometer"'
