@@ -102,6 +102,84 @@ jobs:
         HAMCP_ENV_FILE: "tests/.env.test"
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Container backend with the ha_mcp_tools component ABSENT (#2292): mirrors
+  # pr.yml's e2e-validation-no-component on master push. The same full E2E
+  # suite runs with the component's "File & YAML Tools" config entry never
+  # created (E2E_NO_TOOLS_ENTRY=1) — the addon / Docker / PyPI user who never
+  # installed the component from HACS. Every other lane sets the component up in
+  # its fixtures, so this is the only place a component-backed capability that
+  # neither falls back nor fails actionably shows up as a raw service-not-found.
+  e2e-tests-no-component:
+    name: E2E Tests (No Component)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        submodules: true
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      with:
+        cache-binary: true
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        version: "latest"
+
+    - name: Set up Python
+      run: uv python install ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: uv sync --all-extras --dev
+
+    - name: Cache HA Docker image
+      id: cache-ha-image
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: /tmp/ha-image.tar
+        key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}
+
+    - name: Load cached HA image
+      if: steps.cache-ha-image.outputs.cache-hit == 'true'
+      run: docker load -i /tmp/ha-image.tar
+
+    - name: Pull HA image (GHCR → Docker Hub fallback)
+      if: steps.cache-ha-image.outputs.cache-hit != 'true'
+      run: |
+        HA_VERSION="${HA_IMAGE_GHCR##*:}"
+        HA_IMAGE_DOCKERHUB="homeassistant/home-assistant:${HA_VERSION}"
+        for registry in "$HA_IMAGE_GHCR" "$HA_IMAGE_DOCKERHUB"; do
+          echo "Trying $registry..."
+          if docker pull "$registry"; then
+            if [ "$registry" != "$HA_IMAGE_GHCR" ]; then
+              docker tag "$registry" "$HA_IMAGE_GHCR"
+            fi
+            docker save "$HA_IMAGE_GHCR" -o /tmp/ha-image.tar
+            echo "Pulled and cached from $registry"
+            exit 0
+          fi
+          echo "Failed to pull from $registry, trying next..."
+          sleep 15
+        done
+        echo "All registries failed" && exit 1
+
+    - name: Run full E2E test suite (no component)
+      run: |
+        echo "🚀 Running full E2E test suite without the ha_mcp_tools component with 3 workers..."
+        uv run pytest tests/src/e2e/ \
+          -n3 \
+          --dist loadscope \
+          --tb=short \
+          -v
+        echo "✅ Full E2E test suite (no component) passed"
+      env:
+        E2E_NO_TOOLS_ENTRY: "1"
+        HAMCP_ENV_FILE: "tests/.env.test"
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # In-process MCP server backend (#1527): the SAME full E2E suite, but the
   # server-under-test is the in-process MCP server (ha_mcp_tools entry) running inside
   # each worker's testcontainer (E2E_BACKEND=embedded), driven over its ingress
@@ -191,6 +269,88 @@ jobs:
         echo "✅ Full E2E test suite (embedded backend) passed"
       env:
         E2E_BACKEND: "embedded"
+        HAMCP_ENV_FILE: "tests/.env.test"
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Embedded backend with ONLY the server entry (#2292): mirrors pr.yml's
+  # e2e-validation-embedded-server-only on master push, and is the exact
+  # topology the issue reports. The in-process MCP server entry is present — the
+  # WS command surface rides that entry (#2289/#2291), so search and the other
+  # command-backed reads keep working — while the component's "File & YAML
+  # Tools" entry stays absent (E2E_NO_TOOLS_ENTRY=1), so the filesystem/YAML
+  # services are not registered. Both entries belong to the same component and
+  # every other lane creates both, which is why the split is invisible until a
+  # user hits it. One ubuntu-latest lane at -n2, matching the per-worker wheel
+  # build + in-container preinstall cost of the embedded matrix above.
+  e2e-tests-embedded-server-only:
+    name: E2E Tests (Embedded Server, server entry only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        submodules: true
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      with:
+        cache-binary: true
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        version: "latest"
+
+    - name: Set up Python
+      run: uv python install ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: uv sync --all-extras --dev
+
+    - name: Cache HA Docker image
+      id: cache-ha-image
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: /tmp/ha-image.tar
+        key: ha-image-${{ env.HA_IMAGE_GHCR }}-${{ runner.arch }}
+
+    - name: Load cached HA image
+      if: steps.cache-ha-image.outputs.cache-hit == 'true'
+      run: docker load -i /tmp/ha-image.tar
+
+    - name: Pull HA image (GHCR → Docker Hub fallback)
+      if: steps.cache-ha-image.outputs.cache-hit != 'true'
+      run: |
+        HA_VERSION="${HA_IMAGE_GHCR##*:}"
+        HA_IMAGE_DOCKERHUB="homeassistant/home-assistant:${HA_VERSION}"
+        for registry in "$HA_IMAGE_GHCR" "$HA_IMAGE_DOCKERHUB"; do
+          echo "Trying $registry..."
+          if docker pull "$registry"; then
+            if [ "$registry" != "$HA_IMAGE_GHCR" ]; then
+              docker tag "$registry" "$HA_IMAGE_GHCR"
+            fi
+            docker save "$HA_IMAGE_GHCR" -o /tmp/ha-image.tar
+            echo "Pulled and cached from $registry"
+            exit 0
+          fi
+          echo "Failed to pull from $registry, trying next..."
+          sleep 15
+        done
+        echo "All registries failed" && exit 1
+
+    - name: Run full E2E test suite (embedded backend, server entry only)
+      run: |
+        echo "🚀 Running full E2E suite through the in-process MCP server with only the server entry (no tools entry) with 2 workers..."
+        uv run pytest tests/src/e2e/ \
+          -n2 \
+          --dist loadscope \
+          --tb=short \
+          -v
+        echo "✅ Full E2E test suite (embedded backend, server entry only) passed"
+      env:
+        E2E_BACKEND: "embedded"
+        E2E_NO_TOOLS_ENTRY: "1"
         HAMCP_ENV_FILE: "tests/.env.test"
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
