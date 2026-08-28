@@ -318,9 +318,18 @@ async function loadPolicyState() {
       readOnlyState.enabledKnown = flagReported(roFlag);
       readOnlyState.flag = roFlag || null;
     } else {
+      // Log it: this handler is now the evidence the ambiguous-save path
+      // branches on, so "why did a security switch go unknown?" has to be
+      // answerable from the console.
+      console.warn(
+        '[ha-mcp] /api/settings/features returned HTTP ' + fresp.status +
+        '; flag switches shown as unknown');
       _clearFlagSwitchState();
     }
-  } catch (_e) {
+  } catch (e) {
+    // A malformed payload lands here as a TypeError, indistinguishable from
+    // a network drop unless we say which we saw.
+    console.warn('[ha-mcp] failed to read feature flags', e);
     _clearFlagSwitchState();
   }
   try {
@@ -3608,6 +3617,55 @@ async function policyDecide(token, action) {
   policyLoadPending();
 }
 
+// Shared failed-save handling for the three feature-flag toggles (policy
+// master, policy-editing tool, Read Only Mode). Before this existed the
+// block was ~40 lines duplicated three times, so review items 1 and 2 each
+// cost three edits and a fourth copy would have been easy to miss.
+//
+// `saved === false` is a refusal: the server answered, so the previous value
+// is confirmed and reverting is correct. `null` is ambiguous — the write may
+// have landed with only its response lost — so re-read first and revert only
+// when the readback actually shows the old value.
+//
+// `spec` is {readState, repaint, revertKey, revertText}: readState() returns
+// {value, known} for this toggle's slice of policyState/readOnlyState, and
+// repaint() is the toggle's own painter.
+async function handleFailedFlagSave(checkbox, previous, saved, spec) {
+  if (saved === false) {
+    checkbox.checked = previous;
+    spec.repaint();
+    render();
+    updateStatus(t(spec.revertKey, {}, spec.revertText), false, true);
+    return;
+  }
+  await loadPolicyState();
+  const state = spec.readState();
+  let msg, ok = false;
+  if (state.known && state.value === previous) {
+    checkbox.checked = previous;
+    msg = t(spec.revertKey, {}, spec.revertText);
+  } else if (state.known) {
+    // The write landed; only the response was lost. Leave the switch where
+    // the server actually is, and arm the restart banner — these flags gate
+    // tool registration at startup and the success toast auto-dismisses.
+    checkbox.checked = state.value;
+    msg = t('status.saved_restart', {}, 'Saved. Restart required.');
+    ok = true;
+    markRestartRequired();
+  } else {
+    // Neither value confirmed. Say the thing that is actually true rather
+    // than reusing the global-unknown copy, which talks about "the two
+    // switches below" and reads wrong in a snackbar.
+    msg = t('errors.save_outcome_unknown', {},
+      'Could not confirm the change. It may or may not have been applied — ' +
+      'reload to see what the server has.');
+  }
+  // Paint before the status line so the repaint can't clobber it.
+  spec.repaint();
+  render();
+  updateStatus(msg, ok, !ok);
+}
+
 document.getElementById('policy-save-global-btn').addEventListener('click', saveGlobalSettings);
 
 // Master toggle on this tab mirrors the Server Settings checkbox.
@@ -3617,50 +3675,13 @@ document.getElementById('policy-master-toggle').addEventListener('change', async
   const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
   const saved = await saveFeatureFlag('enable_tool_security_policies', e.target.checked);
   if (!saved) {
-    // A false return is NOT proof the server kept the old value. It covers
-    // two different situations: an HTTP error (the server answered, so the
-    // old value stands) and a rejected fetch, where the POST can have been
-    // applied and only its response lost. Reverting on the second one puts
-    // the switch back to a state the server no longer has, under a message
-    // asserting exactly that. Re-read first, and only revert when the
-    // readback actually shows the old value.
-    // Only the rejected-fetch case (null) is ambiguous; an HTTP error is a
-    // definite no and reverts immediately, keeping the switch retryable.
-    if (saved === false) {
-      e.target.checked = previous;
-      paintPolicyGlobalToggles();
-      render();
-      updateStatus(t('policies.errors.master_save', {},
-        'Tool Security Policies change did not save. The server still has the previous value'), false, true);
-      return;
-    }
-    await loadPolicyState();
-    let msg, ok = false;
-    if (policyState.enabledKnown && policyState.enabled === previous) {
-      e.target.checked = previous;
-      msg = t('policies.errors.master_save', {},
-        'Tool Security Policies change did not save. The server still has the previous value');
-    } else if (policyState.enabledKnown) {
-      // The write landed; only the response was lost. Leave the switch
-      // where the server actually is.
-      e.target.checked = policyState.enabled;
-      msg = t('status.saved_restart', {}, 'Saved. Restart required.');
-      ok = true;
-      // Both save branches return restart_required unconditionally and
-      // these flags gate tool registration at startup, so the banner has
-      // to be armed here too. updateStatus(msg, true) only toasts, and
-      // that auto-dismisses in 4s - without this the switch shows the new
-      // value while the running server still enforces the old one.
-      markRestartRequired();
-    } else {
-      // Neither value confirmed — say so rather than claiming either.
-      msg = t('policies.global.unknown', {},
-        'Could not read server settings. The two switches below are shown as unknown');
-    }
-    // Paint before the status line so the repaint can't clobber it.
-    paintPolicyGlobalToggles();
-    render();
-    updateStatus(msg, ok, !ok);
+    await handleFailedFlagSave(e.target, previous, saved, {
+      readState: () => ({value: policyState.enabled, known: policyState.enabledKnown}),
+      repaint: paintPolicyGlobalToggles,
+      revertKey: 'policies.errors.master_save',
+      revertText:
+        'Tool Security Policies change did not save. The server still has the previous value',
+    });
     return;
   }
   // Re-read the truth from the server. If that read can't confirm, fall
@@ -3690,46 +3711,13 @@ document.getElementById('policy-manage-tool-toggle').addEventListener('change', 
   const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
   const saved = await saveFeatureFlag('enable_security_policy_tool', e.target.checked);
   if (!saved) {
-    // A false return is NOT proof the server kept the old value. It covers
-    // two different situations: an HTTP error (the server answered, so the
-    // old value stands) and a rejected fetch, where the POST can have been
-    // applied and only its response lost. Reverting on the second one puts
-    // the switch back to a state the server no longer has, under a message
-    // asserting exactly that. Re-read first, and only revert when the
-    // readback actually shows the old value.
-    // Only the rejected-fetch case (null) is ambiguous; an HTTP error is a
-    // definite no and reverts immediately, keeping the switch retryable.
-    if (saved === false) {
-      e.target.checked = previous;
-      paintPolicyGlobalToggles();
-      render();
-      updateStatus(t('policies.errors.manage_tool_save', {},
-        'Policy-editing tool change did not save. The server still has the previous value'), false, true);
-      return;
-    }
-    await loadPolicyState();
-    let msg, ok = false;
-    if (policyState.manageToolKnown && policyState.manageToolEnabled === previous) {
-      e.target.checked = previous;
-      msg = t('policies.errors.manage_tool_save', {},
-        'Policy-editing tool change did not save. The server still has the previous value');
-    } else if (policyState.manageToolKnown) {
-      e.target.checked = policyState.manageToolEnabled;
-      msg = t('status.saved_restart', {}, 'Saved. Restart required.');
-      ok = true;
-      // Both save branches return restart_required unconditionally and
-      // these flags gate tool registration at startup, so the banner has
-      // to be armed here too. updateStatus(msg, true) only toasts, and
-      // that auto-dismisses in 4s - without this the switch shows the new
-      // value while the running server still enforces the old one.
-      markRestartRequired();
-    } else {
-      msg = t('policies.global.unknown', {},
-        'Could not read server settings. The two switches below are shown as unknown');
-    }
-    paintPolicyGlobalToggles();
-    render();
-    updateStatus(msg, ok, !ok);
+    await handleFailedFlagSave(e.target, previous, saved, {
+      readState: () => ({value: policyState.manageToolEnabled, known: policyState.manageToolKnown}),
+      repaint: paintPolicyGlobalToggles,
+      revertKey: 'policies.errors.manage_tool_save',
+      revertText:
+        'Policy-editing tool change did not save. The server still has the previous value',
+    });
     return;
   }
   // Same confirm-then-fall-back order as the master toggle above.
@@ -3754,46 +3742,13 @@ document.getElementById('read-only-mode-toggle').addEventListener('change', asyn
   const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
   const saved = await saveFeatureFlag('read_only_mode', e.target.checked);
   if (!saved) {
-    // A false return is NOT proof the server kept the old value. It covers
-    // two different situations: an HTTP error (the server answered, so the
-    // old value stands) and a rejected fetch, where the POST can have been
-    // applied and only its response lost. Reverting on the second one puts
-    // the switch back to a state the server no longer has, under a message
-    // asserting exactly that. Re-read first, and only revert when the
-    // readback actually shows the old value.
-    // Only the rejected-fetch case (null) is ambiguous; an HTTP error is a
-    // definite no and reverts immediately, keeping the switch retryable.
-    if (saved === false) {
-      e.target.checked = previous;
-      syncReadOnlyToggle();
-      render();
-      updateStatus(t('tools.read_only.save_failed', {},
-        'Read Only Mode change did not save. The server still has the previous value'), false, true);
-      return;
-    }
-    await loadPolicyState();
-    let msg, ok = false;
-    if (readOnlyState.enabledKnown && readOnlyState.enabled === previous) {
-      e.target.checked = previous;
-      msg = t('tools.read_only.save_failed', {},
-        'Read Only Mode change did not save. The server still has the previous value');
-    } else if (readOnlyState.enabledKnown) {
-      e.target.checked = readOnlyState.enabled;
-      msg = t('status.saved_restart', {}, 'Saved. Restart required.');
-      ok = true;
-      // Both save branches return restart_required unconditionally and
-      // these flags gate tool registration at startup, so the banner has
-      // to be armed here too. updateStatus(msg, true) only toasts, and
-      // that auto-dismisses in 4s - without this the switch shows the new
-      // value while the running server still enforces the old one.
-      markRestartRequired();
-    } else {
-      msg = t('tools.read_only.unknown', {},
-        'Could not read server settings. Read Only Mode status unknown');
-    }
-    syncReadOnlyToggle();
-    render();
-    updateStatus(msg, ok, !ok);
+    await handleFailedFlagSave(e.target, previous, saved, {
+      readState: () => ({value: readOnlyState.enabled, known: readOnlyState.enabledKnown}),
+      repaint: syncReadOnlyToggle,
+      revertKey: 'tools.read_only.save_failed',
+      revertText:
+        'Read Only Mode change did not save. The server still has the previous value',
+    });
     return;
   }
   // Re-read the truth from the server; if that read couldn't confirm,

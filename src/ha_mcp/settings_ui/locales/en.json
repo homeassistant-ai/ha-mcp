@@ -194,6 +194,7 @@
     "errors.render": "Render failed: {message} (open browser devtools for the stack)",
     "errors.save_failed": "Save failed",
     "errors.save_failed_detail": "Save failed: {message}",
+    "errors.save_outcome_unknown": "Could not confirm the change. It may or may not have been applied \u2014 reload to see what the server has.",
     "errors.save_failed_http": "Save failed (HTTP {status})",
     "errors.save_failed_non_json": "Save failed (HTTP {status}, non-JSON body)",
     "errors.load_failed": "Load failed: {status}",
