@@ -2002,6 +2002,54 @@ class TestMandatoryGate:
         assert "Free up disk space" in str(exc.value)
         assert ran == []  # write never ran
 
+    async def test_component_not_installed_cause_surfaces_unwrapped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A capture that failed because the File & YAML Tools entry is absent
+        re-raises the original COMPONENT_NOT_INSTALLED error, not a backup
+        complaint (#2292): the remediation is "add the entry", and retrying
+        the backup cannot succeed. The write stays blocked either way."""
+        component_error = ToolError(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "COMPONENT_NOT_INSTALLED",
+                        "message": "Add entry -> HA-MCP File & YAML Tools",
+                    },
+                }
+            )
+        )
+
+        class _FakeMgr:
+            async def maybe_snapshot(self, *a: Any, **k: Any) -> None:
+                raise bm.MandatoryBackupError(
+                    "could not read the current state to back it up"
+                ) from component_error
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_global_settings",
+            lambda: _StubSettings(enable_auto_backup=True),
+        )
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
+        )
+
+        ran: list[str] = []
+
+        @with_auto_backup(
+            domain="file", id_param="path", mandatory=True, client=object()
+        )
+        async def tool(*, path: str) -> str:
+            ran.append(path)
+            return "wrote"
+
+        with pytest.raises(ToolError) as exc:
+            await tool(path="www/x.css")
+        assert exc.value is component_error  # unwrapped, byte-identical
+        assert self._error_code(exc.value) == "COMPONENT_NOT_INSTALLED"
+        assert ran == []  # write never ran
+
     async def test_legitimate_skip_proceeds(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
