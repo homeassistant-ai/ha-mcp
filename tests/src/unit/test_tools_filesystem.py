@@ -280,19 +280,50 @@ class TestAssertMcpToolsAvailableCapsFirst:
         client.get_services.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_caps_tools_services_true_passes(self):
-        """A dual-entry (or tools-only) 2.1.0 component reports True and the
-        gate passes without the get_services probe."""
+    async def test_caps_tools_services_true_passes_via_live_probe(self):
+        """A dual-entry (or tools-only) 2.1.0 component reports True; the gate
+        still consults the live registry (the cached snapshot is stale in both
+        directions, Codex review on #2302) and passes when the services are
+        really there."""
         from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
 
         client = AsyncMock()
+        client.get_services = AsyncMock(
+            return_value=[
+                {"domain": "ha_mcp_tools", "services": {"get_caller_token": {}}}
+            ]
+        )
         with patch(
             "ha_mcp.tools.tools_filesystem.get_component_caps",
             AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
         ):
             await _assert_mcp_tools_available(client)  # must not raise
 
-        client.get_services.assert_not_called()
+        client.get_services.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_caps_tools_services_true_but_live_services_gone_raises(self):
+        """The stale-True mirror of the stale-False case: a snapshot taken
+        before the user REMOVED the tools entry must not wave calls through to
+        now-missing services (raw service-not-found instead of the actionable
+        error). The live probe raises the tools-entry error (#2302)."""
+        from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
+
+        client = AsyncMock()
+        client.get_services = AsyncMock(return_value=[])
+        with (
+            patch(
+                "ha_mcp.tools.tools_filesystem.get_component_caps",
+                AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
+            ),
+            pytest.raises(ToolError) as exc,
+        ):
+            await _assert_mcp_tools_available(client)
+
+        data = json.loads(str(exc.value))
+        assert data["success"] is False
+        assert "file & yaml tools" in data["error"]["message"].lower()
+        client.get_services.assert_awaited_once()
 
     def test_parse_caps_reads_additive_tools_services(self):
         """``_parse_caps`` maps the additive field: bool passes through, absent

@@ -432,11 +432,16 @@ async def _assert_mcp_tools_available(client: Any) -> None:
     Caps alone no longer prove the SERVICES exist, though: since 2.1.0 the
     server entry also registers the WS surface (#2289), so ``info`` answers on
     a server-entry-only install too. Such a component reports the additive
-    ``tools_services`` field (#2292); ``False`` raises the tools-entry error
-    below — after a live service-registry re-check, because the cached caps can
-    predate the user adding the tools entry mid-session. ``None`` (a pre-2.1.0
-    component) keeps the old implication, which was sound there — only the
-    tools entry registered ``info``.
+    ``tools_services`` field (#2292) — but the caps snapshot is cached for the
+    client's lifetime while config entries come and go at runtime, so the
+    cached boolean is stale in BOTH directions: a pre-tools-entry ``False``
+    would block these tools until a restart, and a pre-removal ``True`` would
+    wave calls through to now-missing services and surface raw
+    service-call failures instead of the actionable error. So when the field
+    is present at all, ignore its cached value and consult the live service
+    registry — the same per-call probe the legacy fallback below has always
+    paid. ``None`` (a pre-2.1.0 component) keeps the old implication, which
+    was sound there — only the tools entry registered ``info``.
     Legacy fallback: caps is None for a component in the 0.11.0-1.1.0 band
     (services, no info command) or an absent one, so fall back to the per-call
     ``get_services()`` existence probe. A no-services verdict raises the
@@ -453,14 +458,10 @@ async def _assert_mcp_tools_available(client: Any) -> None:
     caps = await get_component_caps(client)
     if caps is not None:
         _assert_caps_version_ok(caps)
-        # Caps are cached for the client's lifetime, so a ``False`` snapshot
-        # taken before the user added the tools entry would block these tools
-        # until a server restart. Service registration is dynamic — re-check
-        # the live service registry before raising, and only raise when it
-        # confirms the services are still absent.
-        if caps.tools_services is False and not await _is_mcp_tools_available(client):
-            _raise_tools_entry_not_set_up()
-        return
+        if caps.tools_services is None:
+            # Pre-2.1.0 component: only the tools entry registered ``info``,
+            # so answering caps DID prove the services exist.
+            return
     if not await _is_mcp_tools_available(client):
         _raise_tools_entry_not_set_up()
 
