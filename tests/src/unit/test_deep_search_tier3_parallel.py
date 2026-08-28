@@ -1036,11 +1036,11 @@ class TestSceneTimeoutClassification:
     """Scene mirror of ``TestTimeoutClassification`` (issue #1784).
 
     Scenes are separate code with separate tuple positions: the scene
-    fetcher lives in ``_scenes.py``, its timeout count rides the 6th slot
+    fetcher lives in ``_scenes.py``, its timeout count rides the 7th slot
     of ``_deep_search_scenes``'s return, and ``deep_search`` maps it into
     ``scene_stats["timeout"]`` for ``_apply_scene_partial_flag``. Without
     these tests a regression that returned ``"failed"`` from the scene
-    ``except`` clause or mis-mapped the 6th slot would pass the automation/
+    ``except`` clause or mis-mapped the 7th slot would pass the automation/
     script suites untouched. The fixture's failing WebSocket makes the
     registry walk fail (``registry_failed=True``), which routes Attempt C
     to attempt-all — the maximal per-id-fetch surface.
@@ -1081,7 +1081,7 @@ class TestSceneTimeoutClassification:
         self, mock_client, smart_tools
     ):
         """A real ``wait_for`` expiry in the scene fetcher must land in the
-        6th tuple slot (``timeout_count``), with ``failed`` staying 0."""
+        7th tuple slot (``timeout_count``), with ``failed`` staying 0."""
         scenes = self._scene_entities()
         mock_client.get_states = AsyncMock(return_value=scenes)
 
@@ -1095,6 +1095,7 @@ class TestSceneTimeoutClassification:
             (
                 results,
                 failed_count,
+                _yaml_skipped_count,
                 skipped_count,
                 _integration_skipped,
                 registry_failed,
@@ -1124,7 +1125,7 @@ class TestSceneTimeoutClassification:
     ):
         """Scene timeouts driven through public ``deep_search`` must reach
         ``scene_stats["timeout"]`` and ``_apply_scene_partial_flag`` — pins
-        the 6th-slot mapping in the aggregator that the component test
+        the 7th-slot mapping in the aggregator that the component test
         cannot see."""
         scenes = self._scene_entities()
         mock_client.get_states = AsyncMock(return_value=scenes)
@@ -1427,7 +1428,7 @@ class TestFailedSampleThroughDeepSearch:
     generic ``failed`` bucket (#1784 follow-up).
 
     ``_deep_search_automations`` / ``_deep_search_scripts`` return the
-    sample in a new 6th tuple slot (scenes: 7th), ``deep_search`` forwards
+    sample in a new 6th tuple slot (scenes: 8th), ``deep_search`` forwards
     it via ``_paginate_and_build_response`` into
     ``_apply_per_type_partial_flag`` (scenes: ``scene_stats["failed_sample"]``
     into ``_apply_scene_partial_flag``), and the failed fragment carries it
@@ -1795,16 +1796,20 @@ class TestFailedSampleThroughDeepSearch:
         )
 
     @pytest.mark.asyncio
-    async def test_scene_404_sample_surfaces_without_500_hint(
+    async def test_scene_404_classifies_as_yaml_skipped_not_failed(
         self, mock_client, smart_tools
     ):
-        """Scenes have no ``yaml_skipped`` branch (integration-managed scenes
-        are pre-filtered upstream via the registry walk), so a scene per-id
-        404 falls into the generic ``failed`` class and surfaces as an
-        ``e.g. HTTP 404`` sample — unlike automations/scripts, whose 404s
-        reclassify to their own fragment and never produce one. Pins the
-        asymmetry the #1930 description disclosed, so a future scene 404
-        branch can't change it silently; the 500 hint must not ride a 404."""
+        """A scene per-id 404 must reclassify to ``yaml_skipped``, never the
+        generic ``failed`` class (#2292).
+
+        The registry walk pre-filters integration-managed scenes, but a
+        YAML-defined scene carrying an ``id:`` registers under platform
+        ``homeassistant`` exactly like a storage scene — it passes the filter
+        and then 404s on ``/config/scene/config``. Counting that as a failure
+        produced a scary ``per-id fetch raised; e.g. HTTP 404`` fragment for
+        a structural, un-retryable gap. This test replaces the earlier one
+        that pinned the pre-#2292 asymmetry against automations/scripts; the
+        500 hint must still not ride a 404."""
         scenes = [
             {
                 "entity_id": "scene.yaml_defined",
@@ -1828,11 +1833,17 @@ class TestFailedSampleThroughDeepSearch:
         assert result["partial"] is True
         reason = result["partial_reason"]
         assert (
-            "1 scene(s) not scanned (per-id fetch raised; "
-            "e.g. HTTP 404: Not Found)" in reason
-        ), f"scene 404 must surface as a failed-class sample; got {reason!r}"
+            "1 scene(s) not scanned (per-id config endpoint returned 404" in reason
+        ), f"scene 404 must surface as its own structural fragment; got {reason!r}"
+        assert "YAML-defined" in reason, (
+            f"the fragment must name the YAML-defined cause; got {reason!r}"
+        )
+        assert "not exhaustive" in reason
+        assert "per-id fetch raised" not in reason, (
+            f"a 404 must not also count as a generic failure; got {reason!r}"
+        )
         assert "in the Home Assistant log" not in reason, (
-            f"the 500 hint must not ride a 404 sample; got {reason!r}"
+            f"the 500 hint must not ride a 404; got {reason!r}"
         )
 
     @pytest.mark.asyncio

@@ -4,6 +4,7 @@ import asyncio
 import logging
 from typing import Any
 
+from ...client.rest_client import HomeAssistantAPIError
 from ._config import (
     ENTITY_REGISTRY_TIMEOUT,
     INDIVIDUAL_CONFIG_TIMEOUT,
@@ -222,19 +223,19 @@ class SceneSearchMixin(ConfigFetchMixin):
         prefetched_registry: Any = None,
         storage_ids_out: dict[str, str] | None = None,
         graph_entity_ids: set[str] | None = None,
-    ) -> tuple[list[dict[str, Any]], int, int, int, bool, int, str | None]:
+    ) -> tuple[list[dict[str, Any]], int, int, int, int, bool, int, str | None]:
         """Deep-search scenes: per-id fetch plus registry-walk augmentation.
 
         Scenes have no listing primitive, so entities are enumerated from
         get_states() and configs fetched per id. Returns the scene results plus
-        the six diagnostic signals feeding the response ``partial`` /
+        the seven diagnostic signals feeding the response ``partial`` /
         ``partial_reason``:
-        ``(results, failed_count, skipped_count, integration_skipped,
-        registry_failed, timeout_count, failed_sample)``. ``failed_sample``
-        is one representative ``summarize_fetch_error`` summary of a
-        ``failed``-class exception (``None`` when none occurred) — see the
-        automation/script mirror in ``_deep_search_automations`` (#1784
-        follow-up).
+        ``(results, failed_count, yaml_skipped_count, skipped_count,
+        integration_skipped, registry_failed, timeout_count, failed_sample)``.
+        ``failed_sample`` is one representative ``summarize_fetch_error``
+        summary of a ``failed``-class exception (``None`` when none occurred)
+        — see the automation/script mirror in ``_deep_search_automations``
+        (#1784 follow-up).
         """
         scene_entities = [
             e for e in all_entities if e.get("entity_id", "").startswith("scene.")
@@ -263,13 +264,14 @@ class SceneSearchMixin(ConfigFetchMixin):
         ) = await self._walk_scene_registry(prefetched_registry=prefetched_registry)
         # Hand the slug-to-storage-key map back to deep_search, which needs it
         # to give reference-graph scene hits their real storage key. An out
-        # parameter rather than an eighth return value: the one production
+        # parameter rather than a ninth return value: the one production
         # caller and the one test that drive this function unpack its tuple
         # positionally.
         if storage_ids_out is not None:
             storage_ids_out.update(slug_to_storage_id)
 
         failed_count = 0
+        yaml_skipped_count = 0
         skipped_count = 0
         integration_skipped = 0
         timeout_count = 0
@@ -298,6 +300,23 @@ class SceneSearchMixin(ConfigFetchMixin):
                     timeout=INDIVIDUAL_CONFIG_TIMEOUT,
                 )
                 return (sid, config_resp.get("config", {}), None)
+            except HomeAssistantAPIError as e:
+                if e.status_code == 404:
+                    # A YAML-defined scene carrying an ``id:`` registers under
+                    # platform ``homeassistant`` exactly like a storage scene,
+                    # so the registry walk cannot pre-filter it and the per-id
+                    # fetch 404s. Classify it the way the automation/script
+                    # fetchers do, so the warning explains the gap is
+                    # structural rather than a fetch outage (#2292).
+                    logger.debug(
+                        f"Scene individual config fetch ({sid}) returned 404 "
+                        "— likely YAML-defined; /config/scene/config only "
+                        "serves storage scenes."
+                    )
+                    return (sid, None, "yaml_skipped")
+                logger.debug(f"Scene individual config fetch ({sid}) failed: {e}")
+                record_first_failure(failed_errors, e)
+                return (sid, None, "failed")
             except TimeoutError:
                 # Per-request timeout under batch concurrency — distinct
                 # from a real failure; see _fetch_automation_config
@@ -324,11 +343,7 @@ class SceneSearchMixin(ConfigFetchMixin):
             fetched_configs,
             failed_count,
             skipped_count,
-            # Scene YAML/integration-managed pre-classification happens
-            # upstream via `_walk_scene_registry`; the 4th tuple slot
-            # from `_individual_fetch_budgeted` is therefore expected
-            # to stay at zero on this path.
-            _scene_yaml_skipped,
+            yaml_skipped_count,
             timeout_count,
         ) = await self._individual_fetch_budgeted(
             sids_to_fetch,
@@ -365,6 +380,7 @@ class SceneSearchMixin(ConfigFetchMixin):
         return (
             scene_results,
             failed_count,
+            yaml_skipped_count,
             skipped_count,
             integration_skipped,
             registry_failed,
@@ -392,9 +408,11 @@ class SceneSearchMixin(ConfigFetchMixin):
         failed = scene_stats["failed"]
         skipped = scene_stats["skipped"]
         # .get(): tolerate older callers/tests that build the stats dict
-        # without the timeout key (added for #1784).
+        # without the timeout key (added for #1784) or without the
+        # yaml_skipped key (added for #2292).
         timeout = scene_stats.get("timeout", 0)
-        if not (failed or skipped or timeout):
+        yaml_skipped = scene_stats.get("yaml_skipped", 0)
+        if not (failed or yaml_skipped or skipped or timeout):
             return
         response["partial"] = True
         reason_parts: list[str] = []
@@ -413,6 +431,18 @@ class SceneSearchMixin(ConfigFetchMixin):
                 f"{sample_suffix}) — "
                 f"their match status is unknown; this result is not "
                 f"exhaustive.{hint}"
+            )
+        if yaml_skipped:
+            # Structural, not transient: a YAML-defined scene with an ``id:``
+            # is indistinguishable from a storage scene in the entity
+            # registry, so it survives the integration-platform filter and
+            # then 404s on the per-id endpoint. Mirrors the automation/script
+            # fragment in ``_apply_per_type_partial_flag`` (#2292).
+            reason_parts.append(
+                f"{yaml_skipped} scene(s) not scanned (per-id config endpoint "
+                "returned 404 — these are likely YAML-defined scenes that the "
+                "/config/scene/config REST endpoint does not expose) — their "
+                "match status is unknown; this result is not exhaustive."
             )
         if timeout:
             reason_parts.append(

@@ -555,6 +555,121 @@ class TestSceneRegistryFetchFailureSurfacing:
         )
 
 
+@pytest.mark.asyncio
+class TestSceneYamlDefined404Classification:
+    """A YAML-defined scene's per-id 404 classifies as ``yaml_skipped`` (#2292).
+
+    The registry walk filters out integration-managed scenes, but a
+    YAML-defined scene carrying an ``id:`` registers under platform
+    ``homeassistant`` exactly like a storage scene — it survives the filter,
+    then 404s because ``/config/scene/config`` only serves the storage
+    collection. Counting that as a fetch FAILURE produced a ``partial: true``
+    with "per-id fetch raised; e.g. HTTP 404: Scene not found", which reads
+    as a broken server rather than a structural, un-retryable gap. The
+    automation and script fetchers have classified this case correctly since
+    #1529; these tests pin the scene mirror.
+    """
+
+    @pytest.fixture
+    def mock_client(self) -> MagicMock:
+        client = MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        client.get_states = AsyncMock(
+            return_value=[_make_scene_entity("scene.movie_night", "Movie Night")]
+        )
+        client._request = AsyncMock(side_effect=AssertionError("unexpected REST call"))
+
+        async def _ws_handler(message: dict[str, Any]) -> dict[str, Any]:
+            if message.get("type") == "config/entity_registry/list":
+                # The registry SUCCEEDS and reports platform "homeassistant" —
+                # the whole point: a YAML scene with an ``id:`` is
+                # indistinguishable from a storage scene here.
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "entity_id": "scene.movie_night",
+                            "unique_id": "movie_night",
+                            "platform": "homeassistant",
+                        }
+                    ],
+                }
+            return {"success": False}
+
+        client.send_websocket_message = AsyncMock(side_effect=_ws_handler)
+        client.get_scene_config = AsyncMock(
+            side_effect=HomeAssistantAPIError("API error: 404 - Scene not found", 404)
+        )
+        return client
+
+    async def test_404_lands_in_yaml_skipped_slot_not_failed(self, mock_client) -> None:
+        """The per-id 404 must count as ``yaml_skipped`` with ``failed`` at
+        zero and no representative ``failed_sample`` captured — a structural
+        gap has no error worth naming."""
+        tools = _make_tools(mock_client)
+
+        (
+            results,
+            failed_count,
+            yaml_skipped_count,
+            skipped_count,
+            integration_skipped,
+            registry_failed,
+            timeout_count,
+            failed_sample,
+        ) = await tools._deep_search_scenes(
+            [_make_scene_entity("scene.movie_night", "Movie Night")],
+            query_lower="movie",
+            exact_match=False,
+        )
+
+        assert yaml_skipped_count == 1, (
+            f"a per-id 404 must classify as yaml_skipped; got "
+            f"yaml_skipped={yaml_skipped_count}, failed={failed_count}"
+        )
+        assert failed_count == 0, (
+            f"a per-id 404 must NOT count as a generic failure; got "
+            f"failed={failed_count}"
+        )
+        assert failed_sample is None, (
+            f"a 404 must not claim the failed-sample slot; got {failed_sample!r}"
+        )
+        assert registry_failed is False  # the registry walk succeeded
+        assert integration_skipped == 0  # platform "homeassistant" passes the filter
+        assert skipped_count == 0
+        assert timeout_count == 0
+        # The scene is still returned on its name score — only its body went
+        # unscanned, which is exactly what the partial_reason has to say.
+        assert len(results) == 1, f"name match must survive the 404; got {results}"
+        assert results[0]["config"] is None
+
+    async def test_404_surfaces_structural_reason_through_deep_search(
+        self, mock_client
+    ) -> None:
+        """The seam: ``deep_search`` maps the new slot into
+        ``scene_stats["yaml_skipped"]`` and ``_apply_scene_partial_flag``
+        words it structurally — no failure fragment, no registry clause."""
+        tools = _make_tools(mock_client)
+
+        result = await tools.deep_search(
+            query="movie", search_types=["scene"], limit=10
+        )
+
+        assert result["partial"] is True
+        reason = result["partial_reason"]
+        assert "1 scene(s) not scanned" in reason
+        assert "YAML-defined" in reason, (
+            f"the fragment must name the YAML-defined cause; got {reason!r}"
+        )
+        assert "not exhaustive" in reason
+        assert "per-id fetch raised" not in reason, (
+            f"a 404 must not also produce a failure fragment; got {reason!r}"
+        )
+        assert "entity-registry fetch failed" not in reason.lower(), (
+            f"the registry walk succeeded here; got {reason!r}"
+        )
+
+
 class TestApplyScenePartialFlag:
     """Direct unit coverage of ``_apply_scene_partial_flag``.
 
@@ -671,6 +786,52 @@ class TestApplyScenePartialFlag:
         reason = response["partial_reason"]
         assert "3 scene(s) not scanned (per-id fetch raised)" in reason
         assert "e.g." not in reason
+
+    def test_yaml_skipped_sets_partial_with_structural_reason(self) -> None:
+        """A per-id 404 count (#2292) sets ``partial`` on its own and words
+        the gap as structural — the config exists, the REST endpoint just
+        cannot return it — rather than as a fetch failure. Asserted on
+        stable substrings so the prose stays editable."""
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        response: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            response,
+            {
+                "failed": 0,
+                "yaml_skipped": 2,
+                "skipped": 0,
+                "integration_skipped": 0,
+                "registry_failed": False,
+            },
+        )
+        assert response["partial"] is True
+        reason = response["partial_reason"]
+        assert "2 scene(s) not scanned" in reason
+        assert "404" in reason
+        assert "YAML-defined" in reason
+        assert "match status is unknown" in reason
+        assert "not exhaustive" in reason
+        # No failure happened, so the failed fragment must not appear.
+        assert "per-id fetch raised" not in reason
+
+    def test_stats_dict_without_yaml_skipped_key_is_tolerated(self) -> None:
+        """``yaml_skipped`` is read with ``.get()`` so stats dicts built
+        before #2292 (and the direct-call tests above) keep working."""
+        from ha_mcp.tools.smart_search._scenes import SceneSearchMixin
+
+        response: dict[str, Any] = {"success": True}
+        SceneSearchMixin._apply_scene_partial_flag(
+            response,
+            {
+                "failed": 1,
+                "skipped": 0,
+                "integration_skipped": 0,
+                "registry_failed": False,
+            },
+        )
+        assert response["partial"] is True
+        assert "YAML-defined" not in response["partial_reason"]
 
     def test_timeout_sets_partial_pointing_at_concurrency_knobs(self) -> None:
         """Per-request timeouts (issue #1784) must surface as their own
