@@ -1104,6 +1104,25 @@ class TestErrorLogPagination:
         assert "pagination_hint" not in result
 
     @pytest.mark.asyncio
+    async def test_terminal_window_with_unreturned_matches_hints_a_larger_limit(self):
+        """Matches the limit slice left inside the LAST window must stay reachable.
+
+        Paging cannot reach them: no older history exists behind the window,
+        and on journald a deeper fetch clamps back to this same oldest window
+        every time, so a next_offset here would loop. A larger limit retrieves
+        them from the already-addressed window exactly.
+        """
+        client = _make_client(_numbered_log(50), has_more=False)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](
+            source="error_log", limit=10, search="issue"
+        )
+        assert result["has_more"] is False
+        assert "next_offset" not in result
+        assert "40 more matching lines remain" in result["pagination_hint"]
+        assert "limit=50" in result["pagination_hint"]
+
+    @pytest.mark.asyncio
     async def test_next_offset_advances_from_the_current_offset(self):
         client = _make_client(_numbered_log(20), has_more=True)
         tools = _register_and_collect(client)

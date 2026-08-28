@@ -317,6 +317,35 @@ async def test_get_error_log_supervised_external_branch(client):
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(10)
+@pytest.mark.parametrize("route", ["addon_logs", "system_service"])
+async def test_proxied_log_routes_share_the_overall_deadline(client, route):
+    """The hassio-proxy log routes are hang-proof for the same reason.
+
+    ``get_addon_logs`` and ``_get_system_service_logs`` proxy branches ride the
+    same per-I/O httpx timeout that let #2279 trickle forever, so they carry
+    the same wall-clock deadline as ``get_error_log``.
+    """
+    client.timeout = 0.01
+
+    async def _hang_forever(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    client._raw_request = AsyncMock(side_effect=_hang_forever)
+
+    with (
+        patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False),
+        pytest.raises(HomeAssistantConnectionError) as exc_info,
+    ):
+        if route == "addon_logs":
+            await client.get_addon_logs("core_mosquitto", lines=5)
+        else:
+            await client._get_system_service_logs("host", lines=5)
+
+    assert "after 0.01s" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(10)
 @pytest.mark.parametrize("supervised", [True, False])
 async def test_get_error_log_has_one_overall_deadline(client, supervised):
     """A server that stalls mid-body must fail fast on every route.

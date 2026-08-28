@@ -680,7 +680,19 @@ class HomeAssistantClient:
         The saturation test counts lines only to decide whether to probe, never
         to answer: one journald entry can be a multi-line traceback, so the line
         count over-estimates entries and can only over-trigger the probe, which
-        then gives the real answer.
+        then gives the real answer. In practice the two rarely diverge here:
+        docker's journald log driver — how HAOS captures Core's output —
+        ingests stdout line by line, one journal entry per rendered line, so
+        multi-line entries reach this endpoint only from native journal-API
+        writers.
+
+        Known imprecision, accepted: the identity check can stop one page
+        early when the entry just behind a full window renders byte-identical
+        to the window's oldest line (the same message logged twice within
+        journald's timestamp resolution). Plain-text rendering carries no
+        cursor to disambiguate positions, and the failure direction is a
+        missed page of duplicates — bounded, unlike the infinite loop a
+        count-based ``has_more`` produces on the clamp.
         """
         text = await fetch(lines, offset)
         if not text or len(text.splitlines()) < lines:
@@ -885,12 +897,30 @@ class HomeAssistantClient:
             return await self._get_addon_logs_via_supervisor(slug, lines=lines)
 
         logger.debug(f"Fetching addon logs for slug={slug} via HA Core proxy")
-        response = await self._raw_request(
-            "GET",
-            f"/hassio/addons/{slug}/logs",
-            headers={"Accept": "text/plain"},
-            params={"lines": lines} if lines is not None else None,
-        )
+        return await self._proxied_logs_get(f"addons/{slug}", lines)
+
+    async def _proxied_logs_get(self, path: str, lines: int | None) -> str:
+        """Fetch ``text/plain`` logs through HA Core's hassio proxy.
+
+        Wrapped in an overall wall-clock deadline for the same reason as the
+        error-log routes (#2279): ``httpx.Timeout`` applies per I/O operation,
+        so a server trickling bytes while assembling the body resets the read
+        timeout indefinitely, and the deadline is the only bound that holds.
+        It caps the whole ``_raw_request`` retry envelope.
+        """
+        try:
+            async with asyncio.timeout(self.timeout):
+                response = await self._raw_request(
+                    "GET",
+                    f"/hassio/{path}/logs",
+                    headers={"Accept": "text/plain"},
+                    params={"lines": lines} if lines is not None else None,
+                )
+        except TimeoutError as e:
+            raise HomeAssistantConnectionError(
+                f"Timeout fetching /hassio/{path}/logs from Home Assistant "
+                f"after {self.timeout}s: {str(e) or type(e).__name__}"
+            ) from e
         return response.text
 
     @staticmethod
@@ -1087,13 +1117,7 @@ class HomeAssistantClient:
             return await self._supervisor_logs_get(service, lines=lines)
 
         logger.debug(f"Fetching {service} logs via HA Core proxy")
-        response = await self._raw_request(
-            "GET",
-            f"/hassio/{service}/logs",
-            headers={"Accept": "text/plain"},
-            params={"lines": lines} if lines is not None else None,
-        )
-        return response.text
+        return await self._proxied_logs_get(service, lines)
 
     async def test_connection(self) -> tuple[bool, str | None]:
         """

@@ -169,8 +169,8 @@ def _validate_log_slug(source: str, slug: str | None) -> None:
                     f"{', '.join(sorted(SYSTEM_SERVICE_SLUGS))}",
                     suggestions=[
                         "Pick a valid service name (e.g. 'supervisor', 'host')",
-                        "For add-on container logs use source='supervisor' with "
-                        + "the add-on slug instead",
+                        "For app (add-on) container logs use source='supervisor' "
+                        + "with the app slug instead",
                     ],
                 )
             )
@@ -180,8 +180,8 @@ def _validate_log_slug(source: str, slug: str | None) -> None:
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 "The 'slug' parameter is required for source='supervisor'",
                 suggestions=[
-                    "Provide the add-on slug, e.g. slug='core_mosquitto'",
-                    "Use ha_get_app() to list installed add-on slugs",
+                    "Provide the app (add-on) slug, e.g. slug='core_mosquitto'",
+                    "Use ha_get_app() to list installed app slugs",
                 ],
             )
         )
@@ -190,8 +190,8 @@ def _validate_log_slug(source: str, slug: str | None) -> None:
 def _addon_auth_error_suggestions() -> list[str]:
     if is_running_in_addon():
         return [
-            "Verify SUPERVISOR_TOKEN is set correctly inside the add-on",
-            "Reinstall the add-on if the token may have rotated",
+            "Verify SUPERVISOR_TOKEN is set correctly inside the app (add-on)",
+            "Reinstall the app if the token may have rotated",
         ]
     return [
         "Verify HOMEASSISTANT_TOKEN is a valid admin Long-Lived Access Token (Settings → Profile → Long-Lived Access Tokens)",

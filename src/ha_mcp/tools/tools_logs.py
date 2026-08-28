@@ -240,7 +240,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - "logbook" (default): Entity state change history with pagination
         - "system": Structured system log entries (errors, warnings) via system_log/list
         - "error_log": Raw log text (home-assistant.log on container/pip installs; HA Core's journald stream on Supervisor-backed installs)
-        - "supervisor": Add-on container logs (requires slug = add-on slug)
+        - "supervisor": App (add-on) container logs (requires slug = app slug)
         - "system_service": HA-Supervisor-managed system service logs (requires
           slug ∈ {supervisor, host, core, dns, audio, cli, multicast, observer})
         - "logger": Effective log level per integration via logger/log_info (confirms logger.set_level changes took effect)
@@ -273,10 +273,10 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             matches the whole line; `limit`/`order` do not apply, issues are
             ranked by count, then severity, then recency, and the summary covers
             a fixed deep window rather than the caller's limit.
-        **Supervisor params:** slug = add-on slug, e.g. "core_mosquitto" (use
+        **Supervisor params:** slug = app slug, e.g. "core_mosquitto" (use
             ha_get_app() to list installed slugs)
         **System-service params:** slug = service name. The slug "supervisor"
-            here means the Supervisor service's own logs, NOT an add-on with
+            here means the Supervisor service's own logs, NOT an app with
             that name — the source param disambiguates.
         """
         return await tools.get_logs(

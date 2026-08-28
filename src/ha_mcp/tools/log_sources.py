@@ -312,9 +312,17 @@ class CoreLogSourcesMixin:
 
             filters_applied: dict[str, str] = {}
 
+            # The isinstance guards keep a malformed non-dict record from
+            # raising AttributeError out of this method's narrow except
+            # clauses without the structured ToolError envelope. Unfiltered
+            # calls still return such records verbatim (pinned by
+            # test_tolerates_missing_none_and_non_dict_entries); a filter
+            # drops them, since they cannot carry the field being matched.
             if level:
                 entries = [
-                    e for e in entries if str(e.get("level", "")).upper() == level
+                    e
+                    for e in entries
+                    if isinstance(e, dict) and str(e.get("level", "")).upper() == level
                 ]
                 filters_applied["level"] = level
 
@@ -323,8 +331,11 @@ class CoreLogSourcesMixin:
                 entries = [
                     e
                     for e in entries
-                    if search_lower in str(e.get("message", "")).lower()
-                    or search_lower in str(e.get("name", "")).lower()
+                    if isinstance(e, dict)
+                    and (
+                        search_lower in str(e.get("message", "")).lower()
+                        or search_lower in str(e.get("name", "")).lower()
+                    )
                 ]
                 filters_applied["search"] = search
 
@@ -604,6 +615,11 @@ class CoreLogSourcesMixin:
                 order,
                 structured,
                 top_n,
+                # Raw path only: the structured summary consumes the whole
+                # window, so it never leaves matches behind a limit slice.
+                unreturned_matches=(
+                    0 if structured else data["total_lines"] - data["returned_lines"]
+                ),
             )
             return data
 

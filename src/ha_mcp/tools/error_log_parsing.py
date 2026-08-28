@@ -21,6 +21,7 @@ from typing import Any, Literal, NamedTuple
 from ..client.rest_client import MIN_LOG_WINDOW_LINES
 from .log_common import (
     DEFAULT_LOG_LIMIT,
+    MAX_LIMIT,
     SUPERVISOR_SEARCH_WINDOW_LINES,
     _coerce_limit,
 )
@@ -517,8 +518,20 @@ def _attach_error_log_pagination(
     order: Literal["newest", "oldest"],
     structured: bool,
     top_n: int | None,
+    unreturned_matches: int = 0,
 ) -> None:
-    """Add the offset/has_more contract to an error-log response in place."""
+    """Add the offset/has_more contract to an error-log response in place.
+
+    ``has_more`` speaks only about history behind this window. Matches the
+    ``limit`` slice left unreturned INSIDE a terminal window get a raise-the-
+    limit hint instead of a ``next_offset``: they sit in a window the caller
+    has already addressed, so a larger ``limit`` retrieves them exactly,
+    whereas paging deeper for them cannot advance once the window is the whole
+    journal (a Supervisor fetch past the start clamps to the same oldest
+    window every time, which would loop). On a non-terminal window the step
+    already resumes just before the oldest returned line, so those matches are
+    covered by the next page and need no hint.
+    """
     data["offset"] = window.offset
     data["has_more"] = window.has_more
     if window.has_more:
@@ -532,5 +545,14 @@ def _attach_error_log_pagination(
             structured,
             top_n,
         )
-    elif window.offset and window.raw_line_count:
+        return
+    if window.offset and window.raw_line_count:
         data["note"] = f"{data.get('note', '')} {_HISTORY_START_NOTE}".strip()
+    if unreturned_matches > 0:
+        total = data.get("total_lines", unreturned_matches)
+        suggested = min(total, MAX_LIMIT)
+        data["pagination_hint"] = (
+            f"{unreturned_matches} more matching lines remain inside this "
+            f"window (no older history exists behind it). Repeat the call "
+            f"with limit={suggested} to retrieve them in one response."
+        )

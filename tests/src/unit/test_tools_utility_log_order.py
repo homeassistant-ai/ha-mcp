@@ -261,6 +261,38 @@ class TestSystemOrder:
         assert result["entries"][0]["timestamp"] == 100.0
 
 
+class TestSystemMalformedEntries:
+    """source='system' — malformed records must not escape the error envelope."""
+
+    @pytest.mark.asyncio
+    async def test_non_dict_entries_are_dropped_by_filters(self):
+        """A non-dict record would AttributeError inside the level/search
+        comprehensions and leave the tool without its structured ToolError
+        shape; a filter drops it instead (unfiltered calls keep it, pinned
+        by test_tolerates_missing_none_and_non_dict_entries)."""
+        client = AsyncMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    "bogus string record",
+                    {
+                        "name": "a",
+                        "message": ["m"],
+                        "level": "ERROR",
+                        "timestamp": 100.0,
+                    },
+                ],
+            }
+        )
+        tools = LogTools(client)
+        result = await tools.get_logs(
+            **_call_kwargs(source="system", level="ERROR", search="m")
+        )
+        assert result["total_entries"] == 1
+        assert [e["name"] for e in result["entries"]] == ["a"]
+
+
 class TestRawTextOrder:
     """error_log / supervisor / system_service — reversible most-recent window."""
 

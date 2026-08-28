@@ -1091,7 +1091,7 @@ class TestGetSupervisorLogWrapper:
         suggestions = payload["error"]["suggestions"]
         assert any("Check Home Assistant connection" in s for s in suggestions)
         assert any(
-            "Verify add-on slug 'core_mosquitto' is correct" in s for s in suggestions
+            "Verify app slug 'core_mosquitto' is correct" in s for s in suggestions
         )
         assert any("ha_get_app" in s for s in suggestions)
 

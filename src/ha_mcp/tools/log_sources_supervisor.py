@@ -45,10 +45,10 @@ class SupervisorLogSourcesMixin:
         search: str | None = None,
         order: Literal["newest", "oldest"] = "newest",
     ) -> dict[str, Any]:
-        """Fetch add-on container logs.
+        """Fetch app (add-on) container logs.
 
         Delegates to ``HomeAssistantClient.get_addon_logs`` which branches on
-        ``is_running_in_addon()``: inside the add-on container hits Supervisor
+        ``is_running_in_addon()``: inside the app container hits Supervisor
         directly at ``http://supervisor/addons/<slug>/logs`` (the HA-Core
         proxy at ``/api/hassio/addons/<slug>/logs`` rejects the Supervisor
         token there — see #1116); on non-addon installs falls back to the
@@ -135,23 +135,23 @@ class SupervisorLogSourcesMixin:
                         context={"source": "supervisor", "slug": slug},
                         suggestions=[
                             f"Supervisor rejected the request for '{slug}' — "
-                            "verify slug format or that the add-on is installed "
+                            "verify slug format or that the app (add-on) is installed "
                             "and running",
-                            "Use ha_get_app() to list installed add-on slugs",
+                            "Use ha_get_app() to list installed app slugs",
                             "Ensure Supervisor is available (HA OS or Supervised install)",
                         ],
                     )
                 )
             if status == 404:
-                first_suggestion = f"Add-on '{slug}' not found or not installed"
+                first_suggestion = f"App (add-on) '{slug}' not found or not installed"
             else:
-                first_suggestion = f"Verify add-on slug '{slug}' is correct"
+                first_suggestion = f"Verify app (add-on) slug '{slug}' is correct"
             exception_to_structured_error(
                 e,
                 context={"source": "supervisor", "slug": slug},
                 suggestions=[
                     first_suggestion,
-                    "Use ha_get_app() to list installed add-on slugs",
+                    "Use ha_get_app() to list installed app slugs",
                     "Ensure Supervisor is available (HA OS or Supervised install)",
                 ],
             )
@@ -165,8 +165,8 @@ class SupervisorLogSourcesMixin:
                 context={"source": "supervisor", "slug": slug},
                 suggestions=[
                     "Check Home Assistant connection",
-                    f"Verify add-on slug '{slug}' is correct",
-                    "Use ha_get_app() to list installed add-on slugs",
+                    f"Verify app slug '{slug}' is correct",
+                    "Use ha_get_app() to list installed app slugs",
                     "Ensure Supervisor is available (HA OS or Supervised install)",
                 ],
             )
