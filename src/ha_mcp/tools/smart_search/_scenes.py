@@ -501,7 +501,7 @@ class SceneSearchMixin(ConfigFetchMixin):
             # (#2292).
             reason_parts.append(
                 f"{yaml_skipped} scene(s) not scanned (per-id config endpoint "
-                "returned 404 — these are YAML-defined scenes with an id:, or "
+                "returned 404 — these are YAML-defined scenes, or "
                 "integration-managed scenes, which that endpoint does not "
                 "expose) — their match status is unknown; this result is not "
                 "exhaustive. Their definitions live outside HA storage "

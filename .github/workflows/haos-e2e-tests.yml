@@ -285,6 +285,7 @@ jobs:
           # Dispatch inputs reach the shell through env (below), never by
           # direct interpolation into this script — same shape as the beta
           # lanes. Both stay unquoted for word splitting.
+          # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
             -n2 --dist loadscope -v --tb=short --maxfail=0 $PYTEST_ARGS
         env:
@@ -503,6 +504,7 @@ jobs:
           # Dispatch inputs reach the shell through env (below), never by
           # direct interpolation into this script — same shape as the beta
           # lanes. Both stay unquoted for word splitting.
+          # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
             -n2 --dist loadscope -v --tb=short --maxfail=0 $PYTEST_ARGS
         env:
@@ -746,9 +748,11 @@ jobs:
           # Dispatch inputs reach the shell through env (below), never by
           # direct interpolation into this script — same shape as the beta
           # lanes. Both stay unquoted for word splitting.
+          # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
             -n2 --dist loadscope -v --tb=short --maxfail=0 \
             -m "not addon_disruptive" $PYTEST_ARGS
+          # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
             -n0 -v --tb=short --maxfail=0 \
             -m addon_disruptive $PYTEST_ARGS \
@@ -1192,6 +1196,7 @@ jobs:
           # Dispatch inputs reach the shell through env (below), never by
           # direct interpolation into this script — same shape as the beta
           # lanes. Both stay unquoted for word splitting.
+          # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
             -n2 --dist loadscope -v --tb=short --maxfail=0 $PYTEST_ARGS
         env:
@@ -1443,9 +1448,11 @@ jobs:
           # Dispatch inputs reach the shell through env (below), never by
           # direct interpolation into this script — same shape as the beta
           # lanes. Both stay unquoted for word splitting.
+          # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
             -n2 --dist loadscope -v --tb=short --maxfail=0 \
             -m "not addon_disruptive" $PYTEST_ARGS
+          # shellcheck disable=SC2086
           uv run pytest $PYTEST_PATHS \
             -n0 -v --tb=short --maxfail=0 \
             -m addon_disruptive $PYTEST_ARGS \

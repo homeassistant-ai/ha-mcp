@@ -270,3 +270,33 @@ def test_container_audit_lane_reports_the_full_failure_surface(
         f"{workflow}::{job_id} stops after pytest.ini's --maxfail=3, so a "
         "topology audit reports three failures instead of the full surface"
     )
+
+
+def test_every_beta_cron_is_claimed_by_exactly_one_lane_gate() -> None:
+    """Each beta cron must be claimed by exactly one job's ``if:`` gate.
+
+    The merged beta workflow declares both nightly crons at the workflow
+    level, and each lane claims its own inside its ``if:``. The two copies of
+    each cron string must stay in lockstep: editing one side leaves a lane
+    whose gate matches no declared cron, so it silently stops running nightly
+    — the lane reports nothing, and nothing else notices (#2302 review).
+    """
+    workflow = yaml.safe_load(
+        (_WORKFLOW_DIR / "haos-e2e-beta-tests.yml").read_text(encoding="utf-8")
+    )
+    triggers = workflow.get("on") or workflow.get(True) or {}
+    declared = [entry["cron"] for entry in triggers.get("schedule", [])]
+    assert declared, "the beta workflow must keep its nightly schedule"
+
+    lane_conditions = [
+        str(job.get("if") or "")
+        for job_id, job in (workflow.get("jobs") or {}).items()
+        if isinstance(job, dict) and job_id != "changes"
+    ]
+    for cron in declared:
+        claimants = [cond for cond in lane_conditions if cron in cond]
+        assert len(claimants) == 1, (
+            f"cron {cron!r} must be claimed by exactly ONE beta lane gate; "
+            f"found {len(claimants)}. A cron no lane claims runs nothing on "
+            f"its slot; one claimed twice starts both lanes on it."
+        )
