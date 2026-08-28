@@ -210,6 +210,16 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "import, so the declaration looks dead.",
     ),
     (
+        "py/unused-global-variable",
+        "src/ha_mcp/tools/log_common.py",
+        "_LOG_LEVEL_RE",
+        "",
+        "Cross-module use: log_common.py is the leaf module of the tools_utility "
+        "split, so this regex is imported and read by log_sources.py's "
+        "_build_raw_error_log level filter. CodeQL's single-file analysis misses "
+        "the cross-module import, so the declaration looks dead.",
+    ),
+    (
         "py/unused-import",
         "packaging/binary/pyinstaller_hooks/runtime_hook.py",
         "idna",

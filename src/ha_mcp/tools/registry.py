@@ -88,6 +88,15 @@ MODULE_PRESETS = {
     ],
 }
 
+# Module splits: a configured legacy module name keeps enabling every module
+# its tools moved to, so an existing ENABLED_TOOL_MODULES list keeps the same
+# tool surface across upgrades. The legacy name itself stays valid — it still
+# names a real (smaller) module.
+MODULE_SPLIT_EXPANSIONS = {
+    # ha_get_logs moved out of tools_utility in the #2279 split.
+    "tools_utility": {"tools_logs"},
+}
+
 
 class ToolsRegistry:
     """Manages registration of all MCP tools for the smart server.
@@ -142,6 +151,9 @@ class ToolsRegistry:
 
         # Parse comma-separated list
         modules = {m.strip() for m in self._enabled_modules.split(",") if m.strip()}
+        for legacy, successors in MODULE_SPLIT_EXPANSIONS.items():
+            if legacy in modules:
+                modules |= successors
         return modules if modules else None
 
     def _discover_tool_modules(self) -> list[str]:

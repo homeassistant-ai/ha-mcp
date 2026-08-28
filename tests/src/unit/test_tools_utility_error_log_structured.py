@@ -19,16 +19,22 @@ import pytest
 from fastmcp.exceptions import ToolError
 from pydantic import TypeAdapter
 
-from ha_mcp.client.rest_client import HomeAssistantAuthError
+from ha_mcp.client.rest_client import ErrorLogPage, HomeAssistantAuthError
 from ha_mcp.tools.error_log_parsing import (
     _DEFAULT_TOP_N,
     _MAX_COMPONENTS,
     _MAX_MESSAGE_LEN,
     _TRUNCATION_MARK,
+    STRUCTURED_ERROR_LOG_WINDOW_LINES,
     _get_component_prefix,
     _parse_error_log_structured,
 )
-from ha_mcp.tools.tools_utility import register_utility_tools
+from ha_mcp.tools.log_common import (
+    DEFAULT_LOG_LIMIT,
+    MAX_LIMIT,
+    SUPERVISOR_SEARCH_WINDOW_LINES,
+)
+from ha_mcp.tools.tools_logs import register_logs_tools
 
 # ---------------------------------------------------------------------------
 # Sample log fixtures
@@ -124,9 +130,17 @@ _TRACEBACK_LOG = textwrap.dedent("""\
 # ---------------------------------------------------------------------------
 
 
-def _make_client(log_text: str = _SAMPLE_LOG) -> MagicMock:
+def _make_client(log_text: str = _SAMPLE_LOG, has_more: bool = False) -> MagicMock:
+    """Client stub whose ``get_error_log`` answers with one page.
+
+    ``has_more`` is the client's verdict, not a property of ``log_text``: on
+    journald only the client can establish it (see ``_journald_error_log_page``),
+    so the tool layer takes it as given.
+    """
     client = MagicMock()
-    client.get_error_log = AsyncMock(return_value=log_text)
+    client.get_error_log = AsyncMock(
+        return_value=ErrorLogPage(text=log_text, has_more=has_more)
+    )
     return client
 
 
@@ -141,7 +155,7 @@ def _get_tool_param_annotation(tool_name: str, param_name: str) -> Any:
 
     async def _inner() -> Any:
         mcp = FastMCP("test")
-        register_utility_tools(mcp, _make_client())
+        register_logs_tools(mcp, _make_client())
         tool = await mcp.get_tool(tool_name)
         return inspect.signature(tool.fn).parameters[param_name].annotation
 
@@ -159,7 +173,7 @@ def _register_and_collect(client: Any) -> dict[str, Any]:
         return _wrap
 
     mcp = SimpleNamespace(tool=_tool)
-    register_utility_tools(mcp, client)
+    register_logs_tools(mcp, client)
     return collected
 
 
@@ -745,6 +759,7 @@ class TestHaGetLogsStructured:
             side_effect=HomeAssistantAuthError("401 Unauthorized")
         )
         real._raw_request = AsyncMock()
+        real.timeout = 30
 
         client = _make_client()
         client.get_error_log = real.get_error_log
@@ -982,6 +997,342 @@ class TestWarningsAreMergedNotClobbered:
         joined = " ".join(result["warnings"])
         assert "only apply to source='logbook'" in joined
         assert "NOT evidence" in joined
+
+
+def _numbered_log(count: int) -> str:
+    """`count` parseable log lines — enough to fill an exact fetch window."""
+    return "".join(
+        f"2026-05-27 10:00:00.000 ERROR (MainThread) [a.b.c] issue {i}\n"
+        for i in range(count)
+    )
+
+
+class TestFetchWindowIsBounded:
+    """Every error_log fetch asks for a bounded window (#2279).
+
+    The unconditional 20,000-line request these replace made Supervisor
+    assemble a journald slice for 15+ minutes before the tool call returned.
+    """
+
+    @pytest.mark.asyncio
+    async def test_structured_reads_the_bounded_summary_window(self):
+        client = _make_client(_SAMPLE_LOG)
+        tools = _register_and_collect(client)
+        await tools["ha_get_logs"](source="error_log", structured=True)
+        assert client.get_error_log.await_args.kwargs == {
+            "lines": STRUCTURED_ERROR_LOG_WINDOW_LINES,
+            "offset": 0,
+        }
+        assert STRUCTURED_ERROR_LOG_WINDOW_LINES < 20000
+
+    @pytest.mark.asyncio
+    async def test_raw_unfiltered_reads_exactly_the_limit(self):
+        client = _make_client(_SAMPLE_LOG)
+        tools = _register_and_collect(client)
+        await tools["ha_get_logs"](source="error_log", limit=25)
+        assert client.get_error_log.await_args.kwargs["lines"] == 25
+
+    @pytest.mark.asyncio
+    async def test_raw_default_limit_reads_the_default_window(self):
+        client = _make_client(_SAMPLE_LOG)
+        tools = _register_and_collect(client)
+        await tools["ha_get_logs"](source="error_log")
+        assert client.get_error_log.await_args.kwargs["lines"] == DEFAULT_LOG_LIMIT
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "filter_kwargs",
+        [{"search": "timeout"}, {"level": "ERROR"}, {"search": "x", "level": "ERROR"}],
+    )
+    async def test_raw_client_side_filters_widen_the_window(self, filter_kwargs):
+        """`search` and `level` both filter the fetched text client-side, so
+        both need history behind the caller's limit to find matches in — the
+        same widening `_get_supervisor_log` applies for `search`."""
+        client = _make_client(_SAMPLE_LOG)
+        tools = _register_and_collect(client)
+        await tools["ha_get_logs"](source="error_log", limit=10, **filter_kwargs)
+        assert (
+            client.get_error_log.await_args.kwargs["lines"]
+            == SUPERVISOR_SEARCH_WINDOW_LINES
+        )
+
+    @pytest.mark.asyncio
+    async def test_limit_is_clamped_before_it_sizes_the_window(self):
+        client = _make_client(_SAMPLE_LOG)
+        tools = _register_and_collect(client)
+        await tools["ha_get_logs"](source="error_log", limit=MAX_LIMIT + 5000)
+        assert client.get_error_log.await_args.kwargs["lines"] == MAX_LIMIT
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("structured", [False, True])
+    async def test_offset_reaches_the_client(self, structured):
+        client = _make_client(_SAMPLE_LOG)
+        tools = _register_and_collect(client)
+        kwargs = {"source": "error_log", "structured": structured, "offset": 400}
+        await tools["ha_get_logs"](**kwargs)
+        assert client.get_error_log.await_args.kwargs["offset"] == 400
+
+
+class TestErrorLogPagination:
+    """`offset`/`has_more`/`next_offset` — the logbook pagination contract,
+    applied to the bounded log window so an agent can read further back.
+
+    ``has_more`` is passed through from the client verbatim: a full window
+    proves nothing on journald, where an over-shot offset clamps to the oldest
+    entry and comes back full forever, so the tool layer must not re-derive it
+    from what it received.
+    """
+
+    @pytest.mark.asyncio
+    async def test_has_more_is_taken_from_the_client(self):
+        client = _make_client(_numbered_log(20), has_more=True)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](source="error_log", limit=20)
+        assert result["offset"] == 0
+        assert result["has_more"] is True
+        assert result["next_offset"] == 20
+        assert "offset=20" in result["pagination_hint"]
+
+    @pytest.mark.asyncio
+    async def test_a_full_window_alone_does_not_claim_more_history(self):
+        """The clamp case: the window is saturated but the client says done."""
+        client = _make_client(_numbered_log(20), has_more=False)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](source="error_log", limit=20)
+        assert result["has_more"] is False
+        assert "next_offset" not in result
+        assert "pagination_hint" not in result
+
+    @pytest.mark.asyncio
+    async def test_terminal_window_with_unreturned_matches_hints_a_larger_limit(self):
+        """Matches the limit slice left inside the LAST window must stay reachable.
+
+        Paging cannot reach them: no older history exists behind the window,
+        and on journald a deeper fetch clamps back to this same oldest window
+        every time, so a next_offset here would loop. A larger limit retrieves
+        them from the already-addressed window exactly.
+        """
+        client = _make_client(_numbered_log(50), has_more=False)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](
+            source="error_log", limit=10, search="issue"
+        )
+        assert result["has_more"] is False
+        assert "next_offset" not in result
+        assert "40 more matching lines remain" in result["pagination_hint"]
+        assert "limit=50" in result["pagination_hint"]
+
+    @pytest.mark.asyncio
+    async def test_terminal_window_at_max_limit_hints_narrowing_instead(self):
+        """At limit=MAX_LIMIT the raise-the-limit hint would repeat the same
+        request verbatim; the hint switches to narrowing the match set."""
+        client = _make_client(_numbered_log(MAX_LIMIT + 100), has_more=False)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](
+            source="error_log", limit=MAX_LIMIT, search="issue"
+        )
+        assert result["has_more"] is False
+        assert "already at its maximum" in result["pagination_hint"]
+        assert f"limit={MAX_LIMIT} to retrieve" not in result["pagination_hint"]
+
+    @pytest.mark.asyncio
+    async def test_next_offset_advances_from_the_current_offset(self):
+        client = _make_client(_numbered_log(20), has_more=True)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](source="error_log", limit=20, offset=60)
+        assert result["offset"] == 60
+        assert result["next_offset"] == 80
+
+    @pytest.mark.asyncio
+    async def test_window_lines_reports_the_size_requested(self):
+        """A degraded (short) window has to be visible as such.
+
+        Without it, a proxy that stripped the Range header and served 100 lines
+        for a 2000-line ask is indistinguishable from a log that only holds 100.
+        """
+        client = _make_client(_numbered_log(20), has_more=True)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](source="error_log", limit=200)
+        assert result["window_lines"] == 200
+        assert result["total_lines"] == 20
+
+    @pytest.mark.asyncio
+    async def test_filtered_window_resumes_where_the_shown_block_starts(self):
+        """A filter that drops most of a window must not skip what it dropped.
+
+        Window of 2000, limit 10: the tool shows the 10 newest matches, so the
+        next page has to resume just before the oldest one shown. Stepping a
+        whole window instead jumps over every match in between — silently, and
+        exactly when a search is what the caller asked for.
+        """
+        client = _make_client(
+            _numbered_log(SUPERVISOR_SEARCH_WINDOW_LINES), has_more=True
+        )
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](
+            source="error_log", limit=10, search="issue 7"
+        )
+        # "issue 7", "issue 70".."issue 79", "issue 700".."issue 799".
+        assert result["total_lines"] == 111
+        assert result["returned_lines"] == 10
+        # Oldest match shown is "issue 790" (index 790 in the window), so the
+        # next page resumes 2000 - 790 lines back.
+        assert result["next_offset"] == SUPERVISOR_SEARCH_WINDOW_LINES - 790
+        assert "search='issue 7'" in result["pagination_hint"]
+
+    @pytest.mark.asyncio
+    async def test_step_never_exceeds_the_window_size(self):
+        """A window longer than requested must not push the step past it.
+
+        On journald the step is spent in ENTRY units while it is derived from
+        LINES, and a multi-line entry makes a window come back longer than the
+        entry count asked for — an uncapped step would then page over entries
+        that were never shown. Here 20 lines answer a 5-line ask.
+        """
+        client = _make_client(_numbered_log(20), has_more=True)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](source="error_log", limit=5)
+        assert result["window_lines"] == 5
+        assert result["next_offset"] == 5
+
+    @pytest.mark.asyncio
+    async def test_a_fully_filtered_window_steps_the_whole_window(self):
+        """Nothing shown means nothing to resume before."""
+        client = _make_client(_numbered_log(20), has_more=True)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](
+            source="error_log", limit=20, search="nothing-matches-this"
+        )
+        assert result["returned_lines"] == 0
+        assert result["next_offset"] == SUPERVISOR_SEARCH_WINDOW_LINES
+
+    @pytest.mark.asyncio
+    async def test_structured_pages_by_the_whole_window(self):
+        window = "ha_mcp.tools.error_log_parsing.STRUCTURED_ERROR_LOG_WINDOW_LINES"
+        with patch(window, 4):
+            client = _make_client(_numbered_log(4), has_more=True)
+            tools = _register_and_collect(client)
+            result = await tools["ha_get_logs"](
+                source="error_log", structured=True, offset=8
+            )
+        assert result["structured"] is True
+        assert result["offset"] == 8
+        assert result["has_more"] is True
+        assert result["window_lines"] == 4
+        # The summary consumes the whole window, so the next page is a whole
+        # window further back.
+        assert result["next_offset"] == 12
+        assert "structured=True" in result["pagination_hint"]
+        assert "offset=12" in result["pagination_hint"]
+
+    @pytest.mark.asyncio
+    async def test_structured_end_of_history_reports_no_next_offset(self):
+        client = _make_client(_SAMPLE_LOG)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](source="error_log", structured=True)
+        assert result["has_more"] is False
+        assert "next_offset" not in result
+        assert result["window_lines"] == STRUCTURED_ERROR_LOG_WINDOW_LINES
+
+    @pytest.mark.asyncio
+    async def test_note_explains_what_offset_counts(self):
+        """The window is not the whole log — the response has to say so, or an
+        agent reads `total_lines` as the instance's total."""
+        client = _make_client(_SAMPLE_LOG)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](source="error_log")
+        assert "offset" in result["note"]
+        assert "window" in result["note"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("structured", [False, True])
+    async def test_last_page_says_it_reached_the_start_of_history(self, structured):
+        """The clamp can hand back entries an earlier page already showed, so
+        the terminal page says so rather than reading as fresh history."""
+        client = _make_client(_SAMPLE_LOG)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](
+            source="error_log", structured=structured, offset=5000
+        )
+        assert result["has_more"] is False
+        assert "start of the available history" in result["note"]
+
+    @pytest.mark.asyncio
+    async def test_first_page_does_not_claim_to_be_the_last(self):
+        client = _make_client(_SAMPLE_LOG)
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](source="error_log")
+        assert "start of the available history" not in result["note"]
+
+
+class TestEmptyWindowAtAnOffset:
+    """An empty window means different things at the newest edge and deep in
+    history, and the wrong one sends the caller after an outage that is not
+    happening (or blesses a failed fetch as a clean log)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("structured", [False, True])
+    async def test_empty_page_past_the_end_is_benign(self, structured):
+        client = _make_client("")
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](
+            source="error_log", structured=structured, offset=900
+        )
+        joined = " ".join(result["warnings"])
+        assert "offset=900" in joined
+        # The failed-fetch alarm must not fire on a routine last page.
+        assert "NOT evidence" not in joined
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("structured", [False, True])
+    async def test_empty_fetch_at_offset_zero_still_warns_loudly(self, structured):
+        """Unchanged: a running instance always logs something."""
+        client = _make_client("")
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](source="error_log", structured=structured)
+        joined = " ".join(result["warnings"])
+        assert "NOT evidence" in joined
+        assert "offset=" not in joined
+
+
+class TestOffsetParameterIncompatibilityWarning:
+    """`offset` applies to source='logbook' and source='error_log'. Anywhere
+    else it must be flagged rather than silently dropped — same shape as the
+    existing level/entity_id/slug incompatibility warnings."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("source", ["system", "logger"])
+    async def test_offset_on_an_unsupported_source_warns(self, source):
+        client = _make_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](source=source, offset=50)
+        warnings = result.get("warnings", [])
+        assert any("offset" in w and source in w for w in warnings), warnings
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("structured", [False, True])
+    async def test_offset_on_error_log_does_not_warn(self, structured):
+        client = _make_client()
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](
+            source="error_log", structured=structured, offset=50
+        )
+        assert not any("offset" in w for w in result.get("warnings", []))
+
+    @pytest.mark.asyncio
+    async def test_zero_offset_never_warns(self):
+        """The default must stay silent — a warning on every `system` call
+        would train agents to ignore the channel."""
+        client = _make_client()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        tools = _register_and_collect(client)
+        result = await tools["ha_get_logs"](source="system")
+        assert not any("offset" in w for w in result.get("warnings", []))
 
 
 class TestDedupKey:

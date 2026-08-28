@@ -19,6 +19,7 @@ import logging
 import os
 import time
 import uuid
+import weakref
 from collections.abc import Callable, Container
 from typing import TYPE_CHECKING, Any
 
@@ -323,6 +324,28 @@ async def _restart_addon(
 # ---- Settings info ----
 
 
+# Keyed by server instance so a replaced worker drops out with its instance;
+# the module-level dict itself survives entry reloads (modules stay cached).
+_WORKER_INSTANCE_IDS: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
+
+
+def _worker_instance_id(server: HomeAssistantSmartMCPServer) -> str:
+    """Per-worker identity for the restart poll's embedded mode.
+
+    ``_PROCESS_INSTANCE_ID`` proves a process swap, but an embedded restart
+    reloads the config entry INSIDE the surviving HA process — modules stay
+    cached, so the process id never flips and the poll timed out after every
+    successful reload (#2279 feedback). A new server instance is constructed
+    per entry setup, so an id lazily pinned to the instance flips exactly
+    when the reload completes.
+    """
+    wid = _WORKER_INSTANCE_IDS.get(server)
+    if wid is None:
+        wid = uuid.uuid4().hex
+        _WORKER_INSTANCE_IDS[server] = wid
+    return wid
+
+
 async def _settings_info(
     server: HomeAssistantSmartMCPServer | None, is_sidecar: bool, _: Request
 ) -> JSONResponse:
@@ -355,6 +378,13 @@ async def _settings_info(
                 "sidecar" if is_sidecar else _detect_installation_method()
             ),
             "instance_id": _PROCESS_INSTANCE_ID,
+            # Embedded restarts swap the server instance, not the process —
+            # the restart poll compares this field in that mode.
+            "worker_id": (
+                _worker_instance_id(server)
+                if server is not None
+                else _PROCESS_INSTANCE_ID
+            ),
             "started_at": _PROCESS_STARTED_AT,
             "version": version,
         }

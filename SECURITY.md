@@ -39,6 +39,15 @@ secrecy and is designed for loopback HTTP or LAN HTTP with a high-entropy
 `MCP_SECRET_PATH`. Any peer that can reach the configured path is treated as
 trusted — securing the local network is outside ha-mcp's scope.
 
+On app (add-on) installs, ha-mcp additionally talks to the Supervisor REST
+API at `http://supervisor` with the Supervisor-issued token. That transport
+is the platform's contract, not a choice this project can harden: Supervisor
+serves its API over plain HTTP only (`web.TCPSite(..., port=80)` in
+`supervisor/api/__init__.py` — no TLS endpoint, no IPC socket), on the
+internal `hassio` docker network that is not reachable from the LAN. The
+isolation of that internal network is the boundary protecting the token, and
+it is enforced by the Home Assistant OS platform, not by ha-mcp.
+
 For internet-facing deployments use the OAuth entrypoint (`ha-mcp-oauth`) or,
 for gating access behind an external identity provider instead of per-user HA
 tokens, the OIDC entrypoint (`ha-mcp-oidc`; see [docs/oidc.md](docs/oidc.md)),

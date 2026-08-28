@@ -148,9 +148,16 @@ def run_script(
 
     ``fetch_map`` keys are URL substrings; values are
     ``{"status": int, "body"?: str, "json"?: any, "throw"?: str,
-    "responses"?: [...]}``. ``responses`` sequences per-call overrides;
-    the last entry sticks after exhaustion. Missing routes default to
-    404.
+    "responses"?: [...], "byMethod"?: {...}}``. ``responses`` sequences
+    per-call overrides; the last entry sticks after exhaustion. Missing
+    routes default to 404.
+
+    ``byMethod`` keys a route by HTTP verb --
+    ``{"byMethod": {"GET": ..., "POST": ...}}`` -- each verb getting its
+    own independent ``responses`` counter (``default`` covers the rest).
+    Use it whenever GET and POST share a URL, so a test targeting the
+    POST does not have to hand-count the init GETs and hope that count
+    never changes.
 
     ``invoke`` runs after the script body — use it to call a function
     the script exposes on ``window`` (e.g. ``"await window.restartAddon();"``)

@@ -124,7 +124,20 @@ def _get_backup_hint_text() -> str:
         "weak": "Backups are usually not required for configuration changes since most operations can be manually undone. Only run this if specifically requested or before irreversible system operations.",
         "auto": "Run before operations that CANNOT be undone (e.g., deleting devices). If the current definition was fetched or can be fetched, this tool is usually not needed.",
     }
-    return hints.get(hint, hints["normal"])
+    if hint not in hints:
+        # Silent fallback used to be harmless; it isn't now. This value is
+        # interpolated into BOTH the full and the lite ha_manage_backup
+        # description, so a typo ("medium", "high", a stray trailing space)
+        # quietly ships the wrong guidance in two places while the docs say
+        # the setting is honoured. Env-var deployments only — the app UI is
+        # a dropdown.
+        logger.warning(
+            "BACKUP_HINT=%r is not one of %s — falling back to 'normal'.",
+            hint,
+            sorted(hints),
+        )
+        hint = "normal"
+    return hints[hint]
 
 
 async def _get_local_backup_agent_id(
@@ -1718,14 +1731,16 @@ survives an agent's own mistakes.
             str | None,
             Field(
                 default=None,
-                description="(edits.list / edits.delete) Filter auto-backups by domain (e.g. 'automation', 'helper_timer').",
+                description="(edits.create / edits.list / edits.delete) Filter auto-backups by domain (e.g. 'automation', 'helper_timer'). "
+                "Required for edits.create.",
             ),
         ] = None,
         entity_id: Annotated[
             str | None,
             Field(
                 default=None,
-                description="(edits.list / edits.delete) Filter auto-backups by entity ID.",
+                description="(edits.create / edits.list / edits.delete) Filter auto-backups by entity ID. "
+                "Required for edits.create.",
             ),
         ] = None,
         backup_name: Annotated[
