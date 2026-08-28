@@ -21,6 +21,7 @@ collects without importing the e2e package and its Docker-shaped conftest.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -299,4 +300,24 @@ def test_every_beta_cron_is_claimed_by_exactly_one_lane_gate() -> None:
             f"cron {cron!r} must be claimed by exactly ONE beta lane gate; "
             f"found {len(claimants)}. A cron no lane claims runs nothing on "
             f"its slot; one claimed twice starts both lanes on it."
+        )
+    # And the reverse direction: a lane gating on a cron string the workflow
+    # never declares (a typo'd edit of one copy) matches no schedule event and
+    # silently skips its nightly run, while every declared cron still finds
+    # its one claimant above. Each gate must contain exactly one cron literal,
+    # and it must be a declared one.
+    cron_literal = re.compile(r"'([^']*(?:\*|\d)[^']*\*[^']*)'")
+    for cond in lane_conditions:
+        crons_in_gate = [
+            lit
+            for lit in cron_literal.findall(cond)
+            if lit.count(" ") == 4  # five cron fields
+        ]
+        assert len(crons_in_gate) == 1, (
+            f"each beta lane gate must name exactly one cron; {cond!r} names "
+            f"{crons_in_gate}"
+        )
+        assert crons_in_gate[0] in declared, (
+            f"lane gate claims undeclared cron {crons_in_gate[0]!r}; the "
+            f"workflow schedules {declared} — the two copies drifted"
         )
