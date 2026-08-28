@@ -185,6 +185,38 @@ class TestSendCommandErrorContract:
         assert "entity not available" in str(exc_info.value)
 
     @pytest.mark.asyncio
+    async def test_send_command_cancellation_drops_the_pending_future(self):
+        """Cancelling a caller mid-wait removes its pending-request entry.
+
+        Only ``TimeoutError`` and ``Exception`` cleaned up before the
+        ``BaseException`` clause was added: a cancelled caller (e.g. the
+        ha_search dashboards leg cancelled on a component-leg failure, #2291)
+        left its future in ``_pending_requests`` until a response with that id
+        arrived — which a hung handler never sends — leaking one entry per
+        cancelled call."""
+        import asyncio
+
+        client = self._prepare_client()
+        sent = asyncio.Event()
+
+        async def _never_resolve(message: dict) -> None:
+            sent.set()
+
+        client.send_json_message = _never_resolve  # type: ignore[method-assign]
+
+        task = asyncio.ensure_future(client.send_command("test/ping"))
+        # The future registers before send_json_message runs, so once the send
+        # stub fires the task is parked on the response wait with its entry in
+        # place.
+        await sent.wait()
+        assert client._state._pending_requests
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert client._state._pending_requests == {}
+
+    @pytest.mark.asyncio
     async def test_send_command_raises_on_string_error(self):
         """send_command raises HomeAssistantCommandError when error is a string."""
         from ha_mcp.client.rest_client import HomeAssistantCommandError

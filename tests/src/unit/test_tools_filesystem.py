@@ -236,11 +236,13 @@ class TestAssertMcpToolsAvailableCapsFirst:
     async def test_caps_tools_services_false_raises_tools_entry_error(self):
         """Since 2.1.0 the server entry also answers ``info`` (#2289), so caps
         alone no longer prove the tools SERVICES exist. A component reporting
-        ``tools_services: False`` raises the actionable tools-entry error
-        instead of letting the call hit raw service-not-found (#2292)."""
+        ``tools_services: False`` — confirmed by the live service-registry
+        probe — raises the actionable tools-entry error instead of letting the
+        call hit raw service-not-found (#2292)."""
         from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
 
         client = AsyncMock()
+        client.get_services = AsyncMock(return_value=[])
         with (
             patch(
                 "ha_mcp.tools.tools_filesystem.get_component_caps",
@@ -253,7 +255,29 @@ class TestAssertMcpToolsAvailableCapsFirst:
         data = json.loads(str(exc.value))
         assert data["success"] is False
         assert "file & yaml tools" in data["error"]["message"].lower()
-        client.get_services.assert_not_called()
+        client.get_services.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_caps_tools_services_false_but_live_services_present_passes(self):
+        """Caps are cached for the client's lifetime, so a ``False`` snapshot
+        can predate the user adding the tools entry mid-session. The live
+        service-registry re-check keeps the tools usable without a server
+        restart (Codex review on #2291)."""
+        from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
+
+        client = AsyncMock()
+        client.get_services = AsyncMock(
+            return_value=[
+                {"domain": "ha_mcp_tools", "services": {"get_caller_token": {}}}
+            ]
+        )
+        with patch(
+            "ha_mcp.tools.tools_filesystem.get_component_caps",
+            AsyncMock(return_value=self._caps("2.1.0", tools_services=False)),
+        ):
+            await _assert_mcp_tools_available(client)  # must not raise
+
+        client.get_services.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_caps_tools_services_true_passes(self):

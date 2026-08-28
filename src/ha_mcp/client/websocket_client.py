@@ -672,6 +672,11 @@ class HomeAssistantWebSocketClient:
             # never-sent. Still cancel the pending future so it cannot leak.
             self.cancel_pending_response(message_id)
             raise
+        except BaseException:
+            # Cancellation mid-send: same leak potential as the response-wait
+            # clause below — drop the registered future before propagating.
+            self.cancel_pending_response(message_id)
+            raise
 
         # Wait for response outside the lock.
         try:
@@ -705,6 +710,15 @@ class HomeAssistantWebSocketClient:
             self.cancel_pending_response(message_id)
             raise HomeAssistantCommandTimeout("Command timeout") from e
         except Exception:
+            self.cancel_pending_response(message_id)
+            raise
+        except BaseException:
+            # Cancellation (or another BaseException) while awaiting the
+            # response: without this clause the registered future stays in
+            # _pending_requests until a response with this id arrives — which a
+            # hung handler never sends — leaking one entry per cancelled call
+            # (e.g. the ha_search dashboards leg cancelled on a component-leg
+            # failure, #2291).
             self.cancel_pending_response(message_id)
             raise
 
