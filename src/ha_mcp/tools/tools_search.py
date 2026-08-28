@@ -1124,7 +1124,22 @@ def _dashboard_split_requested(req: _ResolvedSearch) -> bool:
     )
 
 
-def _dashboard_split_serviceable(req: _ResolvedSearch) -> bool:
+def _component_max_results(caps: Any) -> int:
+    """The component's advertised ``limits.max_results``, defaulting to 500.
+
+    The advisory ``limits`` ride the cached ``info`` probe, so a component
+    advertising a smaller ceiling gates the window fetch here instead of
+    accepting the split and then rejecting the frame in its schema (an
+    avoidable failed round-trip whose fallback still serves the caller).
+    """
+    limits = getattr(caps, "limits", None)
+    value = limits.get("max_results") if isinstance(limits, dict) else None
+    if isinstance(value, int) and value > 0:
+        return value
+    return _COMPONENT_MAX_RESULTS
+
+
+def _dashboard_split_serviceable(req: _ResolvedSearch, caps: Any) -> bool:
     """True when the split can serve the request; False ⇒ legacy serves it whole.
 
     Two corner cases route away rather than being half-served:
@@ -1135,12 +1150,13 @@ def _dashboard_split_serviceable(req: _ResolvedSearch) -> bool:
       split as a dashboards leg wearing a component envelope — the legacy path
       already produces exactly that, with its own bucket.
     - The window fetch would ask for more records than the component's
-      ``limit`` ceiling, which its schema rejects outright.
+      ``limit`` ceiling (``_component_max_results``), which its schema rejects
+      outright.
     """
     serves_body = req.body_eligible and bool(_component_body_search_types(req))
     if not (req.registry_eligible or serves_body):
         return False
-    return req.offset + req.limit <= _COMPONENT_MAX_RESULTS
+    return req.offset + req.limit <= _component_max_results(caps)
 
 
 @dataclass(frozen=True)
@@ -1186,6 +1202,26 @@ def _apply_entity_window(req: _ResolvedSearch, windowed: dict[str, Any]) -> None
     windowed["entity_has_more"] = (req.offset + len(page)) < total
 
 
+def _merge_sort_key(record: dict[str, Any]) -> str:
+    """Mirror of the component's ``_sort_key`` config tiebreak, dashboards added.
+
+    The component cuts its window with ``(-score, _sort_key)`` where
+    ``_sort_key`` is ``str(entity_id or id or name or "")``
+    (``custom_components/ha_mcp_tools/websocket_api.py``); those fields ride
+    the wire records unchanged, so the merge reproduces the exact order that
+    decided window membership. Dashboard records are outside the component
+    corpus, so any deterministic key places them consistently across pages —
+    ``dashboard_url`` extends the same chain.
+    """
+    return str(
+        record.get("entity_id")
+        or record.get("id")
+        or record.get("name")
+        or record.get("dashboard_url")
+        or ""
+    )
+
+
 def _merge_dashboard_window(
     req: _ResolvedSearch,
     component_result: dict[str, Any],
@@ -1198,9 +1234,14 @@ def _merge_dashboard_window(
     the merged page has to be cut server-side. It is exact: the component
     fetched the whole ``[0, offset + limit)`` window of its own corpus, a
     superset of every component record that can reach the caller's page, and
-    the leg returns its bucket unpaginated. Ties keep component records ahead
-    of dashboards (the sort is stable and dashboards are appended last),
-    matching the legacy insertion order.
+    the leg returns its bucket unpaginated.
+
+    The cut uses the SAME total order that selected the window —
+    ``(-score, _merge_sort_key)``, mirroring the component's
+    ``(-score, _sort_key)`` — because window membership is decided by the
+    component's order: cutting the merge with any other order lets an
+    equal-score record at a window boundary repeat on one page and vanish
+    from the next as ``offset`` grows.
 
     Returns the component result rewritten for the caller's page — buckets
     sliced, entity records re-sliced, totals and ``*_has_more`` recomputed —
@@ -1213,7 +1254,9 @@ def _merge_dashboard_window(
         for record in _as_record_list(component_result.get(bucket))
     ]
     tagged.extend(("dashboards", record) for record in dashboard_records)
-    tagged.sort(key=lambda item: item[1].get("score") or 0, reverse=True)
+    tagged.sort(
+        key=lambda item: (-(item[1].get("score") or 0), _merge_sort_key(item[1]))
+    )
     page = tagged[req.offset : req.offset + req.limit]
 
     total = int(component_result.get("config_total_matches", 0) or 0) + len(
@@ -2377,7 +2420,7 @@ class SearchTools:
                 ) = await self._resolve_component_search_visibility(caps)
                 if route_component:
                     component_response = await self._ha_search_via_component(
-                        req, ctx, visibility=visibility
+                        req, ctx, visibility=visibility, caps=caps
                     )
                     if component_response is not None:
                         return component_response
@@ -2419,6 +2462,7 @@ class SearchTools:
         ctx: Context | None,
         *,
         visibility: dict[str, Any] | None = None,
+        caps: Any = None,
     ) -> dict[str, Any] | None:
         """Serve ha_search from the component; ``None`` ⇒ run the legacy path.
 
@@ -2431,10 +2475,12 @@ class SearchTools:
         A ``search_types`` naming ``dashboard`` splits the work — the command
         serves the surfaces it has, the dashboards leg serves that bucket, and
         the two are merged (issue #2289). ``_dashboard_split_serviceable``
-        names the corner cases that send the whole call to legacy instead.
+        names the corner cases that send the whole call to legacy instead;
+        ``caps`` (the routing block's cached probe) feeds its
+        component-advertised ``limits.max_results`` ceiling.
         """
         if _dashboard_split_requested(req):
-            if not _dashboard_split_serviceable(req):
+            if not _dashboard_split_serviceable(req, caps):
                 return None
             return await self._component_search_with_dashboards(
                 req, ctx, visibility=visibility
@@ -2504,28 +2550,38 @@ class SearchTools:
         serialising them would add its latency to every mixed search.
 
         A failing component leg takes the taxonomy's legacy fallback, which
-        serves the WHOLE call — dashboards bucket included — so the finished
-        leg's records are dropped rather than merged on top of a response that
-        already carries them.
+        serves the WHOLE call — dashboards bucket included — so the dashboards
+        leg is CANCELLED on that failure rather than awaited: the legacy
+        response carries its own dashboards bucket, and on the slow leg shapes
+        (an older component's per-dashboard walk, fuzzy, ``include_config``)
+        waiting would delay the fallback and then re-walk the same dashboards
+        inside it.
         """
-        outcomes = await asyncio.gather(
-            self._send_component_search(req, visibility, dashboard_split=True),
-            self._search_dashboards_leg(req),
-            return_exceptions=True,
+        component_task = asyncio.ensure_future(
+            self._send_component_search(req, visibility, dashboard_split=True)
         )
-        component_outcome, dashboard_outcome = outcomes
-        if isinstance(dashboard_outcome, BaseException):
-            # The leg reports ordinary failures in-band, so anything arriving
-            # here is cancellation / shutdown — propagate it like
-            # ``_legacy_ha_search`` does.
-            raise dashboard_outcome
-        if isinstance(component_outcome, BaseException):
-            if not isinstance(component_outcome, Exception):
-                raise component_outcome
-            return await self._component_search_fallback(req, ctx, component_outcome)
+        dashboard_task = asyncio.ensure_future(self._search_dashboards_leg(req))
+        try:
+            raw = await component_task
+        except Exception as exc:
+            dashboard_task.cancel()
+            try:
+                await dashboard_task
+            except (asyncio.CancelledError, Exception):
+                # The leg reports ordinary failures in-band; anything raising
+                # here is the cancellation itself. Either way its outcome is
+                # unused — the fallback serves the dashboards bucket too.
+                pass
+            return await self._component_search_fallback(req, ctx, exc)
+        except BaseException:
+            # Cancellation / shutdown of THIS coroutine: release the leg and
+            # propagate, like ``_legacy_ha_search`` does.
+            dashboard_task.cancel()
+            raise
+        dashboard_outcome = await dashboard_task
 
         windowed, dashboards_page = _merge_dashboard_window(
-            req, component_outcome.get("result") or {}, dashboard_outcome.records
+            req, raw.get("result") or {}, dashboard_outcome.records
         )
         response = _shape_component_search_response(
             req,

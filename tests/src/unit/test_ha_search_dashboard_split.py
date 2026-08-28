@@ -17,6 +17,7 @@ a merged response and the legacy path.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -393,6 +394,35 @@ class TestDashboardSplitRoute:
         assert client.get_states_calls == 1
 
     @pytest.mark.asyncio
+    async def test_component_advertised_smaller_ceiling_gates_the_split(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The gate reads the component's own ``limits.max_results``: a
+        component advertising a smaller ceiling routes legacy instead of
+        accepting the split and having its schema reject the window frame."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        ws = _split_ws(
+            caps={**_CAPS_SPLIT, "limits": {"max_results": 3}},
+            search_result=_search_result(),
+            dashboards_result=_dashboards_result([]),
+        )
+        client = DashboardRoutingClient()
+        ha_search = _build_ha_search(client)
+
+        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+            resp = await ha_search(
+                query="kitchen",
+                search_types=["automation", "dashboard"],
+                limit=4,
+            )
+
+        assert resp["success"] is True
+        assert _sent(ws, "ha_mcp_tools/search") == []
+        assert not any("served via legacy path" in w for w in resp.get("warnings", []))
+        # The legacy pipeline served it.
+        assert client.get_states_calls == 1
+
+    @pytest.mark.asyncio
     async def test_window_at_the_ceiling_still_merges(
         self, tmp_path, monkeypatch
     ) -> None:
@@ -452,7 +482,8 @@ class TestDashboardSplitPagination:
         assert request["offset"] == 0
         assert request["limit"] == 4
         # Merged order: automation(100), dashboard(100), automation(80),
-        # automation(60) — the score tie keeps the component record first, so
+        # automation(60) — on the score tie the mirrored component tiebreak
+        # sorts "automation.first" before the "energy" dashboard_url, so
         # page [2:4] is the 80 then the 60 automation.
         assert [a["entity_id"] for a in resp["automations"]] == [
             "automation.second",
@@ -468,8 +499,9 @@ class TestDashboardSplitPagination:
     async def test_score_tie_keeps_component_record_first(
         self, tmp_path, monkeypatch
     ) -> None:
-        """Legacy appends its dashboards bucket last, so a tie must not let a
-        dashboard displace a component record from the page."""
+        """On a score tie the mirrored component tiebreak decides the page:
+        "automation.kitchen_lights" sorts before the "energy" dashboard_url,
+        so the dashboard does not displace the component record."""
         _setup_visibility_disabled(tmp_path, monkeypatch)
         ws = _split_ws(
             search_result=_search_result([_automation_record("kitchen_lights", 100)]),
@@ -493,6 +525,45 @@ class TestDashboardSplitPagination:
         assert resp["config_has_more"] is True
         assert resp["config_next_offset"] == 1
         assert resp["has_more"] is True
+
+    def test_equal_score_pages_stay_disjoint_across_offsets(self) -> None:
+        """Pages must be cut with the same total order that picked the window.
+
+        The component orders its corpus by ``(-score, _sort_key)``; on an
+        all-tied score, "scene.aaa" sorts before "script.aaa" even though the
+        scenes bucket is concatenated after scripts. A bucket-order (or
+        score-only stable) cut would show "scene.aaa" on BOTH pages and never
+        show "script.aaa" (the Codex review's boundary-tie finding)."""
+        scene = {"entity_id": "scene.aaa", "score": 100, "match_in_config": True}
+        script = {"entity_id": "script.aaa", "score": 100, "match_in_config": True}
+
+        def window(
+            records_by_bucket: dict[str, list[dict[str, Any]]],
+        ) -> dict[str, Any]:
+            return {
+                "automations": [],
+                "scripts": records_by_bucket.get("scripts", []),
+                "scenes": records_by_bucket.get("scenes", []),
+                "helpers": [],
+                "config_total_matches": 2,
+                "config_has_more": False,
+            }
+
+        page1, _ = _merge_dashboard_window(
+            _resolved_split(offset=0, limit=1),
+            window({"scenes": [scene]}),
+            [],
+        )
+        page2, _ = _merge_dashboard_window(
+            _resolved_split(offset=1, limit=1),
+            window({"scenes": [scene], "scripts": [script]}),
+            [],
+        )
+
+        assert [r["entity_id"] for r in page1["scenes"]] == ["scene.aaa"]
+        assert page1["scripts"] == []
+        assert [r["entity_id"] for r in page2["scripts"]] == ["script.aaa"]
+        assert page2["scenes"] == []
 
     @pytest.mark.asyncio
     async def test_component_corpus_past_the_window_reports_has_more(
@@ -690,6 +761,52 @@ class TestDashboardSplitComponentLegFailure:
         # Exactly one "energy" record: the legacy path produced it, and the
         # split leg's copy was dropped rather than merged on top.
         assert [d["dashboard_url"] for d in resp["dashboards"]] == ["energy"]
+
+    @pytest.mark.asyncio
+    async def test_component_error_cancels_slow_dashboard_leg(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A failed component leg cancels the dashboards leg instead of
+        waiting for it: the legacy fallback searches dashboards itself, so a
+        slow leg would only delay the fallback and duplicate its I/O."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        state = {"calls": 0, "cancelled": False}
+
+        async def hang_then_serve(
+            self: SmartSearchTools,
+            query_lower: str,
+            exact_match: bool,
+            semaphore: asyncio.Semaphore,
+            *,
+            include_config: bool,
+        ) -> tuple[list[dict[str, Any]], int]:
+            state["calls"] += 1
+            if state["calls"] == 1:
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    state["cancelled"] = True
+                    raise
+            return [], 0
+
+        monkeypatch.setattr(
+            SmartSearchTools, "_search_dashboards_surface", hang_then_serve
+        )
+        ws = _split_ws(
+            search_exc=HomeAssistantCommandError("Command failed: boom", "internal"),
+            dashboards_result=_dashboards_result([]),
+        )
+        client = DashboardRoutingClient()
+        ha_search = _build_ha_search(client)
+
+        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+            resp = await ha_search(
+                query="kitchen", search_types=["automation", "dashboard"]
+            )
+
+        assert resp["success"] is True
+        assert any("served via legacy path" in w for w in resp["warnings"])
+        assert state["cancelled"] is True
 
     @pytest.mark.asyncio
     async def test_unknown_command_falls_back_silently(
