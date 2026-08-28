@@ -60,6 +60,16 @@ _MAX_REQUEST_ATTEMPTS = 3
 # client mirrors that on every route, so all install types serve the same slice.
 # Shared with the tool layer, which sizes its fetch window against it.
 MIN_LOG_WINDOW_LINES = 2
+# Entries the has_more probe reads from just behind a full window. A one-entry
+# probe compared one rendered line, which a boundary duplicate (the same
+# timestamp-less traceback line logged twice) could false-match into "end of
+# history". Comparing a block this deep requires that many CONSECUTIVE
+# identical lines to straddle the boundary — and then the history a false stop
+# skips is more of the same duplicates. Timestamps cannot close the gap
+# instead: the colliding lines are exactly the ones without them, and
+# journald's cursor/timestamp metadata exists only in the journal export
+# format, which the hassio-proxy route cannot request.
+_PROBE_ENTRIES = 8
 
 
 class HomeAssistantError(Exception):
@@ -669,13 +679,15 @@ class HomeAssistantClient:
 
         Hence: a short or empty window means the journal really is exhausted
         (nothing clamps a window smaller), and a saturated one is settled by
-        asking for the single entry that should sit just behind it. If the
-        journal has nothing there, the clamp returns the same oldest entry the
-        window already starts with — identity means end of history. A distinct
-        entry proves deeper history. The identity check also terminates the
-        degraded case where an intermediary strips the ``Range`` header (RFC
-        7233 permits it): both requests then return Supervisor's default window
-        and compare equal.
+        asking for the ``_PROBE_ENTRIES`` entries that should sit just behind
+        it. If the journal has nothing there, the clamp starts the probe at
+        the same oldest entry the window starts with, so the probe block
+        equals the window's opening lines — identity means end of history. A
+        differing block proves deeper history (an under-full span behind the
+        window also clamps and misaligns, which correctly reads as "more").
+        The identity check also terminates the degraded case where an
+        intermediary strips the ``Range`` header (RFC 7233 permits it): both
+        requests then return Supervisor's default window and compare equal.
 
         The saturation test counts lines only to decide whether to probe, never
         to answer: one journald entry can be a multi-line traceback, so the line
@@ -686,21 +698,23 @@ class HomeAssistantClient:
         multi-line entries reach this endpoint only from native journal-API
         writers.
 
-        Known imprecision, accepted: the identity check can stop one page
-        early when the entry just behind a full window renders byte-identical
-        to the window's oldest line (the same message logged twice within
-        journald's timestamp resolution). Plain-text rendering carries no
-        cursor to disambiguate positions, and the failure direction is a
-        missed page of duplicates — bounded, unlike the infinite loop a
-        count-based ``has_more`` produces on the clamp.
+        Known imprecision, accepted: the identity check can still stop one
+        page early when at least ``_PROBE_ENTRIES`` consecutive byte-identical
+        rendered lines straddle the window boundary (see the constant's
+        comment for why timestamps cannot disambiguate instead). The failure
+        direction is a missed page of exactly those duplicates — bounded,
+        unlike the infinite loop a count-based ``has_more`` produces on the
+        clamp.
         """
         text = await fetch(lines, offset)
         if not text or len(text.splitlines()) < lines:
             return ErrorLogPage(text=text, has_more=False)
-        probe = await fetch(1, offset + lines)
+        probe = await fetch(_PROBE_ENTRIES, offset + lines)
+        probe_lines = probe.splitlines()
         return ErrorLogPage(
             text=text,
-            has_more=bool(probe) and probe.splitlines()[:1] != text.splitlines()[:1],
+            has_more=bool(probe_lines)
+            and probe_lines != text.splitlines()[: len(probe_lines)],
         )
 
     async def get_error_log(self, lines: int, offset: int = 0) -> ErrorLogPage:

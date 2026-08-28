@@ -567,15 +567,15 @@ class TestJournaldHasMoreProbe:
         assert addon_client._supervisor_logs_get.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_saturated_window_probes_the_entry_behind_it(self, addon_client):
-        """A distinct entry one step further back proves deeper history."""
+    async def test_saturated_window_probes_the_block_behind_it(self, addon_client):
+        """A differing block one step further back proves deeper history."""
         self._serve(addon_client, "a\nb\nc\n", "older entry\n")
         page = await self._fetch(addon_client, lines=3, offset=6)
         assert page.text == "a\nb\nc\n"
         assert page.has_more is True
         probe = addon_client._supervisor_logs_get.await_args
         assert probe.args == ("core",)
-        assert probe.kwargs == {"lines": 1, "offset": 9}
+        assert probe.kwargs == {"lines": 8, "offset": 9}
 
     @pytest.mark.asyncio
     async def test_clamped_probe_matching_the_window_ends_paging(self, addon_client):
@@ -620,6 +620,31 @@ class TestJournaldHasMoreProbe:
         assert page.has_more is False
 
     @pytest.mark.asyncio
+    async def test_boundary_duplicate_line_does_not_end_paging(self, addon_client):
+        """One duplicated line at the window boundary must not read as done.
+
+        The entry just behind the window renders identically to the window's
+        oldest line ("dup"), which false-matched a one-line probe; the block
+        probe sees the differing context behind it.
+        """
+        window = "dup\n" + "".join(f"w{i}\n" for i in range(1, 4))
+        probe = "".join(f"x{i}\n" for i in range(7)) + "dup\n"
+        self._serve(addon_client, window, probe)
+        page = await self._fetch(addon_client, lines=4, offset=0)
+        assert page.has_more is True
+
+    @pytest.mark.asyncio
+    async def test_uniform_duplicate_run_reads_as_end_of_history(self, addon_client):
+        """Accepted imprecision: _PROBE_ENTRIES identical lines straddling the
+        boundary stop paging — and what a false stop skips there is more of
+        the same duplicates, so nothing distinguishable is lost."""
+        window = "dup\n" * 10
+        probe = "dup\n" * 8
+        self._serve(addon_client, window, probe)
+        page = await self._fetch(addon_client, lines=10, offset=0)
+        assert page.has_more is False
+
+    @pytest.mark.asyncio
     async def test_proxied_route_probes_the_same_way(self, client):
         """The supervised proxy route runs the identical protocol."""
         client._request = AsyncMock(return_value={"components": ["hassio"]})
@@ -635,7 +660,9 @@ class TestJournaldHasMoreProbe:
 
         assert page.has_more is True
         probe_headers = client._raw_request.await_args.kwargs["headers"]
-        assert probe_headers["Range"] == "entries=:-6:1"
+        # Probe block: 8 entries ending just behind the window (offset 4 +
+        # window 2 -> skip 13, count 8).
+        assert probe_headers["Range"] == "entries=:-13:8"
 
 
 @pytest.mark.asyncio
