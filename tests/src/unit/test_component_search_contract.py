@@ -33,6 +33,7 @@ import pytest
 
 from ha_mcp.tools.tools_search import (
     _COMPONENT_BODY_SEARCH_TYPES,
+    _DASHBOARD_SEARCH_TYPE,
     _VALID_SEARCH_TYPES,
     _ResolvedSearch,
     _shape_component_search_response,
@@ -590,9 +591,13 @@ def test_component_body_search_types_lockstep() -> None:
     # The gate's allowlist is exactly the component's search surfaces minus
     # the entity surface (appended separately by the request builder).
     assert set(wsapi.ALL_SEARCH_TYPES) - {"entity"} == _COMPONENT_BODY_SEARCH_TYPES
-    # Every public search_types value is either component-served or on the
-    # deliberate legacy-only list.
-    assert {"dashboard"} == _VALID_SEARCH_TYPES - _COMPONENT_BODY_SEARCH_TYPES
+    # ``dashboard`` is the one public value the search command cannot take. It
+    # is not legacy-only: the dashboards leg serves that bucket alongside the
+    # command and the server merges the two (issue #2289). Any OTHER value
+    # outside the allowlist would still route its whole call to legacy in
+    # silence, which is what this pin exists to prevent.
+    unserved = _VALID_SEARCH_TYPES - _COMPONENT_BODY_SEARCH_TYPES
+    assert unserved == {_DASHBOARD_SEARCH_TYPE}
 
 
 @pytest.mark.parametrize(

@@ -940,20 +940,24 @@ class ConfigNotFoundDashboardClient(DashboardRoutingClient):
 
 
 class TestDashboardSearchTypesGate:
-    """``search_types`` naming a surface the component lacks stays legacy.
+    """``dashboard`` in ``search_types`` never reaches the ``search`` command.
 
     The component's ``search`` command has no dashboard surface — its
-    voluptuous allowlist rejects the value — so routing such a request there
-    bounced off the schema into a warning-laden fallback on every call
-    (issue #2008). The gate keeps the whole request on the legacy path,
-    silently, exactly like the other route-ineligible modes.
+    voluptuous allowlist rejects the value — so forwarding it bounced off the
+    schema into a warning-laden fallback on every call (issue #2008). What the
+    value costs is the split's business (issue #2289): a mixed list keeps the
+    fast path for the surfaces the command DOES serve, while a
+    ``dashboard``-only pin leaves the command nothing to search and takes the
+    legacy path whole, silently, exactly like the other route-ineligible modes.
     """
 
     @pytest.mark.asyncio
     async def test_dashboard_search_types_skip_component(
         self, tmp_path, monkeypatch
     ) -> None:
-        """search_types=["dashboard"] → no component frame, no fallback warning."""
+        """An explicit pin drops the entity surface, so ``["dashboard"]``
+        leaves the component search with no surface at all → legacy for the
+        whole call, with no component frame and no fallback warning."""
         _setup_visibility_disabled(tmp_path, monkeypatch)
         ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH)
         client = DashboardRoutingClient()
@@ -976,12 +980,24 @@ class TestDashboardSearchTypesGate:
         assert client.ws_types["lovelace/dashboards/list"] == 1
 
     @pytest.mark.asyncio
-    async def test_mixed_search_types_with_dashboard_skip_component(
+    async def test_mixed_search_types_keep_the_component_fast_path(
         self, tmp_path, monkeypatch
     ) -> None:
-        """A mixed list including 'dashboard' is all-or-nothing → all legacy."""
+        """A mixed list naming 'dashboard' keeps the component search for the
+        surfaces the command serves and reaches the dashboard bucket
+        separately — here through the legacy walk, since this component has no
+        ``dashboards_doc_search``. Sending the whole call to legacy instead is
+        what cost every such search the per-config REST fetches (issue #2289)."""
         _setup_visibility_disabled(tmp_path, monkeypatch)
-        ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH)
+        result = {
+            "automations": [],
+            "entity_total_matches": 0,
+            "entity_has_more": False,
+            "config_total_matches": 0,
+            "config_has_more": False,
+            "partial": False,
+        }
+        ws = make_ws("ha_mcp_tools/search", info_result=_CAPS_SEARCH, cmd_result=result)
         client = DashboardRoutingClient()
         ha_search = _build_ha_search(client)
 
@@ -991,13 +1007,22 @@ class TestDashboardSearchTypesGate:
             )
 
         assert resp["success"] is True
-        assert not any(
-            c.args[0] == "ha_mcp_tools/search" for c in ws.send_command.call_args_list
-        ), "a mixed request naming 'dashboard' must not be split across paths"
-        assert not any("served via legacy path" in w for w in resp.get("warnings", []))
-        # The legacy pipeline served both surfaces.
-        assert client.get_states_calls >= 1
+        search_calls = [
+            c
+            for c in ws.send_command.call_args_list
+            if c.args[0] == "ha_mcp_tools/search"
+        ]
+        assert len(search_calls) == 1
+        # ``dashboard`` never crosses the wire: the command's schema rejects it.
+        assert search_calls[0].kwargs["search_types"] == ["automation"]
+        # The config-body surfaces came from the component, so none of the
+        # legacy per-config inventory ran.
+        assert client.get_states_calls == 0
+        # The dashboard bucket still got scanned, and stayed clean.
         assert client.ws_types["lovelace/dashboards/list"] == 1
+        assert resp["dashboards"] == []
+        assert not resp.get("partial")
+        assert not any("served via legacy path" in w for w in resp.get("warnings", []))
 
     @pytest.mark.asyncio
     async def test_dashboard_search_served_by_component_dashboards_frame(
