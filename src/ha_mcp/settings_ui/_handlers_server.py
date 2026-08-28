@@ -326,9 +326,7 @@ async def _restart_addon(
 
 # Keyed by server instance so a replaced worker drops out with its instance;
 # the module-level dict itself survives entry reloads (modules stay cached).
-_WORKER_INSTANCE_IDS: weakref.WeakKeyDictionary[Any, str] = (
-    weakref.WeakKeyDictionary()
-)
+_WORKER_INSTANCE_IDS: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
 
 
 def _worker_instance_id(server: HomeAssistantSmartMCPServer) -> str:
