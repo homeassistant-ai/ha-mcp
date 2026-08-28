@@ -687,7 +687,8 @@ async function _probeAddonRestarted(previousInstanceId) {
     const info = await _fetchSettingsInfo();
     if (info) {
       if (previousInstanceId) {
-        if (info.instance_id && info.instance_id !== previousInstanceId) {
+        const current = restartTargetEmbedded ? info.worker_id : info.instance_id;
+        if (current && current !== previousInstanceId) {
           return true;
         }
         // Same instance_id (or field missing on the response) — keep
@@ -742,7 +743,12 @@ async function restartAddon() {
   // null is fine — the probe degrades to the old "any 200 means up"
   // mode rather than refusing to reload.
   const info = await _fetchSettingsInfo();
-  const previousInstanceId = info?.instance_id ?? null;
+  // Embedded restarts reload the config entry inside the surviving HA
+  // process, so instance_id never flips there; worker_id is pinned to the
+  // server instance and flips exactly when the reload completes.
+  const previousInstanceId = restartTargetEmbedded
+    ? (info?.worker_id ?? null)
+    : (info?.instance_id ?? null);
   try {
     const resp = await fetch('./api/settings/restart', {method: 'POST'});
     if (!resp.ok && resp.status < 500) {
