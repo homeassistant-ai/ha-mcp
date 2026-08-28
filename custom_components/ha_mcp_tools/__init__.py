@@ -3557,7 +3557,10 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     # Register the in-process ha_mcp_tools/* WebSocket commands (info + search)
     # the server calls behind a capability gate. Idempotent, and independent of
     # the caller-token gate above — HA core authenticates the WS connection and
-    # @require_admin gates each command (see websocket_api.py).
+    # @require_admin gates each command (see websocket_api.py). The server
+    # (embedded) entry registers the same surface (#2289), so a server-only
+    # install has it as well; on a dual-entry install both entries register it
+    # and the second registration simply overwrites the first.
     async_register_commands(hass)
 
     # Entry-level finalization: pick up the #1853 rename on existing installs and

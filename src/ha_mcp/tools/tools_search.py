@@ -44,6 +44,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .smart_search import DEFAULT_CONCURRENCY_LIMIT, DeepSearchMixin
 from .util_helpers import (
     JSON_STRING_COERCION,
     add_timezone_metadata,
@@ -1003,53 +1004,97 @@ def _normalize_component_config_record(
 # Body surfaces the ``ha_mcp_tools`` component's ``search`` command accepts
 # (its voluptuous allowlist also has ``entity``, appended separately by
 # ``_build_component_search_request``). ``dashboard`` is deliberately absent:
-# the component has no dashboard scanner, so a request naming it must stay on
-# the legacy path — forwarding it just bounced off the component schema into a
-# warning-laden fallback on every call (issue #2008).
+# the command has no dashboard scanner and its ``vol.In(ALL_SEARCH_TYPES)``
+# rejects the value, which bounced every such call off the component schema
+# into a warning-laden fallback (issue #2008). The value is still ROUTE-
+# eligible: a request naming it keeps the fast path for the surfaces above
+# while the dashboards leg fills that bucket and the server merges the two
+# (issue #2289) — only the wire request drops it.
 _COMPONENT_BODY_SEARCH_TYPES: frozenset[str] = frozenset(
     {"automation", "script", "scene", "helper"}
 )
 
+# The ``search_types`` value the component's ``search`` command cannot serve;
+# the dashboards leg serves it instead (issue #2289).
+_DASHBOARD_SEARCH_TYPE = "dashboard"
+
+# The component's ``limits.max_results``, which its ``search`` schema enforces
+# as a hard ``vol.Range(max=...)`` on ``limit``. The dashboard merge fetches a
+# ``[0, offset + limit)`` window, so a deep enough page exceeds it — see
+# ``_dashboard_split_serviceable``.
+_COMPONENT_MAX_RESULTS = 500
+
+# Config buckets a component ``search`` result can carry. ``dashboards`` is
+# excluded: the command has no dashboard surface, so that bucket always comes
+# from the dashboards leg (issue #2289).
+_COMPONENT_CONFIG_BUCKETS: tuple[str, ...] = tuple(
+    bucket for bucket in _CONFIG_BUCKETS if bucket != "dashboards"
+)
+
 
 def _component_serves_search_types(req: _ResolvedSearch) -> bool:
-    """True when the component's search command accepts every requested surface.
+    """True when the component route can serve every requested surface.
 
-    Only an explicit ``search_types`` list can name an unsupported surface, and
-    only the body-eligible branch forwards it to the component — a
+    Only an explicit ``search_types`` list can name a surface the component's
+    ``search`` command lacks, and only the body-eligible branch forwards it — a
     body-ineligible request sends the entity surface alone, which the component
-    always accepts. Routing is all-or-nothing per command, so one unsupported
-    surface sends the whole request to the legacy path, silently — the same
-    treatment as the other route-ineligible modes, not the warning-emitting
-    failure fallback.
+    always accepts.
+
+    ``dashboard`` is served ALONGSIDE the command rather than by it: the wire
+    request drops the value (``_build_component_search_request``) and the
+    dashboards leg fills the bucket, merged server-side (issue #2289). Any
+    other unsupported surface still sends the whole request to the legacy path,
+    silently — the same treatment as the other route-ineligible modes, not the
+    warning-emitting failure fallback.
     """
     if not req.body_eligible or req.parsed_search_types is None:
         return True
-    return all(t in _COMPONENT_BODY_SEARCH_TYPES for t in req.parsed_search_types)
+    return all(
+        t in _COMPONENT_BODY_SEARCH_TYPES or t == _DASHBOARD_SEARCH_TYPE
+        for t in req.parsed_search_types
+    )
 
 
-def _build_component_search_request(req: _ResolvedSearch) -> dict[str, Any]:
+def _component_body_search_types(req: _ResolvedSearch) -> list[str]:
+    """The body surfaces forwarded to the component, ``dashboard`` stripped.
+
+    The component's ``search`` schema rejects ``dashboard``, so the value never
+    crosses the wire even when the caller asked for it — the dashboards leg
+    serves that bucket instead (issue #2289).
+    """
+    parsed = req.parsed_search_types or ["automation", "script", "scene", "helper"]
+    return [t for t in parsed if t != _DASHBOARD_SEARCH_TYPE]
+
+
+def _build_component_search_request(
+    req: _ResolvedSearch, *, dashboard_split: bool = False
+) -> dict[str, Any]:
     """Translate resolved ha_search inputs into an ``ha_mcp_tools/search`` request.
 
     ``search_types`` on the WS command selects surfaces including the entity
     surface (``"entity"``), so branch eligibility computed server-side maps
-    directly onto which surfaces the component searches — all-or-nothing per
-    command. Optional string filters are omitted when empty to satisfy the
-    component's ``str``-typed voluptuous schema.
+    directly onto which surfaces the component searches. Optional string
+    filters are omitted when empty to satisfy the component's ``str``-typed
+    voluptuous schema.
+
+    ``dashboard_split`` switches to the WINDOW fetch the dashboard merge needs.
+    The component pages its own corpus, so the server can only page the MERGED
+    list if it holds every component record that could reach the caller's page
+    — that is the whole ``[0, offset + limit)`` prefix. With the default
+    ``offset=0`` the window is byte-identical to the plain request.
     """
     search_types: list[str] = []
     if req.registry_eligible:
         search_types.append("entity")
     if req.body_eligible:
-        search_types.extend(
-            req.parsed_search_types or ["automation", "script", "scene", "helper"]
-        )
+        search_types.extend(_component_body_search_types(req))
     request: dict[str, Any] = {
         "search_types": search_types,
         "exact": req.exact_match,
         "include_hidden": req.include_hidden,
         "include_config": req.include_config,
-        "limit": req.limit,
-        "offset": req.offset,
+        "limit": (req.offset + req.limit) if dashboard_split else req.limit,
+        "offset": 0 if dashboard_split else req.offset,
     }
     membership_fields = _requested_membership(
         _parse_component_result_fields(req.result_fields)
@@ -1068,6 +1113,196 @@ def _build_component_search_request(req: _ResolvedSearch) -> dict[str, Any]:
     if state_filter:
         request["state_filter"] = state_filter
     return request
+
+
+def _dashboard_split_requested(req: _ResolvedSearch) -> bool:
+    """True when this request needs the dashboards leg merged in (issue #2289)."""
+    return bool(
+        req.body_eligible
+        and req.parsed_search_types is not None
+        and _DASHBOARD_SEARCH_TYPE in req.parsed_search_types
+    )
+
+
+def _component_max_results(caps: Any) -> int:
+    """The component's advertised ``limits.max_results``, defaulting to 500.
+
+    The advisory ``limits`` ride the cached ``info`` probe, so a component
+    advertising a smaller ceiling gates the window fetch here instead of
+    accepting the split and then rejecting the frame in its schema (an
+    avoidable failed round-trip whose fallback still serves the caller).
+    """
+    limits = getattr(caps, "limits", None)
+    value = limits.get("max_results") if isinstance(limits, dict) else None
+    if isinstance(value, int) and value > 0:
+        return value
+    return _COMPONENT_MAX_RESULTS
+
+
+def _dashboard_split_serviceable(req: _ResolvedSearch, caps: Any) -> bool:
+    """True when the split can serve the request; False ⇒ legacy serves it whole.
+
+    Two corner cases route away rather than being half-served:
+
+    - Nothing is left for the component command once ``dashboard`` is stripped.
+      An explicit ``search_types`` pin also drops the entity surface, so
+      ``search_types=["dashboard"]`` would send an empty request and leave the
+      split as a dashboards leg wearing a component envelope — the legacy path
+      already produces exactly that, with its own bucket.
+    - The window fetch would ask for more records than the component's
+      ``limit`` ceiling (``_component_max_results``), which its schema rejects
+      outright.
+    """
+    serves_body = req.body_eligible and bool(_component_body_search_types(req))
+    if not (req.registry_eligible or serves_body):
+        return False
+    return req.offset + req.limit <= _component_max_results(caps)
+
+
+@dataclass(frozen=True)
+class _DashboardLeg:
+    """The dashboards surface's contribution to a component-served ha_search.
+
+    ``records`` are legacy-shaped (``dashboard_url`` / ``dashboard_title`` /
+    ``score``), NOT component records — they never pass through
+    ``_normalize_component_config_record``. ``failed`` is the leg's own
+    "not scanned" count, reported with the deep path's wording. ``error`` is
+    set only when the leg raised, in which case the bucket is empty and the
+    response says so rather than reading as a clean zero.
+    """
+
+    records: list[dict[str, Any]]
+    failed: int = 0
+    error: str | None = None
+
+
+def _apply_entity_window(req: _ResolvedSearch, windowed: dict[str, Any]) -> None:
+    """Re-slice the over-fetched entity surface onto the caller's page.
+
+    The window fetch over-fetches every surface the request names. Entity
+    records merge with nothing, so their page is the same slice applied
+    server-side. ``entity_total_matches`` is a corpus total and
+    pagination-independent, so ``entity_has_more`` is recomputed against it
+    (and pinned, so the shaping helper never falls back to the sliced length).
+
+    No CURRENT request gets past the early return: the split needs an explicit
+    ``search_types``, which pins the call config-only
+    (``_compute_eligibility``), so the window carries no entity surface at all.
+    This is the guard that keeps the window honest if that eligibility ever
+    admits one — without it the entity page would silently be the whole
+    ``[0, offset + limit)`` prefix.
+    """
+    if not req.registry_eligible:
+        return
+    entities = _as_record_list(windowed.get("entities"))
+    total = int(windowed.get("entity_total_matches", len(entities)) or 0)
+    page = entities[req.offset : req.offset + req.limit]
+    windowed["entities"] = page
+    windowed["entity_total_matches"] = total
+    windowed["entity_has_more"] = (req.offset + len(page)) < total
+
+
+def _merge_sort_key(record: dict[str, Any]) -> str:
+    """Mirror of the component's ``_sort_key`` config tiebreak, dashboards added.
+
+    The component cuts its window with ``(-score, _sort_key)`` where
+    ``_sort_key`` is ``str(entity_id or id or name or "")``
+    (``custom_components/ha_mcp_tools/websocket_api.py``); those fields ride
+    the wire records unchanged, so the merge reproduces the exact order that
+    decided window membership. Dashboard records are outside the component
+    corpus, so any deterministic key places them consistently across pages —
+    ``dashboard_url`` extends the same chain.
+    """
+    return str(
+        record.get("entity_id")
+        or record.get("id")
+        or record.get("name")
+        or record.get("dashboard_url")
+        or ""
+    )
+
+
+def _merge_dashboard_window(
+    req: _ResolvedSearch,
+    component_result: dict[str, Any],
+    dashboard_records: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Page the window fetch and the dashboards leg as ONE score-sorted list.
+
+    The legacy contract is a global score sort across every config bucket, then
+    ``[offset : offset + limit]`` (``_deep._paginate_and_build_response``), so
+    the merged page has to be cut server-side. It is exact: the component
+    fetched the whole ``[0, offset + limit)`` window of its own corpus, a
+    superset of every component record that can reach the caller's page, and
+    the leg returns its bucket unpaginated.
+
+    The cut uses the SAME total order that selected the window —
+    ``(-score, _merge_sort_key)``, mirroring the component's
+    ``(-score, _sort_key)`` — because window membership is decided by the
+    component's order: cutting the merge with any other order lets an
+    equal-score record at a window boundary repeat on one page and vanish
+    from the next as ``offset`` grows.
+
+    Returns the component result rewritten for the caller's page — buckets
+    sliced, entity records re-sliced, totals and ``*_has_more`` recomputed —
+    plus the dashboards page.
+    """
+    tagged: list[tuple[str, dict[str, Any]]] = [
+        (bucket, record)
+        for bucket in _COMPONENT_CONFIG_BUCKETS
+        if bucket in component_result
+        for record in _as_record_list(component_result.get(bucket))
+    ]
+    tagged.extend(("dashboards", record) for record in dashboard_records)
+    tagged.sort(
+        key=lambda item: (-(item[1].get("score") or 0), _merge_sort_key(item[1]))
+    )
+    page = tagged[req.offset : req.offset + req.limit]
+
+    total = int(component_result.get("config_total_matches", 0) or 0) + len(
+        dashboard_records
+    )
+    windowed: dict[str, Any] = dict(component_result)
+    for bucket in _COMPONENT_CONFIG_BUCKETS:
+        if bucket in component_result:
+            windowed[bucket] = [rec for name, rec in page if name == bucket]
+    windowed["config_total_matches"] = total
+    # The component's own flag still carries information the merged count
+    # cannot: it reports a corpus extending past the window, whose records are
+    # not in the merged list at all.
+    windowed["config_has_more"] = (req.offset + len(page)) < total or bool(
+        component_result.get("config_has_more")
+    )
+    _apply_entity_window(req, windowed)
+
+    dashboards_page = [rec for name, rec in page if name == "dashboards"]
+    if not req.include_config:
+        # Mirrors the legacy pipeline's per-record pop, which also runs on the
+        # paginated slice rather than the corpus.
+        for record in dashboards_page:
+            record.pop("config", None)
+    return windowed, dashboards_page
+
+
+def _apply_dashboard_leg_state(response: dict[str, Any], leg: _DashboardLeg) -> None:
+    """Fold the dashboards leg's incompleteness into the merged response.
+
+    ``failed`` reuses the deep path's own per-type wording verbatim, so a
+    merged response and a legacy one report the same sentence for the same
+    condition. A raised leg is reported like a failed legacy branch — an
+    ``errors[]`` entry naming the surface plus ``partial`` — so an empty
+    dashboards bucket is never mistaken for a clean zero.
+    """
+    if leg.failed:
+        DeepSearchMixin._apply_per_type_partial_flag(
+            response, dashboard_failed=leg.failed
+        )
+    if leg.error is not None:
+        _finalize_partial_state(
+            response,
+            partial_local=True,
+            errors_local=[{"surface": "dashboards", "error": leg.error}],
+        )
 
 
 def _merge_component_visibility_warnings(
@@ -1125,8 +1360,39 @@ async def _scrub_component_config_buckets(
         response["count"] = max(0, response["count"] - dropped)
 
 
+def _component_config_payload(
+    req: _ResolvedSearch,
+    component_result: dict[str, Any],
+    dashboard_leg: _DashboardLeg | None,
+) -> dict[str, Any]:
+    """Build the config-surface payload ``_apply_search_outcome`` consumes.
+
+    Component records are normalized into the legacy vocabulary; the
+    dashboards leg's records are already legacy-shaped, so they are attached
+    as-is (issue #2289).
+    """
+    config_has_more = bool(component_result.get("config_has_more", False))
+    payload: dict[str, Any] = {
+        "total_matches": int(component_result.get("config_total_matches", 0) or 0),
+        "has_more": config_has_more,
+        "next_offset": (req.offset + req.limit) if config_has_more else None,
+    }
+    for bucket in _CONFIG_BUCKETS:
+        if bucket in component_result:
+            payload[bucket] = [
+                _normalize_component_config_record(bucket, rec, req.include_config)
+                for rec in _as_record_list(component_result.get(bucket))
+            ]
+    if dashboard_leg is not None:
+        payload["dashboards"] = dashboard_leg.records
+    return payload
+
+
 def _shape_component_search_response(
-    req: _ResolvedSearch, component_result: dict[str, Any]
+    req: _ResolvedSearch,
+    component_result: dict[str, Any],
+    *,
+    dashboard_leg: _DashboardLeg | None = None,
 ) -> dict[str, Any]:
     """Map an ``ha_mcp_tools/search`` result into the ha_search envelope.
 
@@ -1137,6 +1403,11 @@ def _shape_component_search_response(
     finalisation all stay server-side and reuse the same helpers the legacy
     path uses (``_apply_search_outcome`` and friends), so the shape is
     identical to the legacy response by construction.
+
+    ``dashboard_leg`` carries the separately-served dashboards bucket for a
+    ``dashboard``-including request (issue #2289); it is injected here, before
+    the count / partial-mirror finalisation, so a ``fields=`` projection and
+    the enforce-mode scrub both see the merged envelope.
     """
     response = _new_search_response(req.query, req.parsed_search_types)
     _emit_intent_skip_warning(response, req.body_skipped_by_intent_gate)
@@ -1190,19 +1461,11 @@ def _shape_component_search_response(
         _apply_search_outcome(response, "entities", entity_payload)
 
     if req.body_eligible:
-        config_has_more = bool(component_result.get("config_has_more", False))
-        config_payload: dict[str, Any] = {
-            "total_matches": int(component_result.get("config_total_matches", 0) or 0),
-            "has_more": config_has_more,
-            "next_offset": (req.offset + req.limit) if config_has_more else None,
-        }
-        for bucket in _CONFIG_BUCKETS:
-            if bucket in component_result:
-                config_payload[bucket] = [
-                    _normalize_component_config_record(bucket, rec, req.include_config)
-                    for rec in _as_record_list(component_result.get(bucket))
-                ]
-        _apply_search_outcome(response, "configs", config_payload)
+        _apply_search_outcome(
+            response,
+            "configs",
+            _component_config_payload(req, component_result, dashboard_leg),
+        )
 
     # The component reports a single overall partial flag (design § 1). In-process
     # joins are effectively never partial, but a body too large to serialize can
@@ -1224,6 +1487,9 @@ def _shape_component_search_response(
         if diag_reason:
             response["partial"] = True
             _merge_partial_reason(response, diag_reason)
+
+    if dashboard_leg is not None:
+        _apply_dashboard_leg_state(response, dashboard_leg)
 
     _merge_component_visibility_warnings(response, component_result)
 
@@ -2105,9 +2371,9 @@ class SearchTools:
 
         # Prefer the custom component's in-process unified search when it
         # advertises the capability: one WS round-trip replaces the multi-fetch
-        # legacy pipeline. Route all-or-nothing per command and fall back
-        # cleanly when the component is absent, downlevel, or errors — the
-        # taxonomy lives in ``_ha_search_via_component``.
+        # legacy pipeline. Route per command and fall back cleanly when the
+        # component is absent, downlevel, or errors — the taxonomy lives in
+        # ``_ha_search_via_component``.
         #
         # Only QUERY-DRIVEN searches route through the component. The listing
         # modes — empty/whitespace query with domain_filter (legacy
@@ -2116,9 +2382,14 @@ class SearchTools:
         # response keys) — keep the legacy path: their response contracts
         # differ per mode, and after the request-dedup work they are cheap
         # registry-only calls, so the component round-trip buys nothing worth
-        # the shape risk. A ``search_types`` naming a surface the component
-        # lacks (``dashboard``) also stays legacy — see
-        # ``_component_serves_search_types`` (issue #2008).
+        # the shape risk. A ``search_types`` naming a surface the component's
+        # ``search`` command lacks also stays legacy — see
+        # ``_component_serves_search_types`` (issue #2008). ``dashboard`` is
+        # the exception: naming it keeps the fast path for the surfaces the
+        # command DOES serve, and its own bucket comes from the dashboards leg
+        # merged in ``_ha_search_via_component`` — dropping the whole call to
+        # legacy for it cost every mixed search the per-config REST fetches
+        # (issue #2289).
         #
         # Entity-visibility gate. A plain ``search`` component applies no
         # filtering, so an install with an ACTIVE visibility filter would leak
@@ -2149,7 +2420,7 @@ class SearchTools:
                 ) = await self._resolve_component_search_visibility(caps)
                 if route_component:
                     component_response = await self._ha_search_via_component(
-                        req, ctx, visibility=visibility
+                        req, ctx, visibility=visibility, caps=caps
                     )
                     if component_response is not None:
                         return component_response
@@ -2191,6 +2462,7 @@ class SearchTools:
         ctx: Context | None,
         *,
         visibility: dict[str, Any] | None = None,
+        caps: Any = None,
     ) -> dict[str, Any] | None:
         """Serve ha_search from the component; ``None`` ⇒ run the legacy path.
 
@@ -2200,7 +2472,34 @@ class SearchTools:
         component surfaces every match, correct only because the caller routes
         here solely when the filter is inactive or the component can apply it).
 
-        Error taxonomy (design § 4):
+        A ``search_types`` naming ``dashboard`` splits the work — the command
+        serves the surfaces it has, the dashboards leg serves that bucket, and
+        the two are merged (issue #2289). ``_dashboard_split_serviceable``
+        names the corner cases that send the whole call to legacy instead;
+        ``caps`` (the routing block's cached probe) feeds its
+        component-advertised ``limits.max_results`` ceiling.
+        """
+        if _dashboard_split_requested(req):
+            if not _dashboard_split_serviceable(req, caps):
+                return None
+            return await self._component_search_with_dashboards(
+                req, ctx, visibility=visibility
+            )
+        try:
+            raw = await self._send_component_search(req, visibility)
+        except Exception as exc:
+            return await self._component_search_fallback(req, ctx, exc)
+        response = _shape_component_search_response(req, raw.get("result") or {})
+        await _scrub_component_config_buckets(response, self._client)
+        return response
+
+    async def _component_search_fallback(
+        self, req: _ResolvedSearch, ctx: Context | None, exc: Exception
+    ) -> dict[str, Any] | None:
+        """Apply the component-search failure taxonomy (design § 4).
+
+        Returns the legacy-served response, or ``None`` when the caller should
+        run the legacy path itself with no diagnostic:
 
         - ``unknown_command`` (component downgraded mid-session, so the cached
           positive caps are stale): invalidate the caps and return ``None`` so
@@ -2218,46 +2517,134 @@ class SearchTools:
           pooled connection, so a dead transport raises there too (#1947) and
           the registry-unavailable warning names what was skipped.
         """
-        try:
-            raw = await self._send_component_search(req, visibility)
-        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
+        if isinstance(exc, (HomeAssistantCommandError, HomeAssistantCommandTimeout)):
             if is_unknown_command(exc):
                 invalidate_caps(self._client)
                 return None
-            legacy = await self._legacy_ha_search(req, ctx)
-            legacy.setdefault("warnings", []).append(
-                f"component search path failed ({exc}); served via legacy path"
-            )
-            logger.warning("ha_mcp_tools/search failed; fell back to legacy: %r", exc)
-            return legacy
-        except Exception as exc:
-            legacy = await self._legacy_ha_search(req, ctx)
-            legacy.setdefault("warnings", []).append(
+            warning = f"component search path failed ({exc}); served via legacy path"
+            log_message = "ha_mcp_tools/search failed; fell back to legacy: %r"
+        else:
+            warning = (
                 f"component search connection error ({exc}); served via legacy path"
             )
-            logger.warning(
-                "ha_mcp_tools/search connection error; fell back to legacy: %r", exc
+            log_message = (
+                "ha_mcp_tools/search connection error; fell back to legacy: %r"
             )
-            return legacy
-        response = _shape_component_search_response(req, raw.get("result") or {})
+        legacy = await self._legacy_ha_search(req, ctx)
+        legacy.setdefault("warnings", []).append(warning)
+        logger.warning(log_message, exc)
+        return legacy
+
+    async def _component_search_with_dashboards(
+        self,
+        req: _ResolvedSearch,
+        ctx: Context | None,
+        *,
+        visibility: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """Serve a ``dashboard``-including request from both legs (issue #2289).
+
+        The two legs run concurrently: the dashboards leg is a second frame on
+        the same pooled connection (or, on a component without
+        ``dashboards_doc_search``, the legacy per-dashboard walk), so
+        serialising them would add its latency to every mixed search.
+
+        A failing component leg takes the taxonomy's legacy fallback, which
+        serves the WHOLE call — dashboards bucket included — so the dashboards
+        leg is CANCELLED on that failure rather than awaited: the legacy
+        response carries its own dashboards bucket, and on the slow leg shapes
+        (an older component's per-dashboard walk, fuzzy, ``include_config``)
+        waiting would delay the fallback and then re-walk the same dashboards
+        inside it.
+        """
+        component_task = asyncio.ensure_future(
+            self._send_component_search(req, visibility, dashboard_split=True)
+        )
+        dashboard_task = asyncio.ensure_future(self._search_dashboards_leg(req))
+        try:
+            raw = await component_task
+        except Exception as exc:
+            # Settle the leg via ``asyncio.wait``, which never raises the
+            # leg's own CancelledError — while a cancellation of THIS
+            # coroutine delivered at that await still propagates instead of
+            # being consumed right before the fallback runs the whole legacy
+            # search uncancellably.
+            dashboard_task.cancel()
+            await asyncio.wait([dashboard_task])
+            return await self._component_search_fallback(req, ctx, exc)
+        except BaseException:
+            # Cancellation / shutdown of THIS coroutine: settle the leg before
+            # propagating, so no cancelled task outlives the call, then
+            # re-raise like ``_legacy_ha_search``. A second cancellation
+            # delivered during the wait propagates on its own, which is the
+            # same outcome.
+            dashboard_task.cancel()
+            await asyncio.wait([dashboard_task])
+            raise
+        dashboard_outcome = await dashboard_task
+
+        windowed, dashboards_page = _merge_dashboard_window(
+            req, raw.get("result") or {}, dashboard_outcome.records
+        )
+        response = _shape_component_search_response(
+            req,
+            windowed,
+            dashboard_leg=_DashboardLeg(
+                records=dashboards_page,
+                failed=dashboard_outcome.failed,
+                error=dashboard_outcome.error,
+            ),
+        )
         await _scrub_component_config_buckets(response, self._client)
         return response
 
+    async def _search_dashboards_leg(self, req: _ResolvedSearch) -> _DashboardLeg:
+        """The dashboards bucket for a merged component search.
+
+        Reuses the deep path's own dashboards surface, which is already
+        component-first (the ``dashboards_doc_search`` frame) with the legacy
+        per-dashboard walk as its fallback — so the merged route covers exactly
+        the dashboards the legacy route covers.
+
+        An ordinary failure is reported through ``_DashboardLeg.error`` instead
+        of raising: the other surfaces succeeded, so the call returns them and
+        says the dashboard bucket is incomplete. Cancellation still propagates.
+        """
+        semaphore = asyncio.Semaphore(DEFAULT_CONCURRENCY_LIMIT)
+        try:
+            records, failed = await self._smart_tools._search_dashboards_surface(
+                req.query_text.lower(),
+                req.exact_match,
+                semaphore,
+                include_config=req.include_config,
+            )
+        except Exception as exc:
+            logger.warning("ha_search dashboards leg failed: %r", exc)
+            # ``str(asyncio.TimeoutError())`` is "" — fall back to the type name
+            # so the errors[] entry never reads "dashboards: ".
+            return _DashboardLeg(records=[], error=str(exc) or type(exc).__name__)
+        return _DashboardLeg(records=list(records), failed=failed)
+
     async def _send_component_search(
-        self, req: _ResolvedSearch, visibility: dict[str, Any] | None = None
+        self,
+        req: _ResolvedSearch,
+        visibility: dict[str, Any] | None = None,
+        *,
+        dashboard_split: bool = False,
     ) -> dict[str, Any]:
         """Send one ``ha_mcp_tools/search`` command over the per-client WebSocket.
 
         ``visibility`` (the serialized hide config) is attached only when set, so
         a plain-``search`` component (which lacks the param in its schema) never
-        receives it.
+        receives it. ``dashboard_split`` asks for the window fetch the dashboard
+        merge pages server-side.
         """
         ws = await get_websocket_client(
             url=self._client.base_url,
             token=self._client.token,
             verify_ssl=getattr(self._client, "verify_ssl", None),
         )
-        request = _build_component_search_request(req)
+        request = _build_component_search_request(req, dashboard_split=dashboard_split)
         if visibility is not None:
             request["visibility"] = visibility
         return await ws.send_command("ha_mcp_tools/search", **request)

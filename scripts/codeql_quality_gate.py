@@ -106,6 +106,28 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/ineffectual-statement",
+        "tests/src/unit/test_websocket_client.py",
+        "This statement has no effect",
+        "await task",
+        "False positive on the bare 'await task' inside pytest.raises in "
+        "test_send_command_cancellation_drops_the_pending_future: awaiting "
+        "the cancelled send_command task IS the effect (it drives the task to "
+        "completion and raises the CancelledError the context manager "
+        "asserts).",
+    ),
+    (
+        "py/ineffectual-statement",
+        "tests/src/unit/test_ha_search_dashboard_split.py",
+        "This statement has no effect",
+        "await call",
+        "False positive on the bare 'await call' inside pytest.raises in "
+        "test_parent_cancellation_settles_the_dashboard_leg: awaiting the "
+        "cancelled ha_search task IS the effect (it drives the call to "
+        "completion and raises the CancelledError the context manager "
+        "asserts).",
+    ),
+    (
+        "py/ineffectual-statement",
         "tests/src/e2e/workflows/hacs/test_auto_refresh_startup.py",
         "This statement has no effect",
         "await task",
