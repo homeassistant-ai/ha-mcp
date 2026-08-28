@@ -384,9 +384,20 @@ def _assert_only_yaml_scene_degradation(data: dict) -> None:
         for part in (data.get("partial_reason") or "").split(" ; ")
         if part.strip()
     ]
-    offenders = [text for text in fragments if "YAML-defined" not in text]
+    # Two fragments are structural classifications rather than degradations
+    # gone wrong: the YAML-defined 404 gap, and the deliberately informational
+    # integration-managed note (an idless YAML scene has no registry
+    # unique_id, so the legacy walk classifies it integration-managed and
+    # scores it by attribute — its match status is KNOWN, just config-less;
+    # see _apply_scene_partial_flag). Anything else — a raised fetch, a
+    # timeout, a registry failure — still fails.
+    offenders = [
+        text
+        for text in fragments
+        if "YAML-defined" not in text and "scored by attribute only" not in text
+    ]
     assert not offenders, (
-        "Only the structural YAML-defined-scene gap is acceptable without a "
+        "Only the structural YAML-scene fragments are acceptable without a "
         f"component surface; got {offenders}"
     )
 
