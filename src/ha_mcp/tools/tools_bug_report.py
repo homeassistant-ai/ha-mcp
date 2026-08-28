@@ -77,6 +77,14 @@ _ADDON_LOG_MAX_CHARS = 3000
 # is where they land. ~5000 chars ≈ 1250 LLM tokens.
 _CORE_LOG_MAX_CHARS = 5000
 
+# Log window requested from the install for that tail. Only the last
+# _CORE_LOG_MAX_CHARS survive into the report — a few dozen lines of typical
+# HA log text — so anything deeper is fetched and then thrown away, which on
+# Supervisor-backed installs is exactly the cost that made the unconditional
+# 20,000-line fetch hang (#2279). 500 keeps an order of magnitude of headroom
+# for short lines.
+_CORE_LOG_WINDOW_LINES = 500
+
 # IPv4 sanitization: only redact addresses with strong network context so that
 # four-segment version strings (e.g. "ha-mcp version 1.2.3.4") are preserved.
 _IPV4_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
@@ -601,12 +609,13 @@ async def _fetch_core_error_log(client: Any) -> str:
     (``InsecureKeyLengthWarning``, "invalid authentication") only appeared in
     home-assistant.log, not in the add-on log this tool already captured.
 
-    Best-effort: returns sanitized text (last ``_CORE_LOG_MAX_CHARS`` chars,
-    with a truncation marker prepended) or an empty string on any failure, so a
-    log-fetch problem never breaks the bug-report path.
+    Best-effort: returns sanitized text (last ``_CORE_LOG_MAX_CHARS`` chars of a
+    ``_CORE_LOG_WINDOW_LINES`` window, with a truncation marker prepended) or an
+    empty string on any failure, so a log-fetch problem never breaks the
+    bug-report path.
     """
     try:
-        raw = await client.get_error_log()
+        page = await client.get_error_log(lines=_CORE_LOG_WINDOW_LINES)
     except Exception as e:
         # Broad by design — the bug-report path must stay robust whatever the
         # client raises (auth, role, connection, transport). Logged at INFO so
@@ -618,12 +627,12 @@ async def _fetch_core_error_log(client: Any) -> str:
         )
         return ""
 
-    if not raw:
+    if not page.text:
         return ""
 
     # Strip ANSI, then sanitize, then truncate — sanitizing before truncating
     # keeps a secret straddling the cut boundary from leaking through.
-    sanitized = _sanitize_log_text(ANSI_ESCAPE_RE.sub("", raw))
+    sanitized = _sanitize_log_text(ANSI_ESCAPE_RE.sub("", page.text))
     if len(sanitized) > _CORE_LOG_MAX_CHARS:
         marker = (
             f"[...truncated, showing last {_CORE_LOG_MAX_CHARS} of "

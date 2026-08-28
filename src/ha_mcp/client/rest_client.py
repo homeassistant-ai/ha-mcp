@@ -8,6 +8,7 @@ import logging
 import os
 import ssl
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, NoReturn
 
@@ -52,10 +53,23 @@ logger = logging.getLogger(__name__)
 _RETRYABLE_GATEWAY_STATUS = frozenset({502, 503, 504})
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _MAX_REQUEST_ATTEMPTS = 3
-# Journald window requested for the Core error log on Supervisor-backed
-# installs. Both such branches of get_error_log() build their request from this
-# constant, so the window they ask for cannot drift apart.
-_ERROR_LOG_LINES = 20000
+# Smallest log window this client requests. Supervisor's Range syntax addresses
+# a newest-anchored window by its first entry, so a one-entry one is
+# inexpressible (``entries=:0:1`` reads from the OLDEST entry instead);
+# Supervisor coerces its own ``?lines=1`` to 2 (supervisor/api/host.py) and this
+# client mirrors that on every route, so all install types serve the same slice.
+# Shared with the tool layer, which sizes its fetch window against it.
+MIN_LOG_WINDOW_LINES = 2
+# Entries the has_more probe reads from just behind a full window. A one-entry
+# probe compared one rendered line, which a boundary duplicate (the same
+# timestamp-less traceback line logged twice) could false-match into "end of
+# history". Comparing a block this deep requires that many CONSECUTIVE
+# identical lines to straddle the boundary — and then the history a false stop
+# skips is more of the same duplicates. Timestamps cannot close the gap
+# instead: the colliding lines are exactly the ones without them, and
+# journald's cursor/timestamp metadata exists only in the journal export
+# format, which the hassio-proxy route cannot request.
+_PROBE_ENTRIES = 8
 
 
 class HomeAssistantError(Exception):
@@ -96,7 +110,7 @@ class HomeAssistantAuthError(HomeAssistantError):
     auth errors as part of the local "this entity is not registered yet"
     polling logic. Sites that specifically need to catch both must list
     them explicitly (see ``_get_supervisor_log`` and
-    ``_get_system_service_log`` in ``tools_utility.py``).
+    ``_get_system_service_log`` in ``log_sources_supervisor.py``).
     """
 
 
@@ -112,6 +126,19 @@ class HomeAssistantAPIError(HomeAssistantError):
         super().__init__(message)
         self.status_code = status_code
         self.response_data = response_data
+
+
+@dataclass(frozen=True)
+class ErrorLogPage:
+    """One bounded window of the error log, plus whether older history exists.
+
+    ``has_more`` cannot be derived by the caller from ``text``: a journald
+    window that comes back full may or may not have anything behind it (see
+    ``_journald_error_log_page``), and only the fetching route knows which.
+    """
+
+    text: str
+    has_more: bool
 
 
 @dataclass(frozen=True)
@@ -579,8 +606,140 @@ class HomeAssistantClient:
         logger.debug("Checking configuration")
         return await self._request("POST", "/config/core/check_config")
 
-    async def get_error_log(self) -> str:
-        """Get Home Assistant error log.
+    @staticmethod
+    def _journald_range_header(lines: int, offset: int = 0) -> str:
+        """Build Supervisor's journald ``Range`` header for a bounded window.
+
+        Supervisor's log endpoints accept
+        ``Range: entries=<cursor>:<num_skip>:<num_entries>`` and build
+        ``entries=:-{N-1}:{N}`` themselves for a ``?lines=N`` request
+        (supervisor/api/host.py). ``offset`` moves the window that many entries
+        further back, so the returned slice ends ``offset`` entries before the
+        newest one.
+
+        A ``lines=1`` window is only expressible with a non-zero ``offset``: at
+        ``offset=0`` the header degenerates to ``entries=:0:1``, whose
+        non-negative skip reads from the OLDEST entry instead of the newest.
+        Callers anchoring at the newest entry pass ``lines`` already floored at
+        ``MIN_LOG_WINDOW_LINES``; the one-entry probe always carries an offset.
+        """
+        # Negate the computed skip rather than prefixing "-" so the degenerate
+        # skip of 0 renders as ":0:" (non-negative, reads from the oldest
+        # entry) instead of the ill-formed ":-0:".
+        return f"entries=:{-(offset + lines - 1)}:{lines}"
+
+    @staticmethod
+    def _container_error_log_page(text: str, lines: int, offset: int) -> ErrorLogPage:
+        """Window the whole-file ``/api/error_log`` body client-side.
+
+        Same tail semantics as the journald Range the Supervisor-backed
+        branches request, so ``get_error_log`` answers with the same slice of
+        history on every install type. Paging is exact here — the whole file is
+        in hand, so ``has_more`` is simply whether anything precedes the window.
+        An ``offset`` past the start of the file yields an empty final page.
+        """
+        all_lines = text.splitlines()
+        end = len(all_lines) - offset
+        if end <= 0:
+            return ErrorLogPage(text="", has_more=False)
+        start = max(end - lines, 0)
+        return ErrorLogPage(text="\n".join(all_lines[start:end]), has_more=start > 0)
+
+    async def _supervisor_core_logs(self, lines: int, offset: int) -> str:
+        """Fetch a journald window of HA Core's log straight from Supervisor."""
+        return await self._supervisor_logs_get("core", lines=lines, offset=offset)
+
+    async def _proxied_core_logs(self, lines: int, offset: int) -> str:
+        """Fetch the same window through HA Core's hassio proxy with the LLA."""
+        response = await self._raw_request(
+            "GET",
+            "/hassio/core/logs",
+            headers={
+                "Accept": "text/plain",
+                "Range": self._journald_range_header(lines, offset),
+            },
+        )
+        return response.text
+
+    async def _journald_error_log_page(
+        self,
+        lines: int,
+        offset: int,
+        fetch: Callable[[int, int], Awaitable[str]],
+    ) -> ErrorLogPage:
+        """Read one journald window and settle ``has_more`` with a 1-entry probe.
+
+        systemd's journal-gatewayd does not guard the negative-skip branch the
+        way it guards the positive one (``sd_journal_previous_skip(-n_skip + 1)``
+        returns no END_OF_STREAM): an offset past the start of the journal
+        CLAMPS to the oldest entry and still answers with a full window. So a
+        saturated window proves nothing about what lies behind it, and a
+        count-based ``has_more`` would stay true forever — an agent following
+        the pagination hint would loop on identical pages.
+
+        Hence: a short or empty window means the journal really is exhausted
+        (nothing clamps a window smaller), and a saturated one is settled by
+        asking for the ``_PROBE_ENTRIES`` entries that should sit just behind
+        it. If the journal has nothing there, the clamp starts the probe at
+        the same oldest entry the window starts with, so the probe block
+        equals the window's opening lines — identity means end of history. A
+        differing block proves deeper history (an under-full span behind the
+        window also clamps and misaligns, which correctly reads as "more").
+        The identity check also terminates the degraded case where an
+        intermediary strips the ``Range`` header (RFC 7233 permits it): both
+        requests then return Supervisor's default window and compare equal.
+
+        The saturation test counts lines only to decide whether to probe, never
+        to answer: one journald entry can be a multi-line traceback, so the line
+        count over-estimates entries and can only over-trigger the probe, which
+        then gives the real answer. In practice the two rarely diverge here:
+        docker's journald log driver — how HAOS captures Core's output —
+        ingests stdout line by line, one journal entry per rendered line, so
+        multi-line entries reach this endpoint only from native journal-API
+        writers.
+
+        Known imprecision, accepted: the identity check can still stop one
+        page early when the compared block — ``_PROBE_ENTRIES`` lines, or the
+        window's own length when that is smaller — is byte-identical across
+        the boundary (see the constant's comment for why timestamps cannot
+        disambiguate instead). The failure
+        direction is a missed page of exactly those duplicates — bounded,
+        unlike the infinite loop a count-based ``has_more`` produces on the
+        clamp.
+        """
+        text = await fetch(lines, offset)
+        if not text or len(text.splitlines()) < lines:
+            return ErrorLogPage(text=text, has_more=False)
+        probe = await fetch(_PROBE_ENTRIES, offset + lines)
+        probe_lines = probe.splitlines()
+        window_lines = text.splitlines()
+        # Compare the shared-length prefix: with a window smaller than the
+        # probe (lines < _PROBE_ENTRIES), an end-of-history clamp returns a
+        # probe LONGER than the window, and a full-length compare would read
+        # that as "more history" forever — the small-limit loop this method
+        # exists to prevent.
+        shared = min(len(probe_lines), len(window_lines))
+        return ErrorLogPage(
+            text=text,
+            has_more=shared > 0 and probe_lines[:shared] != window_lines[:shared],
+        )
+
+    async def get_error_log(self, lines: int, offset: int = 0) -> ErrorLogPage:
+        """Get a bounded window of the Home Assistant error log.
+
+        ``lines`` is the number of log lines to fetch and ``offset`` how many
+        newer lines to skip, counted back from the most recent one; both are
+        floored/served at ``MIN_LOG_WINDOW_LINES``. Returns the window text and
+        whether older history remains behind it. The window is mandatory: the
+        unconditional 20,000-line fetch this replaces made Supervisor assemble
+        a journald slice for 15+ minutes on real hardware (#2279).
+
+        The whole body runs under one ``asyncio.timeout(self.timeout)``. That
+        is the only bound that holds here: ``httpx.Timeout`` applies per I/O
+        operation, so a server trickling bytes while it assembles the body
+        resets the read timeout indefinitely and no per-attempt timeout ever
+        fires — the mechanism behind #2279's hang. The deadline covers the
+        install-class probe, the log fetch and the ``has_more`` probe together.
 
         Three-way branch depending on how this client reaches HA:
 
@@ -601,6 +760,17 @@ class HomeAssistantClient:
         - **External client → Container/pip HA** (neither of the above):
           keep the historical ``/api/error_log`` proxy path.
 
+        The two Supervisor-backed branches express the window as a journald
+        ``Range`` header (see ``_journald_range_header``) and settle
+        ``has_more`` with a one-entry probe (see ``_journald_error_log_page``).
+        HA Core's hassio proxy forwards that header for its log paths
+        (``PATHS_LOGS`` in ``homeassistant/components/hassio/http.py``); an
+        intermediary that stripped it would degrade to Supervisor's 100-line
+        default, never to an unbounded fetch, and the probe still terminates
+        paging. ``/api/error_log`` is a whole-file plain-text endpoint with no
+        window support, so the container branch reads the file and applies the
+        same window client-side, where paging is exact.
+
         The middle branch was discovered by the HAOS E2E tier (#1326): the
         test harness runs ha-mcp externally against a booted HAOS, hits
         the unregistered endpoint, and the old binary branch surfaced as
@@ -615,30 +785,36 @@ class HomeAssistantClient:
             HomeAssistantConnectionError: Network, timeout, or transport
                 error.
         """
-        if is_running_in_addon():
-            logger.debug("Fetching error log via Supervisor direct (core service)")
-            # An explicit `lines` is required: without it Supervisor applies its
-            # 100-line default, which is far too short a slice to tell what keeps
-            # repeating. `_get_supervisor_log` plumbs the same parameter for the
-            # same reason (#1734).
-            return await self._supervisor_logs_get("core", lines=_ERROR_LOG_LINES)
+        window = max(lines, MIN_LOG_WINDOW_LINES)
+        try:
+            async with asyncio.timeout(self.timeout):
+                if is_running_in_addon():
+                    logger.debug(
+                        "Fetching error log via Supervisor direct (core service)"
+                    )
+                    return await self._journald_error_log_page(
+                        window, offset, self._supervisor_core_logs
+                    )
 
-        if await self._is_supervised_install():
-            logger.debug(
-                "Fetching error log via HA Core /hassio/core/logs proxy (supervised)"
-            )
-            raw_response = await self._raw_request(
-                "GET",
-                f"/hassio/core/logs?lines={_ERROR_LOG_LINES}",
-                headers={"Accept": "text/plain"},
-            )
-            return raw_response.text
+                if await self._is_supervised_install():
+                    logger.debug(
+                        "Fetching error log via HA Core /hassio/core/logs proxy "
+                        "(supervised)"
+                    )
+                    return await self._journald_error_log_page(
+                        window, offset, self._proxied_core_logs
+                    )
 
-        logger.debug("Fetching error log via HA Core proxy (Container/pip)")
-        raw_response = await self._raw_request(
-            "GET", "/error_log", headers={"Accept": "text/plain"}
-        )
-        return raw_response.text
+                logger.debug("Fetching error log via HA Core proxy (Container/pip)")
+                raw_response = await self._raw_request(
+                    "GET", "/error_log", headers={"Accept": "text/plain"}
+                )
+                return self._container_error_log_page(raw_response.text, window, offset)
+        except TimeoutError as e:
+            raise HomeAssistantConnectionError(
+                f"Timeout fetching the error log after {self.timeout}s: "
+                f"{str(e) or type(e).__name__}"
+            ) from e
 
     async def _is_supervised_install(self) -> bool:
         """Detect whether the target HA is a Supervised / HAOS install.
@@ -742,12 +918,30 @@ class HomeAssistantClient:
             return await self._get_addon_logs_via_supervisor(slug, lines=lines)
 
         logger.debug(f"Fetching addon logs for slug={slug} via HA Core proxy")
-        response = await self._raw_request(
-            "GET",
-            f"/hassio/addons/{slug}/logs",
-            headers={"Accept": "text/plain"},
-            params={"lines": lines} if lines is not None else None,
-        )
+        return await self._proxied_logs_get(f"addons/{slug}", lines)
+
+    async def _proxied_logs_get(self, path: str, lines: int | None) -> str:
+        """Fetch ``text/plain`` logs through HA Core's hassio proxy.
+
+        Wrapped in an overall wall-clock deadline for the same reason as the
+        error-log routes (#2279): ``httpx.Timeout`` applies per I/O operation,
+        so a server trickling bytes while assembling the body resets the read
+        timeout indefinitely, and the deadline is the only bound that holds.
+        It caps the whole ``_raw_request`` retry envelope.
+        """
+        try:
+            async with asyncio.timeout(self.timeout):
+                response = await self._raw_request(
+                    "GET",
+                    f"/hassio/{path}/logs",
+                    headers={"Accept": "text/plain"},
+                    params={"lines": lines} if lines is not None else None,
+                )
+        except TimeoutError as e:
+            raise HomeAssistantConnectionError(
+                f"Timeout fetching /hassio/{path}/logs from Home Assistant "
+                f"after {self.timeout}s: {str(e) or type(e).__name__}"
+            ) from e
         return response.text
 
     @staticmethod
@@ -772,7 +966,12 @@ class HomeAssistantClient:
             message = text_body.strip() or reason_phrase or "<empty body>"
         return message
 
-    async def _supervisor_logs_get(self, path: str, lines: int | None = None) -> str:
+    async def _supervisor_logs_get(
+        self,
+        path: str,
+        lines: int | None = None,
+        offset: int | None = None,
+    ) -> str:
         """Fetch ``text/plain`` logs from a Supervisor REST endpoint.
 
         ``path`` is everything between ``http://supervisor/`` and ``/logs``:
@@ -782,11 +981,22 @@ class HomeAssistantClient:
           cli, multicast, observer}) for system-service logs
 
         ``lines`` maps to the endpoint's ``?lines=`` journald-window query
-        param; omitted → Supervisor's 100-line default window.
+        param; omitted → Supervisor's 100-line default window. Adding
+        ``offset`` switches the same window to a ``Range: entries=`` header
+        (see ``_journald_range_header``), which is the only form that can
+        address an older window. The two forms are mutually exclusive on the
+        wire — Supervisor tests ``if "lines" in request.query`` first and
+        ignores a ``Range`` header whenever that query param is present — so
+        the offset form sends the window in the header and no query param,
+        rather than a pair that could contradict each other.
 
         Bypasses ``HomeAssistantClient.httpx_client`` because that client targets
         Home Assistant Core through ``http://supervisor/core/api``, while logs
-        belong to Supervisor at ``http://supervisor``. Both clients use the same
+        belong to Supervisor at ``http://supervisor``. Plain HTTP here is the
+        platform contract, not a downgrade: Supervisor serves its API over
+        HTTP only (no TLS endpoint or IPC socket exists), on the internal
+        ``hassio`` docker network whose isolation is the boundary protecting
+        the token — see SECURITY.md § "Local network is the trusted zone". Both clients use the same
         ``SUPERVISOR_TOKEN``; the Core proxy requires ``homeassistant_api``, while
         system-service and arbitrary app-log paths require ``hassio_api`` and
         ``hassio_role: manager``. The recognized-app-token exception is
@@ -815,11 +1025,19 @@ class HomeAssistantClient:
             )
 
         relative_path = f"/{path}/logs"
+        headers = {"Accept": "text/plain"}
+        params = {"lines": lines} if lines is not None else None
+        if offset is not None:
+            # An offset window with no size asked for falls back to the
+            # smallest one the Range syntax can express.
+            size = lines if lines is not None else MIN_LOG_WINDOW_LINES
+            headers["Range"] = self._journald_range_header(size, offset)
+            params = None
         logger.debug(
-            "Fetching %s%s via Supervisor direct (lines=%s)",
+            "Fetching %s%s via Supervisor direct (%s)",
             get_supervisor_base_url(),
             relative_path,
-            lines,
+            f"range={headers['Range']}" if offset is not None else f"lines={lines}",
         )
 
         try:
@@ -830,8 +1048,8 @@ class HomeAssistantClient:
                 ) as client:
                     response = await client.get(
                         relative_path,
-                        headers={"Accept": "text/plain"},
-                        params={"lines": lines} if lines is not None else None,
+                        headers=headers,
+                        params=params,
                     )
         except (TimeoutError, httpx.TimeoutException) as e:
             raise HomeAssistantConnectionError(
@@ -924,13 +1142,7 @@ class HomeAssistantClient:
             return await self._supervisor_logs_get(service, lines=lines)
 
         logger.debug(f"Fetching {service} logs via HA Core proxy")
-        response = await self._raw_request(
-            "GET",
-            f"/hassio/{service}/logs",
-            headers={"Accept": "text/plain"},
-            params={"lines": lines} if lines is not None else None,
-        )
-        return response.text
+        return await self._proxied_logs_get(service, lines)
 
     async def test_connection(self) -> tuple[bool, str | None]:
         """

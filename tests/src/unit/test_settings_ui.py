@@ -2566,6 +2566,32 @@ class TestSettingsInfoEndpoint:
         assert first["instance_id"] == second["instance_id"]
         assert first["started_at"] == second["started_at"]
 
+    @pytest.mark.asyncio
+    async def test_worker_id_stable_per_server_instance(self, monkeypatch):
+        """``worker_id`` must not flip between polls of the same worker —
+        the JS poll would otherwise reload immediately on the first probe."""
+        handler = self._capture_handler(monkeypatch)
+        first = json.loads((await handler(MagicMock())).body)
+        second = json.loads((await handler(MagicMock())).body)
+        assert isinstance(first["worker_id"], str)
+        assert len(first["worker_id"]) > 0
+        assert first["worker_id"] == second["worker_id"]
+
+    @pytest.mark.asyncio
+    async def test_worker_id_flips_across_server_instances(self, monkeypatch):
+        """An embedded restart constructs a NEW server instance inside the
+        surviving HA process, so ``instance_id`` never flips there —
+        ``worker_id`` is the signal that does (#2279 feedback: the restart
+        poll timed out after every successful embedded reload)."""
+        first_handler = self._capture_handler(monkeypatch)
+        first = json.loads((await first_handler(MagicMock())).body)
+        # A second registration = a second server object = the reload case.
+        second_handler = self._capture_handler(monkeypatch)
+        second = json.loads((await second_handler(MagicMock())).body)
+        assert first["worker_id"] != second["worker_id"]
+        # The process identity deliberately does NOT flip.
+        assert first["instance_id"] == second["instance_id"]
+
 
 class TestFeatureGatedToolsCustomCode:
     """``ha_manage_custom_tool`` (gated by ``enable_code_mode``) must

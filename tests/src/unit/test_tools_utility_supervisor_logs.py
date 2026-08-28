@@ -1,6 +1,7 @@
 """Unit tests for `ha_get_logs(source="supervisor"|"system_service")`.
 
-Covers two REST-client paths and their tools_utility wrappers:
+Covers two REST-client paths and their log-source wrappers
+(``log_sources_supervisor``, registered by ``tools_logs``):
 
 - `HomeAssistantClient.get_addon_logs()` — branches on `is_running_in_addon()`:
   inside the addon container hits Supervisor directly at
@@ -30,18 +31,18 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import (
-    _ERROR_LOG_LINES,
+    ErrorLogPage,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantClient,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools.tools_utility import (
+from ha_mcp.tools.log_common import (
     DEFAULT_LOG_LIMIT,
     MAX_LIMIT,
     SUPERVISOR_SEARCH_WINDOW_LINES,
-    register_utility_tools,
 )
+from ha_mcp.tools.tools_logs import register_logs_tools
 
 
 @pytest.fixture
@@ -112,7 +113,7 @@ def _register_and_collect(client: Any) -> dict[str, Any]:
         return _wrap
 
     mcp = SimpleNamespace(tool=_tool)
-    register_utility_tools(mcp, client)
+    register_logs_tools(mcp, client)
     return collected
 
 
@@ -577,9 +578,9 @@ class TestGetErrorLogBranchSelection:
         mock_client._raw_request = AsyncMock(return_value=mock_response)
 
         with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False):
-            result = await mock_client.get_error_log()
+            page = await mock_client.get_error_log(lines=100)
 
-        assert "error log via proxy" in result
+        assert "error log via proxy" in page.text
         # Probe via _request, fetch via _raw_request.
         mock_client._request.assert_awaited_once_with("GET", "/config")
         mock_client._raw_request.assert_awaited_once_with(
@@ -602,16 +603,17 @@ class TestGetErrorLogBranchSelection:
         mock_client._raw_request = AsyncMock(return_value=mock_response)
 
         with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False):
-            result = await mock_client.get_error_log()
+            page = await mock_client.get_error_log(lines=100)
 
-        assert "hassio-proxied log content" in result
+        assert "hassio-proxied log content" in page.text
         # Probe call.
         mock_client._request.assert_awaited_once_with("GET", "/config")
-        # Fetch via _raw_request (text/plain payload, not JSON).
+        # Fetch via _raw_request (text/plain payload, not JSON), windowed by a
+        # journald Range header the proxy forwards (#2279).
         mock_client._raw_request.assert_awaited_once_with(
             "GET",
-            f"/hassio/core/logs?lines={_ERROR_LOG_LINES}",
-            headers={"Accept": "text/plain"},
+            "/hassio/core/logs",
+            headers={"Accept": "text/plain", "Range": "entries=:-99:100"},
         )
 
     @pytest.mark.asyncio
@@ -627,14 +629,16 @@ class TestGetErrorLogBranchSelection:
         )
 
         with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=True):
-            result = await mock_client.get_error_log()
+            page = await mock_client.get_error_log(lines=100)
 
-        assert "error log via supervisor" in result
-        # An explicit window is required: without `lines`, Supervisor applies
-        # its 100-line default, far too short a slice to tell what keeps
-        # repeating.
+        assert "error log via supervisor" in page.text
+        # An explicit window is required: without one, Supervisor applies its
+        # 100-line default, far too short a slice to tell what keeps repeating
+        # — and an unbounded one hung the call outright (#2279). The offset is
+        # what selects the Range form over the ?lines= query, which Supervisor
+        # would otherwise prefer (it ignores Range whenever `lines` is present).
         mock_client._supervisor_logs_get.assert_called_once_with(
-            "core", lines=_ERROR_LOG_LINES
+            "core", lines=100, offset=0
         )
         mock_client._request.assert_not_called()
 
@@ -649,19 +653,46 @@ class TestGetErrorLogBranchSelection:
         """
         mock_client._supervisor_logs_get = AsyncMock(return_value="x")
         with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=True):
-            await mock_client.get_error_log()
-        addon_lines = mock_client._supervisor_logs_get.call_args.kwargs["lines"]
+            await mock_client.get_error_log(lines=250, offset=40)
+        addon_kwargs = mock_client._supervisor_logs_get.call_args.kwargs
 
         mock_response = MagicMock()
         mock_response.text = "x"
         mock_client._request = AsyncMock(return_value={"components": ["hassio"]})
         mock_client._raw_request = AsyncMock(return_value=mock_response)
         with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False):
-            await mock_client.get_error_log()
-        supervised_url = mock_client._raw_request.call_args.args[1]
+            await mock_client.get_error_log(lines=250, offset=40)
+        supervised_headers = mock_client._raw_request.call_args.kwargs["headers"]
 
-        assert addon_lines == _ERROR_LOG_LINES
-        assert supervised_url.endswith(f"lines={addon_lines}")
+        # Both express the same window; the direct route hands Supervisor the
+        # (lines, offset) pair and lets it build the header, the proxied one
+        # builds the header itself because the proxy only forwards it.
+        assert addon_kwargs == {"lines": 250, "offset": 40}
+        assert supervised_headers["Range"] == "entries=:-289:250"
+
+    @pytest.mark.asyncio
+    async def test_neither_supervisor_branch_requests_the_old_fixed_window(
+        self, mock_client
+    ):
+        """Neither route may fall back to the unconditional 20,000-line fetch.
+
+        That fetch is what made ``ha_get_logs(source='error_log')`` hang for
+        15+ minutes on a Supervisor-backed install (#2279).
+        """
+        mock_client._supervisor_logs_get = AsyncMock(return_value="x")
+        with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=True):
+            await mock_client.get_error_log(lines=100)
+        assert mock_client._supervisor_logs_get.call_args.kwargs["lines"] == 100
+
+        mock_response = MagicMock()
+        mock_response.text = "x"
+        mock_client._request = AsyncMock(return_value={"components": ["hassio"]})
+        mock_client._raw_request = AsyncMock(return_value=mock_response)
+        with patch("ha_mcp.client.rest_client.is_running_in_addon", return_value=False):
+            await mock_client.get_error_log(lines=100)
+        supervised_call = mock_client._raw_request.call_args
+        assert supervised_call.args[1] == "/hassio/core/logs"
+        assert supervised_call.kwargs["headers"]["Range"] == "entries=:-99:100"
 
 
 class TestGetSystemServiceLogs:
@@ -1060,7 +1091,7 @@ class TestGetSupervisorLogWrapper:
         suggestions = payload["error"]["suggestions"]
         assert any("Check Home Assistant connection" in s for s in suggestions)
         assert any(
-            "Verify add-on slug 'core_mosquitto' is correct" in s for s in suggestions
+            "Verify app slug 'core_mosquitto' is correct" in s for s in suggestions
         )
         assert any("ha_get_app" in s for s in suggestions)
 
@@ -1100,7 +1131,7 @@ class TestGetSupervisorLogWrapper:
 
         with (
             patch(
-                "ha_mcp.tools.tools_utility.is_running_in_addon",
+                "ha_mcp.tools.log_common.is_running_in_addon",
                 return_value=True,
             ),
             pytest.raises(ToolError) as exc_info,
@@ -1126,7 +1157,7 @@ class TestGetSupervisorLogWrapper:
 
         with (
             patch(
-                "ha_mcp.tools.tools_utility.is_running_in_addon",
+                "ha_mcp.tools.log_common.is_running_in_addon",
                 return_value=False,
             ),
             pytest.raises(ToolError) as exc_info,
@@ -1160,7 +1191,9 @@ class TestSlugParameterIncompatibilityWarning:
     ):
         """`slug='x'` paired with any non-supervisor/system_service source
         produces a warning naming the parameter and the source."""
-        client_with_logbook.get_error_log = AsyncMock(return_value="")
+        client_with_logbook.get_error_log = AsyncMock(
+            return_value=ErrorLogPage(text="", has_more=False)
+        )
         # `system` and `logger` sources route via WebSocket → system_log/list
         # and logger/log_info respectively; stub send_websocket_message so the
         # tool reaches the warnings-emit path without a real WS client.
@@ -1309,7 +1342,7 @@ class TestGetSystemServiceLogWrapper:
 
         with (
             patch(
-                "ha_mcp.tools.tools_utility.is_running_in_addon",
+                "ha_mcp.tools.log_sources_supervisor.is_running_in_addon",
                 return_value=True,
             ),
             pytest.raises(ToolError) as exc_info,
@@ -1340,7 +1373,7 @@ class TestGetSystemServiceLogWrapper:
 
         with (
             patch(
-                "ha_mcp.tools.tools_utility.is_running_in_addon",
+                "ha_mcp.tools.log_sources_supervisor.is_running_in_addon",
                 return_value=False,
             ),
             pytest.raises(ToolError) as exc_info,
@@ -1368,7 +1401,7 @@ class TestGetSystemServiceLogWrapper:
 
         with (
             patch(
-                "ha_mcp.tools.tools_utility.is_running_in_addon",
+                "ha_mcp.tools.log_common.is_running_in_addon",
                 return_value=True,
             ),
             pytest.raises(ToolError) as exc_info,
@@ -1394,7 +1427,7 @@ class TestGetSystemServiceLogWrapper:
 
         with (
             patch(
-                "ha_mcp.tools.tools_utility.is_running_in_addon",
+                "ha_mcp.tools.log_common.is_running_in_addon",
                 return_value=False,
             ),
             pytest.raises(ToolError) as exc_info,
@@ -1556,6 +1589,31 @@ class TestJournaldWindowLinesParam:
 
         _args, kwargs = inner_client.get.call_args
         assert kwargs["params"] is None
+
+    @pytest.mark.asyncio
+    async def test_offset_switches_the_window_to_a_range_header(
+        self, mock_client, addon_install, mock_async_client_class
+    ):
+        """An offset window goes in the header, and the query param is dropped.
+
+        Supervisor tests ``if "lines" in request.query`` first and ignores the
+        Range header whenever that query param is present, so sending both
+        would serve the newest window instead of the requested offset one.
+        Taking ``offset`` rather than a prebuilt header is what makes the pair
+        impossible to state inconsistently.
+        """
+        inner_client, _class = mock_async_client_class
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "x\n"
+        inner_client.get.return_value = mock_response
+
+        await mock_client._supervisor_logs_get("core", lines=50, offset=100)
+
+        _args, kwargs = inner_client.get.call_args
+        assert kwargs["params"] is None
+        assert kwargs["headers"]["Range"] == "entries=:-149:50"
+        assert kwargs["headers"]["Accept"] == "text/plain"
 
     @pytest.mark.asyncio
     async def test_addon_proxy_branch_sends_lines_query(
