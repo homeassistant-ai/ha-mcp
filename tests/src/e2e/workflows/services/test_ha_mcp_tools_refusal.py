@@ -35,6 +35,10 @@ from ...utilities.assertions import (
 
 logger = logging.getLogger(__name__)
 
+# The caller-token contract is a property of the ha_mcp_tools services, which
+# register only in the "File & YAML Tools" config entry (#2292).
+pytestmark = pytest.mark.requires_tools_entry
+
 FEATURE_FLAG = "HAMCP_ENABLE_FILESYSTEM_TOOLS"
 
 

@@ -39,6 +39,11 @@ from ..utilities.assertions import (
 )
 from ..utilities.entity_finders import find_test_light_entity
 
+# The gate is exercised through ha_config_set_yaml, which writes via the
+# component's privileged services — only present with the "File & YAML Tools"
+# config entry (#2292).
+pytestmark = pytest.mark.requires_tools_entry
+
 _BEST_PRACTICES_SKILL = "home-assistant-best-practices"
 _AUTOMATION_PATTERNS_REF = "references/automation-patterns.md"
 

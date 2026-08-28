@@ -24,6 +24,10 @@ from ...utilities.assertions import extract_error_message, safe_call_tool
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Legacy backup reads/restores go through the component's privileged file
+# services, which register only in the "File & YAML Tools" entry (#2292).
+pytestmark = pytest.mark.requires_tools_entry
+
 # Fixed artifacts staged pre-boot by conftest._seed_legacy_yaml_backups.
 _UNAMBIGUOUS = "legacy:themes_e2elegacy.yaml.20200101_000000.bak"
 _AMBIGUOUS = "legacy:packages_foo_bar.yaml.20200101_000000.bak"

@@ -66,6 +66,7 @@ from haos_runtime import (
     login_for_token,
     refresh_dev_addon_source_in_qcow2,
     refresh_recorder_in_qcow2,
+    remove_tools_entry_in_qcow2,
     set_default_backup_password,
     stage_embedded_server_feature_flags_in_qcow2,
     stage_embedded_server_wheel_in_qcow2,
@@ -209,6 +210,17 @@ def _is_embedded_backend_selected() -> bool:
     return os.environ.get("E2E_BACKEND", "").strip().lower() == "embedded"
 
 
+def _is_no_tools_entry_selected() -> bool:
+    """Return True when ``E2E_NO_TOOLS_ENTRY=1`` selects a no-tools lane (#2292).
+
+    On these lanes the component's "HA-MCP File & YAML Tools" config entry is
+    absent, so the privileged filesystem / YAML services never register. It is
+    orthogonal to the backend selectors: each backend has its own no-tools
+    shape (see ``_prepare_testcontainer_config`` / ``_prepare_haos_image``).
+    """
+    return os.environ.get("E2E_NO_TOOLS_ENTRY") == "1"
+
+
 def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:
     """Record a fixture-side readiness-gate timing data point.
 
@@ -279,6 +291,26 @@ def _apply_beta_haos_only_skip(
         item.add_marker(skip_marker)
 
 
+def _apply_no_tools_entry_skips(
+    item: Any,
+    no_tools_entry: bool,
+    skip_requires_tools_entry: Any,
+    skip_no_tools_only: Any,
+) -> None:
+    """Apply both directions of the no-tools-lane gate (#2292).
+
+    The two markers are mirror images: ``requires_tools_entry`` needs the
+    File & YAML Tools entry (so it skips ON the no-tools lanes),
+    ``no_tools_only`` pins what happens WITHOUT it (so it skips everywhere
+    else). Out-of-line for the same reason as ``_apply_haos_tls_skip``: the
+    dispatcher sits at ruff's C901 ceiling.
+    """
+    if no_tools_entry and "requires_tools_entry" in item.keywords:
+        item.add_marker(skip_requires_tools_entry)
+    if not no_tools_entry and "no_tools_only" in item.keywords:
+        item.add_marker(skip_no_tools_only)
+
+
 def pytest_collection_modifyitems(config, items):
     """Enforce backend markers and auto-apply ``haos_only`` to its dir.
 
@@ -308,6 +340,11 @@ def pytest_collection_modifyitems(config, items):
       installed ``ha-mcp`` command and uses real stdio JSON-RPC framing).
     - ``haos_tls``: final HAOS-embedded scenario. It restarts Core with HTTPS,
       exercises the same VM, and restores HTTP before session teardown.
+    - ``requires_tools_entry`` / ``no_tools_only``: the two directions of the
+      no-tools lane gate (``E2E_NO_TOOLS_ENTRY=1``, #2292). The first needs the
+      component's "File & YAML Tools" config entry and skips where it is
+      absent; the second pins the absent-entry behaviour and skips everywhere
+      the entry IS installed.
     """
     del config
     haos = is_haos_backend_selected()
@@ -363,6 +400,15 @@ def pytest_collection_modifyitems(config, items):
     skip_beta_haos_only = pytest.mark.skip(
         reason="beta HAOS image expectations are not configured"
     )
+    no_tools_entry = _is_no_tools_entry_selected()
+    skip_requires_tools_entry = pytest.mark.skip(
+        reason="File & YAML Tools entry not installed in this lane "
+        "(E2E_NO_TOOLS_ENTRY=1; #2292)"
+    )
+    skip_no_tools_only = pytest.mark.skip(
+        reason="no-tools lane required (set E2E_NO_TOOLS_ENTRY=1); only that "
+        "lane runs without the File & YAML Tools config entry"
+    )
     skip_not_on_embedded = pytest.mark.skip(
         reason="redundant on the embedded backend (the lane's own session "
         "backend already exercises this path)"
@@ -386,6 +432,9 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_haos_stdio_only)
         _apply_haos_tls_skip(item, haos_embedded, skip_haos_tls)
         _apply_beta_haos_only_skip(item, beta_haos, skip_beta_haos_only)
+        _apply_no_tools_entry_skips(
+            item, no_tools_entry, skip_requires_tools_entry, skip_no_tools_only
+        )
         # Deliberate: inserting the haos_tls dispatch above broke the old
         # ``elif`` chain into this ``if``. An item carrying several gate
         # markers now collects one skip marker per gate instead of the first
@@ -894,11 +943,18 @@ def _install_custom_component(
     component_src: Path,
     domain: str,
     title: str,
+    *,
+    seed_entry: bool = True,
 ) -> bool:
     """Install a custom component into the test HA config.
 
     Copies component source into custom_components/<domain> and injects a
     config entry so HA loads it on startup. Returns True if installed.
+
+    ``seed_entry=False`` copies the files but seeds NO config entry — the
+    no-tools lanes (#2292) need ha_mcp_tools' code present (the in-process
+    server entry loads from it) with its File & YAML Tools entry absent, so
+    the privileged services never register.
     """
     if not component_src.exists():
         logger.info("%s source not found — skipping installation", domain)
@@ -910,7 +966,7 @@ def _install_custom_component(
 
     # Inject config entry if not already present
     storage_file = config_path / ".storage" / "core.config_entries"
-    if storage_file.exists():
+    if seed_entry and storage_file.exists():
         data = json.loads(storage_file.read_text())
         entries = data.get("data", {}).get("entries", [])
         if not any(isinstance(e, dict) and e.get("domain") == domain for e in entries):
@@ -936,7 +992,9 @@ def _install_custom_component(
             )
             storage_file.write_text(json.dumps(data, indent=2))
 
-    logger.info("Installed %s component", domain)
+    logger.info(
+        "Installed %s component%s", domain, "" if seed_entry else " (no config entry)"
+    )
     return True
 
 
@@ -1909,6 +1967,14 @@ def _prepare_haos_image(
     # ride the shared-IP 60 req/h unauthenticated GitHub budget —
     # the long-standing HACS-install flake. Must run before boot.
     inject_hacs_token_in_qcow2(image_path)
+    # No-tools lanes (#2292): drop the baked "File & YAML Tools" config entry so
+    # the privileged ha_mcp_tools services never register. Pre-boot offline edit
+    # on this worker's own overlay (HA Core owns .storage once it boots), and it
+    # removes ONLY the tools entry — the staged, still-disabled in-process server
+    # entry stays, which is what gives the haos_embedded lane its
+    # server-entry-only topology.
+    if _is_no_tools_entry_selected():
+        remove_tools_entry_in_qcow2(image_path)
     # Deliver a checkout-built ha-mcp wheel into /config and point the baked
     # (disabled) in-process server config entry's pip_spec at it, so the HAOS
     # embedded-server E2E (#1527) exercises the PR's own src/ha_mcp when it
@@ -2302,12 +2368,21 @@ def _prepare_testcontainer_config(
             "webhook_id": "mcp_e2e_test_webhook_proxy",
         }
         (config_path / ".mcp_proxy_config.json").write_text(json.dumps(proxy_config))
-    _install_custom_component(
-        config_path,
-        repo_root / "custom_components" / "ha_mcp_tools",
-        "ha_mcp_tools",
-        "HA-MCP File & YAML Tools",
-    )
+    # No-tools lanes (#2292): the File & YAML Tools entry is absent, in the two
+    # shapes a real install can take. Embedded still needs the component FILES
+    # (its in-process server entry loads from them), so the files are copied
+    # with no tools entry seeded — the exact server-entry-only topology. The
+    # plain container installs nothing at all: a user who never installed the
+    # component. The mcp_proxy install above is untouched either way.
+    no_tools_entry = _is_no_tools_entry_selected()
+    if not no_tools_entry or embedded:
+        _install_custom_component(
+            config_path,
+            repo_root / "custom_components" / "ha_mcp_tools",
+            "ha_mcp_tools",
+            "HA-MCP File & YAML Tools",
+            seed_entry=not no_tools_entry,
+        )
 
     # Embedded backend: build the checkout's wheel into /config, install the
     # in-process MCP server entry, seed its config entry + feature-flag overrides.
