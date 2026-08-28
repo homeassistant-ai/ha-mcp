@@ -18,6 +18,7 @@ Feature Flag: Set HAMCP_ENABLE_FILESYSTEM_TOOLS=true to enable these tools.
 import asyncio
 import json
 import logging
+import time
 import weakref
 from typing import Annotated, Any, NoReturn
 
@@ -125,6 +126,25 @@ _COMPONENT_VERSION_CACHE: weakref.WeakKeyDictionary[Any, str] = (
 _CALLER_TOKEN_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = (
     weakref.WeakKeyDictionary()
 )
+
+# How long a live service-registry verdict stays memoized (see
+# ``_probe_tools_services``). 30 seconds deliberately matches
+# ``component_api._TRANSIENT_NEGATIVE_CACHE_TTL_S``: both cache an answer that
+# can flip at any moment — there a transport that may come back, here a config
+# entry the user can add or remove at runtime — so both stay short enough to
+# self-heal without a server restart.
+_LIVE_TOOLS_PROBE_TTL_S = 30.0
+# ``(verdict, monotonic_time)`` per client, keyed exactly like
+# ``_CALLER_TOKEN_CACHE`` / ``_COMPONENT_VERSION_CACHE`` above so the entry
+# self-evicts with the client and multi-client setups stay separate.
+_LIVE_TOOLS_PROBE_CACHE: weakref.WeakKeyDictionary[Any, tuple[bool, float]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _monotonic() -> float:
+    """Monotonic clock read, isolated so tests can advance it deterministically."""
+    return time.monotonic()
 
 
 def _get_token_lock(client: Any) -> asyncio.Lock:
@@ -374,9 +394,15 @@ async def call_mcp_tools_service(
 
 
 def _reset_caller_token_cache() -> None:
-    """Test hook: clear the module-level token cache."""
+    """Test hook: clear the module-level per-client caches.
+
+    Covers the live service-registry memo too — it is keyed by client like the
+    token cache, so a suite reusing one client object across cases would
+    otherwise inherit a verdict from the previous test for the TTL window.
+    """
     _CALLER_TOKEN_CACHE.clear()
     _CALLER_TOKEN_LOCKS.clear()
+    _LIVE_TOOLS_PROBE_CACHE.clear()
 
 
 def is_filesystem_tools_enabled() -> bool:
@@ -422,6 +448,28 @@ def _assert_caps_version_ok(caps: ComponentCaps) -> None:
         _raise_component_too_old(f"reported version is {caps.component_version}")
 
 
+async def _probe_tools_services(client: Any) -> bool:
+    """``_is_mcp_tools_available`` behind a short per-client TTL memo.
+
+    The live registry probe is an uncached ``GET /api/services`` — HA serves
+    the whole service registry — and every gated tool call on a 2.1.0+
+    component reaches it, so an unbounded per-call probe would put that request
+    in front of each file read. Memoizing the verdict for
+    ``_LIVE_TOOLS_PROBE_TTL_S`` costs at most one probe per window instead.
+
+    A ``False`` verdict is memoized too: a user who adds the tools entry
+    mid-session waits at most the TTL for the tools to start working, which is
+    the same self-healing bound the caps transient negative accepts, and far
+    better than the restart the cached caps boolean would have required.
+    """
+    cached = _LIVE_TOOLS_PROBE_CACHE.get(client)
+    if cached is not None and (_monotonic() - cached[1]) < _LIVE_TOOLS_PROBE_TTL_S:
+        return cached[0]
+    verdict = await _is_mcp_tools_available(client)
+    _LIVE_TOOLS_PROBE_CACHE[client] = (verdict, _monotonic())
+    return verdict
+
+
 async def _assert_mcp_tools_available(client: Any) -> None:
     """Raise ToolError if ha_mcp_tools is not available.
 
@@ -439,21 +487,26 @@ async def _assert_mcp_tools_available(client: Any) -> None:
     wave calls through to now-missing services and surface raw
     service-call failures instead of the actionable error. So when the field
     is present at all, ignore its cached value and consult the live service
-    registry — the same per-call probe the legacy fallback below has always
-    paid. ``None`` (a pre-2.1.0 component) keeps the old implication, which
-    was sound there — only the tools entry registered ``info``.
-    Legacy fallback: caps is None for a component in the 0.11.0-1.1.0 band
-    (services, no info command) or an absent one, so fall back to the per-call
-    ``get_services()`` existence probe. A no-services verdict raises the
-    "File & YAML Tools entry not set up" error
-    (``_raise_tools_entry_not_set_up``), not an install-the-component prompt —
-    the entry-not-added state is the common cause (#1996).
+    registry (``_probe_tools_services``), which is memoized for
+    ``_LIVE_TOOLS_PROBE_TTL_S`` — one ``get_services()`` per window, not one
+    per gated call. ``None`` (a pre-2.1.0 component) keeps the old implication,
+    which was sound there — only the tools entry registered ``info``.
+
+    Caps-absent band: caps is None for a component in the 0.11.0-1.1.0 band
+    (services, no info command) or an absent one, so the same live probe is the
+    only signal available. It is the secondary case now — on a current
+    component the probe above is the primary path — but the verdict is read
+    identically. A no-services verdict raises the "File & YAML Tools entry not
+    set up" error (``_raise_tools_entry_not_set_up``), not an
+    install-the-component prompt — the entry-not-added state is the common
+    cause (#1996).
 
     Must be called within a try block that handles API errors via
     exception_to_structured_error, so connection failures are classified
     correctly rather than masked as COMPONENT_NOT_INSTALLED. ``get_component_caps``
-    returns None (not raises) on a transport failure, so the legacy
-    ``get_services()`` probe still surfaces the connection error to that handler.
+    returns None (not raises) on a transport failure, so the live
+    ``get_services()`` probe still surfaces the connection error to that handler
+    (a raise is never memoized — only a verdict is).
     """
     caps = await get_component_caps(client)
     if caps is not None:
@@ -462,7 +515,7 @@ async def _assert_mcp_tools_available(client: Any) -> None:
             # Pre-2.1.0 component: only the tools entry registered ``info``,
             # so answering caps DID prove the services exist.
             return
-    if not await _is_mcp_tools_available(client):
+    if not await _probe_tools_services(client):
         _raise_tools_entry_not_set_up()
 
 
