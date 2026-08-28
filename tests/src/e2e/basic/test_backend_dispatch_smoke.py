@@ -133,6 +133,9 @@ _SKIP_CEILING_PER_LANE = {
     # +3 embedded_only conversion, +1 backup external_only conversion, and the
     # #2292 no_tools_only module. Set from the round-1 CI observation, which is
     # what this dict records; the other lanes' observations moved by 8 there.
+    # This entry moved 117 -> 119 rather than by that 8: the 117 was a ceiling
+    # carrying headroom above its own observed count, so part of the +8 landed
+    # inside that headroom and 119 is what round-1 CI actually observed.
     "haos_stdio": 119,
     "haos_inaddon": 94,  # was 86; +8 #2292 no_tools_only
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container

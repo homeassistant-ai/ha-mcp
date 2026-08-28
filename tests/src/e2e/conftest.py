@@ -87,6 +87,7 @@ from .utilities.supervisor_mock import (
     _supervisor_mock_server,  # noqa: F401  (session fixture supervisor_mock depends on)
     supervisor_mock,  # noqa: F401  (re-exported fixture)
 )
+from .utilities.topology import tools_entry_absent
 
 # Import test constants
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -211,14 +212,19 @@ def _is_embedded_backend_selected() -> bool:
 
 
 def _is_no_tools_entry_selected() -> bool:
-    """Return True when ``E2E_NO_TOOLS_ENTRY=1`` selects a no-tools lane (#2292).
+    """Return True when ``E2E_NO_TOOLS_ENTRY`` selects a no-tools lane (#2292).
 
     On these lanes the component's "HA-MCP File & YAML Tools" config entry is
     absent, so the privileged filesystem / YAML services never register. It is
     orthogonal to the backend selectors: each backend has its own no-tools
     shape (see ``_prepare_testcontainer_config`` / ``_prepare_haos_image``).
+
+    Delegates to ``utilities.topology.tools_entry_absent`` — the staging here
+    and the markers / assertions there must never disagree about which
+    topology a lane is running, so there is one parser, not two. It raises on
+    an unrecognized value rather than guessing.
     """
-    return os.environ.get("E2E_NO_TOOLS_ENTRY") == "1"
+    return tools_entry_absent()
 
 
 def _log_readiness_timing(gate: str, elapsed_s: float, **extras: Any) -> None:

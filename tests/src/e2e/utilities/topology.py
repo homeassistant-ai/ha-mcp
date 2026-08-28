@@ -10,16 +10,40 @@ from __future__ import annotations
 
 import os
 
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+_FALSE_VALUES = frozenset({"", "0", "false", "no", "off"})
+
 
 def tools_entry_absent() -> bool:
-    """True on the no-tools lanes, where the File & YAML Tools entry is absent."""
-    return os.environ.get("E2E_NO_TOOLS_ENTRY") == "1"
+    """True on the no-tools lanes, where the File & YAML Tools entry is absent.
+
+    ``E2E_NO_TOOLS_ENTRY`` is normalized (stripped, lower-cased) and anything
+    outside the recognized true/false spellings RAISES rather than defaulting.
+    Guessing "off" for an unrecognized value would silently re-run the ordinary
+    topology on a lane whose entire purpose is to test the no-tools one, and the
+    lane would report green while covering nothing new (#2292).
+    """
+    raw = os.environ.get("E2E_NO_TOOLS_ENTRY", "")
+    value = raw.strip().lower()
+    if value in _TRUE_VALUES:
+        return True
+    if value in _FALSE_VALUES:
+        return False
+    raise RuntimeError(
+        f"E2E_NO_TOOLS_ENTRY={raw!r} is not a recognized boolean "
+        f"(true: {sorted(_TRUE_VALUES)}; false: {sorted(_FALSE_VALUES - {''})}, "
+        "or unset). Refusing to guess: reading it as 'off' would silently "
+        "re-run the ordinary topology on a lane that exists to test the "
+        "no-tools one, and every downstream marker and assertion keys off "
+        "this value (#2292)."
+    )
 
 
 def component_surface_available() -> bool:
     """True wherever a live ha_mcp_tools component surface can answer.
 
-    Every ordinary lane has the component with both entries. Of the no-tools
+    The ordinary lanes all have the component's tools entry, and the embedded
+    lanes add the in-process server entry on top of it. Of the no-tools
     lanes, only the two ``embedded`` shapes keep an active config entry: their
     in-process server entry still registers the ``ha_mcp_tools/*`` WebSocket
     surface (#2291), so shared component capabilities — a config entry's

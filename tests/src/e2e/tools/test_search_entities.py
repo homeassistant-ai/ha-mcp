@@ -16,6 +16,7 @@ from ..utilities.assertions import (
     parse_mcp_result,
     safe_call_tool,
 )
+from ..utilities.scene_fragments import is_structural_scene_fragment
 from ..utilities.topology import component_surface_available
 from ..utilities.wait_helpers import wait_for_tool_result
 
@@ -376,7 +377,9 @@ def _assert_only_yaml_scene_degradation(data: dict) -> None:
     ``partial_reason`` is one string joining its fragments with `` ; ``, so it
     is split back apart — a response whose reason mixes the structural
     YAML-scene fragment with a "per-id fetch raised" one must fail, not pass on
-    the strength of the acceptable half.
+    the strength of the acceptable half. The classification itself lives in
+    ``utilities/scene_fragments.py``, pinned by
+    ``tests/src/unit/test_scene_fragment_matcher.py``.
     """
     fragments = list(data.get("warnings") or [])
     fragments += [
@@ -384,77 +387,11 @@ def _assert_only_yaml_scene_degradation(data: dict) -> None:
         for part in (data.get("partial_reason") or "").split(" ; ")
         if part.strip()
     ]
-    offenders = [text for text in fragments if not _is_structural_scene_fragment(text)]
+    offenders = [text for text in fragments if not is_structural_scene_fragment(text)]
     assert not offenders, (
         "Only the structural YAML-scene fragments are acceptable without a "
         f"component surface; got {offenders}"
     )
-
-
-def _is_structural_scene_fragment(text: str) -> bool:
-    """True only for the two structural scene classifications (#2292).
-
-    Anchored on the fragments' distinctive message shapes from
-    ``_apply_scene_partial_flag`` rather than loose substrings — a failed-fetch
-    fragment whose ``e.g.`` sample happens to mention a YAML-defined scene must
-    still be rejected. The failure markers are checked first for exactly that
-    reason: any fragment carrying one is a degradation gone wrong regardless of
-    what else it mentions.
-
-    - YAML-defined gap: "per-id config endpoint returned 404 — these are
-      likely YAML-defined scenes ..."
-    - Informational integration-managed note (an idless YAML scene has no
-      registry unique_id, so the legacy walk classifies it integration-managed
-      and scores it by attribute — match status KNOWN, just config-less):
-      "... scored by attribute only (no per-id fetch)."
-    """
-    failure_markers = (
-        "fetch raised",
-        "timed out",
-        "registry",
-        "not scanned (per-id fetch",
-    )
-    if any(marker in text for marker in failure_markers):
-        return False
-    return (
-        "per-id config endpoint returned 404" in text and "YAML-defined scenes" in text
-    ) or text.rstrip().endswith("scored by attribute only (no per-id fetch).")
-
-
-def test_structural_scene_fragment_matcher_rejects_failures():
-    """Negative cases for the matcher above: a failure fragment whose sample
-    mentions a YAML-defined scene, a timeout, and a registry fallback must all
-    be rejected; the two genuine structural shapes must pass."""
-    # Explicit + concatenation, not adjacent literals: CodeQL's
-    # implicit-string-concatenation-in-list check reads the latter as a
-    # possible missing comma.
-    spoofing_failed_fetch = (
-        "1 scene(s) not scanned (per-id fetch raised a non-404 error; e.g. "
-        + "HTTP 500 while reading YAML-defined scenes) — their match status "
-        + "is unknown; this result is not exhaustive."
-    )
-    timeout_fragment = (
-        "2 scene(s) not scanned (per-id fetch timed out after 8.0s while 5 "
-        + "fetches ran concurrently ...) — their match status is unknown"
-    )
-    yaml_structural = (
-        "1 scene(s) not scanned (per-id config endpoint returned 404 — these "
-        + "are likely YAML-defined scenes that the /config/scene/config REST "
-        + "endpoint does not expose) — their match status is unknown; this "
-        + "result is not exhaustive."
-    )
-    rejected = [
-        spoofing_failed_fetch,
-        timeout_fragment,
-        "entity-registry augmentation failed; attempting all scenes",
-        "unrelated warning that mentions scored by attribute only in passing",
-    ]
-    accepted = [
-        yaml_structural,
-        "1 integration-managed scenes are scored by attribute only (no per-id fetch).",
-    ]
-    assert not [t for t in rejected if _is_structural_scene_fragment(t)]
-    assert all(_is_structural_scene_fragment(t) for t in accepted)
 
 
 @pytest.mark.asyncio
