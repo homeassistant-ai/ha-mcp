@@ -531,9 +531,15 @@ _SPLIT_RE = re.compile(r"[._\-\s]+")
 def async_register_commands(hass: HomeAssistant) -> None:
     """Register the ``ha_mcp_tools/*`` WebSocket commands.
 
+    Called from BOTH config-entry setups: the tools entry (alongside its service
+    registrations) and the server entry (#2289). The surface is entry-agnostic —
+    every handler reads HA-core state, none of it the tools entry's
+    ``hass.data`` — so a server-entry-only install gets it too; only the
+    filesystem/YAML HA *services* remain tools-entry-only.
+
     Idempotent: HA's ``async_register_command`` overwrites an existing handler,
-    so re-running on a config-entry reload is harmless. Called from the tools
-    config-entry setup alongside the service registrations.
+    so re-running on a config-entry reload, or from both entries on a dual-entry
+    install, is harmless.
     """
     for schema, do_fn, prep in _command_specs():
         websocket_api.async_register_command(hass, _build_handler(schema, do_fn, prep))

@@ -5,7 +5,8 @@ wire up around the :class:`~.coordinator.ServerVersionCoordinator`: creating
 it with the right interval, registering its auto-update listener (as a
 background task, never a synchronous reload from inside the listener),
 kicking off an initial (non-blocking) refresh, and forwarding/unloading the
-``update`` platform.
+``update`` platform — plus the ``ha_mcp_tools/*`` WebSocket command surface
+the server entry registers up front (issue #2289).
 
 Home Assistant / aiohttp are stubbed via ``_embedded_stubs`` (imported first so
 the fakes are installed before the component module binds them). The lazily
@@ -134,8 +135,9 @@ def fake_collaborators(monkeypatch):
 
     ``async_setup_server_entry`` imports ``async_bring_up_server`` /
     ``async_maybe_auto_update`` from ``embedded_setup``,
-    ``async_register_ui_panel`` from ``ui_panel``, and ``ServerVersionCoordinator``
-    from ``coordinator`` at call time; the fakes keep the full HA chain out of
+    ``async_register_ui_panel`` from ``ui_panel``, ``ServerVersionCoordinator``
+    from ``coordinator``, and ``async_register_commands`` from
+    ``websocket_api`` at call time; the fakes keep the full HA chain out of
     this test.
     """
     fake_setup = ModuleType("custom_components.ha_mcp_tools.embedded_setup")
@@ -152,6 +154,9 @@ def fake_collaborators(monkeypatch):
     fake_coord_mod = ModuleType("custom_components.ha_mcp_tools.coordinator")
     fake_coord_mod.ServerVersionCoordinator = _FakeCoordinator
 
+    fake_wsapi = ModuleType("custom_components.ha_mcp_tools.websocket_api")
+    fake_wsapi.async_register_commands = MagicMock(name="async_register_commands")
+
     monkeypatch.setitem(
         sys.modules, "custom_components.ha_mcp_tools.embedded_setup", fake_setup
     )
@@ -161,8 +166,14 @@ def fake_collaborators(monkeypatch):
     monkeypatch.setitem(
         sys.modules, "custom_components.ha_mcp_tools.coordinator", fake_coord_mod
     )
+    monkeypatch.setitem(
+        sys.modules, "custom_components.ha_mcp_tools.websocket_api", fake_wsapi
+    )
     return SimpleNamespace(
-        setup=fake_setup, panel=fake_panel, coordinator_cls=_FakeCoordinator
+        setup=fake_setup,
+        panel=fake_panel,
+        coordinator_cls=_FakeCoordinator,
+        websocket_api=fake_wsapi,
     )
 
 
@@ -279,6 +290,43 @@ class TestSetup:
         await _drain_background_tasks(hass, entry)
 
         fake_collaborators.panel.async_register_ui_panel.assert_not_awaited()
+
+
+class TestWebSocketCommandRegistration:
+    """The server entry registers the ``ha_mcp_tools/*`` WS commands (#2289).
+
+    They used to be registered only from the tools entry, so an install with
+    just the server (embedded) entry had no ``ha_mcp_tools/*`` commands at all
+    and every ``ha_search`` silently fell back to the legacy path.
+    """
+
+    async def test_setup_registers_ws_commands(self, fake_collaborators):
+        hass = _make_hass()
+        entry = _make_entry()
+
+        await eentry.async_setup_server_entry(hass, entry)
+        await _drain_background_tasks(hass, entry)
+
+        register = fake_collaborators.websocket_api.async_register_commands
+        register.assert_called_once_with(hass)
+
+    async def test_ws_commands_registered_before_fallible_setup_steps(
+        self, fake_collaborators
+    ):
+        # Placement pin: registration runs first, so a later setup step failing
+        # (the sidebar panel here, the background bring-up in the field) never
+        # costs a server-only install its command surface.
+        hass = _make_hass()
+        entry = _make_entry()
+        fake_collaborators.panel.async_register_ui_panel.side_effect = RuntimeError(
+            "panel registration failed"
+        )
+
+        with pytest.raises(RuntimeError):
+            await eentry.async_setup_server_entry(hass, entry)
+
+        register = fake_collaborators.websocket_api.async_register_commands
+        register.assert_called_once_with(hass)
 
 
 class TestPrebindOAuthViews:

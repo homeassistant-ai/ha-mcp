@@ -48,12 +48,13 @@ from .const import (
 )
 
 # NOTE: embedded_setup / coordinator (and their embedded_server / mcp_webhook
-# chain) are imported lazily inside the entry lifecycle functions below, not at
-# module top level. They pull in aiohttp and several homeassistant.* submodules
-# (auth, requirements, util.package, components.http/webhook) that the
-# entry-point wiring here never touches directly, so a top-level import would
-# make importing this package require that whole stack — breaking hermetic unit
-# tests that stub only the modules they use.
+# chain), plus websocket_api, are imported lazily inside the entry lifecycle
+# functions below, not at module top level. They pull in aiohttp, yaml and
+# several homeassistant.* submodules (auth, requirements, util.package,
+# components.http/webhook, components.websocket_api, half a dozen helpers) that
+# the entry-point wiring here never touches directly, so a top-level import
+# would make importing this package require that whole stack — breaking
+# hermetic unit tests that stub only the modules they use.
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -67,13 +68,28 @@ async def async_setup_server_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     startup. It runs as a config-entry background task — automatically cancelled
     on unload. The secret webhook id and secret path are generated first, before
     the update listener is registered, so those ``entry.data`` writes never
-    trigger a mid-setup reload.
+    trigger a mid-setup reload. The ``ha_mcp_tools/*`` WebSocket command surface
+    is registered up front, before any of that.
     """
     # Imported lazily (see the import note) so the aiohttp / auth / requirements
     # chain is pulled in only when an entry is actually set up.
     from .coordinator import ServerVersionCoordinator
     from .embedded_setup import async_bring_up_server, async_maybe_auto_update
     from .ui_panel import async_register_ui_panel
+    from .websocket_api import async_register_commands
+
+    # The ha_mcp_tools/* WS commands are entry-agnostic read/search machinery
+    # over HA-core state (entity components, storage collections, lovelace,
+    # registries) — nothing in them reads the tools entry's hass.data, and HA
+    # core authenticates the connection while @require_admin gates each command.
+    # So the server entry registers them too (#2289): a server-entry-only
+    # install used to have no ha_mcp_tools/* commands at all, silently dropping
+    # every ha_search to the legacy path. Only the filesystem/YAML HA *services*
+    # stay tools-entry-only. Registered first, before anything that can fail or
+    # await, so a broken bring-up later never costs the install this surface;
+    # registration is idempotent, so a dual-entry install re-registering is
+    # harmless.
+    async_register_commands(hass)
 
     _ensure_secrets(hass, entry)
     # Bind every applicable OAuth route synchronously here — before the slow
