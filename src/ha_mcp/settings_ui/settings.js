@@ -489,7 +489,11 @@ async function loadTools() {
   updateStatus(t('status.loaded', {}, 'Loaded'));
 }
 
-async function applyInfoChrome() {
+// Restart-chrome half of applyInfoChrome: which restart control is shown
+// and what the restart notice tells the user to do. Split out (with the
+// footer below) so applyInfoChrome stays orchestration — the branch ladder
+// here alone sits near the complexity limit.
+function _applyRestartChrome(info) {
   // Show restart button if running as add-on; show Stop Sidecar
   // button only when this page is served by the stdio sidecar
   // (HTTP modes serve the same HTML but is_sidecar=false there, so
@@ -499,84 +503,91 @@ async function applyInfoChrome() {
   // reopen Claude Desktop" vs "click Restart Add-on" vs "restart
   // your Docker container") instead of a generic "restart the add-on"
   // that only matches one of three real deployment surfaces.
+  const noticeEl = document.getElementById('restartNoticeText');
+  if (info.is_addon) {
+    document.getElementById('restartBtn').style.display = '';
+    if (noticeEl) {
+      noticeEl.textContent = t(
+        'notice.restart.addon',
+        {},
+        '⚠ Changes saved. Click "Restart App (add-on)" for them to take effect. Then refresh the MCP tool list in your AI client.'
+      );
+    }
+  } else if (info.deployment_mode === 'embedded') {
+    // In-process (custom component) server: the restart endpoint reloads
+    // the server config entry, which reinstalls-if-newer and swaps the
+    // worker onto the freshly installed code.
+    const rbtn = document.getElementById('restartBtn');
+    rbtn.style.display = '';
+    restartTargetEmbedded = true;
+    rbtn.textContent = t('actions.restart_server', {}, 'Restart HA-MCP Server');
+    if (noticeEl) {
+      noticeEl.textContent = t(
+        'notice.restart.embedded',
+        {},
+        '⚠ Changes saved. Click "Restart HA-MCP Server" for them to take effect. Then refresh the MCP tool list in your AI client.'
+      );
+    }
+  } else if (info.is_sidecar) {
+    if (noticeEl) {
+      noticeEl.textContent = t(
+        'notice.restart.sidecar',
+        {},
+        '⚠ Changes saved. Fully quit and reopen your MCP client for them to take effect.'
+      );
+    }
+    document.getElementById('sidecarStopRow').style.display = '';
+  } else if (noticeEl) {
+    // HTTP / Docker / standalone — no button we can wire to a restart,
+    // so describe the action in process terms, then the client-refresh
+    // step (remote connectors cache the tool list, same as add-on mode).
+    noticeEl.textContent = t(
+      'notice.restart.standalone',
+      {},
+      '⚠ Changes saved. Restart the ha-mcp process, then refresh the MCP tool list in your AI client.'
+    );
+  }
+}
+
+// Footer — show the running build and the same deployment classification
+// used by ha_report_issue. The backend keeps embedded and sidecar distinct
+// because they need different restart behavior; preserve those concise
+// names here and clarify the less obvious packaging-oriented values.
+function _applyVersionFooter(info) {
+  if (!info.version) return;
+  const fEl = document.getElementById('versionFooterText');
+  const deploymentMode = typeof info.deployment_mode === 'string'
+    ? info.deployment_mode
+    : '';
+  const deploymentLabels = {
+    embedded: 'embedded',
+    sidecar: 'sidecar',
+    addon: t('footer.deployment.addon', {}, 'app/add-on'),
+    docker: t('footer.deployment.docker', {}, 'container/docker'),
+    pyinstaller: t('footer.deployment.pyinstaller', {}, 'standalone binary'),
+    git: t('footer.deployment.git', {}, 'source checkout'),
+    pypi: t('footer.deployment.pypi', {}, 'python package'),
+    unknown: t('footer.deployment.unknown', {}, 'unknown'),
+  };
+  const deploymentLabel = Object.prototype.hasOwnProperty.call(
+    deploymentLabels, deploymentMode
+  ) ? deploymentLabels[deploymentMode] : deploymentMode;
+  const installation = deploymentLabel
+    ? ' · ' + t(
+      'footer.installation',
+      {method: deploymentLabel},
+      'installation: {method}'
+    )
+    : '';
+  if (fEl) fEl.textContent = 'ha-mcp ' + info.version + installation;
+}
+
+async function applyInfoChrome() {
   try {
     const infoResp = await fetch('./api/settings/info');
     const info = await infoResp.json();
-    const noticeEl = document.getElementById('restartNoticeText');
-    if (info.is_addon) {
-      document.getElementById('restartBtn').style.display = '';
-      if (noticeEl) {
-        noticeEl.textContent = t(
-          'notice.restart.addon',
-          {},
-          '⚠ Changes saved. Click "Restart App (add-on)" for them to take effect. Then refresh the MCP tool list in your AI client.'
-        );
-      }
-    } else if (info.deployment_mode === 'embedded') {
-      // In-process (custom component) server: the restart endpoint reloads
-      // the server config entry, which reinstalls-if-newer and swaps the
-      // worker onto the freshly installed code.
-      const rbtn = document.getElementById('restartBtn');
-      rbtn.style.display = '';
-      restartTargetEmbedded = true;
-      rbtn.textContent = t('actions.restart_server', {}, 'Restart HA-MCP Server');
-      if (noticeEl) {
-        noticeEl.textContent = t(
-          'notice.restart.embedded',
-          {},
-          '⚠ Changes saved. Click "Restart HA-MCP Server" for them to take effect. Then refresh the MCP tool list in your AI client.'
-        );
-      }
-    } else if (info.is_sidecar) {
-      if (noticeEl) {
-        noticeEl.textContent = t(
-          'notice.restart.sidecar',
-          {},
-          '⚠ Changes saved. Fully quit and reopen your MCP client for them to take effect.'
-        );
-      }
-      document.getElementById('sidecarStopRow').style.display = '';
-    } else if (noticeEl) {
-      // HTTP / Docker / standalone — no button we can wire to a restart,
-      // so describe the action in process terms, then the client-refresh
-      // step (remote connectors cache the tool list, same as add-on mode).
-      noticeEl.textContent = t(
-        'notice.restart.standalone',
-        {},
-        '⚠ Changes saved. Restart the ha-mcp process, then refresh the MCP tool list in your AI client.'
-      );
-    }
-    // Footer — show the running build and the same deployment classification
-    // used by ha_report_issue. The backend keeps embedded and sidecar distinct
-    // because they need different restart behavior; preserve those concise
-    // names here and clarify the less obvious packaging-oriented values.
-    if (info.version) {
-      const fEl = document.getElementById('versionFooterText');
-      const deploymentMode = typeof info.deployment_mode === 'string'
-        ? info.deployment_mode
-        : '';
-      const deploymentLabels = {
-        embedded: 'embedded',
-        sidecar: 'sidecar',
-        addon: t('footer.deployment.addon', {}, 'app/add-on'),
-        docker: t('footer.deployment.docker', {}, 'container/docker'),
-        pyinstaller: t('footer.deployment.pyinstaller', {}, 'standalone binary'),
-        git: t('footer.deployment.git', {}, 'source checkout'),
-        pypi: t('footer.deployment.pypi', {}, 'python package'),
-        unknown: t('footer.deployment.unknown', {}, 'unknown'),
-      };
-      const deploymentLabel = Object.prototype.hasOwnProperty.call(
-        deploymentLabels, deploymentMode
-      ) ? deploymentLabels[deploymentMode] : deploymentMode;
-      const installation = deploymentLabel
-        ? ' · ' + t(
-          'footer.installation',
-          {method: deploymentLabel},
-          'installation: {method}'
-        )
-        : '';
-      if (fEl) fEl.textContent = 'ha-mcp ' + info.version + installation;
-    }
+    _applyRestartChrome(info);
+    _applyVersionFooter(info);
   } catch (e) {
     // A transient /api/settings/info failure must not leave the restart
     // button hidden / the restart notice unset silently — log it so the
