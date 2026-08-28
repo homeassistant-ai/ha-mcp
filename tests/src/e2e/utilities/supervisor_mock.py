@@ -52,7 +52,7 @@ MOCK_SUPERVISOR_TOKEN = "test-supervisor-token"
 MOCK_INSUFFICIENT_ROLE_TOKEN = "test-supervisor-token-low-role"
 
 # The eight Supervisor-managed system services exposed at /<service>/logs.
-# Mirrors SYSTEM_SERVICE_SLUGS in src/ha_mcp/tools/tools_utility.py.
+# Mirrors SYSTEM_SERVICE_SLUGS in src/ha_mcp/tools/log_common.py.
 SYSTEM_SERVICES = frozenset(
     {"supervisor", "host", "core", "dns", "audio", "cli", "multicast", "observer"}
 )

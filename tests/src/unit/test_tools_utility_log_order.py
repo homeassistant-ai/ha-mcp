@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
-from ha_mcp.tools.tools_utility import UtilityTools
+from ha_mcp.client.rest_client import ErrorLogPage, HomeAssistantConnectionError
+from ha_mcp.tools.tools_logs import LogTools
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +35,7 @@ def _no_real_caps_probe():
 
 
 def _call_kwargs(**overrides):
-    """Full keyword set for ``UtilityTools.get_logs`` with sensible defaults."""
+    """Full keyword set for ``LogTools.get_logs`` with sensible defaults."""
     base = {
         "source": "logbook",
         "limit": None,
@@ -76,7 +76,7 @@ class TestLogbookOrder:
 
     @pytest.mark.asyncio
     async def test_newest_is_default_and_reverses_window(self):
-        tools = UtilityTools(self._client(self._entries()))
+        tools = LogTools(self._client(self._entries()))
         result = await tools.get_logs(**_call_kwargs(source="logbook", limit=2))
         data = result["data"]
         assert data["order"] == "newest"
@@ -87,7 +87,7 @@ class TestLogbookOrder:
 
     @pytest.mark.asyncio
     async def test_oldest_returns_chronological_window(self):
-        tools = UtilityTools(self._client(self._entries()))
+        tools = LogTools(self._client(self._entries()))
         result = await tools.get_logs(
             **_call_kwargs(source="logbook", limit=2, order="oldest")
         )
@@ -98,7 +98,7 @@ class TestLogbookOrder:
 
     @pytest.mark.asyncio
     async def test_newest_offset_pages_into_older_entries(self):
-        tools = UtilityTools(self._client(self._entries()))
+        tools = LogTools(self._client(self._entries()))
         result = await tools.get_logs(
             **_call_kwargs(source="logbook", limit=2, offset=2)
         )
@@ -109,21 +109,22 @@ class TestLogbookOrder:
 
     @pytest.mark.asyncio
     async def test_oldest_pagination_hint_carries_order(self):
-        tools = UtilityTools(self._client(self._entries()))
+        tools = LogTools(self._client(self._entries()))
         result = await tools.get_logs(
             **_call_kwargs(source="logbook", limit=2, order="oldest")
         )
-        assert "order=oldest" in result["data"]["pagination_hint"]
+        # Quoted: the hint is meant to be copied back as a call.
+        assert "order='oldest'" in result["data"]["pagination_hint"]
 
     @pytest.mark.asyncio
     async def test_newest_default_hint_omits_order(self):
-        tools = UtilityTools(self._client(self._entries()))
+        tools = LogTools(self._client(self._entries()))
         result = await tools.get_logs(**_call_kwargs(source="logbook", limit=2))
         assert "order=" not in result["data"]["pagination_hint"]
 
     @pytest.mark.asyncio
     async def test_newest_offset_beyond_total_returns_empty(self):
-        tools = UtilityTools(self._client(self._entries()))
+        tools = LogTools(self._client(self._entries()))
         result = await tools.get_logs(
             **_call_kwargs(source="logbook", limit=2, offset=10)
         )
@@ -135,7 +136,7 @@ class TestLogbookOrder:
 
     @pytest.mark.asyncio
     async def test_newest_limit_exceeds_total_returns_all_reversed(self):
-        tools = UtilityTools(self._client(self._entries()))
+        tools = LogTools(self._client(self._entries()))
         result = await tools.get_logs(**_call_kwargs(source="logbook", limit=100))
         data = result["data"]
         # start clamped to 0 via max(end - limit, 0).
@@ -144,7 +145,7 @@ class TestLogbookOrder:
 
     @pytest.mark.asyncio
     async def test_newest_last_page_sets_has_more_false(self):
-        tools = UtilityTools(self._client(self._entries()))
+        tools = LogTools(self._client(self._entries()))
         result = await tools.get_logs(
             **_call_kwargs(source="logbook", limit=2, offset=4)
         )
@@ -163,7 +164,7 @@ class TestLogbookOrder:
             }
             for i in range(5)
         ]
-        tools = UtilityTools(self._client(entries))
+        tools = LogTools(self._client(entries))
         result = await tools.get_logs(
             **_call_kwargs(source="logbook", limit=10, search="match")
         )
@@ -180,7 +181,7 @@ class TestLogbookOrder:
         client = AsyncMock()
         client.get_logbook = AsyncMock(return_value={"unexpected": "shape"})
         client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
-        tools = UtilityTools(client)
+        tools = LogTools(client)
         result = await tools.get_logs(**_call_kwargs(source="logbook", limit=2))
         data = result["data"]
         assert data["order"] == "newest"
@@ -223,14 +224,14 @@ class TestSystemOrder:
 
     @pytest.mark.asyncio
     async def test_newest_sorts_timestamp_descending(self):
-        tools = UtilityTools(self._client())
+        tools = LogTools(self._client())
         result = await tools.get_logs(**_call_kwargs(source="system"))
         assert result["order"] == "newest"
         assert [e["timestamp"] for e in result["entries"]] == [300.0, 200.0, 100.0]
 
     @pytest.mark.asyncio
     async def test_oldest_sorts_timestamp_ascending(self):
-        tools = UtilityTools(self._client())
+        tools = LogTools(self._client())
         result = await tools.get_logs(**_call_kwargs(source="system", order="oldest"))
         assert result["order"] == "oldest"
         assert [e["timestamp"] for e in result["entries"]] == [100.0, 200.0, 300.0]
@@ -251,7 +252,7 @@ class TestSystemOrder:
                 ],
             }
         )
-        tools = UtilityTools(client)
+        tools = LogTools(client)
         result = await tools.get_logs(**_call_kwargs(source="system"))
         assert result["order"] == "newest"
         assert result["returned_entries"] == 4
@@ -266,8 +267,10 @@ class TestRawTextOrder:
     @pytest.mark.asyncio
     async def test_error_log_newest_reverses_recent_window(self):
         client = AsyncMock()
-        client.get_error_log = AsyncMock(return_value="l0\nl1\nl2\nl3")
-        tools = UtilityTools(client)
+        client.get_error_log = AsyncMock(
+            return_value=ErrorLogPage(text="l0\nl1\nl2\nl3", has_more=False)
+        )
+        tools = LogTools(client)
         result = await tools.get_logs(**_call_kwargs(source="error_log", limit=2))
         assert result["order"] == "newest"
         assert result["log"] == "l3\nl2"  # newest line first
@@ -277,8 +280,10 @@ class TestRawTextOrder:
     @pytest.mark.asyncio
     async def test_error_log_oldest_keeps_chronological_window(self):
         client = AsyncMock()
-        client.get_error_log = AsyncMock(return_value="l0\nl1\nl2\nl3")
-        tools = UtilityTools(client)
+        client.get_error_log = AsyncMock(
+            return_value=ErrorLogPage(text="l0\nl1\nl2\nl3", has_more=False)
+        )
+        tools = LogTools(client)
         result = await tools.get_logs(
             **_call_kwargs(source="error_log", limit=2, order="oldest")
         )
@@ -289,7 +294,7 @@ class TestRawTextOrder:
     async def test_supervisor_newest_reverses(self):
         client = AsyncMock()
         client.get_addon_logs = AsyncMock(return_value="a\nb\nc\nd")
-        tools = UtilityTools(client)
+        tools = LogTools(client)
         result = await tools.get_logs(
             **_call_kwargs(source="supervisor", slug="core_x", limit=2)
         )
@@ -301,7 +306,7 @@ class TestRawTextOrder:
     async def test_system_service_oldest_keeps_chronological(self):
         client = AsyncMock()
         client._get_system_service_logs = AsyncMock(return_value="a\nb\nc\nd")
-        tools = UtilityTools(client)
+        tools = LogTools(client)
         result = await tools.get_logs(
             **_call_kwargs(
                 source="system_service", slug="supervisor", limit=2, order="oldest"
@@ -327,13 +332,13 @@ class TestLoggerOrderWarning:
 
     @pytest.mark.asyncio
     async def test_non_default_order_warns_and_is_ignored(self):
-        tools = UtilityTools(self._client())
+        tools = LogTools(self._client())
         result = await tools.get_logs(**_call_kwargs(source="logger", order="oldest"))
         assert "order" not in result  # logger response has no order field
         assert any("order" in w for w in result.get("warnings", []))
 
     @pytest.mark.asyncio
     async def test_default_order_emits_no_warning(self):
-        tools = UtilityTools(self._client())
+        tools = LogTools(self._client())
         result = await tools.get_logs(**_call_kwargs(source="logger"))
         assert "warnings" not in result

@@ -6,16 +6,28 @@ thousands of times, so the raw form can exhaust an agent's context while
 conveying very little. This module collapses it into counted, deduplicated,
 component-grouped issues.
 
-Split out of ``tools_utility`` under AGENTS.md § Module Size: the parsing is
-self-contained and shares nothing with the tool plumbing but its input string.
+It also owns the window/pagination unit the two response paths share: how
+large a window one fetch asks for, and how the response describes where that
+window sat and how to read further back.
+
+Split out of ``tools_utility`` under AGENTS.md § Module Size: neither the
+parsing nor the window arithmetic touches the client or the tool plumbing.
 """
 
 import re
-from typing import Any, NamedTuple
+from dataclasses import dataclass
+from typing import Any, Literal, NamedTuple
+
+from ..client.rest_client import MIN_LOG_WINDOW_LINES
+from .log_common import (
+    DEFAULT_LOG_LIMIT,
+    SUPERVISOR_SEARCH_WINDOW_LINES,
+    _coerce_limit,
+)
 
 # Full HA log line, e.g.
 # "2026-05-27 10:15:23.456 ERROR (MainThread) [homeassistant.components.zha] msg"
-# Distinct from `_LOG_LEVEL_RE` in `tools_utility`, which only sniffs the level
+# Distinct from `_LOG_LEVEL_RE` in `log_common`, which only sniffs the level
 # out of a line for the raw path's filter.
 # The thread field is matched lazily instead of as `\([^)]*\)`: since Python 3.10
 # an unnamed thread is called "Thread-1 (target_fn)", so the field itself can
@@ -363,3 +375,162 @@ def _parse_error_log_structured(
             "the filters, not a parse failure."
         ]
     return result
+
+
+# Log window the structured error-log summary reads. Bounded replacement for
+# the unconditional 20,000-line fetch that hung Supervisor-backed installs
+# (#2279). Deliberately conservative and aligned with
+# SUPERVISOR_SEARCH_WINDOW_LINES: structured=True was the exact call that hung,
+# and no timing exists for the reporter's hardware, so the depth is a guess
+# either way — `offset` pages deeper when the summary needs more history.
+STRUCTURED_ERROR_LOG_WINDOW_LINES = 2000
+
+# Appended to the last error-log page. An offset past the start of a journald
+# journal clamps to the oldest entries rather than returning nothing, so the
+# final page can repeat content an earlier one already showed.
+_HISTORY_START_NOTE = (
+    "This window reached the start of the available history; it may overlap an "
+    "earlier page, since an offset past the start clamps to the oldest entries."
+)
+
+
+@dataclass(frozen=True)
+class _ErrorLogWindow:
+    """The log window one ``get_error_log`` fetch consumed.
+
+    ``has_more`` comes from the client, which is the only layer that can
+    establish it (a full journald window proves nothing on its own — see
+    ``_journald_error_log_page``).
+
+    ``offset`` addresses journald ENTRIES on Supervisor-backed installs and
+    text LINES on container/pip ones; the two coincide only while every entry
+    is a single line, which a traceback is not. Paging is therefore exact on
+    container and approximate on journald, where a step derived from line
+    counts can land inside an entry — hence the cap at ``fetch_lines``, which
+    bounds the error to re-reading part of a window rather than skipping past
+    one.
+    """
+
+    offset: int
+    fetch_lines: int
+    raw_line_count: int
+    has_more: bool
+
+    def __post_init__(self) -> None:
+        # Guards the two shapes that make paging non-terminating or
+        # nonsensical. Internal type with a single construction site, so this
+        # can only fire on a code bug, never on caller input.
+        if self.fetch_lines < 1:
+            raise ValueError(f"fetch_lines must be at least 1, got {self.fetch_lines}")
+        if self.offset < 0:
+            raise ValueError(f"offset must not be negative, got {self.offset}")
+
+
+def _error_log_window_lines(
+    limit: int | None,
+    search: str | None,
+    level: str | None,
+    structured: bool,
+) -> int:
+    """Number of raw log lines a single error-log fetch requests.
+
+    Bounded on every path (#2279). The structured summary reads a fixed
+    deep window; the raw path reads the caller's limit, widened to the
+    search window when ``level`` or ``search`` is set, since both filter
+    client-side over the fetched text and need history behind the limit to
+    find matches in (the same widening ``_get_supervisor_log`` applies for
+    ``search``; it has no ``level`` parameter). Floored at the client's
+    minimum window so the recorded size matches the one actually served.
+    """
+    if structured:
+        # `limit` is deliberately not coerced here: it does not apply to the
+        # summary, and validating it would reject limit=0 for a parameter
+        # with no effect. On the raw path it is coerced here AND again in
+        # `_build_raw_error_log` — the same pure validator, called where
+        # each needs the value.
+        return STRUCTURED_ERROR_LOG_WINDOW_LINES
+    effective_limit = _coerce_limit(
+        limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
+    )
+    if search or level:
+        return max(effective_limit, SUPERVISOR_SEARCH_WINDOW_LINES)
+    return max(effective_limit, MIN_LOG_WINDOW_LINES)
+
+
+def _next_page_step(window: _ErrorLogWindow, shown: list[tuple[int, str]]) -> int:
+    """How far back the next page's ``offset`` sits from this one's.
+
+    The window text runs oldest-first, so the oldest line shown sits
+    ``raw_line_count - index`` lines back from the window's newest edge;
+    resuming there is what keeps a filtered read from skipping the matches
+    it did not show. Capped at the window size because on journald the step
+    is spent in ENTRY units, where an uncapped line-derived step could
+    overshoot the window that produced it. Nothing shown means nothing to
+    resume before, so the whole window is consumed.
+    """
+    if not shown:
+        return window.fetch_lines
+    return min(window.raw_line_count - shown[0][0], window.fetch_lines)
+
+
+def _build_error_log_pagination_hint(
+    next_offset: int,
+    limit: int | None,
+    search: str | None,
+    level: str | None,
+    order: Literal["newest", "oldest"],
+    structured: bool,
+    top_n: int | None,
+) -> str:
+    """Build the reproducible next-page call for source='error_log'.
+
+    String values are quoted: the hint is meant to be copied back as a
+    call, and an unquoted ``search=issue 7`` is not one.
+    """
+    parts = ["source='error_log'"]
+    if structured:
+        parts.append("structured=True")
+        if top_n is not None:
+            parts.append(f"top_n={top_n}")
+    else:
+        parts.append(f"limit={limit}")
+        if order != "newest":
+            parts.append(f"order={order!r}")
+    if level:
+        parts.append(f"level={level!r}")
+    if search:
+        parts.append(f"search={search!r}")
+    parts.append(f"offset={next_offset}")
+    return (
+        "Older entries remain behind this window. To read further back, "
+        f"use: ha_get_logs({', '.join(parts)})"
+    )
+
+
+def _attach_error_log_pagination(
+    data: dict[str, Any],
+    window: _ErrorLogWindow,
+    step: int,
+    limit: int | None,
+    search: str | None,
+    level: str | None,
+    order: Literal["newest", "oldest"],
+    structured: bool,
+    top_n: int | None,
+) -> None:
+    """Add the offset/has_more contract to an error-log response in place."""
+    data["offset"] = window.offset
+    data["has_more"] = window.has_more
+    if window.has_more:
+        data["next_offset"] = window.offset + step
+        data["pagination_hint"] = _build_error_log_pagination_hint(
+            window.offset + step,
+            limit,
+            search,
+            level,
+            order,
+            structured,
+            top_n,
+        )
+    elif window.offset and window.raw_line_count:
+        data["note"] = f"{data.get('note', '')} {_HISTORY_START_NOTE}".strip()
