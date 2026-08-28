@@ -766,6 +766,30 @@ class TestInfo:
         assert wsapi._do_info()["timezone"] is None
         assert wsapi._do_info(FakeHass())["timezone"] is None
 
+    def test_tools_services_reflects_service_registry(self):
+        """The additive ``tools_services`` field mirrors the service registry.
+
+        Since 2.1.0 both entry types register the WS surface (#2289), so the
+        server's filesystem/YAML gate reads this field instead of inferring the
+        tools services from ``info`` answering (#2292). Probes the actual
+        registry entry (``read_file``), degrading to None on a hass-less call.
+        """
+
+        class _Services:
+            def __init__(self, present: bool) -> None:
+                self._present = present
+
+            def has_service(self, domain: str, service: str) -> bool:
+                assert domain == wsapi.DOMAIN
+                assert service == "read_file"
+                return self._present
+
+        info_with = wsapi._do_info(FakeHass(services=_Services(True)))
+        assert info_with["tools_services"] is True
+        info_without = wsapi._do_info(FakeHass(services=_Services(False)))
+        assert info_without["tools_services"] is False
+        assert wsapi._do_info()["tools_services"] is None
+
     def test_manifest_version_parity(self):
         """Manifest and COMPONENT_VERSION lockstep, plus the ONE literal pin.
 
