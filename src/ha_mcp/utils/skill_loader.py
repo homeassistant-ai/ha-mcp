@@ -16,8 +16,10 @@ Functions:
   matching markdown section so reactive embeds don't ship 20 KB when only
   one 2 KB section is relevant. A top-level ``#`` anchor or a section
   near EOF will return most of the file — the section runs from the
-  matching heading to the next same/higher-level heading. Silently skips
-  missing files, missing anchors, symlinks, and path-traversal attempts.
+  matching heading to the next same/higher-level heading. Skips missing
+  files, symlinks, and path-traversal attempts silently; a missing ANCHOR
+  is skipped but logged at WARNING, since that means a caller typo or a
+  vendor heading rename rather than an absent optional file.
 * :func:`extract_section` — markdown heading-based slicer used by
   ``resolve_skill_files`` and exposed for callers that already have a file
   body in hand.
@@ -45,13 +47,20 @@ logger = logging.getLogger(__name__)
 _HEADING_LINE_RE = re.compile(r"^(#+)\s+(.+?)\s*$")
 _SLUG_STRIP = re.compile(r"[^\w\s-]")
 # One hyphen per whitespace CHARACTER, not per run. GitHub drops stripped
-# punctuation in place and leaves the spaces that flanked it, so an em-dash
-# heading yields a DOUBLE hyphen: "Config-Entry Data — Blind Spots" becomes
-# "config-entry-data--blind-spots". Collapsing runs (`\s+`) produced a single
-# hyphen, so every anchor a skill author copied out of GitHub's own heading
-# link silently matched nothing — and resolve_skill_files skips misses
-# silently by design, so the agent just got no content back. Two anchors
-# already cited in the bundled SKILL.md were dead this way.
+# punctuation in place and leaves the spaces that flanked it, so ANY heading
+# with punctuation between spaces yields a DOUBLE hyphen — an em dash in
+# "Config-Entry Data — Blind Spots" and an ampersand in "Triggers &
+# Conditions" behave identically. Collapsing runs (`\s+`) produced a single
+# hyphen, so an anchor copied out of GitHub's own heading link matched
+# nothing. Only headings of that shape differ between the two rules; a
+# plain-word heading slugifies the same either way.
+#
+# Two anchors cited in the bundled SKILL.md were dead this way (one em dash,
+# one ampersand). Scope of the damage, precisely: nothing REQUESTED them at
+# runtime — every anchored ref in src/ is one of ten single-hyphen anchors —
+# so no WARNING was emitted (extract_section misses do log, see
+# resolve_skill_files) and no production call returned empty. They were
+# prose citations that would not have resolved if followed.
 _SLUG_SPACES = re.compile(r"\s")
 
 
@@ -168,7 +177,8 @@ def resolve_skill_files(
     keyed by the original request strings. Each on-disk file is read at
     most once regardless of how many sections are requested from it.
 
-    Silently skips missing files, missing anchors, symlinks, and any path
+    Skips missing files, symlinks, and path-traversal attempts
+    silently; a missing anchor is skipped but logged at WARNING.
     that escapes the skill directory. Returns an empty dict when
     ``skills_dir`` is ``None`` (vendor submodule missing), when the named
     skill doesn't exist, or when nothing resolves.

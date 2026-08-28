@@ -832,12 +832,17 @@ class HomeAssistantSmartMCPServer:
             "entity_id over device_id, impact analysis before renaming — see "
             "ha_get_skill_guide."
         ),
-        # ha_manage_backup: 4571 -> 1295 chars, a 72% reduction. All figures
-        # in this map are dedented characters — the size actually advertised
-        # on the wire — measured with BACKUP_HINT=normal, which varies the
-        # full total by ~100 chars.
+        # ha_manage_backup: the full description is 4571 dedented chars at
+        # BACKUP_HINT=normal (4672 strong / 4598 weak) and the lite value is
+        # a little over a quarter of that. No exact pair is quoted here on
+        # purpose — three successive edits left a stale figure in this
+        # comment, so the ratio is pinned by
+        # test_backup_lite_description_stays_substantially_smaller instead,
+        # which measures both sides at test time.
         #
-        # This was the largest remaining full description outside the map.
+        # It was the largest full description in the GATEWAY catalog this was
+        # measured against, not in the repo: ha_eval_template (5834) and
+        # ha_get_system_health (5811) are both larger and both unmapped.
         # The reduction is smaller than pure compression would give because
         # the safety content below is kept inline. The routing matrix STAYS —
         # the `action` parameter's own Field description says "Valid (scope,
@@ -866,18 +871,24 @@ class HomeAssistantSmartMCPServer:
             "(`scope='snapshot'`) and per-entity auto-backups of agent edits "
             "(`scope='edits'`). Pick the scope first — the wrong one routes "
             "through the wrong code path.\n\n"
-            "`scope='snapshot'` actions: `create`, `list`, `restore` "
-            "(**restarts HA**), `delete` (needs `confirm=True`; disabled "
-            "until a human sets `enable_snapshot_delete` — an agent cannot "
-            "enable it. Even then a delete is refused for "
-            "scheduled/automatic backups, for anything younger than "
-            "`snapshot_delete_min_age_days` (default 7), and for the single "
-            "newest snapshot remaining).\n\n"
-            "`scope='edits'` actions: `create`, `list`, `view`, `diff`, "
-            "`restore` (no HA restart), `delete`. Automatic capture on write "
-            "is gated by `enable_auto_backup`, so an empty `list` means "
-            '"nothing saved" OR "the toggle is off" — check it before '
-            "concluding there is nothing to restore.\n\n"
+            "`scope='snapshot'` actions: `create` (slow on a large "
+            "instance — progress heartbeats are sent while waiting, so a "
+            "long wait is not a hang; retrying starts a SECOND backup), "
+            "`list`, `restore` (**restarts HA**), `delete` (needs "
+            "`confirm=True`; disabled until a human sets "
+            "`enable_snapshot_delete` — an agent cannot enable it. Even then "
+            "a delete is refused for scheduled/automatic backups, for "
+            "anything younger than `snapshot_delete_min_age_days` (default "
+            "7; 0 disables the floor), and for the single newest snapshot "
+            "remaining).\n\n"
+            "`scope='edits'` actions: `create` (needs `domain` + "
+            "`entity_id`), `list`, `view`, `diff`, `restore` (takes a fresh "
+            "safety snapshot first; no HA restart), `delete`. Automatic "
+            "capture on write is gated by `enable_auto_backup`, so an empty "
+            '`list` means "nothing saved" OR "the toggle is off" — check it '
+            "before concluding there is nothing to restore. Either way "
+            "`(edits, create)` still works: it bypasses the toggle because "
+            "the request is explicit.\n\n"
             "Use `edits` to undo a recent agent edit to an "
             "automation/script/scene/dashboard/helper; use `snapshot` for "
             "system-wide recovery and before irreversible operations. "
@@ -886,9 +897,9 @@ class HomeAssistantSmartMCPServer:
             "actually contains, and the encryption key a restore needs, see "
             "ha_get_skill_guide (`references/backups.md`)."
         ),
-        # ha_report_issue: 2045 -> 712 chars, a 65% reduction. Same dedented
-        # basis as above; the raw indented docstring is 2351 chars, which is
-        # NOT what gets advertised.
+        # ha_report_issue: the dedented docstring is what gets advertised,
+        # not the raw indented one (2351 chars), and the lite value is about
+        # a third of it. Same reason as above for not quoting a pair.
         #
         # Unlike every other entry here, the deferral target is the tool's
         # OWN RESPONSE, not the skill guide: `instructions` (see
@@ -987,8 +998,10 @@ class HomeAssistantSmartMCPServer:
         startup the full description does.
         """
         # Local import: same lazy-seam pattern as backup_manager's
-        # _normalize_config_for_roundtrip import, and it keeps the tools
-        # package off server.py's import path at module load.
+        # _normalize_config_for_roundtrip import. It does NOT keep the tools
+        # package off the module-load path — server.py already imports
+        # .tools.helpers at module scope — what it avoids is pulling in
+        # tools.backup, which is the actual reason to keep it local.
         from .tools.backup import _get_backup_hint_text
 
         return {"backup_hint_text": _get_backup_hint_text()}

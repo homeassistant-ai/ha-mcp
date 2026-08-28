@@ -49,15 +49,6 @@ _TOOL_RESPONSE_PREFIX = "tool-response:"
 _SELF_CONTAINED = "self-contained"
 _REFERENCE_FILE_RE = re.compile(r"references/[\w.-]+\.md")
 
-# Prose copies of the lite-mapped tool list. Hand-maintained in three
-# places (plus the mapping itself), which is what let ha_search drift out
-# of all three; test_documented_tool_lists_cover_every_mapped_tool is the
-# guard that stops it recurring.
-_DOCUMENTED_TOOL_LISTS = (
-    REPO_ROOT / "docs" / "beta.md",
-    REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales" / "en.json",
-)
-
 
 def _require_vendored_skills() -> Path:
     """Skip cleanly when the submodule isn't initialised.
@@ -325,8 +316,10 @@ class TestLiteDocstringsMappingInvariants:
 
         * skill-path destination → must name ``ha_get_skill_guide``, the
           tool that serves it.
-        * ``tool-response:<field>`` → must name ``<field>`` instead, and
-          must NOT send the reader to the skill guide for the content.
+        * ``tool-response:<field>`` → must name ``<field>``. It may still
+          mention ``ha_get_skill_guide``; ``ha_report_issue`` does, to say
+          the guide does NOT cover issue reporting, which saves a compliant
+          agent a pointless call. Only the field name is required here.
         * ``self-contained`` → must carry NO pointer at all. An entry that
           defers nothing cannot be allowed to quietly re-acquire a
           ``ha_get_skill_guide`` pointer or name a reference file, because
@@ -582,51 +575,160 @@ class TestBackupHintInterpolation:
         assert not unknown, f"Placeholders with no resolver: {unknown}"
 
 
+class TestBackupLiteDescriptionSize:
+    """The claim the comments used to make as a number, made as a test.
+
+    An exact "4571 -> 1295, 72%" pair went stale across three successive
+    edits of the lite text, twice unnoticed. A ratio measured at test time
+    cannot: it fails if someone re-inflates the lite value toward the full
+    one, and it does not need touching when the wording changes.
+
+    ``ha_manage_backup``'s advertised text is the ``description=`` f-string
+    built in ``register_backup_tools()``, not a docstring (``__doc__`` is 73
+    chars), so the full side is measured by extracting that template and
+    substituting the hint the same way registration does.
+    """
+
+    def _full_description(self, hint_level: str, monkeypatch) -> str:
+        monkeypatch.setenv("BACKUP_HINT", hint_level)
+        from ha_mcp.tools.backup import _get_backup_hint_text
+
+        source = (REPO_ROOT / "src" / "ha_mcp" / "tools" / "backup.py").read_text(
+            encoding="utf-8"
+        )
+        opener = 'manage_backup_description = f"""'
+        start = source.index(opener) + len(opener)
+        template = source[start : source.index('"""', start)]
+        return template.replace("{backup_hint_text}", _get_backup_hint_text())
+
+    @pytest.mark.parametrize("hint_level", ["strong", "normal", "weak"])
+    def test_backup_lite_description_stays_substantially_smaller(
+        self, hint_level: str, monkeypatch
+    ) -> None:
+        from ha_mcp.server import HomeAssistantSmartMCPServer
+
+        full = self._full_description(hint_level, monkeypatch)
+        lite = HomeAssistantSmartMCPServer._resolve_lite_docstrings()[
+            "ha_manage_backup"
+        ]
+        assert len(lite) < 0.45 * len(full), (
+            f"[BACKUP_HINT={hint_level}] lite is {len(lite)} chars against a "
+            f"full {len(full)} ({100 * len(lite) / len(full):.0f}%) — the "
+            "entry is meant to be a fraction of the full description, and "
+            "the whole point of mapping it was catalog size"
+        )
+        # And it must not be trimmed back to uselessness: the safety content
+        # is why this entry accepts ~70% instead of ~82%.
+        assert len(lite) > 900, (
+            f"[BACKUP_HINT={hint_level}] lite is only {len(lite)} chars — "
+            "check the irreversibility markers below are still inline"
+        )
+
+    @pytest.mark.parametrize(
+        "marker",
+        [
+            "confirm=True",
+            "enable_snapshot_delete",
+            "snapshot_delete_min_age_days",
+            "restarts HA",
+            "enable_auto_backup",
+            "safety snapshot",
+            "heartbeats",
+        ],
+    )
+    def test_backup_lite_description_keeps_its_safety_content(
+        self, marker: str
+    ) -> None:
+        """Every irreversibility marker and no-fallback diagnostic, pinned.
+
+        ``destructiveHint`` is set on this tool and the stated reason for
+        accepting a smaller reduction is that these stay inline — but every
+        other guard in this file passed with these sentences deleted, which
+        is exactly the regression the review caught twice.
+        """
+        from ha_mcp.server import HomeAssistantSmartMCPServer
+
+        lite = HomeAssistantSmartMCPServer._resolve_lite_docstrings()[
+            "ha_manage_backup"
+        ]
+        assert marker in lite, (
+            f"{marker!r} dropped from the ha_manage_backup lite description; "
+            "it has no fallback in the skill pack or the input schema"
+        )
+
+
 class TestDocumentedToolLists:
     """The mapped-tool list is hand-copied into docs and the settings UI."""
 
     def test_documented_tool_lists_cover_every_mapped_tool(self) -> None:
-        """Every mapped tool must be named in beta.md and en.json.
+        """Every mapped tool must be named in each documented list.
 
-        ``ha_search`` had been in the mapping while all three prose copies
-        omitted it. Nothing derived the lists from
-        ``_LITE_DOCSTRINGS.keys()`` and nothing cross-checked them, so the
-        drift was invisible.
+        Three regions, checked independently rather than as one blob:
+        ``beta.md``'s beta-tools row, ``beta.md``'s
+        ``### enable_lite_docstrings`` summary sentence, and the ``en.json``
+        help string.
+
+        The previous version matched over the WHOLE of ``beta.md``, which
+        made it ineffective: ``ha_config_get_dashboard`` and
+        ``ha_config_set_dashboard`` also appear in the dashboard-screenshot
+        row, so both lite lists could be stripped of them and this still
+        passed — verified by mutation. A companion test sentinelled one tool
+        at count >= 2, which a 16th tool added to only one passage also
+        slipped past. ``beta.md`` meanwhile *claimed* the guarantee neither
+        delivered, and this PR exists partly because ``ha_search`` drifted
+        out of all three lists unnoticed.
+
+        Names are matched in their backticked form in Markdown and on word
+        boundaries in JSON, so ``ha_search`` is not satisfied by
+        ``ha_search_tools``.
         """
         from ha_mcp.server import HomeAssistantSmartMCPServer
 
         mapped = sorted(HomeAssistantSmartMCPServer._LITE_DOCSTRINGS)
-        failures: list[str] = []
+        beta = (REPO_ROOT / "docs" / "beta.md").read_text(encoding="utf-8")
 
-        for path in _DOCUMENTED_TOOL_LISTS:
-            text = path.read_text(encoding="utf-8")
-            if path.suffix == ".json":
-                text = json.loads(text)["messages"][
-                    "features.enable_lite_docstrings.help"
+        # Region 1: the beta-tools table row (the env-var string is unique to
+        # it). Region 2: the summary sentence under the section heading.
+        rows = [ln for ln in beta.splitlines() if "ENABLE_LITE_DOCSTRINGS=true" in ln]
+        assert len(rows) == 1, (
+            f"expected exactly one beta-tools row for the flag, found {len(rows)}"
+        )
+        summaries = [
+            ln
+            for ln in beta.splitlines()
+            if ln.startswith("Replaces the docstrings on")
+        ]
+        assert len(summaries) == 1, (
+            "expected exactly one 'Replaces the docstrings on ...' summary "
+            f"sentence in docs/beta.md, found {len(summaries)}"
+        )
+
+        help_text = json.loads(
+            (
+                REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales" / "en.json"
+            ).read_text(encoding="utf-8")
+        )["messages"]["features.enable_lite_docstrings.help"]
+
+        regions = {
+            "docs/beta.md (beta-tools row)": ("md", rows[0]),
+            "docs/beta.md (enable_lite_docstrings summary)": ("md", summaries[0]),
+            "en.json (features.enable_lite_docstrings.help)": ("json", help_text),
+        }
+
+        failures: list[str] = []
+        for label, (kind, text) in regions.items():
+            if kind == "md":
+                missing = [n for n in mapped if f"`{n}`" not in text]
+            else:
+                missing = [
+                    n for n in mapped if not re.search(rf"\b{re.escape(n)}\b", text)
                 ]
-            missing = [name for name in mapped if name not in text]
             if missing:
-                failures.append(
-                    f"{path.relative_to(REPO_ROOT)} does not mention: {missing}"
-                )
+                failures.append(f"{label} does not name: {missing}")
 
         assert not failures, (
             "Documented lite-docstring tool lists are out of sync with "
             "_LITE_DOCSTRINGS:\n" + "\n".join(f"  - {f}" for f in failures)
-        )
-
-    def test_beta_md_lists_the_tools_in_both_places(self) -> None:
-        """beta.md names the set twice — the flag table and the section.
-
-        The whole-file check above passes if only ONE of the two copies is
-        complete, so count occurrences of a tool that appears nowhere else
-        in the file.
-        """
-        text = (REPO_ROOT / "docs" / "beta.md").read_text(encoding="utf-8")
-
-        assert text.count("`ha_config_get_scene`") >= 2, (
-            "docs/beta.md should enumerate the mapped tools in both the "
-            "beta-flag table and the enable_lite_docstrings section"
         )
 
 
