@@ -341,6 +341,17 @@ async def _capture_pre_write_snapshot(
                 # None`` because this IS the underlying error being unwrapped;
                 # chaining it back onto the wrapper it came out of would only
                 # print the chain twice (and B904 wants the intent explicit).
+                # ``from None`` also drops the wrapper's own text from the
+                # traceback, so record it here or the only account of WHICH
+                # mandatory capture was re-pointed at the component error is
+                # gone.
+                logger.warning(
+                    "Auto-backup: mandatory capture for '%s' failed (%s) — "
+                    "surfacing the underlying component error instead; the "
+                    "write is blocked either way",
+                    func.__name__,
+                    err,
+                )
                 raise component_error from None
             raise_tool_error(
                 create_error_response(
