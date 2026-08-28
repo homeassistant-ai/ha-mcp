@@ -11,7 +11,7 @@ env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
   # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.8.0"
+  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.8.3"
   # Disable Testcontainers' Ryuk reaper: it has been reported to leave
   # zombie containers on GHA runners (see #366, Ilya0527 2026-05-18).
   # The E2E fixture in tests/src/e2e/conftest.py relies instead on the
@@ -194,7 +194,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.33-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.12.7-python3.13-trixie-slim
     # 5 (was 2): this job now also fetches HA's constraints file over the
     # network. The fetch is budgeted to fail fast (3 x 10s + short backoff)
     # so its own distinct exit code is always reachable, and the headroom
@@ -305,7 +305,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.33-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.12.7-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:
@@ -354,7 +354,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.33-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.12.7-python3.13-trixie-slim
     timeout-minutes: 2
 
     steps:
@@ -373,7 +373,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.33-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.12.7-python3.13-trixie-slim
     timeout-minutes: 5
 
     steps:
@@ -396,7 +396,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.11.33-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.12.7-python3.13-trixie-slim
     # Bumped 5 → 8 for the issue #2027 regression tests, which spawn real
     # subprocesses — including a full stdio server session — costing tens
     # of seconds on a slow runner.
