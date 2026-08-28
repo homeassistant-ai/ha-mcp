@@ -384,22 +384,65 @@ def _assert_only_yaml_scene_degradation(data: dict) -> None:
         for part in (data.get("partial_reason") or "").split(" ; ")
         if part.strip()
     ]
-    # Two fragments are structural classifications rather than degradations
-    # gone wrong: the YAML-defined 404 gap, and the deliberately informational
-    # integration-managed note (an idless YAML scene has no registry
-    # unique_id, so the legacy walk classifies it integration-managed and
-    # scores it by attribute — its match status is KNOWN, just config-less;
-    # see _apply_scene_partial_flag). Anything else — a raised fetch, a
-    # timeout, a registry failure — still fails.
-    offenders = [
-        text
-        for text in fragments
-        if "YAML-defined" not in text and "scored by attribute only" not in text
-    ]
+    offenders = [text for text in fragments if not _is_structural_scene_fragment(text)]
     assert not offenders, (
         "Only the structural YAML-scene fragments are acceptable without a "
         f"component surface; got {offenders}"
     )
+
+
+def _is_structural_scene_fragment(text: str) -> bool:
+    """True only for the two structural scene classifications (#2292).
+
+    Anchored on the fragments' distinctive message shapes from
+    ``_apply_scene_partial_flag`` rather than loose substrings — a failed-fetch
+    fragment whose ``e.g.`` sample happens to mention a YAML-defined scene must
+    still be rejected. The failure markers are checked first for exactly that
+    reason: any fragment carrying one is a degradation gone wrong regardless of
+    what else it mentions.
+
+    - YAML-defined gap: "per-id config endpoint returned 404 — these are
+      likely YAML-defined scenes ..."
+    - Informational integration-managed note (an idless YAML scene has no
+      registry unique_id, so the legacy walk classifies it integration-managed
+      and scores it by attribute — match status KNOWN, just config-less):
+      "... scored by attribute only (no per-id fetch)."
+    """
+    failure_markers = (
+        "fetch raised",
+        "timed out",
+        "registry",
+        "not scanned (per-id fetch",
+    )
+    if any(marker in text for marker in failure_markers):
+        return False
+    return (
+        "per-id config endpoint returned 404" in text and "YAML-defined scenes" in text
+    ) or text.rstrip().endswith("scored by attribute only (no per-id fetch).")
+
+
+def test_structural_scene_fragment_matcher_rejects_failures():
+    """Negative cases for the matcher above: a failure fragment whose sample
+    mentions a YAML-defined scene, a timeout, and a registry fallback must all
+    be rejected; the two genuine structural shapes must pass."""
+    rejected = [
+        "1 scene(s) not scanned (per-id fetch raised a non-404 error; e.g. "
+        "HTTP 500 while reading YAML-defined scenes) — their match status is "
+        "unknown; this result is not exhaustive.",
+        "2 scene(s) not scanned (per-id fetch timed out after 8.0s while 5 "
+        "fetches ran concurrently ...) — their match status is unknown",
+        "entity-registry augmentation failed; attempting all scenes",
+        "unrelated warning that mentions scored by attribute only in passing",
+    ]
+    accepted = [
+        "1 scene(s) not scanned (per-id config endpoint returned 404 — these "
+        "are likely YAML-defined scenes that the /config/scene/config REST "
+        "endpoint does not expose) — their match status is unknown; this "
+        "result is not exhaustive.",
+        "1 integration-managed scenes are scored by attribute only (no per-id fetch).",
+    ]
+    assert not [t for t in rejected if _is_structural_scene_fragment(t)]
+    assert all(_is_structural_scene_fragment(t) for t in accepted)
 
 
 @pytest.mark.asyncio
