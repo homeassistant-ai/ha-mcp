@@ -425,20 +425,32 @@ def test_structural_scene_fragment_matcher_rejects_failures():
     """Negative cases for the matcher above: a failure fragment whose sample
     mentions a YAML-defined scene, a timeout, and a registry fallback must all
     be rejected; the two genuine structural shapes must pass."""
-    rejected = [
+    # Explicit + concatenation, not adjacent literals: CodeQL's
+    # implicit-string-concatenation-in-list check reads the latter as a
+    # possible missing comma.
+    spoofing_failed_fetch = (
         "1 scene(s) not scanned (per-id fetch raised a non-404 error; e.g. "
-        "HTTP 500 while reading YAML-defined scenes) — their match status is "
-        "unknown; this result is not exhaustive.",
+        + "HTTP 500 while reading YAML-defined scenes) — their match status "
+        + "is unknown; this result is not exhaustive."
+    )
+    timeout_fragment = (
         "2 scene(s) not scanned (per-id fetch timed out after 8.0s while 5 "
-        "fetches ran concurrently ...) — their match status is unknown",
+        + "fetches ran concurrently ...) — their match status is unknown"
+    )
+    yaml_structural = (
+        "1 scene(s) not scanned (per-id config endpoint returned 404 — these "
+        + "are likely YAML-defined scenes that the /config/scene/config REST "
+        + "endpoint does not expose) — their match status is unknown; this "
+        + "result is not exhaustive."
+    )
+    rejected = [
+        spoofing_failed_fetch,
+        timeout_fragment,
         "entity-registry augmentation failed; attempting all scenes",
         "unrelated warning that mentions scored by attribute only in passing",
     ]
     accepted = [
-        "1 scene(s) not scanned (per-id config endpoint returned 404 — these "
-        "are likely YAML-defined scenes that the /config/scene/config REST "
-        "endpoint does not expose) — their match status is unknown; this "
-        "result is not exhaustive.",
+        yaml_structural,
         "1 integration-managed scenes are scored by attribute only (no per-id fetch).",
     ]
     assert not [t for t in rejected if _is_structural_scene_fragment(t)]
