@@ -84,6 +84,18 @@ function buildFetchStub(fetchMap, fetches) {
       // route get a loud, predictable failure mode.
       entry = { status: 404, body: "" };
     }
+    // Method-keyed routes: { byMethod: { GET: ..., POST: ... } }. Opt-in,
+    // and the reason it exists is that GET and POST share a URL on
+    // /api/settings/features — so a test that wants "the POST fails" had to
+    // hand-count how many times init GETs that endpoint and put its entry
+    // in that slot. Any change to init's read count then slid the failure
+    // onto a different call and the test kept passing while exercising a
+    // different path. Keyed by method, the counters are independent and the
+    // test says what it means.
+    if (entry.byMethod) {
+      entry = entry.byMethod[method] ?? entry.byMethod.default ?? entry;
+      matchedPattern = matchedPattern + "|" + method;
+    }
     // Sequenced responses: each call advances the index, the last entry
     // sticks after exhaustion (matches "addon comes back online and
     // stays online" — the shape these probe loops need).

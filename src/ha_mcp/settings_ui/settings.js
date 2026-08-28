@@ -2505,10 +2505,20 @@ function renderAdvancedSubRows(parentEl, section, cssClass, lockedByGate) {
   });
 }
 
-// Returns true only when the server confirmed the save (HTTP ok), false
-// on any network/HTTP failure. Callers that need to revert UI state on a
-// failed save (the toggle handlers) branch on this; the additive return
-// doesn't affect callers that ignore it.
+// Three-valued, because "did not succeed" and "did not happen" are not the
+// same thing and the toggle handlers have to tell them apart:
+//
+//   parsed body (truthy) - the server confirmed the save. Carries `applied`
+//                          (what it persisted) and `restart_required`.
+//   false                - the server answered and refused. The previous
+//                          value is confirmed; reverting the UI is correct.
+//   null                 - AMBIGUOUS. No usable answer came back, so the
+//                          write may or may not have landed. Callers must
+//                          re-read before asserting which value the server
+//                          holds.
+//
+// `!saved` still covers both failure cases for callers that only care
+// whether it succeeded.
 async function saveFeatureFlag(fieldName, value) {
   updateStatus(t('status.saving_server_setting', {}, 'Saving server setting...'));
   let resp;
@@ -2542,6 +2552,23 @@ async function saveFeatureFlag(fieldName, value) {
     let msg = t('errors.save_failed_http', {status: resp.status}, `Save failed (HTTP ${resp.status})`);
     if (data?.error?.message) msg = t('errors.save_failed_detail', {message: data.error.message}, 'Save failed: ' + data.error.message);
     updateStatus(msg, false, true);
+    // Not every error response means the write didn't happen. In app
+    // (add-on) mode the save goes through the supervisor, and
+    // _supervisor.py catches EVERY httpx.HTTPError - read timeouts
+    // included - into _SupervisorOptionsError.transport(), which hardcodes
+    // 502 and maps to CONNECTION_FAILED. A read timeout means the POST
+    // reached the supervisor and the RESPONSE was lost, so
+    // /addons/self/options can be written while we answer 502. A bodyless
+    // 502/504 is ingress doing the same in front of us: `data` stays null,
+    // because the `resp.ok` guard above only supplies the fallback body on
+    // success. Both are ambiguous in exactly the way a rejected fetch is.
+    //
+    // File mode stays unambiguous - every failure path in
+    // _write_feature_flag_overrides_file returns before or from the atomic
+    // write - and a supervisor validation refusal keeps its real status
+    // code, so it lands as `false` and still reverts.
+    if (data?.error?.code === 'CONNECTION_FAILED') return null;
+    if (!data && (resp.status === 502 || resp.status === 504)) return null;
     return false;
   }
   // Unified restart flow — save persists the change but does NOT fire
@@ -3619,6 +3646,12 @@ document.getElementById('policy-master-toggle').addEventListener('change', async
       e.target.checked = policyState.enabled;
       msg = t('status.saved_restart', {}, 'Saved. Restart required.');
       ok = true;
+      // Both save branches return restart_required unconditionally and
+      // these flags gate tool registration at startup, so the banner has
+      // to be armed here too. updateStatus(msg, true) only toasts, and
+      // that auto-dismisses in 4s - without this the switch shows the new
+      // value while the running server still enforces the old one.
+      markRestartRequired();
     } else {
       // Neither value confirmed — say so rather than claiming either.
       msg = t('policies.global.unknown', {},
@@ -3684,6 +3717,12 @@ document.getElementById('policy-manage-tool-toggle').addEventListener('change', 
       e.target.checked = policyState.manageToolEnabled;
       msg = t('status.saved_restart', {}, 'Saved. Restart required.');
       ok = true;
+      // Both save branches return restart_required unconditionally and
+      // these flags gate tool registration at startup, so the banner has
+      // to be armed here too. updateStatus(msg, true) only toasts, and
+      // that auto-dismisses in 4s - without this the switch shows the new
+      // value while the running server still enforces the old one.
+      markRestartRequired();
     } else {
       msg = t('policies.global.unknown', {},
         'Could not read server settings. The two switches below are shown as unknown');
@@ -3742,6 +3781,12 @@ document.getElementById('read-only-mode-toggle').addEventListener('change', asyn
       e.target.checked = readOnlyState.enabled;
       msg = t('status.saved_restart', {}, 'Saved. Restart required.');
       ok = true;
+      // Both save branches return restart_required unconditionally and
+      // these flags gate tool registration at startup, so the banner has
+      // to be armed here too. updateStatus(msg, true) only toasts, and
+      // that auto-dismisses in 4s - without this the switch shows the new
+      // value while the running server still enforces the old one.
+      markRestartRequired();
     } else {
       msg = t('tools.read_only.unknown', {},
         'Could not read server settings. Read Only Mode status unknown');
