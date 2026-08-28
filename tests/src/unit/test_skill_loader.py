@@ -302,7 +302,13 @@ def test_extract_section_matches_ampersand_double_hyphen_anchor() -> None:
     )
 
 
-_ANCHOR_CITATION_RE = re.compile(r"[\w./-]+\.md#[A-Za-z0-9_-]+")
+# Group 1 is the citation; the prefix class keeps URL fragments out. Every
+# character inside "https://host/path.md#a" is \w, ".", "/" or ":", so no
+# substring of an external link can follow line-start, whitespace, "(", "["
+# or a backtick — while prose, backticked and markdown-link citations all do.
+_ANCHOR_CITATION_RE = re.compile(
+    r"(?:^|[\s(\[`])([\w./-]+\.md#[A-Za-z0-9_-]+)", re.MULTILINE
+)
 
 
 def _vendored_anchor_citations() -> list[str]:
@@ -318,7 +324,7 @@ def _vendored_anchor_citations() -> list[str]:
     citations: set[tuple[str, str]] = set()
     for md in sorted(skill.rglob("*.md")):
         for match in _ANCHOR_CITATION_RE.finditer(md.read_text(encoding="utf-8")):
-            citations.add((str(md.relative_to(skill)), match.group(0)))
+            citations.add((str(md.relative_to(skill)), match.group(1)))
     return [f"{citing} -> {cite}" for citing, cite in sorted(citations)]
 
 
