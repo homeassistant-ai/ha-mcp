@@ -164,20 +164,24 @@ configuration:
       quelle que soit sa valeur ici.
   enable_lite_docstrings:
     name: Activer les docstrings allégées des outils (bêta)
-    description: 'Fonctionnalité bêta. Remplace les docstrings d''une poignée d''outils
-      ha-mcp lourds (automatisations, scripts, scènes, assistants, tableaux de bord,
-      ha_call_service, ha_config_set_yaml) par des variantes plus courtes qui reportent
-      les détails du schéma et des exemples à l''outil ha_get_skill_guide (ou sa ressource
-      skill://). ATTENTION : cela réduit l''utilisation de tokens inactifs, mais peut
-      dégrader les performances du LLM — les descriptions réduites comptent sur le
-      LLM pour appeler réellement l''outil de compétence ou lire la ressource de compétence
-      pour les détails, ce qui n''est pas garanti (certains modèles sautent l''appel
-      d''outil supplémentaire et se retrouvent avec moins de conseils qu''avant).
-      Idéalement associé à un client qui prend en charge les ressources MCP ou à enable_tool_search.
-      Nécessite un redémarrage pour prendre effet. REQUIERT que le bouton principal
-      « Activer les fonctionnalités bêta » ci-dessus (et dans l''interface Web) soit
-      activé — sinon ce sous-drapeau est ignoré à l''exécution indépendamment de sa
-      valeur ici.'
+    description: 'Fonctionnalité bêta. Remplace les docstrings de 15 outils ha-mcp
+      lourds (ha_config_get_automation, ha_config_set_automation, ha_config_get_script,
+      ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers,
+      ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service,
+      ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) par des variantes
+      plus courtes qui reportent les détails des schémas et des exemples vers l''outil
+      ha_get_skill_guide (ou sa ressource skill://). Une exception : ha_report_issue
+      se réfère plutôt au champ d''instructions de sa propre réponse. Le réglage de
+      l''indice de sauvegarde (Backup-hint) s''applique toujours en mode léger. AVERTISSEMENT
+      : cela réduit l''utilisation des jetons au repos, mais peut dégrader les performances
+      du LLM — les descriptions réduites reposent sur le fait que le LLM appelle effectivement
+      l''outil de compétence ou lit la ressource de compétence pour obtenir les détails,
+      ce qui n''est pas garanti (certains modèles omettront l''appel d''outil supplémentaire
+      et se retrouveront avec moins de conseils qu''avant). Idéalement associé à un
+      client prenant en charge les ressources MCP ou avec enable_tool_search. Nécessite
+      un redémarrage pour prendre effet. NÉCESSITE que l''option principale "Enable
+      beta features" ci-dessus (et dans l''interface web) soit activée — sinon, ce
+      sous-indicateur est ignoré à l''exécution quelle que soit sa valeur ici.'
   enable_mandatory_bps:
     name: Attacher les compétences de bonnes pratiques aux écritures
     description: 'Interrupteur principal pour la fonction de livraison de contenu

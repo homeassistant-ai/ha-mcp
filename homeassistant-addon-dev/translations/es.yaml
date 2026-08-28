@@ -165,19 +165,24 @@ configuration:
       de ejecución independientemente de su valor aquí.
   enable_lite_docstrings:
     name: Activar descripciones de herramientas reducidas (beta)
-    description: 'Función beta. Sustituye las descripciones de unas pocas herramientas
-      pesadas de ha-mcp (automatizaciones, scripts, escenas, auxiliares, paneles,
-      ha_call_service, ha_config_set_yaml) por variantes más cortas que delegan el
-      detalle de esquemas y ejemplos en la herramienta ha_get_skill_guide (o en su
-      recurso skill://). ADVERTENCIA: esto reduce el uso de tokens en reposo, pero
-      puede degradar el rendimiento del LLM: las descripciones recortadas dependen
-      de que el LLM llame realmente a la herramienta de skills o lea el recurso para
-      obtener el detalle, y eso no está garantizado (algunos modelos se saltan la
-      llamada adicional y acaban con menos orientación que antes). Va mejor con un
-      cliente compatible con recursos MCP o junto con enable_tool_search. Requiere
-      reiniciar para que surta efecto. REQUIERE que la opción principal "Activar las
-      funciones beta" de arriba (y en la interfaz web) esté activada; de lo contrario,
-      este subindicador se ignora en tiempo de ejecución sea cual sea su valor aquí.'
+    description: 'Función beta. Reemplaza las cadenas de documentación en 15 herramientas
+      pesadas de ha-mcp (ha_config_get_automation, ha_config_set_automation, ha_config_get_script,
+      ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers,
+      ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service,
+      ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) con variantes
+      más cortas que delegan los detalles de esquemas y ejemplos a la herramienta
+      ha_get_skill_guide (o su recurso skill://). Una excepción: ha_report_issue delega
+      al campo instructions de su propia respuesta en su lugar. El ajuste de la opción
+      Backup-hint sigue funcionando en modo lite. ADVERTENCIA: esto reduce el uso
+      de tokens en reposo, pero puede disminuir el rendimiento del LLM; las descripciones
+      recortadas dependen de que el LLM realmente llame a la herramienta de habilidades
+      o lea el recurso de habilidades para obtener detalles, lo cual no está garantizado
+      (algunos modelos omitirán la llamada adicional a la herramienta y terminarán
+      con menos orientación que antes). Se combina mejor con un cliente que admita
+      recursos MCP o con enable_tool_search. Requiere reiniciar para surtir efecto.
+      REQUIRES el interruptor maestro "Enable beta features" de arriba (y en la interfaz
+      web) activado; de lo contrario, esta subopción se ignorará en tiempo de ejecución
+      independientemente de su valor aquí.'
   enable_mandatory_bps:
     name: Adjuntar skills de buenas prácticas en las escrituras
     description: 'Interruptor principal de la entrega de contenido de skills en las

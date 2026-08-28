@@ -146,18 +146,23 @@ configuration:
       dum rultempo sendepende de sia valoro ĉi tie.
   enable_lite_docstrings:
     name: Ebligi malpezajn ilajn dokumentŝnurojn (beta)
-    description: 'Beta-funkcio. Anstataŭigas la dokumentŝnurojn de kelkaj pezaj ha-mcp-iloj
-      (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml)
-      per pli mallongaj variantoj, kiuj prokrastas skemon kaj ekzemplajn detalojn
-      al la ilo ha_get_skill_guide (aŭ ĝia skill://-rimedo). AVERTO: ĉi tio reduktas
-      neaktivan ĵeton-uzon, sed povas malbonigi LLM-rendimenton — la tonditaj priskriboj
-      dependas de la LLM efektive vokanta la kapablan ilon aŭ leganta la kapablan
-      rimedon por detaloj, kio ne estas garantiita (iuj modeloj preterlasos la ekstran
-      ilvokon kaj finos kun malpli da gvidado ol ili havis antaŭe). Plej bone parigita
-      kun kliento, kiu subtenas MCP-rimedojn aŭ kun enable_tool_search. Postulas restartigon
-      por ekvalidi. POSTULAS ke la ĉefa ŝaltilo "Enable beta features" supre (kaj
-      en la reta UI) estu ŝaltita — alie ĉi tiu sub-flago estas ignorita dum rultempo
-      sendepende de ĝia valoro ĉi tie.'
+    description: 'Beta-funkcio. Anstataŭigas la dokumentajn signovicojn ĉe 15 pezaj
+      ha-mcp-iloj (ha_config_get_automation, ha_config_set_automation, ha_config_get_script,
+      ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers,
+      ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service,
+      ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) per pli mallongaj
+      variantoj, kiuj prokrastas la detalojn de skemo kaj ekzemplo al la ilo ha_get_skill_guide
+      (aŭ ĝia risurco skill://). Unu escepto: ha_report_issue prokrastas anstataŭe
+      al la instrukcia kampo de sia propra respondo. Agordi la konservan konsilon
+      (Backup-hint) ankoraŭ validas en malpeza reĝimo. ATENTO: ĉi tio malpliigas la
+      uzadon de neaktivaj signetoj (tokens), sed povas malbonigi la LLM-efikecon —
+      la fortonĉitaj priskriboj dependas de tio, ke la LLM fakte vokas la lertan ilon
+      aŭ legas la lertan risurcon por detaloj, kio ne estas garantiita (kelkaj modeloj
+      preterlasos la ekstran ilvokon kaj finos kun malpli da gvidado ol antaŭe). Plej
+      bone uzata kune kun kliento kiu subtenas MCP-risurcojn aŭ kun enable_tool_search.
+      Postulas restartigon por ekvalidi. POSTULAS, ke la ĉefa ŝaltilo "Enable beta
+      features" supre (kaj en la reta interfaco) estu enŝaltita — alie ĉi tiu sub-flago
+      estas ignorata dum rulado sendepende de sia valoro ĉi tie.'
   enable_mandatory_bps:
     name: Aligi plejbonajn praktikajn kapablojn ĉe skriboj
     description: 'Majstra ŝaltilo por la funkcio de liverado de enhavo de skrib-ila

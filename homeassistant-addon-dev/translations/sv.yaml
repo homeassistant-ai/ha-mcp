@@ -141,18 +141,22 @@ configuration:
       är på – annars ignoreras denna underflagga vid körning oavsett dess värde här.
   enable_lite_docstrings:
     name: Aktivera lätta verktygsdocstrings (beta)
-    description: 'Betafunktion. Ersätter docstrings på ett fåtal tunga ha-mcp-verktyg
-      (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml)
-      med kortare varianter som skjuter upp schema- och exempeldetaljer till verktyget
-      ha_get_skill_guide (eller dess skill://-resurs). VARNING: detta minskar oanvänd
-      tokenanvändning, men kan försämra LLM-prestanda — de trimmade beskrivningarna
-      förlitar sig på att LLM faktiskt anropar skill-verktyget eller läser skill-resursen
-      för detaljer, vilket inte är garanterat (vissa modeller kommer att hoppa över
-      det extra verktygsanropet och sluta med mindre vägledning än de hade tidigare).
-      Passar bäst med en klient som stöder MCP-resurser eller med enable_tool_search.
-      Kräver omstart för att träda i kraft. KRÄVER att huvudbrytaren "Aktivera betafunktioner"
-      ovan (och i webbgränssnittet) är påslagen — annars ignoreras denna underflagga
-      vid körning oavsett dess värde här.'
+    description: 'Betafunktion. Ersätter docstrings på 15 tunga ha-mcp-verktyg (ha_config_get_automation,
+      ha_config_set_automation, ha_config_get_script, ha_config_set_script, ha_config_get_scene,
+      ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard,
+      ha_config_set_dashboard, ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup,
+      ha_report_issue) med kortare varianter som flyttar schema- och exempletaljer
+      till ha_get_skill_guide-verktyget (eller dess skill://-resurs). Ett undantag:
+      ha_report_issue hänvisar till instruktionsfältet i sitt eget svar istället.
+      Justering av säkerhetskopieringsinställningen gäller fortfarande i lättlöst
+      läge. VARNING: detta minskar tokenanvändningen vid inaktivitet, men kan försämra
+      LLM-prestandan — de nedskurna beskrivningarna förlitar sig på att LLM faktiskt
+      anropar färdighetsverktyget eller läser färdighetsresursen för detaljer, vilket
+      inte garanteras (vissa modeller hoppar över det extra verktygsanropet och hamnar
+      med mindre vägledning än tidigare). Passar bäst med en klient som stöder MCP-resurser
+      eller med enable_tool_search. Kräver omstart för att träda i kraft. KRÄVER att
+      masterreglaget "Enable beta features" ovan (och i webbgränssnittet) är aktiverat
+      — annars ignoreras denna underflagga vid körning oavsett dess värde här.'
   enable_mandatory_bps:
     name: Bifoga bästa praxis-färdigheter vid skrivningar
     description: 'Huvudbrytare för funktionen för leverans av skrivverktygsfärdighetsinnehåll

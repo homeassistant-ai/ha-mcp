@@ -148,18 +148,23 @@ configuration:
       bez ohledu na jeho hodnotu zde.
   enable_lite_docstrings:
     name: Povolit zjednodušené docstringy nástrojů (beta)
-    description: 'Beta funkce. Nahrazuje docstringy u několika náročných nástrojů
-      ha-mcp (automations, scripts, scenes, helpers, dashboards, ha_call_service,
-      ha_config_set_yaml) kratšími variantami, které odkládají podrobnosti o schématu
-      a příkladech na nástroj ha_get_skill_guide (nebo jeho skill:// resource). UPOZORNĚNÍ:
-      toto snižuje využití tokenů v nečinnosti, ale může snížit výkon LLM — zkrácené
-      popisy spoléhají na to, že LLM skutečně zavolá nástroj skill nebo přečte skill
-      resource pro podrobnosti, což není zaručeno (některé modely přeskočí dodatečné
-      volání nástroje a skončí s menším vedením, než měly dříve). Nejlépe se kombinuje
-      s klientem, který podporuje MCP resources nebo s enable_tool_search. Vyžaduje
-      restart, aby se projevilo. VYŽADUJE, aby byl hlavní přepínač „Enable beta features“
-      výše (a ve web UI) zapnutý — jinak je tento podřízený příznak za runtime ignorován
-      bez ohledu na jeho hodnotu zde.'
+    description: 'Beta funkce. Nahrazuje dokumentační řetězce u 15 náročných nástrojů
+      ha-mcp (ha_config_get_automation, ha_config_set_automation, ha_config_get_script,
+      ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers,
+      ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service,
+      ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) kratšími variantami,
+      které odsouvají podrobnosti schémat a příkladů na nástroj ha_get_skill_guide
+      (nebo jeho zdroj skill://). Jedna výjimka: ha_report_issue se odkazuje na pole
+      instructions ve své vlastní odpovědi. Ladění nastavení Backup-hint funguje v
+      úsporném režimu (lite mode) i nadále. VAROVÁNÍ: toto snižuje spotřebu tokenů
+      v klidovém stavu, ale může snížit výkon LLM — zkrácené popisy spoléhají na to,
+      že LLM skutečně zavolá nástroj dovedností nebo si přečte zdroj dovedností pro
+      podrobnosti, což není zaručeno (některé modely přeskočí dodatečné volání nástroje
+      a skončí s menší nápovědou než dříve). Nejlépe se používá s klientem, který
+      podporuje zdroje MCP nebo s enable_tool_search. Vyžaduje restart, aby se projevilo.
+      VYŽADUJE, aby hlavní přepínač "Povolit beta funkce" výše (a ve webovém rozhraní)
+      byl zapnutý — jinak bude tento podpříznak za běhu ignorován bez ohledu na jeho
+      hodnotu zde.'
   enable_mandatory_bps:
     name: Připojit dovednosti osvědčených postupů při zápisu
     description: 'Hlavní přepínač pro funkci doručování obsahu dovedností nástrojů
