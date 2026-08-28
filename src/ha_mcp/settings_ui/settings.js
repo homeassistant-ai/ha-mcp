@@ -318,9 +318,18 @@ async function loadPolicyState() {
       readOnlyState.enabledKnown = flagReported(roFlag);
       readOnlyState.flag = roFlag || null;
     } else {
+      // Log it: this handler is now the evidence the ambiguous-save path
+      // branches on, so "why did a security switch go unknown?" has to be
+      // answerable from the console.
+      console.warn(
+        '[ha-mcp] /api/settings/features returned HTTP ' + fresp.status +
+        '; flag switches shown as unknown');
       _clearFlagSwitchState();
     }
-  } catch (_e) {
+  } catch (e) {
+    // A malformed payload lands here as a TypeError, indistinguishable from
+    // a network drop unless we say which we saw.
+    console.warn('[ha-mcp] failed to read feature flags', e);
     _clearFlagSwitchState();
   }
   try {
@@ -2014,7 +2023,7 @@ const FEATURE_META = {
   },
   enable_lite_docstrings: {
     label: "Enable lite tool docstrings (beta)",
-    help: "Beta feature. Replaces the docstrings on a handful of heavy ha-mcp tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). WARNING: this reduces idle token usage, but may degrade LLM performance — the trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
+    help: "Beta feature. Replaces the docstrings on 15 heavy ha-mcp tools (ha_config_get_automation, ha_config_set_automation, ha_config_get_script, ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) with shorter variants that defer schema and example detail to the ha_get_skill_guide tool (or its skill:// resource). One exception: ha_report_issue defers to the instructions field of its own response instead. Tuning the Backup-hint setting still applies in lite mode. WARNING: this reduces idle token usage, but may degrade LLM performance — the trimmed descriptions rely on the LLM actually calling the skill tool or reading the skill resource for detail, which is not guaranteed (some models will skip the extra tool call and end up with less guidance than they had before). Best paired with a client that supports MCP resources or with enable_tool_search. Requires restart to take effect. REQUIRES the master \"Enable beta features\" toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless of its value here.",
   },
   enable_dashboard_screenshot: {
     label: "Enable dashboard screenshot mode (beta)",
@@ -2505,10 +2514,20 @@ function renderAdvancedSubRows(parentEl, section, cssClass, lockedByGate) {
   });
 }
 
-// Returns true only when the server confirmed the save (HTTP ok), false
-// on any network/HTTP failure. Callers that need to revert UI state on a
-// failed save (the toggle handlers) branch on this; the additive return
-// doesn't affect callers that ignore it.
+// Three-valued, because "did not succeed" and "did not happen" are not the
+// same thing and the toggle handlers have to tell them apart:
+//
+//   parsed body (truthy) - the server confirmed the save. Carries `applied`
+//                          (what it persisted) and `restart_required`.
+//   false                - the server answered and refused. The previous
+//                          value is confirmed; reverting the UI is correct.
+//   null                 - AMBIGUOUS. No usable answer came back, so the
+//                          write may or may not have landed. Callers must
+//                          re-read before asserting which value the server
+//                          holds.
+//
+// `!saved` still covers both failure cases for callers that only care
+// whether it succeeded.
 async function saveFeatureFlag(fieldName, value) {
   updateStatus(t('status.saving_server_setting', {}, 'Saving server setting...'));
   let resp;
@@ -2520,7 +2539,14 @@ async function saveFeatureFlag(fieldName, value) {
     });
   } catch (e) {
     updateStatus(t('errors.save_failed_detail', {message: e.message}, 'Save failed: ' + e.message), false, true);
-    return false;
+    // null, not false: the request was never answered, so we do NOT know
+    // whether it landed. `!saved` still holds for callers that only care
+    // about "didn't succeed"; the toggle handlers check for null and
+    // re-read before asserting which value the server has. An `!resp.ok`
+    // below stays `false` — there the server answered, so the previous
+    // value is confirmed and a re-read would only turn a known state
+    // into an unknown one.
+    return null;
   }
   let data = null;
   try { data = await resp.json(); } catch (_e) {
@@ -2535,6 +2561,23 @@ async function saveFeatureFlag(fieldName, value) {
     let msg = t('errors.save_failed_http', {status: resp.status}, `Save failed (HTTP ${resp.status})`);
     if (data?.error?.message) msg = t('errors.save_failed_detail', {message: data.error.message}, 'Save failed: ' + data.error.message);
     updateStatus(msg, false, true);
+    // Not every error response means the write didn't happen. In app
+    // (add-on) mode the save goes through the supervisor, and
+    // _supervisor.py catches EVERY httpx.HTTPError - read timeouts
+    // included - into _SupervisorOptionsError.transport(), which hardcodes
+    // 502 and maps to CONNECTION_FAILED. A read timeout means the POST
+    // reached the supervisor and the RESPONSE was lost, so
+    // /addons/self/options can be written while we answer 502. A bodyless
+    // 502/504 is ingress doing the same in front of us: `data` stays null,
+    // because the `resp.ok` guard above only supplies the fallback body on
+    // success. Both are ambiguous in exactly the way a rejected fetch is.
+    //
+    // File mode stays unambiguous - every failure path in
+    // _write_feature_flag_overrides_file returns before or from the atomic
+    // write - and a supervisor validation refusal keeps its real status
+    // code, so it lands as `false` and still reverts.
+    if (data?.error?.code === 'CONNECTION_FAILED') return null;
+    if (!data && (resp.status === 502 || resp.status === 504)) return null;
     return false;
   }
   // Unified restart flow — save persists the change but does NOT fire
@@ -3574,6 +3617,55 @@ async function policyDecide(token, action) {
   policyLoadPending();
 }
 
+// Shared failed-save handling for the three feature-flag toggles (policy
+// master, policy-editing tool, Read Only Mode). Before this existed the
+// block was ~40 lines duplicated three times, so review items 1 and 2 each
+// cost three edits and a fourth copy would have been easy to miss.
+//
+// `saved === false` is a refusal: the server answered, so the previous value
+// is confirmed and reverting is correct. `null` is ambiguous — the write may
+// have landed with only its response lost — so re-read first and revert only
+// when the readback actually shows the old value.
+//
+// `spec` is {readState, repaint, revertKey, revertText}: readState() returns
+// {value, known} for this toggle's slice of policyState/readOnlyState, and
+// repaint() is the toggle's own painter.
+async function handleFailedFlagSave(checkbox, previous, saved, spec) {
+  if (saved === false) {
+    checkbox.checked = previous;
+    spec.repaint();
+    render();
+    updateStatus(t(spec.revertKey, {}, spec.revertText), false, true);
+    return;
+  }
+  await loadPolicyState();
+  const state = spec.readState();
+  let msg, ok = false;
+  if (state.known && state.value === previous) {
+    checkbox.checked = previous;
+    msg = t(spec.revertKey, {}, spec.revertText);
+  } else if (state.known) {
+    // The write landed; only the response was lost. Leave the switch where
+    // the server actually is, and arm the restart banner — these flags gate
+    // tool registration at startup and the success toast auto-dismisses.
+    checkbox.checked = state.value;
+    msg = t('status.saved_restart', {}, 'Saved. Restart required.');
+    ok = true;
+    markRestartRequired();
+  } else {
+    // Neither value confirmed. Say the thing that is actually true rather
+    // than reusing the global-unknown copy, which talks about "the two
+    // switches below" and reads wrong in a snackbar.
+    msg = t('errors.save_outcome_unknown', {},
+      'Could not confirm the change. It may or may not have been applied — ' +
+      'reload to see what the server has.');
+  }
+  // Paint before the status line so the repaint can't clobber it.
+  spec.repaint();
+  render();
+  updateStatus(msg, ok, !ok);
+}
+
 document.getElementById('policy-save-global-btn').addEventListener('click', saveGlobalSettings);
 
 // Master toggle on this tab mirrors the Server Settings checkbox.
@@ -3583,15 +3675,13 @@ document.getElementById('policy-master-toggle').addEventListener('change', async
   const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
   const saved = await saveFeatureFlag('enable_tool_security_policies', e.target.checked);
   if (!saved) {
-    // Save definitely failed — the server still has the old value.
-    // Revert the checkbox and surface the failure (set the status AFTER
-    // the revert so it isn't clobbered).
-    e.target.checked = previous;
-    updateStatus(t(
-      'policies.errors.master_save',
-      {},
-      'Tool Security Policies change did not save. The server still has the previous value'
-    ), false, true);
+    await handleFailedFlagSave(e.target, previous, saved, {
+      readState: () => ({value: policyState.enabled, known: policyState.enabledKnown}),
+      repaint: paintPolicyGlobalToggles,
+      revertKey: 'policies.errors.master_save',
+      revertText:
+        'Tool Security Policies change did not save. The server still has the previous value',
+    });
     return;
   }
   // Re-read the truth from the server. If that read can't confirm, fall
@@ -3608,6 +3698,9 @@ document.getElementById('policy-master-toggle').addEventListener('change', async
     }
   }
   paintPolicyGlobalToggles();
+  // render() reads policyState for the per-tool security-gate treatment, so
+  // the rows go stale unless it runs after the flag settles.
+  render();
 });
 
 // Policy-editing tool toggle (enable_security_policy_tool) — same
@@ -3618,15 +3711,13 @@ document.getElementById('policy-manage-tool-toggle').addEventListener('change', 
   const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
   const saved = await saveFeatureFlag('enable_security_policy_tool', e.target.checked);
   if (!saved) {
-    // Save definitely failed — the server still has the old value.
-    // Revert the checkbox and surface the failure (set the status AFTER
-    // the revert so it isn't clobbered).
-    e.target.checked = previous;
-    updateStatus(t(
-      'policies.errors.manage_tool_save',
-      {},
-      'Policy-editing tool change did not save. The server still has the previous value'
-    ), false, true);
+    await handleFailedFlagSave(e.target, previous, saved, {
+      readState: () => ({value: policyState.manageToolEnabled, known: policyState.manageToolKnown}),
+      repaint: paintPolicyGlobalToggles,
+      revertKey: 'policies.errors.manage_tool_save',
+      revertText:
+        'Policy-editing tool change did not save. The server still has the previous value',
+    });
     return;
   }
   // Same confirm-then-fall-back order as the master toggle above.
@@ -3639,6 +3730,9 @@ document.getElementById('policy-manage-tool-toggle').addEventListener('change', 
     }
   }
   paintPolicyGlobalToggles();
+  // render() reads policyState for the per-tool security-gate treatment, so
+  // the rows go stale unless it runs after the flag settles.
+  render();
 });
 
 // Read Only Mode toggle (Tools tab, above the search box) — same flag
@@ -3648,17 +3742,13 @@ document.getElementById('read-only-mode-toggle').addEventListener('change', asyn
   const previous = !e.target.checked;  // user just flipped; previous is the OPPOSITE.
   const saved = await saveFeatureFlag('read_only_mode', e.target.checked);
   if (!saved) {
-    // Save definitely failed — the server still has the previous value.
-    // Revert the checkbox and leave readOnlyState.enabled untouched (do
-    // NOT write an unconfirmed value). Set the status AFTER the revert
-    // so the revert's render/sync can't clobber the message.
-    e.target.checked = previous;
-    render();
-    updateStatus(t(
-      'tools.read_only.save_failed',
-      {},
-      'Read Only Mode change did not save. The server still has the previous value'
-    ), false, true);
+    await handleFailedFlagSave(e.target, previous, saved, {
+      readState: () => ({value: readOnlyState.enabled, known: readOnlyState.enabledKnown}),
+      repaint: syncReadOnlyToggle,
+      revertKey: 'tools.read_only.save_failed',
+      revertText:
+        'Read Only Mode change did not save. The server still has the previous value',
+    });
     return;
   }
   // Re-read the truth from the server; if that read couldn't confirm,

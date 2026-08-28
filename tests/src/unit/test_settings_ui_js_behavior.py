@@ -2309,6 +2309,256 @@ def _already_decided_cases() -> list[tuple[str, str]]:
     return [(locale, outcome) for locale in locales for outcome in outcomes]
 
 
+# ---------------------------------------------------------------------------
+# Ambiguous-save handling, across all three feature-flag toggles
+#
+# saveFeatureFlag is three-valued: a parsed body means the server confirmed,
+# `false` means it refused (previous value confirmed, revert), and `null`
+# means no usable answer came back so the write MAY have landed. The last
+# case is the one this table exists for: reverting there puts the switch back
+# to a value the server no longer holds, under a message asserting exactly
+# that.
+#
+# `null` arises three ways, all covered below: a rejected fetch, a
+# CONNECTION_FAILED 502 (app/add-on mode - _supervisor.py folds every
+# httpx.HTTPError, read timeouts included, into a hardcoded 502), and a
+# bodyless 502/504 from ingress.
+#
+# Routes use `byMethod` so the failing response is keyed to the POST rather
+# than to a hand-counted init-GET slot: previously an entry sat in "slot 4"
+# and any change to how often init reads /api/settings/features would have
+# slid it onto a different call, leaving the test green while exercising a
+# different path.
+# ---------------------------------------------------------------------------
+
+_TOGGLES = [
+    ("policy-master-toggle", "enable_tool_security_policies", "Tool Security Policies"),
+    ("policy-manage-tool-toggle", "enable_security_policy_tool", "Policy-editing tool"),
+    ("read-only-mode-toggle", "read_only_mode", "Read Only Mode"),
+]
+
+# The three ways a save can come back with no usable answer.
+_AMBIGUOUS_POST = [
+    ("rejected_fetch", {"throw": "NetworkError when attempting to fetch"}),
+    (
+        "connection_failed_502",
+        {
+            "status": 502,
+            "json": {"error": {"code": "CONNECTION_FAILED", "message": "supervisor"}},
+        },
+    ),
+    ("bodyless_504", {"status": 504, "body": ""}),
+]
+
+
+def _flags_response(**values: bool) -> dict:
+    """A /api/settings/features GET reporting every flag explicitly.
+
+    All three are named on every response so a test never lands on the
+    missing-entry path (which renders a switch indeterminate) by accident.
+    """
+    base = {
+        "enable_tool_security_policies": False,
+        "enable_security_policy_tool": False,
+        "read_only_mode": False,
+    }
+    base.update(values)
+    return {
+        "status": 200,
+        "json": {"flags": {k: {"value": v} for k, v in base.items()}},
+    }
+
+
+def _toggle_probe(toggle_id: str, probe_id: str) -> str:
+    """Flip ``toggle_id`` on, then record switch state, toast and banner."""
+    return f"""
+      await new Promise(r => setTimeout(r, 250));
+      await window.syncPolicyGlobalToggles();
+      const cb = document.getElementById('{toggle_id}');
+      cb.checked = true;
+      cb.dispatchEvent(new Event('change'));
+      await new Promise(r => setTimeout(r, 200));
+      const toast = document.querySelector('#ha-toast-region .ha-toast');
+      const probe = document.createElement('div');
+      probe.id = '{probe_id}';
+      probe.dataset.checked = String(cb.checked);
+      probe.dataset.indeterminate = String(cb.indeterminate);
+      probe.dataset.msg = toast
+        ? (toast.querySelector('.ha-toast-msg')?.textContent || '') : '';
+      probe.dataset.restart = String(
+        document.getElementById('restartNotice').classList.contains('show'));
+      document.body.appendChild(probe);
+    """
+
+
+def _probe_tag(result: HarnessResult, probe_id: str) -> str:
+    _assert_clean_init(result)
+    m = re.search(rf'<div[^>]*id="{probe_id}"[^>]*>', result.dom)
+    assert m is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+    return m.group(0)
+
+
+class TestAmbiguousSaveAcrossToggles:
+    """Every toggle, every way the answer can go missing."""
+
+    @pytest.mark.parametrize("toggle_id,flag,label", _TOGGLES)
+    @pytest.mark.parametrize("case,post_response", _AMBIGUOUS_POST)
+    def test_write_that_landed_is_not_reverted(
+        self, settings_script: str, toggle_id, flag, label, case, post_response
+    ) -> None:
+        """The re-read shows the new value, so the switch stays where it is.
+
+        Reverting here would contradict the server, and the message that
+        goes with a revert ("still has the previous value") would be false.
+        The restart banner must also be armed: these flags gate tool
+        registration at startup, and the success toast auto-dismisses.
+        """
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {
+                    "byMethod": {
+                        "GET": {
+                            "responses": [
+                                _flags_response(),
+                                _flags_response(),
+                                _flags_response(),
+                                _flags_response(**{flag: True}),
+                            ]
+                        },
+                        "POST": {"responses": [post_response]},
+                    }
+                },
+            },
+            invoke=_toggle_probe(toggle_id, "__landed"),
+        )
+        tag = _probe_tag(result, "__landed")
+        assert 'data-checked="true"' in tag, (
+            f"[{case}/{flag}] the write landed and the re-read confirms it — "
+            f"reverting would contradict the server: {tag}"
+        )
+        assert "did not save" not in tag, (
+            f"[{case}/{flag}] must not claim the server kept the previous "
+            f"value when it did not: {tag}"
+        )
+        assert 'data-restart="true"' in tag, (
+            f"[{case}/{flag}] a landed write needs the restart banner — the "
+            f"toast alone auto-dismisses in 4s: {tag}"
+        )
+
+    @pytest.mark.parametrize("toggle_id,flag,label", _TOGGLES)
+    def test_write_that_did_not_land_reverts_with_the_reason(
+        self, settings_script: str, toggle_id, flag, label
+    ) -> None:
+        """The re-read shows the old value — the one case where reverting is
+        justified, and the only case where the message is true."""
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {
+                    "byMethod": {
+                        "GET": {"responses": [_flags_response()]},
+                        "POST": {
+                            "responses": [
+                                {"throw": "NetworkError when attempting to fetch"}
+                            ]
+                        },
+                    }
+                },
+            },
+            invoke=_toggle_probe(toggle_id, "__notlanded"),
+        )
+        tag = _probe_tag(result, "__notlanded")
+        assert 'data-checked="false"' in tag, f"[{flag}] must revert: {tag}"
+        assert "did not save" in tag, (
+            f"[{flag}] a revert must say why — the wrong switch position "
+            f"*under* that message is the defect: {tag}"
+        )
+
+    @pytest.mark.parametrize("toggle_id,flag,label", _TOGGLES)
+    def test_unconfirmable_readback_goes_unknown(
+        self, settings_script: str, toggle_id, flag, label
+    ) -> None:
+        """Neither value confirmed: show unknown rather than assert either.
+
+        This is the likeliest path in practice — a rejected fetch usually
+        means the network is down, so the follow-up read fails too and
+        `_clearFlagSwitchState()` clears every flag.
+        """
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {
+                    "byMethod": {
+                        "GET": {
+                            "responses": [
+                                _flags_response(),
+                                _flags_response(),
+                                _flags_response(),
+                                {"status": 503, "json": {}},
+                            ]
+                        },
+                        "POST": {
+                            "responses": [
+                                {"throw": "NetworkError when attempting to fetch"}
+                            ]
+                        },
+                    }
+                },
+            },
+            invoke=_toggle_probe(toggle_id, "__unknown"),
+        )
+        tag = _probe_tag(result, "__unknown")
+        assert 'data-indeterminate="true"' in tag, (
+            f"[{flag}] an unconfirmable readback must read as unknown: {tag}"
+        )
+        assert "did not save" not in tag, (
+            f"[{flag}] must not claim the previous value survived when that "
+            f"is unknown: {tag}"
+        )
+
+    @pytest.mark.parametrize("toggle_id,flag,label", _TOGGLES)
+    def test_server_refusal_reverts_immediately(
+        self, settings_script: str, toggle_id, flag, label
+    ) -> None:
+        """A refusal is NOT ambiguous, and must not be re-read.
+
+        The server answered, so the previous value is confirmed. Re-reading
+        here would turn a known state into an unknown one — the regression
+        the blanket-readback attempt introduced.
+        """
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/api/settings/features": {
+                    "byMethod": {
+                        "GET": {"responses": [_flags_response()]},
+                        "POST": {
+                            "responses": [
+                                {"status": 500, "json": {"error": {"message": "nope"}}}
+                            ]
+                        },
+                    }
+                },
+            },
+            invoke=_toggle_probe(toggle_id, "__refused"),
+        )
+        tag = _probe_tag(result, "__refused")
+        assert 'data-checked="false"' in tag, f"[{flag}] refusal must revert: {tag}"
+        assert 'data-indeterminate="false"' in tag, (
+            f"[{flag}] a refusal leaves the server's value KNOWN, so the "
+            f"switch stays editable rather than going unknown: {tag}"
+        )
+
+
 class TestAlreadyDecidedCopy:
     """The 409 alert must read as one translated sentence.
 
