@@ -544,7 +544,8 @@ jobs:
     - name: Run full E2E test suite
       run: |
         echo "🚀 Running full E2E test suite with ${{ matrix.pytest_workers }} workers..."
-        uv run pytest tests/src/e2e/ \
+        cd tests
+        uv run pytest src/e2e/ \
           -n${{ matrix.pytest_workers }} \
           --dist loadscope \
           --tb=short \
@@ -556,7 +557,7 @@ jobs:
 
   # Container backend with the ha_mcp_tools component ABSENT (#2292): the same
   # full E2E suite, but the component's "File & YAML Tools" config entry is
-  # never created (E2E_NO_TOOLS_ENTRY=1). This is the addon / Docker / PyPI user
+  # never created (E2E_NO_TOOLS_ENTRY=1). This is the app (add-on) / Docker / PyPI user
   # who never installed the component from HACS — the majority install, and the
   # one every other lane hides, because the e2e fixtures set the component up
   # everywhere. Every component-backed capability must therefore either fall
@@ -633,11 +634,14 @@ jobs:
     - name: Run full E2E test suite (no component)
       run: |
         echo "🚀 Running full E2E test suite without the ha_mcp_tools component with 3 workers..."
-        uv run pytest tests/src/e2e/ \
+        # --maxfail=0 overrides pytest.ini's --maxfail=3: this topology audit is only useful if it reports every failure, not the first three.
+        cd tests
+        uv run pytest src/e2e/ \
           -n3 \
           --dist loadscope \
           --tb=short \
-          -v
+          -v \
+          --maxfail=0
         echo "✅ Full E2E test suite (no component) passed"
       env:
         E2E_NO_TOOLS_ENTRY: "1"
@@ -736,7 +740,8 @@ jobs:
     - name: Run full E2E test suite (embedded backend)
       run: |
         echo "🚀 Running full E2E suite through the in-process MCP server (embedded backend) with ${{ matrix.pytest_workers }} workers..."
-        uv run pytest tests/src/e2e/ \
+        cd tests
+        uv run pytest src/e2e/ \
           -n${{ matrix.pytest_workers }} \
           --dist loadscope \
           --tb=short \
@@ -826,11 +831,14 @@ jobs:
     - name: Run full E2E test suite (embedded backend, server entry only)
       run: |
         echo "🚀 Running full E2E suite through the in-process MCP server with only the server entry (no tools entry) with 2 workers..."
-        uv run pytest tests/src/e2e/ \
+        # --maxfail=0 overrides pytest.ini's --maxfail=3: this topology audit is only useful if it reports every failure, not the first three.
+        cd tests
+        uv run pytest src/e2e/ \
           -n2 \
           --dist loadscope \
           --tb=short \
-          -v
+          -v \
+          --maxfail=0
         echo "✅ Full E2E test suite (embedded backend, server entry only) passed"
       env:
         E2E_BACKEND: "embedded"
@@ -942,7 +950,8 @@ jobs:
       # of the whole fastmcp tree that nothing in this lane uses.
       run: |
         echo "🚀 Running the update-path e2e lane (released component + PyPI server → PR wheel)..."
-        uv run pytest tests/src/e2e/workflows/embedded/test_embedded_update_path.py \
+        cd tests
+        uv run pytest src/e2e/workflows/embedded/test_embedded_update_path.py \
           -m update_path \
           --tb=short \
           -v

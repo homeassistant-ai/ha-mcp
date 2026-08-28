@@ -274,9 +274,14 @@ jobs:
         # so triage sees the full failure surface.
         run: |
           cd tests
-          uv run pytest ${{ github.event.inputs.pytest_paths || 'src/e2e/' }} \
-            -n2 --dist loadscope -v --tb=short --maxfail=0 ${{ github.event.inputs.pytest_args }}
+          # Dispatch inputs reach the shell through env (below), never by
+          # direct interpolation into this script — same shape as the beta
+          # lanes. Both stay unquoted for word splitting.
+          uv run pytest $PYTEST_PATHS \
+            -n2 --dist loadscope -v --tb=short --maxfail=0 $PYTEST_ARGS
         env:
+          PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
+          PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
           E2E_NO_TOOLS_ENTRY: "1"
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2

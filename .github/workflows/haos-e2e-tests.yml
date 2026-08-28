@@ -263,8 +263,12 @@ jobs:
         # failure surface for triage — early-terminating loses signal.
         run: |
           cd tests
-          uv run pytest src/e2e/ -n2 --dist loadscope -v --tb=short --maxfail=0 ${{ github.event.inputs.pytest_args }}
+          # Dispatch inputs reach the shell through env (below), never by
+          # direct interpolation into this script — same shape as the beta
+          # lanes. $PYTEST_ARGS stays unquoted for word splitting.
+          uv run pytest src/e2e/ -n2 --dist loadscope -v --tb=short --maxfail=0 $PYTEST_ARGS
         env:
+          PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
           # Feeds conftest's HACS token injection (qcow2 pre-boot edit)

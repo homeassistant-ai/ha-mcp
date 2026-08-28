@@ -1,14 +1,14 @@
 name: HAOS E2E Tests (inaddon, no tools entry)
 
 # No-tools-entry twin of haos-e2e-inaddon-tests.yml (#2292). It runs the same
-# test suite against the same cached qcow2, through the same ha-mcp dev addon
-# endpoint INSIDE the booted HAOS, with ONE difference: the component's "File &
-# YAML Tools" config entry is removed from the worker's overlay before boot
-# (E2E_NO_TOOLS_ENTRY=1).
+# test suite against the same cached qcow2, through the same ha-mcp dev app
+# (add-on) endpoint INSIDE the booted HAOS, with ONE difference: the
+# component's "File & YAML Tools" config entry is removed from the worker's
+# overlay before boot (E2E_NO_TOOLS_ENTRY=1).
 #
-# That is the addon-server user who never installed the component from HACS —
+# That is the app-server user who never installed the component from HACS —
 # the ordinary install, and the one every other HAOS lane hides, because they
-# all boot an image where the component's entries exist. Anything the addon
+# all boot an image where the component's entries exist. Anything the app
 # server routes through the component must therefore fall back or fail with an
 # actionable "install the component" error; a raw service-not-found is what this
 # lane is here to catch.
@@ -287,14 +287,19 @@ jobs:
         # when nothing else can be in flight.
         run: |
           cd tests
-          uv run pytest ${{ github.event.inputs.pytest_paths || 'src/e2e/' }} \
+          # Dispatch inputs reach the shell through env (below), never by
+          # direct interpolation into this script — same shape as the beta
+          # lanes. Both stay unquoted for word splitting.
+          uv run pytest $PYTEST_PATHS \
             -n2 --dist loadscope -v --tb=short --maxfail=0 \
-            -m "not addon_disruptive" ${{ github.event.inputs.pytest_args }}
-          uv run pytest ${{ github.event.inputs.pytest_paths || 'src/e2e/' }} \
+            -m "not addon_disruptive" $PYTEST_ARGS
+          uv run pytest $PYTEST_PATHS \
             -n0 -v --tb=short --maxfail=0 \
-            -m addon_disruptive ${{ github.event.inputs.pytest_args }} \
+            -m addon_disruptive $PYTEST_ARGS \
             || { rc=$?; [ "$rc" -eq 5 ] && echo "no disruptive tests in selection"; [ "$rc" -eq 5 ]; }
         env:
+          PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
+          PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
           E2E_NO_TOOLS_ENTRY: "1"
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
