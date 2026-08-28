@@ -16,17 +16,22 @@ command name, its parameters, the envelope parsing, and the item-type-to-bucket
 mapping in a single pass. Everything else about the merge is pure logic already
 covered by ``tests/src/unit/test_search_related_graph.py``.
 
-**Why this test names a dashboard search type.** The reference-graph merge runs
-on the legacy config-body path only. It is deliberately absent from the
-``ha_mcp_tools`` component route, which reads HA's loaded config in-process and
-so has neither of the blind spots above (no per-id budget, and YAML-defined
-configs are visible to it). This suite installs that component into every test
-container, so a plain ``search_types=["automation"]`` call is served by the
-component and never reaches the code under test. Naming ``dashboard`` -- a
-surface the component's search command does not accept -- sends the whole
-request down the legacy path (``_component_serves_search_types`` is
-all-or-nothing per call). Without it this test passes vacuously against a
-feature that never ran.
+**Why this test asks for a dashboard surface and an oversized limit.** The
+reference-graph merge runs on the legacy config-body path only. It is
+deliberately absent from the ``ha_mcp_tools`` component route, which reads HA's
+loaded config in-process and so has neither of the blind spots above (no per-id
+budget, and YAML-defined configs are visible to it). This suite installs that
+component into every test container, so a plain ``search_types=["automation"]``
+call is served by the component and never reaches the code under test.
+
+Naming ``dashboard`` alone no longer sends the call to legacy: the component
+serves the surfaces its search command has while the dashboards leg serves that
+bucket, merged server-side (issue #2289). What still routes the WHOLE call to
+legacy is a page the merge cannot fetch -- ``offset + limit`` past the
+component's 500-record ``limit`` ceiling, which its schema rejects outright --
+so the request pairs the dashboard surface with a limit one past that ceiling.
+Should that lever stop working, this test fails on ``match_in_references``
+rather than passing vacuously against a feature that never ran.
 """
 
 import logging
@@ -45,6 +50,11 @@ _REFERENCED_ENTITY = f"input_boolean.refgraph_{_RUN_ID}"
 _SLUG = f"reference_graph_probe_{_RUN_ID}"
 _ALIAS = f"Reference Graph Probe {_RUN_ID}"
 _PROBE_ENTITY_ID = f"automation.{_SLUG}"
+# One past the component's 500-record ``limit`` ceiling, which is what sends a
+# ``dashboard``-including request to the legacy path whole — see the module
+# docstring. Wide enough that the probe automation is on the page regardless of
+# how many configs the container holds.
+_LEGACY_ROUTE_LIMIT = 501
 
 
 @pytest.mark.asyncio
@@ -79,9 +89,9 @@ async def test_reference_graph_flags_an_automation_that_uses_the_entity(mcp_clie
             tool_name="ha_search",
             arguments={
                 "query": _REFERENCED_ENTITY,
-                # "dashboard" forces the legacy path -- see the module docstring.
+                # This pair forces the legacy path -- see the module docstring.
                 "search_types": ["automation", "dashboard"],
-                "limit": 25,
+                "limit": _LEGACY_ROUTE_LIMIT,
             },
             predicate=lambda d: any(
                 a.get("friendly_name") == _ALIAS for a in d.get("automations", [])
