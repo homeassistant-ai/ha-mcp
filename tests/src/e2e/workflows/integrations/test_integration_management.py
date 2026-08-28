@@ -12,6 +12,7 @@ from ...utilities.assertions import (
     assert_mcp_success,
     safe_call_tool,
 )
+from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
@@ -552,12 +553,17 @@ class TestIntegrationManagement:
                 # re-keys the unique_id through
                 # async_update_reload_and_abort(unique_id=...). That is a
                 # legitimate re-key, reported rather than refused — and it is
-                # only observable because the harness installs ha_mcp_tools
-                # (conftest copies the component in), which is the sole source
-                # of a config entry's unique_id.
-                assert (
-                    verification.get("unique_id_verification")
-                    == "changed_during_change"
+                # only observable where a live ha_mcp_tools component surface
+                # can supply it, which is the sole source of a config entry's
+                # unique_id. On the no-tools lanes with no active component
+                # entry (#2292) there is no such source, and the server reports
+                # that honestly instead of guessing
+                # (config_entry_reconfigure.py's
+                # ``unavailable_without_component``).
+                assert verification.get("unique_id_verification") == (
+                    "changed_during_change"
+                    if component_surface_available()
+                    else "unavailable_without_component"
                 ), result
 
                 changed = await mcp.call_tool_success(

@@ -28,14 +28,14 @@ What this module pins, per #2292's acceptance criteria:
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 import httpx
 import pytest
 from test_constants import TEST_TOKEN
 
-from ...utilities.assertions import MCPAssertions, parse_mcp_result
+from ...utilities.assertions import MCPAssertions
+from ...utilities.topology import component_surface_available
 
 logger = logging.getLogger(__name__)
 
@@ -81,12 +81,10 @@ def _server_entry_present() -> bool:
 
     Both embedded lanes keep the component installed and its "HA-MCP Server"
     entry set up; every other no-tools lane has no active ha_mcp_tools config
-    entry at all.
+    entry at all. This module is ``no_tools_only``, so the shared predicate's
+    component-present case never applies here and the two are equivalent.
     """
-    return (
-        os.environ.get("E2E_BACKEND") == "embedded"
-        or os.environ.get("HAOS_TEST_MODE") == "embedded"
-    )
+    return component_surface_available()
 
 
 @pytest.mark.filesystem
@@ -164,40 +162,37 @@ async def test_shared_capabilities_survive_per_topology(mcp_client):
     Where there is no component, the same shared surface must still be served
     by the legacy REST path.
     """
-    diagnostics = parse_mcp_result(
-        await mcp_client.call_tool("ha_report_issue", {"fields": "diagnostic_info"})
-    )
-    info = diagnostics.get("diagnostic_info", {})
-    assert isinstance(info, dict), f"no diagnostic_info in response: {diagnostics}"
-
-    # Same verdict on every no-tools lane: the entry is not set up.
-    assert "not set up" in (info.get("tools_entry_status") or ""), (
-        f"tools_entry_status should report the missing entry: {info}"
-    )
-
-    if _server_entry_present():
-        # The WS surface answers, so the version probe resolves — proof the
-        # server entry registers ``ha_mcp_tools/info`` on its own (#2291).
-        assert info.get("component_version"), (
-            f"the server entry should still answer the component caps probe: {info}"
+    async with MCPAssertions(mcp_client) as mcp:
+        diagnostics = await mcp.call_tool_success(
+            "ha_report_issue", {"fields": "diagnostic_info"}
         )
-        # And a shared component-backed capability still serves normally.
-        helpers = parse_mcp_result(
-            await mcp_client.call_tool("ha_config_list_helpers", {"helper_type": "all"})
-        )
-        assert helpers.get("success"), f"shared helper listing failed: {helpers}"
-        logger.info(
-            "Server entry present: caps answer (component %s), shared tools work",
-            info["component_version"],
-        )
-        return
+        info = diagnostics.get("diagnostic_info", {})
+        assert isinstance(info, dict), f"no diagnostic_info in response: {diagnostics}"
 
-    # No component at all — the shared surface falls back to legacy REST.
-    assert info.get("component_version") is None, (
-        f"no component is installed on this lane, yet caps reported one: {info}"
-    )
-    search = parse_mcp_result(
-        await mcp_client.call_tool("ha_search", {"domain_filter": "light", "limit": 5})
-    )
-    assert search.get("success"), f"legacy-path search failed: {search}"
+        # Same verdict on every no-tools lane: the entry is not set up.
+        assert "not set up" in (info.get("tools_entry_status") or ""), (
+            f"tools_entry_status should report the missing entry: {info}"
+        )
+
+        if _server_entry_present():
+            # The WS surface answers, so the version probe resolves — proof the
+            # server entry registers ``ha_mcp_tools/info`` on its own (#2291).
+            assert info.get("component_version"), (
+                f"the server entry should still answer the caps probe: {info}"
+            )
+            # And a shared component-backed capability still serves normally.
+            await mcp.call_tool_success(
+                "ha_config_list_helpers", {"helper_type": "all"}
+            )
+            logger.info(
+                "Server entry present: caps answer (component %s), shared tools work",
+                info["component_version"],
+            )
+            return
+
+        # No component at all — the shared surface falls back to legacy REST.
+        assert info.get("component_version") is None, (
+            f"no component is installed on this lane, yet caps reported one: {info}"
+        )
+        await mcp.call_tool_success("ha_search", {"domain_filter": "light", "limit": 5})
     logger.info("No component: shared tools still served by the legacy REST path")

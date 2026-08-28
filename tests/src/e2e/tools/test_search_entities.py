@@ -16,6 +16,7 @@ from ..utilities.assertions import (
     parse_mcp_result,
     safe_call_tool,
 )
+from ..utilities.topology import component_surface_available
 from ..utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
@@ -369,6 +370,27 @@ async def test_search_entities_multiple_domains(mcp_client):
 # ============================================================================
 
 
+def _assert_only_yaml_scene_degradation(data: dict) -> None:
+    """Every degradation the response reports is the YAML-scene one (#2292).
+
+    ``partial_reason`` is one string joining its fragments with `` ; ``, so it
+    is split back apart — a response whose reason mixes the structural
+    YAML-scene fragment with a "per-id fetch raised" one must fail, not pass on
+    the strength of the acceptable half.
+    """
+    fragments = list(data.get("warnings") or [])
+    fragments += [
+        part.strip()
+        for part in (data.get("partial_reason") or "").split(" ; ")
+        if part.strip()
+    ]
+    offenders = [text for text in fragments if "YAML-defined" not in text]
+    assert not offenders, (
+        "Only the structural YAML-defined-scene gap is acceptable without a "
+        f"component surface; got {offenders}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_search_entities_successful_fuzzy_search_no_warning(mcp_client):
     """Test that successful fuzzy search returns no warning or partial flag.
@@ -385,9 +407,20 @@ async def test_search_entities_successful_fuzzy_search_no_warning(mcp_client):
 
     assert data.get("success") is True
     assert data.get("search_type") == "fuzzy_search"
-    # Normal fuzzy search should NOT have warning or partial flag
-    assert not data.get("warnings"), f"Unexpected warnings: {data.get('warnings')}"
-    assert "partial" not in data or data.get("partial") is not True
+    if component_surface_available():
+        # Normal fuzzy search should NOT have warning or partial flag
+        assert not data.get("warnings"), f"Unexpected warnings: {data.get('warnings')}"
+        assert "partial" not in data or data.get("partial") is not True
+    else:
+        # #2292: with no active component entry the search runs on the legacy
+        # REST path, whose /config/scene/config endpoint serves only storage
+        # scenes — a YAML-defined scene carrying an ``id:`` is indistinguishable
+        # in the registry and then 404s. That gap is structural, not a fetch
+        # outage, and the sibling src fix reclassifies the 404 as
+        # ``yaml_skipped`` so the wording says so. This branch pins that wording
+        # as the ONLY degradation this topology may produce: a fetch failure or
+        # any other non-404 cause still has to fail the test.
+        _assert_only_yaml_scene_degradation(data)
     # Strong matches should not include suggestions
     assert "suggestions" not in data, "Strong matches should not include suggestions"
 
