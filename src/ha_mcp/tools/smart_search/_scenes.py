@@ -4,7 +4,10 @@ import asyncio
 import logging
 from typing import Any
 
-from ...client.rest_client import HomeAssistantAPIError
+from ...client.rest_client import (
+    HomeAssistantAPIError,
+    SceneStorageConfigNotFoundError,
+)
 from ._config import (
     ENTITY_REGISTRY_TIMEOUT,
     INDIVIDUAL_CONFIG_TIMEOUT,
@@ -213,6 +216,84 @@ class SceneSearchMixin(ConfigFetchMixin):
         )
         return scene_id
 
+    async def _fetch_one_scene_config(
+        self,
+        sid: str,
+        slug_to_storage_id: dict[str, str],
+        failed_errors: list[str],
+    ) -> tuple[str, dict[str, Any] | None, str | None]:
+        """Fetch one scene's storage config and classify the outcome.
+
+        Extracted from ``_deep_search_scenes``'s Attempt-C fetch closure
+        (C901). Returns ``(sid, config-or-None, marker)`` where the marker is
+        the ``_individual_fetch_budgeted`` classification: ``None`` (success),
+        ``"yaml_skipped"``, ``"timeout"`` or ``"failed"``.
+        """
+        try:
+            config_resp = await asyncio.wait_for(
+                # Fetch by STORAGE key (what the endpoint indexes on),
+                # return under the SLUG (what the scoring pass looks up).
+                self.client.get_scene_config(slug_to_storage_id.get(sid, sid)),
+                timeout=INDIVIDUAL_CONFIG_TIMEOUT,
+            )
+            return (sid, config_resp.get("config", {}), None)
+        except SceneStorageConfigNotFoundError as e:
+            # The entity EXISTS, it is just not an editable storage scene:
+            # a YAML-defined scene carrying an ``id:`` (which registers
+            # under platform ``homeassistant`` exactly like a storage
+            # scene, so the registry walk cannot pre-filter it), an
+            # ``id``-less YAML scene the client confirmed through the state
+            # machine, or an integration-managed (Hue/deCONZ/...) scene.
+            # The client decides that classification itself
+            # (``_raise_scene_config_404``) from the registry/state lookups
+            # it makes for the fetch, independently of the search-side
+            # registry filter — which is why this branch stays correct on
+            # the registry-failed attempt-all path, where integration-
+            # managed scenes DO reach the fetch. Every one of them is a
+            # structural gap rather than a fetch outage, so classify it the
+            # way the automation/script fetchers do (#2292).
+            logger.debug(
+                f"Scene individual config fetch ({sid}) returned 404 "
+                f"— not a storage scene: {e}"
+            )
+            return (sid, None, "yaml_skipped")
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
+                # A bare 404 (not the subclass above) means the entity is in
+                # neither the registry nor the state machine: it vanished
+                # between get_states() and this fetch. That IS a real gap in
+                # this result, so it belongs in the failed bucket with a
+                # representative sample.
+                logger.debug(
+                    f"Scene individual config fetch ({sid}) returned 404 "
+                    "— entity no longer exists since enumeration."
+                )
+            else:
+                logger.debug(f"Scene individual config fetch ({sid}) failed: {e}")
+            record_first_failure(failed_errors, e)
+            return (sid, None, "failed")
+        except TimeoutError:
+            # Per-request timeout under batch concurrency — distinct
+            # from a real failure; see _fetch_automation_config
+            # (#1784).
+            logger.debug(
+                f"Scene individual config fetch ({sid}) timed out "
+                f"after {INDIVIDUAL_CONFIG_TIMEOUT}s."
+            )
+            return (sid, None, "timeout")
+        except Exception as e:
+            if is_timeout_error(e):
+                # Client-side HTTP timeout arrived wrapped; still a
+                # timeout. See is_timeout_error in _fetch.
+                logger.debug(
+                    f"Scene individual config fetch ({sid}) timed "
+                    f"out (client-side HTTP timeout): {e}"
+                )
+                return (sid, None, "timeout")
+            logger.debug(f"Scene individual config fetch ({sid}) failed: {e}")
+            record_first_failure(failed_errors, e)
+            return (sid, None, "failed")
+
     async def _deep_search_scenes(
         self,
         all_entities: list[dict[str, Any]],
@@ -292,52 +373,9 @@ class SceneSearchMixin(ConfigFetchMixin):
         async def _fetch_scene_config(
             sid: str,
         ) -> tuple[str, dict[str, Any] | None, str | None]:
-            try:
-                config_resp = await asyncio.wait_for(
-                    # Fetch by STORAGE key (what the endpoint indexes on),
-                    # return under the SLUG (what the scoring pass looks up).
-                    self.client.get_scene_config(slug_to_storage_id.get(sid, sid)),
-                    timeout=INDIVIDUAL_CONFIG_TIMEOUT,
-                )
-                return (sid, config_resp.get("config", {}), None)
-            except HomeAssistantAPIError as e:
-                if e.status_code == 404:
-                    # A YAML-defined scene carrying an ``id:`` registers under
-                    # platform ``homeassistant`` exactly like a storage scene,
-                    # so the registry walk cannot pre-filter it and the per-id
-                    # fetch 404s. Classify it the way the automation/script
-                    # fetchers do, so the warning explains the gap is
-                    # structural rather than a fetch outage (#2292).
-                    logger.debug(
-                        f"Scene individual config fetch ({sid}) returned 404 "
-                        "— likely YAML-defined; /config/scene/config only "
-                        "serves storage scenes."
-                    )
-                    return (sid, None, "yaml_skipped")
-                logger.debug(f"Scene individual config fetch ({sid}) failed: {e}")
-                record_first_failure(failed_errors, e)
-                return (sid, None, "failed")
-            except TimeoutError:
-                # Per-request timeout under batch concurrency — distinct
-                # from a real failure; see _fetch_automation_config
-                # (#1784).
-                logger.debug(
-                    f"Scene individual config fetch ({sid}) timed out "
-                    f"after {INDIVIDUAL_CONFIG_TIMEOUT}s."
-                )
-                return (sid, None, "timeout")
-            except Exception as e:
-                if is_timeout_error(e):
-                    # Client-side HTTP timeout arrived wrapped; still a
-                    # timeout. See is_timeout_error in _fetch.
-                    logger.debug(
-                        f"Scene individual config fetch ({sid}) timed "
-                        f"out (client-side HTTP timeout): {e}"
-                    )
-                    return (sid, None, "timeout")
-                logger.debug(f"Scene individual config fetch ({sid}) failed: {e}")
-                record_first_failure(failed_errors, e)
-                return (sid, None, "failed")
+            return await self._fetch_one_scene_config(
+                sid, slug_to_storage_id, failed_errors
+            )
 
         (
             fetched_configs,
@@ -433,16 +471,23 @@ class SceneSearchMixin(ConfigFetchMixin):
                 f"exhaustive.{hint}"
             )
         if yaml_skipped:
-            # Structural, not transient: a YAML-defined scene with an ``id:``
-            # is indistinguishable from a storage scene in the entity
-            # registry, so it survives the integration-platform filter and
-            # then 404s on the per-id endpoint. Mirrors the automation/script
-            # fragment in ``_apply_per_type_partial_flag`` (#2292).
+            # Structural, not transient, and two kinds land here: a YAML-defined
+            # scene with an ``id:`` is indistinguishable from a storage scene in
+            # the entity registry, so it survives the integration-platform
+            # filter and then 404s on the per-id endpoint; and on the
+            # registry-failed attempt-all path integration-managed scenes reach
+            # the fetch and 404 the same way. Name both so the reader knows
+            # where the definition actually lives. Mirrors the
+            # automation/script fragment in ``_apply_per_type_partial_flag``
+            # (#2292).
             reason_parts.append(
                 f"{yaml_skipped} scene(s) not scanned (per-id config endpoint "
-                "returned 404 — these are likely YAML-defined scenes that the "
-                "/config/scene/config REST endpoint does not expose) — their "
-                "match status is unknown; this result is not exhaustive."
+                "returned 404 — these are YAML-defined scenes with an id:, or "
+                "integration-managed scenes, which that endpoint does not "
+                "expose) — their match status is unknown; this result is not "
+                "exhaustive. Their definitions live outside HA storage "
+                "(typically scenes.yaml or the owning integration); check "
+                "there if the match matters."
             )
         if timeout:
             reason_parts.append(
@@ -476,8 +521,13 @@ class SceneSearchMixin(ConfigFetchMixin):
         if scene_stats["registry_failed"]:
             # Issue #1168 R5 blocker 11: when the registry fetch errors, the
             # integration-platform filter is unavailable and Attempt C falls
-            # back to attempting all scenes -- surface that so an elevated
-            # failed_count isn't mistaken for a real config outage.
+            # back to attempting all scenes -- surface that so the elevated
+            # counts aren't mistaken for a real config outage. Since the 404
+            # taxonomy split (#2292) the bucket that swells here is
+            # ``yaml_skipped``, not ``failed``: the REST client classifies an
+            # integration-managed scene's 404 as
+            # ``SceneStorageConfigNotFoundError`` from its own registry/state
+            # lookups, which this path's failed registry walk does not affect.
             reason_parts.append(
                 "Entity-registry fetch failed; integration-platform filter "
                 "unavailable, attempted all scenes (false-positive failures "

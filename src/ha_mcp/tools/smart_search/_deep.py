@@ -1495,7 +1495,9 @@ class DeepSearchMixin(SceneSearchMixin):
                     "endpoint returned 404 — these are likely YAML-defined "
                     f"{noun}s that the {endpoint} REST endpoint does not "
                     "expose) — their match status is unknown; this result "
-                    "is not exhaustive."
+                    "is not exhaustive. Their definitions live outside HA "
+                    f"storage (typically {noun}s.yaml); check there if the "
+                    "match matters."
                 )
             if timeout:
                 reasons.append(

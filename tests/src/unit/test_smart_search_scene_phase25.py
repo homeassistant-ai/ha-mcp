@@ -19,7 +19,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ha_mcp.client.rest_client import HomeAssistantAPIError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
+    SceneStorageConfigNotFoundError,
+)
 from ha_mcp.tools.smart_search import SmartSearchTools
 
 
@@ -557,17 +560,26 @@ class TestSceneRegistryFetchFailureSurfacing:
 
 @pytest.mark.asyncio
 class TestSceneYamlDefined404Classification:
-    """A YAML-defined scene's per-id 404 classifies as ``yaml_skipped`` (#2292).
+    """The scene 404 taxonomy: not-storage-scene vs vanished entity (#2292).
 
-    The registry walk filters out integration-managed scenes, but a
-    YAML-defined scene carrying an ``id:`` registers under platform
-    ``homeassistant`` exactly like a storage scene — it survives the filter,
-    then 404s because ``/config/scene/config`` only serves the storage
-    collection. Counting that as a fetch FAILURE produced a ``partial: true``
-    with "per-id fetch raised; e.g. HTTP 404: Scene not found", which reads
-    as a broken server rather than a structural, un-retryable gap. The
-    automation and script fetchers have classified this case correctly since
-    #1529; these tests pin the scene mirror.
+    The REST client already splits the two cases it can distinguish, and the
+    fetch closure routes on that split rather than on the bare status code:
+
+    - ``SceneStorageConfigNotFoundError`` — the entity EXISTS but is not
+      storage-editable. A YAML-defined scene carrying an ``id:`` registers
+      under platform ``homeassistant`` exactly like a storage scene, so it
+      survives the registry walk's integration filter and then 404s because
+      ``/config/scene/config`` only serves the storage collection;
+      integration-managed scenes 404 the same way. Counting either as a fetch
+      FAILURE produced a ``partial: true`` reading "per-id fetch raised; e.g.
+      HTTP 404: Scene not found", which looks like a broken server rather than
+      a structural, un-retryable gap → ``yaml_skipped``.
+    - A bare 404 — the entity is in neither the registry nor the state machine,
+      so it disappeared between ``get_states()`` and the fetch. That is a real
+      gap in this result → ``failed``, with a sample naming it.
+
+    The automation and script fetchers have classified the structural case
+    correctly since #1529; these tests pin the scene mirror and the split.
     """
 
     @pytest.fixture
@@ -597,15 +609,19 @@ class TestSceneYamlDefined404Classification:
             return {"success": False}
 
         client.send_websocket_message = AsyncMock(side_effect=_ws_handler)
+        # What the client raises for a scene that resolved in the registry but
+        # has no editable storage config — the YAML-with-``id:`` case.
         client.get_scene_config = AsyncMock(
-            side_effect=HomeAssistantAPIError("API error: 404 - Scene not found", 404)
+            side_effect=SceneStorageConfigNotFoundError(
+                "movie_night", platform="homeassistant", storage_key="movie_night"
+            )
         )
         return client
 
     async def test_404_lands_in_yaml_skipped_slot_not_failed(self, mock_client) -> None:
-        """The per-id 404 must count as ``yaml_skipped`` with ``failed`` at
-        zero and no representative ``failed_sample`` captured — a structural
-        gap has no error worth naming."""
+        """The not-storage-scene 404 must count as ``yaml_skipped`` with
+        ``failed`` at zero and no representative ``failed_sample`` captured — a
+        structural gap has no error worth naming."""
         tools = _make_tools(mock_client)
 
         (
@@ -642,6 +658,47 @@ class TestSceneYamlDefined404Classification:
         # unscanned, which is exactly what the partial_reason has to say.
         assert len(results) == 1, f"name match must survive the 404; got {results}"
         assert results[0]["config"] is None
+
+    async def test_bare_404_lands_in_failed_slot_with_a_sample(
+        self, mock_client
+    ) -> None:
+        """The other half of the split: a BARE 404 (the entity is in neither
+        the registry nor the state machine, so it vanished since enumeration)
+        stays in the ``failed`` bucket and claims the sample slot. Routing it
+        to ``yaml_skipped`` on the status code alone would tell the caller a
+        structural YAML gap where a scene actually disappeared mid-search."""
+        mock_client.get_scene_config = AsyncMock(
+            side_effect=HomeAssistantAPIError("API error: 404 - Scene not found", 404)
+        )
+        tools = _make_tools(mock_client)
+
+        (
+            _results,
+            failed_count,
+            yaml_skipped_count,
+            _skipped_count,
+            _integration_skipped,
+            registry_failed,
+            _timeout_count,
+            failed_sample,
+        ) = await tools._deep_search_scenes(
+            [_make_scene_entity("scene.movie_night", "Movie Night")],
+            query_lower="movie",
+            exact_match=False,
+        )
+
+        assert failed_count == 1, (
+            f"a vanished-entity 404 must count as a failure; got "
+            f"failed={failed_count}, yaml_skipped={yaml_skipped_count}"
+        )
+        assert yaml_skipped_count == 0, (
+            f"only the not-storage-scene 404 is structural; got "
+            f"yaml_skipped={yaml_skipped_count}"
+        )
+        assert failed_sample == "HTTP 404: Scene not found", (
+            f"the failure must name itself in the sample slot; got {failed_sample!r}"
+        )
+        assert registry_failed is False
 
     async def test_404_surfaces_structural_reason_through_deep_search(
         self, mock_client
