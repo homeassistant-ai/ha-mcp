@@ -3305,11 +3305,11 @@
           "default": false
         },
         "domain": {
-          "type": "Annotated[str | None, Field(default=None, description=\"(edits.list / edits.delete) Filter auto-backups by domain (e.g. 'automation', 'helper_timer').\")]",
+          "type": "Annotated[str | None, Field(default=None, description=\"(edits.create / edits.list / edits.delete) Filter auto-backups by domain (e.g. 'automation', 'helper_timer'). Required for edits.create.\")]",
           "default": null
         },
         "entity_id": {
-          "type": "Annotated[str | None, Field(default=None, description='(edits.list / edits.delete) Filter auto-backups by entity ID.')]",
+          "type": "Annotated[str | None, Field(default=None, description='(edits.create / edits.list / edits.delete) Filter auto-backups by entity ID. Required for edits.create.')]",
           "default": null
         },
         "backup_name": {
