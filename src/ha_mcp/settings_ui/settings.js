@@ -509,6 +509,7 @@ async function applyInfoChrome() {
       // worker onto the freshly installed code.
       const rbtn = document.getElementById('restartBtn');
       rbtn.style.display = '';
+      restartTargetEmbedded = true;
       rbtn.textContent = t('actions.restart_server', {}, 'Restart HA-MCP Server');
       if (noticeEl) {
         noticeEl.textContent = t(
@@ -653,6 +654,10 @@ function markRestartRequired() {
 // again); otherwise stays true through the restart cycle until the
 // page reloads.
 let restartInProgress = false;
+// True when the restart button drives the embedded (custom component) server
+// rather than the app (add-on) — the wait/give-up copy must name the right
+// thing (issue #2279 feedback: the embedded flow said "app" throughout).
+let restartTargetEmbedded = false;
 
 async function _fetchSettingsInfo() {
   // Read ``/api/settings/info`` once; return the parsed JSON or null
@@ -706,7 +711,9 @@ async function _runRestartReloadCycle(previousInstanceId) {
   // instance and we reload before the new one is up.
   btn.textContent = t('status.restarting', {}, 'Restarting…');
   await new Promise(r => setTimeout(r, RESTART_PROBE_INITIAL_GRACE_MS));
-  btn.textContent = t('status.waiting_addon', {}, 'Waiting for App (add-on) to come back online…');
+  btn.textContent = restartTargetEmbedded
+    ? t('status.waiting_server', {}, 'Waiting for the HA-MCP server to come back online…')
+    : t('status.waiting_addon', {}, 'Waiting for App (add-on) to come back online…');
   const restarted = await _probeAddonRestarted(previousInstanceId);
   if (restarted) {
     window.location.reload();
@@ -715,7 +722,9 @@ async function _runRestartReloadCycle(previousInstanceId) {
     // never actually fired (silent supervisor failure → instance_id
     // never flipped) OR supervisor is genuinely slower than the cap.
     // Surface a clear next-step instead of silently doing nothing.
-    btn.textContent = t('errors.addon_not_back', {}, 'App (add-on) did not come back online. Reload the page manually.');
+    btn.textContent = restartTargetEmbedded
+      ? t('errors.server_not_back', {}, 'The HA-MCP server did not come back online. Reload the page manually.')
+      : t('errors.addon_not_back', {}, 'App (add-on) did not come back online. Reload the page manually.');
     btn.disabled = false;
     restartInProgress = false;
   }
