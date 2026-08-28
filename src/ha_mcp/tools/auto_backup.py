@@ -66,8 +66,16 @@ def _component_not_installed_cause(err: BaseException) -> ToolError | None:
     backup pipeline's.
     """
     seen: set[int] = set()
-    cause: BaseException | None = err.__cause__ or err.__context__
-    while cause is not None and id(cause) not in seen:
+    # Worklist over BOTH chain links: an explicit ``raise ... from other``
+    # sets an unrelated ``__cause__`` while the component error stays in
+    # ``__context__`` — following only one link per node would miss it.
+    stack: list[BaseException] = [
+        link for link in (err.__cause__, err.__context__) if link is not None
+    ]
+    while stack:
+        cause = stack.pop()
+        if id(cause) in seen:
+            continue
         seen.add(id(cause))
         if isinstance(cause, ToolError):
             try:
@@ -81,7 +89,9 @@ def _component_not_installed_cause(err: BaseException) -> ToolError | None:
                 == ErrorCode.COMPONENT_NOT_INSTALLED.value
             ):
                 return cause
-        cause = cause.__cause__ or cause.__context__
+        stack.extend(
+            link for link in (cause.__cause__, cause.__context__) if link is not None
+        )
     return None
 
 

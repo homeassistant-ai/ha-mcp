@@ -2050,6 +2050,57 @@ class TestMandatoryGate:
         assert self._error_code(exc.value) == "COMPONENT_NOT_INSTALLED"
         assert ran == []  # write never ran
 
+    async def test_component_cause_found_behind_unrelated_explicit_cause(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``raise ... from other`` buries the component error in __context__
+        while an unrelated exception occupies __cause__ — the cause walk must
+        traverse BOTH links or the failure regresses to BACKUP_CAPTURE_FAILED."""
+        component_error = ToolError(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "COMPONENT_NOT_INSTALLED",
+                        "message": "Add entry -> HA-MCP File & YAML Tools",
+                    },
+                }
+            )
+        )
+
+        class _FakeMgr:
+            async def maybe_snapshot(self, *a: Any, **k: Any) -> None:
+                try:
+                    raise component_error
+                except ToolError:
+                    # Explicit unrelated cause; the ToolError stays reachable
+                    # only through __context__.
+                    raise bm.MandatoryBackupError("capture failed") from RuntimeError(
+                        "unrelated"
+                    )
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_global_settings",
+            lambda: _StubSettings(enable_auto_backup=True),
+        )
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
+        )
+
+        ran: list[str] = []
+
+        @with_auto_backup(
+            domain="file", id_param="path", mandatory=True, client=object()
+        )
+        async def tool(*, path: str) -> str:
+            ran.append(path)
+            return "wrote"
+
+        with pytest.raises(ToolError) as exc:
+            await tool(path="www/x.css")
+        assert exc.value is component_error
+        assert ran == []
+
     async def test_legitimate_skip_proceeds(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

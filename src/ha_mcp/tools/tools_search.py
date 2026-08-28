@@ -2581,7 +2581,15 @@ class SearchTools:
             dashboard_task.cancel()
             await asyncio.wait([dashboard_task])
             raise
-        dashboard_outcome = await dashboard_task
+        try:
+            dashboard_outcome = await dashboard_task
+        except BaseException:
+            # Same invariant as above for the second await: a cancellation
+            # delivered here would otherwise leave the leg task running
+            # detached after this call unwinds. Settle it, then propagate.
+            dashboard_task.cancel()
+            await asyncio.wait([dashboard_task])
+            raise
 
         windowed, dashboards_page = _merge_dashboard_window(
             req, raw.get("result") or {}, dashboard_outcome.records
