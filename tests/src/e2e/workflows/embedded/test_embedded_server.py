@@ -476,11 +476,15 @@ class TestEmbeddedServerEndToEnd:
 
         ``llm_api.py`` cannot be imported here (its module-level
         ``homeassistant.*`` imports need a running HA), so this makes the
-        exact same calls it makes, with the real SDK, against the real
+        same call sequence it makes, with the real SDK, against the real
         server: streamable-HTTP session -> ``initialize`` (whose
         ``instructions`` become the API prompt) -> ``tools/list`` ->
         ``convert_to_voluptuous`` on EVERY tool's schema -> one read-only
         ``call_tool`` dumped the way ``HaMcpTool.async_call`` returns it.
+        The transport is NOT the same: this drives the webhook relay URL
+        and lets the SDK build its own default httpx client, whereas
+        ``_mcp_session`` targets the loopback URL with a dedicated client
+        (explicit generous timeout, ``verify=False``, ``trust_env=False``).
 
         The zero-conversion-failures assertion is the point: at runtime an
         unconvertible schema is skipped per-tool with only a warning, so a
