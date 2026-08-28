@@ -241,8 +241,8 @@ jobs:
         # Save whenever the runtime cache missed so the locally-built
         # qcow2 populates the shared key and future runs restore it
         # instead of rebuilding. This is the sole writer for the shared
-        # cache key (#1407 + #1428); the inaddon lane intentionally
-        # doesn't save, see the block comment at the same position in
+        # cache key (#1407 + #1428); the other five lanes intentionally
+        # don't save, see the block comment at the same position in
         # the ``haos-e2e-inaddon`` job below.
         if: steps.restore-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -284,9 +284,11 @@ jobs:
           cd tests
           # Dispatch inputs reach the shell through env (below), never by
           # direct interpolation into this script — same shape as the beta
-          # lanes. $PYTEST_ARGS stays unquoted for word splitting.
-          uv run pytest src/e2e/ -n2 --dist loadscope -v --tb=short --maxfail=0 $PYTEST_ARGS
+          # lanes. Both stay unquoted for word splitting.
+          uv run pytest $PYTEST_PATHS \
+            -n2 --dist loadscope -v --tb=short --maxfail=0 $PYTEST_ARGS
         env:
+          PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
           PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
@@ -387,8 +389,10 @@ jobs:
 
       - name: Compute image cache key
         id: key
-        # Shared with the ``haos-e2e`` + ``haos-e2e-inaddon`` lanes: all three
-        # lanes consume the same byte-identical qcow2. The bake seeds the
+        # Shared with every other HAOS lane in this file (``haos-e2e``,
+        # ``haos-e2e-inaddon``, ``haos-e2e-stdio``,
+        # ``haos-e2e-embedded-no-tools``, ``haos-e2e-inaddon-no-tools``): all
+        # six lanes consume the same byte-identical qcow2. The bake seeds the
         # in-process MCP server config entry (of ha_mcp_tools) into the image
         # (build_image._stage_embedded_server_integration), and the per-worker
         # wheel/feature-flag staging happens IN-VM at test time on each worker's
@@ -434,8 +438,8 @@ jobs:
         # download (~1.5 GB xz) + decompress (~7 GB qcow2) + boot + addon-install
         # peaks at the edge of the runner's ~14 GB SSD, so prune the ~30 GB of
         # preinstalled tooling the bake does not use. Keep /opt/hostedtoolcache:
-        # Python from there is on PATH for build_image.py. See haos-e2e-tests.yml
-        # for the full rationale.
+        # Python from there is on PATH for build_image.py. See the haos-e2e job
+        # above for the full rationale.
         if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
         run: |
           df -h /
@@ -455,13 +459,13 @@ jobs:
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-test-image.qcow2
 
-      # No cache-save step here on purpose. The external lane
-      # (haos-e2e-tests.yml) computes the same cache key (#1407) and is the SOLE
-      # saver of the shared qcow2; this lane and the inaddon lane both restore
-      # from that shared key. All three lanes start in parallel on the same PR
+      # No cache-save step here on purpose. The external lane (``haos-e2e``)
+      # computes the same cache key (#1407) and is the SOLE saver of the
+      # shared qcow2; the other five lanes only restore from that shared
+      # key. All six lanes start in parallel on the same PR
       # push, so having only one saver avoids the "another job may be creating
       # this cache" race + the wasted tar+zstd write of a 12 GB image. The
-      # shared-key bet is safe because all three consume the SAME byte-identical
+      # shared-key bet is safe because all six consume the SAME byte-identical
       # base: the key hashes bake-input paths only, and every PR-level source /
       # feature-flag override happens in-VM at test time on each worker's overlay
       # (see stage_embedded_server_wheel_in_qcow2 /
@@ -612,8 +616,9 @@ jobs:
 
       - name: Compute image cache key
         id: key
-        # Shared with haos-e2e-tests.yml: both lanes consume the same
-        # qcow2. The bake (build_image.py::build) unconditionally calls
+        # Shared with the ``haos-e2e`` lane and every other HAOS lane in
+        # this file: all six consume the same qcow2. The bake
+        # (build_image.py::build) unconditionally calls
         # stage_dev_addon_source + install_ha_mcp_dev_addon, so the baked
         # image is already addon-baked and works for both tiers. Inaddon's
         # refresh_dev_addon_source_in_qcow2 overwrites the addon source at
@@ -662,7 +667,7 @@ jobs:
         # addon-install peaks at the edge of the runner's ~14 GB SSD, so
         # prune the ~30 GB of preinstalled tooling the bake does not use.
         # Keep /opt/hostedtoolcache: Python from there is on PATH for
-        # build_image.py. See haos-e2e-tests.yml for the full rationale.
+        # build_image.py. See the haos-e2e job above for the full rationale.
         if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
         run: |
           df -h /
@@ -682,21 +687,21 @@ jobs:
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-test-image.qcow2
 
-      # No cache-save step here on purpose. The external lane
-      # (haos-e2e-tests.yml) computes the same cache key (#1407) and
-      # always tries to save the same qcow2; both lanes start in
+      # No cache-save step here on purpose. The external lane (``haos-e2e``)
+      # computes the same cache key (#1407) and always tries to save the
+      # same qcow2; all six lanes start in
       # parallel on the same PR push, so whichever lost the save race
       # was burning ~25s on a tar+zstd-write of a 12 GB qcow2 that
       # the actions/cache service then refused with
       # "another job may be creating this cache." Letting only the
       # external lane save eliminates the wasted work without
-      # changing what gets cached — both lanes still restore from the
-      # shared key on the next run.
+      # changing what gets cached — the other five lanes still restore from
+      # the shared key on the next run.
       #
-      # The shared-key bet is safe because both lanes consume the SAME
+      # The shared-key bet is safe because all six lanes consume the SAME
       # byte-identical qcow2: the cache key hashes the bake-input paths
       # only, so a cache miss builds one qcow2 that the saving lane writes
-      # to the shared key for both to restore, and PR-level addon/source
+      # to the shared key for all six to restore, and PR-level addon/source
       # overrides happen *in-VM at test time* (see
       # ``refresh_dev_addon_source_in_qcow2`` /
       # ``refresh_recorder_in_qcow2`` in conftest.py) on each
@@ -959,13 +964,15 @@ jobs:
         # their transport coverage is widened later.
         run: |
           cd tests
-          # PYTEST_ARGS is intentionally word-split into individual pytest args.
+          # Dispatch inputs reach the shell through env (below), never by
+          # direct interpolation into this script — same shape as the beta
+          # lanes. Both stay unquoted for word splitting.
           # shellcheck disable=SC2086
-          uv run pytest src/e2e/ \
+          uv run pytest $PYTEST_PATHS \
             -n2 --dist loadscope -v --tb=short --maxfail=0 \
             -m "not addon_disruptive" $PYTEST_ARGS
           # shellcheck disable=SC2086
-          uv run pytest src/e2e/ \
+          uv run pytest $PYTEST_PATHS \
             -n0 -v --tb=short --maxfail=0 \
             -m addon_disruptive $PYTEST_ARGS \
             || { rc=$?; [ "$rc" -eq 5 ] && echo "no disruptive tests in selection"; [ "$rc" -eq 5 ]; }
@@ -976,6 +983,7 @@ jobs:
           # conftest injects this bare token into HACS inside the guest so its
           # repository calls do not hit the shared-IP unauthenticated rate limit.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
           PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
 
       - name: Extract HA diagnostics from booted qcow2
@@ -1113,8 +1121,8 @@ jobs:
         # download (~1.5 GB xz) + decompress (~7 GB qcow2) + boot + addon-install
         # peaks at the edge of the runner's ~14 GB SSD, so prune the ~30 GB of
         # preinstalled tooling the bake does not use. Keep /opt/hostedtoolcache:
-        # Python from there is on PATH for build_image.py. See haos-e2e-tests.yml
-        # for the full rationale.
+        # Python from there is on PATH for build_image.py. See the haos-e2e job
+        # above for the full rationale.
         if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
         run: |
           df -h /
@@ -1134,11 +1142,11 @@ jobs:
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-test-image.qcow2
 
-      # No cache-save step here on purpose. The external lane
-      # (haos-e2e-tests.yml) computes the same cache key (#1407) and is the SOLE
-      # saver of the shared qcow2; this lane, the inaddon lanes, the stdio lane
-      # and the component-present embedded lane all restore from that shared
-      # key. They start in parallel on the same PR
+      # No cache-save step here on purpose. The external lane (``haos-e2e``)
+      # computes the same cache key (#1407) and is the SOLE saver of the
+      # shared qcow2; the other five lanes — this one, the two inaddon lanes,
+      # the stdio lane and the component-present embedded lane — only restore
+      # from that shared key. They all start in parallel on the same PR
       # push, so having only one saver avoids the "another job may be creating
       # this cache" race + the wasted tar+zstd write of a 12 GB image. The
       # shared-key bet is safe because they all consume the SAME byte-identical
@@ -1298,8 +1306,8 @@ jobs:
 
       - name: Compute image cache key
         id: key
-        # Shared with haos-e2e-tests.yml and every other HAOS lane: they all
-        # consume the same qcow2. The bake (build_image.py::build)
+        # Shared with the ``haos-e2e`` lane and every other HAOS lane in this
+        # file: all six consume the same qcow2. The bake (build_image.py::build)
         # unconditionally calls
         # stage_dev_addon_source + install_ha_mcp_dev_addon, so the baked
         # image is already addon-baked and works for both tiers. Inaddon's
@@ -1350,7 +1358,7 @@ jobs:
         # addon-install peaks at the edge of the runner's ~14 GB SSD, so
         # prune the ~30 GB of preinstalled tooling the bake does not use.
         # Keep /opt/hostedtoolcache: Python from there is on PATH for
-        # build_image.py. See haos-e2e-tests.yml for the full rationale.
+        # build_image.py. See the haos-e2e job above for the full rationale.
         if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
         run: |
           df -h /
@@ -1370,9 +1378,9 @@ jobs:
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-test-image.qcow2
 
-      # No cache-save step here on purpose. The external lane
-      # (haos-e2e-tests.yml) computes the same cache key (#1407) and
-      # always tries to save the same qcow2; all the HAOS lanes start in
+      # No cache-save step here on purpose. The external lane (``haos-e2e``)
+      # computes the same cache key (#1407) and always tries to save the
+      # same qcow2; all six HAOS lanes start in
       # parallel on the same PR push, so whichever lost the save race
       # was burning ~25s on a tar+zstd-write of a 12 GB qcow2 that
       # the actions/cache service then refused with
@@ -1413,9 +1421,9 @@ jobs:
         # HTTP transport to the addon's MCP endpoint.
         #
         # E2E_NO_TOOLS_ENTRY=1 additionally removes the component's "File &
-        # YAML Tools" entry from the worker's overlay pre-boot — the
-        # addon-server user without the component installed (#2292). It is set
-        # once in this step's env, so it covers BOTH pytest phases below.
+        # YAML Tools" entry from the worker's overlay pre-boot — the app
+        # (add-on) server user without the component installed (#2292). It is
+        # set once in this step's env, so it covers BOTH pytest phases below.
         #
         # v1: targets src/e2e/haos_only/ only (canary tier). Widen via
         # workflow_dispatch pytest_paths input once the inaddon plumbing

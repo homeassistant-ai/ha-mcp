@@ -107,9 +107,12 @@ jobs:
   # pr.yml's e2e-validation-no-component on master push. The same full E2E
   # suite runs with the component's "File & YAML Tools" config entry never
   # created (E2E_NO_TOOLS_ENTRY=1) — the app (add-on) / Docker / PyPI user who never
-  # installed the component from HACS. Every other lane sets the component up in
-  # its fixtures, so this is the only place a component-backed capability that
-  # neither falls back nor fails actionably shows up as a raw service-not-found.
+  # installed the component from HACS: the majority install, and the one every
+  # component-present lane hides, because the e2e fixtures set the component up
+  # everywhere. Every component-backed capability must therefore either fall
+  # back to a server-side path or fail with an actionable "install the
+  # component" error; a raw service-not-found is the bug this lane catches (the
+  # HAOS inaddon no-tools lane shares this topology and catches it too).
   e2e-tests-no-component:
     name: E2E Tests (No Component)
     runs-on: ubuntu-latest
