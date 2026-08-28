@@ -2387,6 +2387,14 @@ def _toggle_probe(toggle_id: str, probe_id: str) -> str:
         ? (toast.querySelector('.ha-toast-msg')?.textContent || '') : '';
       probe.dataset.restart = String(
         document.getElementById('restartNotice').classList.contains('show'));
+      // One digit per switch, declaration order of _TOGGLES. The failure
+      // path re-reads via loadPolicyState(), which refreshes or clears the
+      // state of ALL THREE switches — so the repaint has to cover all three,
+      // not just the toggle under test (the repaint-one-of-three bug).
+      probe.dataset.allIndet = ['policy-master-toggle',
+        'policy-manage-tool-toggle', 'read-only-mode-toggle']
+        .map(i => document.getElementById(i).indeterminate ? '1' : '0')
+        .join('');
       document.body.appendChild(probe);
     """
 
@@ -2446,6 +2454,11 @@ class TestAmbiguousSaveAcrossToggles:
         assert 'data-restart="true"' in tag, (
             f"[{case}/{flag}] a landed write needs the restart banner — the "
             f"toast alone auto-dismisses in 4s: {tag}"
+        )
+        # Positive, not just the absence of the wrong message: this branch
+        # exists to say the save landed, and nothing else pins that it does.
+        assert "Saved. Restart required." in tag, (
+            f"[{case}/{flag}] a landed write must say so: {tag}"
         )
 
     @pytest.mark.parametrize("toggle_id,flag,label", _TOGGLES)
@@ -2522,6 +2535,21 @@ class TestAmbiguousSaveAcrossToggles:
             f"[{flag}] must not claim the previous value survived when that "
             f"is unknown: {tag}"
         )
+        # The dedicated copy, positively. Swapping errors.save_outcome_unknown
+        # for the saved toast would otherwise leave the suite green.
+        assert "Could not confirm the change" in tag, (
+            f"[{flag}] the unknown outcome has its own message and this is "
+            f"the only case that shows it: {tag}"
+        )
+        # The failed re-read cleared ALL THREE switch slices
+        # (_clearFlagSwitchState), so all three must repaint as unknown —
+        # repainting only the toggle under test leaves the other two painted
+        # editable at a value that no longer exists, with their unknown
+        # notices hidden.
+        assert 'data-all-indet="111"' in tag, (
+            f"[{flag}] every flag switch must repaint as unknown after the "
+            f"re-read cleared all three state slices: {tag}"
+        )
 
     @pytest.mark.parametrize("toggle_id,flag,label", _TOGGLES)
     def test_server_refusal_reverts_immediately(
@@ -2556,6 +2584,9 @@ class TestAmbiguousSaveAcrossToggles:
         assert 'data-indeterminate="false"' in tag, (
             f"[{flag}] a refusal leaves the server's value KNOWN, so the "
             f"switch stays editable rather than going unknown: {tag}"
+        )
+        assert "did not save" in tag, (
+            f"[{flag}] the revert must say the server kept the previous value: {tag}"
         )
 
 

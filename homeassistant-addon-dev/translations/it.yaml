@@ -166,19 +166,24 @@ configuration:
       viene ignorato in esecuzione indipendentemente dal valore impostato qui.
   enable_lite_docstrings:
     name: Attiva le docstring ridotte degli strumenti (beta)
-    description: 'Funzione beta. Sostituisce le docstring di alcuni strumenti pesanti
-      di ha-mcp (automazioni, script, scene, helper, dashboard, ha_call_service, ha_config_set_yaml)
-      con varianti più brevi che rimandano i dettagli su schema ed esempi allo strumento
-      ha_get_skill_guide (o alla sua risorsa skill://). ATTENZIONE: questo riduce
-      il consumo di token a riposo, ma può peggiorare le prestazioni dell''LLM: le
-      descrizioni ridotte contano sul fatto che l''LLM chiami davvero lo strumento
-      delle skill o legga la risorsa per i dettagli, cosa che non è garantita (alcuni
-      modelli saltano la chiamata aggiuntiva e si ritrovano con meno indicazioni di
-      prima). Si abbina meglio a un client che supporta le risorse MCP oppure a enable_tool_search.
-      Richiede il riavvio per avere effetto. RICHIEDE che l''opzione principale «Attiva
-      le funzioni beta» qui sopra (e nell''interfaccia web) sia attiva, altrimenti
-      questo sotto-flag viene ignorato in esecuzione a prescindere dal valore impostato
-      qui.'
+    description: 'Funzione beta. Sostituisce le docstring su 15 strumenti ha-mcp pesanti
+      (ha_config_get_automation, ha_config_set_automation, ha_config_get_script, ha_config_set_script,
+      ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper,
+      ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service, ha_config_set_yaml,
+      ha_search, ha_manage_backup, ha_report_issue) con varianti più brevi che rimandano
+      i dettagli di schema ed esempio allo strumento ha_get_skill_guide (o alla sua
+      risorsa skill://). Un''eccezione: ha_report_issue rimanda invece al campo delle
+      istruzioni della propria risposta. La regolazione dell''impostazione del suggerimento
+      di backup si applica comunque in modalità ridotta. ATTENZIONE: questo riduce
+      l''utilizzo di token inattivi, ma potrebbe peggiorare le prestazioni del LLM
+      — le descrizioni ridotte si affidano al fatto che il LLM chiami effettivamente
+      lo strumento di competenza o legga la risorsa di competenza per i dettagli,
+      cosa non garantita (alcuni modelli salteranno la chiamata allo strumento extra
+      e finiranno con meno indicazioni rispetto a prima). Ideale in abbinamento a
+      un client che supporta le risorse MCP o con enable_tool_search. Richiede il
+      riavvio per avere effetto. RICHIEDE che l''interruttore principale "Enable beta
+      features" sopra (e nell''interfaccia web) sia attivo — altrimenti questo sotto-flag
+      viene ignorato in esecuzione indipendentemente dal suo valore qui.'
   enable_mandatory_bps:
     name: Allega le skill di buone pratiche alle scritture
     description: 'Interruttore principale della funzione che consegna il contenuto

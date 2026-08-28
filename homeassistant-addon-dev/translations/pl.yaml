@@ -153,19 +153,24 @@ configuration:
       jest ignorowana w czasie wykonywania niezależnie od jej wartości.
   enable_lite_docstrings:
     name: Włącz uproszczone docstringi narzędzi (beta)
-    description: 'Funkcja beta. Zastępuje docstringi w kilku „ciężkich” narzędziach
-      ha-mcp (automations, scripts, scenes, helpers, dashboards, ha_call_service,
-      ha_config_set_yaml) krótszymi wariantami, które odkładają szczegóły schematu
-      i przykładów do narzędzia ha_get_skill_guide (lub jego zasobu skill://). OSTRZEŻENIE:
-      zmniejsza to zużycie tokenów w stanie bezczynności, ale może obniżyć wydajność
-      LLM — skrócone opisy polegają na tym, że LLM faktycznie wywołuje narzędzie skill
-      lub czyta zasób skill w celu uzyskania szczegółów, co nie jest gwarantowane
-      (niektóre modele pominą dodatkowe wywołanie narzędzia i ostatecznie będą miały
-      mniej wskazówek niż wcześniej). Najlepiej używać w połączeniu z klientem obsługującym
-      zasoby MCP lub z enable_tool_search. Wymaga restartu, aby zmiany weszły w życie.
-      WYMAGA włączenia głównego przełącznika „Enable beta features” powyżej (i w interfejsie
-      sieciowym) — w przeciwnym razie ta pod-flaga jest ignorowana podczas działania,
-      niezależnie od jej wartości tutaj.'
+    description: 'Funkcja w fazie beta. Zastępuje opisy (docstringi) w 15 ciężkich
+      narzędziach ha-mcp (ha_config_get_automation, ha_config_set_automation, ha_config_get_script,
+      ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers,
+      ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service,
+      ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) krótszymi
+      wariantami, które oddelegowują szczegóły schematów i przykładów do narzędzia
+      ha_get_skill_guide (lub jego zasobu skill://). Jeden wyjątek: ha_report_issue
+      oddelegowuje te informacje do pola instrukcji we własnej odpowiedzi. Dostosowanie
+      ustawienia podpowiedzi kopii zapasowej nadal działa w trybie uproszczonym. OSTRZEŻENIE:
+      zmniejsza to zużycie tokenów w stanie bezczynności, ale może pogorszyć wydajność
+      LLM — okrojone opisy polegają na tym, że LLM faktycznie wywoła narzędzie umiejętności
+      lub odczyta zasób umiejętności w celu uzyskania szczegółów, co nie jest gwarantowane
+      (niektóre modele pomijają dodatkowe wywołanie narzędzia i kończą z mniejszą
+      ilością wskazówek niż wcześniej). Najlepiej stosować w parze z klientem obsługującym
+      zasoby MCP lub z włączonym enable_tool_search. Wymaga ponownego uruchomienia,
+      aby zacząć działać. WYMAGA, aby główny przełącznik "Włącz funkcje beta" powyżej
+      (i w interfejsie WWW) był włączony — w przeciwnym razie ta podflaga zostanie
+      zignorowana podczas działania, niezależnie od jej wartości tutaj.'
   enable_mandatory_bps:
     name: Dołącz umiejętności najlepszych praktyk przy zapisach
     description: 'Główny przełącznik funkcji dostarczania treści umiejętności narzędzi

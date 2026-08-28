@@ -161,19 +161,24 @@ configuration:
       hier ignoriert.
   enable_lite_docstrings:
     name: Lite-Tool-Docstrings aktivieren (Beta)
-    description: 'Beta-Funktion. Ersetzt die Docstrings auf einer Handvoll schwerer
-      ha-mcp-Tools (Automatisierungen, Skripte, Szenen, Helfer, Dashboards, ha_call_service,
-      ha_config_set_yaml) durch kürzere Varianten, die Schema- und Beispieldetails
-      auf das ha_get_skill_guide-Tool (oder seine skill://-Ressource) verschieben.
-      WARNUNG: Dies reduziert die Leerlauf-Token-Nutzung, kann aber die LLM-Leistung
-      beeinträchtigen – die gekürzten Beschreibungen verlassen sich darauf, dass das
-      LLM tatsächlich das Skill-Tool aufruft oder die Skill-Ressource für Details
-      liest, was nicht garantiert ist (einige Modelle überspringen den zusätzlichen
-      Tool-Aufruf und haben am Ende weniger Anleitung als zuvor). Am besten mit einem
-      Client gepaart, der MCP-Ressourcen unterstützt, oder mit enable_tool_search.
-      Erfordert Neustart, um wirksam zu werden. ERFORDERT, dass der Master-Schalter
-      Beta-Funktionen aktivieren oben (und in der Web-UI) eingeschaltet ist – andernfalls
-      wird dieses Unter-Flag zur Laufzeit ignoriert, unabhängig von seinem Wert hier.'
+    description: 'Beta-Funktion. Ersetzt die Docstrings von 15 speicherintensiven
+      ha-mcp-Tools (ha_config_get_automation, ha_config_set_automation, ha_config_get_script,
+      ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers,
+      ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service,
+      ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) durch kürzere
+      Varianten, die Schema- und Beispieldetails auf das ha_get_skill_guide-Tool (oder
+      dessen skill://-Ressource) auslagern. Eine Ausnahme: ha_report_issue verweist
+      stattdessen auf das instructions-Feld seiner eigenen Antwort. Die Anpassung
+      der Backup-Hinweis-Einstellung gilt weiterhin im Lite-Modus. WARNUNG: Dies reduziert
+      die Token-Nutzung im Ruhezustand, kann jedoch die LLM-Leistung beeinträchtigen
+      — die gekürzten Beschreibungen verlassen sich darauf, dass das LLM tatsächlich
+      das Skill-Tool aufruft oder die Skill-Ressource für Details liest, was nicht
+      garantiert ist (einige Modelle überspringen den zusätzlichen Tool-Aufruf und
+      erhalten dadurch weniger Hilfestellung als zuvor). Am besten in Kombination
+      mit einem Client, der MCP-Ressourcen unterstützt oder mit enable_tool_search.
+      Erfordert einen Neustart, um wirksam zu werden. ERFORDERT, dass der übergeordnete
+      Schalter „Enable beta features“ oben (und in der Web-UI) aktiviert ist — andernfalls
+      wird dieses Unter-Flag zur Laufzeit unabhängig von seinem Wert hier ignoriert.'
   enable_mandatory_bps:
     name: Best-Practice-Skills bei Schreibvorgängen anhängen
     description: 'Hauptschalter für die Funktion zur Bereitstellung von Schreib-Tool-Skill-Inhalten

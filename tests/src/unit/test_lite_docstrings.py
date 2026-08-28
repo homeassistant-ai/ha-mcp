@@ -22,6 +22,7 @@ Covers three layers:
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import sys
@@ -733,10 +734,20 @@ class TestDocumentedToolLists:
 
 
 def _tool_response_has_field(tool_name: str, field: str) -> bool:
-    """True when ``tool_name``'s source returns ``field`` in its response.
+    """True when ``tool_name``'s own function builds a dict carrying ``field``.
 
-    Static check against the module ``extract_tools`` attributes the tool
-    to — enough to catch a renamed response key, without a live HA.
+    AST check, scoped to the function whose name matches the tool inside the
+    module ``extract_tools`` attributes it to. The previous version substring-
+    matched ``'"<field>":'`` over the WHOLE source file, so any dict literal
+    anywhere in the module satisfied it — including one never returned, which
+    is the checked-the-pointer-never-the-destination pattern this test file
+    exists to replace. Scoping to the function is still static (no live HA)
+    and still an approximation — it accepts a dict built but not returned —
+    but the dict must at least live in the tool's own body.
+
+    Assumes the tool's function shares its registered name (true for every
+    tool today); a mismatch returns False, which fails the destination test
+    loudly rather than passing it silently.
     """
     sources = {
         t["source_file"]
@@ -744,7 +755,40 @@ def _tool_response_has_field(tool_name: str, field: str) -> bool:
         if t["name"] == tool_name
     }
     tools_dir = REPO_ROOT / "src" / "ha_mcp" / "tools"
-    return any(
-        f'"{field}":' in (tools_dir / source).read_text(encoding="utf-8")
-        for source in sources
-    )
+
+    def _dict_with_field_in_scope(node: ast.AST) -> bool:
+        """Scan one function's own scope, not code nested inside it.
+
+        A helper or lambda defined inside the tool has its own return
+        value, so a dict it builds is not the tool's response — descending
+        into it would re-open the any-dict-anywhere hole one level down.
+        """
+        for child in ast.iter_child_nodes(node):
+            if isinstance(
+                child,
+                ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda | ast.ClassDef,
+            ):
+                continue
+            if isinstance(child, ast.Dict) and any(
+                isinstance(key, ast.Constant) and key.value == field
+                for key in child.keys
+            ):
+                return True
+            if _dict_with_field_in_scope(child):
+                return True
+        return False
+
+    for source in sources:
+        tree = ast.parse((tools_dir / source).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            # ast.walk, not module-level lookup: registered tools are
+            # methods on registrar classes (ha_report_issue lives inside
+            # one), so the function has to be findable at any depth — only
+            # the scan of its BODY stops at nested scope boundaries.
+            if (
+                isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+                and node.name == tool_name
+            ):
+                if _dict_with_field_in_scope(node):
+                    return True
+    return False

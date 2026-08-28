@@ -73,10 +73,11 @@ configuration:
       Web UI 中）的主“启用 Beta 功能”开关处于开启状态 — 否则此子标志在运行时将被忽略，无论此处的值为何。
   enable_lite_docstrings:
     name: 启用精简工具文档字符串（测试版）
-    description: 测试版功能。将少数重型 ha-mcp 工具（自动化、脚本、场景、辅助元素、仪表盘、ha_call_service、ha_config_set_yaml）上的文档字符串替换为更短的变体，将
-      schema 和示例细节推迟到 ha_get_skill_guide 工具（或其 skill:// 资源）。警告：这会降低空闲 token 用量，但可能降低
-      LLM 表现——精简后的描述依赖 LLM 实际调用技能工具或读取技能资源来获取细节，这并不保证（某些模型会跳过额外的工具调用，最终得到的指引反而比之前更少）。最好与支持
-      MCP 资源的客户端或 enable_tool_search 搭配使用。需要重启才能生效。需要上方（及 Web UI 中）的主开关“启用测试版功能”开启——否则无论此处值如何，此子开关在运行时都会被忽略。
+    description: Beta 功能。将 15 个较重的 ha-mcp 工具（ha_config_get_automation、ha_config_set_automation、ha_config_get_script、ha_config_set_script、ha_config_get_scene、ha_config_set_scene、ha_config_list_helpers、ha_config_set_helper、ha_config_get_dashboard、ha_config_set_dashboard、ha_call_service、ha_config_set_yaml、ha_search、ha_manage_backup、ha_report_issue）的文档字符串替换为更短的变体，将架构和示例详情推迟到
+      ha_get_skill_guide 工具（或其 skill:// 资源）。有一个例外：ha_report_issue 转为推迟到其自身响应的 instructions
+      字段。调整备份提示设置在轻量模式下仍然适用。警告：这减少了空闲状态下的 Token 使用量，但可能会降低 LLM 性能 — 精简后的描述依赖于 LLM
+      实际调用技能工具或读取技能资源来获取详情，但这无法保证（某些模型会跳过额外的工具调用，最终得到的指导比以前少）。最好与支持 MCP 资源的客户端或启用
+      enable_tool_search 搭配使用。需要重启才能生效。要求必须开启上方（以及 Web UI 中的）主“启用 Beta 功能”开关 — 否则此子标志在运行时将被忽略，无论其在此处的值如何。
   enable_mandatory_bps:
     name: 写入时附加最佳实践技能
     description: '写入工具技能内容投递功能（issue #1182）的主开关。启用时（默认），六个配置写入工具（自动化、脚本、场景、辅助元素、仪表盘、原始

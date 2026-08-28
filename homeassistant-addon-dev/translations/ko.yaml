@@ -102,13 +102,17 @@ configuration:
       웹 UI)의 "베타 기능 사용" 마스터 토글이 켜져 있어야 하며, 그렇지 않으면 여기 값과 관계없이 이 하위 플래그는 런타임에서 무시됩니다.
   enable_lite_docstrings:
     name: 간소화된 도구 설명문 사용(베타)
-    description: '베타 기능입니다. 무거운 ha-mcp 도구 몇 가지(자동화, 스크립트, 장면, 헬퍼, 대시보드, ha_call_service,
-      ha_config_set_yaml)의 설명문을, 스키마와 예시 세부 사항을 ha_get_skill_guide 도구(또는 그 skill://
-      리소스)로 넘기는 짧은 버전으로 바꿉니다. 경고: 대기 상태 토큰 사용량은 줄지만 LLM 성능이 떨어질 수 있습니다. 축약된 설명은 LLM이
-      실제로 스킬 도구를 호출하거나 스킬 리소스를 읽어 세부 사항을 확인한다는 전제에 의존하는데, 이는 보장되지 않습니다(일부 모델은 추가 도구
-      호출을 건너뛰어 이전보다 적은 안내만 받게 됩니다). MCP 리소스를 지원하는 클라이언트나 enable_tool_search와 함께 쓰는
-      것이 가장 좋습니다. 적용하려면 다시 시작해야 합니다. 위(그리고 웹 UI)의 "베타 기능 사용" 마스터 토글이 켜져 있어야 하며, 그렇지
-      않으면 여기 값과 관계없이 이 하위 플래그는 런타임에서 무시됩니다.'
+    description: '베타 기능입니다. 15개의 무거운 ha-mcp 도구(ha_config_get_automation, ha_config_set_automation,
+      ha_config_get_script, ha_config_set_script, ha_config_get_scene, ha_config_set_scene,
+      ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard,
+      ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue)의
+      독스트링을 스키마 및 예제 세부 정보를 ha_get_skill_guide 도구(또는 skill:// 리소스)로 위임하는 더 짧은 버전으로
+      바꿉니다. 예외: ha_report_issue는 대신 자체 응답의 instructions 필드로 위임합니다. 백업 힌트 설정 미세 조정은
+      간소화 모드에서도 계속 적용됩니다. 경고: 유휴 토큰 사용량이 줄어들지만 LLM 성능이 저하될 수 있습니다. 축소된 설명은 LLM이 실제로
+      스킬 도구를 호출하거나 상세 정보를 위해 스킬 리소스를 읽는 것에 의존하지만, 이는 보장되지 않습니다(일부 모델은 추가 도구 호출을 건너뛰고
+      이전보다 안내를 덜 받게 될 수 있음). MCP 리소스를 지원하는 클라이언트나 enable_tool_search와 함께 사용하는 것이 가장
+      좋습니다. 적용하려면 재시작이 필요합니다. 위의(및 웹 UI의) 마스터 "베타 기능 활성화" 토글이 켜져 있어야 합니다. 그렇지 않으면
+      여기서의 값과 상관없이 런타임에 이 하위 플래그가 무시됩니다.'
   enable_mandatory_bps:
     name: 쓰기 시 모범 사례 스킬 첨부
     description: '쓰기 도구 스킬 콘텐츠 전달 기능(이슈 #1182)의 마스터 스위치입니다. 켜져 있으면(기본값) 여섯 개의 설정 쓰기

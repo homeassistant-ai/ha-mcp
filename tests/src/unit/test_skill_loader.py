@@ -9,6 +9,7 @@ never fail the write operation that's embedding the response.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -267,14 +268,17 @@ def test_extract_section_handles_ifthen_style_anchor() -> None:
 def test_extract_section_matches_githubs_double_hyphen_anchor() -> None:
     """Stripped punctuation leaves BOTH flanking spaces → a double hyphen.
 
-    GitHub removes the em dash and turns each surrounding space into its own
+    The rule is any punctuation flanked by spaces — the em dash here and the
+    ampersand in the test below behave identically. GitHub drops the
+    punctuation in place and turns each surrounding space into its own
     hyphen, so its own heading link is
     ``#config-entry-data--blind-spots-for-entity-registry-renames``. A
     skill author copies that anchor out of the rendered page, so it is the
     form that has to resolve. Collapsing whitespace runs produced a single
-    hyphen and matched nothing — and ``resolve_skill_files`` skips misses
-    silently, so the agent got no content and no error. Two anchors cited in
-    the bundled ``SKILL.md`` were dead this way.
+    hyphen and matched nothing. Two anchors cited in the bundled
+    ``SKILL.md`` were dead this way — as prose citations only: a miss is
+    logged at WARNING by ``resolve_skill_files``, but nothing requested
+    either anchor at runtime, so no warning ever fired.
     """
     body = (
         "## Config-Entry Data — Blind Spots for entity registry renames\n"
@@ -295,6 +299,81 @@ def test_extract_section_matches_ampersand_double_hyphen_anchor() -> None:
             body, "purpose-specific-triggers--conditions-default-since-20267"
         )
         is not None
+    )
+
+
+# Group 1 is the citation; the prefix class keeps URL fragments out. Every
+# character inside "https://host/path.md#a" is \w, ".", "/" or ":", so no
+# substring of an external link can follow line-start, whitespace, "(", "["
+# or a backtick — while prose, backticked and markdown-link citations all do.
+_ANCHOR_CITATION_RE = re.compile(
+    r"(?:^|[\s(\[`])([\w./-]+\.md#[A-Za-z0-9_-]+)", re.MULTILINE
+)
+
+
+def _vendored_anchor_citations() -> list[str]:
+    """Every ``file.md#anchor`` citation in the bundled skill pack.
+
+    Encoded as ``citing-file.md -> cited-file.md#anchor`` param ids so a
+    failure names where the dead citation lives.
+    """
+    skills_dir = skill_loader.get_skills_dir()
+    if skills_dir is None:
+        return []
+    skill = skills_dir / "home-assistant-best-practices"
+    citations: set[tuple[str, str]] = set()
+    for md in sorted(skill.rglob("*.md")):
+        for match in _ANCHOR_CITATION_RE.finditer(md.read_text(encoding="utf-8")):
+            citations.add((str(md.relative_to(skill)), match.group(1)))
+    return [f"{citing} -> {cite}" for citing, cite in sorted(citations)]
+
+
+@pytest.mark.parametrize("citation", _vendored_anchor_citations() or [None])
+def test_every_vendored_anchor_citation_resolves(citation: str | None) -> None:
+    """Each ``*.md#anchor`` the bundled pack cites must actually resolve.
+
+    The two synthetic-heading tests above prove ``_slugify`` emits a double
+    hyphen; they cannot prove the anchors the pack actually cites are live —
+    if a real heading used a different dash or spacing, both would pass while
+    the citation stayed dead. This is the assertion that matters, and it is
+    what the #2153 slug fix was for: under the old slugifier two of these
+    parameters fail.
+
+    Cited paths are resolved against the skill root first (the form
+    ``resolve_skill_files`` takes), then against the citing file's own
+    directory for sibling-relative prose citations.
+    """
+    if citation is None:
+        pytest.skip("skills-vendor submodule not initialised in this checkout")
+    skills_dir = skill_loader.get_skills_dir()
+    assert skills_dir is not None
+    skill = skills_dir / "home-assistant-best-practices"
+    citing, cite = citation.split(" -> ")
+    path_part, anchor = cite.rsplit("#", 1)
+
+    # Containment mirrors resolve_skill_files: a citation that escapes the
+    # skill directory (e.g. "../README.md#intro") is one production would
+    # reject as traversal, so the test must not bless it just because the
+    # file happens to exist outside the pack.
+    skill_root = skill.resolve()
+    candidates = [skill / path_part, (skill / citing).parent / path_part]
+    target = next(
+        (
+            c
+            for c in candidates
+            if c.resolve().is_relative_to(skill_root) and c.is_file()
+        ),
+        None,
+    )
+    assert target is not None, (
+        f"{citing} cites {cite!r} but no such file exists inside the pack "
+        "(a file outside the skill directory does not count — "
+        "resolve_skill_files rejects traversal)"
+    )
+    section = skill_loader.extract_section(target.read_text(encoding="utf-8"), anchor)
+    assert section, (
+        f"{citing} cites {cite!r} but the anchor matches no heading in "
+        f"{target.name} — the citation is dead if followed"
     )
 
 

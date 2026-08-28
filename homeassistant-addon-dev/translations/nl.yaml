@@ -160,19 +160,23 @@ configuration:
       ongeacht de waarde hiervan.
   enable_lite_docstrings:
     name: Lite tool-docstrings inschakelen (bèta)
-    description: 'Bètafunctie. Vervangt de docstrings van een handvol zware ha-mcp
-      tools (automations, scripts, scenes, helpers, dashboards, ha_call_service, ha_config_set_yaml)
-      door kortere varianten die schema- en voorbeeldgegevens uitstellen naar de ha_get_skill_guide
-      tool (of de skill:// resource ervan). WAARSCHUWING: dit vermindert het tokengebruik
-      in rust, maar kan de LLM-prestaties verslechteren — de ingekorte beschrijvingen
-      zijn afhankelijk van het feit dat de LLM daadwerkelijk de skill tool aanroept
-      of de skill resource leest voor details, wat niet gegarandeerd is (sommige modellen
-      zullen de extra tool-aanroep overslaan en uiteindelijk minder begeleiding hebben
-      dan voorheen). Het beste te combineren met een client die MCP-resources ondersteunt
-      of met enable_tool_search. Vereist een herstart om van kracht te worden. VEREIST
-      dat de hoofdschakelaar "Bètafuncties inschakelen" hierboven (en in de web-UI)
-      is ingeschakeld — anders wordt deze sub-vlag tijdens runtime genegeerd, ongeacht
-      de waarde hier.'
+    description: 'Bètafunctie. Vervangt de docstrings van 15 zware ha-mcp tools (ha_config_get_automation,
+      ha_config_set_automation, ha_config_get_script, ha_config_set_script, ha_config_get_scene,
+      ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard,
+      ha_config_set_dashboard, ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup,
+      ha_report_issue) door kortere varianten die schema- en voorbeeldgegevens verplaatsen
+      naar de ha_get_skill_guide tool (of de bijbehorende skill:// bron). Één uitzondering:
+      ha_report_issue verwijst in plaats daarvan naar het instructieveld van zijn
+      eigen reactie. Het aanpassen van de Back-up-hintinstelling werkt nog steeds
+      in de lite-modus. WAARSCHUWING: dit vermindert het verbruik van inactieve tokens,
+      maar kan de prestaties van de LLM verminderen — de ingekorte beschrijvingen
+      vertrouwen erop dat de LLM daadwerkelijk de skill-tool aanroept of de skill-bron
+      leest voor details, wat niet gegarandeerd is (sommige modellen slaan de extra
+      tool-aanroep over en krijgen zo minder begeleiding dan voorheen). Werkt het
+      best in combinatie met een client die MCP-bronnen ondersteunt of met enable_tool_search.
+      Vereist een herstart om van kracht te worden. VEREIST dat de hoofdoptie "Bètafuncties
+      inschakelen" hierboven (en in de web-interface) is ingeschakeld — anders wordt
+      deze sub-vlag op het moment van uitvoering genegeerd, ongeacht de waarde hier.'
   enable_mandatory_bps:
     name: Koppel best-practice vaardigheden aan schrijfbewerkingen
     description: 'Hoofdschakelaar voor de functie voor het leveren van vaardigheidsinhoud
