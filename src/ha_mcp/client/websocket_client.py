@@ -111,7 +111,7 @@ class WebSocketConnectionState:
         return self._pending_requests.pop(message_id, None)
 
     def cancel_pending_request(self, message_id: int) -> None:
-        """Cancel a pending request future if it exists."""
+        """Remove a pending request future, cancelling it or draining its exception."""
         future = self._pending_requests.pop(message_id, None)
         if future and not future.done():
             future.cancel()
@@ -138,7 +138,7 @@ class WebSocketConnectionState:
         return self._event_responses.pop(message_id, None)
 
     def cancel_event_response(self, message_id: int) -> None:
-        """Cancel a stored event future."""
+        """Remove a pending event future, cancelling it or draining its exception."""
         future = self._event_responses.pop(message_id, None)
         if future and not future.done():
             future.cancel()
@@ -766,9 +766,8 @@ class HomeAssistantWebSocketClient:
             self.cancel_event_response(message_id)
             raise
         except BaseException:
-            # Cancellation mid-send: a CancelledError is a BaseException, so it
-            # skips the clause above (cf. the note in reset_connection) and would
-            # leave BOTH registrations behind — drop them before propagating.
+            # Cancellation mid-send: skips the clause above and would leave BOTH
+            # registrations behind — drop them before propagating.
             self.cancel_pending_response(message_id)
             self.cancel_event_response(message_id)
             raise
@@ -796,12 +795,11 @@ class HomeAssistantWebSocketClient:
         try:
             event_response = await asyncio.wait_for(event_future, timeout=wait_timeout)
         except BaseException:
-            # Widened from ``except TimeoutError``: a cancelled caller took the
-            # same leak path the result wait above closes, leaving the event
-            # registration in _event_responses until an event with this id
-            # arrives. The cleanup is identical for every exception type and the
-            # original exception re-raises unchanged, so callers branching on
-            # TimeoutError (e.g. ha_get_system_health) are unaffected.
+            # A cancelled caller leaves the event registration in
+            # _event_responses until an event with this id arrives, which
+            # nothing sends once the caller is gone. The cleanup is
+            # exception-type-independent and the original exception re-raises
+            # unchanged.
             self.cancel_event_response(message_id)
             raise
 
@@ -854,21 +852,18 @@ class HomeAssistantWebSocketClient:
             self.cancel_pending_response(message_id)
             raise
         except BaseException:
-            # Cancellation mid-send: a CancelledError skips the clause above
-            # (cf. the note in reset_connection) and would leave the pending
-            # future registered — drop it before propagating.
+            # Cancellation mid-send: skips the clause above and would leave the
+            # pending future registered — drop it before propagating.
             self.cancel_pending_response(message_id)
             raise
 
         try:
             response = await asyncio.wait_for(future, timeout=30.0)
         except BaseException:
-            # Widened from ``except TimeoutError``: a cancelled caller leaked
-            # the pending future, which nothing ever resolves once the caller
-            # is gone. The cleanup is identical for every exception type and
-            # the original exception re-raises unchanged, so callers branching
-            # on TimeoutError (e.g. util_helpers' REST-polling fallback) are
-            # unaffected.
+            # A cancelled caller leaks the pending future, which nothing ever
+            # resolves once the caller is gone. The cleanup is
+            # exception-type-independent and the original exception re-raises
+            # unchanged.
             self.cancel_pending_response(message_id)
             raise
 
@@ -961,10 +956,9 @@ class HomeAssistantWebSocketClient:
             self.cancel_pending_response(message_id)
             raise
         except BaseException:
-            # Cancellation mid-send: a CancelledError skips the clause above
-            # (cf. the note in reset_connection) and would leave BOTH the queue
-            # and the pending future registered — the queue never drains and
-            # every later event for this id is buffered forever.
+            # Cancellation mid-send: skips the clause above and would leave BOTH
+            # the queue and the pending future registered — the queue never
+            # drains and buffers every later event for this id forever.
             self._state.unregister_subscription_queue(message_id)
             self.cancel_pending_response(message_id)
             raise
@@ -972,12 +966,10 @@ class HomeAssistantWebSocketClient:
         try:
             response = await asyncio.wait_for(result_future, timeout=timeout)
         except BaseException:
-            # Widened from ``except TimeoutError``: a cancelled caller leaked
-            # the pending future AND the subscription queue, which keeps
-            # accumulating events with no reader. The cleanup is identical for
-            # every exception type and the original exception re-raises
-            # unchanged, so callers branching on TimeoutError (e.g. the HACS
-            # list-lookup fallback) are unaffected.
+            # A cancelled caller leaks the pending future AND the subscription
+            # queue, which keeps accumulating events with no reader. The
+            # cleanup is exception-type-independent and the original exception
+            # re-raises unchanged.
             self._state.unregister_subscription_queue(message_id)
             self.cancel_pending_response(message_id)
             raise

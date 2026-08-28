@@ -1191,3 +1191,71 @@ class TestSubscribeCommand:
             await asyncio.wait_for(get_task, timeout=1.0)
         # The queue must be unregistered.
         assert client._state.get_subscription_queue(sub_id) is None
+
+
+class TestPendingFutureCancelGuards:
+    """``cancel_pending_request`` / ``cancel_event_response`` on a future that
+    is already settled.
+
+    ``reset_connection`` fails every registered future with a normal exception
+    (a bare ``cancel()`` would surface ``CancelledError``, which the MCP SDK
+    reads as a client-initiated cancellation, #1721). A later cancel call on
+    the same id therefore meets a DONE future, and must retrieve that exception
+    rather than drop the last reference to it — asyncio logs an ERROR-level
+    "Future exception was never retrieved" at GC otherwise. ``_log_traceback``
+    is asyncio's retrieved-flag: True after ``set_exception``, flipped False
+    only by ``result()`` / ``exception()``, so asserting it False proves the
+    production code consumed the exception (the GC log itself is not
+    deterministic to observe).
+    """
+
+    @staticmethod
+    def _state():
+        from ha_mcp.client.websocket_client import WebSocketConnectionState
+
+        return WebSocketConnectionState()
+
+    @pytest.mark.asyncio
+    async def test_cancel_pending_request_drains_a_failed_future(self):
+        state = self._state()
+        future = state.register_pending_request(7)
+        future.set_exception(RuntimeError("connection went away"))
+
+        state.cancel_pending_request(7)  # must not raise
+
+        assert state._pending_requests == {}
+        assert future._log_traceback is False, (
+            "the pending future's exception was never retrieved -- asyncio "
+            "would log 'Future exception was never retrieved' at GC"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cancel_event_response_drains_a_failed_future(self):
+        state = self._state()
+        future = state.register_event_response(11)
+        future.set_exception(RuntimeError("connection went away"))
+
+        state.cancel_event_response(11)  # must not raise
+
+        assert state._event_responses == {}
+        assert future._log_traceback is False, (
+            "the event future's exception was never retrieved -- asyncio would "
+            "log 'Future exception was never retrieved' at GC"
+        )
+
+    @pytest.mark.asyncio
+    async def test_neither_helper_raises_on_an_already_cancelled_future(self):
+        """The drain branch must stay behind the ``not cancelled()`` guard:
+        ``exception()`` on a cancelled future raises ``CancelledError``, which
+        would escape the cleanup path every caller runs while unwinding."""
+        state = self._state()
+        pending = state.register_pending_request(7)
+        event = state.register_event_response(11)
+        pending.cancel()
+        event.cancel()
+
+        state.cancel_pending_request(7)
+        state.cancel_event_response(11)
+
+        assert state._pending_requests == {}
+        assert state._event_responses == {}
