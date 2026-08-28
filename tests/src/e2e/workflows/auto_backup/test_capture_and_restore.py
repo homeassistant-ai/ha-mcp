@@ -1049,6 +1049,21 @@ class TestToggleOffSkipsCapture:
         from ha_mcp.config import _reset_global_settings
 
         _reset_global_settings()
+        # The reset above rebuilds the process-global settings singleton
+        # with auto-backup DISABLED, and monkeypatch teardown restores only
+        # the env var — the singleton would stay disabled for the rest of
+        # this worker's life. Whichever test xdist schedules next on this
+        # worker then fails its auto-backup gate unless it happens to call
+        # _enable_auto_backup itself (CI hit this: ha_config_set_yaml
+        # refused in test_yaml_read immediately after this test). Undo the
+        # env FIRST, then rebuild the singleton from the restored values.
+        try:
+            await self._run_disabled_capture_check(mcp_client)
+        finally:
+            monkeypatch.undo()
+            _reset_global_settings()
+
+    async def _run_disabled_capture_check(self, mcp_client) -> None:
 
         # Count before
         before = await safe_call_tool(
