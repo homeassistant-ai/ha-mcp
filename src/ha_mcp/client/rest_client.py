@@ -699,9 +699,10 @@ class HomeAssistantClient:
         writers.
 
         Known imprecision, accepted: the identity check can still stop one
-        page early when at least ``_PROBE_ENTRIES`` consecutive byte-identical
-        rendered lines straddle the window boundary (see the constant's
-        comment for why timestamps cannot disambiguate instead). The failure
+        page early when the compared block — ``_PROBE_ENTRIES`` lines, or the
+        window's own length when that is smaller — is byte-identical across
+        the boundary (see the constant's comment for why timestamps cannot
+        disambiguate instead). The failure
         direction is a missed page of exactly those duplicates — bounded,
         unlike the infinite loop a count-based ``has_more`` produces on the
         clamp.
@@ -711,10 +712,16 @@ class HomeAssistantClient:
             return ErrorLogPage(text=text, has_more=False)
         probe = await fetch(_PROBE_ENTRIES, offset + lines)
         probe_lines = probe.splitlines()
+        window_lines = text.splitlines()
+        # Compare the shared-length prefix: with a window smaller than the
+        # probe (lines < _PROBE_ENTRIES), an end-of-history clamp returns a
+        # probe LONGER than the window, and a full-length compare would read
+        # that as "more history" forever — the small-limit loop this method
+        # exists to prevent.
+        shared = min(len(probe_lines), len(window_lines))
         return ErrorLogPage(
             text=text,
-            has_more=bool(probe_lines)
-            and probe_lines != text.splitlines()[: len(probe_lines)],
+            has_more=shared > 0 and probe_lines[:shared] != window_lines[:shared],
         )
 
     async def get_error_log(self, lines: int, offset: int = 0) -> ErrorLogPage:

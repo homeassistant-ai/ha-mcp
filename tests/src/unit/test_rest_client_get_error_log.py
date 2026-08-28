@@ -645,6 +645,21 @@ class TestJournaldHasMoreProbe:
         assert page.has_more is False
 
     @pytest.mark.asyncio
+    async def test_small_window_clamp_still_ends_paging(self, addon_client):
+        """A probe longer than the window must not read the clamp as "more".
+
+        With lines < _PROBE_ENTRIES and an offset past the journal start,
+        both requests clamp to the oldest entry and the probe comes back
+        LONGER than the window; comparing full lengths would report more
+        history forever. The shared-prefix compare says done.
+        """
+        window = "j0\nj1\n"
+        probe = "".join(f"j{i}\n" for i in range(8))
+        self._serve(addon_client, window, probe)
+        page = await self._fetch(addon_client, lines=2, offset=500)
+        assert page.has_more is False
+
+    @pytest.mark.asyncio
     async def test_proxied_route_probes_the_same_way(self, client):
         """The supervised proxy route runs the identical protocol."""
         client._request = AsyncMock(return_value={"components": ["hassio"]})
