@@ -351,11 +351,24 @@ def test_every_vendored_anchor_citation_resolves(citation: str | None) -> None:
     citing, cite = citation.split(" -> ")
     path_part, anchor = cite.rsplit("#", 1)
 
-    target = skill / path_part
-    if not target.is_file():
-        target = (skill / citing).parent / path_part
-    assert target.is_file(), (
-        f"{citing} cites {cite!r} but no such file exists in the pack"
+    # Containment mirrors resolve_skill_files: a citation that escapes the
+    # skill directory (e.g. "../README.md#intro") is one production would
+    # reject as traversal, so the test must not bless it just because the
+    # file happens to exist outside the pack.
+    skill_root = skill.resolve()
+    candidates = [skill / path_part, (skill / citing).parent / path_part]
+    target = next(
+        (
+            c
+            for c in candidates
+            if c.resolve().is_relative_to(skill_root) and c.is_file()
+        ),
+        None,
+    )
+    assert target is not None, (
+        f"{citing} cites {cite!r} but no such file exists inside the pack "
+        "(a file outside the skill directory does not count — "
+        "resolve_skill_files rejects traversal)"
     )
     section = skill_loader.extract_section(target.read_text(encoding="utf-8"), anchor)
     assert section, (
