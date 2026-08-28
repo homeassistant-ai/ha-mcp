@@ -2564,26 +2564,22 @@ class SearchTools:
         try:
             raw = await component_task
         except Exception as exc:
+            # Settle the leg via ``asyncio.wait``, which never raises the
+            # leg's own CancelledError — while a cancellation of THIS
+            # coroutine delivered at that await still propagates instead of
+            # being consumed right before the fallback runs the whole legacy
+            # search uncancellably.
             dashboard_task.cancel()
-            try:
-                await dashboard_task
-            except (asyncio.CancelledError, Exception):
-                # The leg reports ordinary failures in-band; anything raising
-                # here is the cancellation itself. Either way its outcome is
-                # unused — the fallback serves the dashboards bucket too.
-                pass
+            await asyncio.wait([dashboard_task])
             return await self._component_search_fallback(req, ctx, exc)
         except BaseException:
             # Cancellation / shutdown of THIS coroutine: settle the leg before
-            # propagating, so no cancelled task outlives the call or drops an
-            # unretrieved exception, then re-raise like ``_legacy_ha_search``.
+            # propagating, so no cancelled task outlives the call, then
+            # re-raise like ``_legacy_ha_search``. A second cancellation
+            # delivered during the wait propagates on its own, which is the
+            # same outcome.
             dashboard_task.cancel()
-            try:
-                await dashboard_task
-            except BaseException:
-                # The leg's own CancelledError (or a re-delivered outer
-                # cancellation at this await) — the original is re-raised below.
-                pass
+            await asyncio.wait([dashboard_task])
             raise
         dashboard_outcome = await dashboard_task
 

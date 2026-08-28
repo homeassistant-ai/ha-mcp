@@ -496,12 +496,15 @@ class TestDashboardSplitPagination:
         assert resp["count"] == 2
 
     @pytest.mark.asyncio
-    async def test_score_tie_keeps_component_record_first(
+    async def test_score_tie_is_cut_by_the_mirrored_sort_key(
         self, tmp_path, monkeypatch
     ) -> None:
-        """On a score tie the mirrored component tiebreak decides the page:
-        "automation.kitchen_lights" sorts before the "energy" dashboard_url,
-        so the dashboard does not displace the component record."""
+        """On a score tie the mirrored component tiebreak decides the page.
+
+        There is no component-first rule: the lexical key alone decides, and
+        here "automation.kitchen_lights" < "energy" keeps the automation on
+        the page. A dashboard whose url_path sorted lower would win instead —
+        exactly as it would in the component's own corpus order."""
         _setup_visibility_disabled(tmp_path, monkeypatch)
         ws = _split_ws(
             search_result=_search_result([_automation_record("kitchen_lights", 100)]),
@@ -807,6 +810,57 @@ class TestDashboardSplitComponentLegFailure:
         assert resp["success"] is True
         assert any("served via legacy path" in w for w in resp["warnings"])
         assert state["cancelled"] is True
+
+    @pytest.mark.asyncio
+    async def test_parent_cancellation_during_fallback_settle_propagates(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A cancellation delivered while the failed-component branch settles
+        the leg must propagate — not be consumed right before the legacy
+        fallback runs uncancellably (human review on #2291)."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        cancel_seen = asyncio.Event()
+        release = asyncio.Event()
+
+        async def stubborn_leg(
+            self: SmartSearchTools,
+            query_lower: str,
+            exact_match: bool,
+            semaphore: asyncio.Semaphore,
+            *,
+            include_config: bool,
+        ) -> tuple[list[dict[str, Any]], int]:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancel_seen.set()
+                # Hold through the first cancellation so the caller is
+                # provably parked in its settle wait when the test cancels it.
+                await release.wait()
+                raise
+            return [], 0
+
+        monkeypatch.setattr(
+            SmartSearchTools, "_search_dashboards_surface", stubborn_leg
+        )
+        ws = _split_ws(
+            search_exc=HomeAssistantCommandError("Command failed: boom", "internal"),
+            dashboards_result=_dashboards_result([]),
+        )
+        client = DashboardRoutingClient()
+        ha_search = _build_ha_search(client)
+
+        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+            call = asyncio.ensure_future(
+                ha_search(query="kitchen", search_types=["automation", "dashboard"])
+            )
+            # The component leg fails fast; once the leg has received its
+            # cancel, the call is parked in the settle wait.
+            await cancel_seen.wait()
+            call.cancel()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await call
 
     @pytest.mark.asyncio
     async def test_parent_cancellation_settles_the_dashboard_leg(
