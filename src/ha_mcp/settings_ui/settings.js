@@ -3627,14 +3627,28 @@ async function policyDecide(token, action) {
 // have landed with only its response lost — so re-read first and revert only
 // when the readback actually shows the old value.
 //
-// `spec` is {readState, repaint, revertKey, revertText}: readState() returns
-// {value, known} for this toggle's slice of policyState/readOnlyState, and
-// repaint() is the toggle's own painter.
+// `spec` is {readState, revertKey, revertText}: readState() returns
+// {value, known} for this toggle's slice of policyState/readOnlyState.
+//
+// Repaints are NOT per-toggle. The re-read below is loadPolicyState(),
+// which refreshes — or, through _clearFlagSwitchState(), clears — the
+// state slices of ALL THREE switches. Repainting only the toggle being
+// saved left the other two painted from state that no longer existed:
+// a failed re-read after a Read Only Mode save cleared both policy
+// slices while their switches stayed editable at the stale value with
+// #policyUnknownNotice hidden, and vice versa for #roUnknownNotice.
+function _repaintFlagSwitches() {
+  paintPolicyGlobalToggles();
+  syncReadOnlyToggle();
+  render();
+}
+
 async function handleFailedFlagSave(checkbox, previous, saved, spec) {
   if (saved === false) {
+    // No re-read happened, so the other switches' state is untouched and
+    // repainting them is a no-op — one shape for both branches.
     checkbox.checked = previous;
-    spec.repaint();
-    render();
+    _repaintFlagSwitches();
     updateStatus(t(spec.revertKey, {}, spec.revertText), false, true);
     return;
   }
@@ -3661,8 +3675,7 @@ async function handleFailedFlagSave(checkbox, previous, saved, spec) {
       'reload to see what the server has.');
   }
   // Paint before the status line so the repaint can't clobber it.
-  spec.repaint();
-  render();
+  _repaintFlagSwitches();
   updateStatus(msg, ok, !ok);
 }
 
@@ -3677,7 +3690,6 @@ document.getElementById('policy-master-toggle').addEventListener('change', async
   if (!saved) {
     await handleFailedFlagSave(e.target, previous, saved, {
       readState: () => ({value: policyState.enabled, known: policyState.enabledKnown}),
-      repaint: paintPolicyGlobalToggles,
       revertKey: 'policies.errors.master_save',
       revertText:
         'Tool Security Policies change did not save. The server still has the previous value',
@@ -3713,7 +3725,6 @@ document.getElementById('policy-manage-tool-toggle').addEventListener('change', 
   if (!saved) {
     await handleFailedFlagSave(e.target, previous, saved, {
       readState: () => ({value: policyState.manageToolEnabled, known: policyState.manageToolKnown}),
-      repaint: paintPolicyGlobalToggles,
       revertKey: 'policies.errors.manage_tool_save',
       revertText:
         'Policy-editing tool change did not save. The server still has the previous value',
@@ -3744,7 +3755,6 @@ document.getElementById('read-only-mode-toggle').addEventListener('change', asyn
   if (!saved) {
     await handleFailedFlagSave(e.target, previous, saved, {
       readState: () => ({value: readOnlyState.enabled, known: readOnlyState.enabledKnown}),
-      repaint: syncReadOnlyToggle,
       revertKey: 'tools.read_only.save_failed',
       revertText:
         'Read Only Mode change did not save. The server still has the previous value',
