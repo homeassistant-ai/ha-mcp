@@ -809,6 +809,63 @@ class TestDashboardSplitComponentLegFailure:
         assert state["cancelled"] is True
 
     @pytest.mark.asyncio
+    async def test_parent_cancellation_settles_the_dashboard_leg(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Cancelling ha_search settles the dashboards leg BEFORE the call
+        completes: the leg task must not outlive the parent with an
+        unobserved cancellation."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        search_started = asyncio.Event()
+        state = {"cancelled": False}
+
+        async def hang_forever(
+            self: SmartSearchTools,
+            query_lower: str,
+            exact_match: bool,
+            semaphore: asyncio.Semaphore,
+            *,
+            include_config: bool,
+        ) -> tuple[list[dict[str, Any]], int]:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                state["cancelled"] = True
+                raise
+            return [], 0
+
+        monkeypatch.setattr(
+            SmartSearchTools, "_search_dashboards_surface", hang_forever
+        )
+
+        async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
+            if command_type == "ha_mcp_tools/info":
+                return {"success": True, "result": _CAPS_SPLIT}
+            if command_type == "ha_mcp_tools/search":
+                search_started.set()
+                await asyncio.Event().wait()
+            raise AssertionError(f"unexpected command {command_type!r}")
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(side_effect=_send)
+        client = DashboardRoutingClient()
+        ha_search = _build_ha_search(client)
+
+        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+            call = asyncio.ensure_future(
+                ha_search(query="kitchen", search_types=["automation", "dashboard"])
+            )
+            await search_started.wait()
+            call.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await call
+
+        # The leg settled before the parent call completed — without the
+        # settle-await, its CancelledError delivery would still be pending
+        # here and the flag unset.
+        assert state["cancelled"] is True
+
+    @pytest.mark.asyncio
     async def test_unknown_command_falls_back_silently(
         self, tmp_path, monkeypatch
     ) -> None:

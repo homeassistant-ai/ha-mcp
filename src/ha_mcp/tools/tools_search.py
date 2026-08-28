@@ -2574,9 +2574,16 @@ class SearchTools:
                 pass
             return await self._component_search_fallback(req, ctx, exc)
         except BaseException:
-            # Cancellation / shutdown of THIS coroutine: release the leg and
-            # propagate, like ``_legacy_ha_search`` does.
+            # Cancellation / shutdown of THIS coroutine: settle the leg before
+            # propagating, so no cancelled task outlives the call or drops an
+            # unretrieved exception, then re-raise like ``_legacy_ha_search``.
             dashboard_task.cancel()
+            try:
+                await dashboard_task
+            except BaseException:
+                # The leg's own CancelledError (or a re-delivered outer
+                # cancellation at this await) — the original is re-raised below.
+                pass
             raise
         dashboard_outcome = await dashboard_task
 
