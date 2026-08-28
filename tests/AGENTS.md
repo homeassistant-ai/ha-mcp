@@ -45,9 +45,11 @@ testcontainer run).
   behaviour passes *vacuously*. Naming `"dashboard"` in `search_types` no
   longer changes that — the component serves the surfaces its search command
   has while the dashboards leg serves that bucket, merged server-side
-  (#2289). What still routes a whole call to legacy is `offset + limit` past
-  the component's 500-record `limit` ceiling on such a request
-  (`tests/src/e2e/tools/test_search_reference_graph.py` uses exactly that).
+  (#2289). Two conditions still route such a whole call to legacy:
+  `offset + limit` past the component's advertised `limit` ceiling (500
+  default — `tests/src/e2e/tools/test_search_reference_graph.py` uses exactly
+  that), and a `search_types` that leaves the component search command no
+  surface once `dashboard` is stripped (e.g. `search_types=["dashboard"]`).
 - **The in-process "server" config entry** of that same component (#1527) is
   the embedded backend only, seeded separately. That one IS lane-specific.
 
