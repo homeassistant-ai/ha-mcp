@@ -29,11 +29,11 @@
                 "title": "HA-MCP File & YAML Tools",
                 "description": "Configure the privileged file and YAML editing services used by ha-mcp's opt-in file/YAML tools. These settings also appear in the ha-mcp server's own settings UI and apply live, with no restart. A non-overridable deny floor still blocks sensitive paths (e.g. .storage) and trust-boundary keys (homeassistant, http, frontend, lovelace).",
                 "data": {
-                    "allowed_dirs": "Extra file directories",
+                    "allowed_dirs": "Extra file paths",
                     "extra_yaml_keys": "Extra YAML write keys"
                 },
                 "data_description": {
-                    "allowed_dirs": "Directories relative to the config directory, each granted read and write (e.g. pyscript). Traversal and out-of-config entries are dropped.",
+                    "allowed_dirs": "Paths relative to the config directory, including exact filenames such as sensor.yaml, or paths under /share, /media, /ssl, and /backup. Each entry is granted read and write for that path and anything below it; enter every path as a separate list item. Traversal and other disallowed paths are dropped.",
                     "extra_yaml_keys": "Top-level keys ha_config_set_yaml may write in addition to the built-in ones, for YAML-first integrations on this install (e.g. alert2). Trust-boundary keys are dropped."
                 }
             },

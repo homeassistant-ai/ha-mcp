@@ -1653,8 +1653,8 @@ function renderFsCustomPathsSubForm(parentEl, masterOn, fsOn) {
       ? d.deny_floor.join(', ')
       : '.storage, secrets.yaml';
   info.innerHTML =
-    `<div class="feature-name">${escapeHtml(t('filesystem.custom.title', {}, 'Custom filesystem directories (advanced)'))}</div>` +
-    `<div class="feature-help">${tHtml('filesystem.custom.help', {}, 'Extra directories (one per line) that the file tools may READ and WRITE, either relative to your config dir or an absolute allowed HAOS sibling volume. Each entry grants both read and write. Applies immediately; no restart needed.')}</div>` +
+    `<div class="feature-name">${escapeHtml(t('filesystem.custom.title', {}, 'Custom filesystem paths (advanced)'))}</div>` +
+    `<div class="feature-help">${tHtml('filesystem.custom.help', {}, 'Extra paths (one per line) that file tools may <strong>read and write</strong>. Config-relative paths, including exact filenames such as <code>sensor.yaml</code>, and paths under <code>/share</code>, <code>/media</code>, <code>/ssl</code>, and <code>/backup</code> are supported. Each entry allows that path and anything below it. You can also manage these paths in Home Assistant under Settings → Devices & Services → HA-MCP Custom Component → HA-MCP File & YAML Tools → Configure; both locations edit the same setting and apply changes immediately.')}</div>` +
     `<div class="feature-help">${tHtml('filesystem.custom.blocked', {paths: `<code>${escapeHtml(denyList)}</code>`}, 'Always blocked (cannot be added): {paths}, path traversal (<code>..</code>), and any absolute path outside the HAOS sibling volumes.')}</div>`;
 
   const control = document.createElement('div');
@@ -1674,7 +1674,7 @@ function renderFsCustomPathsSubForm(parentEl, masterOn, fsOn) {
     const note = document.createElement('div');
     note.className = 'feature-locked-note';
     note.textContent =
-      d.reason || t('filesystem.custom.unavailable', {}, 'Custom directories are currently unavailable.');
+      d.reason || t('filesystem.custom.unavailable', {}, 'Custom paths are currently unavailable.');
     control.appendChild(note);
   } else {
     const ta = document.createElement('textarea');
@@ -1684,7 +1684,7 @@ function renderFsCustomPathsSubForm(parentEl, masterOn, fsOn) {
     const btn = document.createElement('button');
     btn.id = 'fsCustomPathsSave';
     btn.className = 'adv-save-btn';
-    btn.textContent = t('filesystem.custom.save', {}, 'Save directories');
+    btn.textContent = t('filesystem.custom.save', {}, 'Save paths');
     btn.addEventListener('click', saveFsCustomPaths);
     const status = document.createElement('div');
     status.id = 'fsCustomPathsStatus';
