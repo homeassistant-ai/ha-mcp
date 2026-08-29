@@ -222,6 +222,8 @@ class SceneSearchMixin(ConfigFetchMixin):
         sid: str,
         slug_to_storage_id: dict[str, str],
         failed_errors: list[str],
+        *,
+        registry_failed: bool,
     ) -> tuple[str, dict[str, Any] | None, str | None]:
         """Fetch one scene's storage config and classify the outcome.
 
@@ -238,15 +240,23 @@ class SceneSearchMixin(ConfigFetchMixin):
         # "vanished" case — round-6 of #2302's no-component lane caught exactly
         # that on the seeded YAML-with-id scene. Passing the resolution keeps
         # the 404 classification working AND drops the per-scene registry
-        # round-trip the internal re-resolve used to pay. ``registry_hit``
-        # mirrors whether the registry walk mapped this slug; on the
-        # registry-failed attempt-all path it is False and the client's state
-        # check (by the real slug, which is what ``sid`` is) still separates
-        # existing-but-not-storage from genuinely gone.
-        resolution = SceneResolution(
-            storage_key=slug_to_storage_id.get(sid, sid),
-            registry_hit=sid in slug_to_storage_id,
-            platform=None,
+        # round-trip the internal re-resolve used to pay.
+        #
+        # ONLY when the registry walk succeeded, though: on the failed walk the
+        # map is empty, and a synthesized (sid, registry_hit=False) resolution
+        # would suppress the client's own per-scene resolver — which may work
+        # again by fetch time on a transient list failure, and is the only way
+        # a UI-renamed storage scene (storage key != slug) can still resolve.
+        # Leaving resolution unset there restores the pre-#2302 per-scene
+        # resolve for exactly that path (Codex review on #2302).
+        resolution = (
+            None
+            if registry_failed
+            else SceneResolution(
+                storage_key=slug_to_storage_id.get(sid, sid),
+                registry_hit=sid in slug_to_storage_id,
+                platform=None,
+            )
         )
         try:
             config_resp = await asyncio.wait_for(
@@ -393,7 +403,7 @@ class SceneSearchMixin(ConfigFetchMixin):
             sid: str,
         ) -> tuple[str, dict[str, Any] | None, str | None]:
             return await self._fetch_one_scene_config(
-                sid, slug_to_storage_id, failed_errors
+                sid, slug_to_storage_id, failed_errors, registry_failed=registry_failed
             )
 
         (

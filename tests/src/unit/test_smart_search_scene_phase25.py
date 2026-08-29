@@ -187,6 +187,17 @@ class TestSceneRegistryAugmentation:
         assert result["success"] is True
         scenes = result.get("scenes", [])
         assert len(scenes) == 1, f"Augmentation failure must not lose match: {scenes}"
+        # The other half of the resolution seam (Codex review on #2302): when
+        # the registry WALK failed, the scan must NOT hand the client a
+        # synthesized empty-map resolution — that would suppress the client's
+        # own per-scene resolver, which may work again by fetch time on a
+        # transient list failure and is the only route by which a UI-renamed
+        # storage scene (storage key != slug) can still resolve.
+        call_kwargs = mock_client.get_scene_config.await_args.kwargs
+        assert call_kwargs.get("resolution") is None, (
+            "registry-failed path must leave resolution unset so the client "
+            f"re-resolves per scene; got {call_kwargs}"
+        )
         # With the registry unavailable there is no way to tell HA-managed
         # from integration-managed scenes, so every scene is attempted; the
         # slug doubles as the storage id here and the fetch succeeds.
