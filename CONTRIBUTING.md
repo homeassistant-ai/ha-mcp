@@ -32,7 +32,7 @@ uv run mypy src/                   # Type check
 uv run ast-grep scan               # AST lint (error handling patterns)
 ```
 
-On every commit, hooks run `ruff check --fix` (lint), `ast-grep scan` (AST lint), `mypy` (type check), and unit tests in parallel via [lefthook](https://github.com/evilmartians/lefthook). The **Fast Checks** CI job also enforces these on pull requests, alongside the lockfile, docs-size, HACS and Hassfest checks, and additionally runs `ruff format --check` on changed Python files.
+On every commit, hooks run `ruff check --fix` (lint), `ast-grep scan` (AST lint), `mypy` (type check), and unit tests in parallel via [lefthook](https://github.com/evilmartians/lefthook). On pull requests the **Fast Checks** CI job enforces the lint, AST lint, and type checks (unit tests run in the separate **Unit Tests** job), alongside the lockfile, docs-size, HACS and Hassfest checks, and additionally runs `ruff format --check` on changed Python files.
 
 ## 🔄 Migrating from pre-commit to lefthook
 

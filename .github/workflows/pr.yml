@@ -208,11 +208,18 @@ jobs:
   # below still runs in that container image, so the Renovate datasource pinning
   # it stays live.)
   #
-  # `if: success() || failure()` on every check step from the docs-size one down
-  # is the failure-attribution requirement: one lane must still report EVERY
-  # check, so a ruff failure cannot hide a mypy failure the way it would if the
-  # steps simply stopped at the first red. It is deliberately not `always()` —
+  # `if: success() || failure()` on every step after the first check is the
+  # failure-attribution requirement: one lane must still report EVERY check, so
+  # a ruff failure cannot hide a mypy failure the way it would if the steps
+  # simply stopped at the first red. It is deliberately not `always()` —
   # a cancelled run stops here instead of grinding through the rest.
+  #
+  # ORDER IS LOAD-BEARING: HACS and Hassfest validate the checkout as
+  # committed, so they run before ANY step that executes PR-controlled code —
+  # `uv sync` builds this project via its PR-supplied PEP 517 backend, and the
+  # lock/constraint/lint steps run PR-supplied config and scripts. Reordering
+  # a validator after any of those would let a PR rewrite the tree the
+  # validators certify (Codex review on #2314).
   fast-checks:
     name: Fast Checks
     runs-on: ubuntu-latest
@@ -226,23 +233,57 @@ jobs:
       with:
         persist-credentials: false
 
+    - name: Docs Size Check
+      run: |
+        size=$(LC_ALL=C.UTF-8 wc -m < AGENTS.md)
+        if [ "$size" -gt 40000 ]; then
+          echo "::warning file=AGENTS.md::AGENTS.md is ${size} chars (>40k). Claude Code will show a startup performance warning."
+        fi
+
+    - name: HACS validation
+      if: success() || failure()
+      uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa # main
+      with:
+        category: integration
+
+    # Drop vendored third-party fixtures (e.g. the upstream HACS integration
+    # used as an e2e fixture) so hassfest only validates integrations this repo
+    # owns. Mirrors scripts/codeql_quality_gate.py's PATHS_IGNORE convention.
+    # Restored right after Hassfest so the later checks see the tree as
+    # committed.
+    - name: Remove vendored test fixtures
+      if: success() || failure()
+      run: rm -rf tests/initial_test_state
+
+    - name: Hassfest
+      if: success() || failure()
+      uses: home-assistant/actions/hassfest@a7c616ce81ccda50150bf1595786c71b1883fabb # master
+
+    - name: Restore vendored test fixtures
+      if: success() || failure()
+      run: git checkout -- tests/initial_test_state
+
     - name: Install uv
       # Pinned, not "latest": the folded jobs got uv from the Renovate-pinned
       # container image, and `uv lock --check` is sensitive to the uv version.
       # Renovate bumps this pin (github-releases datasource) alongside the
       # unit-tests job's container image tag.
+      if: success() || failure()
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
         version: "0.12.7"
 
     - name: Set up Python
+      if: success() || failure()
       run: uv python install ${{ env.PYTHON_VERSION }}
 
     - name: Verify uv.lock is in sync with pyproject.toml
+      if: success() || failure()
       run: uv lock --check
 
     - name: Check dependency alignment with HA core constraints
+      if: success() || failure()
       # Mechanical link to HA's own package_constraints.txt (#2135/#2146):
       # where HA pins a shared dependency exactly, ha-mcp must admit the pin;
       # where HA is loose, ha-mcp must not pin exactly (an exact pin forces
@@ -273,14 +314,6 @@ jobs:
           exit 0
         fi
         exit "$status"
-
-    - name: Docs Size Check
-      if: success() || failure()
-      run: |
-        size=$(LC_ALL=C.UTF-8 wc -m < AGENTS.md)
-        if [ "$size" -gt 40000 ]; then
-          echo "::warning file=AGENTS.md::AGENTS.md is ${size} chars (>40k). Claude Code will show a startup performance warning."
-        fi
 
     - name: Install dependencies
       # One install for ruff, ast-grep and mypy. The three folded jobs each ran
@@ -325,25 +358,6 @@ jobs:
         uv run mypy src/ custom_components/ homeassistant-addon/ scripts/
         uv run mypy homeassistant-addon-webhook-proxy/
         uv run mypy homeassistant-addon-webhook-proxy-dev/
-
-    - name: HACS validation
-      if: success() || failure()
-      uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa # main
-      with:
-        category: integration
-
-    # Drop vendored third-party fixtures (e.g. the upstream HACS integration
-    # used as an e2e fixture) so hassfest only validates integrations this repo
-    # owns. Mirrors scripts/codeql_quality_gate.py's PATHS_IGNORE convention.
-    # LAST of the checks that read the tree, because it mutates the workspace:
-    # every step above still sees the checkout as committed.
-    - name: Remove vendored test fixtures
-      if: success() || failure()
-      run: rm -rf tests/initial_test_state
-
-    - name: Hassfest
-      if: success() || failure()
-      uses: home-assistant/actions/hassfest@a7c616ce81ccda50150bf1595786c71b1883fabb # master
 
   # Anchors the docs-site accessibility work (#1574/#1595): astro check (types
   # + a11y diagnostics), eslint-plugin-astro + jsx-a11y, and an axe-core audit
