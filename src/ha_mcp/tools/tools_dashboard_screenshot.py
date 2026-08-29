@@ -152,20 +152,17 @@ class DashboardScreenshotTools:
                 "'auto'."
             ),
         ] = DEFAULT_HEIGHT,
-        viewport_presets: (
-            Annotated[
-                list[ViewportPreset],
-                JSON_STRING_COERCION,
-                Field(
-                    description="Render one or more named responsive viewports in "
-                    "this order: mobile (390x844), tablet (768x1024), desktop "
-                    "(1280x800). Overrides width/height.",
-                    min_length=1,
-                    max_length=3,
-                ),
-            ]
-            | None
-        ) = None,
+        viewport_presets: Annotated[
+            list[ViewportPreset] | None,
+            Field(
+                description="Render one or more named responsive viewports in "
+                "this order: mobile (390x844), tablet (768x1024), desktop "
+                "(1280x800). Overrides width/height.",
+                min_length=1,
+                max_length=3,
+            ),
+            JSON_STRING_COERCION,
+        ] = None,
         orientation: Annotated[
             Orientation | None,
             Field(
