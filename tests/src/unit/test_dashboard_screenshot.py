@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from pydantic import ValidationError
 
 from ha_mcp import config
@@ -169,6 +170,68 @@ class TestRegistrationGate:
 
 
 class TestStandaloneScreenshotTool:
+    async def test_viewport_presets_registered_validation_and_schema(
+        self, monkeypatch: Any
+    ) -> None:
+        from fastmcp import FastMCP
+
+        from ha_mcp.dashboard_screenshot.paths import DashboardRenderTarget
+        from ha_mcp.tools import tools_dashboard_screenshot as mod
+
+        async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
+            return DashboardRenderTarget(
+                dashboard_url_path="wall-panel",
+                view_path=None,
+                render_path="wall-panel",
+                view_index=None,
+                stable=True,
+            )
+
+        captures: list[dict[str, Any]] = []
+
+        async def capture(*_a: Any, **kwargs: Any) -> list[Any]:
+            captures.append(kwargs)
+            return [_fake_dashboard_capture()]
+
+        monkeypatch.setattr(
+            config,
+            "get_global_settings",
+            lambda: SimpleNamespace(enable_dashboard_screenshot=True),
+        )
+        monkeypatch.setattr(mod, "resolve_dashboard_render_target", resolve)
+        monkeypatch.setattr(mod, "capture_dashboard_images", capture)
+
+        mcp = FastMCP("test")
+        mod.register_dashboard_screenshot_tools(mcp, MagicMock())
+        tool = await mcp.get_tool("ha_get_dashboard_screenshot")
+
+        await tool.run(
+            {
+                "dashboard_url_path": "wall-panel",
+                "width": 2560,
+                "viewport_presets": None,
+            }
+        )
+        assert captures[-1]["viewport_presets"] is None
+        assert captures[-1]["width"] == 2560
+
+        await tool.run(
+            {
+                "dashboard_url_path": "wall-panel",
+                "viewport_presets": '["mobile"]',
+            }
+        )
+        assert captures[-1]["viewport_presets"] == ["mobile"]
+
+        for invalid in ([], ["mobile"] * 4):
+            with pytest.raises(FastMCPValidationError):
+                await tool.run({"viewport_presets": invalid})
+
+        schema = tool.parameters["properties"]["viewport_presets"]
+        assert schema["description"].startswith("Render one or more named")
+        assert schema["anyOf"][0]["minItems"] == 1
+        assert schema["anyOf"][0]["maxItems"] == 3
+
     async def test_structured_target_returns_ordered_images_and_metadata(
         self, monkeypatch: Any
     ) -> None:
