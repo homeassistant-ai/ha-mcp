@@ -34,6 +34,7 @@ test, so the whole lifecycle runs with no HA install and no I/O.
 from __future__ import annotations
 
 import ast
+import importlib
 import inspect
 import sys
 import textwrap
@@ -51,8 +52,11 @@ import custom_components.ha_mcp_tools as comp  # noqa: E402
 
 # Imported eagerly so ``async_setup_entry``'s lazy
 # ``from .install_source_check import ...`` resolves from sys.modules whatever a
-# peer test module has since done to the ``homeassistant.*`` stubs.
-import custom_components.ha_mcp_tools.install_source_check  # noqa: E402, F401
+# peer test module has since done to the ``homeassistant.*`` stubs. An explicit
+# import_module call, not an import statement: the module is wanted purely for
+# its sys.modules side effect, and the call form says so (a bare import here
+# reads as unused to linters that ignore noqa, e.g. CodeQL).
+importlib.import_module("custom_components.ha_mcp_tools.install_source_check")
 from custom_components.ha_mcp_tools.const import (  # noqa: E402
     CONF_ENTRY_TYPE,
     DOMAIN,
