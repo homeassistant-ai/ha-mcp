@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Niestandardowy komponent HA-MCP",
-        "description": "Wybierz, co chcesz dodać. **HA-MCP Server** uruchamia pełny serwer ha-mcp wewnątrz Home Assistanta i udostępnia go za pomocą webhooka Home Assistanta – jest to instalacja, której większość osób oczekuje. Jest to samodzielny serwer i kompletny zamiennik każdej innej metody instalacji: aplikacji (dodatku), platformy Docker, uvx/PyPI, stdio; jeśli go uruchomisz, nie uruchamiaj równocześnie żadnej z nich. **HA-MCP File & YAML Tools** dodaje uprzywilejowane usługi edycji plików i konfiguracji YAML, potrzebne tylko wtedy, gdy włączysz opcjonalne narzędzia edycji plików/YAML ha-mcp. Jeśli Twój serwer ha-mcp działa już gdzie indziej – w aplikacji (dodatku), Dockerze, uvx – nie potrzebujesz wpisu serwera; dodaj tylko ten wpis File & YAML, i to tylko wtedy, gdy korzystasz z tych narzędzi. Działa on z każdym typem serwera i można go dodać później w dowolnym momencie.",
+        "description": "Wybierz, co chcesz dodać. **HA-MCP Server** uruchamia pełny serwer ha-mcp wewnątrz Home Assistanta i udostępnia go za pomocą webhooka Home Assistanta – jest to instalacja, której wybiera większość osób. Jest to samodzielny serwer i kompletny zamiennik każdej innej metody instalacji: aplikacji (dodatku), Dockera, uvx/PyPI, stdio; jeśli go uruchamiasz, nie uruchamiaj równocześnie żadnej z nich. **HA-MCP File & YAML Tools** pełni dwie role. Jeśli Twój serwer ha-mcp działa poza Home Assistantem – w aplikacji, Dockerze, uvx/PyPI, stdio – ten wpis zapewnia również temu serwerowi możliwości komponentu w procesie, do których nie ma dostępu z zewnątrz (szybkie wyszukiwanie w procesie, metadane wpisów konfiguracji, odczyty oparte na rejestrze), więc warto go dodać do każdej zewnętrznej instalacji, a także stanowi on bramkę dla uprzywilejowanych usług edycji plików i YAML, używanych przez opcjonalne narzędzia plików/YAML w ha-mcp. Jeśli zamiast tego dodasz wpis HA-MCP Server, zapewnia on już te współdzielone możliwości, więc ten drugi wpis jest wtedy potrzebny tylko jako bramka dla opcjonalnych narzędzi plików/YAML. Działa z każdym typem serwera i można go dodać później w dowolnym momencie.",
         "menu_options": {
           "server": "Serwer HA-MCP (zalecane)",
           "tools": "Narzędzia plików i YAML HA-MCP (opcjonalne)"
@@ -11,7 +11,7 @@
       },
       "tools": {
         "title": "Narzędzia plików i YAML HA-MCP",
-        "description": "Konfiguruje uprzywilejowane usługi plików i konfiguracji YAML. Potrzebne tylko wtedy, gdy włączysz opcjonalne narzędzia edycji plików/YAML ha-mcp (flagi funkcji, domyślnie wyłączone) – dotyczy to każdego typu serwera, w tym serwera HA-MCP działającego w procesie. Możesz dodać lub usunąć ten wpis w dowolnym momencie."
+        "description": "Konfiguruje uprzywilejowane usługi edycji plików i konfiguracji YAML, które pozostają zabezpieczone za opcjonalnymi narzędziami edycji plików/YAML ha-mcp (flagi funkcji, domyślnie wyłączone) – dotyczy to każdego typu serwera, w tym serwera HA-MCP Server działającego w procesie. Jeśli Twój serwer ha-mcp działa poza Home Assistantem, ten wpis zapewnia mu również możliwości komponentu w procesie, do których nie ma dostępu z zewnątrz (szybkie wyszukiwanie w procesie, metadane wpisów konfiguracji, odczyty oparte na rejestrze), które warto mieć nawet przy wyłączonych narzędziach plików/YAML. Możesz dodać lub usunąć ten wpis w dowolnym momencie."
       },
       "server": {
         "title": "Serwer HA-MCP",

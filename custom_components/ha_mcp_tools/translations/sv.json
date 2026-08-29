@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "HA-MCP Anpassad Komponent",
-        "description": "Välj vad som ska läggas till. **HA-MCP Server** kör hela ha-mcp-servern inne i Home Assistant och exponerar den via en Home Assistant-webhook – detta är installationen som de flesta vill ha. Den är en fristående server och en komplett ersättning för alla andra installationsmetoder: App (tillägg), Docker, uvx/PyPI, stdio; om du kör den ska du inte samtidigt köra någon av dem. **HA-MCP File & YAML Tools** lägger till de privilegierade fil- och YAML-konfigurationstjänsterna, vilket endast behövs om du aktiverar ha-mcp:s valfria fil-/YAML-verktyg. Om din ha-mcp-server redan körs någon annanstans – App (tillägg), Docker, uvx – behöver du inte serverposten – lägg endast till denna Fil- och YAML-post, och endast om du använder dessa verktyg. Den fungerar med alla servertyper och kan läggas till senare när som helst.",
+        "description": "Välj vad som ska läggas till. **HA-MCP Server** kör hela ha-mcp-servern inne i Home Assistant och exponerar den via en Home Assistant-webhook – detta är installationen som de flesta vill ha. Den är en fristående server och en komplett ersättning för alla andra installationsmetoder: App (tillägg), Docker, uvx/PyPI, stdio; om du kör den, kör inte någon av dem samtidigt. **HA-MCP File & YAML Tools** har två roller. Om din ha-mcp-server körs utanför Home Assistant – app, Docker, uvx/PyPI, stdio – ger denna post även den servern de inbyggda komponentfunktioner den inte kan nå utifrån (snabb inbyggd sökning, metadata för konfigurationsposter, registerbaserade läsningar), så den är värd att lägga till för varje extern installation, och den fungerar som spärr för de privilegierade fil- och YAML-redigeringstjänsterna som används av ha-mcp:s valbara fil-/YAML-verktyg. Om du lägger till posten HA-MCP Server i stället, tillhandahåller den posten redan dessa delade funktioner, så denna andra post behövs då endast som spärr för de valbara fil-/YAML-verktygen. Den fungerar med alla servertyper och kan läggas till senare när som helst.",
         "menu_options": {
           "server": "HA-MCP Server (rekommenderas)",
           "tools": "HA-MCP Fil- & YAML-verktyg (valfritt)"
@@ -11,7 +11,7 @@
       },
       "tools": {
         "title": "HA-MCP Fil- & YAML-verktyg",
-        "description": "Konfigurerar de privilegierade fil- och YAML-konfigurationstjänsterna. Behövs endast om du aktiverar ha-mcp:s valfria fil-/YAML-redigeringsverktyg (funktionsflaggor, avstängda som standard) – detta gäller för alla servertyper, inklusive den inbyggda HA-MCP-servern. Du kan lägga till eller ta bort denna post när som helst."
+        "description": "Konfigurerar de privilegierade fil- och YAML-konfigurationstjänsterna, som förblir spärrade bakom ha-mcp:s valbara fil-/YAML-redigeringsverktyg (funktionsflaggor, av som standard) – detta gäller för alla servertyper, inklusive den inbyggda HA-MCP Server. Om din ha-mcp-server körs utanför Home Assistant ger denna post den även de inbyggda komponentfunktioner den inte kan nå utifrån (snabb inbyggd sökning, metadata för konfigurationsposter, registerbaserade läsningar), vilka är värda att ha även när fil-/YAML-verktygen är avstängda. Du kan lägga till eller ta bort denna post när som helst."
       },
       "server": {
         "title": "HA-MCP Server",

@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "HA-MCP Propra Komponanto",
-        "description": "Elektu kion aldoni. **HA-MCP Server** rulas la plenan ha-mcp servilon ene de Home Assistant kaj elmetas ĝin per Home Assistant rethoko (webhook) — ĉi tio estas la instalado, kiun la plej multaj homoj volas. Ĝi estas memstara servilo kaj kompleta anstataŭaĵo por ĉiu alia instala metodo: Apo (aldonaĵo), Docker, uvx/PyPI, stdio; se vi rulas ĝin, ne rulu ankaŭ unu el tiuj. **HA-MCP File & YAML Tools** aldonas la privilegiajn dosierajn kaj YAML-konfigurajn servojn, bezonatajn nur se vi ŝaltas la laŭvolajn dosierajn/YAML-ilojn de ha-mcp. Se via ha-mcp servilo jam rulas aliloke — Apo (aldonaĵo), Docker, uvx — vi ne bezonas la servilan eniron — aldonu nur ĉi tiun Dosieran & YAML eniron, kaj nur se vi uzas tiujn ilojn. Ĝi funkcias kun ĉiu servila tipo kaj povas esti aldonita poste iam ajn.",
+        "description": "Elektu kion aldoni. **HA-MCP Server** rulas la plenan ha-mcp-servilon ene de Home Assistant kaj elmetas ĝin per Home Assistant-retooko (webhook) — ĉi tio estas la instalo, kiun la plej multaj homoj deziras. Ĝi estas memstara servilo kaj kompleta anstataŭaĵo por ĉiu alia instala metodo: Apo (aldonaĵo), Docker, uvx/PyPI, stdio; se vi rulas ĝin, ne krome rulas iun el tiuj. **HA-MCP File & YAML Tools** havas du rolojn. Se via ha-mcp-servilo rulas ekster Home Assistant — apo, Docker, uvx/PyPI, stdio — ĉi tiu enigo ankaŭ donas al tiu servilo la enprocezajn komponentajn kapablojn, kiujn ĝi ne povas atingi de ekstere (rapida enproceza serĉo, metadatenoj de agorda enigo, legadoj subtenataj de registro), do indas aldoni ĝin al ĉiu ekstera instalo, kaj ĝi regas la privilegiitajn dosierajn kaj YAML-redaktajn servojn uzatajn de la laŭvolaj dosieraj/YAML-iloj de ha-mcp. Se vi aldonas la enigon de HA-MCP Server anstataŭe, tiu enigo jam provizas tiujn komunajn kapablojn, do ĉi tiu dua enigo tiam necesas nur kiel la pordego por la laŭvolaj dosieraj/YAML-iloj. Ĝi funkcias kun ĉiu servilspeco kaj povas esti aldonita poste iam ajn.",
         "menu_options": {
           "server": "HA-MCP Servilo (rekomendita)",
           "tools": "HA-MCP Dosieraj & YAML Iloj (laŭvola)"
@@ -11,7 +11,7 @@
       },
       "tools": {
         "title": "HA-MCP Dosieraj & YAML Iloj",
-        "description": "Agordas la privilegiajn dosierajn kaj YAML-konfigurajn servojn. Nur necesa se vi ebligas la laŭvolajn dosierajn/YAML-redaktajn ilojn de ha-mcp (funkciaj flagoj, malŝaltitaj defaŭlte) — ĉi tio aplikiĝas al ĉiu servila tipo, inkluzive de la enproceza HA-MCP Servilo. Vi povas aldoni aŭ forigi ĉi tiun eniron iam ajn."
+        "description": "Agordas la privilegiitajn dosierajn kaj YAML-agordajn servojn, kiuj restas regataj malantaŭ la laŭvolaj dosieraj/YAML-redaktaj iloj de ha-mcp (funkciaj flagoj, defaŭlte malŝaltitaj) — ĉi tio aplikiĝas al ĉiu servilspeco, inkluzive de la enproceza HA-MCP Server. Se via ha-mcp-servilo rulas ekster Home Assistant, ĉi tiu enigo ankaŭ donas al ĝi la enprocezajn komponentajn kapablojn, kiujn ĝi ne povas atingi de ekstere (rapida enproceza serĉo, metadatenoj de agorda enigo, legadoj subtenataj de registro), kiuj indas havi eĉ kiam la dosieraj/YAML-iloj estas malŝaltitaj. Vi povas aldoni aŭ forigi ĉi tiun enigon iam ajn."
       },
       "server": {
         "title": "HA-MCP Servilo",

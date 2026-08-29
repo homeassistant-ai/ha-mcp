@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "HA-MCP 自定义组件",
-        "description": "选择要添加的内容。**HA-MCP Server** 在 Home Assistant 内部运行完整的 ha-mcp 服务器，并通过 Home Assistant Webhook 将其公开——这是绝大多数人需要的安装方式。这是一个独立的服务器，可完全替代所有其他安装方式：App (add-on)、Docker、uvx/PyPI、stdio；如果您运行了它，请勿同时运行其中任何一种。**HA-MCP File & YAML Tools** 添加了特权文件和 YAML 编辑服务，仅在您开启 ha-mcp 的可选文件/YAML 工具时才需要。如果您的 ha-mcp 服务器已经在其他地方运行——App (add-on)、Docker、uvx——则无需添加服务器条目——只需添加此 File & YAML 条目，且仅在您使用这些工具时添加。它适用于所有服务器类型，并且可以随时在以后添加。",
+        "description": "选择要添加的内容。**HA-MCP Server** 在 Home Assistant 内部运行完整的 ha-mcp 服务器，并通过 Home Assistant webhook 将其暴露——这是大多数人想要的安装方式。它是一个独立的服务器，可完全替代所有其他安装方法：App (add-on)、Docker、uvx/PyPI、stdio；如果您运行了它，请勿同时运行其他安装方式。**HA-MCP File & YAML Tools** 有两个作用。如果您的 ha-mcp server 运行在 Home Assistant 外部（app、Docker、uvx/PyPI、stdio），此条目还可为该服务器提供其无法从外部访问的进程内组件功能（快速进程内搜索、配置条目元数据、注册表支持的读取），因此非常值得添加到每个外部安装中，并且它还是 ha-mcp 的可选文件/YAML 工具所使用的特权文件与 YAML 编辑服务的访问控制关卡。如果您改为添加 HA-MCP Server 条目，该条目已提供这些共享功能，因此该第二个条目此时仅用作可选文件/YAML 工具的访问控制关卡。它适用于所有服务器类型，并且可以随时在以后添加。",
         "menu_options": {
           "server": "HA-MCP 服务器（推荐）",
           "tools": "HA-MCP 文件与 YAML 工具（可选）"
@@ -11,7 +11,7 @@
       },
       "tools": {
         "title": "HA-MCP 文件与 YAML 工具",
-        "description": "设置特权文件和 YAML 配置服务。仅在您启用 ha-mcp 的可选文件/YAML 编辑工具（功能开关，默认关闭）时才需要——这适用于所有服务器类型，包括进程内的 HA-MCP 服务器。您可以随时添加或移除此条目。"
+        "description": "设置特权文件和 YAML 配置服务，这些服务受控于 ha-mcp 的可选文件/YAML 编辑工具（功能标志，默认关闭）——这适用于所有服务器类型，包括进程内的 HA-MCP Server。如果您的 ha-mcp server 运行在 Home Assistant 外部，此条目还会为其提供无法从外部访问的进程内组件功能（快速进程内搜索、配置条目元数据、注册表支持的读取），即使关闭文件/YAML 工具，这些功能也非常值得拥有。您可以随时添加或删除此条目。"
       },
       "server": {
         "title": "HA-MCP 服务器",

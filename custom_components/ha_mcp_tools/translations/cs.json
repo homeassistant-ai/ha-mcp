@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Vlastní komponenta HA-MCP",
-        "description": "Vyberte, co chcete přidat. **HA-MCP Server** spustí kompletní server ha-mcp uvnitř Home Assistanta a zpřístupní ho prostřednictvím webhooku Home Assistanta – toto je instalace, kterou většina lidí chce. Jedná se o samostatný server a kompletní náhradu za všechny ostatní způsoby instalace: App (add-on), Docker, uvx/PyPI, stdio; pokud jej spouštíte, nespouštějte zároveň žádný z nich. **HA-MCP File & YAML Tools** přidává privilegované služby pro úpravu souborů a YAML, které jsou potřeba pouze v případě, že zapnete volitelné nástroje ha-mcp pro úpravu souborů/YAML. Pokud váš server ha-mcp již běží jinde – App (add-on), Docker, uvx – nepotřebujete záznam serveru – přidejte pouze tento záznam File & YAML, a to pouze v případě, že tyto nástroje používáte. Funguje s každým typem serveru a lze jej kdykoli později přidat.",
+        "description": "Vyberte, co chcete přidat. **HA-MCP Server** spustí kompletní server ha-mcp uvnitř Home Assistanta a zpřístupní ho prostřednictvím webhooku Home Assistanta – toto je instalace, kterou většina uživatelů chce. Jedná se o samostatný server a kompletní náhradu za všechny ostatní způsoby instalace: Aplikace (doplněk), Docker, uvx/PyPI, stdio; pokud jej spouštíte, nespouštějte současně žádnou z nich. **HA-MCP File & YAML Tools** má dvě role. Pokud váš server ha-mcp běží mimo Home Assistanta – aplikace, Docker, uvx/PyPI, stdio – tato položka tomuto serveru poskytuje také schopnosti komponenty běžící v procesu, které nemůže dosáhnout zvenčí (rychlé vyhledávání v procesu, metadata položky konfigurace, čtení podpořená registry), takže stojí za to ji přidat ke každé externí instalaci, a slouží jako brána pro privilegované služby úprav souborů a YAML, které používají volitelné nástroje pro soubory/YAML v ha-mcp. Pokud místo toho přidáte položku HA-MCP Server, tato položka již tyto sdílené schopnosti poskytuje, takže tato druhá položka je pak potřeba pouze jako brána pro volitelné nástroje pro soubory/YAML. Funguje se všemi typy serverů a lze ji přidat kdykoliv později.",
         "menu_options": {
           "server": "Server HA-MCP (doporučeno)",
           "tools": "Nástroje souborů a YAML HA-MCP (volitelné)"
@@ -11,7 +11,7 @@
       },
       "tools": {
         "title": "Nástroje souborů a YAML HA-MCP",
-        "description": "Nastavuje privilegované služby pro konfiguraci souborů a YAML. Potřebné pouze v případě, že povolíte volitelné nástroje pro úpravu souborů/YAML ha-mcp (příznaky funkcí, ve výchozím nastavení vypnuto) – to platí pro každý typ serveru, včetně serveru HA-MCP běžícího ve stejném procesu. Tuto položku můžete kdykoli přidat nebo odebrat."
+        "description": "Nastavuje privilegované služby pro úpravy konfigurace souborů a YAML, které zůstávají chráněny za volitelnými nástroji pro úpravy souborů/YAML v ha-mcp (funkční příznaky, ve výchozím nastavení vypnuto) – to platí pro každý typ serveru, včetně vnitroprocesového HA-MCP Serveru. Pokud váš server ha-mcp běží mimo Home Assistanta, tato položka mu také poskytuje schopnosti komponenty běžící v procesu, které nemůže dosáhnout zvenčí (rychlé vyhledávání v procesu, metadata položky konfigurace, čtení podpořená registry), které stojí za to mít i s vypnutými nástroji pro soubory/YAML. Tuto položku můžete kdykoliv přidat nebo odebrat."
       },
       "server": {
         "title": "Server HA-MCP",
