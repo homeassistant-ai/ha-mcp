@@ -306,7 +306,7 @@ def test_container_audit_lane_reports_the_full_failure_surface(
 def _discover_e2e_lanes() -> set[tuple[str, str]]:
     """Every ``(workflow, job)`` in the workflow dir that runs the e2e suite."""
     discovered: set[tuple[str, str]] = set()
-    for path in sorted(_WORKFLOW_DIR.glob("*.yml")):
+    for path in sorted((*_WORKFLOW_DIR.glob("*.yml"), *_WORKFLOW_DIR.glob("*.yaml"))):
         workflow = path.name
         if workflow in _NON_TOPOLOGY_WORKFLOWS:
             continue
