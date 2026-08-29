@@ -18,12 +18,12 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, get_type_hints
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastmcp.exceptions import ToolError
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from ha_mcp import config
 from ha_mcp.dashboard_screenshot.provision import EngineTarget
@@ -169,6 +169,20 @@ class TestRegistrationGate:
 
 
 class TestStandaloneScreenshotTool:
+    def test_viewport_presets_allow_none_without_weakening_list_bounds(self) -> None:
+        from ha_mcp.tools import tools_dashboard_screenshot as mod
+
+        annotation = get_type_hints(
+            mod.DashboardScreenshotTools.ha_get_dashboard_screenshot,
+            include_extras=True,
+        )["viewport_presets"]
+        adapter = TypeAdapter(annotation)
+
+        assert adapter.validate_python(None) is None
+        assert adapter.validate_python('["mobile"]') == ["mobile"]
+        with pytest.raises(ValidationError):
+            adapter.validate_python([])
+
     async def test_structured_target_returns_ordered_images_and_metadata(
         self, monkeypatch: Any
     ) -> None:
