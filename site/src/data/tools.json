@@ -680,7 +680,7 @@
           "type": "Annotated[int | Literal['auto'], Field(description=\"Viewport height in px (64-4096), or 'auto' for content height. full_page=True is a compatibility alias for 'auto'.\")]"
         },
         "viewport_presets": {
-          "type": "Annotated[list[ViewportPreset] | None, JSON_STRING_COERCION, Field(description='Render one or more named responsive viewports in this order: mobile (390x844), tablet (768x1024), desktop (1280x800). Overrides width/height.', min_length=1, max_length=3)]",
+          "type": "Annotated[list[ViewportPreset] | None, Field(description='Render one or more named responsive viewports in this order: mobile (390x844), tablet (768x1024), desktop (1280x800). Overrides width/height.', min_length=1, max_length=3), JSON_STRING_COERCION]",
           "default": null
         },
         "orientation": {
