@@ -920,6 +920,72 @@ class TestDashboardSplitComponentLegFailure:
         assert state["cancelled"] is True
 
     @pytest.mark.asyncio
+    async def test_parent_cancellation_at_the_second_await_settles_the_leg(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The same invariant at the OTHER await: the component leg has already
+        returned, so the call is parked on ``await dashboard_task`` when the
+        cancellation lands. Only the second ``except BaseException`` covers
+        that point — without it the leg task outlives the call with its
+        cancellation still undelivered."""
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        leg_parked = asyncio.Event()
+        component_returned = asyncio.Event()
+        state = {"cancelled": False}
+
+        async def hang_forever(
+            self: SmartSearchTools,
+            query_lower: str,
+            exact_match: bool,
+            semaphore: asyncio.Semaphore,
+            *,
+            include_config: bool,
+        ) -> tuple[list[dict[str, Any]], int]:
+            leg_parked.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                state["cancelled"] = True
+                raise
+            return [], 0
+
+        monkeypatch.setattr(
+            SmartSearchTools, "_search_dashboards_surface", hang_forever
+        )
+
+        async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
+            if command_type == "ha_mcp_tools/info":
+                return {"success": True, "result": _CAPS_SPLIT}
+            if command_type == "ha_mcp_tools/search":
+                # Answer only once the dashboards leg is parked, so the leg is
+                # provably still pending when the component leg completes.
+                await leg_parked.wait()
+                component_returned.set()
+                return {"success": True, "result": _search_result()}
+            raise AssertionError(f"unexpected command {command_type!r}")
+
+        ws = AsyncMock()
+        ws.send_command = AsyncMock(side_effect=_send)
+        client = DashboardRoutingClient()
+        ha_search = _build_ha_search(client)
+
+        with patch_ws(ws, tools_search), _patch_dashboards_ws(ws):
+            call = asyncio.ensure_future(
+                ha_search(query="kitchen", search_types=["automation", "dashboard"])
+            )
+            await component_returned.wait()
+            # Let the call resume from ``await component_task`` and park on
+            # ``await dashboard_task``; cancelling before that would land on
+            # the first await instead, which the test above already covers.
+            for _ in range(2):
+                await asyncio.sleep(0)
+            call.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await call
+
+        assert state["cancelled"] is True
+
+    @pytest.mark.asyncio
     async def test_unknown_command_falls_back_silently(
         self, tmp_path, monkeypatch
     ) -> None:

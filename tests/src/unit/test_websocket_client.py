@@ -215,6 +215,77 @@ class TestSendCommandErrorContract:
         assert client._state._pending_requests == {}
 
     @pytest.mark.asyncio
+    async def test_send_command_with_event_cancelled_in_send_drops_both(self):
+        """Cancelling mid-transmission drops BOTH registrations.
+
+        ``send_command_with_event`` registers a pending-response future AND an
+        event future before sending. Its transmission ``except Exception``
+        clause cannot see a ``CancelledError``, so a caller cancelled while
+        ``send_json_message`` was in flight leaked one entry in each dict,
+        with nothing left to resolve either.
+        """
+        client = self._prepare_client()
+        sending = asyncio.Event()
+
+        async def _block_in_send(_message: dict) -> None:
+            sending.set()
+            await asyncio.Event().wait()
+
+        client.send_json_message = _block_in_send  # type: ignore[method-assign]
+
+        task = asyncio.ensure_future(
+            client.send_command_with_event("system_health/info")
+        )
+        # Both futures register before the send, so once the stub parks the
+        # task is suspended inside send_json_message with both in place.
+        await sending.wait()
+        assert client._state._pending_requests
+        assert client._state._event_responses
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert client._state._pending_requests == {}
+        assert client._state._event_responses == {}
+
+    @pytest.mark.asyncio
+    async def test_send_command_with_event_cancelled_in_event_wait_drops_event(self):
+        """Cancelling during the event wait drops the event registration.
+
+        The result wait already had the ``BaseException`` treatment; the event
+        wait cleaned up on ``TimeoutError`` only, so a cancelled caller left its
+        ``_event_responses`` entry behind until an event with that id arrived —
+        which never comes once the caller is gone.
+        """
+        client = self._prepare_client()
+        sent = asyncio.Event()
+
+        async def _resolve_result_only(message: dict) -> None:
+            # Pop as ``_process_message`` does in production so the emptied
+            # pending dict below is the real post-result state, not a
+            # test-only leftover.
+            future = client._state._pending_requests.pop(message["id"])
+            future.set_result({"id": message["id"], "type": "result", "success": True})
+            sent.set()
+
+        client.send_json_message = _resolve_result_only  # type: ignore[method-assign]
+
+        task = asyncio.ensure_future(
+            client.send_command_with_event("system_health/info")
+        )
+        # An already-resolved future is consumed without suspending, so the
+        # task runs through the result phase and parks on the event wait
+        # before this coroutine is scheduled again.
+        await sent.wait()
+        assert client._state._pending_requests == {}
+        assert client._state._event_responses
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert client._state._event_responses == {}
+
+    @pytest.mark.asyncio
     async def test_send_command_raises_on_string_error(self):
         """send_command raises HomeAssistantCommandError when error is a string."""
         from ha_mcp.client.rest_client import HomeAssistantCommandError
@@ -700,6 +771,59 @@ class TestSubscribeEventsContract:
             f"still have: {list(client._state._pending_requests)}"
         )
 
+    @pytest.mark.asyncio
+    async def test_cancellation_during_send_drops_the_pending_future(self):
+        """Cancelling mid-transmission drops the pending-request entry.
+
+        ``CancelledError`` is a BaseException and skips the transmission
+        ``except Exception`` clause, so before the paired ``BaseException``
+        clause the registered future stayed in ``_pending_requests`` with the
+        caller gone and no result ever arriving to pop it.
+        """
+        client = self._prepare_client()
+        sending = asyncio.Event()
+
+        async def _block_in_send(_message: dict) -> None:
+            sending.set()
+            await asyncio.Event().wait()
+
+        client.send_json_message = _block_in_send  # type: ignore[method-assign]
+
+        task = asyncio.ensure_future(client.subscribe_events("state_changed"))
+        # The future registers before the send, so once the stub parks the
+        # task is suspended inside send_json_message with its entry in place.
+        await sending.wait()
+        assert client._state._pending_requests
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert client._state._pending_requests == {}
+
+    @pytest.mark.asyncio
+    async def test_cancellation_during_result_wait_drops_the_pending_future(self):
+        """Cancelling while awaiting the subscribe ack drops the pending entry.
+
+        The wait cleaned up on ``TimeoutError`` only, so a cancelled caller
+        (e.g. a tool leg cancelled by its parent) leaked one entry per call.
+        """
+        client = self._prepare_client()
+        sent = asyncio.Event()
+
+        async def _never_resolve(_message: dict) -> None:
+            sent.set()
+
+        client.send_json_message = _never_resolve  # type: ignore[method-assign]
+
+        task = asyncio.ensure_future(client.subscribe_events("state_changed"))
+        await sent.wait()
+        assert client._state._pending_requests
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert client._state._pending_requests == {}
+
 
 class TestSubscribeCommand:
     """``subscribe_command``: generic subscribe path used for HACS' ``hacs/subscribe``.
@@ -967,6 +1091,70 @@ class TestSubscribeCommand:
         assert not client._state._pending_requests
 
     @pytest.mark.asyncio
+    async def test_cancellation_during_send_drops_queue_and_pending_future(self):
+        """Cancelling mid-transmission drops the queue AND the pending future.
+
+        ``CancelledError`` skips the transmission ``except Exception`` clause,
+        so before the paired ``BaseException`` clause both the subscription
+        queue (registered before the send so no event is missed) and the
+        pending-response future survived a cancelled caller — the queue then
+        buffering every later event for that id with no reader.
+        """
+        client = self._prepare_client()
+        sending = asyncio.Event()
+
+        async def _block_in_send(_message: dict) -> None:
+            sending.set()
+            await asyncio.Event().wait()
+
+        client.send_json_message = _block_in_send  # type: ignore[method-assign]
+
+        task = asyncio.ensure_future(
+            client.subscribe_command("hacs/subscribe", signal="x")
+        )
+        # Queue and future both register before the send, so once the stub
+        # parks the task is suspended inside send_json_message with both
+        # entries in place.
+        await sending.wait()
+        assert client._state._subscription_queues
+        assert client._state._pending_requests
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert not client._state._subscription_queues
+        assert not client._state._pending_requests
+
+    @pytest.mark.asyncio
+    async def test_cancellation_during_result_wait_drops_queue_and_pending(self):
+        """Cancelling while awaiting the subscribe ack drops both registrations.
+
+        Same leak as the timeout path above, which cleaned up on
+        ``TimeoutError`` only: a cancelled caller left the queue registered
+        (accumulating events nobody reads) and the future pending.
+        """
+        client = self._prepare_client()
+        sent = asyncio.Event()
+
+        async def _never_resolve(_message: dict) -> None:
+            sent.set()
+
+        client.send_json_message = _never_resolve  # type: ignore[method-assign]
+
+        task = asyncio.ensure_future(
+            client.subscribe_command("hacs/subscribe", signal="x")
+        )
+        await sent.wait()
+        assert client._state._subscription_queues
+        assert client._state._pending_requests
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert not client._state._subscription_queues
+        assert not client._state._pending_requests
+
+    @pytest.mark.asyncio
     async def test_reset_connection_wakes_subscription_queue_awaiters(self):
         """``reset_connection`` shuts subscription queues so blocked
         ``await queue.get()`` calls raise ``QueueShutDown`` rather
@@ -1003,3 +1191,71 @@ class TestSubscribeCommand:
             await asyncio.wait_for(get_task, timeout=1.0)
         # The queue must be unregistered.
         assert client._state.get_subscription_queue(sub_id) is None
+
+
+class TestPendingFutureCancelGuards:
+    """``cancel_pending_request`` / ``cancel_event_response`` on a future that
+    is already settled.
+
+    ``reset_connection`` fails every registered future with a normal exception
+    (a bare ``cancel()`` would surface ``CancelledError``, which the MCP SDK
+    reads as a client-initiated cancellation, #1721). A later cancel call on
+    the same id therefore meets a DONE future, and must retrieve that exception
+    rather than drop the last reference to it — asyncio logs an ERROR-level
+    "Future exception was never retrieved" at GC otherwise. ``_log_traceback``
+    is asyncio's retrieved-flag: True after ``set_exception``, flipped False
+    only by ``result()`` / ``exception()``, so asserting it False proves the
+    production code consumed the exception (the GC log itself is not
+    deterministic to observe).
+    """
+
+    @staticmethod
+    def _state():
+        from ha_mcp.client.websocket_client import WebSocketConnectionState
+
+        return WebSocketConnectionState()
+
+    @pytest.mark.asyncio
+    async def test_cancel_pending_request_drains_a_failed_future(self):
+        state = self._state()
+        future = state.register_pending_request(7)
+        future.set_exception(RuntimeError("connection went away"))
+
+        state.cancel_pending_request(7)  # must not raise
+
+        assert state._pending_requests == {}
+        assert future._log_traceback is False, (
+            "the pending future's exception was never retrieved -- asyncio "
+            "would log 'Future exception was never retrieved' at GC"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cancel_event_response_drains_a_failed_future(self):
+        state = self._state()
+        future = state.register_event_response(11)
+        future.set_exception(RuntimeError("connection went away"))
+
+        state.cancel_event_response(11)  # must not raise
+
+        assert state._event_responses == {}
+        assert future._log_traceback is False, (
+            "the event future's exception was never retrieved -- asyncio would "
+            "log 'Future exception was never retrieved' at GC"
+        )
+
+    @pytest.mark.asyncio
+    async def test_neither_helper_raises_on_an_already_cancelled_future(self):
+        """The drain branch must stay behind the ``not cancelled()`` guard:
+        ``exception()`` on a cancelled future raises ``CancelledError``, which
+        would escape the cleanup path every caller runs while unwinding."""
+        state = self._state()
+        pending = state.register_pending_request(7)
+        event = state.register_event_response(11)
+        pending.cancel()
+        event.cancel()
+
+        state.cancel_pending_request(7)
+        state.cancel_event_response(11)
+
+        assert state._pending_requests == {}
+        assert state._event_responses == {}

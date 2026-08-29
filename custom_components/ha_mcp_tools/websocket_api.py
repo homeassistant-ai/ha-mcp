@@ -531,15 +531,31 @@ _SPLIT_RE = re.compile(r"[._\-\s]+")
 def async_register_commands(hass: HomeAssistant) -> None:
     """Register the ``ha_mcp_tools/*`` WebSocket commands.
 
-    Called from BOTH config-entry setups: the tools entry (alongside its service
-    registrations) and the server entry (#2289). The surface is entry-agnostic —
-    every handler reads HA-core state, none of it the tools entry's
-    ``hass.data`` — so a server-entry-only install gets it too; only the
-    filesystem/YAML HA *services* remain tools-entry-only.
+    Called from BOTH config-entry setups since component 2.1.0: the tools entry
+    (alongside its service registrations) and the server entry (#2289/#2291).
+    The surface is entry-agnostic — every handler reads HA-core state, none of
+    it the tools entry's ``hass.data`` — so a server-entry-only install gets it
+    too; only the filesystem/YAML HA *services* remain tools-entry-only.
 
     Idempotent: HA's ``async_register_command`` overwrites an existing handler,
     so re-running on a config-entry reload, or from both entries on a dual-entry
     install, is harmless.
+
+    There is NO unregister. HA's ``websocket_api`` exposes no counterpart to
+    ``async_register_command``, so the commands outlive an entry unload and stay
+    on the connection surface until Home Assistant restarts. That is deliberate
+    and accepted (#2292). Unloading one entry must not strip the surface the
+    other entry still serves from, and a surface left behind by a FULLY unloaded
+    component holds no privilege of its own: every handler works off live
+    HA-core state rather than anything the unloaded entry cached, HA core
+    authenticates the connection, and ``@require_admin`` gates each command — so
+    a caller reaching it can already do the same through HA's own WS API. The
+    write commands are no exception: their D1 domain block refuses
+    ``domain == "ha_mcp_tools"`` unconditionally, so the leftover surface can
+    never reach the privileged filesystem/YAML services, which
+    :func:`~custom_components.ha_mcp_tools._async_unload_tools_entry` does remove
+    on unload. Admin-gated commands answering from live core state until the
+    next restart is the trade this makes.
     """
     for schema, do_fn, prep in _command_specs():
         websocket_api.async_register_command(hass, _build_handler(schema, do_fn, prep))

@@ -32,6 +32,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from fastmcp.exceptions import ToolError
+
 from ..backup_manager import (
     _CAPTURE_TRANSIENT_ERRORS,
     MandatoryBackupError,
@@ -49,6 +51,48 @@ logger = logging.getLogger(__name__)
 # tuple. Programming errors (TypeError on a bad ``id_fn`` lambda,
 # KeyError on a missing kwarg) propagate to surface the bug.
 _DECORATOR_TRANSIENT_ERRORS = _CAPTURE_TRANSIENT_ERRORS
+
+
+def _component_not_installed_cause(err: BaseException) -> ToolError | None:
+    """Return the ``COMPONENT_NOT_INSTALLED`` ToolError behind a capture failure.
+
+    A mandatory pre-write snapshot reads the current content through the same
+    File & YAML Tools services the wrapped write needs, so on an install
+    without that config entry the capture fails FIRST and the write would be
+    refused as ``BACKUP_CAPTURE_FAILED`` — burying the actionable "add the
+    entry" guidance one level deep (#2292). Walk the cause chain for the
+    original structured error so the caller can surface it unchanged: retrying
+    the backup cannot succeed, and the remediation is the component's, not the
+    backup pipeline's.
+    """
+    seen: set[int] = set()
+    # Worklist over BOTH chain links: an explicit ``raise ... from other``
+    # sets an unrelated ``__cause__`` while the component error stays in
+    # ``__context__`` — following only one link per node would miss it.
+    stack: list[BaseException] = [
+        link for link in (err.__cause__, err.__context__) if link is not None
+    ]
+    while stack:
+        cause = stack.pop()
+        if id(cause) in seen:
+            continue
+        seen.add(id(cause))
+        if isinstance(cause, ToolError):
+            try:
+                payload = json.loads(str(cause))
+            except (TypeError, ValueError):
+                payload = None
+            if (
+                isinstance(payload, dict)
+                and isinstance(payload.get("error"), dict)
+                and payload["error"].get("code")
+                == ErrorCode.COMPONENT_NOT_INSTALLED.value
+            ):
+                return cause
+        stack.extend(
+            link for link in (cause.__cause__, cause.__context__) if link is not None
+        )
+    return None
 
 
 def _resolve_str(value: Any) -> str:
@@ -288,6 +332,27 @@ async def _capture_pre_write_snapshot(
             # wrapped write never runs, so nothing has been changed.
             # The ToolError this raises propagates rather than being
             # swallowed by the best-effort handler below.
+            component_error = _component_not_installed_cause(err)
+            if component_error is not None:
+                # The capture failed because the File & YAML Tools entry is
+                # not set up — the same reason the wrapped write itself would
+                # refuse. Surface that actionable error (add the entry), not a
+                # backup complaint (#2292). The write is still blocked. ``from
+                # None`` because this IS the underlying error being unwrapped;
+                # chaining it back onto the wrapper it came out of would only
+                # print the chain twice (and B904 wants the intent explicit).
+                # ``from None`` also drops the wrapper's own text from the
+                # traceback, so record it here or the only account of WHICH
+                # mandatory capture was re-pointed at the component error is
+                # gone.
+                logger.warning(
+                    "Auto-backup: mandatory capture for '%s' failed (%s) — "
+                    "surfacing the underlying component error instead; the "
+                    "write is blocked either way",
+                    func.__name__,
+                    err,
+                )
+                raise component_error from None
             raise_tool_error(
                 create_error_response(
                     ErrorCode.BACKUP_CAPTURE_FAILED,

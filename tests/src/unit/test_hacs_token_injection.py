@@ -118,3 +118,57 @@ def test_pip_spec_returns_false_and_leaves_doc_untouched_when_missing():
     doc = _entries_doc([{"entry_id": "other", "options": {"pip_spec": "keep"}}])
     assert haos_runtime._set_embedded_server_pip_spec(doc, "x") is False
     assert doc["data"]["entries"][0]["options"]["pip_spec"] == "keep"
+
+
+# ---------------------------------------------------------------------------
+# remove_tools_entry (#2292) - the pure transform behind the no-tools lanes'
+# qcow2 pre-boot edit (remove_tools_entry_in_qcow2). Same contract family as
+# the transforms above: in-place, discriminated the way the component itself
+# dispatches (data.entry_type == "server" is the server entry; anything else
+# under the ha_mcp_tools domain is the tools entry).
+# ---------------------------------------------------------------------------
+
+
+def test_removes_tools_entry_and_keeps_server_entry():
+    doc = _entries_doc(
+        [
+            {"domain": "sun", "data": {}},
+            {
+                "domain": "ha_mcp_tools",
+                "entry_id": "e2e_test_ha_mcp_tools_entry",
+                "data": {},
+            },
+            {
+                "domain": "ha_mcp_tools",
+                "entry_id": haos_runtime.HA_MCP_SERVER_ENTRY_ID,
+                "data": {"entry_type": "server"},
+            },
+        ]
+    )
+    removed = haos_runtime.remove_tools_entry(doc)
+    assert removed == ["e2e_test_ha_mcp_tools_entry"]
+    remaining = doc["data"]["entries"]
+    assert [e["domain"] for e in remaining] == ["sun", "ha_mcp_tools"]
+    assert remaining[1]["data"]["entry_type"] == "server"
+
+
+def test_missing_entry_type_means_tools_entry():
+    """A ha_mcp_tools entry with no data.entry_type at all is the tools entry —
+    the same default the component's own setup dispatcher applies."""
+    doc = _entries_doc([{"domain": "ha_mcp_tools", "entry_id": "legacy"}])
+    assert haos_runtime.remove_tools_entry(doc) == ["legacy"]
+    assert doc["data"]["entries"] == []
+
+
+def test_no_tools_entry_returns_empty_and_leaves_doc_untouched():
+    entries = [
+        {"domain": "sun", "data": {}},
+        {
+            "domain": "ha_mcp_tools",
+            "entry_id": haos_runtime.HA_MCP_SERVER_ENTRY_ID,
+            "data": {"entry_type": "server"},
+        },
+    ]
+    doc = _entries_doc([dict(e, data=dict(e["data"])) for e in entries])
+    assert haos_runtime.remove_tools_entry(doc) == []
+    assert doc == _entries_doc(entries)

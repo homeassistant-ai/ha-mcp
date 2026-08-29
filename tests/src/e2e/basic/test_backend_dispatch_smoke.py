@@ -1,20 +1,27 @@
 """Multi-layer smoke tests for backend dispatch correctness.
 
 The e2e CI lanes set env vars that ``conftest.ha_container_with_fresh_config``
-reads to choose a backend:
+reads to choose a backend. Every HAOS lane below is a job of the one
+``haos-e2e-tests.yml`` workflow (the beta lanes are jobs of
+``haos-e2e-beta-tests.yml``):
 
 | Lane                          | HAOS_TEST_IMAGE_PATH | HAOS_TEST_MODE | expected backend |
 | ----------------------------- | -------------------- | -------------- | ---------------- |
 | e2e-tests.yml (testcontainer) | unset                | unset          | ``container``    |
-| haos-e2e-tests.yml (external) | set                  | unset          | ``haos``         |
-| haos-e2e-stdio-tests.yml      | set                  | ``stdio``      | ``haos_stdio``   |
-| haos-e2e-inaddon-tests.yml    | set                  | ``inaddon``    | ``haos_inaddon`` |
-| haos-e2e-embedded-tests.yml   | set                  | ``embedded``   | ``haos_embedded``|
+| ``haos-e2e`` (external)       | set                  | unset          | ``haos``         |
+| ``haos-e2e-stdio``            | set                  | ``stdio``      | ``haos_stdio``   |
+| ``haos-e2e-inaddon``          | set                  | ``inaddon``    | ``haos_inaddon`` |
+| ``haos-e2e-embedded``         | set                  | ``embedded``   | ``haos_embedded``|
 
 The testcontainer ``embedded`` backend (#1527) is a fourth variant selected by a
 separate axis, ``E2E_BACKEND=embedded`` (not ``HAOS_TEST_MODE``): same container
 HA, but the server-under-test is the in-process MCP server entry inside
 the container.
+
+``E2E_NO_TOOLS_ENTRY=1`` (#2292) is a third, orthogonal axis: the backend is
+unchanged, but the "File & YAML Tools" entry is absent, so a completely
+different set of tests is marker-skipped. Only the skip ceiling below cares —
+it keys those lanes separately, as ``<backend>_no_tools``.
 
 Three layers of guard, each catching a different silent-failure mode:
 
@@ -55,6 +62,7 @@ import os
 from typing import Any
 
 from ..utilities.assertions import safe_call_tool
+from ..utilities.topology import tools_entry_absent
 
 # Floor for total collected tests across all lanes. As of 2026-05-22
 # container lanes collect 912 and HAOS lanes collect 915 (small per-mode
@@ -106,16 +114,30 @@ _SKIP_CEILING_PER_LANE = {
     # Beta variants share backend keys, so they inherit the ceiling increase
     # while running the attestation instead of skipping it. Its in-app-only
     # self-update guard adds a second skip outside the in-app lanes.
-    "container": 79,  # was 75; +3 embedded_only, +1 beta_haos_only
-    "haos": 58,  # observed on #2270 after both new marker-gated tests
+    # #2292's ``no_tools_only`` module
+    # (tests/src/e2e/workflows/filesystem/test_tools_entry_absent.py) contributes
+    # 8 items that RUN only on the no-tools lanes (E2E_NO_TOOLS_ENTRY=1) and
+    # therefore add collection-time skips on every component-present lane; each
+    # entry below is re-pinned to what round-1 CI observed with them in place.
+    # The beta HAOS variants share these backend keys
+    # and observed slightly LOWER counts than their stable siblings
+    # (haos_embedded beta 125, haos_inaddon beta 93), so the stable-lane numbers
+    # here cover both.
+    "container": 87,  # was 79; +8 #2292 no_tools_only
+    "haos": 66,  # was 58; +8 #2292 no_tools_only
     # HAOS stdio is the external HAOS set plus ``external_only`` tests, whose
     # test-process monkeypatches cannot reach the subprocess server. The first
     # full lane run on 2026-08-18 observed 103 collection-time marker skips
     # (plus 9 runtime skips); keep the same five-item buffer as established
     # lanes (108), +1 #2241 haos_tls scenario, +3 #2239 dependency conflict,
-    # +3 embedded_only conversion, +1 backup external_only conversion.
-    "haos_stdio": 117,
-    "haos_inaddon": 86,  # was 81; +3 embedded, +1 backup, +1 beta
+    # +3 embedded_only conversion, +1 backup external_only conversion, and the
+    # #2292 no_tools_only module. Set from the round-1 CI observation, which is
+    # what this dict records; the other lanes' observations moved by 8 there.
+    # This entry moved 117 -> 119 rather than by that 8: the 117 was a ceiling
+    # carrying headroom above its own observed count, so part of the +8 landed
+    # inside that headroom and 119 is what round-1 CI actually observed.
+    "haos_stdio": 119,
+    "haos_inaddon": 94,  # was 86; +8 #2292 no_tools_only
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
     # lane's marker-skips PLUS two embedded-specific additions:
     #   - haos_only + inaddon_only tests skip on embedded just like on container
@@ -131,7 +153,7 @@ _SKIP_CEILING_PER_LANE = {
     # +1 visibility e2e (haos_stdio_only) and +1 #2241 haos_tls scenario
     # (haos_only) bridge 133 -> 135.
     # Read future changes from CI instead of deriving them.
-    "embedded": 137,  # was 135; +1 backup, +1 beta_haos_only
+    "embedded": 145,  # was 137; +8 #2292 no_tools_only
     # HAOS embedded backend (#1527, HAOS_TEST_MODE=embedded). A HAOS lane, so it
     # skips the SAME set as the external HAOS lane (container_only + inaddon_only)
     # PLUS two haos_embedded-specific additions:
@@ -149,7 +171,21 @@ _SKIP_CEILING_PER_LANE = {
     # 107 in the 2026-08-18 CI run (106 before the self-restart e2e).
     # Read future changes from CI instead of deriving them.
     # #2270 stable observed 118 marker skips; beta observed 117.
-    "haos_embedded": 118,
+    "haos_embedded": 126,  # was 118; +8 #2292 no_tools_only
+    # No-tools topology keys (#2292). On the ``E2E_NO_TOOLS_ENTRY=1`` lanes the
+    # lookup key gains a ``_no_tools`` suffix, because those lanes skip a
+    # completely different — and much larger — set: every ``requires_tools_entry``
+    # module (the whole filesystem / YAML suite) skips, while the 8
+    # ``no_tools_only`` items run. Sharing the base key would force one ceiling
+    # to cover both topologies and blind the check on whichever side is lower.
+    # New-lane convention: the CI-observed count plus the five-item buffer.
+    # The haos (external) and haos_stdio backends have no no-tools lane today,
+    # so they deliberately have no key here — an unknown backend fails loudly in
+    # the test below rather than silently skipping the ceiling check.
+    "container_no_tools": 192,  # observed 187
+    "embedded_no_tools": 249,  # observed 244
+    "haos_embedded_no_tools": 230,  # observed 225
+    "haos_inaddon_no_tools": 198,  # observed 193
 }
 
 
@@ -352,12 +388,15 @@ def test_session_skipped_count_below_ceiling(
 
     Ceilings are updated only when a PR legitimately introduces new
     marker-gated tests; runtime skips are deliberately excluded.
+
+    The no-tools lanes (#2292) skip a different set entirely, so they get
+    their own ``<backend>_no_tools`` keys rather than sharing the backend's.
     """
     backend = ha_container_with_fresh_config["backend"]
-    ceiling = _SKIP_CEILING_PER_LANE.get(backend)
+    lane = f"{backend}_no_tools" if tools_entry_absent() else backend
+    ceiling = _SKIP_CEILING_PER_LANE.get(lane)
     assert ceiling is not None, (
-        f"Unknown backend {backend!r} — add to _SKIP_CEILING_PER_LANE "
-        f"at the top of this file"
+        f"Unknown lane {lane!r} — add to _SKIP_CEILING_PER_LANE at the top of this file"
     )
     # Items in request.session.items already have skip markers applied
     # by pytest_collection_modifyitems (which ran before any test).
@@ -369,10 +408,10 @@ def test_session_skipped_count_below_ceiling(
         if any(m.name == "skip" for m in item.iter_markers())
     )
     assert skipped <= ceiling, (
-        f"{skipped} tests have skip markers on the {backend} lane, "
+        f"{skipped} tests have skip markers on the {lane} lane, "
         f"which exceeds the ceiling of {ceiling}. A marker may be "
         f"applied too broadly in pytest_collection_modifyitems — "
         f"check pytest_collection_modifyitems in tests/src/e2e/conftest.py for recent changes. "
         f"If the increase is intentional (legitimate new marker-gated "
-        f"tests), bump _SKIP_CEILING_PER_LANE[{backend!r}] in this file."
+        f"tests), bump _SKIP_CEILING_PER_LANE[{lane!r}] in this file."
     )

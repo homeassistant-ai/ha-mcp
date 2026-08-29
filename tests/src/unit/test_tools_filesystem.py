@@ -262,7 +262,7 @@ class TestAssertMcpToolsAvailableCapsFirst:
         """Caps are cached for the client's lifetime, so a ``False`` snapshot
         can predate the user adding the tools entry mid-session. The live
         service-registry re-check keeps the tools usable without a server
-        restart (Codex review on #2291)."""
+        restart (#2291)."""
         from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
 
         client = AsyncMock()
@@ -280,19 +280,114 @@ class TestAssertMcpToolsAvailableCapsFirst:
         client.get_services.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_caps_tools_services_true_passes(self):
-        """A dual-entry (or tools-only) 2.1.0 component reports True and the
-        gate passes without the get_services probe."""
+    async def test_caps_tools_services_true_passes_via_live_probe(self):
+        """A dual-entry (or tools-only) 2.1.0 component reports True; the gate
+        still consults the live registry (the cached snapshot is stale in both
+        directions, #2302) and passes when the services are really there."""
         from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
 
         client = AsyncMock()
+        client.get_services = AsyncMock(
+            return_value=[
+                {"domain": "ha_mcp_tools", "services": {"get_caller_token": {}}}
+            ]
+        )
         with patch(
             "ha_mcp.tools.tools_filesystem.get_component_caps",
             AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
         ):
             await _assert_mcp_tools_available(client)  # must not raise
 
-        client.get_services.assert_not_called()
+        client.get_services.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_caps_tools_services_true_but_live_services_gone_raises(self):
+        """The stale-True mirror of the stale-False case: a snapshot taken
+        before the user REMOVED the tools entry must not wave calls through to
+        now-missing services (raw service-not-found instead of the actionable
+        error). The live probe raises the tools-entry error (#2302)."""
+        from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
+
+        client = AsyncMock()
+        client.get_services = AsyncMock(return_value=[])
+        with (
+            patch(
+                "ha_mcp.tools.tools_filesystem.get_component_caps",
+                AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
+            ),
+            pytest.raises(ToolError) as exc,
+        ):
+            await _assert_mcp_tools_available(client)
+
+        data = json.loads(str(exc.value))
+        assert data["success"] is False
+        assert "file & yaml tools" in data["error"]["message"].lower()
+        client.get_services.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_live_probe_is_memoized_within_its_ttl(self, monkeypatch):
+        """Every gated call on a 2.1.0+ component reaches the live probe, and
+        ``get_services()`` is an uncached fetch of HA's whole service registry.
+        A second call inside the TTL window must read the memo instead of
+        paying for it again."""
+        from ha_mcp.tools import tools_filesystem
+        from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
+
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(tools_filesystem, "_monotonic", lambda: clock["now"])
+
+        client = AsyncMock()
+        client.get_services = AsyncMock(
+            return_value=[
+                {"domain": "ha_mcp_tools", "services": {"get_caller_token": {}}}
+            ]
+        )
+        with patch(
+            "ha_mcp.tools.tools_filesystem.get_component_caps",
+            AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
+        ):
+            await _assert_mcp_tools_available(client)
+            clock["now"] += tools_filesystem._LIVE_TOOLS_PROBE_TTL_S / 2
+            await _assert_mcp_tools_available(client)  # must not raise
+
+        client.get_services.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_live_probe_reruns_once_the_ttl_expires(self, monkeypatch):
+        """The memo is short precisely because its verdict can flip: a user who
+        adds (or removes) the tools entry mid-session must be picked up without
+        a server restart. Past the TTL the probe runs again."""
+        from ha_mcp.tools import tools_filesystem
+        from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
+
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(tools_filesystem, "_monotonic", lambda: clock["now"])
+
+        client = AsyncMock()
+        # First probe: no tools entry. Second: the user added it.
+        client.get_services = AsyncMock(
+            side_effect=[
+                [],
+                [{"domain": "ha_mcp_tools", "services": {"get_caller_token": {}}}],
+            ]
+        )
+        with (
+            patch(
+                "ha_mcp.tools.tools_filesystem.get_component_caps",
+                AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
+            ),
+            pytest.raises(ToolError),
+        ):
+            await _assert_mcp_tools_available(client)
+
+        clock["now"] += tools_filesystem._LIVE_TOOLS_PROBE_TTL_S + 1
+        with patch(
+            "ha_mcp.tools.tools_filesystem.get_component_caps",
+            AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
+        ):
+            await _assert_mcp_tools_available(client)  # must not raise
+
+        assert client.get_services.await_count == 2
 
     def test_parse_caps_reads_additive_tools_services(self):
         """``_parse_caps`` maps the additive field: bool passes through, absent

@@ -238,6 +238,7 @@ class DeepSearchMixin(SceneSearchMixin):
             # search is not requested.
             scene_stats: dict[str, Any] = {
                 "failed": 0,
+                "yaml_skipped": 0,
                 "skipped": 0,
                 "timeout": 0,
                 "integration_skipped": 0,
@@ -316,6 +317,7 @@ class DeepSearchMixin(SceneSearchMixin):
                 (
                     results["scenes"],
                     scene_stats["failed"],
+                    scene_stats["yaml_skipped"],
                     scene_stats["skipped"],
                     scene_stats["integration_skipped"],
                     scene_stats["registry_failed"],
@@ -1327,6 +1329,7 @@ class DeepSearchMixin(SceneSearchMixin):
             scene_body_incomplete=bool(
                 scene_stats.get("skipped")
                 or scene_stats.get("failed")
+                or scene_stats.get("yaml_skipped")
                 or scene_stats.get("timeout")
             ),
             automation_skipped=automation_skipped,
@@ -1492,7 +1495,9 @@ class DeepSearchMixin(SceneSearchMixin):
                     "endpoint returned 404 — these are likely YAML-defined "
                     f"{noun}s that the {endpoint} REST endpoint does not "
                     "expose) — their match status is unknown; this result "
-                    "is not exhaustive."
+                    "is not exhaustive. Their definitions live outside HA "
+                    f"storage (typically {noun}s.yaml); check there if the "
+                    "match matters."
                 )
             if timeout:
                 reasons.append(

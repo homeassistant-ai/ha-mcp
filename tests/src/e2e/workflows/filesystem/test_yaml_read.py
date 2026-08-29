@@ -32,6 +32,10 @@ from ...utilities.assertions import MCPAssertions
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ha_config_get_yaml reads through the component's privileged services, which
+# register only in the "File & YAML Tools" config entry (#2292).
+pytestmark = pytest.mark.requires_tools_entry
+
 TOOL_NAME = "ha_config_get_yaml"
 SET_TOOL = "ha_config_set_yaml"
 READ_TOOL = "ha_read_file"

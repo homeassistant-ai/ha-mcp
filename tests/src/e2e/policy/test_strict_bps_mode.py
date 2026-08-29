@@ -39,6 +39,12 @@ from ..utilities.assertions import (
 )
 from ..utilities.entity_finders import find_test_light_entity
 
+# Deliberately NOT requires_tools_entry (#2292): the strict gate must hold on
+# component-less installs too. Its one ha_config_set_yaml call is blocked by
+# the BPS gate BEFORE tool-argument validation or any component service call,
+# and every success-path write goes through ha_config_set_automation — so the
+# whole module runs on the no-tools lanes and pins the policy there as well.
+
 _BEST_PRACTICES_SKILL = "home-assistant-best-practices"
 _AUTOMATION_PATTERNS_REF = "references/automation-patterns.md"
 

@@ -111,10 +111,15 @@ class WebSocketConnectionState:
         return self._pending_requests.pop(message_id, None)
 
     def cancel_pending_request(self, message_id: int) -> None:
-        """Cancel a pending request future if it exists."""
+        """Remove a pending request future, cancelling it or draining its exception."""
         future = self._pending_requests.pop(message_id, None)
         if future and not future.done():
             future.cancel()
+        elif future and not future.cancelled():
+            # A done future may hold the exception reset_connection set on it;
+            # retrieve it here so dropping the last reference doesn't log an
+            # ERROR-level "Future exception was never retrieved" at GC.
+            future.exception()
 
     def register_event_response(
         self, message_id: int
@@ -133,10 +138,13 @@ class WebSocketConnectionState:
         return self._event_responses.pop(message_id, None)
 
     def cancel_event_response(self, message_id: int) -> None:
-        """Cancel a stored event future."""
+        """Remove a pending event future, cancelling it or draining its exception."""
         future = self._event_responses.pop(message_id, None)
         if future and not future.done():
             future.cancel()
+        elif future and not future.cancelled():
+            # Same GC guard as cancel_pending_request above.
+            future.exception()
 
     def store_auth_message(self, message_type: str, data: dict[str, Any]) -> None:
         """Store an authentication handshake message."""
@@ -757,6 +765,12 @@ class HomeAssistantWebSocketClient:
             self.cancel_pending_response(message_id)
             self.cancel_event_response(message_id)
             raise
+        except BaseException:
+            # Cancellation mid-send: skips the clause above and would leave BOTH
+            # registrations behind — drop them before propagating.
+            self.cancel_pending_response(message_id)
+            self.cancel_event_response(message_id)
+            raise
 
         try:
             result_response = await asyncio.wait_for(
@@ -780,7 +794,12 @@ class HomeAssistantWebSocketClient:
 
         try:
             event_response = await asyncio.wait_for(event_future, timeout=wait_timeout)
-        except TimeoutError:
+        except BaseException:
+            # A cancelled caller leaves the event registration in
+            # _event_responses until an event with this id arrives, which
+            # nothing sends once the caller is gone. The cleanup is
+            # exception-type-independent and the original exception re-raises
+            # unchanged.
             self.cancel_event_response(message_id)
             raise
 
@@ -832,10 +851,19 @@ class HomeAssistantWebSocketClient:
         except Exception:
             self.cancel_pending_response(message_id)
             raise
+        except BaseException:
+            # Cancellation mid-send: skips the clause above and would leave the
+            # pending future registered — drop it before propagating.
+            self.cancel_pending_response(message_id)
+            raise
 
         try:
             response = await asyncio.wait_for(future, timeout=30.0)
-        except TimeoutError:
+        except BaseException:
+            # A cancelled caller leaks the pending future, which nothing ever
+            # resolves once the caller is gone. The cleanup is
+            # exception-type-independent and the original exception re-raises
+            # unchanged.
             self.cancel_pending_response(message_id)
             raise
 
@@ -927,10 +955,21 @@ class HomeAssistantWebSocketClient:
             self._state.unregister_subscription_queue(message_id)
             self.cancel_pending_response(message_id)
             raise
+        except BaseException:
+            # Cancellation mid-send: skips the clause above and would leave BOTH
+            # the queue and the pending future registered — the queue never
+            # drains and buffers every later event for this id forever.
+            self._state.unregister_subscription_queue(message_id)
+            self.cancel_pending_response(message_id)
+            raise
 
         try:
             response = await asyncio.wait_for(result_future, timeout=timeout)
-        except TimeoutError:
+        except BaseException:
+            # A cancelled caller leaks the pending future AND the subscription
+            # queue, which keeps accumulating events with no reader. The
+            # cleanup is exception-type-independent and the original exception
+            # re-raises unchanged.
             self._state.unregister_subscription_queue(message_id)
             self.cancel_pending_response(message_id)
             raise

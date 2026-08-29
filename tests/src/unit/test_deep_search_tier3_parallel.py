@@ -16,6 +16,7 @@ import pytest
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantConnectionError,
+    SceneStorageConfigNotFoundError,
 )
 from ha_mcp.tools.smart_search import SmartSearchTools
 from ha_mcp.tools.smart_search._fetch import (
@@ -280,7 +281,7 @@ class TestAttemptCParallelFetch:
             # Script/scene per-id calls go through a dedicated client method;
             # the fixture's `_request`/`send_websocket_message` exceptions
             # already block their registry walk.
-            async def _typed_individual(sid: str) -> dict:
+            async def _typed_individual(sid: str, **kwargs: object) -> dict:
                 return await _count_individual()
 
             setattr(
@@ -1036,11 +1037,11 @@ class TestSceneTimeoutClassification:
     """Scene mirror of ``TestTimeoutClassification`` (issue #1784).
 
     Scenes are separate code with separate tuple positions: the scene
-    fetcher lives in ``_scenes.py``, its timeout count rides the 6th slot
+    fetcher lives in ``_scenes.py``, its timeout count rides the 7th slot
     of ``_deep_search_scenes``'s return, and ``deep_search`` maps it into
     ``scene_stats["timeout"]`` for ``_apply_scene_partial_flag``. Without
     these tests a regression that returned ``"failed"`` from the scene
-    ``except`` clause or mis-mapped the 6th slot would pass the automation/
+    ``except`` clause or mis-mapped the 7th slot would pass the automation/
     script suites untouched. The fixture's failing WebSocket makes the
     registry walk fail (``registry_failed=True``), which routes Attempt C
     to attempt-all — the maximal per-id-fetch surface.
@@ -1081,11 +1082,11 @@ class TestSceneTimeoutClassification:
         self, mock_client, smart_tools
     ):
         """A real ``wait_for`` expiry in the scene fetcher must land in the
-        6th tuple slot (``timeout_count``), with ``failed`` staying 0."""
+        7th tuple slot (``timeout_count``), with ``failed`` staying 0."""
         scenes = self._scene_entities()
         mock_client.get_states = AsyncMock(return_value=scenes)
 
-        async def _slow_scene(sid: str) -> dict:
+        async def _slow_scene(sid: str, **kwargs: object) -> dict:
             await asyncio.sleep(0.2)
             return {"config": {"name": "slow"}}
 
@@ -1095,6 +1096,7 @@ class TestSceneTimeoutClassification:
             (
                 results,
                 failed_count,
+                _yaml_skipped_count,
                 skipped_count,
                 _integration_skipped,
                 registry_failed,
@@ -1124,12 +1126,12 @@ class TestSceneTimeoutClassification:
     ):
         """Scene timeouts driven through public ``deep_search`` must reach
         ``scene_stats["timeout"]`` and ``_apply_scene_partial_flag`` — pins
-        the 6th-slot mapping in the aggregator that the component test
+        the 7th-slot mapping in the aggregator that the component test
         cannot see."""
         scenes = self._scene_entities()
         mock_client.get_states = AsyncMock(return_value=scenes)
 
-        async def _slow_scene(sid: str) -> dict:
+        async def _slow_scene(sid: str, **kwargs: object) -> dict:
             await asyncio.sleep(0.2)
             return {"config": {"name": "slow"}}
 
@@ -1427,7 +1429,7 @@ class TestFailedSampleThroughDeepSearch:
     generic ``failed`` bucket (#1784 follow-up).
 
     ``_deep_search_automations`` / ``_deep_search_scripts`` return the
-    sample in a new 6th tuple slot (scenes: 7th), ``deep_search`` forwards
+    sample in a new 6th tuple slot (scenes: 8th), ``deep_search`` forwards
     it via ``_paginate_and_build_response`` into
     ``_apply_per_type_partial_flag`` (scenes: ``scene_stats["failed_sample"]``
     into ``_apply_scene_partial_flag``), and the failed fragment carries it
@@ -1683,7 +1685,7 @@ class TestFailedSampleThroughDeepSearch:
         ]
         mock_client.get_states = AsyncMock(return_value=scenes)
 
-        async def _scene_500(sid: str) -> dict:
+        async def _scene_500(sid: str, **kwargs: object) -> dict:
             # aiohttp's generic production 500 body (see the script mirror).
             raise HomeAssistantAPIError(
                 "API error: 500 - 500 Internal Server Error", status_code=500
@@ -1794,27 +1796,81 @@ class TestFailedSampleThroughDeepSearch:
             f"HTTP-500 automation fragment must carry the HA-log hint; got {reason!r}"
         )
 
-    @pytest.mark.asyncio
-    async def test_scene_404_sample_surfaces_without_500_hint(
-        self, mock_client, smart_tools
-    ):
-        """Scenes have no ``yaml_skipped`` branch (integration-managed scenes
-        are pre-filtered upstream via the registry walk), so a scene per-id
-        404 falls into the generic ``failed`` class and surfaces as an
-        ``e.g. HTTP 404`` sample — unlike automations/scripts, whose 404s
-        reclassify to their own fragment and never produce one. Pins the
-        asymmetry the #1930 description disclosed, so a future scene 404
-        branch can't change it silently; the 500 hint must not ride a 404."""
-        scenes = [
+    @staticmethod
+    def _one_scene() -> list[dict]:
+        return [
             {
                 "entity_id": "scene.yaml_defined",
                 "state": "scening",
                 "attributes": {"friendly_name": "YAML Defined"},
             },
         ]
+
+    @pytest.mark.asyncio
+    async def test_scene_404_classifies_as_yaml_skipped_not_failed(
+        self, mock_client, smart_tools
+    ):
+        """A not-storage-scene 404 reclassifies to ``yaml_skipped``, never the
+        generic ``failed`` class (#2292).
+
+        The classification is the REST client's, not the search's: it raises
+        ``SceneStorageConfigNotFoundError`` when the entity resolved but has no
+        editable storage config (a YAML scene with an ``id:``, an ``id``-less
+        one confirmed through the state machine, or an integration-managed
+        scene). That holds here even though THIS fixture's registry walk fails
+        — the search-side integration pre-filter is unavailable, so every scene
+        is attempted, and the client still classifies each 404 on its own
+        lookups. The registry-driven pre-filter itself is pinned in
+        ``test_smart_search_scene_phase25.py``'s
+        ``TestSceneYamlDefined404Classification``.
+
+        Counting this as a failure produced a scary ``per-id fetch raised; e.g.
+        HTTP 404`` fragment for a structural, un-retryable gap. This test
+        replaces the earlier one that pinned the pre-#2292 asymmetry against
+        automations/scripts; the 500 hint must still not ride a 404."""
+        scenes = self._one_scene()
         mock_client.get_states = AsyncMock(return_value=scenes)
 
-        async def _scene_404(sid: str) -> dict:
+        async def _not_a_storage_scene(sid: str, **kwargs: object) -> dict:
+            raise SceneStorageConfigNotFoundError(sid, platform="homeassistant")
+
+        mock_client.get_scene_config = AsyncMock(side_effect=_not_a_storage_scene)
+
+        result = await smart_tools.deep_search(
+            query="anything",
+            search_types=["scene"],
+            limit=10,
+        )
+
+        assert result["partial"] is True
+        reason = result["partial_reason"]
+        assert (
+            "1 scene(s) not scanned (per-id config endpoint returned 404" in reason
+        ), f"scene 404 must surface as its own structural fragment; got {reason!r}"
+        assert "YAML-defined" in reason, (
+            f"the fragment must name the YAML-defined cause; got {reason!r}"
+        )
+        assert "not exhaustive" in reason
+        assert "per-id fetch raised" not in reason, (
+            f"a 404 must not also count as a generic failure; got {reason!r}"
+        )
+        assert "in the Home Assistant log" not in reason, (
+            f"the 500 hint must not ride a 404; got {reason!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_scene_bare_404_stays_in_the_failed_bucket(
+        self, mock_client, smart_tools
+    ):
+        """The other half of the taxonomy on the SAME registry-failed path: a
+        bare 404 means the client found the entity in neither the registry nor
+        the state machine, so it disappeared between ``get_states()`` and the
+        fetch. That is a real gap in this result, not a structural one — it
+        stays in ``failed`` and names itself in the sample (#2292)."""
+        scenes = self._one_scene()
+        mock_client.get_states = AsyncMock(return_value=scenes)
+
+        async def _scene_404(sid: str, **kwargs: object) -> dict:
             raise HomeAssistantAPIError("API error: 404 - Not Found", status_code=404)
 
         mock_client.get_scene_config = AsyncMock(side_effect=_scene_404)
@@ -1830,9 +1886,12 @@ class TestFailedSampleThroughDeepSearch:
         assert (
             "1 scene(s) not scanned (per-id fetch raised; "
             "e.g. HTTP 404: Not Found)" in reason
-        ), f"scene 404 must surface as a failed-class sample; got {reason!r}"
+        ), f"a vanished scene must stay in the failed bucket; got {reason!r}"
+        assert "per-id config endpoint returned 404" not in reason, (
+            f"a bare 404 must not claim the structural fragment; got {reason!r}"
+        )
         assert "in the Home Assistant log" not in reason, (
-            f"the 500 hint must not ride a 404 sample; got {reason!r}"
+            f"the 500 hint must not ride a 404; got {reason!r}"
         )
 
     @pytest.mark.asyncio
@@ -1936,4 +1995,70 @@ class TestFailedSamplePreference:
         assert errs == ["HTTP 500: 500 Internal Server Error"]
         assert spy.call_count == 2, (
             f"expected one capture + one upgrade; got {spy.call_count}"
+        )
+
+
+class TestSceneYamlSkippedReachesTheGraphScopeGate:
+    """``yaml_skipped`` scenes must reach the reference-graph scope sentence.
+
+    ``_paginate_and_build_response`` derives ``scene_body_incomplete`` from the
+    scene stats, and the reference-graph disclosure uses it to decide whether to
+    state what the graph accounted for anyway. Leaving ``yaml_skipped`` out of
+    that OR would let the one class of scene gap that is permanent — the config
+    lives outside HA storage, so no budget or retry ever reads it — be the one
+    the caller gets no scope statement for.
+
+    The graph arrangement mirrors ``test_search_related_graph.py``: an
+    entity_id-shaped query, and a ``send_websocket_message`` that serves the
+    entity-registry walk and the ``search/related`` frame from one handler.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_yaml_skipped_scene_still_scopes_the_unknown(self):
+        client = MagicMock()
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
+        client.get_states = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": "scene.movie_night",
+                    "state": "scening",
+                    "attributes": {"friendly_name": "Movie Night"},
+                }
+            ]
+        )
+        client.get_scene_config = AsyncMock(
+            side_effect=SceneStorageConfigNotFoundError(
+                "movie_night", platform="homeassistant"
+            )
+        )
+        client.send_websocket_message = AsyncMock(
+            side_effect=lambda message: (
+                {
+                    "success": True,
+                    "result": [
+                        {
+                            "entity_id": "scene.movie_night",
+                            "unique_id": "movie_night",
+                            "platform": "homeassistant",
+                        }
+                    ],
+                }
+                if message.get("type") == "config/entity_registry/list"
+                else {"success": True, "result": {"scene": ["scene.movie_night"]}}
+            )
+        )
+        smart_tools = _make_tools(client)
+
+        result = await smart_tools.deep_search(
+            query="climate.master_4",
+            search_types=["scene"],
+            limit=20,
+        )
+
+        reason = result.get("partial_reason") or ""
+        assert "per-id config endpoint returned 404" in reason, (
+            f"the yaml_skipped fragment itself must be present; got {reason!r}"
+        )
+        assert "reference graph was consulted" in reason, (
+            f"a yaml_skipped scene did not reach the scope gate; got {reason!r}"
         )

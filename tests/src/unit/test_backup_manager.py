@@ -41,6 +41,7 @@ from ha_mcp.backup_manager import (
     get_backup_manager,
 )
 from ha_mcp.client.rest_client import HomeAssistantError
+from ha_mcp.errors import ErrorCode, create_error_response
 from ha_mcp.tools.auto_backup import with_auto_backup
 
 # ---------------------------------------------------------------- fixtures
@@ -2001,6 +2002,180 @@ class TestMandatoryGate:
         assert "disk full" in str(exc.value)
         assert "Free up disk space" in str(exc.value)
         assert ran == []  # write never ran
+
+    async def test_component_not_installed_cause_surfaces_unwrapped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A capture that failed because the File & YAML Tools entry is absent
+        re-raises the original COMPONENT_NOT_INSTALLED error, not a backup
+        complaint (#2292): the remediation is "add the entry", and retrying
+        the backup cannot succeed. The write stays blocked either way."""
+        component_error = ToolError(
+            json.dumps(
+                create_error_response(
+                    ErrorCode.COMPONENT_NOT_INSTALLED,
+                    "Add entry -> HA-MCP File & YAML Tools",
+                )
+            )
+        )
+
+        class _FakeMgr:
+            async def maybe_snapshot(self, *a: Any, **k: Any) -> None:
+                raise bm.MandatoryBackupError(
+                    "could not read the current state to back it up"
+                ) from component_error
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_global_settings",
+            lambda: _StubSettings(enable_auto_backup=True),
+        )
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
+        )
+
+        ran: list[str] = []
+
+        @with_auto_backup(
+            domain="file", id_param="path", mandatory=True, client=object()
+        )
+        async def tool(*, path: str) -> str:
+            ran.append(path)
+            return "wrote"
+
+        with pytest.raises(ToolError) as exc:
+            await tool(path="www/x.css")
+        assert exc.value is component_error  # unwrapped, byte-identical
+        assert self._error_code(exc.value) == "COMPONENT_NOT_INSTALLED"
+        assert ran == []  # write never ran
+
+    async def test_component_cause_found_behind_unrelated_explicit_cause(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``raise ... from other`` buries the component error in __context__
+        while an unrelated exception occupies __cause__ — the cause walk must
+        traverse BOTH links or the failure regresses to BACKUP_CAPTURE_FAILED."""
+        component_error = ToolError(
+            json.dumps(
+                create_error_response(
+                    ErrorCode.COMPONENT_NOT_INSTALLED,
+                    "Add entry -> HA-MCP File & YAML Tools",
+                )
+            )
+        )
+
+        class _FakeMgr:
+            async def maybe_snapshot(self, *a: Any, **k: Any) -> None:
+                try:
+                    raise component_error
+                except ToolError:
+                    # Explicit unrelated cause; the ToolError stays reachable
+                    # only through __context__.
+                    raise bm.MandatoryBackupError("capture failed") from RuntimeError(
+                        "unrelated"
+                    )
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_global_settings",
+            lambda: _StubSettings(enable_auto_backup=True),
+        )
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
+        )
+
+        ran: list[str] = []
+
+        @with_auto_backup(
+            domain="file", id_param="path", mandatory=True, client=object()
+        )
+        async def tool(*, path: str) -> str:
+            ran.append(path)
+            return "wrote"
+
+        with pytest.raises(ToolError) as exc:
+            await tool(path="www/x.css")
+        assert exc.value is component_error
+        assert ran == []
+
+    async def test_unrelated_tool_error_in_the_chain_is_not_unwrapped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The cause walk must match on the CODE, not on "a ToolError is in
+        there somewhere". A capture that failed for an unrelated structured
+        reason still surfaces as BACKUP_CAPTURE_FAILED — unwrapping it would
+        hand the caller an error whose remediation has nothing to do with why
+        the write was blocked."""
+        unrelated = ToolError(
+            json.dumps(
+                create_error_response(
+                    ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+                    "token cannot read that path",
+                )
+            )
+        )
+
+        class _FakeMgr:
+            async def maybe_snapshot(self, *a: Any, **k: Any) -> None:
+                raise bm.MandatoryBackupError("could not read the current state") from (
+                    unrelated
+                )
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_global_settings",
+            lambda: _StubSettings(enable_auto_backup=True),
+        )
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
+        )
+
+        ran: list[str] = []
+
+        @with_auto_backup(
+            domain="file", id_param="path", mandatory=True, client=object()
+        )
+        async def tool(*, path: str) -> str:
+            ran.append(path)
+            return "wrote"
+
+        with pytest.raises(ToolError) as exc:
+            await tool(path="www/x.css")
+        assert self._error_code(exc.value) == "BACKUP_CAPTURE_FAILED"
+        assert exc.value is not unrelated
+        assert ran == []  # write never ran
+
+    async def test_plain_text_tool_error_in_the_chain_is_tolerated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Not every ToolError carries a JSON body — a bare-string one in the
+        cause chain must be skipped rather than blowing up the walk, so the
+        capture failure still lands as BACKUP_CAPTURE_FAILED."""
+
+        class _FakeMgr:
+            async def maybe_snapshot(self, *a: Any, **k: Any) -> None:
+                raise bm.MandatoryBackupError("could not read the current state") from (
+                    ToolError("something went wrong")
+                )
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_global_settings",
+            lambda: _StubSettings(enable_auto_backup=True),
+        )
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
+        )
+
+        ran: list[str] = []
+
+        @with_auto_backup(
+            domain="file", id_param="path", mandatory=True, client=object()
+        )
+        async def tool(*, path: str) -> str:
+            ran.append(path)
+            return "wrote"
+
+        with pytest.raises(ToolError) as exc:
+            await tool(path="www/x.css")
+        assert self._error_code(exc.value) == "BACKUP_CAPTURE_FAILED"
+        assert ran == []
 
     async def test_legitimate_skip_proceeds(
         self, monkeypatch: pytest.MonkeyPatch

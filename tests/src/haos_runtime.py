@@ -787,6 +787,140 @@ def inject_hacs_token_in_qcow2(image_path: Path) -> None:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def remove_tools_entry(config_entries_doc: dict[str, Any]) -> list[str]:
+    """Drop the "File & YAML Tools" config entry from a parsed storage doc.
+
+    Mutates ``config_entries_doc`` (a parsed ``.storage/core.config_entries``
+    document) in place, removing every ``ha_mcp_tools`` entry that is NOT the
+    in-process server entry — i.e. the tools entry, whose baked ``entry_id`` is
+    ``e2e_test_ha_mcp_tools_entry``. The discriminator is
+    ``data.entry_type == "server"``, the same one the component itself uses
+    (a missing ``entry_type`` means tools), so the staged (disabled) server
+    entry survives and only the privileged filesystem / YAML services go away.
+
+    Returns the list of removed ``entry_id`` values; empty means the document
+    carried no tools entry (doc left untouched).
+    """
+    entries = config_entries_doc.get("data", {}).get("entries", [])
+    removed: list[str] = []
+    kept: list[Any] = []
+    for entry in entries:
+        is_tools_entry = (
+            isinstance(entry, dict)
+            and entry.get("domain") == HA_MCP_SERVER_DOMAIN
+            and (entry.get("data") or {}).get("entry_type") != "server"
+        )
+        if is_tools_entry:
+            removed.append(str(entry.get("entry_id")))
+        else:
+            kept.append(entry)
+    if removed:
+        config_entries_doc["data"]["entries"] = kept
+    return removed
+
+
+def remove_tools_entry_in_qcow2(image_path: Path) -> None:
+    """Delete the baked File & YAML Tools config entry from the qcow2 (#2292).
+
+    The no-tools lanes (``E2E_NO_TOOLS_ENTRY=1``) prove that the privileged
+    ``ha_mcp_tools`` services are unavailable when the user never added the
+    "HA-MCP File & YAML Tools" entry. On HAOS that entry is baked into the
+    image, so it is removed here — a pre-boot offline qcow2 edit on the
+    per-worker overlay, the same mechanism as the recorder / HACS-token
+    refreshers and for the same reason: HA Core owns ``.storage`` once it
+    boots. The component files and the staged (disabled) in-process server
+    entry are deliberately left alone, so the ``haos_embedded`` lane still
+    gets its server-entry-only topology.
+
+    Unlike the best-effort HACS-token injection above, every failure RAISES:
+    a silent no-op would leave the tools entry in place and the whole lane
+    would then re-test the ordinary topology while reporting green.
+    """
+    import shutil
+    import tempfile
+
+    storage_path = "/supervisor/homeassistant/.storage/core.config_entries"
+    workdir = Path(tempfile.mkdtemp(prefix="haos-drop-tools-entry-"))
+    try:
+        try:
+            subprocess.run(
+                [
+                    "guestfish",
+                    "--ro",
+                    "-a",
+                    str(image_path),
+                    "run",
+                    ":",
+                    "mount",
+                    "/dev/sda8",
+                    "/",
+                    ":",
+                    "copy-out",
+                    storage_path,
+                    str(workdir),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            local = workdir / "core.config_entries"
+            doc = json.loads(local.read_text(encoding="utf-8"))
+            removed = remove_tools_entry(doc)
+            if not removed:
+                raise RuntimeError(
+                    f"No {HA_MCP_SERVER_DOMAIN} tools config entry in {image_path} "
+                    "— nothing to remove, so an E2E_NO_TOOLS_ENTRY=1 run would "
+                    "silently re-test the ordinary topology. Check that the bake "
+                    "still seeds it (build_image.bake_test_state)."
+                )
+            local.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+            subprocess.run(
+                [
+                    "guestfish",
+                    "--rw",
+                    "-a",
+                    str(image_path),
+                    "run",
+                    ":",
+                    "mount",
+                    "/dev/sda8",
+                    "/",
+                    ":",
+                    "copy-in",
+                    str(local),
+                    "/supervisor/homeassistant/.storage/",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            LOG.info(
+                "Removed %s tools config entries %s from %s (E2E_NO_TOOLS_ENTRY=1)",
+                HA_MCP_SERVER_DOMAIN,
+                removed,
+                image_path,
+            )
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            json.JSONDecodeError,
+            OSError,
+        ) as exc:
+            stderr = (getattr(exc, "stderr", "") or "").strip()
+            raise RuntimeError(
+                f"Failed to remove the File & YAML Tools config entry from "
+                f"{image_path} ({type(exc).__name__}"
+                + (f": {stderr[-300:]}" if stderr else f": {exc}")
+                + "). The no-tools lane needs that entry gone; aborting session "
+                "setup rather than running the whole lane against the ordinary "
+                "topology."
+            ) from exc
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def _build_embedded_server_wheel(dest_dir: Path) -> Path:
     """Build a ha-mcp wheel from the checkout into ``dest_dir`` using ``uv build``.
 

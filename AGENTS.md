@@ -783,6 +783,36 @@ fully validate a component change before merge.
 - **Live-test on the dev server immediately after merge**, before the next
   stable cut. The component path cannot be fully exercised by CI pre-merge.
 
+### Two entry types, one shared command surface
+
+One domain, two config-entry types with different jobs: **HA-MCP Server** runs
+the ha-mcp server in-process and exposes it through a HA webhook, and **File &
+YAML Tools** registers the privileged filesystem/YAML HA services. Since
+component 2.1.0 (#2289/#2291) **both** entries register the shared
+`ha_mcp_tools/*` WebSocket command surface, so an external server (app, Docker,
+uvx/PyPI) reaches those in-process capabilities through the tools entry alone.
+The surface is entry-agnostic (every handler reads live HA-core state, never the
+tools entry's `hass.data`), `async_register_command` is idempotent, and HA
+offers **no unregister** — the commands survive an entry unload and stay
+registered until HA restarts. Don't try to tear them down on unload; do pop that
+entry's `hass.data` caches so the next setup re-reads storage.
+
+**The privileged filesystem/YAML HA services stay tools-entry-ONLY** — never
+reachable from a server-entry-only install. Because `ha_mcp_tools/info` now
+answers on both entries, the server gates those services on the additive
+`tools_services` field in that handshake (#2292), not on the general capability
+list.
+
+When you add or change component-backed functionality:
+- update the server consumer, its capability gate, and its legacy fallback under
+  `src/ha_mcp/` in the same PR as the producer in `custom_components/ha_mcp_tools/`;
+- make the shared command serve identically from both entries — a handler that
+  reads tools-entry state breaks the server-entry-only install silently;
+- keep anything privileged or beta behind an explicit tools-entry signal (the
+  `tools_services` caps field), never behind the general capability handshake;
+- exercise both topologies with the no-tools lanes (`E2E_NO_TOOLS_ENTRY=1`, see
+  `tests/AGENTS.md` § *No-tools lanes*).
+
 ## Translations
 
 **One canonical store, generated projections, automated retranslation**

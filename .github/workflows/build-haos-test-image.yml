@@ -1,6 +1,6 @@
 name: Build HAOS Test Image (Prime Shared Cache)
 
-# Bakes the pre-baked HAOS qcow2 used by all four HAOS E2E lanes — see #1281.
+# Bakes the pre-baked HAOS qcow2 used by all six HAOS E2E lanes — see #1281.
 # The workflow's job on master is to local-build the qcow2 and warm the shared
 # Actions cache; the lanes restore from that cache and local-build on a miss.
 # The PR-time job uploads the qcow2 as a workflow artifact so reviewers can
@@ -11,8 +11,11 @@ name: Build HAOS Test Image (Prime Shared Cache)
 # and push to master that touches any input baked into the qcow2.
 #
 # INVARIANT — the path triggers below MUST mirror the ``git ls-tree`` paths
-# that the four HAOS E2E workflows hash into their image cache keys (see each
-# "Compute image cache key" step). When master commits change a baked
+# that the six HAOS E2E lanes in ``haos-e2e-tests.yml`` hash into their image
+# cache keys (see each "Compute image cache key" step). The beta lanes in
+# ``haos-e2e-beta-tests.yml`` are NOT part of this invariant: they key a
+# separate ``haos-beta-image-*`` namespace this workflow never primes.
+# When master commits change a baked
 # input that isn't listed here, the master cache-prime stays at the
 # previous state and every subsequent PR on a cache miss builds locally
 # (rather than restoring the master-primed cache), which adds ~25 min
@@ -25,7 +28,7 @@ on:
   push:
     branches: [master]
     paths:
-      # Bake inputs — must match all four HAOS E2E cache-key paths.
+      # Bake inputs — must match all six HAOS E2E cache-key paths.
       - 'tests/haos_image_build/**'
       - 'tests/initial_test_state/**'
       - 'custom_components/ha_mcp_tools/**'
@@ -230,7 +233,7 @@ jobs:
           if-no-files-found: error
 
       # --- Warm the shared Actions cache (master only) -----------------------
-      # The external, inaddon, embedded, and stdio E2E lanes restore the qcow2
+      # The six HAOS E2E lanes in haos-e2e-tests.yml restore the qcow2
       # from the Actions cache and fall back to a local build on a miss. Saving
       # the image here, on the default branch, lets PR runs restore it via
       # GitHub's default-branch cache scope and skip the local build.
@@ -241,7 +244,7 @@ jobs:
         if: github.ref == 'refs/heads/master'
         continue-on-error: true
         # INVARIANT: this git ls-tree must stay byte-IDENTICAL to the
-        # "Compute image cache key" step in all four HAOS E2E workflows —
+        # "Compute image cache key" step in all six HAOS E2E lanes —
         # otherwise this warms a key the lanes never restore (a wasted prime,
         # not a stale test: the lanes still recompute their own correct key).
         # NOTE the push-trigger paths above are a deliberate SUPERSET (they also

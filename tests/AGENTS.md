@@ -26,6 +26,8 @@ before adding a gate:
 | `inaddon_only` | HAOS inaddon mode only (`HAOS_TEST_MODE=inaddon`), where `is_running_in_addon()` paths are live |
 | `haos_stdio_only` | HAOS stdio mode only (`HAOS_TEST_MODE=stdio`), where the installed `ha-mcp` command is exercised through a real subprocess transport |
 | `not_on_embedded` / `not_on_haos_embedded` | everywhere except that lane, for tests the lane's own session backend already covers |
+| `requires_tools_entry` | every lane EXCEPT the no-tools lanes (`E2E_NO_TOOLS_ENTRY=1`), where the File & YAML Tools entry is absent (#2292) |
+| `no_tools_only` | the no-tools lanes only — the mirror of `requires_tools_entry` |
 
 Pick the marker by what the test *needs*, not by where it happens to pass:
 `external_only` is about needing an in-process server you can reconfigure,
@@ -37,7 +39,11 @@ testcontainer run).
 **Two different things share the `ha_mcp_tools` name — don't conflate them:**
 
 - **The component itself** (filesystem / registry tools) is installed on
-  EVERY lane by `_install_custom_component`. A test may therefore rely on
+  every lane by `_install_custom_component` EXCEPT the no-tools lanes
+  (`E2E_NO_TOOLS_ENTRY=1`, see below), where the "File & YAML Tools" config
+  entry is absent and the privileged services never register. A test that
+  relies on tools-entry behaviour must carry `requires_tools_entry`;
+  everywhere else a test may still rely on
   component-gated behaviour with no marker — e.g. a config entry's
   `unique_id`, which Home Assistant's own API never exposes on any endpoint.
   Consequence for `ha_search`: a query-driven call is served by the component's
@@ -56,6 +62,41 @@ testcontainer run).
 In production the component is optional (it ships via HACS), so server code
 reading component-only data must degrade honestly for installs without it
 rather than assume the e2e's always-present case.
+
+## No-tools lanes (`E2E_NO_TOOLS_ENTRY=1`, #2292)
+
+The rest of the suite always has the "HA-MCP File & YAML Tools" config entry,
+so the state real users hit most — integration installed, second entry never
+added — was untested. `E2E_NO_TOOLS_ENTRY=1` runs a lane without that entry.
+It is orthogonal to the backend selectors, so each backend has its own shape:
+
+| Lane | Topology |
+|---|---|
+| container (`E2E_BACKEND` unset) | **no component at all** — `_install_custom_component` is skipped for `ha_mcp_tools`, so neither files nor entry exist. A user who never installed the integration |
+| container `embedded` | **server entry only** — component files are copied with `seed_entry=False` (no tools entry) and the in-process server entry is seeded as usual |
+| HAOS `inaddon` | **no component** in effect — `remove_tools_entry_in_qcow2` drops the baked tools entry pre-boot; nothing else sets one up |
+| HAOS `embedded` | **server entry only** — same pre-boot removal, and the staged (disabled) server entry is deliberately kept |
+
+The staging lives in `conftest._prepare_testcontainer_config` (container) and
+`conftest._prepare_haos_image` → `haos_runtime.remove_tools_entry_in_qcow2`
+(HAOS). The qcow2 edit is offline and per-worker, like the recorder / HACS
+refreshers, and raises rather than warning: a silent no-op would leave the
+entry in place and the lane would re-test the ordinary topology while
+reporting green.
+
+Two markers gate on it, both dispatched from `pytest_collection_modifyitems`:
+
+- `requires_tools_entry` — the test needs the entry, so it skips on these
+  lanes. Applied module-wide to the filesystem / YAML suites.
+- `no_tools_only` — the test pins what happens WITHOUT the entry, so it skips
+  everywhere else. `src/e2e/workflows/filesystem/test_tools_entry_absent.py`
+  is the module that carries it.
+
+Since component 2.1.0 the server entry registers the `ha_mcp_tools/*`
+WebSocket surface too (#2291), so on the two `embedded` shapes the shared
+component capabilities answer while the privileged *services* stay gone —
+that split is the whole point of the lanes, and `test_tools_entry_absent.py`
+asserts both halves.
 
 ## Test Patterns
 

@@ -33,6 +33,10 @@ from ...utilities.wait_helpers import wait_for_tool_result
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ha_config_set_yaml writes through the component's privileged services, which
+# register only in the "File & YAML Tools" config entry (#2292).
+pytestmark = pytest.mark.requires_tools_entry
+
 FEATURE_FLAG = "ENABLE_YAML_CONFIG_EDITING"
 TOOL_NAME = "ha_config_set_yaml"
 READ_TOOL = "ha_read_file"
