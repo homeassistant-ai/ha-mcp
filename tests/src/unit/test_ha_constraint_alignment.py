@@ -173,12 +173,13 @@ class TestMainExitCodes:
 class TestFetchFailurePath:
     """The fetch budget the CI job's timeout is sized against.
 
-    pr.yml raised the lockfile job to 5 minutes and treats
+    pr.yml runs this check as a step of the Fast Checks lane and treats
     EXIT_CONSTRAINTS_UNREACHABLE as a fail-open warning on the reasoning
-    that a fetch failure resolves FAST and distinctly. Restoring a long
-    timeout or a trailing sleep would push the worst case past the job
-    budget, turning that clean exit into an opaque runner kill — the exact
-    outcome the comments say must not happen.
+    that a fetch failure resolves FAST and distinctly. That lane's 15-minute
+    budget is shared with every other fast check, so restoring a long timeout
+    or a trailing sleep would push the worst case past it, turning that clean
+    exit into an opaque runner kill — the exact outcome the comments say must
+    not happen.
     """
 
     def _patch_fetch(self, monkeypatch, *, sleeps, attempts):
