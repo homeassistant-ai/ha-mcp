@@ -1,7 +1,9 @@
 """Unit tests for tools_filesystem module."""
 
+import asyncio
 import json
 import os
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -385,6 +387,152 @@ class TestAssertMcpToolsAvailableCapsFirst:
             "ha_mcp.tools.tools_filesystem.get_component_caps",
             AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
         ):
+            await _assert_mcp_tools_available(client)  # must not raise
+
+        assert client.get_services.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_concurrent_probes_on_one_client_fetch_the_registry_once(self):
+        """Two gated calls racing on an empty memo serialize on the per-client
+        lock and pay for ONE ``get_services()``.
+
+        The suspension is the whole test. With a plain
+        ``AsyncMock(return_value=...)`` nothing inside the probe ever yields to
+        the event loop, so the first caller runs miss → lock → probe → store to
+        completion before the second is scheduled at all: the memo is already
+        warm by the time the second arrives, and the assertion below would hold
+        with no lock and no second cache check in the code. Parking the first
+        caller *inside* ``get_services`` is what puts the second one at the lock
+        while the memo is still unwritten, which is the only arrangement that
+        distinguishes the serialized refresh (#2302) from a per-caller probe.
+        """
+        from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
+
+        entered_probe = asyncio.Event()
+        release_probe = asyncio.Event()
+
+        async def _suspending_get_services() -> list[dict[str, Any]]:
+            entered_probe.set()
+            await release_probe.wait()
+            return [{"domain": MCP_TOOLS_DOMAIN, "services": {"get_caller_token": {}}}]
+
+        client = AsyncMock()
+        client.get_services = AsyncMock(side_effect=_suspending_get_services)
+
+        with patch(
+            "ha_mcp.tools.tools_filesystem.get_component_caps",
+            AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
+        ):
+            first = asyncio.create_task(_assert_mcp_tools_available(client))
+            # Resumes only once the first caller is parked mid-probe. Bounded so
+            # a gate that stops probing at all fails here instead of hanging.
+            await asyncio.wait_for(entered_probe.wait(), timeout=5)
+            second = asyncio.create_task(_assert_mcp_tools_available(client))
+            # Let the second caller reach the per-client lock and block on it
+            # while the memo is still empty.
+            for _ in range(10):
+                await asyncio.sleep(0)
+            release_probe.set()
+            await asyncio.gather(first, second)  # neither may raise
+
+        client.get_services.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_refresh_after_expiry_probes_once(self, monkeypatch):
+        """The lock must also serialize the EXPIRED-entry refresh, not just the
+        cold cache. Steady state is a memo that expires every TTL with the
+        gated tools still being called; an implementation that serialized only
+        the initial insert would pass the cold-cache test above while issuing
+        one full service-registry fetch per concurrent caller every window
+        (Codex review on the #2302 follow-up)."""
+        from ha_mcp.tools import tools_filesystem
+        from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
+
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(tools_filesystem, "_monotonic", lambda: clock["now"])
+
+        services_present = [
+            {"domain": MCP_TOOLS_DOMAIN, "services": {"get_caller_token": {}}}
+        ]
+        entered_probe = asyncio.Event()
+        release_probe = asyncio.Event()
+        primed = {"done": False}
+
+        async def _get_services() -> list[dict[str, Any]]:
+            if not primed["done"]:
+                # The priming call resolves immediately; only the refresh
+                # after expiry parks, so the race lands on the expired path.
+                return services_present
+            entered_probe.set()
+            await release_probe.wait()
+            return services_present
+
+        client = AsyncMock()
+        client.get_services = AsyncMock(side_effect=_get_services)
+
+        with patch(
+            "ha_mcp.tools.tools_filesystem.get_component_caps",
+            AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
+        ):
+            await _assert_mcp_tools_available(client)  # prime the memo
+            primed["done"] = True
+            clock["now"] += tools_filesystem._LIVE_TOOLS_PROBE_TTL_S + 1.0
+
+            first = asyncio.create_task(_assert_mcp_tools_available(client))
+            await asyncio.wait_for(entered_probe.wait(), timeout=5)
+            second = asyncio.create_task(_assert_mcp_tools_available(client))
+            for _ in range(10):
+                await asyncio.sleep(0)
+            release_probe.set()
+            await asyncio.gather(first, second)
+
+        assert client.get_services.await_count == 2, (
+            "expiry refresh must cost ONE probe regardless of concurrent "
+            f"callers; got {client.get_services.await_count}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_false_verdict_is_memoized_for_the_ttl_too(self, monkeypatch):
+        """A ``False`` verdict is memoized deliberately, and that costs the user
+        who adds the tools entry mid-window at most one TTL of staleness.
+
+        Memoizing only the ``True`` side would look kinder and be worse: the
+        install that is already broken — no tools entry — would put a full
+        uncached ``get_services()`` in front of every gated call until it is
+        fixed. The bound is what makes the trade acceptable, so pin both halves:
+        the error repeats without re-probing inside the window, and the entry
+        added mid-session starts working once the window passes, with no server
+        restart (#2302).
+        """
+        from ha_mcp.tools import tools_filesystem
+        from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
+
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(tools_filesystem, "_monotonic", lambda: clock["now"])
+
+        client = AsyncMock()
+        client.get_services = AsyncMock(return_value=[])
+        with patch(
+            "ha_mcp.tools.tools_filesystem.get_component_caps",
+            AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
+        ):
+            with pytest.raises(ToolError):
+                await _assert_mcp_tools_available(client)
+            client.get_services.assert_awaited_once()
+
+            # The user adds the "File & YAML Tools" entry mid-window.
+            client.get_services.return_value = [
+                {"domain": MCP_TOOLS_DOMAIN, "services": {"get_caller_token": {}}}
+            ]
+            clock["now"] += tools_filesystem._LIVE_TOOLS_PROBE_TTL_S / 2
+            with pytest.raises(ToolError) as exc:
+                await _assert_mcp_tools_available(client)
+            data = json.loads(str(exc.value))
+            assert "file & yaml tools" in data["error"]["message"].lower()
+            # Still the memoized False — no second registry fetch.
+            client.get_services.assert_awaited_once()
+
+            clock["now"] += tools_filesystem._LIVE_TOOLS_PROBE_TTL_S
             await _assert_mcp_tools_available(client)  # must not raise
 
         assert client.get_services.await_count == 2
