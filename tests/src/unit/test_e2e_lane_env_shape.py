@@ -133,6 +133,7 @@ def test_no_tools_haos_inaddon_has_no_component_surface(
 _PR = "pr.yml"
 _E2E = "e2e-tests.yml"
 _HAOS = "haos-e2e-tests.yml"
+_BETA = "haos-e2e-beta-tests.yml"
 
 # (workflow, job) -> the backend selectors that step's env must carry, exactly.
 # An absent selector is as load-bearing as a present one: the two no-component
@@ -147,8 +148,11 @@ _NO_TOOLS_LANES: dict[tuple[str, str], dict[str, str]] = {
     (_HAOS, "haos-e2e-inaddon-no-tools"): {"HAOS_TEST_MODE": "inaddon"},
 }
 
-# The component-present siblings each no-tools lane is paired against. If one of
-# these ever grows E2E_NO_TOOLS_ENTRY, the pair stops being a comparison.
+# Every component-present lane: the siblings each no-tools lane is paired
+# against, plus the beta lanes, which have no no-tools counterpart but are
+# component-present all the same. If one of these ever grows
+# E2E_NO_TOOLS_ENTRY, a pair stops being a comparison and a beta lane stops
+# covering the topology it was built to run on beta images.
 _ORDINARY_LANES: tuple[tuple[str, str], ...] = (
     (_PR, "e2e-validation"),
     (_PR, "e2e-validation-embedded"),
@@ -160,6 +164,8 @@ _ORDINARY_LANES: tuple[tuple[str, str], ...] = (
     (_HAOS, "haos-e2e-embedded"),
     (_HAOS, "haos-e2e-inaddon"),
     (_HAOS, "haos-e2e-stdio"),
+    (_BETA, "haos-e2e-inaddon-beta"),
+    (_BETA, "haos-e2e-embedded-beta"),
 )
 
 # The container no-tools lanes are whole-topology audits: pytest.ini's
@@ -174,6 +180,23 @@ _AUDIT_LANES: tuple[tuple[str, str], ...] = (
 )
 
 _SELECTOR_NAMES = ("E2E_BACKEND", "HAOS_TEST_MODE")
+
+# The workflows whose e2e jobs the two tables above are expected to classify.
+# `performance-tests.yml` also runs `uv run pytest tests/src/e2e/...`, but its
+# single job is a benchmark over `src/e2e/performance/` rather than a topology
+# lane paired against anything, so it is deliberately left unclassified.
+_LANE_WORKFLOWS: tuple[str, ...] = (_PR, _E2E, _HAOS, _BETA)
+
+# A pytest step is an e2e lane when it targets the e2e suite: the path
+# literally, or `$PYTEST_PATHS`, the HAOS workflows' dispatch-overridable input
+# that defaults to `src/e2e/`. Matching `uv run pytest` alone would also sweep
+# in pr.yml's unit-tests and docker-validation jobs.
+_E2E_TARGET = re.compile(r"src/e2e/|\$\{?PYTEST_PATHS")
+
+# Floor on the discovered count, so a predicate that quietly stops matching (a
+# workflow restructure, a renamed input) fails here rather than reporting an
+# empty sweep as full coverage.
+_MIN_DISCOVERED_LANES = 18
 
 
 def _job(workflow: str, job_id: str) -> dict[str, Any]:
@@ -270,6 +293,71 @@ def test_container_audit_lane_reports_the_full_failure_surface(
     assert "--maxfail=0" in run, (
         f"{workflow}::{job_id} stops after pytest.ini's --maxfail=3, so a "
         "topology audit reports three failures instead of the full surface"
+    )
+
+
+def _discover_e2e_lanes() -> set[tuple[str, str]]:
+    """Every ``(workflow, job)`` in ``_LANE_WORKFLOWS`` that runs the e2e suite."""
+    discovered: set[tuple[str, str]] = set()
+    for workflow in _LANE_WORKFLOWS:
+        data = yaml.safe_load((_WORKFLOW_DIR / workflow).read_text(encoding="utf-8"))
+        for job_id, job in (data.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps", []):
+                if not isinstance(step, dict):
+                    continue
+                run = str(step.get("run", ""))
+                if "uv run pytest" in run and _E2E_TARGET.search(run):
+                    discovered.add((workflow, job_id))
+                    break
+    return discovered
+
+
+def test_every_e2e_lane_is_claimed_by_exactly_one_table() -> None:
+    """Both lane tables are hand-maintained, so a lane added later belongs to
+    neither and is exempt from every env-contract check above: it is
+    parametrized nowhere, and nothing goes red for it (#2302 review).
+
+    Completeness is all this test claims, and classification stays the tables'
+    job deliberately. Deriving it from the presence of E2E_NO_TOOLS_ENTRY would
+    make the contract vacuous in exactly the case #2292 is about: a no-tools
+    lane that LOST the variable would re-classify itself as ordinary, and
+    ``test_ordinary_lane_does_not_carry_the_no_tools_env`` would then cheerfully
+    confirm the variable it just dropped is absent. So the author says which
+    table a new lane belongs to; this test only insists that they say.
+    """
+    discovered = _discover_e2e_lanes()
+    tables = {
+        "_NO_TOOLS_LANES": set(_NO_TOOLS_LANES),
+        "_ORDINARY_LANES": set(_ORDINARY_LANES),
+    }
+
+    for lane in sorted(discovered):
+        claimants = [name for name, table in tables.items() if lane in table]
+        workflow, job_id = lane
+        assert len(claimants) == 1, (
+            f"{workflow}::{job_id} runs the e2e suite but is claimed by "
+            f"{claimants or 'no table'}, not by exactly one. Add it to "
+            "_NO_TOOLS_LANES (with the backend selectors its pytest step must "
+            "carry) if it sets E2E_NO_TOOLS_ENTRY=1, otherwise to "
+            "_ORDINARY_LANES — a lane in neither table is checked by nothing "
+            "in this module, and a lane in both is contradicting itself"
+        )
+
+    for name, table in tables.items():
+        stale = sorted(lane for lane in table if lane not in discovered)
+        assert not stale, (
+            f"{name} names {stale}, which no longer runs the e2e suite — a "
+            "renamed or deleted job. Fix the entry rather than dropping it: "
+            "the lane it stood for may still exist under its new name"
+        )
+
+    assert len(discovered) >= _MIN_DISCOVERED_LANES, (
+        f"discovered only {len(discovered)} e2e lanes across {_LANE_WORKFLOWS}, "
+        f"below the {_MIN_DISCOVERED_LANES} that exist today — the discovery "
+        "predicate stopped matching, and an empty sweep passes the checks "
+        "above vacuously"
     )
 
 
