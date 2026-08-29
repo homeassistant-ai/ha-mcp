@@ -40,6 +40,7 @@ jobs:
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
+        persist-credentials: false
         submodules: true
 
     - name: Set up Docker Buildx
@@ -121,6 +122,7 @@ jobs:
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
+        persist-credentials: false
         submodules: true
 
     - name: Set up Docker Buildx
@@ -216,6 +218,7 @@ jobs:
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
+        persist-credentials: false
         submodules: true
 
     - name: Set up Docker Buildx
@@ -298,6 +301,7 @@ jobs:
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
+        persist-credentials: false
         submodules: true
 
     - name: Set up Docker Buildx
@@ -388,6 +392,7 @@ jobs:
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
+        persist-credentials: false
         submodules: true
         # fetch-depth 0: the update-path scenario checks the custom component
         # out at the released ``stable`` git tag, which the default shallow

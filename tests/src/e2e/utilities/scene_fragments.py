@@ -8,6 +8,8 @@ relative imports, a Docker-shaped conftest) that it has no business importing.
 
 from __future__ import annotations
 
+import re
+
 # Any fragment carrying one of these is a degradation gone wrong, whatever else
 # it mentions — checked before the structural shapes so a failed-fetch fragment
 # whose ``e.g.`` sample happens to name a YAML-defined scene is still rejected.
@@ -34,6 +36,15 @@ def is_structural_scene_fragment(text: str) -> bool:
     """
     if any(marker in text for marker in _FAILURE_MARKERS):
         return False
+    # The attribute-only note is matched by its COMPLETE shape, not just the
+    # tail: a future non-structural message that happened to end with the same
+    # suffix must not pass as the informational note.
     return (
         "per-id config endpoint returned 404" in text and "YAML-defined scenes" in text
-    ) or text.rstrip().endswith("scored by attribute only (no per-id fetch).")
+    ) or bool(
+        re.fullmatch(
+            r"\d+ integration-managed scenes are scored by attribute only "
+            r"\(no per-id fetch\)\.",
+            text.strip(),
+        )
+    )

@@ -41,6 +41,7 @@ from ha_mcp.backup_manager import (
     get_backup_manager,
 )
 from ha_mcp.client.rest_client import HomeAssistantError
+from ha_mcp.errors import ErrorCode, create_error_response
 from ha_mcp.tools.auto_backup import with_auto_backup
 
 # ---------------------------------------------------------------- fixtures
@@ -2011,13 +2012,10 @@ class TestMandatoryGate:
         the backup cannot succeed. The write stays blocked either way."""
         component_error = ToolError(
             json.dumps(
-                {
-                    "success": False,
-                    "error": {
-                        "code": "COMPONENT_NOT_INSTALLED",
-                        "message": "Add entry -> HA-MCP File & YAML Tools",
-                    },
-                }
+                create_error_response(
+                    ErrorCode.COMPONENT_NOT_INSTALLED,
+                    "Add entry -> HA-MCP File & YAML Tools",
+                )
             )
         )
 
@@ -2058,13 +2056,10 @@ class TestMandatoryGate:
         traverse BOTH links or the failure regresses to BACKUP_CAPTURE_FAILED."""
         component_error = ToolError(
             json.dumps(
-                {
-                    "success": False,
-                    "error": {
-                        "code": "COMPONENT_NOT_INSTALLED",
-                        "message": "Add entry -> HA-MCP File & YAML Tools",
-                    },
-                }
+                create_error_response(
+                    ErrorCode.COMPONENT_NOT_INSTALLED,
+                    "Add entry -> HA-MCP File & YAML Tools",
+                )
             )
         )
 
@@ -2111,13 +2106,10 @@ class TestMandatoryGate:
         the write was blocked."""
         unrelated = ToolError(
             json.dumps(
-                {
-                    "success": False,
-                    "error": {
-                        "code": "AUTH_INSUFFICIENT_PERMISSIONS",
-                        "message": "token cannot read that path",
-                    },
-                }
+                create_error_response(
+                    ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+                    "token cannot read that path",
+                )
             )
         )
 
