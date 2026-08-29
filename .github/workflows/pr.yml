@@ -194,23 +194,45 @@ jobs:
             exit 1
           fi
 
-  lockfile:
-    name: Check uv.lock
+  # The seven fast checks that used to be seven separate jobs and seven
+  # required contexts (issue #2311): Check uv.lock, Docs Size Check, Ruff Lint,
+  # AST Lint and Mypy Type Check from this file, plus HACS and Hassfest, which
+  # validate.yml used to run on pull_request. They all finish in a couple of
+  # minutes and three of them each paid for their own dependency install; folded
+  # into one lane they share a single `uv sync --dev`.
+  #
+  # A PLAIN runner, not the `ghcr.io/astral-sh/uv` container image the folded
+  # jobs used: hacs/action and home-assistant/actions/hassfest are Docker
+  # actions, and a Docker action cannot be assumed to work inside a container
+  # job. uv therefore comes from astral-sh/setup-uv here. (The unit-tests job
+  # below still runs in that container image, so the Renovate datasource pinning
+  # it stays live.)
+  #
+  # `if: success() || failure()` on every check step from the docs-size one down
+  # is the failure-attribution requirement: one lane must still report EVERY
+  # check, so a ruff failure cannot hide a mypy failure the way it would if the
+  # steps simply stopped at the first red. It is deliberately not `always()` —
+  # a cancelled run stops here instead of grinding through the rest.
+  fast-checks:
+    name: Fast Checks
     runs-on: ubuntu-latest
-    container:
-      # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.12.7-python3.13-trixie-slim
-    # 5 (was 2): this job now also fetches HA's constraints file over the
-    # network. The fetch is budgeted to fail fast (3 x 10s + short backoff)
-    # so its own distinct exit code is always reachable, and the headroom
-    # here keeps a slow network from turning that clean failure into an
-    # opaque runner kill.
-    timeout-minutes: 5
+    # 15: under the 18 the five folded pr.yml jobs budgeted between them
+    # (5 + 1 + 5 + 2 + 5), because two of the three dependency installs are
+    # gone, with headroom left for the two Docker actions to pull their images.
+    timeout-minutes: 15
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         persist-credentials: false
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        version: "latest"
+
+    - name: Set up Python
+      run: uv python install ${{ env.PYTHON_VERSION }}
 
     - name: Verify uv.lock is in sync with pyproject.toml
       run: uv lock --check
@@ -247,22 +269,76 @@ jobs:
         fi
         exit "$status"
 
-  docs-size:
-    name: Docs Size Check
-    runs-on: ubuntu-latest
-    timeout-minutes: 1
-
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      with:
-        persist-credentials: false
-
-    - name: Check AGENTS.md size
+    - name: Docs Size Check
+      if: success() || failure()
       run: |
         size=$(LC_ALL=C.UTF-8 wc -m < AGENTS.md)
         if [ "$size" -gt 40000 ]; then
           echo "::warning file=AGENTS.md::AGENTS.md is ${size} chars (>40k). Claude Code will show a startup performance warning."
         fi
+
+    - name: Install dependencies
+      # One install for ruff, ast-grep and mypy. The three folded jobs each ran
+      # their own; this is where most of the fold's wall-clock saving comes from.
+      if: success() || failure()
+      run: uv sync --dev
+
+    - name: Run ruff check
+      if: success() || failure()
+      run: uv run ruff check src/ tests/ custom_components/ homeassistant-addon/ homeassistant-addon-webhook-proxy/ homeassistant-addon-webhook-proxy-dev/ packaging/ scripts/
+
+    - name: Run ruff format check on changed Python files
+      if: success() || failure()
+      run: |
+        # Changed-files-only gate per the maintainer call on issue #1318:
+        # new edits must be formatted; pre-existing format-debt on
+        # untouched files stays grandfathered. Avoids the disruption of a
+        # repo-wide sweep while still preventing fresh debt from landing.
+        if [ -z "${GITHUB_BASE_REF}" ]; then
+          echo "No PR base ref (workflow_dispatch); skipping format check."
+          exit 0
+        fi
+        git fetch --depth=1 origin "${GITHUB_BASE_REF}"
+        base_sha=$(git rev-parse "origin/${GITHUB_BASE_REF}")
+        changed_py=$(git diff --name-only --diff-filter=ACMR "${base_sha}" -- '*.py')
+        if [ -z "$changed_py" ]; then
+          echo "No Python files changed; skipping ruff format check."
+          exit 0
+        fi
+        count=$(echo "$changed_py" | wc -l)
+        echo "Checking ruff format on $count changed Python files:"
+        echo "$changed_py" | sed 's/^/  /'
+        echo "$changed_py" | xargs uv run ruff format --check
+
+    - name: Run ast-grep
+      if: success() || failure()
+      run: uv run ast-grep scan
+
+    - name: Run mypy
+      if: success() || failure()
+      run: |
+        uv run mypy src/ custom_components/ homeassistant-addon/ scripts/
+        uv run mypy homeassistant-addon-webhook-proxy/
+        uv run mypy homeassistant-addon-webhook-proxy-dev/
+
+    - name: HACS validation
+      if: success() || failure()
+      uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa # main
+      with:
+        category: integration
+
+    # Drop vendored third-party fixtures (e.g. the upstream HACS integration
+    # used as an e2e fixture) so hassfest only validates integrations this repo
+    # owns. Mirrors scripts/codeql_quality_gate.py's PATHS_IGNORE convention.
+    # LAST of the checks that read the tree, because it mutates the workspace:
+    # every step above still sees the checkout as committed.
+    - name: Remove vendored test fixtures
+      if: success() || failure()
+      run: rm -rf tests/initial_test_state
+
+    - name: Hassfest
+      if: success() || failure()
+      uses: home-assistant/actions/hassfest@a7c616ce81ccda50150bf1595786c71b1883fabb # master
 
   # Anchors the docs-site accessibility work (#1574/#1595): astro check (types
   # + a11y diagnostics), eslint-plugin-astro + jsx-a11y, and an axe-core audit
@@ -304,96 +380,6 @@ jobs:
       # Blocking: the baseline is clean (0 violations across all pages), so a
       # new axe-core violation fails the PR rather than slipping through.
       run: npm run audit:a11y
-
-  lint:
-    name: Ruff Lint
-    runs-on: ubuntu-latest
-    container:
-      # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.12.7-python3.13-trixie-slim
-    timeout-minutes: 5
-
-    steps:
-    - name: Install git for changed-files diff
-      run: apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
-
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      with:
-        persist-credentials: false
-
-    - name: Install dependencies
-      run: uv sync --dev
-
-    - name: Run ruff check
-      run: uv run ruff check src/ tests/ custom_components/ homeassistant-addon/ homeassistant-addon-webhook-proxy/ homeassistant-addon-webhook-proxy-dev/ packaging/ scripts/
-
-    - name: Run ruff format check on changed Python files
-      run: |
-        # actions/checkout sets safe.directory in a temp HOME that this
-        # step doesn't inherit; re-add it here so git operations succeed
-        # when the checkout dir is owned by a different UID than the
-        # container's root.
-        git config --global --add safe.directory "$GITHUB_WORKSPACE"
-        # Changed-files-only gate per the maintainer call on issue #1318:
-        # new edits must be formatted; pre-existing format-debt on
-        # untouched files stays grandfathered. Avoids the disruption of a
-        # repo-wide sweep while still preventing fresh debt from landing.
-        if [ -z "${GITHUB_BASE_REF}" ]; then
-          echo "No PR base ref (workflow_dispatch); skipping format check."
-          exit 0
-        fi
-        git fetch --depth=1 origin "${GITHUB_BASE_REF}"
-        base_sha=$(git rev-parse "origin/${GITHUB_BASE_REF}")
-        changed_py=$(git diff --name-only --diff-filter=ACMR "${base_sha}" -- '*.py')
-        if [ -z "$changed_py" ]; then
-          echo "No Python files changed; skipping ruff format check."
-          exit 0
-        fi
-        count=$(echo "$changed_py" | wc -l)
-        echo "Checking ruff format on $count changed Python files:"
-        echo "$changed_py" | sed 's/^/  /'
-        echo "$changed_py" | xargs uv run ruff format --check
-
-  ast-grep:
-    name: AST Lint
-    runs-on: ubuntu-latest
-    container:
-      # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.12.7-python3.13-trixie-slim
-    timeout-minutes: 2
-
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      with:
-        persist-credentials: false
-
-    - name: Install dependencies
-      run: uv sync --dev
-
-    - name: Run ast-grep
-      run: uv run ast-grep scan
-
-  mypy:
-    name: Mypy Type Check
-    runs-on: ubuntu-latest
-    container:
-      # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.12.7-python3.13-trixie-slim
-    timeout-minutes: 5
-
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      with:
-        persist-credentials: false
-
-    - name: Install dependencies
-      run: uv sync --dev
-
-    - name: Run mypy
-      run: |
-        uv run mypy src/ custom_components/ homeassistant-addon/ scripts/
-        uv run mypy homeassistant-addon-webhook-proxy/
-        uv run mypy homeassistant-addon-webhook-proxy-dev/
 
   # Fast unit tests (no Docker, no HA instance needed)
   unit-tests:
