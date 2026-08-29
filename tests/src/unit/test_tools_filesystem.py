@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -410,7 +411,7 @@ class TestAssertMcpToolsAvailableCapsFirst:
         entered_probe = asyncio.Event()
         release_probe = asyncio.Event()
 
-        async def _suspending_get_services():
+        async def _suspending_get_services() -> list[dict[str, Any]]:
             entered_probe.set()
             await release_probe.wait()
             return [{"domain": MCP_TOOLS_DOMAIN, "services": {"get_caller_token": {}}}]
@@ -435,6 +436,60 @@ class TestAssertMcpToolsAvailableCapsFirst:
             await asyncio.gather(first, second)  # neither may raise
 
         client.get_services.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_refresh_after_expiry_probes_once(self, monkeypatch):
+        """The lock must also serialize the EXPIRED-entry refresh, not just the
+        cold cache. Steady state is a memo that expires every TTL with the
+        gated tools still being called; an implementation that serialized only
+        the initial insert would pass the cold-cache test above while issuing
+        one full service-registry fetch per concurrent caller every window
+        (Codex review on the #2302 follow-up)."""
+        from ha_mcp.tools import tools_filesystem
+        from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
+
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(tools_filesystem, "_monotonic", lambda: clock["now"])
+
+        services_present = [
+            {"domain": MCP_TOOLS_DOMAIN, "services": {"get_caller_token": {}}}
+        ]
+        entered_probe = asyncio.Event()
+        release_probe = asyncio.Event()
+        primed = {"done": False}
+
+        async def _get_services() -> list[dict[str, Any]]:
+            if not primed["done"]:
+                # The priming call resolves immediately; only the refresh
+                # after expiry parks, so the race lands on the expired path.
+                return services_present
+            entered_probe.set()
+            await release_probe.wait()
+            return services_present
+
+        client = AsyncMock()
+        client.get_services = AsyncMock(side_effect=_get_services)
+
+        with patch(
+            "ha_mcp.tools.tools_filesystem.get_component_caps",
+            AsyncMock(return_value=self._caps("2.1.0", tools_services=True)),
+        ):
+            await _assert_mcp_tools_available(client)  # prime the memo
+            primed["done"] = True
+            clock["now"] += tools_filesystem._LIVE_TOOLS_PROBE_TTL_S + 1.0
+
+            first = asyncio.create_task(_assert_mcp_tools_available(client))
+            await asyncio.wait_for(entered_probe.wait(), timeout=5)
+            second = asyncio.create_task(_assert_mcp_tools_available(client))
+            for _ in range(10):
+                await asyncio.sleep(0)
+            release_probe.set()
+            await asyncio.gather(first, second)
+
+        assert client.get_services.await_count == 2, (
+            "expiry refresh must cost ONE probe regardless of concurrent "
+            f"callers; got {client.get_services.await_count}"
+        )
 
     @pytest.mark.asyncio
     async def test_false_verdict_is_memoized_for_the_ttl_too(self, monkeypatch):

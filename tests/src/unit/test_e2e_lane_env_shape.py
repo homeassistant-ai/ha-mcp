@@ -181,11 +181,18 @@ _AUDIT_LANES: tuple[tuple[str, str], ...] = (
 
 _SELECTOR_NAMES = ("E2E_BACKEND", "HAOS_TEST_MODE")
 
-# The workflows whose e2e jobs the two tables above are expected to classify.
-# `performance-tests.yml` also runs `uv run pytest tests/src/e2e/...`, but its
-# single job is a benchmark over `src/e2e/performance/` rather than a topology
-# lane paired against anything, so it is deliberately left unclassified.
-_LANE_WORKFLOWS: tuple[str, ...] = (_PR, _E2E, _HAOS, _BETA)
+# Workflows whose e2e-pytest jobs are deliberately NOT topology lanes and so
+# stay outside the two tables. Every OTHER workflow in the directory is
+# discovered by glob, so a topology lane introduced in a brand-new workflow
+# file fails the completeness check until it is classified — hand-listing the
+# lane files here would exempt the next file the same way the tables used to
+# exempt the next lane (Codex review on the #2302 follow-up).
+_NON_TOPOLOGY_WORKFLOWS: dict[str, str] = {
+    "performance-tests.yml": (
+        "benchmark over src/e2e/performance/, not a topology lane paired "
+        "against anything"
+    ),
+}
 
 # A pytest step is an e2e lane when it targets the e2e suite: the path
 # literally, or `$PYTEST_PATHS`, the HAOS workflows' dispatch-overridable input
@@ -297,10 +304,15 @@ def test_container_audit_lane_reports_the_full_failure_surface(
 
 
 def _discover_e2e_lanes() -> set[tuple[str, str]]:
-    """Every ``(workflow, job)`` in ``_LANE_WORKFLOWS`` that runs the e2e suite."""
+    """Every ``(workflow, job)`` in the workflow dir that runs the e2e suite."""
     discovered: set[tuple[str, str]] = set()
-    for workflow in _LANE_WORKFLOWS:
-        data = yaml.safe_load((_WORKFLOW_DIR / workflow).read_text(encoding="utf-8"))
+    for path in sorted(_WORKFLOW_DIR.glob("*.yml")):
+        workflow = path.name
+        if workflow in _NON_TOPOLOGY_WORKFLOWS:
+            continue
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            continue
         for job_id, job in (data.get("jobs") or {}).items():
             if not isinstance(job, dict):
                 continue
@@ -354,7 +366,7 @@ def test_every_e2e_lane_is_claimed_by_exactly_one_table() -> None:
         )
 
     assert len(discovered) >= _MIN_DISCOVERED_LANES, (
-        f"discovered only {len(discovered)} e2e lanes across {_LANE_WORKFLOWS}, "
+        f"discovered only {len(discovered)} e2e lanes across the workflow dir, "
         f"below the {_MIN_DISCOVERED_LANES} that exist today — the discovery "
         "predicate stopped matching, and an empty sweep passes the checks "
         "above vacuously"
