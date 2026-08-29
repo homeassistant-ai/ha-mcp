@@ -296,7 +296,9 @@ class TestEntryTypeDispatch:
         routes.tools_setup.assert_not_awaited()
 
     @pytest.mark.parametrize(
-        "entry_type", [None, ENTRY_TYPE_TOOLS], ids=["missing", "explicit_tools"]
+        "entry_type",
+        [None, ENTRY_TYPE_TOOLS, "future_entry_type"],
+        ids=["missing", "explicit_tools", "other_nonserver"],
     )
     async def test_non_server_entry_type_sets_up_the_tools_entry(
         self, routes, tmp_path, entry_type
@@ -319,7 +321,9 @@ class TestEntryTypeDispatch:
         routes.tools_unload.assert_not_awaited()
 
     @pytest.mark.parametrize(
-        "entry_type", [None, ENTRY_TYPE_TOOLS], ids=["missing", "explicit_tools"]
+        "entry_type",
+        [None, ENTRY_TYPE_TOOLS, "future_entry_type"],
+        ids=["missing", "explicit_tools", "other_nonserver"],
     )
     async def test_non_server_entry_type_unloads_the_tools_entry(
         self, routes, tmp_path, entry_type
