@@ -220,7 +220,12 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
     workflow = _workflow(beta_path)
 
     triggers = workflow[True]
-    assert triggers["pull_request"] is None
+    # No pull_request trigger (#2311): the beta lanes run nightly and on the
+    # master push after each merge, never per PR push.
+    assert "pull_request" not in triggers, (
+        "beta lanes must not run per PR push (#2311) - a per-PR beta failure "
+        "blames every open PR for an upstream change none of them made"
+    )
     assert triggers["push"]["branches"] == ["master"]
     assert triggers["schedule"]
     assert all(entry.get("cron") for entry in triggers["schedule"])
@@ -244,7 +249,7 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
             "schedule trigger starts it on the other lane's cron too"
         )
         assert "github.event_name != 'schedule'" in job["if"], (
-            f"{beta_job_id} would never run on pull_request / push / dispatch, "
+            f"{beta_job_id} would never run on push / dispatch, "
             "where github.event.schedule is empty"
         )
         for other_cron in (c for _j, _m, c, _s in lane_specs if c != cron):

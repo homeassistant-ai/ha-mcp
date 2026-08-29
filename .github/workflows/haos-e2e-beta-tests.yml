@@ -16,14 +16,15 @@ name: HAOS E2E Tests (beta)
 # otherwise start BOTH lanes on BOTH crons. So each lane's `if:` appends a
 # `github.event.schedule` term to the shared classifier predicate: inaddon beta
 # answers 06:00 UTC, embedded beta 08:00 UTC. Every non-schedule event
-# (pull_request, push, workflow_dispatch) leaves `github.event.schedule` empty,
+# (push, workflow_dispatch) leaves `github.event.schedule` empty,
 # which is what the `github.event_name != 'schedule'` disjunct lets through, so
 # both lanes still run on those.
 
 on:
-  # Run on every pull request so beta compatibility stays visible. The
-  # `changes` job skips the QEMU suite only for docs/website-only changes.
-  pull_request:
+  # NOT on pull_request (#2311): per-PR beta runs cost ~21 runner-minutes per
+  # push to answer a question that moves nightly (upstream beta) or per-merge
+  # (our code). A beta incompatibility surfaces on the merge commit via the
+  # push trigger, and upstream-side breakage within a day via the crons.
   push:
     branches: [master]
   schedule:
