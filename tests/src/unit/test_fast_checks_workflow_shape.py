@@ -57,7 +57,7 @@ def test_docs_size_check_enforces_root_instruction_budgets() -> None:
     """Workflow limits, root prose, and the current file stay synchronized."""
     step = next(step for step in _steps() if _step_name(step) == "Docs Size Check")
     run = str(step["run"])
-    agents = _AGENTS_MD.read_text(encoding="utf-8")
+    agents = _AGENTS_MD.read_bytes().decode("utf-8")
 
     assert "LC_ALL=C.UTF-8 wc -m < AGENTS.md" in run
     assert "wc -l < AGENTS.md" in run
@@ -79,7 +79,7 @@ def test_docs_size_check_enforces_root_instruction_budgets() -> None:
     assert "::error file=AGENTS.md" in run
     assert "exit 1" in run
     assert len(agents) <= max_chars
-    assert len(agents.splitlines()) <= max_lines
+    assert agents.count("\n") <= max_lines
 
 
 def test_clean_tree_validators_precede_pr_controlled_execution() -> None:

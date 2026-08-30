@@ -2610,15 +2610,22 @@ def test_locale_readme_states_the_current_ceilings() -> None:
     )
     component = re.search(r"Component catalogs allow (\d+)%", section)
     assert surface and projection and component
-    documented = {*surface.groups(), projection.group(1), component.group(1)}
-
-    assert documented == {
-        f"{_MAX_ENGLISH_IDENTICAL_SHARE:.0%}".rstrip("%"),
-        f"{_MAX_COMPONENT_IDENTICAL_SHARE:.0%}".rstrip("%"),
-    }, (
-        f"locale README documents ceilings {sorted(documented)} but "
-        f"the constants are {_MAX_ENGLISH_IDENTICAL_SHARE:.0%} and "
-        f"{_MAX_COMPONENT_IDENTICAL_SHARE:.0%}. Update the prose."
+    expected_english = f"{_MAX_ENGLISH_IDENTICAL_SHARE:.0%}".rstrip("%")
+    expected_component = f"{_MAX_COMPONENT_IDENTICAL_SHARE:.0%}".rstrip("%")
+    documented = {
+        "messages": surface.group(1),
+        "tools": surface.group(2),
+        "app projections": projection.group(1),
+        "component catalogs": component.group(1),
+    }
+    expected = {
+        "messages": expected_english,
+        "tools": expected_english,
+        "app projections": expected_english,
+        "component catalogs": expected_component,
+    }
+    assert documented == expected, (
+        f"locale README documents ceilings {documented} but expected {expected}"
     )
 
 

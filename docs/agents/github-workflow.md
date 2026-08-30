@@ -139,7 +139,8 @@ not `pullRequestReviewThreadId`.
 To locate failed runs from a pull request:
 
 ```bash
-gh pr checks <PR> --json | jq '.[] | select(.conclusion == "failure") | .detailsUrl'
+gh pr checks <PR> --json bucket,link \
+  --jq '.[] | select(.bucket == "fail") | .link'
 ```
 
 ## Pull-request lifecycle

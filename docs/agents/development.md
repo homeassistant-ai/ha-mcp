@@ -59,8 +59,8 @@ uv run hamcp-test-env --no-interactive
 
 Locally, `-n2` limits the number of simultaneous Home Assistant containers;
 more workers usually add memory pressure without proportional speed. CI uses
-`-n3` is tuned for CI's 2-vCPU, 15 GB runners. The roughly 11,000 unit tests
-take more than 25 minutes serial, so run them in parallel as shown.
+`-n3`, a value tuned for CI's 2-vCPU, 15 GB runners. The roughly 11,000 unit
+tests take more than 25 minutes serial, so run them in parallel as shown.
 `tests/pytest.ini` sets `--maxfail=3`, so
 a report with three failures may be an early stop; use `--maxfail=0` only when
 the complete failure set is actually needed.

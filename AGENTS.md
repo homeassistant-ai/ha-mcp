@@ -27,7 +27,11 @@ git fetch origin master
 git worktree add worktree/<name> -b <branch> origin/master
 ```
 
-Before committing, verify the branch is not `master`/`main` and the working directory is the intended worktree. Preserve unrelated dirty changes in every checkout. Remove a worktree only when its branch is no longer needed and the user has authorized any associated destructive cleanup.
+Before committing, verify that the working directory is the intended checkout.
+For a non-documentation change, also verify that the branch is not
+`master`/`main`. Preserve unrelated dirty changes in every checkout. Remove a
+worktree only when its branch is no longer needed and the user has authorized
+any associated destructive cleanup.
 The repository-root checkout is where `master` is kept; `git worktree prune`
 removes stale worktree references.
 
