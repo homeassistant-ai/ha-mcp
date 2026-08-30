@@ -655,6 +655,19 @@ class HomeAssistantSmartMCPServer:
             "ssh samba grafana influxdb deconz motioneye compile validate upload "
             "deploy firmware ota flash yaml device logs flows events stats"
         ),
+        # #2322: the Energy Dashboard's tariffs live in .storage/energy, not
+        # in the state machine, so an agent hunting for electricity prices
+        # searches entities, finds none, and invents input_number helpers.
+        # The docstring says "cost tariffs" but never "price", "peak" or
+        # "kWh" — the words agents actually query with — and the title reads
+        # write-only ("Manage ..."), so lead the boost with the read verbs.
+        "ha_manage_energy_prefs": (
+            "read get inspect energy dashboard preferences prefs "
+            "electricity price prices pricing tariff tariffs rate rates "
+            "cost costs kwh peak off-peak offpeak contract utility bill "
+            "grid solar battery gas water consumption "
+            "number_energy_price entity_energy_price stat_energy_from"
+        ),
         # Old tool names from before #1134 consolidation. BM25 retrieval
         # on agents that still know the previous catalog ("call
         # ha_list_resources", "use ha_get_skill_home_assistant_best_practices")

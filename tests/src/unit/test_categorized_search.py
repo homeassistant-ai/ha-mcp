@@ -929,3 +929,44 @@ class TestApplySearchKeywordEnrichment:
         )
         for term in ("create", "update", "modify", "edit", "new", "save"):
             assert term in enriched.description.lower()
+
+    @pytest.mark.anyio
+    async def test_energy_prefs_keywords_cover_tariff_vocabulary(self):
+        """Energy-tariff queries must reach ha_manage_energy_prefs (#2322).
+
+        The Energy Dashboard's contract prices live in ``.storage/energy``,
+        never in entity state, so an agent that only knows the tool's own
+        wording ("cost tariffs") searches the state machine instead. The
+        boost adds the vocabulary agents actually query with, plus read
+        verbs to offset the write-only "Manage ..." title.
+        """
+        from ha_mcp.server import HomeAssistantSmartMCPServer
+
+        keywords = HomeAssistantSmartMCPServer._SEARCH_KEYWORDS
+        assert "ha_manage_energy_prefs" in keywords
+
+        transform = SearchKeywordsTransform(keywords=keywords)
+        tool = _make_tool(
+            "ha_manage_energy_prefs",
+            destructive=True,
+            description="Manage the Home Assistant Energy Dashboard preferences.",
+        )
+        enriched = (await transform.list_tools([tool]))[0]
+
+        assert enriched.description.startswith(
+            "Manage the Home Assistant Energy Dashboard preferences."
+        )
+        for term in (
+            "price",
+            "tariff",
+            "cost",
+            "kwh",
+            "rate",
+            "peak",
+            "off-peak",
+            "electricity",
+            "contract",
+            "read",
+            "get",
+        ):
+            assert term in enriched.description.lower(), f"{term!r} missing"

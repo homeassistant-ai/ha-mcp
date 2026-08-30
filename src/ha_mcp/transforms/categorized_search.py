@@ -100,8 +100,10 @@ class SearchKeywordsTransform(Transform):
       a narrower one so BM25 ranks the tool *lower* for broad queries.
 
     The original description is preserved unless an override is applied.
-    Only active when added to the transform pipeline (i.e., behind
-    the ``enable_tool_search`` toggle).
+
+    Added to the transform pipeline unconditionally (#940), so ``keywords``
+    reach every client regardless of ``enable_tool_search``; only
+    ``overrides`` are gated behind that toggle.
     """
 
     def __init__(
