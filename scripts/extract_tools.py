@@ -39,22 +39,19 @@ ANNOTATION_KEYS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWor
 
 PACKAGE_ROOT = REPO_ROOT / "src" / "ha_mcp"
 
-# Pydantic ``Field`` constraint kwargs, recorded under their own names. They
-# used to be visible in the raw annotation source this extractor dumped into
-# ``type``; cleaning up ``type`` must not lose them. Deliberately NOT translated
-# to JSON Schema keywords: ``min_length`` means ``minLength`` on a string but
+# ``Field`` keywords with a home of their own in the extracted parameter.
+# Every OTHER keyword that resolves statically is recorded under
+# ``constraints`` — ``ge``/``le``, but also ``strict``, ``allow_inf_nan`` and
+# whatever a future signature reaches for. A whitelist here would drop those
+# silently, and unwrapping ``Annotated`` took away the raw source that used to
+# expose them.
+#
+# Names stay as pydantic spells them, deliberately NOT translated to JSON
+# Schema keywords: ``min_length`` means ``minLength`` on a string but
 # ``minItems`` on a list, and ``type`` here is a Python annotation
 # (``list[str] | None``) rather than a JSON Schema type, so there is nothing to
-# read the distinction from. The pydantic spelling is what the signature says.
-FIELD_CONSTRAINTS = (
-    "ge",
-    "gt",
-    "le",
-    "lt",
-    "min_length",
-    "max_length",
-    "multiple_of",
-)
+# read the distinction from.
+FIELD_OWN_KEYS = ("description", "default")
 
 # String methods safe to apply to an already-resolved literal.
 STR_METHODS = ("upper", "lower", "capitalize", "title", "strip", "lstrip", "rstrip")
@@ -303,15 +300,15 @@ def _is_annotated(node: ast.expr) -> bool:
 
 def _field_keyword(info: dict, kw: ast.keyword, scope: ModuleScope) -> None:
     """Fold one ``Field(...)`` keyword into the parameter info."""
-    if kw.arg not in ("description", "default") and kw.arg not in FIELD_CONSTRAINTS:
+    if kw.arg is None:
         return
     value = _static_value(kw.value, scope)
     if value is UNRESOLVED:
         return
-    if kw.arg in FIELD_CONSTRAINTS:
-        info.setdefault("constraints", {})[kw.arg] = value
-    else:
+    if kw.arg in FIELD_OWN_KEYS:
         info[kw.arg] = value
+    else:
+        info.setdefault("constraints", {})[kw.arg] = value
 
 
 def _annotated_metadata(slice_node: ast.expr, scope: ModuleScope) -> dict:

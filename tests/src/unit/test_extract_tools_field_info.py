@@ -139,6 +139,22 @@ class TestFieldConstraints:
 
         assert set(info["constraints"]) == {"min_length"}
 
+    def test_non_bound_validation_keywords_are_kept_too(self):
+        """``strict`` / ``allow_inf_nan`` are validation rules, not decoration.
+
+        They were visible in the annotation source this extractor used to dump
+        into ``type``; a whitelist of bounds would drop them silently.
+        """
+        info = _field_info(
+            "Annotated[float, Field(ge=0, strict=True, allow_inf_nan=False)]"
+        )
+
+        assert info["constraints"] == {
+            "ge": 0,
+            "strict": True,
+            "allow_inf_nan": False,
+        }
+
     def test_negative_bounds_survive(self):
         """``ge=-1`` parses as a unary minus, not a plain literal."""
         info = _field_info("Annotated[int, Field(ge=-1, le=-0.5)]")
