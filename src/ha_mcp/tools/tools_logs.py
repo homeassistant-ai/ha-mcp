@@ -5,7 +5,8 @@ registration. The sources themselves are mixed in from ``log_sources`` (Core)
 and ``log_sources_supervisor`` (Supervisor), their shared plumbing lives in
 ``log_common``, and the error-log window arithmetic in ``error_log_parsing``.
 
-Split out of ``tools_utility`` under .gemini/styleguide.md § Tool Consolidation and Module Size.
+Split out of ``tools_utility`` under `.gemini/styleguide.md` § Tool
+Consolidation and Module Size.
 """
 
 from typing import Annotated, Any, Literal

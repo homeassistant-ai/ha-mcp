@@ -24,6 +24,7 @@ Home Assistant language code used across every corresponding file:
 - `homeassistant-addon/translations/<code>.yaml` (generated)
 - `homeassistant-addon-dev/translations/<code>.yaml` (generated)
 
+<!-- Keep the following marker line intact; locale parity tests parse it. -->
 The current code set `cs`, `de`, `eo`, `es`, `fr`, `it`, `ko`, `nl`, `pl`, `ru`, `sv`, `tlh`, and `zh-Hans` names every file:
 the parity test keeps this documentation aligned with the shipped catalogs.
 
@@ -111,6 +112,10 @@ In PR CI (ungated — `tests/src/unit/test_locale_parity.py` unless another file
 is named):
 
 - Every surface carries the same set of language codes.
+- Settings UI `messages` may omit keys because English is the per-key
+  fallback, but a locale may not carry a key absent from `en.json`: nothing
+  can render it. `tool_groups` and `tools` must instead match the renderable
+  keys exactly.
 - Every decided `Decision` outcome (all but `pending`) and every
   `PredicateOp` operator has a word in every catalog, non-blank — and in every
   catalog but `en.json` not still spelled the way the backend does
@@ -150,9 +155,14 @@ In the post-merge `locale-sync.yml` workflow only (the same files, gated behind
 these, and the daily sync owes them afterwards):
 
 - `tool_groups` and `tools` name exactly the renderable groups and tools.
+  The check parses the registered tool set from source rather than trusting
+  generated `tools.json`, so a broken generator cannot validate its own stale
+  output.
 - At most 5% of this catalog's `messages`, and 5% of its `tools` texts, may be
-  byte-identical to English or missing outright; the component catalogs allow
-  15%, because they carry product names as keys of their own. A single tool
+  byte-identical to English or missing outright. The 5% ceiling also applies
+  independently to each generated app projection computed from the canonical
+  store. Component catalogs allow 15%, because they carry product names as
+  keys of their own. A single tool
   whose `title` *and* `description` are both still English fails by name
   however small the share.
 - The English each translation was written against is hashed in
@@ -161,6 +171,10 @@ these, and the daily sync owes them afterwards):
   `scripts/translate_locales.py` retranslates exactly those keys and repins
   the baseline. Adding a language does not change any English source, so no
   baseline regeneration is needed for it.
+`test_locale_sync_gate_shape.py` pins this gated workflow wiring. A successful
+`locale-sync.yml` run pushes the regenerated catalogs straight to `master`
+with the release App credential and can include everything merged since the
+previous run.
 
 ## English changes and retranslation
 
@@ -192,8 +206,11 @@ before merging. An old translated value can still have the right key and a
 translated-looking value, so ordinary parity and untranslated-share checks
 cannot detect the stale meaning. Repinning is not a repair because it blesses
 the stale value; delete or update the value so the planner queues the correct
-work. The numeric and identifier parity test catches many—but not all—such
-cases.
+work. Issue #1993 is the precedent: an English policy changed from ALL-match
+to ANY-match while one locale still asserted the opposite. Numbers and
+code-like identifiers are the cheap signal because rewording often moves one;
+`test_translations_keep_english_numbers_and_identifiers` checks them across
+all three authored surfaces, but cannot replace semantic review.
 
 Tool docstring summaries are English translation sources. Editing a summary
 queues its translated title/description in every locale. `Field(description=)`
@@ -224,3 +241,5 @@ provider boundary is `_call_gemini`, configured by `GEMINI_API_URL`,
 
 The Webhook Proxy app and its bundled integration remain English-only by
 decision. Their tests intentionally reject an accidental partial catalog.
+Any other new catalog directory fails until it is translated across every
+required surface or explicitly added to the English-only decision.

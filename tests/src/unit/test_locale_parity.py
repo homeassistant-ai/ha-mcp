@@ -2583,7 +2583,9 @@ def _locale_readme_section(title: str) -> str:
     """
     text = LOCALE_README.read_text("utf-8")
     match = re.search(
-        rf"^## {re.escape(title)}$(.*?)(?=^## )", text, re.MULTILINE | re.DOTALL
+        rf"^## {re.escape(title)}$(.*?)(?=^#{{1,2}} |\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
     )
     assert match, f"locale README has no '## {title}' section — this test guards it"
     return match.group(1)
@@ -2596,7 +2598,19 @@ def test_locale_readme_states_the_current_ceilings() -> None:
     moment the constant moved, and nothing tied the two together.
     """
     section = _locale_readme_section("What CI checks")
-    documented = set(re.findall(r"(\d+)%", section))
+    surface = re.search(
+        r"At most (\d+)% of this catalog's `messages`, and (\d+)% of its "
+        r"`tools` texts",
+        section,
+    )
+    projection = re.search(
+        r"The (\d+)% ceiling also applies\s+independently to each generated "
+        r"app projection",
+        section,
+    )
+    component = re.search(r"Component catalogs allow (\d+)%", section)
+    assert surface and projection and component
+    documented = {*surface.groups(), projection.group(1), component.group(1)}
 
     assert documented == {
         f"{_MAX_ENGLISH_IDENTICAL_SHARE:.0%}".rstrip("%"),

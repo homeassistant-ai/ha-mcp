@@ -260,7 +260,7 @@ jobs:
               echo "mirror tag v${VER} exists and the component snapshot is identical - nothing new to release"
               exit 0
             fi
-            echo "::error::mirror tag v${VER} already exists but the current component snapshot DIFFERS from its content - master took component changes without a version bump after v${VER} went stable; skipping would strand them with no installable release. Bump manifest.json + const.py (and the parity-test literal) to open the next pending version per AGENTS.md 'Version bumps ride the stable release cycle', then let the next stable carry the stranded changes."
+            echo "::error::mirror tag v${VER} already exists but the current component snapshot DIFFERS from its content - master took component changes without a version bump after v${VER} went stable; skipping would strand them with no installable release. Bump manifest.json + const.py (and the parity-test literal) to open the next pending version per docs/agents/custom-component.md#version-cycle, then let the next stable carry the stranded changes."
             exit 1
           fi
           python3 scripts/build_mirror_release_notes.py \
@@ -320,7 +320,8 @@ jobs:
           # the last stable release, so there is nothing dev-only to publish:
           # a v<VER>-dev.N tag would hide behind the stable release in HACS's
           # newest-first scan. Component changes are required to bump
-          # manifest.json in the same PR (AGENTS.md "Custom Component") - if
+          # manifest.json in the same PR per
+          # docs/agents/custom-component.md#version-cycle - if
           # that rule is ever violated, this skip means pre-release users
           # silently miss that build until the next bump.
           # Captures instead of `| grep -q .`: without pipefail a FAILED

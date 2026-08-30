@@ -13,14 +13,18 @@ flavors are independent:
 - `homeassistant-addon-dev/`: development, slug `ha_mcp_dev`.
 
 Each has its own `config.yaml`. Stable's version must match the released
-package version when published.
+package version sourced from `pyproject.toml`.
 
-Release automation synchronizes version and changelog data into the stable
-flavor; it does not synchronize functional configuration. When a non-beta
+Release automation synchronizes only the version and changelog into the stable
+flavor: the `update-addon-config` job owns the version, and
+`semver-release.yml`'s `Copy changelog to addon directory` step owns the
+changelog. It does not synchronize functional configuration. When a non-beta
 capability should exist in both flavors, edit both `config.yaml` files in the
 same pull request. This includes `ingress`, `ports`, `host_network`,
 `options`, and `schema`. Beta-only keys are the documented exception; see
 [`docs/beta.md`](../beta.md) and the note in the app configuration.
+Issue #2083 is the precedent: assuming the release pipeline would mirror
+functional configuration left `ingress` off the stable app.
 
 Both app flavors select architecture-specific images through explicit
 `version:` pins. Do not infer their state from the general server container's

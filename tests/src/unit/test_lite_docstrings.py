@@ -363,8 +363,7 @@ class TestLiteDocstringsMappingInvariants:
         """Style-guide tool-docstring rule: first word is an action verb.
 
         Verb list mirrors `.gemini/styleguide.md` > MCP Tool Docstrings.
-        every tool. ``Create`` covers ``Create or update`` openers used
-        on the consolidated set_* tools.
+        ``Create`` covers ``Create or update`` on consolidated set_* tools.
         """
         from ha_mcp.server import HomeAssistantSmartMCPServer
 

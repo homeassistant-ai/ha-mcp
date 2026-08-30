@@ -87,7 +87,8 @@ def test_bump_stable_tuple_math():
 # Reset: dev version must ALWAYS strictly increase
 # ---------------------------------------------------------------------------
 def test_reset_moves_to_next_stable_patch_with_fresh_counter():
-    # The scoped Webhook Proxy AGENTS rule: dev base = the NEXT stable patch, so the dev channel
+    # homeassistant-addon-webhook-proxy/AGENTS.md § Versioning: the dev base is
+    # the NEXT stable patch, so the dev channel
     # sorts AHEAD of the stable it will promote into (PEP 440 puts
     # 1.2.3.devN BEHIND 1.2.3). Counter restarts on the base jump.
     assert sync.reset_version("1.2.3.dev1", "1.2.3") == "1.2.4.dev1"

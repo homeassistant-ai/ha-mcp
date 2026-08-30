@@ -560,8 +560,8 @@ def _attach_resolution_to_response(
     """Attach ``resolution.summary()`` to a response, surfacing its warnings
     at the top level.
 
-    Per .gemini/styleguide.md "Tool Tags and Return Values", ``warnings`` is always a top-level
-    ``list[str]``, never nested inside another field.
+    Per .gemini/styleguide.md "Tool Tags and Return Values", ``warnings``
+    is always a top-level ``list[str]``, never nested inside another field.
     ``resolution.summary()`` nests its own warnings (e.g. "N entities were
     hidden") under ``resolution`` for internal cohesion, so this pops them
     back out. ``response`` may already carry dispatch-time warnings (e.g.
@@ -2103,8 +2103,8 @@ class ServiceTools:
         """Resolve one structural selector and, unless ``dry_run``, dispatch it.
 
         Split out of ``ha_bulk_control`` to keep that tool's own McCabe
-        complexity under the repo's C901 threshold (docs/agents/development.md — no per-file
-        exemptions).
+        complexity under the repo's C901 threshold
+        (docs/agents/development.md — no per-file exemptions).
         """
         if action is None:
             raise_tool_error(

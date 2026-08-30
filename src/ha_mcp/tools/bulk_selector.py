@@ -837,8 +837,8 @@ async def resolve_bulk_selector(
     hidden_count = len(directly_hidden | hidden_selected | excluded_and_hidden)
     warnings: list[str] = list(visibility_warnings)
     if hidden_count:
-        # .gemini/styleguide.md "Tool Tags and Return Values": a degraded result belongs in the
-        # top-level warnings list, not just a bare count the caller has no
+        # .gemini/styleguide.md "Tool Tags and Return Values": a degraded
+        # result belongs in top-level warnings, not a bare count the caller has no
         # actionable text for. `counts.hidden` alone cannot tell a user
         # "three entities you wanted controlled were skipped" from "your
         # exclusion was redundant" -- this at least names that something

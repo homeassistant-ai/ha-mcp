@@ -42,8 +42,8 @@ _SETTINGS_LOCALES = _REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
 # wording to sample, so sampling it would fail on emptiness rather than on the
 # property this checks. Such a catalog cannot ship anyway — the `Decision` and
 # `PredicateOp` word checks in test_settings_ui_i18n.py apply to every catalog
-# (src/ha_mcp/settings_ui/locales/README.md) — so the exclusion narrows this check rather than
-# opening a way past it.
+# (src/ha_mcp/settings_ui/locales/README.md), so the exclusion narrows this
+# check rather than opening a way past it.
 _TRANSLATED_LOCALES = sorted(
     path.stem
     for path in _SETTINGS_LOCALES.glob("*.json")
@@ -55,8 +55,8 @@ _TRANSLATED_LOCALES = sorted(
 # (`_surface_catalogs`), so it needs its own list. Read the production constant
 # rather than rebuilding the path: a catalog this list misses is a catalog the
 # check below silently never runs on. An empty catalog is excluded for the same
-# reason as above — src/ha_mcp/settings_ui/locales/README.md lets a component catalog start
-# empty, and there is no wording in one to sample.
+# reason as above: the locale README allows an empty starting catalog, which
+# has no wording to sample.
 _COMPONENT_LOCALES = sorted(
     path.stem
     for path in translate_locales.COMPONENT_DIR.glob("*.json")

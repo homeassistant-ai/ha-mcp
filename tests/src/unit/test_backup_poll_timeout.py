@@ -353,7 +353,8 @@ class TestPollBackupCompletionPostTimeout:
         assert result["success"] is True
         assert result["backup_id"] == "abc123"
         assert result["name"] == "Slow_Backup"
-        # Top-level `warnings: list[str]` per .gemini/styleguide.md tool-return contract.
+        # Top-level `warnings: list[str]` per .gemini/styleguide.md
+        # tool-return contract.
         assert "warnings" in result
         assert isinstance(result["warnings"], list)
         assert all(isinstance(w, str) for w in result["warnings"])

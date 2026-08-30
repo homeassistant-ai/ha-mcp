@@ -6,7 +6,8 @@ alone: every fetcher here is a thin shell around one client call, and the
 dispatch, validation and tool registration they share live with the host class.
 The Supervisor-backed sources are in ``log_sources_supervisor``.
 
-Split out of ``tools_utility`` under .gemini/styleguide.md § Tool Consolidation and Module Size.
+Split out of ``tools_utility`` under `.gemini/styleguide.md` § Tool
+Consolidation and Module Size.
 """
 
 import logging

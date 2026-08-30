@@ -2200,9 +2200,9 @@ class DashboardConfigTools:
 
         config_hash: str | None = compute_config_hash(config)
 
-        # Warn-don't-truncate (.gemini/styleguide.md Tool Tags and Return Values): the walker covers
-        # cards / card / custom_fields / states containers and stops at
-        # the depth bound, so neither a depth-truncated search nor a
+        # Warn-don't-truncate (.gemini/styleguide.md Tool Tags and Return
+        # Values): the walker covers cards / card / custom_fields / states and
+        # stops at the depth bound, so neither a depth-truncated search nor a
         # search over a dashboard carrying a non-traversed child-bearing
         # shape may read as an authoritative complete result. Disclosure
         # keys off the *presence* of such a shape (collected during the

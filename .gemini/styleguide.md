@@ -59,7 +59,8 @@ See issue #1266.
 3. **Credentials in code** - API keys, tokens, passwords
 4. **SQL injection risks** - String concatenation in queries
 5. **Prompt injection risks** - User input interpolated into tool descriptions or prompts
-6. **AGENTS.md/CLAUDE.md modifications** - Changes that alter agent behavior, security policies, or review processes
+6. **Agent-guidance modifications** - Changes to `AGENTS.md`/`CLAUDE.md`,
+   `docs/agents/**`, or other files that alter behavior, security, or review
 7. **`.github/` workflow changes** - Secrets access, permission changes, `pull_request_target` usage
 8. **`.claude/` agent/skill changes** - Could affect agent behavior or introduce backdoors
 
@@ -68,16 +69,30 @@ See issue #1266.
 Verify that safety annotations match actual tool behavior:
 
 - Tool with `readOnlyHint: True` must NOT modify state (no writes, no service calls)
-- Tool with `destructiveHint: True` must actually delete data
-- State-changing operations should have `idempotentHint: True` only if safe to retry
-- Tool with `openWorldHint: True` must reach an external, third-party-authored world (HACS store, app (add-on) repositories, GitHub release feeds, arbitrary import URLs); a tool whose domain is the local Home Assistant instance should use `False`. It is open-world if its output carries externally-authored content back to the client, even when a local integration (HACS, Supervisor, HA Core) makes the actual network call on its behalf
+- Tool with `destructiveHint: True` may perform destructive updates (only
+  meaningful when `readOnlyHint` is false); use `False` only for additive-only
+  updates, such as creating a new record
+- State-changing operations should have `idempotentHint: True` only if safe to
+  retry; the hint is meaningful only when `readOnlyHint` is false
+- Tool with `openWorldHint: True` must reach an external,
+  third-party-authored world (HACS store, app (add-on) repositories, GitHub
+  release feeds, arbitrary import URLs); a tool whose domain is the local Home
+  Assistant instance should use `False`. It is open-world if its output
+  carries externally-authored content back to the client, even when a local
+  integration makes the network call. `ha_get_overview` and
+  `ha_get_system_health` embed an external update-check field;
+  `ha_get_blueprint` and `ha_config_list_dashboard_resources` return
+  externally authored content from otherwise local reads.
 
 FastMCP defaults are `readOnlyHint=False`, `destructiveHint=True`,
 `idempotentHint=False`, and `openWorldHint=True`.
 
 Set `openWorldHint` explicitly on every tool because FastMCP defaults it to
 `true`, which otherwise silently misclassifies local Home Assistant tools.
-Annotations describe behavior against current supported upstream versions.
+Annotations describe behavior against current supported upstream versions. A
+side effect present only in an outdated external build does not demote a tool
+from `readOnlyHint`; document the required upstream update instead (the old
+screenshot-engine `settheme` write is the precedent from issue #1991).
 
 Flag HIGH severity if annotation contradicts actual behavior in the implementation.
 
@@ -97,12 +112,14 @@ Use `ha_<verb>_<noun>`:
 Grouped families may insert a namespace:
 `ha_<namespace>_<verb>_<noun>`. Established namespaces include `ha_config_*`
 and developer-mode-only `ha_dev_*`.
+`ha_dev_*` tools register only when `enable_dev_mode` is enabled in the
+Developer section of the web settings UI's Server Settings tab.
 
 Accepted natural-name exceptions are:
 
 - `ha_restart`, `ha_reload_core`, `ha_eval_template`
 - `ha_report_issue`, `ha_import_blueprint`
-- `ha_read_file`, `ha_write_file`, `ha_bulk_control`
+- `ha_read_file`, `ha_write_file`, `ha_bulk_control`, `ha_search`
 
 When no verb fits, update this list rather than forcing an inaccurate name.
 This section is the single source of truth for tool naming.
@@ -175,8 +192,8 @@ except Exception as exc:
 ```
 
 The explicit `except ToolError: raise` guard is required when the `try`
-body may call `raise_tool_error()`; otherwise a broad handler remaps the
-intentional error to `INTERNAL_ERROR`.
+body may call `raise_tool_error()` or a validation helper; otherwise a broad
+handler remaps the intentional error to `INTERNAL_ERROR`.
 
 For validation, call
 `raise_tool_error(create_error_response(ErrorCode.VALIDATION_INVALID_PARAMETER, ...))`.
@@ -184,6 +201,14 @@ For service failures, use `ErrorCode.SERVICE_CALL_FAILED` and the service's
 reported error. Batch items may append `create_error_response(...)` without
 raising. Use `raise_error=False` only when the payload must be adjusted before
 raising, and never add timezone metadata to errors.
+
+`exception_to_structured_error()` classifies 404, authentication, and timeout
+exceptions. Its `context` is functional: an `entity_id` can produce
+`ENTITY_NOT_FOUND`, while `operation` and `timeout_seconds` describe a
+`TimeoutError`. Available constructors are `create_error_response`,
+`create_entity_not_found_error`, `create_connection_error`,
+`create_auth_error`, `create_service_error`, `create_validation_error`,
+`create_config_error`, and `create_timeout_error`.
 
 Flag HIGH severity when a tool returns a plain error, swallows `ToolError`, or
 bypasses the shared structured-error helpers.
@@ -202,6 +227,19 @@ These rules apply to new or modified tool docstrings in the PR diff only -- not 
 - Embeds a full parameter schema instead of deferring to `ha_get_skill_guide`
 - Is a workflow-entry tool but gives no hint about the next natural tool to call
 - Multi-line docstring does not follow this structure: (1) what the tool does, (2) when NOT to use it with preferred alternatives, (3) when to use it, and (4) caveats.
+
+Add a `RELATED TOOLS` hint when the tool starts a workflow and the natural
+next call is not obvious, such as `ha_search` leading to `ha_get_state`.
+Add `EXAMPLES` when a tool has multiple modes or non-obvious parameters;
+omit them when one required parameter makes the call self-evident. The
+four-part structure follows
+[Anthropic's tool-design guidance](https://www.anthropic.com/engineering/writing-tools-for-agents).
+
+Do not repeat full parameter documentation, types already present in the
+signature, Home Assistant domain facts the model already knows, or
+motivational prose. State consequences in plain prose, but route permission
+and retry safety through `readOnlyHint`, `destructiveHint`, and
+`idempotentHint` rather than magic docstring keywords.
 
 **Do NOT flag:**
 - Concise one-liners on straightforward tools (progressive disclosure: brief by default)
@@ -242,6 +280,9 @@ Successful tool responses use:
 never nested in `data` and never represented by a singular `warning`
 string. Tool-level failure raises `ToolError`; only an item inside a batch
 result may use `{"success": False, "error": {...}}`.
+For the canonical shared response shape, see
+`tools_config_helpers.py::HelperResponse` / `_helper_response` and
+`tests/src/unit/test_helper_response_shape.py`.
 
 ## Tool Waiting Behavior
 
@@ -266,12 +307,17 @@ When another tool fully covers a tool's behavior, remove the redundant tool and
 update references rather than adding a deprecation shim. Fewer, more distinct
 tools improve model selection. Combine frequently chained operations when the
 combined interface remains coherent.
+This repository exceeds the
+[10–20 tool range](https://ai.google.dev/gemini-api/docs/function-calling)
+where selection accuracy degrades, so reducing count is a priority. See also
+[Anthropic's tool-design guidance](https://www.anthropic.com/engineering/writing-tools-for-agents).
 
 Consolidation, renaming with a migration path, parameter evolution, and return
 restructuring are not breaking when the same outcome and information remain
 available. Removing functionality with no replacement is breaking.
 
-Keep modules focused. Around 1,000 lines is a review signal that a module may
+Keep modules focused. Around 1,000 lines—Pylint's `max-module-lines`
+default—is a review signal that a module may
 span multiple concerns, not a mechanical limit. Split along responsibilities
 and update internal imports and test patch targets together; internal Python
 module paths are not a public MCP tool contract.

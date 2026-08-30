@@ -3,8 +3,8 @@
 Every tool MUST declare its safety behavior with one of:
 - readOnlyHint: true - For tools that only read data
 - destructiveHint: true - For tools that modify data or have side effects
-- destructiveHint: false - For non-read-only tools whose side effects are not
-  destructive (for example, a reversible setting update or restart)
+- destructiveHint: false - For non-read-only tools whose side effects are
+  additive only (for example, creating a record without changing existing data)
 
 Additionally, every tool SHOULD have a title for UI display.
 """
@@ -19,6 +19,11 @@ def get_tools_dir() -> Path:
     """Get the path to the tools directory."""
     return Path(__file__).parent.parent.parent.parent / "src" / "ha_mcp" / "tools"
 
+
+
+def get_styleguide_path() -> Path:
+    """Get the path to the canonical code-review style guide."""
+    return Path(__file__).parent.parent.parent.parent / ".gemini" / "styleguide.md"
 
 def _is_mcp_tool(func: ast.expr) -> bool:
     """``mcp.tool`` as written on a decorator, called or bare."""
@@ -137,6 +142,30 @@ def get_all_tools() -> list[dict]:
 class TestToolAnnotations:
     """Test suite for MCP tool annotation compliance."""
 
+
+    def test_styleguide_natural_name_exceptions_match_registered_tools(self):
+        """The naming exceptions must describe every unconventional tool name."""
+        styleguide = get_styleguide_path().read_text(encoding="utf-8")
+        section = re.search(
+            r"Accepted natural-name exceptions are:\n\n"
+            r"(?P<items>(?:- .*\n)+)",
+            styleguide,
+        )
+        assert section, "style guide is missing its natural-name exception list"
+        documented = set(re.findall(r"`(ha_[a-z0-9_]+)`", section["items"]))
+
+        conventional = re.compile(
+            r"^ha_(?:(?:config|dev)_)?"
+            r"(?:get|list|search|set|delete|remove|call|manage)_"
+        )
+        registered = {tool["function"] for tool in get_all_tools()}
+        actual = {name for name in registered if not conventional.match(name)}
+
+        assert documented == actual, (
+            "style-guide naming exceptions differ from registered "
+            f"unconventional tool names. Missing: {sorted(actual - documented)}; "
+            f"stale: {sorted(documented - actual)}"
+        )
     def test_all_tools_have_required_hint(self):
         """Every tool must explicitly describe read-only/destructive behavior."""
         tools = get_all_tools()

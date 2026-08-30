@@ -1,8 +1,9 @@
 """Warning accumulator and skill-reference routing for the best-practice checks.
 
 Split out of :mod:`best_practice_checker` so a check module can emit a warning
-without importing the checker back (.gemini/styleguide.md - Tool Consolidation and Module Size). Nothing here
-inspects a config; it only carries warnings and builds the ' See ...' suffix.
+without importing the checker back (see `.gemini/styleguide.md` § Tool
+Consolidation and Module Size). Nothing here inspects a config; it only carries
+warnings and builds the ' See ...' suffix.
 """
 
 _SKILL_URI_PREFIX = "skill://home-assistant-best-practices/references"

@@ -37,8 +37,10 @@ details are in
 
 ## Test commands
 
-E2E tests live in `tests/src/e2e/`, use testcontainers, and must be launched
-from `tests/` so pytest loads the correct `conftest.py`.
+E2E tests live in `tests/src/e2e/` (not `tests/e2e/`), use testcontainers,
+and require a running Docker daemon. Launch them from `tests/` so pytest
+loads the correct `conftest.py`. Unit tests in `tests/src/unit/` do not use
+Docker.
 
 ```bash
 # Full E2E suite. Use only before claiming the full suite passes.
@@ -57,7 +59,9 @@ uv run hamcp-test-env --no-interactive
 
 Locally, `-n2` limits the number of simultaneous Home Assistant containers;
 more workers usually add memory pressure without proportional speed. CI uses
-its own runner-tuned concurrency. `tests/pytest.ini` sets `--maxfail=3`, so
+`-n3` is tuned for CI's 2-vCPU, 15 GB runners. The roughly 11,000 unit tests
+take more than 25 minutes serial, so run them in parallel as shown.
+`tests/pytest.ini` sets `--maxfail=3`, so
 a report with three failures may be an early stop; use `--maxfail=0` only when
 the complete failure set is actually needed.
 
@@ -75,9 +79,11 @@ uv run ast-grep scan
 ```
 
 C901 complexity is capped at 10 repository-wide with no per-file exemptions;
-extract helpers instead of adding a `C901` per-file ignore. Ruff's `--fix`
-can remove a newly added but not-yet-used import from non-`__init__` modules,
-so add an import and its first use in the same change.
+issue #925 removed the grandfathered list, so extract helpers instead of
+adding a `C901` per-file ignore. Lefthook runs `ruff --fix` on commit with
+`stage_fixed`; that can remove a newly added but not-yet-used import from
+non-`__init__` modules. Add an import and its first use in the same change or
+the hook may strip it without a separate Ruff invocation.
 
 ## Docker
 
@@ -96,12 +102,15 @@ docker run -d -p 127.0.0.1:8086:8086 \
   -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \
   ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web
 ```
+Connect a same-host client to `http://127.0.0.1:8086/mcp`; the default
+`MCP_SECRET_PATH` supplies that `/mcp` suffix.
 
 A LAN-reachable listener needs an unguessable MCP path configured in both the
 server and client:
 
 ```bash
 MCP_SECRET="/private_$(python3 -c 'import secrets; print(secrets.token_urlsafe(16))')"
+echo "MCP_SECRET_PATH=$MCP_SECRET"
 docker run -d -p 8086:8086 \
   -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \
   -e MCP_SECRET_PATH="$MCP_SECRET" \
@@ -137,6 +146,14 @@ src/ha_mcp/
 
 Use the live tree for filenames and counts; this map describes responsibilities,
 not an exhaustive inventory.
+Concrete owners worth preserving in the map are
+`client/websocket_listener.py`, `tools/best_practice_checker.py`,
+`utils/fuzzy_search.py`, `utils/operation_manager.py`,
+`utils/skill_loader.py`, `utils/python_sandbox.py`, and
+`utils/kill_signal_diagnostics.py`. Bundled UI knowledge lives in
+`resources/card_types.json` and `resources/dashboard_guide.md`.
+`utils/config_hash.py` is the shared optimistic-locking implementation for
+automation, script, scene, dashboard, and energy configuration.
 
 Key patterns:
 
@@ -160,9 +177,13 @@ retired term alone.
 Identifiers are not automatically exempt. Check the current upstream contract:
 
 - The current container prefix is `app_`; `addon_` remains a legacy fallback.
+  `tests/src/haos_runtime.py` discovers the live name from Docker instead of
+  assuming either prefix.
 - The established REST surface remains under `/addons/...`.
-- `/v2/apps` is a separate feature-gated surface and cannot replace the v1
-  route for older or default Supervisor installations.
+- `/v2/apps` is mounted only when the `supervisor_v2_api` feature flag is
+  enabled. It was added in 2026-04 with v1 retained for compatibility, is
+  absent from older/default Supervisors, and returns `apps` where v1 returns
+  `addons`.
 - The developer documentation redirects from `/docs/add-ons` to `/docs/apps`.
 
 Old spelling remains correct for app slugs, the `addon` issue label,
@@ -171,7 +192,8 @@ value, and literal historical UI labels in compatibility notes.
 
 ## API research
 
-Search Home Assistant Core without cloning the full repository:
+Search Home Assistant Core without cloning the 500 MB+ repository. Use
+`gh search code` or the contents API:
 
 ```bash
 gh search code "use_blueprint" --repo home-assistant/core \

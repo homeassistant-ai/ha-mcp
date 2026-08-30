@@ -6,7 +6,7 @@ Canonical agent guidance for the Home Assistant MCP Server repository.
 
 - `AGENTS.md` is the canonical source. `CLAUDE.md` is a symlink to it; edit `AGENTS.md` only.
 - This root file owns repository-wide behavior, permissions, scope, and testing policy. Linked documents own topic-specific detail.
-- Before working in a directory with another `AGENTS.md`, read the closest file; its scoped rules supplement this one.
+- Before working, read every applicable `AGENTS.md` from the repository root through the target directory; narrower files supplement every broader ancestor.
 - Follow ordinary Markdown links when the task enters their scope. Do not replace them with `@imports`: imports load every linked byte at startup and defeat progressive disclosure.
 - If linked guidance conflicts with this file's behavioral rules, this file controls. Repair the conflicting duplicate rather than choosing silently.
 
@@ -18,7 +18,9 @@ Read the [development reference](docs/agents/development.md) for commands and ar
 
 ## Worktree Workflow
 
-Never implement on `master` or `main`. Create feature worktrees under `worktree/` from an up-to-date `origin/master`:
+Create feature worktrees under `worktree/` from an up-to-date
+`origin/master`. A documentation-only adjustment is the sole exception that
+may be committed directly on `master` or `main`:
 
 ```bash
 git fetch origin master
@@ -26,6 +28,8 @@ git worktree add worktree/<name> -b <branch> origin/master
 ```
 
 Before committing, verify the branch is not `master`/`main` and the working directory is the intended worktree. Preserve unrelated dirty changes in every checkout. Remove a worktree only when its branch is no longer needed and the user has authorized any associated destructive cleanup.
+The repository-root checkout is where `master` is kept; `git worktree prune`
+removes stale worktree references.
 
 ## Project Overview
 
@@ -71,39 +75,57 @@ For an accepted inline finding, implement the fix, reply with evidence, resolve 
 
 ## Git & PR Policies
 
-- Never commit directly to `master` or `main`, including documentation.
+- Never commit directly to `master` or `main` except for a documentation-only adjustment.
 - Never push or open a pull request without explicit user permission.
 - Open every pull request as a draft. Mark it ready only when explicitly asked, after refreshing its description and verifying required CI and reviews.
 - Never merge, close, delete branches, publish, release, or otherwise finalize work without explicit approval for that exact action.
 - Preserve the pull-request template headings and generated review sections.
 - Make routine, reversible implementation decisions autonomously. Ask before a choice materially changes scope, public behavior, architecture, or review surface; do not create competing pull requests without approval.
-- Keep the description accurate as scope changes. Do not claim readiness from stale checks or a different head SHA.
+- Choose for long-term codebase health, not implementation speed; maintainability-improving refactors are valid when they fit the user's scope.
+- Draft descriptions may remain provisional. Refresh the description before marking ready and after later scope changes while ready. Do not claim readiness from stale checks or a different head SHA.
 
 ### Testing and verification
 
 Testing behavior belongs in this root because it applies to every code change:
 
 - Bug fixes require a failing regression test first, then the minimal fix.
-- New MCP tools need E2E coverage. A touched tool with no coverage gains E2E coverage. Core changes in `client/`, `server.py`, or `errors.py` need focused coverage.
+- New MCP tools need E2E coverage. Any existing tool without tests gains E2E coverage even when it is not otherwise part of the current pull request. Core changes in `client/`, `server.py`, or `errors.py` need focused coverage.
 - Refactors with strong existing coverage, documentation-only changes, minor parameters on well-tested tools, and utilities already exercised by E2E may not need a new test.
 - Run the smallest relevant tests after changes. Read [`tests/AGENTS.md`](tests/AGENTS.md) for lanes, markers, polling, and test patterns, and the [development reference](docs/agents/development.md#test-commands) for exact commands.
+- Run relevant E2E tests without waiting to be asked. Let pytest report unavailable prerequisites or skips rather than assuming them.
 - Run the full E2E suite only before claiming the full suite passes; a focused file is partial evidence and must be described that way.
+- Fix unrelated test failures encountered during CI, even when time-consuming, subject to the Boy Scout scope rules below.
 - Match verification to risk. Documentation-only work needs structural checks such as links, generated-file drift, size, and workflow shape—not unrelated application E2E.
 - Never state that tests, lint, builds, CI, or review are clean without fresh evidence from the relevant command or current pull-request head.
 
 ### Boy Scout Rule — Handling Discovered Improvements
 
-Leave touched code better than you found it. Fix-in-place is the default, but the user's scope controls meaningful expansion.
+Leave touched code better than you found it. Fix-in-place is the default, but the user's scope controls meaningful expansion. “Improve incrementally” means commit-by-commit within this pull request, not across follow-up pull requests.
 
 | Finding | Action |
 |---|---|
-| Small and clearly related | Fix in this pull request, preferably as a distinct commit. |
+| Small and clearly related—including missing or weak tests in the touched area and straightforward test-quality fixes | Fix in this pull request, preferably as a distinct commit. |
 | Mid-sized or meaningfully expands the diff | Pause before pushing and ask whether to bundle it. |
 | Large, unrelated, or a different subsystem | Explain the scope change and ask; do not silently defer or expand. |
 
-Never create a follow-up issue or pull request without explicit approval. Before proposing one, all of these must be true: the work cannot reasonably be bundled, it has a concrete user or maintainer benefit, and it has actionable acceptance criteria that will still matter later. Bot nits are fixed or dismissed in the current review, not converted into backlog noise.
+About 200 changed lines is a should-I-ask heuristic, not a bundling cap. Work
+of any size may stay in the pull request when it is not grossly out of scope;
+estimate honestly and do not inflate the estimate to justify deferral.
 
-Do not use “non-blocking,” “post-merge follow-up,” “nice to have,” or “pre-existing” to hide a legitimate current finding. State the finding and let the user decide scope.
+Never create a follow-up issue or pull request without explicit approval.
+Before proposing one, the work must not be achievable by mirroring a nearby
+pattern; it must either present a real design choice with named alternatives
+or be a genuinely large mechanical migration; it must change the review
+surface, have a concrete benefit, and remain actionable. If any test fails,
+fix it now or let it go—do not file an issue merely to “track” it. Bot nits
+are fixed or dismissed in the current review, not converted into backlog
+noise.
+
+Do not use “non-blocking,” “post-merge follow-up,” “nice to have,”
+“pre-existing,” or similar phrasing to hide a legitimate current finding.
+This list is non-exhaustive: match the intent, and remember that pre-existing
+problems are the point of the Boy Scout rule. State the finding and let the
+user decide scope.
 
 ## CI/CD Workflows
 
@@ -132,6 +154,10 @@ Tools wait for completion when a reliable signal exists; query and fire-and-forg
 ## Custom Component
 
 Before changing `custom_components/ha_mcp_tools/` or a server dependency on it, read the [custom-component guide](docs/agents/custom-component.md). It owns the pending-version cycle, minimum-version gate, backward compatibility, two-entry command surface, and post-merge live-test requirement.
+Functionality used by the embedded server must be registered on the shared
+command surface available from the server entry; never leave it on the tools
+entry alone. Only the privileged filesystem and YAML services remain
+intentionally tools-entry-only.
 
 ## Translations
 

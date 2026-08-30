@@ -25,6 +25,7 @@ import yaml
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
 _PR_YML = _WORKFLOW_DIR / "pr.yml"
+_AGENTS_MD = _REPO_ROOT / "AGENTS.md"
 
 # Steps allowed to precede the validators: the checkout, the docs-size check
 # (reads AGENTS.md, executes nothing from the tree), and the fixture handling
@@ -53,17 +54,32 @@ def _step_name(step: dict[str, Any]) -> str:
 
 
 def test_docs_size_check_enforces_root_instruction_budgets() -> None:
-    """The startup-context budget is a hard gate, not an ignorable warning."""
+    """Workflow limits, root prose, and the current file stay synchronized."""
     step = next(step for step in _steps() if _step_name(step) == "Docs Size Check")
     run = str(step["run"])
+    agents = _AGENTS_MD.read_text(encoding="utf-8")
 
     assert "LC_ALL=C.UTF-8 wc -m < AGENTS.md" in run
     assert "wc -l < AGENTS.md" in run
-    assert '[ "$chars" -gt 16000 ]' in run
-    assert '[ "$lines" -gt 200 ]' in run
+    char_limit = re.search(r"^\s*max_chars=(\d+)$", run, re.MULTILINE)
+    line_limit = re.search(r"^\s*max_lines=(\d+)$", run, re.MULTILINE)
+    prose_limits = re.search(
+        r"Hard limit: ([\d,]+) Unicode characters and ([\d,]+) lines",
+        agents,
+    )
+
+    assert char_limit and line_limit and prose_limits
+    max_chars = int(char_limit.group(1))
+    max_lines = int(line_limit.group(1))
+    assert (max_chars, max_lines) == tuple(
+        int(value.replace(",", "")) for value in prose_limits.groups()
+    )
+    assert '[ "$chars" -gt "$max_chars" ]' in run
+    assert '[ "$lines" -gt "$max_lines" ]' in run
     assert "::error file=AGENTS.md" in run
     assert "exit 1" in run
-    assert "::warning file=AGENTS.md" not in run
+    assert len(agents) <= max_chars
+    assert len(agents.splitlines()) <= max_lines
 
 
 def test_clean_tree_validators_precede_pr_controlled_execution() -> None:

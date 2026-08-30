@@ -18,6 +18,7 @@ CodeRabbit reviews drafts. `.coderabbit.yaml` deliberately sets:
 
 - `reviews.auto_review.drafts: true`
 - `auto_pause_after_reviewed_commits: 0`
+  (the schema default pauses after five reviewed commits)
 
 The second setting spends the per-developer hourly review allowance faster. A
 rate-limited push reports that state in a comment and does not block merging;
@@ -29,6 +30,8 @@ Repository YAML outranks CodeRabbit UI settings and does not merge with them.
 Omitted keys use schema defaults. On public repositories, a change to
 `.coderabbit.yaml` does not govern its own pull request because CodeRabbit
 uses the base branch configuration.
+The tell on the pull request changing the file is
+`Configuration used: defaults`; the new rules take effect only after merge.
 
 Dependabot, Renovate, and `github-actions[bot]` webhook-proxy promotion pull
 requests are excluded from automatic Codex and CodeRabbit review. Their exact
@@ -36,6 +39,11 @@ lists are kept in lockstep by `test_coderabbit_config.py`. A maintainer can
 still request review on a promotion pull request with
 `@coderabbitai review`, or request Codex with a comment that is exactly
 `/review` or `@ghhamcp review`.
+`.coderabbit.yaml`'s `ignore_usernames` and the
+`pull_request_target` admission list enforce the exclusion. The
+`issue_comment` admission list deliberately omits `github-actions[bot]`, so
+a maintainer's exact manual-review command remains the only way to admit a
+promotion pull request.
 
 Division of responsibility:
 
@@ -54,13 +62,16 @@ Triage-state labels:
 |---|---|
 | `ready-to-implement` | Clear path with no unresolved decisions. |
 | `needs-choices` | Multiple approaches need stakeholder input. |
-| `needs-info` | Awaiting the reporter. `close-needs-info.yml` reminds on days 3, 5, and 6 and closes on day 7 unless the author replies. |
+| `needs-info` | Awaiting the reporter. `close-needs-info.yml` clocks from the label event, reminds on days 3, 5, and 6, and closes on day 7; an author reply removes the label. |
 | `priority: high/medium/low` | Relative priority. |
 | `triaged` | Historical marker from the retired triage bot. |
 | `triage-failed` | Historical failure marker from the retired triage bot. |
 | `issue-analyzed` | Deep analysis is complete. |
 
 Bug and scope labels:
+Bug-class labels originate in issue-template form selection, CodeRabbit
+labeling, or manual triage. Scope labels are orthogonal: one issue may carry
+both a bug-class label and a scope label.
 
 | Label | Meaning |
 |---|---|
@@ -72,17 +83,20 @@ Bug and scope labels:
 | `javascript` | Website or Astro code under `site/`. |
 
 Lifecycle and automation labels:
+Lifecycle labels record state and do not double as close reasons.
 
 | Label | Meaning |
 |---|---|
 | `wontfix` | Valid issue intentionally not addressed; usually records the closure rationale. |
-| `blocked` | Progress depends on an external change or decision. |
-| `python-upgrade` | Added by Renovate to every managed pull request, including non-Python updates. |
+| `blocked` | Progress depends on an upstream change, sibling pull request, or design decision; recording it lets sweepers find what is waiting. |
+| `python-upgrade` | Added by Renovate's global `labels` array to every managed pull request, including non-Python updates. |
 
 CodeRabbit issue enrichment replaces the retired GitHub Models triage bot. It
 runs on new and edited issues, suggests duplicates and related work, and applies
 labels from `.coderabbit.yaml`. Plans are manual: comment
 `@coderabbitai plan` or select **Create Plan** in the enrichment comment.
+The owning configuration keys are `issue_enrichment` and
+`labeling_instructions`.
 
 To find open issues without deep analysis:
 
@@ -92,6 +106,8 @@ gh issue list --state open --json number,title,labels \
 ```
 
 Draft any analysis for approval before posting it or applying labels.
+When the user says “analyze issues,” run the issue-analysis workflow
+sequentially for each issue missing `issue-analyzed`.
 
 ## Review comments
 
@@ -117,7 +133,14 @@ For an accepted inline finding, implement the fix, reply on that thread with
 the evidence, and resolve it. When a review contains inline comments, also post
 one pull-request-level summary. Leave a thread open only when the reply asks
 for clarification. The `/my-pr-checker` workflow owns the exact reply endpoint
-and GraphQL `resolveReviewThread` mutation; its input field is `threadId`.
+and GraphQL `resolveReviewThread` mutation; its input field is `threadId`,
+not `pullRequestReviewThreadId`.
+
+To locate failed runs from a pull request:
+
+```bash
+gh pr checks <PR> --json | jq '.[] | select(.conclusion == "failure") | .detailsUrl'
+```
 
 ## Pull-request lifecycle
 
@@ -131,7 +154,8 @@ The permission, worktree, draft, testing, scope, and completion rules are in
 5. Read all review comments and full review bodies.
 6. Fix verified failures and findings, then repeat until the required checks
    pass and every addressed thread is resolved.
-7. Refresh the description whenever the implemented scope has changed.
+7. If the pull request is already ready for review, refresh the description
+   whenever the implemented scope has changed.
 
 Before declaring the pull request ready, verify the current head, the complete
 required-check state, and the review-thread state. Post an implementation
@@ -142,20 +166,22 @@ summary only when the pull request actually reaches that state.
 | Workflow | Trigger | Purpose |
 |---|---|---|
 | `pr.yml` | Pull request | Fast checks and validation orchestration. |
-| `e2e-tests.yml` | Pull request to `master` | Full E2E validation. |
-| `publish-dev.yml` | Push to `master` | Development release. |
-| `notify-dev-channel.yml` | Relevant push to `master` | Development-testing notices. |
+| `e2e-tests.yml` | Pull request to `master` | Full E2E validation, normally about three minutes. |
+| `publish-dev.yml` | Push to `master` | Development `.devN` release. |
+| `notify-dev-channel.yml` | Push to `master` touching `src/` | Development-testing notices. |
 | `semver-release.yml` | Biweekly or manual | Stable version tag and GitHub release. |
-| `release-publish.yml` | Stable release or manual | Stable container images and MCP registry. |
-| `build-binary.yml` | Release | Platform binaries. |
+| `release-publish.yml` | `workflow_run` after SemVer Release, or manual | Stable container images and MCP registry. |
+| `build-binary.yml` | Release | Linux, macOS, and Windows binaries. |
 | `addon-publish.yml` | Release | Home Assistant app publishing. |
-| `sync-tool-docs.yml` | Tool-source change on `master` | Generated tool documentation. |
-| `locale-sync.yml` | Daily or manual | Post-merge translation updates. |
+| `sync-tool-docs.yml` | Push to `master` touching tool sources or `scripts/extract_tools.py` | Regenerate `tools.json`, README, and app `DOCS.md`. |
+| `locale-sync.yml` | Daily or manual | Post-merge translations pushed directly to `master`. |
 
 Stable container releases publish `:latest`, `:stable`, and semantic-version
 tags. Development builds publish only `:dev` and `:dev-<sha>`; `:latest`
 is never a development tag. Home Assistant app images use separate per-arch
 repositories and an explicit `version:` pin.
+The per-architecture app repositories are `-addon-{arch}` for stable and
+`-addon-dev-{arch}` for development.
 
 The fast-check order in `pr.yml` is security-sensitive. HACS and Hassfest run
 before anything that executes pull-request-controlled code. The AGENTS size
@@ -175,9 +201,13 @@ Conventional commit effects:
 | `docs:` | None | User-facing |
 | `*:(internal)` | Normal type effect | Internal |
 
+Releases use
+[python-semantic-release](https://python-semantic-release.readthedocs.io/).
 Use the `(internal)` scope when the change should not appear in user release
-notes. Every `master` commit updates the development channel; stable releases
-are normally cut biweekly on Wednesday at 10:00 UTC.
+notes, for example:
+`feat(internal): Log package version on startup`.
+Every `master` commit updates the development channel; stable releases are
+normally cut biweekly on Wednesday at 10:00 UTC.
 
 For an urgent release, merge the fix through the normal branch and pull-request
 flow, then manually dispatch `semver-release.yml` from `master`. Use

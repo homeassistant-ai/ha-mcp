@@ -10,8 +10,9 @@ It also owns the window/pagination unit the two response paths share: how
 large a window one fetch asks for, and how the response describes where that
 window sat and how to read further back.
 
-Split out of ``tools_utility`` under .gemini/styleguide.md § Tool Consolidation and Module Size: neither the
-parsing nor the window arithmetic touches the client or the tool plumbing.
+Split out of ``tools_utility`` under `.gemini/styleguide.md` § Tool
+Consolidation and Module Size: neither parsing nor window arithmetic touches
+the client or tool plumbing.
 """
 
 import re

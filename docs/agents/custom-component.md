@@ -10,6 +10,8 @@ must hold in both update directions.
 The component version in `manifest.json` and `COMPONENT_VERSION` in
 `const.py` must stay identical. The version rides the stable release cycle;
 do not bump it once per pull request or push.
+`test_manifest_version_parity` in
+`tests/src/unit/test_component_ws_search.py` enforces the lockstep.
 
 Compare `master` with the last stable release:
 
@@ -29,6 +31,14 @@ Apply these rules:
 - The PR Component Version Gate requires a changed component to lead the
   mirror's released stable version. The mirror release workflow separately
   rejects content drift under an already-tagged component version.
+  In the PR gate, equal means a bump is needed to open the pending version;
+  behind means a stale tree or bad merge resurrected an older version.
+
+The mirror drift check prevents changes from being stranded under a version
+that already shipped and therefore has no new installable release. The gap it
+catches is a pull request opened while a version was pending but merged after
+that version became stable: no PR check reruns at merge time, so only the
+mirror can detect that the already-tagged content changed.
 
 One exception overrides the shared pending-version rule: if a change adds a
 component service or argument that the server depends on, open a fresh pending
@@ -38,6 +48,10 @@ same version. The floor must identify only builds that contain the capability.
 Never use a released or previously opened pending version that also exists
 without the new behavior; callers on that build would pass the gate and then
 hit a raw missing-service failure.
+`get_caller_token` reports the component manifest version used by this gate.
+The issue #1946 failure is the precedent: the floor was set to an already
+shipped 1.1.0, so builds reporting 1.1.0 existed both with and without the
+required behavior and the gate could not distinguish them.
 
 ## Compatibility
 
@@ -46,6 +60,8 @@ server package update independently. Do not remove or tighten an existing
 service schema without a compatibility shim the previous server can still
 satisfy. Remove that shim only after the matching server version becomes the
 minimum supported component consumer.
+The version gate cannot protect this direction because the older server is the
+caller and does not know to demand the new component.
 
 A component path cannot be fully exercised by pre-merge CI. After merge,
 live-test it promptly on the development server before the next stable cut.
