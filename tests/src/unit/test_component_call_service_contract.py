@@ -321,6 +321,73 @@ async def test_unavailable_entity_reports_unavailable_after_genuine_lapse() -> N
 
 
 @pytest.mark.asyncio
+async def test_unavailable_entity_reconnected_to_other_state_not_reported_unavailable() -> (
+    None
+):
+    """Codex-flagged regression: a target that reconnects DURING the dispatch but
+    settles on some state OTHER than the exact expected hint (so the listener's
+    hint-filtered confirmation never captures it, and the wait genuinely lapses)
+    is demonstrably no longer unavailable — ``_post_state``'s live re-read after
+    the timeout shows the new state. Reporting ENTITY_UNAVAILABLE purely from the
+    stale PRE-dispatch state would discard that real result; this must fall
+    through to the generic partial/timeout wording instead.
+    """
+    reconnected = FakeState("light.b", state="off")  # reconnected, but NOT "on"
+    bus = _FakeBus()
+    hass_holder: dict[str, Any] = {}
+
+    def _on_call() -> None:
+        # Mirrors the device reconnecting mid-dispatch and settling on a
+        # DIFFERENT state than the hint — updates the live state store directly
+        # (no matching state_changed fired, so the listener never captures it).
+        hass_holder["hass"].states._by_id["light.b"] = reconnected
+
+    services = _FakeCallServices(known={("light", "turn_on")}, on_call=_on_call)
+    hass = _call_hass([FakeState("light.b", state="unavailable")], services, bus)
+    hass_holder["hass"] = hass
+
+    msg = {
+        "type": wsapi.WS_CALL_SERVICE,
+        "domain": "light",
+        "service": "turn_on",
+        "entity_ids": ["light.b"],
+        "wait": True,
+        "timeout": 0.05,
+        "expected_state": "on",
+    }
+    extra = await wsapi._call_service_prep(hass, msg)
+    component_result = wsapi._do_call_service(hass, msg, **extra)
+
+    assert component_result["confirmed"] is False
+    assert component_result["partial"] is True
+    (transition,) = component_result["transitions"]
+    assert transition["old_state"]["state"] == "unavailable"
+    # The live re-read after the timeout shows the reconnect, even though the
+    # listener never captured a matching event.
+    assert transition["new_state"]["state"] == "off"
+
+    tools = ServiceTools(ContractClient(), device_tools=MagicMock())
+    resp = tools._build_component_call_response(
+        component_result,
+        domain="light",
+        service="turn_on",
+        entity_id="light.b",
+        data=None,
+        should_wait=True,
+        return_response=False,
+        verbose=False,
+        fields=None,
+        attribute_keys=None,
+    )
+
+    assert resp["success"] is True
+    assert resp["partial"] is True
+    assert any(
+        "state change could not be verified" in w for w in resp.get("warnings", [])
+    )
+
+
+@pytest.mark.asyncio
 async def test_mixed_idempotent_and_missing_target_does_not_wait_full_timeout() -> None:
     """CodeRabbit-flagged regression: an idempotently-confirmed valid target mixed
     with a nonexistent one must not stall the whole call to the full timeout.

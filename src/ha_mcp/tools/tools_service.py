@@ -1515,13 +1515,21 @@ class ServiceTools:
         stayed IN the component's confirmation wait (unlike a nonexistent
         target, it can legitimately reconnect and transition mid-dispatch — the
         caller only reaches this branch after that chance has already lapsed),
-        so raise ENTITY_UNAVAILABLE. No-op (returns) for any other unconfirmed
-        target — a real, available entity whose confirming event simply never
-        arrived, OR no transition row at all (``_dispatched_unconfirmed_result``'s
-        empty ``transitions`` after a post-dispatch formatting failure — the
-        write already landed, so an absent row proves nothing about existence)
-        — leaving the caller's existing generic partial/timeout wording for
-        those genuine-ambiguity cases.
+        so raise ENTITY_UNAVAILABLE -- but ONLY if ``new_state`` (the best-
+        available POST-dispatch read: ``_post_state`` re-reads live if the
+        listener's exact expected-state event never arrived) shows it is
+        STILL unavailable. A target that reconnected but settled on some
+        state other than the hint (e.g. a lock that reached "locking", not
+        yet "locked") is demonstrably no longer unavailable even though this
+        op never confirmed -- reporting it as ENTITY_UNAVAILABLE from the
+        stale pre-state alone would discard that real result. No-op (returns)
+        for any other unconfirmed target — a real, available entity whose
+        confirming event simply never arrived, OR no transition row at all
+        (``_dispatched_unconfirmed_result``'s empty ``transitions`` after a
+        post-dispatch formatting failure — the write already landed, so an
+        absent row proves nothing about existence) — leaving the caller's
+        existing generic partial/timeout wording for those genuine-ambiguity
+        cases.
         """
         transition = next(
             (
@@ -1536,7 +1544,15 @@ class ServiceTools:
         old_state = transition.get("old_state")
         if old_state is None:
             raise_tool_error(create_entity_not_found_error(entity_id))
-        if isinstance(old_state, dict) and old_state.get("state") == "unavailable":
+        new_state = transition.get("new_state")
+        still_unavailable = new_state is None or (
+            isinstance(new_state, dict) and new_state.get("state") == "unavailable"
+        )
+        if (
+            isinstance(old_state, dict)
+            and old_state.get("state") == "unavailable"
+            and still_unavailable
+        ):
             raise_tool_error(
                 create_error_response(
                     ErrorCode.ENTITY_UNAVAILABLE,

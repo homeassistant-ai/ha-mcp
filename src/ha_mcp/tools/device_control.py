@@ -1071,17 +1071,25 @@ class DeviceControlTools:
                     )
                     err["service_call"] = service_call
                     return err
+                new_state = transition.get("new_state")
+                still_unavailable = new_state is None or (
+                    isinstance(new_state, dict)
+                    and new_state.get("state") == "unavailable"
+                )
                 if (
                     not component_op.get("confirmed")
                     and isinstance(old_state, dict)
                     and old_state.get("state") == "unavailable"
+                    and still_unavailable
                 ):
-                    # Gated on NOT confirmed: unlike a nonexistent entity, an
-                    # "unavailable" one legitimately stays in the component's
+                    # Gated on NOT confirmed AND still unavailable per the best-
+                    # available post-dispatch read: unlike a nonexistent entity,
+                    # an "unavailable" one legitimately stays in the component's
                     # confirmation wait and can reconnect and transition
-                    # mid-dispatch (see _confirmable_entity_ids) — a confirmed op
-                    # must never be reported as this failure just because its
-                    # PRE-state happened to be unavailable.
+                    # mid-dispatch (see _confirmable_entity_ids) — a confirmed op,
+                    # or one whose new_state shows it reconnected to some OTHER
+                    # state (just not the expected hint), must never be reported
+                    # as this failure just because its PRE-state was unavailable.
                     err = create_error_response(
                         ErrorCode.ENTITY_UNAVAILABLE,
                         f"Entity '{entity_id}' exists but is currently unavailable",

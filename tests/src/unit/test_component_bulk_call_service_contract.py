@@ -221,6 +221,47 @@ async def test_unavailable_entity_in_batch_reports_unavailable_after_genuine_lap
 
 
 @pytest.mark.asyncio
+async def test_unavailable_batch_entity_reconnected_to_other_state_not_reported_unavailable() -> (
+    None
+):
+    """Codex-flagged regression (bulk mirror): a batch target that reconnects
+    DURING the dispatch but settles on some state OTHER than the exact expected
+    hint (so the wait genuinely lapses) is demonstrably no longer unavailable —
+    the live post-timeout re-read shows the new state. Must fall through to a
+    normal dispatched-but-unconfirmed op, not a false ENTITY_UNAVAILABLE."""
+    reconnected = FakeState("light.b", state="off")  # reconnected, but NOT "on"
+    bus = _FakeBus()
+    hass_holder: dict[str, Any] = {}
+
+    def _on_call() -> None:
+        hass_holder["hass"].states._by_id["light.b"] = reconnected
+
+    services = _FakeBulkServices(
+        known={("light", "turn_on")},
+        behaviors={("light", "turn_on"): {"on_call": _on_call}},
+    )
+    hass = _call_hass([FakeState("light.b", state="unavailable")], services, bus)
+    hass_holder["hass"] = hass
+    ws = _real_bulk_ws(hass)
+    client = ContractClient()
+    tools = DeviceControlTools(client)
+
+    with patch_ws(ws, device_control):
+        resp = await tools.bulk_device_control(
+            operations=[
+                {"entity_id": "light.b", "action": "on", "timeout_seconds": 0.05}
+            ],
+            parallel=True,
+        )
+
+    assert resp["failed_commands"] == 0
+    (result,) = resp["results"]
+    assert "error" not in result
+    assert result["confirmed"] is False
+    assert result["partial"] is True
+
+
+@pytest.mark.asyncio
 async def test_unavailable_entity_in_batch_confirms_on_reconnect() -> None:
     """An "unavailable" batch target that reconnects and transitions during the
     blocking dispatch is reported as a normal successful op, never a false
