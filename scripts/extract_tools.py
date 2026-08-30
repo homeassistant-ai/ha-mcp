@@ -76,9 +76,13 @@ class ModuleScope(NamedTuple):
 
 EMPTY_SCOPE = ModuleScope({}, {})
 
+# Distinct from None, which is itself a resolvable value: ``DEFAULT = None``
+# assigned to a name and then passed as ``Field(default=DEFAULT)`` must survive.
+UNRESOLVED: Any = object()
+
 
 def _static_value(node: ast.expr, scope: ModuleScope) -> Any:
-    """Resolve an expression to its literal value, or None when it cannot be.
+    """Resolve an expression to its value, or ``UNRESOLVED`` when it cannot be.
 
     Deliberately an interpreter over a handful of node types rather than
     ``eval``: the generator never executes repository source.
@@ -86,29 +90,29 @@ def _static_value(node: ast.expr, scope: ModuleScope) -> Any:
     if isinstance(node, ast.Constant):
         return node.value
     if isinstance(node, ast.Name):
-        return scope.consts.get(node.id)
+        return scope.consts.get(node.id, UNRESOLVED)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
         left = _static_value(node.left, scope)
         right = _static_value(node.right, scope)
         if isinstance(left, str) and isinstance(right, str):
             return left + right
-        return None
+        return UNRESOLVED
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
         # ``Field(ge=-1)`` parses as a unary minus over a literal, not a Constant.
         operand = _static_value(node.operand, scope)
         if isinstance(operand, (int, float)) and not isinstance(operand, bool):
             return -operand if isinstance(node.op, ast.USub) else operand
-        return None
+        return UNRESOLVED
     if isinstance(node, ast.JoinedStr):
         return _joined_str_value(node, scope)
     if isinstance(node, ast.Subscript):
         return _subscript_value(node, scope)
     if isinstance(node, ast.Call):
         return _call_value(node, scope)
-    return None
+    return UNRESOLVED
 
 
-def _joined_str_value(node: ast.JoinedStr, scope: ModuleScope) -> str | None:
+def _joined_str_value(node: ast.JoinedStr, scope: ModuleScope) -> Any:
     """Resolve an f-string whose interpolations are all statically known."""
     parts: list[str] = []
     for value in node.values:
@@ -116,19 +120,19 @@ def _joined_str_value(node: ast.JoinedStr, scope: ModuleScope) -> str | None:
             parts.append(str(value.value))
             continue
         if not isinstance(value, ast.FormattedValue) or value.format_spec is not None:
-            return None
+            return UNRESOLVED
         resolved = _static_value(value.value, scope)
-        if resolved is None:
-            return None
+        if resolved is UNRESOLVED:
+            return UNRESOLVED
         parts.append(str(resolved))
     return "".join(parts)
 
 
-def _subscript_value(node: ast.Subscript, scope: ModuleScope) -> str | None:
+def _subscript_value(node: ast.Subscript, scope: ModuleScope) -> Any:
     """Resolve ``SOME_TEXT[:1]`` style slicing of a known string."""
     target = _static_value(node.value, scope)
     if not isinstance(target, str) or not isinstance(node.slice, ast.Slice):
-        return None
+        return UNRESOLVED
     bounds: list[int | None] = []
     for part in (node.slice.lower, node.slice.upper, node.slice.step):
         if part is None:
@@ -136,7 +140,7 @@ def _subscript_value(node: ast.Subscript, scope: ModuleScope) -> str | None:
             continue
         resolved = _static_value(part, scope)
         if not isinstance(resolved, int):
-            return None
+            return UNRESOLVED
         bounds.append(resolved)
     return target[slice(*bounds)]
 
@@ -144,14 +148,14 @@ def _subscript_value(node: ast.Subscript, scope: ModuleScope) -> str | None:
 def _call_value(node: ast.Call, scope: ModuleScope) -> Any:
     """Resolve a zero-argument helper call or a string method on a literal."""
     if node.args or node.keywords:
-        return None
+        return UNRESOLVED
     if isinstance(node.func, ast.Name):
-        return scope.funcs.get(node.func.id)
+        return scope.funcs.get(node.func.id, UNRESOLVED)
     if isinstance(node.func, ast.Attribute) and node.func.attr in STR_METHODS:
         target = _static_value(node.func.value, scope)
         if isinstance(target, str):
             return getattr(target, node.func.attr)()
-    return None
+    return UNRESOLVED
 
 
 def _import_source(path: Path, node: ast.ImportFrom) -> Path | None:
@@ -212,20 +216,42 @@ def _returned_literal(node: ast.stmt) -> tuple[str, ast.expr] | None:
     return node.name, returns[0].value
 
 
-def _apply_definitions(tree: ast.Module, scope: ModuleScope) -> None:
-    """Record module-level literals and zero-argument literal-returning helpers."""
+def _definition_pass(tree: ast.Module, scope: ModuleScope) -> bool:
+    """Resolve what it can this pass; report whether anything new resolved."""
+    progressed = False
     for node in tree.body:
         assigned = _assigned_literal(node)
         if assigned is not None:
-            value = _static_value(assigned[1], scope)
-            if value is not None:
-                scope.consts[assigned[0]] = value
+            name, expr = assigned
+            if name in scope.consts:
+                continue
+            value = _static_value(expr, scope)
+            if value is not UNRESOLVED:
+                scope.consts[name] = value
+                progressed = True
             continue
         returned = _returned_literal(node)
         if returned is not None:
-            value = _static_value(returned[1], scope)
-            if value is not None:
-                scope.funcs[returned[0]] = value
+            name, expr = returned
+            if name in scope.funcs:
+                continue
+            value = _static_value(expr, scope)
+            if value is not UNRESOLVED:
+                scope.funcs[name] = value
+                progressed = True
+    return progressed
+
+
+def _apply_definitions(tree: ast.Module, scope: ModuleScope) -> None:
+    """Record module-level literals and zero-argument literal-returning helpers.
+
+    Repeated until nothing new resolves: a single source-order pass misses a
+    name that is defined after its use (a helper returning a constant declared
+    lower in the file), and the parameter that reads it would silently lose its
+    description.
+    """
+    while _definition_pass(tree, scope):
+        pass
 
 
 _SCOPE_CACHE: dict[Path, ModuleScope] = {}
@@ -277,14 +303,15 @@ def _is_annotated(node: ast.expr) -> bool:
 
 def _field_keyword(info: dict, kw: ast.keyword, scope: ModuleScope) -> None:
     """Fold one ``Field(...)`` keyword into the parameter info."""
-    if kw.arg in ("description", "default"):
-        value = _static_value(kw.value, scope)
-        if value is not None or isinstance(kw.value, ast.Constant):
-            info[kw.arg] = value
-    elif kw.arg in FIELD_CONSTRAINTS:
-        value = _static_value(kw.value, scope)
-        if value is not None:
-            info.setdefault("constraints", {})[kw.arg] = value
+    if kw.arg not in ("description", "default") and kw.arg not in FIELD_CONSTRAINTS:
+        return
+    value = _static_value(kw.value, scope)
+    if value is UNRESOLVED:
+        return
+    if kw.arg in FIELD_CONSTRAINTS:
+        info.setdefault("constraints", {})[kw.arg] = value
+    else:
+        info[kw.arg] = value
 
 
 def _annotated_metadata(slice_node: ast.expr, scope: ModuleScope) -> dict:

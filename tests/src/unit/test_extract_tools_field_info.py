@@ -199,6 +199,14 @@ class TestNonLiteralDescriptions:
 
         assert info["description"] == "Transform.  SECURITY: none."
 
+    def test_a_constant_that_is_none_is_a_value_not_a_failure(self):
+        """``DEFAULT = None`` must reach the schema as a real default."""
+        scope = self._scope(consts={"DEFAULT": None})
+        info = self._resolve("Annotated[str | None, Field(default=DEFAULT)]", scope)
+
+        assert "default" in info
+        assert info["default"] is None
+
     def test_unresolvable_description_is_omitted_not_truncated(self):
         """A partial resolution would silently drop half the documentation."""
         info = self._resolve(
@@ -207,6 +215,40 @@ class TestNonLiteralDescriptions:
         )
 
         assert "description" not in info
+
+
+class TestForwardReferences:
+    """Definition order in the source must not decide what resolves."""
+
+    def _scope_for(self, tmp_path, source: str):
+        module = tmp_path / "mod.py"
+        module.write_text(source, encoding="utf-8")
+        scope = extract_tools.ModuleScope({}, {})
+        _definition_scan = extract_tools._apply_definitions
+        _definition_scan(ast.parse(source), scope)
+        return scope
+
+    def test_helper_returning_a_later_constant_resolves(self, tmp_path):
+        """A single source-order pass would leave this helper unresolved."""
+        scope = self._scope_for(
+            tmp_path,
+            "def docs():\n    return TEXT\n\n\nTEXT = 'Shared documentation.'\n",
+        )
+
+        assert scope.funcs["docs"] == "Shared documentation."
+
+    def test_constant_built_from_a_later_constant_resolves(self, tmp_path):
+        scope = self._scope_for(
+            tmp_path,
+            "HEAD = LEAD + ' tail.'\n\nLEAD = 'Lead'\n",
+        )
+
+        assert scope.consts["HEAD"] == "Lead tail."
+
+    def test_a_genuinely_unresolvable_name_stays_out(self, tmp_path):
+        scope = self._scope_for(tmp_path, "VALUE = missing_helper()\n")
+
+        assert "VALUE" not in scope.consts
 
 
 class TestModuleScope:
