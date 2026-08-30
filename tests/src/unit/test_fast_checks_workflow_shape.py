@@ -59,8 +59,8 @@ def test_docs_size_check_enforces_root_instruction_budgets() -> None:
 
     assert "LC_ALL=C.UTF-8 wc -m < AGENTS.md" in run
     assert "wc -l < AGENTS.md" in run
-    assert "16000" in run
-    assert "200" in run
+    assert '[ "$chars" -gt 16000 ]' in run
+    assert '[ "$lines" -gt 200 ]' in run
     assert "::error file=AGENTS.md" in run
     assert "exit 1" in run
     assert "::warning file=AGENTS.md" not in run

@@ -30,19 +30,9 @@ The behavioral decision about when to write and run tests is canonical in
 Reviewers use the severity guidance below to assess whether a change satisfies
 that policy.
 
-**When tests ARE required (HIGH severity):**
-- New MCP tools in `src/ha_mcp/tools/` without any E2E tests
-- Tools that previously had NO tests - add E2E tests even if not part of current PR
-- Core functionality changes in `client/`, `server.py`, or `errors.py` without coverage
-- Bug fixes without regression tests
-
-**When tests may NOT be required:**
-- Refactoring with existing comprehensive test coverage
-- Documentation-only changes (`*.md` files)
-- Minor parameter additions to well-tested tools
-- Internal utilities already covered by E2E tests
-
-**If unsure about test coverage:** Flag with MEDIUM severity to manually verify test adequacy.
+Flag missing coverage as HIGH severity when the root policy requires it. If the
+change's scope or an allowed exception is unclear, flag test adequacy as MEDIUM
+severity for manual verification.
 
 **Test locations:**
 - E2E tests (preferred for tools): `tests/src/e2e/`

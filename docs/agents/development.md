@@ -42,16 +42,13 @@ from `tests/` so pytest loads the correct `conftest.py`.
 
 ```bash
 # Full E2E suite. Use only before claiming the full suite passes.
-cd tests
-uv run pytest src/e2e/ -n2 --dist loadscope -v --tb=short
+(cd tests && uv run pytest src/e2e/ -n2 --dist loadscope -v --tb=short)
 
 # One relevant E2E file.
-cd tests
-uv run pytest src/e2e/workflows/automation/test_lifecycle.py -v
+(cd tests && uv run pytest src/e2e/workflows/automation/test_lifecycle.py -v)
 
 # Unit suite, parallel as in CI.
-cd tests
-uv run pytest src/unit/ -n auto --tb=short
+(cd tests && uv run pytest src/unit/ -n auto --tb=short)
 
 # Interactive isolated Home Assistant environment.
 uv run hamcp-test-env
