@@ -202,30 +202,41 @@ jobs:
   # into one lane they share a single `uv sync --dev`.
   #
   # A PLAIN runner, not the `ghcr.io/astral-sh/uv` container image the folded
-  # jobs used: hacs/action and home-assistant/actions/hassfest are Docker
-  # actions, and a Docker action cannot be assumed to work inside a container
-  # job. uv therefore comes from astral-sh/setup-uv here. (The unit-tests job
-  # below still runs in that container image, so the Renovate datasource pinning
-  # it stays live.)
+  # jobs used: hacs/action is a Docker action and hassfest is a composite
+  # action that shells out to `docker run` — neither can run inside a container
+  # job, which has no docker CLI or socket. uv therefore comes from
+  # astral-sh/setup-uv here.
   #
   # `if: success() || failure()` on every step after the first check is the
   # failure-attribution requirement: one lane must still report EVERY check, so
   # a ruff failure cannot hide a mypy failure the way it would if the steps
   # simply stopped at the first red. It is deliberately not `always()` —
-  # a cancelled run stops here instead of grinding through the rest.
+  # a cancelled run stops here instead of grinding through the rest. The setup
+  # steps (Install uv, Set up Python, Install dependencies) carry the same
+  # condition so a setup failure is reported rather than swallowed, at the cost
+  # of noisy downstream reds: read the FIRST red step, not the last.
   #
   # ORDER IS LOAD-BEARING: HACS and Hassfest validate the checkout as
-  # committed, so they run before ANY step that executes PR-controlled code —
-  # `uv sync` builds this project via its PR-supplied PEP 517 backend, and the
-  # lock/constraint/lint steps run PR-supplied config and scripts. Reordering
-  # a validator after any of those would let a PR rewrite the tree the
-  # validators certify (Codex review on #2314).
+  # committed (minus the vendored fixtures, removed just for Hassfest below),
+  # so they run before ANY step that executes PR-controlled code — `uv sync`
+  # builds this project via its PR-supplied PEP 517 backend, and the
+  # lock/constraint/lint steps run PR-supplied config and scripts. This guards
+  # against accidental or inconspicuous tree mutation ahead of the validators
+  # (a pull_request workflow runs the PR's own copy of this file, so it is not
+  # a defense against a PR that openly edits the workflow — reviewers see that
+  # diff). Only the Docs Size Check precedes them: it reads AGENTS.md and
+  # executes nothing from the tree. Do not add anything else above HACS.
+  # (Origin: Codex review on #2314. Pinned by
+  # tests/src/unit/test_fast_checks_workflow_shape.py.)
   fast-checks:
     name: Fast Checks
     runs-on: ubuntu-latest
-    # 15: under the 18 the five folded pr.yml jobs budgeted between them
-    # (5 + 1 + 5 + 2 + 5), because two of the three dependency installs are
-    # gone, with headroom left for the two Docker actions to pull their images.
+    # 15 covers the serial worst case: two Docker image pulls (~1 min), one
+    # `uv sync --dev`, the HA-constraints fetch budget (3 x 10s + backoff,
+    # sized in tests/src/unit/test_ha_constraint_alignment.py — the fetch must
+    # exit on its own code, never as an opaque runner kill), and the four
+    # linters. Observed full-lane time: ~1.5 min; the headroom is for cold
+    # caches and slow image pulls.
     timeout-minutes: 15
 
     steps:
@@ -249,8 +260,8 @@ jobs:
     # Drop vendored third-party fixtures (e.g. the upstream HACS integration
     # used as an e2e fixture) so hassfest only validates integrations this repo
     # owns. Mirrors scripts/codeql_quality_gate.py's PATHS_IGNORE convention.
-    # Restored right after Hassfest so the later checks see the tree as
-    # committed.
+    # Restored right after Hassfest so the later checks see the tracked tree
+    # again (a fresh CI checkout holds nothing untracked here).
     - name: Remove vendored test fixtures
       if: success() || failure()
       run: rm -rf tests/initial_test_state
@@ -260,14 +271,23 @@ jobs:
       uses: home-assistant/actions/hassfest@a7c616ce81ccda50150bf1595786c71b1883fabb # master
 
     - name: Restore vendored test fixtures
+      # The restore must be verified: the fixture tree holds 59 tracked .py
+      # files that ast-grep and the changed-files format check walk, so a
+      # silently failed restore would stamp green checks on a reduced file set.
       if: success() || failure()
-      run: git checkout -- tests/initial_test_state
+      run: |
+        git checkout HEAD -- tests/initial_test_state
+        if ! git diff --quiet HEAD -- tests/initial_test_state; then
+          echo "::error::tests/initial_test_state was not fully restored; the lint steps below would silently skip its files"
+          exit 1
+        fi
 
     - name: Install uv
       # Pinned, not "latest": the folded jobs got uv from the Renovate-pinned
       # container image, and `uv lock --check` is sensitive to the uv version.
-      # Renovate bumps this pin (github-releases datasource) alongside the
-      # unit-tests job's container image tag.
+      # renovate.json groups this github-releases pin with the unit-tests
+      # job's container image tag (group "uv"), so both move in one Renovate
+      # PR and cannot drift apart.
       if: success() || failure()
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
@@ -333,14 +353,14 @@ jobs:
         # untouched files stays grandfathered. Avoids the disruption of a
         # repo-wide sweep while still preventing fresh debt from landing.
         if [ -z "${GITHUB_BASE_REF}" ]; then
-          echo "No PR base ref (workflow_dispatch); skipping format check."
+          echo "::notice::no PR base ref (workflow_dispatch) - the ruff format check did not run"
           exit 0
         fi
         git fetch --depth=1 origin "${GITHUB_BASE_REF}"
         base_sha=$(git rev-parse "origin/${GITHUB_BASE_REF}")
         changed_py=$(git diff --name-only --diff-filter=ACMR "${base_sha}" -- '*.py')
         if [ -z "$changed_py" ]; then
-          echo "No Python files changed; skipping ruff format check."
+          echo "::notice::no Python files changed - the ruff format check did not run"
           exit 0
         fi
         count=$(echo "$changed_py" | wc -l)
@@ -354,10 +374,15 @@ jobs:
 
     - name: Run mypy
       if: success() || failure()
+      # Accumulate, don't abort: under the default `bash -e` the first failing
+      # invocation would hide the other trees' errors — the same failure mode
+      # the per-step `if:` guards exist to prevent, one level down.
       run: |
-        uv run mypy src/ custom_components/ homeassistant-addon/ scripts/
-        uv run mypy homeassistant-addon-webhook-proxy/
-        uv run mypy homeassistant-addon-webhook-proxy-dev/
+        status=0
+        uv run mypy src/ custom_components/ homeassistant-addon/ scripts/ || status=1
+        uv run mypy homeassistant-addon-webhook-proxy/ || status=1
+        uv run mypy homeassistant-addon-webhook-proxy-dev/ || status=1
+        exit "$status"
 
   # Anchors the docs-site accessibility work (#1574/#1595): astro check (types
   # + a11y diagnostics), eslint-plugin-astro + jsx-a11y, and an axe-core audit

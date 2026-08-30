@@ -14,17 +14,21 @@ name: HAOS E2E Tests (beta)
 # SCHEDULE GATING: the two lanes deliberately keep different nightly slots, but
 # `schedule` is a property of the workflow, not of a job — a merged file would
 # otherwise start BOTH lanes on BOTH crons. So each lane's `if:` appends a
-# `github.event.schedule` term to the shared classifier predicate: inaddon beta
+# `github.event.schedule` term to its `if:` predicate: inaddon beta
 # answers 06:00 UTC, embedded beta 08:00 UTC. Every non-schedule event
 # (push, workflow_dispatch) leaves `github.event.schedule` empty,
 # which is what the `github.event_name != 'schedule'` disjunct lets through, so
 # both lanes still run on those.
 
 on:
-  # NOT on pull_request (#2311): per-PR beta runs cost ~21 runner-minutes per
-  # push to answer a question that moves nightly (upstream beta) or per-merge
-  # (our code). A beta incompatibility surfaces on the merge commit via the
-  # push trigger, and upstream-side breakage within a day via the crons.
+  # NOT on pull_request (#2311). The load-bearing reason is attribution: a
+  # per-PR beta failure blames every open PR for an upstream change none of
+  # them made (test_haos_image_workflow_shape.py pins this). It also cost ~21
+  # runner-minutes per push to answer a question that moves nightly (upstream
+  # beta) or per-merge (our code): a beta incompatibility surfaces on the
+  # merge commit via the push trigger, upstream breakage within a day via the
+  # crons. No docs-only classifier here any more — every surviving trigger is
+  # a trusted ref where the suite should simply run.
   push:
     branches: [master]
   schedule:
@@ -59,71 +63,14 @@ env:
   LIBGUESTFS_BACKEND: direct
 
 jobs:
-  # Gate the heavy suite: run on code, tests, configuration, app, or bake-input
-  # changes; skip only when every changed file is documentation or website
-  # content. Non-documentation app and bake-input files count as code.
-  changes:
-    name: Detect relevant changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      run: ${{ steps.filter.outputs.run }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Classify changed files
-        id: filter
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          # Fail-closed gate: default to RUNNING the suite; skip only when the
-          # PR is proven to contain only docs/website changes. Any classifier failure
-          # (non-PR event, fetch/rev-parse/diff error, or empty diff) leaves
-          # run=true so code cannot be mislabeled as docs-only.
-          run=true
-          if [ "${{ github.event_name }}" = "pull_request" ] \
-            && git fetch --depth=1 origin "$BASE_REF" \
-            && base_sha=$(git rev-parse "origin/$BASE_REF") \
-            && changed=$(git diff --no-renames --name-only --diff-filter=ACMD "$base_sha" HEAD) \
-            && [ -n "$changed" ]; then
-            echo "Changed files:"; printf '%s\n' "$changed" | sed 's/^/  /'
-            run=false
-            while IFS= read -r f; do
-              [ -z "$f" ] && continue
-              case "$f" in
-                # Markdown-only app/component changes are treated as docs-only
-                # because they do not alter runtime behavior.
-                homeassistant-addon/*.md|homeassistant-addon-dev/*.md|homeassistant-addon-webhook-proxy/*.md|custom_components/ha_mcp_tools/*.md)
-                  continue ;;
-                # Bake inputs and app directories are baked into the qcow2 or
-                # shipped, so their non-doc files count as code.
-                homeassistant-addon/*|homeassistant-addon-dev/*|homeassistant-addon-webhook-proxy/*|custom_components/ha_mcp_tools/*|tests/haos_image_build/*|tests/initial_test_state/*)
-                  run=true; break ;;
-                # Pure docs / website do not, on their own, warrant the suite.
-                *.md|*.mdx|docs/*|site/*)
-                  continue ;;
-                # Anything else (code, tests, config, workflows, lockfile, ...) runs.
-                *)
-                  run=true; break ;;
-              esac
-            done <<< "$changed"
-          else
-            echo "Non-PR event or unresolved diff — running suite (fail-closed)."
-          fi
-          echo "run=$run"
-          echo "run=$run" >> "$GITHUB_OUTPUT"
-
   haos-e2e-inaddon-beta:
     name: HAOS E2E Tests (inaddon beta)
-    needs: changes
-    # Run unless the classifier succeeds and explicitly confirms docs-only.
-    # Any missing/failed classifier result runs fail-closed; a real cancellation
-    # remains cancelled.
     # Only this lane's own cron starts it; see SCHEDULE GATING in the file
-    # header. Non-schedule events leave `github.event.schedule` empty and
-    # are admitted by the `github.event_name != 'schedule'` disjunct.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') && (github.event_name != 'schedule' || github.event.schedule == '0 6 * * *') }}
+    # header. The master-push and dispatch events leave `github.event.schedule`
+    # empty and are admitted by the `github.event_name != 'schedule'` disjunct
+    # — with pull_request gone (#2311) that disjunct is what lets every
+    # non-cron trigger through.
+    if: ${{ !cancelled() && (github.event_name != 'schedule' || github.event.schedule == '0 6 * * *') }}
     runs-on: ubuntu-22.04
     timeout-minutes: 75
 
@@ -401,14 +348,12 @@ jobs:
 
   haos-e2e-embedded-beta:
     name: HAOS E2E Tests (embedded beta)
-    needs: changes
-    # Run unless the classifier succeeds and explicitly confirms docs-only.
-    # Any missing/failed classifier result runs fail-closed; a real cancellation
-    # remains cancelled.
     # Only this lane's own cron starts it; see SCHEDULE GATING in the file
-    # header. Non-schedule events leave `github.event.schedule` empty and
-    # are admitted by the `github.event_name != 'schedule'` disjunct.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') && (github.event_name != 'schedule' || github.event.schedule == '0 8 * * *') }}
+    # header. The master-push and dispatch events leave `github.event.schedule`
+    # empty and are admitted by the `github.event_name != 'schedule'` disjunct
+    # — with pull_request gone (#2311) that disjunct is what lets every
+    # non-cron trigger through.
+    if: ${{ !cancelled() && (github.event_name != 'schedule' || github.event.schedule == '0 8 * * *') }}
     runs-on: ubuntu-22.04
     # The embedded beta lane receives extra headroom for the per-worker runtime
     # package installation inside the resource-constrained QEMU guest.
