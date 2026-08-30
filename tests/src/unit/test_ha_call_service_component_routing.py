@@ -513,6 +513,38 @@ async def test_component_reports_entity_unavailable_immediately() -> None:
 
 
 @pytest.mark.asyncio
+async def test_empty_transitions_after_dispatch_does_not_report_not_found() -> None:
+    """CodeRabbit-flagged regression: an unconfirmed component result with an
+    EMPTY transitions list (the ``_dispatched_unconfirmed_result`` shape a
+    post-dispatch formatting failure produces — the write already landed, the
+    entity demonstrably exists) must NOT be misread as ENTITY_NOT_FOUND. A
+    missing transition row proves nothing about existence, unlike a present row
+    with a null ``old_state``."""
+    result = {
+        "domain": "light",
+        "service": "turn_on",
+        "dispatched": True,
+        "confirmed": False,
+        "partial": True,
+        "transitions": [],
+    }
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_CALL, cmd_result=result)
+    client = RoutingClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light", service="turn_on", entity_id="light.a"
+        )
+
+    assert resp["success"] is True
+    assert resp["partial"] is True
+    assert any(
+        "state change could not be verified" in w for w in resp.get("warnings", [])
+    )
+
+
+@pytest.mark.asyncio
 async def test_partial_without_response_warns_that_null_is_not_proof() -> None:
     """A dispatched-unconfirmed call can lose a response the service produced.
 

@@ -1517,17 +1517,23 @@ class ServiceTools:
         caller only reaches this branch after that chance has already lapsed),
         so raise ENTITY_UNAVAILABLE. No-op (returns) for any other unconfirmed
         target — a real, available entity whose confirming event simply never
-        arrived — leaving the caller's existing generic partial/timeout wording
-        for that genuine confirmation lapse.
+        arrived, OR no transition row at all (``_dispatched_unconfirmed_result``'s
+        empty ``transitions`` after a post-dispatch formatting failure — the
+        write already landed, so an absent row proves nothing about existence)
+        — leaving the caller's existing generic partial/timeout wording for
+        those genuine-ambiguity cases.
         """
-        old_state = next(
+        transition = next(
             (
-                t.get("old_state")
+                t
                 for t in transitions
                 if isinstance(t, dict) and t.get("entity_id") == entity_id
             ),
             None,
         )
+        if transition is None:
+            return
+        old_state = transition.get("old_state")
         if old_state is None:
             raise_tool_error(create_entity_not_found_error(entity_id))
         if isinstance(old_state, dict) and old_state.get("state") == "unavailable":

@@ -1041,49 +1041,54 @@ class DeviceControlTools:
         # exist (HA no-ops the dispatch, then the wait stalls to partial). The legacy
         # path returns a structured ENTITY_NOT_FOUND per-op failure — match it from
         # the pre-state already in the transition (no extra hops), rather than
-        # counting a phantom entity as a successful command. Reachability is
-        # drift-bounded: a missing transition row from a length-drifted batch now routes
-        # to the ambiguous path (I2) before reaching here, so a null old_state here
-        # means a genuinely absent entity, not a dropped row.
+        # counting a phantom entity as a successful command. I2 (length-drift)
+        # guards the BATCH-level op-count, not this: an individual op can still
+        # legitimately carry an EMPTY transitions list (dispatched, but post-
+        # dispatch formatting raised — see _dispatched_unconfirmed_bulk_result) at
+        # the correct array length, and that proves nothing about existence. So
+        # look for a transition row at all first; only a present row with a null
+        # old_state means a genuinely absent entity.
         if op.get("validate_first", True) and row.get("entity_ids"):
-            old_state = next(
+            transition = next(
                 (
-                    t.get("old_state")
+                    t
                     for t in transitions
                     if isinstance(t, dict) and t.get("entity_id") == entity_id
                 ),
                 None,
             )
-            if old_state is None:
-                err = create_error_response(
-                    ErrorCode.ENTITY_NOT_FOUND,
-                    f"Entity not found: {entity_id}",
-                    suggestions=[
-                        "Use ha_search to find the correct entity",
-                        "Check the entity is not disabled in Home Assistant",
-                    ],
-                    context={"entity_id": entity_id, "action": action},
-                )
-                err["service_call"] = service_call
-                return err
-            if (
-                not component_op.get("confirmed")
-                and isinstance(old_state, dict)
-                and old_state.get("state") == "unavailable"
-            ):
-                # Gated on NOT confirmed: unlike a nonexistent entity, an
-                # "unavailable" one legitimately stays in the component's
-                # confirmation wait and can reconnect and transition mid-dispatch
-                # (see _confirmable_entity_ids) — a confirmed op must never be
-                # reported as this failure just because its PRE-state happened to
-                # be unavailable.
-                err = create_error_response(
-                    ErrorCode.ENTITY_UNAVAILABLE,
-                    f"Entity '{entity_id}' exists but is currently unavailable",
-                    context={"entity_id": entity_id, "action": action},
-                )
-                err["service_call"] = service_call
-                return err
+            if transition is not None:
+                old_state = transition.get("old_state")
+                if old_state is None:
+                    err = create_error_response(
+                        ErrorCode.ENTITY_NOT_FOUND,
+                        f"Entity not found: {entity_id}",
+                        suggestions=[
+                            "Use ha_search to find the correct entity",
+                            "Check the entity is not disabled in Home Assistant",
+                        ],
+                        context={"entity_id": entity_id, "action": action},
+                    )
+                    err["service_call"] = service_call
+                    return err
+                if (
+                    not component_op.get("confirmed")
+                    and isinstance(old_state, dict)
+                    and old_state.get("state") == "unavailable"
+                ):
+                    # Gated on NOT confirmed: unlike a nonexistent entity, an
+                    # "unavailable" one legitimately stays in the component's
+                    # confirmation wait and can reconnect and transition
+                    # mid-dispatch (see _confirmable_entity_ids) — a confirmed op
+                    # must never be reported as this failure just because its
+                    # PRE-state happened to be unavailable.
+                    err = create_error_response(
+                        ErrorCode.ENTITY_UNAVAILABLE,
+                        f"Entity '{entity_id}' exists but is currently unavailable",
+                        context={"entity_id": entity_id, "action": action},
+                    )
+                    err["service_call"] = service_call
+                    return err
         final_state = next(
             (
                 t["new_state"].get("state")
