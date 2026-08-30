@@ -19,7 +19,14 @@ EXPLICIT_ID_RE = re.compile(r"\s*\{#([^}]+)\}\s*$")
 def _tracked_markdown() -> list[Path]:
     """Return tracked Markdown except generated release histories."""
     result = subprocess.run(
-        ["git", "ls-files", "-z", "*.md"],
+        [
+            "git",
+            "-c",
+            f"safe.directory={ROOT}",
+            "ls-files",
+            "-z",
+            "*.md",
+        ],
         cwd=ROOT,
         check=True,
         capture_output=True,
