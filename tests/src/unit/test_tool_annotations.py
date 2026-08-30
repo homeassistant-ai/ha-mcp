@@ -142,7 +142,6 @@ def get_all_tools() -> list[dict]:
 class TestToolAnnotations:
     """Test suite for MCP tool annotation compliance."""
 
-
     def test_styleguide_natural_name_exceptions_match_registered_tools(self):
         """The naming exceptions must describe every unconventional tool name."""
         styleguide = get_styleguide_path().read_text(encoding="utf-8")
@@ -166,6 +165,7 @@ class TestToolAnnotations:
             f"unconventional tool names. Missing: {sorted(actual - documented)}; "
             f"stale: {sorted(documented - actual)}"
         )
+
     def test_all_tools_have_required_hint(self):
         """Every tool must explicitly describe read-only/destructive behavior."""
         tools = get_all_tools()
