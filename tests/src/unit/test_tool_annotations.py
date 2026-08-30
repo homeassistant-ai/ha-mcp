@@ -20,10 +20,10 @@ def get_tools_dir() -> Path:
     return Path(__file__).parent.parent.parent.parent / "src" / "ha_mcp" / "tools"
 
 
-
 def get_styleguide_path() -> Path:
     """Get the path to the canonical code-review style guide."""
     return Path(__file__).parent.parent.parent.parent / ".gemini" / "styleguide.md"
+
 
 def _is_mcp_tool(func: ast.expr) -> bool:
     """``mcp.tool`` as written on a decorator, called or bare."""

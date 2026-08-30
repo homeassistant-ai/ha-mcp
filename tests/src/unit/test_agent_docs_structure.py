@@ -9,7 +9,6 @@ import subprocess
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-
 ROOT = Path(__file__).parents[3]
 ROOT_AGENTS = ROOT / "AGENTS.md"
 LINK_RE = re.compile(r"(?<!!)\[[^]]+\]\(\s*(?:<([^>]+)>|([^\s)]+))")

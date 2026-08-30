@@ -365,9 +365,7 @@ def test_relocated_guidelines_apply_to_the_whole_tree() -> None:
     )
 
     for guideline in sorted(REPO_WIDE_GUIDELINES):
-        scope = {
-            part.strip() for part in entries[guideline]["applyTo"].split(",")
-        }
+        scope = {part.strip() for part in entries[guideline]["applyTo"].split(",")}
         missing = {p: why for p, why in REQUIRED_SCOPE.items() if p not in scope}
 
         assert not missing, (
