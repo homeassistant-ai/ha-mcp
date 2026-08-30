@@ -353,10 +353,20 @@ class AutoApproveAuthorizeView(HomeAssistantView):
             params.popall("client_id", None)
             params["client_id"] = forward_id
 
-        import yarl
+        from urllib.parse import urlencode
 
-        target = yarl.URL("/auth/authorize").with_query(params)
-        return web.Response(status=302, headers={"Location": str(target)})
+        # Percent-encode the query instead of handing the params to yarl: yarl
+        # legally leaves ":" and "/" literal inside query values (RFC 3986
+        # permits both in the query component), so a loopback client's callback
+        # forwards as ``redirect_uri=http://127.0.0.1:1234/callback``. Reverse
+        # proxies shipping a generic "block common exploits" ruleset -- Nginx
+        # Proxy Manager enables one per host with a checkbox -- match
+        # ``[a-zA-Z0-9_]=http://`` and answer 403 before core ever sees the
+        # request, stranding every native-app client behind such a proxy.
+        # Full encoding is semantically identical and survives those filters.
+        query = urlencode(list(params.items()))
+        target = f"/auth/authorize?{query}" if query else "/auth/authorize"
+        return web.Response(status=302, headers={"Location": target})
 
     async def post(self, request: web.Request) -> web.Response:
         """Handle legacy consent submissions on the scoped authorize route."""
