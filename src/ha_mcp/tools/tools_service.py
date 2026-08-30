@@ -1034,18 +1034,27 @@ class ServiceTools:
             )
 
     async def _still_unavailable(self, entity_id: str) -> bool:
-        """Best-effort live re-check: True unless the entity is now known-available.
+        """Live re-check: True only when a successful fetch explicitly shows
+        ``"unavailable"``.
 
-        Any fetch failure (including a 404 -- the entity vanished) is NOT
-        proof of recovery, so it counts as still unavailable; only a fetched
-        state that is NOT ``"unavailable"`` counts as recovered.
+        A 404 here means the entity was REMOVED since the initial fetch — a
+        more specific outcome than "still unavailable", so it raises
+        ENTITY_NOT_FOUND directly rather than being folded into it. Any other
+        fetch failure (network blip) or a response with no usable ``state``
+        is inconclusive, not proof either way, so it returns ``False`` and
+        lets the caller fall through to the generic verification-failed
+        wording instead of confidently asserting an unproven "still
+        unavailable".
         """
         try:
             current = await self._client.get_entity_state(entity_id)
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
+                raise_tool_error(create_entity_not_found_error(entity_id))
+            return False
         except Exception:
-            return True
-        current_state = current.get("state") if current else None
-        return current_state is None or current_state == "unavailable"
+            return False
+        return isinstance(current, dict) and current.get("state") == "unavailable"
 
     @staticmethod
     def _split_return_response_envelope(

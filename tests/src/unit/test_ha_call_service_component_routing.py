@@ -681,6 +681,9 @@ async def test_legacy_dispatches_unavailable_target_and_reports_after_genuine_la
     # of it, so failing before the POST would deny it that chance.
     assert len(client.call_service_calls) == 1
     tools_service.wait_for_state_change.assert_called_once()
+    # Two fetches: the initial pre-dispatch read, plus the post-timeout live
+    # re-check that actually decided the "still unavailable" classification.
+    assert client.get_state_calls == 2
 
 
 @pytest.mark.asyncio
@@ -712,6 +715,77 @@ async def test_legacy_unavailable_target_reconnected_not_reported_unavailable() 
         "state change could not be verified" in w for w in resp.get("warnings", [])
     )
     assert len(client.call_service_calls) == 1
+    # Two fetches: the initial pre-dispatch read, plus the post-timeout live
+    # re-check that found the reconnect and skipped the false ENTITY_UNAVAILABLE.
+    assert client.get_state_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_unavailable_target_removed_reports_not_found_not_unavailable() -> (
+    None
+):
+    """CodeRabbit-flagged regression: a target "unavailable" at dispatch time
+    that 404s on the post-timeout live re-check was REMOVED, a more specific
+    outcome than "still unavailable" — reports ENTITY_NOT_FOUND, not
+    ENTITY_UNAVAILABLE."""
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_NONE)
+    client = RoutingClient()
+    responses: list[Any] = [
+        {"state": "unavailable"},
+        HomeAssistantAPIError("gone", status_code=404),
+    ]
+
+    async def _get_state(entity_id: str) -> dict[str, Any]:
+        client.get_state_calls += 1
+        result = responses.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    client.get_entity_state = _get_state  # type: ignore[method-assign]
+    call_service = _build_call_service(client)
+    tools_service.wait_for_state_change.return_value = None  # genuine timeout
+
+    with patch_ws(ws, tools_service), pytest.raises(ToolError) as exc:
+        await call_service(domain="light", service="turn_on", entity_id="light.a")
+
+    assert "ENTITY_NOT_FOUND" in str(exc.value)
+    assert "ENTITY_UNAVAILABLE" not in str(exc.value)
+    assert client.get_state_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_unavailable_recheck_transient_error_falls_through() -> None:
+    """CodeRabbit-flagged regression: a non-404 failure on the post-timeout live
+    re-check is inconclusive, not proof of "still unavailable" — falls through
+    to the existing generic verification-failed warning instead of a
+    confidently-wrong ENTITY_UNAVAILABLE."""
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_NONE)
+    client = RoutingClient()
+    responses: list[Any] = [
+        {"state": "unavailable"},
+        HomeAssistantConnectionError("network blip"),
+    ]
+
+    async def _get_state(entity_id: str) -> dict[str, Any]:
+        client.get_state_calls += 1
+        result = responses.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    client.get_entity_state = _get_state  # type: ignore[method-assign]
+    call_service = _build_call_service(client)
+    tools_service.wait_for_state_change.return_value = None  # genuine timeout
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light", service="turn_on", entity_id="light.a"
+        )
+
+    assert resp["success"] is True
+    assert not any("unavailable" in w.lower() for w in resp.get("warnings", []))
+    assert client.get_state_calls == 2
 
 
 @pytest.mark.asyncio
