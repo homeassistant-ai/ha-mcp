@@ -14,6 +14,7 @@ from fastmcp.tools import tool
 from pydantic import ConfigDict, Field, SkipValidation, TypeAdapter, ValidationError
 
 from ..client.rest_client import (
+    HomeAssistantAPIError,
     HomeAssistantClient,
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
@@ -23,6 +24,7 @@ from ..client.websocket_client import get_websocket_client
 from ..errors import (
     ErrorCode,
     create_connection_error,
+    create_entity_not_found_error,
     create_error_response,
     create_validation_error,
 )
@@ -924,8 +926,8 @@ class ServiceTools:
             response["warnings"].append(_COMPONENT_RESPONSE_UNCONFIRMED_WARNING)
         return response
 
-    async def _capture_initial_state(self, entity_id: str | None) -> str | None:
-        """Capture the current state of an entity before a service call.
+    async def _validate_entity_before_wait(self, entity_id: str | None) -> str | None:
+        """Fetch entity_id's pre-call state, failing fast on a settled bad target.
 
         ``entity_id`` stays optional in the signature to match the caller's
         own ``str | None`` (a service call may target zero entities); the
@@ -936,17 +938,42 @@ class ServiceTools:
         not in a form the type checker can see through. Narrowing here
         instead of trusting the caller keeps ``get_entity_state`` (which
         genuinely requires a ``str``) honestly typed.
+
+        A clean 404 (the entity does not exist) or a fetched ``"unavailable"``
+        state settle the question with certainty before any service dispatch
+        or 10s state-change wait, so raise immediately instead of silently
+        degrading into a wait that can never confirm. Any other fetch failure
+        is NOT conclusive -- it returns ``None`` and lets the call proceed as
+        before, since the entity may well exist and this could be a
+        transient blip.
         """
         if entity_id is None:
             return None
         try:
             state_data = await self._client.get_entity_state(entity_id)
-            return state_data.get("state") if state_data else None
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
+                raise_tool_error(create_entity_not_found_error(entity_id))
+            logger.debug(
+                f"Could not fetch initial state for {entity_id}: {e} — state verification may be degraded"
+            )
+            return None
         except Exception as e:
             logger.debug(
                 f"Could not fetch initial state for {entity_id}: {e} — state verification may be degraded"
             )
             return None
+
+        state = state_data.get("state") if state_data else None
+        if state == "unavailable":
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.ENTITY_UNAVAILABLE,
+                    f"Entity '{entity_id}' exists but is currently unavailable",
+                    context={"entity_id": entity_id},
+                )
+            )
+        return state
 
     async def _verify_state_change(
         self,
@@ -1465,6 +1492,42 @@ class ServiceTools:
                     return new_state.get("state")
         return None
 
+    @staticmethod
+    def _raise_for_missing_or_unavailable_target(
+        transitions: list[Any], entity_id: str
+    ) -> None:
+        """Fail fast when the component's captured pre-state settles the target.
+
+        The component captures each target's pre-dispatch state for free (a
+        synchronous in-memory ``hass.states.get`` read) before ever registering a
+        confirmation waiter — the transition's ``old_state`` is ``None`` for an
+        entity absent from the state machine, or a real state dict for one that
+        exists (whose ``state`` may itself be ``"unavailable"``). Either settles
+        the question with certainty, so raise the precise error immediately
+        instead of leaving the caller with the generic "state change could not
+        be verified within timeout" wording. No-op (returns) for a real,
+        available target — the caller's existing partial/timeout handling covers
+        a genuine confirmation lapse on that.
+        """
+        old_state = next(
+            (
+                t.get("old_state")
+                for t in transitions
+                if isinstance(t, dict) and t.get("entity_id") == entity_id
+            ),
+            None,
+        )
+        if old_state is None:
+            raise_tool_error(create_entity_not_found_error(entity_id))
+        if isinstance(old_state, dict) and old_state.get("state") == "unavailable":
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.ENTITY_UNAVAILABLE,
+                    f"Entity '{entity_id}' exists but is currently unavailable",
+                    context={"entity_id": entity_id},
+                )
+            )
+
     def _build_component_call_response(
         self,
         component_result: dict[str, Any],
@@ -1492,6 +1555,19 @@ class ServiceTools:
         timeout path produces (``_build_timeout_response``).
         """
         transitions = component_result.get("transitions") or []
+        # A target the component's pre-dispatch read already proved unconfirmable
+        # (nonexistent, or already "unavailable") never reaches ``confirmed`` —
+        # check that BEFORE building a generic partial/timeout response, using the
+        # same ``old_state`` signal ``device_control.py``'s bulk-op mapping already
+        # reads from this identical transitions shape. A genuine confirmation lapse
+        # on a real, available target (old_state present, not "unavailable") falls
+        # through unchanged to the existing partial-success wording below.
+        if (
+            should_wait
+            and entity_id is not None
+            and not component_result.get("confirmed")
+        ):
+            self._raise_for_missing_or_unavailable_target(transitions, entity_id)
         # The transition new_states are State.as_dict() records — the same shape the
         # legacy REST POST returns — so the existing projection helpers apply
         # unchanged (compact filters to the target, drops metadata / heavy lists).
@@ -1819,10 +1895,13 @@ class ServiceTools:
                 return component_response
 
             # Legacy REST path (component absent, or it never dispatched): capture
-            # initial state before the call for the WS-subscribe verification.
+            # initial state before the call for the WS-subscribe verification. A
+            # settled bad target (404 / "unavailable") raises here, BEFORE the
+            # dispatch below, so a known-invalid single-entity call never reaches
+            # the service POST or the 10s confirmation wait.
             initial_state = None
             if should_wait:
-                initial_state = await self._capture_initial_state(entity_id)
+                initial_state = await self._validate_entity_before_wait(entity_id)
 
             result = await self._client.call_service(
                 domain, service, service_data, return_response=return_response_bool

@@ -5647,11 +5647,16 @@ async def _call_service_prep(
        domain, so it holds no matter which path reaches this function.
     2. **ServiceNotFound** before dispatch, so an unknown service is a clean
        ``SERVICE_NOT_FOUND`` and never a landed-but-unreported write.
-    3. Pre-state capture for each ``entity_id`` (a synchronous in-memory read).
+    3. Pre-state capture for each ``entity_id`` (a synchronous in-memory read). A
+       target whose captured state is ``None`` (nonexistent) or ``"unavailable"``
+       is excluded from confirmation entirely (:func:`_confirmable_entity_ids`) —
+       it can never emit a confirming event, so waiting on it would only burn the
+       full ``timeout`` to learn what the pre-state already proved.
     4. Register the expected-aware ``EVENT_STATE_CHANGED`` waiter BEFORE the dispatch
-       (D5) so a fast entity's event can't arrive before the listener exists. The
-       waiter confirms only on reaching the server's ``expected_state`` hint (skipping
-       intermediate/noise events); a ``None`` hint keeps any-first-event confirmation.
+       (D5) so a fast entity's event can't arrive before the listener exists, scoped
+       to only the confirmable targets from step 3. The waiter confirms only on
+       reaching the server's ``expected_state`` hint (skipping intermediate/noise
+       events); a ``None`` hint keeps any-first-event confirmation.
     5. Fire exactly ONE ``async_call`` (``blocking=True``); flip ``dispatched``
        immediately after so a post-dispatch problem is never retried as a failed
        call (D3/D9).
@@ -5695,7 +5700,6 @@ async def _call_service_prep(
     wait = msg.get("wait", True)
     timeout = msg.get("timeout", CALL_SERVICE_DEFAULT_TIMEOUT)
     return_response = msg.get("return_response", False)
-    should_confirm = bool(wait and entity_ids)
     # The server's confirmation HINT (``_SERVICE_TO_STATE.get(service)``), applied to
     # every confirmation target. Absent / None keeps any-first-event confirmation.
     expected_state = msg.get("expected_state")
@@ -5703,6 +5707,15 @@ async def _call_service_prep(
 
     # 3. Pre-state capture (synchronous in-memory reads, guarded against drift).
     pre = {eid: _state_as_dict(_state_get(hass, eid)) for eid in entity_ids}
+    # Only a target whose pre-dispatch state can possibly report a confirming
+    # event is worth waiting on (see ``_confirmable_entity_ids``) — a target
+    # absent from the state machine or already "unavailable" can never emit one,
+    # so waiting on it is certain to burn the full ``timeout`` for no new
+    # information. Excluding it turns that into an immediate, precise result
+    # (the server reads the ``None`` / "unavailable" ``old_state`` straight off
+    # the transition) instead of a pointless wait.
+    confirmable_entity_ids = _confirmable_entity_ids(entity_ids, pre)
+    should_confirm = bool(wait and confirmable_entity_ids)
 
     # 4. Register-before-fire (D5): only when there is something to confirm.
     evt: Any = None
@@ -5710,7 +5723,7 @@ async def _call_service_prep(
     unsub: Any = None
     if should_confirm:
         evt, captured, unsub = _register_transition_waiter(
-            hass, set(entity_ids), expected_by_entity
+            hass, set(confirmable_entity_ids), expected_by_entity
         )
 
     # 5. Dispatch exactly once. 6. Immediate-match + bounded wait. 7. Build the diff.
@@ -5762,6 +5775,24 @@ async def _call_service_prep(
         if unsub is not None:
             unsub()
     return {"result": result}
+
+
+def _confirmable_entity_ids(entity_ids: list[str], pre: Mapping[str, Any]) -> list[str]:
+    """Targets whose pre-dispatch state can possibly report a confirming event.
+
+    A target absent from the state machine (``pre[eid] is None`` — it does not
+    exist) or already ``"unavailable"`` can never emit a confirming
+    ``state_changed`` for this dispatch: HA no-ops a service call for an entity
+    id that matches nothing, and an unavailable entity has no live integration
+    to act on the command. Excluding either from the confirmation set lets the
+    server read the certain outcome straight off the transition's ``old_state``
+    instead of burning the full wait to learn nothing new.
+    """
+    return [
+        eid
+        for eid in entity_ids
+        if pre.get(eid) is not None and pre[eid].get("state") != "unavailable"
+    ]
 
 
 def _guard_call_service_target(hass: HomeAssistant, domain: str, service: str) -> None:
@@ -5953,7 +5984,13 @@ def _build_call_service_result(
         _call_service_transition(eid, pre.get(eid), _post_state(hass, eid, captured))
         for eid in entity_ids
     ]
-    confirmed = bool(should_confirm and set(entity_ids) <= set(captured))
+    # Compare against the SAME confirmable set the wait was scoped to (not the
+    # full ``entity_ids``) — an excluded target (nonexistent / "unavailable")
+    # can never land in ``captured``, so comparing against the full set would
+    # leave ``confirmed`` permanently False even when every confirmable target
+    # reported in.
+    confirmable_entity_ids = _confirmable_entity_ids(entity_ids, pre)
+    confirmed = bool(should_confirm and set(confirmable_entity_ids) <= set(captured))
     result: dict[str, Any] = {
         "domain": domain,
         "service": service,
@@ -6155,19 +6192,25 @@ def _bulk_op_record(
     ``pre`` is the synchronous in-memory pre-state per target; ``expected_by_entity``
     maps every target to this op's confirmation hint (``_SERVICE_TO_STATE``) so the
     waiter + immediate-match key off it; ``dispatched`` / ``error`` / ``response``
-    start empty and are filled during dispatch; ``should_confirm`` is true only when
-    the batch is waiting AND this op names targets to confirm.
+    start empty and are filled during dispatch. ``confirmable_entity_ids`` excludes
+    any target whose captured pre-state is ``None`` (nonexistent) or ``"unavailable"``
+    — it can never emit a confirming event, so it is never worth the shared wait (see
+    ``_confirmable_entity_ids``); ``should_confirm`` is true only when the batch is
+    waiting AND this op has at least one such target.
     """
     entity_ids = list(op.get("entity_ids") or [])
     expected_state = op.get("expected_state")
+    pre = {eid: _state_as_dict(_state_get(hass, eid)) for eid in entity_ids}
+    confirmable_entity_ids = _confirmable_entity_ids(entity_ids, pre)
     return {
         "domain": op["domain"],
         "service": op["service"],
         "service_data": op.get("service_data") or {},
         "entity_ids": entity_ids,
+        "confirmable_entity_ids": confirmable_entity_ids,
         "expected_by_entity": dict.fromkeys(entity_ids, expected_state),
-        "should_confirm": bool(wait and entity_ids),
-        "pre": {eid: _state_as_dict(_state_get(hass, eid)) for eid in entity_ids},
+        "should_confirm": bool(wait and confirmable_entity_ids),
+        "pre": pre,
         "evt": None,
         "captured": {},
         "dispatched": False,
@@ -6212,7 +6255,7 @@ def _bulk_register_all(hass: HomeAssistant, ops: list[dict[str, Any]]) -> list[A
         for op in ops:
             if op["should_confirm"]:
                 evt, captured, unsub = _register_transition_waiter(
-                    hass, set(op["entity_ids"]), op["expected_by_entity"]
+                    hass, set(op["confirmable_entity_ids"]), op["expected_by_entity"]
                 )
                 op["evt"] = evt
                 op["captured"] = captured
@@ -6289,7 +6332,7 @@ async def _bulk_wait_all(ops: list[dict[str, Any]], timeout: float) -> None:
         for op in ops
         if op["should_confirm"]
         and op["dispatched"]
-        and not (set(op["entity_ids"]) <= set(op["captured"]))
+        and not (set(op["confirmable_entity_ids"]) <= set(op["captured"]))
     ]
     if not waiters:
         return
@@ -6330,7 +6373,15 @@ def _build_bulk_op_result(hass: HomeAssistant, op: Mapping[str, Any]) -> dict[st
         )
         for eid in entity_ids
     ]
-    confirmed = bool(should_confirm and dispatched and set(entity_ids) <= set(captured))
+    # Compare against the confirmable subset (excludes a nonexistent / "unavailable"
+    # target — see ``_confirmable_entity_ids``), not the full ``entity_ids``: an
+    # excluded target can never land in ``captured``, so comparing against the full
+    # set would leave ``confirmed`` permanently False even when every confirmable
+    # target reported in.
+    confirmable_entity_ids = op["confirmable_entity_ids"]
+    confirmed = bool(
+        should_confirm and dispatched and set(confirmable_entity_ids) <= set(captured)
+    )
     result: dict[str, Any] = {
         "domain": op["domain"],
         "service": op["service"],

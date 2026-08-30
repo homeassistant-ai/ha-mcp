@@ -1018,7 +1018,9 @@ class DeviceControlTools:
         maps to a structured ``SERVICE_CALL_FAILED`` error and is NOT re-dispatched
         (D9). When ``validate_first`` (the default) is set and the target's captured
         pre-state is null (the entity does not exist), the op maps to a structured
-        ``ENTITY_NOT_FOUND`` failure — parity with the legacy per-op validation.
+        ``ENTITY_NOT_FOUND`` failure — parity with the legacy per-op validation. A
+        captured pre-state of ``"unavailable"`` maps to a distinct
+        ``ENTITY_UNAVAILABLE`` failure the same way.
         """
         service_call = {
             "domain": row["domain"],
@@ -1060,6 +1062,14 @@ class DeviceControlTools:
                         "Use ha_search to find the correct entity",
                         "Check the entity is not disabled in Home Assistant",
                     ],
+                    context={"entity_id": entity_id, "action": action},
+                )
+                err["service_call"] = service_call
+                return err
+            if isinstance(old_state, dict) and old_state.get("state") == "unavailable":
+                err = create_error_response(
+                    ErrorCode.ENTITY_UNAVAILABLE,
+                    f"Entity '{entity_id}' exists but is currently unavailable",
                     context={"entity_id": entity_id, "action": action},
                 )
                 err["service_call"] = service_call

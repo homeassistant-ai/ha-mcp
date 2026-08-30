@@ -186,6 +186,99 @@ async def test_d1_domain_block_surfaces_as_structured_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_nonexistent_entity_fails_fast_without_waiting() -> None:
+    """A target absent from the state machine reports ENTITY_NOT_FOUND immediately
+    through the REAL component prep + REAL consumer, with NO confirmation wait.
+
+    The regression this pins: an invented entity ID (a local LLM hallucinating
+    ``light.cuisine`` instead of a real kitchen light) used to fall through to the
+    10s confirmation wait — which could never resolve, since a nonexistent entity
+    never emits a state_changed event — leaving the caller's own timeout to expire
+    mid-wait. The dispatch still fires (HA silently no-ops it; matching the
+    pre-existing behavior for an unmatched service target), but no listener is
+    ever registered for it, so the fast-fail is structural, not merely fast in
+    this test's fake clock.
+    """
+    bus = _FakeBus()
+    services = _FakeCallServices(known={("light", "turn_on")})
+    # No FakeState for "light.cuisine" — hass.states.get() returns None for it.
+    hass = _call_hass([], services, bus)
+    ws = _real_call_service_ws(hass)
+    client = ContractClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service), pytest.raises(ToolError) as exc:
+        await call_service(
+            domain="light", service="turn_on", entity_id="light.cuisine"
+        )
+
+    assert "ENTITY_NOT_FOUND" in str(exc.value)
+    assert "light.cuisine" in str(exc.value)
+    # The service was still dispatched (HA silently no-ops an unmatched target) —
+    # only the pointless confirmation wait was skipped.
+    assert services.call_count == 1
+    # No EVENT_STATE_CHANGED listener was ever registered: the wait never started.
+    assert bus.listeners == []
+
+
+@pytest.mark.asyncio
+async def test_unavailable_entity_fails_fast_without_waiting() -> None:
+    """A target whose pre-dispatch state is "unavailable" reports ENTITY_UNAVAILABLE
+    immediately, distinct from ENTITY_NOT_FOUND, with NO confirmation wait."""
+    unavailable = FakeState("light.b", state="unavailable")
+    bus = _FakeBus()
+    services = _FakeCallServices(known={("light", "turn_on")})
+    hass = _call_hass([unavailable], services, bus)
+    ws = _real_call_service_ws(hass)
+    client = ContractClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service), pytest.raises(ToolError) as exc:
+        await call_service(domain="light", service="turn_on", entity_id="light.b")
+
+    assert "ENTITY_UNAVAILABLE" in str(exc.value)
+    assert "light.b" in str(exc.value)
+    assert services.call_count == 1
+    assert bus.listeners == []
+
+
+@pytest.mark.asyncio
+async def test_genuine_confirmation_lapse_still_reports_partial() -> None:
+    """A REAL, available target whose confirming event never arrives keeps the
+    existing bounded partial/timeout contract — the fast-fail path must not
+    swallow a genuine (if rare) confirmation lapse on a valid entity.
+
+    Driven directly against the component prep (not the full consumer, which
+    hardcodes a 10s wait) with an explicit short timeout so the test stays fast.
+    """
+    off = FakeState("light.c", state="off")
+    bus = _FakeBus()
+    services = _FakeCallServices(known={("light", "turn_on")})  # no on_call: never fires
+    hass = _call_hass([off], services, bus)
+
+    msg = {
+        "type": wsapi.WS_CALL_SERVICE,
+        "domain": "light",
+        "service": "turn_on",
+        "entity_ids": ["light.c"],
+        "wait": True,
+        "timeout": 0.05,
+        "expected_state": "on",
+    }
+    extra = await wsapi._call_service_prep(hass, msg)
+    result = wsapi._do_call_service(hass, msg, **extra)
+
+    assert result["dispatched"] is True
+    assert result["confirmed"] is False
+    assert result["partial"] is True
+    assert result["transitions"][0]["old_state"]["state"] == "off"
+    # A confirmable target DOES get a listener registered (unlike the fast-fail
+    # cases above) — it just never fires in this test.
+    assert bus.listeners
+    assert services.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_component_prep_itself_refuses_ha_mcp_tools() -> None:
     """The authoritative, component-side D1 block: driving the REAL prep directly with
     domain=ha_mcp_tools refuses BEFORE any dispatch (the block that holds no matter
