@@ -101,6 +101,14 @@ NUDGE_MARKER_TIMEOUT = (
 # lane could never have passed anyway, and the message says which it was.
 HACS_WS_READY_TIMEOUT = sum(RETRY_DELAYS) + DEFAULT_COMMAND_WAIT_TIMEOUT
 
+# pytest.ini caps every test FUNCTION at 300 s, which the readiness wait alone
+# can exceed on a genuinely broken HACS — and then the timeout kills the test
+# before the helper's own message says which stage never came up. Each
+# positive lane therefore carries its own budget: readiness + the marker window
+# + slack for the launcher to start and stop. Derived, not a literal, so
+# raising either schedule cannot silently outgrow it.
+POSITIVE_LANE_TIMEOUT = HACS_WS_READY_TIMEOUT + NUDGE_MARKER_TIMEOUT + 60.0
+
 
 async def _wait_for_hacs_ws_ready(container_info: dict) -> None:
     """Block until the container's HACS answers ``hacs/repositories/list``."""
@@ -137,6 +145,7 @@ async def _wait_for_hacs_ws_ready(container_info: dict) -> None:
 
 
 @pytest.mark.hacs
+@pytest.mark.timeout(POSITIVE_LANE_TIMEOUT)
 async def test_stdio_launcher_runs_the_startup_nudge(
     ha_container_with_fresh_config, tmp_path
 ):
@@ -341,6 +350,7 @@ async def _spawn_http_launcher(command: str, env: dict[str, str]) -> _HttpLaunch
 
 
 @pytest.mark.hacs
+@pytest.mark.timeout(POSITIVE_LANE_TIMEOUT)
 async def test_web_launcher_runs_the_startup_nudge(
     ha_container_with_fresh_config, tmp_path
 ):
