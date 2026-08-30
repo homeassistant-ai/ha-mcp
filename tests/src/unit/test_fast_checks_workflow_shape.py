@@ -136,11 +136,12 @@ def _setup_uv_sites() -> list[tuple[Path, dict[str, Any]]]:
         for job in (data.get("jobs") or {}).values():
             if not isinstance(job, dict):
                 continue
-            for step in job.get("steps", []):
-                if isinstance(step, dict) and str(step.get("uses", "")).startswith(
-                    "astral-sh/setup-uv"
-                ):
-                    sites.append((path, step))
+            sites.extend(
+                (path, step)
+                for step in job.get("steps", [])
+                if isinstance(step, dict)
+                and str(step.get("uses", "")).startswith("astral-sh/setup-uv")
+            )
     return sites
 
 
