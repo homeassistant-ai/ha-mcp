@@ -6,6 +6,13 @@ permissions:
   contents: write
   pull-requests: write
 
+# Cancel the previous commit's run when the PR is pushed again — the approval
+# is pinned to a commit sha, so only the latest run's verdict is meaningful.
+# See pr.yml for the full rationale.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   dependabot:
     if: >-

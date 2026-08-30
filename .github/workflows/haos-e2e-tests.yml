@@ -56,6 +56,19 @@ on:
 permissions:
   contents: read
 
+# Cancel the previous commit's lanes when a PR is pushed again — six HAOS
+# runners per push is the most expensive fan-out in the repo, and nothing
+# merges on a superseded commit's result. Non-PR events (dispatch) fall back
+# to the unique run id, so they are never cancelled. The image cache is
+# unaffected in the normal case: its key hashes the baked build inputs, not
+# the commit, so cancelling a run that restored a cache hit throws away
+# nothing. Only in the window right after those inputs change does a lane
+# actually build and save the qcow2, and cancelling that one run defers the
+# prime to the next run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
