@@ -186,13 +186,54 @@ async def test_nonexistent_entity_in_batch_fails_fast_without_waiting() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unavailable_entity_in_batch_fails_fast_without_waiting() -> None:
-    """A batch op targeting an "unavailable" entity maps to a distinct
-    ENTITY_UNAVAILABLE failure, with no listener registered for it either."""
+async def test_unavailable_entity_in_batch_reports_unavailable_after_genuine_lapse() -> (
+    None
+):
+    """A batch op targeting an "unavailable" entity that never reconnects during
+    the wait maps to a distinct ENTITY_UNAVAILABLE failure — but, unlike a
+    nonexistent target, a listener IS registered for it (it stays eligible to
+    confirm; see ``_confirmable_entity_ids``). A short per-op ``timeout_seconds``
+    keeps this genuine-lapse case fast without touching production defaults.
+    """
     unavailable = FakeState("light.b", state="unavailable")
     bus = _FakeBus()
-    services = _FakeBulkServices(known={("light", "turn_on")})
+    services = _FakeBulkServices(
+        known={("light", "turn_on")}
+    )  # no on_call: never fires
     hass = _call_hass([unavailable], services, bus)
+    ws = _real_bulk_ws(hass)
+    client = ContractClient()
+    tools = DeviceControlTools(client)
+
+    with patch_ws(ws, device_control):
+        resp = await tools.bulk_device_control(
+            operations=[
+                {"entity_id": "light.b", "action": "on", "timeout_seconds": 0.05}
+            ],
+            parallel=True,
+        )
+
+    assert resp["failed_commands"] == 1
+    (result,) = resp["results"]
+    assert result["error"]["code"] == "ENTITY_UNAVAILABLE"
+    assert services.call_count == 1
+    assert bus.listeners
+
+
+@pytest.mark.asyncio
+async def test_unavailable_entity_in_batch_confirms_on_reconnect() -> None:
+    """An "unavailable" batch target that reconnects and transitions during the
+    blocking dispatch is reported as a normal successful op, never a false
+    ENTITY_UNAVAILABLE — the same reconnect case pinned for the single-call path,
+    exercised through the batch consumer.
+    """
+    new = FakeState("light.b", state="on")
+    bus = _FakeBus()
+    services = _FakeBulkServices(
+        known={("light", "turn_on")},
+        behaviors={("light", "turn_on"): {"on_call": lambda: bus.fire("light.b", new)}},
+    )
+    hass = _call_hass([FakeState("light.b", state="unavailable")], services, bus)
     ws = _real_bulk_ws(hass)
     client = ContractClient()
     tools = DeviceControlTools(client)
@@ -203,11 +244,12 @@ async def test_unavailable_entity_in_batch_fails_fast_without_waiting() -> None:
             parallel=True,
         )
 
-    assert resp["failed_commands"] == 1
+    assert resp["failed_commands"] == 0
+    assert resp["successful_commands"] == 1
     (result,) = resp["results"]
-    assert result["error"]["code"] == "ENTITY_UNAVAILABLE"
-    assert services.call_count == 1
-    assert bus.listeners == []
+    assert result["confirmed"] is True
+    assert result["final_state"] == "on"
+    assert bus.listeners
 
 
 @pytest.mark.asyncio

@@ -946,13 +946,21 @@ class ServiceTools:
         is NOT conclusive -- it returns ``None`` and lets the call proceed as
         before, since the entity may well exist and this could be a
         transient blip.
+
+        A comma-separated ``entity_id`` ("light.a,light.b") is a valid
+        multi-target for the service-call payload, but ``/api/states/<id>``
+        has no comma syntax and 404s on the literal joined string -- that 404
+        proves nothing about whether the individual targets exist, so the
+        fast-fail is skipped entirely for one (matching the component route's
+        own comma exclusion in ``_maybe_component_call_service``).
         """
         if entity_id is None:
             return None
+        is_single_target = "," not in entity_id
         try:
             state_data = await self._client.get_entity_state(entity_id)
         except HomeAssistantAPIError as e:
-            if e.status_code == 404:
+            if is_single_target and e.status_code == 404:
                 raise_tool_error(create_entity_not_found_error(entity_id))
             logger.debug(
                 f"Could not fetch initial state for {entity_id}: {e} — state verification may be degraded"
@@ -965,7 +973,7 @@ class ServiceTools:
             return None
 
         state = state_data.get("state") if state_data else None
-        if state == "unavailable":
+        if is_single_target and state == "unavailable":
             raise_tool_error(
                 create_error_response(
                     ErrorCode.ENTITY_UNAVAILABLE,
@@ -1496,18 +1504,21 @@ class ServiceTools:
     def _raise_for_missing_or_unavailable_target(
         transitions: list[Any], entity_id: str
     ) -> None:
-        """Fail fast when the component's captured pre-state settles the target.
+        """Report why a confirmation never landed, once it's certain it never will.
 
-        The component captures each target's pre-dispatch state for free (a
-        synchronous in-memory ``hass.states.get`` read) before ever registering a
-        confirmation waiter — the transition's ``old_state`` is ``None`` for an
-        entity absent from the state machine, or a real state dict for one that
-        exists (whose ``state`` may itself be ``"unavailable"``). Either settles
-        the question with certainty, so raise the precise error immediately
-        instead of leaving the caller with the generic "state change could not
-        be verified within timeout" wording. No-op (returns) for a real,
-        available target — the caller's existing partial/timeout handling covers
-        a genuine confirmation lapse on that.
+        Only reached when the component result was NOT confirmed. The
+        transition's ``old_state`` is ``None`` for an entity absent from the
+        state machine at pre-dispatch time — the component excludes it from the
+        wait entirely (it structurally cannot ever confirm), so an unconfirmed
+        result with a null ``old_state`` is unambiguous: raise ENTITY_NOT_FOUND
+        immediately. A real state dict whose ``state`` is ``"unavailable"``
+        stayed IN the component's confirmation wait (unlike a nonexistent
+        target, it can legitimately reconnect and transition mid-dispatch — the
+        caller only reaches this branch after that chance has already lapsed),
+        so raise ENTITY_UNAVAILABLE. No-op (returns) for any other unconfirmed
+        target — a real, available entity whose confirming event simply never
+        arrived — leaving the caller's existing generic partial/timeout wording
+        for that genuine confirmation lapse.
         """
         old_state = next(
             (

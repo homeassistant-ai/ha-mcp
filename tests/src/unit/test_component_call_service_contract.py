@@ -23,7 +23,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from ha_mcp.tools import component_api, tools_service
-from ha_mcp.tools.tools_service import register_service_tools
+from ha_mcp.tools.tools_service import ServiceTools, register_service_tools
 
 from ._component_routing_helpers import patch_ws
 
@@ -208,9 +208,7 @@ async def test_nonexistent_entity_fails_fast_without_waiting() -> None:
     call_service = _build_call_service(client)
 
     with patch_ws(ws, tools_service), pytest.raises(ToolError) as exc:
-        await call_service(
-            domain="light", service="turn_on", entity_id="light.cuisine"
-        )
+        await call_service(domain="light", service="turn_on", entity_id="light.cuisine")
 
     assert "ENTITY_NOT_FOUND" in str(exc.value)
     assert "light.cuisine" in str(exc.value)
@@ -222,24 +220,155 @@ async def test_nonexistent_entity_fails_fast_without_waiting() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unavailable_entity_fails_fast_without_waiting() -> None:
-    """A target whose pre-dispatch state is "unavailable" reports ENTITY_UNAVAILABLE
-    immediately, distinct from ENTITY_NOT_FOUND, with NO confirmation wait."""
+async def test_unavailable_entity_still_confirms_on_reconnect() -> None:
+    """An "unavailable" target is NOT excluded from confirmation like a nonexistent
+    one: it can legitimately reconnect and transition during the blocking dispatch
+    (e.g. a Zigbee light that wakes on the very command being sent), and that real
+    transition must be reported as a normal success, never a false ENTITY_UNAVAILABLE.
+
+    Driven directly against the component prep with an explicit short timeout;
+    ``on_call`` fires the confirming event mid-dispatch, mirroring a device that
+    reconnects in response to the command.
+    """
+    new = FakeState("light.b", state="on")
+    bus = _FakeBus()
+    services = _FakeCallServices(
+        known={("light", "turn_on")},
+        on_call=lambda: bus.fire("light.b", new),
+    )
+    hass = _call_hass([FakeState("light.b", state="unavailable")], services, bus)
+
+    msg = {
+        "type": wsapi.WS_CALL_SERVICE,
+        "domain": "light",
+        "service": "turn_on",
+        "entity_ids": ["light.b"],
+        "wait": True,
+        "timeout": 5.0,
+        "expected_state": "on",
+    }
+    extra = await wsapi._call_service_prep(hass, msg)
+    result = wsapi._do_call_service(hass, msg, **extra)
+
+    assert result["dispatched"] is True
+    assert result["confirmed"] is True
+    assert result["partial"] is False
+    assert result["transitions"][0]["old_state"]["state"] == "unavailable"
+    assert result["transitions"][0]["new_state"]["state"] == "on"
+    # A listener WAS registered for it (unlike the nonexistent-entity case) —
+    # that is exactly what let it catch the reconnect transition.
+    assert bus.listeners
+
+
+@pytest.mark.asyncio
+async def test_unavailable_entity_reports_unavailable_after_genuine_lapse() -> None:
+    """An "unavailable" target that never reconnects during the wait keeps a
+    listener registered (unlike a nonexistent target) and, through the REAL
+    consumer's response mapping, reports the distinct ENTITY_UNAVAILABLE once
+    confirmation genuinely lapses — not the generic "state change could not be
+    verified" wording.
+
+    Drives the REAL component prep directly with a short explicit timeout (the
+    full ``ha_call_service`` tool hardcodes 10s for this path, which would make
+    a genuine-lapse test like this one actually take 10 real seconds), then
+    feeds the resulting envelope through the REAL
+    ``ServiceTools._build_component_call_response`` mapping — the same function
+    the full consumer calls — so both sides of the seam are still exercised.
+    """
     unavailable = FakeState("light.b", state="unavailable")
     bus = _FakeBus()
-    services = _FakeCallServices(known={("light", "turn_on")})
+    services = _FakeCallServices(
+        known={("light", "turn_on")}
+    )  # no on_call: never fires
     hass = _call_hass([unavailable], services, bus)
-    ws = _real_call_service_ws(hass)
-    client = ContractClient()
-    call_service = _build_call_service(client)
 
-    with patch_ws(ws, tools_service), pytest.raises(ToolError) as exc:
-        await call_service(domain="light", service="turn_on", entity_id="light.b")
+    msg = {
+        "type": wsapi.WS_CALL_SERVICE,
+        "domain": "light",
+        "service": "turn_on",
+        "entity_ids": ["light.b"],
+        "wait": True,
+        "timeout": 0.05,
+        "expected_state": "on",
+    }
+    extra = await wsapi._call_service_prep(hass, msg)
+    component_result = wsapi._do_call_service(hass, msg, **extra)
+
+    assert component_result["confirmed"] is False
+    assert component_result["partial"] is True
+    # A listener WAS registered (unlike the nonexistent-entity fast-fail case) —
+    # the real component genuinely waited out the confirmation window.
+    assert bus.listeners
+    assert services.call_count == 1
+
+    tools = ServiceTools(ContractClient(), device_tools=MagicMock())
+    with pytest.raises(ToolError) as exc:
+        tools._build_component_call_response(
+            component_result,
+            domain="light",
+            service="turn_on",
+            entity_id="light.b",
+            data=None,
+            should_wait=True,
+            return_response=False,
+            verbose=False,
+            fields=None,
+            attribute_keys=None,
+        )
 
     assert "ENTITY_UNAVAILABLE" in str(exc.value)
     assert "light.b" in str(exc.value)
-    assert services.call_count == 1
-    assert bus.listeners == []
+
+
+@pytest.mark.asyncio
+async def test_mixed_idempotent_and_missing_target_does_not_wait_full_timeout() -> None:
+    """CodeRabbit-flagged regression: an idempotently-confirmed valid target mixed
+    with a nonexistent one must not stall the whole call to the full timeout.
+
+    ``light.a`` is already at its expected hint (immediate-match, no wait needed);
+    ``light.missing`` is excluded from confirmation entirely. Driven directly
+    against the component prep (multi-entity ``entity_ids`` is not something the
+    real single-entity ``ha_call_service``/``ha_bulk_control`` consumers send today,
+    but the prep itself must stay correct for any WS caller of this capability) with
+    a timeout long enough to fail the test if the bug regresses, but the assertion
+    is on WALL-CLOCK TIME, not just the outcome, so a regression to the full wait
+    is caught even though it would eventually still report the right shape.
+    """
+    import time
+
+    already_on = FakeState("light.a", state="on")
+    bus = _FakeBus()
+    services = _FakeCallServices(known={("light", "turn_on")})
+    hass = _call_hass([already_on], services, bus)
+
+    msg = {
+        "type": wsapi.WS_CALL_SERVICE,
+        "domain": "light",
+        "service": "turn_on",
+        "entity_ids": ["light.a", "light.missing"],
+        "wait": True,
+        "timeout": 5.0,
+        "expected_state": "on",
+    }
+    start = time.monotonic()
+    extra = await wsapi._call_service_prep(hass, msg)
+    elapsed = time.monotonic() - start
+    result = wsapi._do_call_service(hass, msg, **extra)
+
+    assert elapsed < 1.0, (
+        f"prep took {elapsed:.2f}s — the immediate-matched target should not "
+        "have waited out the missing target's exclusion"
+    )
+    assert result["dispatched"] is True
+    # light.a's own transition confirmed via immediate-match; light.missing never
+    # existed, so the OP as a whole is not fully confirmed.
+    assert result["confirmed"] is False
+    assert result["partial"] is True
+    transitions_by_id = {t["entity_id"]: t for t in result["transitions"]}
+    assert transitions_by_id["light.a"]["old_state"]["state"] == "on"
+    assert transitions_by_id["light.missing"]["old_state"] is None
+    # Only ONE listener registered — for light.a; light.missing was excluded.
+    assert len(bus.listeners) == 1
 
 
 @pytest.mark.asyncio
@@ -253,7 +382,9 @@ async def test_genuine_confirmation_lapse_still_reports_partial() -> None:
     """
     off = FakeState("light.c", state="off")
     bus = _FakeBus()
-    services = _FakeCallServices(known={("light", "turn_on")})  # no on_call: never fires
+    services = _FakeCallServices(
+        known={("light", "turn_on")}
+    )  # no on_call: never fires
     hass = _call_hass([off], services, bus)
 
     msg = {

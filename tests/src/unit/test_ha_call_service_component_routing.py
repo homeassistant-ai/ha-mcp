@@ -106,16 +106,18 @@ def _partial_result(entity_id: str = "light.a") -> dict[str, Any]:
 def _not_found_result(entity_id: str = "light.a") -> dict[str, Any]:
     """The component's shape for a target absent from the state machine.
 
-    ``old_state`` is None (the component's ``pre.get(eid)`` read found nothing)
-    and, since it was never confirmable, ``confirmed``/``partial`` are both False
-    (excluded from the confirmation set entirely, not merely unconfirmed).
+    ``old_state`` is None (the component's ``pre.get(eid)`` read found nothing).
+    ``should_confirm`` stays intent-level (True) even though the target was
+    excluded from the actual wait, so ``partial`` is True here too — a
+    ``validate_first=False``-style caller that doesn't inspect ``old_state``
+    still sees the same dispatched-but-unconfirmed shape it always has.
     """
     return {
         "domain": "light",
         "service": "turn_on",
         "dispatched": True,
         "confirmed": False,
-        "partial": False,
+        "partial": True,
         "transitions": [
             {
                 "entity_id": entity_id,
@@ -129,13 +131,20 @@ def _not_found_result(entity_id: str = "light.a") -> dict[str, Any]:
 
 
 def _unavailable_result(entity_id: str = "light.a") -> dict[str, Any]:
-    """The component's shape for a target whose pre-dispatch state is "unavailable"."""
+    """The component's shape for a target whose confirmation genuinely lapsed
+    while its pre-dispatch state was "unavailable".
+
+    Unlike a nonexistent target, "unavailable" stays IN the confirmation wait
+    (it can legitimately reconnect and transition mid-dispatch) — this fixture
+    represents the case where it did not, so ``partial`` is True exactly like
+    any other genuine confirmation lapse.
+    """
     return {
         "domain": "light",
         "service": "turn_on",
         "dispatched": True,
         "confirmed": False,
-        "partial": False,
+        "partial": True,
         "transitions": [
             {
                 "entity_id": entity_id,
@@ -388,6 +397,28 @@ async def test_comma_multi_target_uses_legacy_not_component() -> None:
 
 
 @pytest.mark.asyncio
+async def test_comma_multi_target_survives_404_on_states_endpoint() -> None:
+    """Regression: /api/states/<id> has no comma syntax and 404s on a literal
+    joined "light.a,light.b" even when both individual entities are real — that
+    404 must NOT be misread as ENTITY_NOT_FOUND for the (valid) multi-target
+    service call. Caught by CI's E2E suite:
+    TestCallServiceResultProjection::test_comma_separated_entity_id_filters_to_target_set.
+    """
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_CALL)
+    client = RoutingClient()
+    client.get_state_exception = HomeAssistantAPIError("not found", status_code=404)
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light", service="turn_on", entity_id="light.a,light.b"
+        )
+
+    assert resp["success"] is True
+    assert len(client.call_service_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_return_response_passed_through() -> None:
     """return_response threads to the component and its service_response is surfaced."""
     result = _confirmed_result("light.a")
@@ -452,9 +483,7 @@ async def test_component_reports_entity_not_found_immediately() -> None:
     call_service = _build_call_service(client)
 
     with patch_ws(ws, tools_service), pytest.raises(ToolError) as exc:
-        await call_service(
-            domain="light", service="turn_on", entity_id="light.cuisine"
-        )
+        await call_service(domain="light", service="turn_on", entity_id="light.cuisine")
 
     assert "ENTITY_NOT_FOUND" in str(exc.value)
     assert "light.cuisine" in str(exc.value)
@@ -586,9 +615,7 @@ async def test_legacy_reports_entity_not_found_without_dispatch() -> None:
     call_service = _build_call_service(client)
 
     with patch_ws(ws, tools_service), pytest.raises(ToolError) as exc:
-        await call_service(
-            domain="light", service="turn_on", entity_id="light.cuisine"
-        )
+        await call_service(domain="light", service="turn_on", entity_id="light.cuisine")
 
     assert "ENTITY_NOT_FOUND" in str(exc.value)
     assert "light.cuisine" in str(exc.value)
