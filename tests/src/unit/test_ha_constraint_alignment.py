@@ -4,7 +4,7 @@ The script is the mechanical link between ha-mcp's direct dependencies and
 HA core's ``package_constraints.txt``: where HA pins exactly we must admit
 the pin, and where HA is loose we must not pin exactly (the forced in-place
 replacement that tears packages). These tests pin the two rules offline; the
-lockfile CI job runs the script against the live constraints of the HA
+Fast Checks CI lane runs the script against the live constraints of the HA
 version the e2e lanes test.
 """
 
@@ -95,8 +95,8 @@ class TestRepoPyprojectIsAligned:
     Uses a constraints sample frozen from the HA release the suite pins
     (HA_TEST_IMAGE / HA_IMAGE_GHCR), covering the packages ha-mcp actually
     shares with HA — the live check against that same version runs in CI
-    (lockfile job), where drift on either side should fail the PR that
-    introduces it, not this offline test.
+    (the Fast Checks lane), where drift on either side should fail the PR
+    that introduces it, not this offline test.
     """
 
     def test_current_pyproject_has_no_violations(self):
@@ -151,7 +151,7 @@ class TestMarkerAndOperatorHandling:
 
 
 class TestMainExitCodes:
-    """The lockfile CI job invokes main(); its exit codes are the contract."""
+    """The Fast Checks CI lane invokes main(); its exit codes are the contract."""
 
     def test_clean_alignment_exits_zero(self, tmp_path):
         constraints = tmp_path / "cons.txt"
@@ -173,12 +173,13 @@ class TestMainExitCodes:
 class TestFetchFailurePath:
     """The fetch budget the CI job's timeout is sized against.
 
-    pr.yml raised the lockfile job to 5 minutes and treats
+    pr.yml runs this check as a step of the Fast Checks lane and treats
     EXIT_CONSTRAINTS_UNREACHABLE as a fail-open warning on the reasoning
-    that a fetch failure resolves FAST and distinctly. Restoring a long
-    timeout or a trailing sleep would push the worst case past the job
-    budget, turning that clean exit into an opaque runner kill — the exact
-    outcome the comments say must not happen.
+    that a fetch failure resolves FAST and distinctly. That lane's 15-minute
+    budget is shared with every other fast check, so restoring a long timeout
+    or a trailing sleep would push the worst case past it, turning that clean
+    exit into an opaque runner kill — the exact outcome the comments say must
+    not happen.
     """
 
     def _patch_fetch(self, monkeypatch, *, sleeps, attempts):
@@ -272,9 +273,9 @@ class TestFetchFailurePath:
             for n in range(checker._FETCH_ATTEMPTS - 1)
         )
         assert budget <= 60, (
-            f"worst-case fetch is {budget}s; the lockfile job also checks the "
-            "lockfile and resolves packages, so keep this well under its "
-            "timeout-minutes or exit 2 becomes an opaque kill"
+            f"worst-case fetch is {budget}s; the Fast Checks lane shares one "
+            "timeout-minutes across every fast check, so keep this well under "
+            "it or exit 2 becomes an opaque kill"
         )
 
     def test_unreadable_local_file_exits_two(self, tmp_path):

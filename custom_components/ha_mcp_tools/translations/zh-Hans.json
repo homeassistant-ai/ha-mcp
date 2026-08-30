@@ -29,11 +29,11 @@
         "title": "HA-MCP 文件与 YAML 工具",
         "description": "配置 ha-mcp 可选文件/YAML 工具所使用的特权文件和 YAML 编辑服务。这些设置也会出现在 ha-mcp 服务器自身的设置界面中，并实时生效，无需重启。不可覆盖的拒绝底线仍会阻止敏感路径（例如 .storage）和信任边界键（homeassistant、http、frontend、lovelace）。",
         "data": {
-          "allowed_dirs": "额外的文件目录",
+          "allowed_dirs": "额外文件路径",
           "extra_yaml_keys": "额外的 YAML 可写键"
         },
         "data_description": {
-          "allowed_dirs": "相对于配置目录的目录，每个目录都授予读写权限（例如 pyscript）。路径穿越以及配置目录之外的条目会被丢弃。",
+          "allowed_dirs": "相对于配置目录的路径，包括诸如 sensor.yaml 的确切文件名，或 /share、/media、/ssl 和 /backup 下的路径。每个条目均被授予对该路径及其中所有内容的读写权限；每个路径请作为一个单独的列表项输入。将丢弃目录遍历及其他不允许的路径。",
           "extra_yaml_keys": "除内置键外，ha_config_set_yaml 还可写入的顶层键，适用于本安装中以 YAML 为主的集成（例如 alert2）。信任边界键会被丢弃。"
         }
       },

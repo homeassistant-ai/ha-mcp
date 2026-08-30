@@ -29,11 +29,11 @@
         "title": "Nástroje souborů a YAML HA-MCP",
         "description": "Nakonfigurujte privilegované služby pro úpravu souborů a YAML používané volitelnými nástroji souborů/YAML ha-mcp. Tato nastavení se také zobrazují v uživatelském rozhraní nastavení serveru ha-mcp a aplikují se okamžitě, bez restartu. Nepřepisovatelná úroveň zákazu stále blokuje citlivé cesty (např. .storage) a klíče hranice důvěry (homeassistant, http, frontend, lovelace).",
         "data": {
-          "allowed_dirs": "Další adresáře souborů",
+          "allowed_dirs": "Další cesta k souborům",
           "extra_yaml_keys": "Další klíče pro zápis YAML"
         },
         "data_description": {
-          "allowed_dirs": "Adresáře vzhledem ke konfiguračnímu adresáři, každému je uděleno právo čtení a zápisu (např. pyscript). Průchod a položky mimo konfiguraci jsou zahozeny.",
+          "allowed_dirs": "Cesty relativní k adresáři konfigurace, včetně přesných názvů souborů, jako je sensor.yaml, nebo cesty pod /share, /media, /ssl a /backup. Každá položka má uděleno oprávnění pro čtení a zápis pro danou cestu a vše pod ní; každou cestu zadejte jako samostatnou položku seznamu. Adresářový posun (traversal) a jiné nepovolené cesty budou ignorovány.",
           "extra_yaml_keys": "Klíče nejvyšší úrovně, které ha_config_set_yaml může zapisovat navíc k vestavěným, pro integrace s prioritou YAML v této instalaci (např. alert2). Klíče hranice důvěry jsou zahozeny."
         }
       },

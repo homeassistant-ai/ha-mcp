@@ -29,11 +29,11 @@
         "title": "HA-MCP 파일 및 YAML 도구",
         "description": "ha-mcp의 선택형 파일/YAML 도구가 사용하는, 권한이 필요한 파일 및 YAML 편집 서비스를 구성합니다. 이 설정은 ha-mcp 서버 자체의 설정 UI에도 나타나며 다시 시작하지 않아도 즉시 적용됩니다. 재정의할 수 없는 기본 차단 규칙은 민감한 경로(예: .storage)와 신뢰 경계 키(homeassistant, http, frontend, lovelace)를 계속 차단합니다.",
         "data": {
-          "allowed_dirs": "추가 파일 디렉터리",
+          "allowed_dirs": "추가 파일 경로",
           "extra_yaml_keys": "추가 YAML 쓰기 허용 키"
         },
         "data_description": {
-          "allowed_dirs": "설정 디렉터리 기준 상대 디렉터리이며 각각 읽기와 쓰기가 허용됩니다(예: pyscript). 경로 탈출과 설정 디렉터리 밖의 항목은 무시됩니다.",
+          "allowed_dirs": "sensor.yaml 같은 정확한 파일 이름을 포함하여 config 디렉토리 상대 경로, 또는 /share, /media, /ssl, /backup 아래의 경로입니다. 각 항목에는 해당 경로 및 그 하위 경로에 대한 읽기 및 쓰기 권한이 부여되며, 각 경로는 별도의 목록 항목으로 입력하세요. 상위 디렉토리 순회 및 허용되지 않는 경로는 제외됩니다.",
           "extra_yaml_keys": "이 설치본에서 YAML 우선으로 동작하는 통합 구성요소(예: alert2)를 위해, ha_config_set_yaml이 기본 허용 키 외에 추가로 쓸 수 있는 최상위 키입니다. 신뢰 경계 키는 무시됩니다."
         }
       },

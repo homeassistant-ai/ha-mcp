@@ -161,10 +161,8 @@ def _discover_translation_surfaces() -> set[str]:
         completed = subprocess.run(
             # The unit-test job runs in a container against a checkout owned by
             # another uid, and actions/checkout's safe.directory lands in a temp
-            # HOME that container jobs don't see — the Ruff Lint job's "Run ruff
-            # format check on changed Python files" step re-adds it by hand for
-            # the same reason. Without this, git refuses the repo as dubious
-            # ownership and the check dies with an empty stderr.
+            # HOME that container jobs don't see. Without this, git refuses the
+            # repo as dubious ownership and the check dies with an empty stderr.
             ["git", "-c", "safe.directory=*", "ls-files", "-z"],
             cwd=_REPO_ROOT,
             capture_output=True,

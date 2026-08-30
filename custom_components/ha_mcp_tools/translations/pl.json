@@ -29,11 +29,11 @@
         "title": "Narzędzia plików i YAML HA-MCP",
         "description": "Skonfiguruj uprzywilejowane usługi edycji plików i YAML używane przez opcjonalne narzędzia plików/YAML ha-mcp. Te ustawienia pojawiają się również w interfejsie ustawień serwera ha-mcp i są stosowane na żywo, bez restartu. Nienadpisywalna blokada nadal blokuje wrażliwe ścieżki (np. .storage) i klucze graniczne zaufania (homeassistant, http, frontend, lovelace).",
         "data": {
-          "allowed_dirs": "Dodatkowe katalogi plików",
+          "allowed_dirs": "Dodatkowe ścieżki plików",
           "extra_yaml_keys": "Dodatkowe klucze zapisu YAML"
         },
         "data_description": {
-          "allowed_dirs": "Katalogi względem katalogu konfiguracyjnego, każdy z uprawnieniami do odczytu i zapisu (np. pyscript). Wpisy poza konfiguracją i przechodzenie przez katalogi są odrzucane.",
+          "allowed_dirs": "Ścieżki względne do katalogu konfiguracyjnego, w tym dokładne nazwy plików, takie jak sensor.yaml, lub ścieżki w katalogach /share, /media, /ssl i /backup. Każdy wpis otrzymuje uprawnienia do odczytu i zapisu dla danej ścieżki oraz wszystkiego, co się w niej znajduje; wpisz każdą ścieżkę jako oddzielny element listy. Przechodzenie w górę drzewa katalogów (traversal) i inne niedozwolone ścieżki są odrzucane.",
           "extra_yaml_keys": "Klucze najwyższego poziomu, które ha_config_set_yaml może zapisywać oprócz wbudowanych, dla integracji opartych na YAML w tej instalacji (np. alert2). Klucze graniczne zaufania są odrzucane."
         }
       },
