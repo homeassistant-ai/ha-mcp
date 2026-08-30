@@ -173,6 +173,43 @@ class TestFieldConstraints:
         )
 
 
+class TestMetadataSelection:
+    """Only ``Field`` keywords describe the parameter."""
+
+    def test_other_metadata_calls_contribute_nothing(self):
+        """Their keywords are their own, not pydantic validation rules."""
+        info = _field_info("Annotated[int, OtherMetadata(mode='strict')]")
+
+        assert info == {"type": "int"}
+
+    def test_field_is_still_read_beside_other_metadata(self):
+        info = _field_info("Annotated[int, OtherMetadata(mode='strict'), Field(ge=1)]")
+
+        assert info["constraints"] == {"ge": 1}
+
+
+class TestRequiredParameters:
+    """``required`` must agree with the defaults the schema reports."""
+
+    def _params(self, signature: str):
+        source = f"async def tool({signature}) -> None:\n    pass\n"
+        node = ast.parse(source).body[0]
+        return extract_tools._extract_tool_params(node)
+
+    def test_field_default_alone_makes_a_parameter_optional(self):
+        """FastMCP treats ``Field(default=...)`` as the default; so must this."""
+        properties, required = self._params("limit: Annotated[int, Field(default=10)]")
+
+        assert properties["limit"]["default"] == 10
+        assert required == []
+
+    def test_a_parameter_with_no_default_at_all_stays_required(self):
+        properties, required = self._params("entity_id: str")
+
+        assert required == ["entity_id"]
+        assert "default" not in properties["entity_id"]
+
+
 class TestNonLiteralDescriptions:
     """Descriptions built from constants and helpers still reach the catalog."""
 

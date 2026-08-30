@@ -20,7 +20,7 @@ import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, TypeGuard
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = REPO_ROOT / "src" / "ha_mcp" / "tools"
@@ -310,6 +310,16 @@ def _is_annotated(node: ast.expr) -> bool:
     return isinstance(node, ast.Attribute) and node.attr == "Annotated"
 
 
+def _is_field_call(node: ast.expr) -> TypeGuard[ast.Call]:
+    """Whether ``node`` is a pydantic ``Field(...)`` call."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id == "Field"
+    return isinstance(func, ast.Attribute) and func.attr == "Field"
+
+
 def _field_keyword(info: dict, kw: ast.keyword, scope: ModuleScope) -> None:
     """Fold one ``Field(...)`` keyword into the parameter info."""
     if kw.arg is None:
@@ -330,10 +340,13 @@ def _annotated_metadata(slice_node: ast.expr, scope: ModuleScope) -> dict:
         return info
 
     info["type"] = ast.unparse(slice_node.elts[0])
-    # Everything after the type is metadata; bare validators (e.g.
-    # JSON_STRING_COERCION) are names rather than calls and carry nothing.
+    # Everything after the type is metadata, but only ``Field(...)`` carries
+    # keywords this catalog describes. A bare validator (JSON_STRING_COERCION)
+    # is a name rather than a call; another metadata call's keywords are its
+    # own, and recording them as constraints would invent a rule pydantic
+    # never applied.
     for elt in slice_node.elts[1:]:
-        if not isinstance(elt, ast.Call):
+        if not _is_field_call(elt):
             continue
         for kw in elt.keywords:
             _field_keyword(info, kw, scope)
@@ -451,7 +464,9 @@ def _extract_tool_params(
             def_node = node.args.defaults[def_idx]
             if isinstance(def_node, ast.Constant):
                 p.setdefault("default", def_node.value)
-        else:
+        elif "default" not in p:
+            # ``Field(default=...)`` alone makes the parameter optional, so a
+            # signature default is not the only thing that can supply one.
             required.append(arg.arg)
         if p:
             properties[arg.arg] = p
