@@ -107,8 +107,13 @@ async def _wait_for_hacs_ws_ready(container_info: dict) -> None:
     client = HomeAssistantWebSocketClient(
         container_info["base_url"], container_info.get("token", TEST_TOKEN)
     )
-    assert await client.connect(), "could not open the HA WebSocket for the probe"
+    # connect() opens the socket and starts its reader before it returns, and
+    # a cancellation in between bypasses its own cleanup — so the finally must
+    # already be armed when connect() runs; disconnect() tolerates a client
+    # that never got that far.
     try:
+        if not await client.connect():
+            pytest.fail("could not open the HA WebSocket for the HACS probe")
         deadline = asyncio.get_running_loop().time() + HACS_WS_READY_TIMEOUT
         while True:
             try:
@@ -345,7 +350,7 @@ async def test_web_launcher_runs_the_startup_nudge(
     container_info = ha_container_with_fresh_config
     await _wait_for_hacs_ws_ready(container_info)
     env = _http_launcher_env(container_info["base_url"], tmp_path)
-    env["HOMEASSISTANT_TOKEN"] = TEST_TOKEN
+    env["HOMEASSISTANT_TOKEN"] = container_info.get("token", TEST_TOKEN)
 
     def marker_files():
         return list(tmp_path.glob(f"{MARKER_FILENAME_PREFIX}_*.json"))
