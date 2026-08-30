@@ -1637,12 +1637,64 @@ class ServiceTools:
     @log_tool_usage
     async def ha_call_service(
         self,
-        domain: str | None = None,
-        service: str | None = None,
-        entity_id: str | None = None,
-        data: Annotated[dict[str, Any] | None, JSON_STRING_COERCION] = None,
-        return_response: bool = False,
-        wait: bool = True,
+        domain: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Service domain (e.g. 'light', 'climate', 'automation'). "
+                    "Required unless ws_command is set."
+                ),
+            ),
+        ] = None,
+        service: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Service name within domain (e.g. 'turn_on', 'set_temperature', "
+                    "'trigger'). Required unless ws_command is set."
+                ),
+            ),
+        ] = None,
+        entity_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Entity ID(s) the service call targets (e.g. 'light.living_room'). "
+                    "Optional for services that don't target a specific entity."
+                ),
+            ),
+        ] = None,
+        data: Annotated[
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Extra service-call parameters beyond entity_id (e.g. "
+                    "{'temperature': 22} for climate.set_temperature). Also carries "
+                    "the raw command payload when ws_command is set."
+                ),
+            ),
+        ] = None,
+        return_response: Annotated[
+            bool,
+            Field(
+                description=(
+                    "If True, the service's response data is returned once, as "
+                    "the top-level 'service_response' key — never nested inside "
+                    "'result' (default False)."
+                ),
+            ),
+        ] = False,
+        wait: Annotated[
+            bool,
+            Field(
+                description=(
+                    "If True (default), wait for the entity state to change "
+                    "before returning. Only applies to state-changing services "
+                    "on a single entity."
+                ),
+            ),
+        ] = True,
         verbose: Annotated[
             bool,
             Field(
