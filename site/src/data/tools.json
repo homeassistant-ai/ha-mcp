@@ -482,6 +482,7 @@
         },
         "python_transform": {
           "type": "str | None",
+          "description": "Python expression to transform existing automation config. Mutually exclusive with config. Requires identifier and config_hash for validation. WARNING: Expressions with infinite loops will hang the server. Examples: Simple: python_transform=\"config['actions'][0]['data']['brightness'] = 255\" Pattern: python_transform=\"for a in config['actions']: if a.get('alias') == 'My Step': a['data']['value'] = 100\" \n\nPYTHON TRANSFORM SECURITY:\n\n✅ ALLOWED:\n- Dictionary/list access: config['views'][0]['cards'][1]\n- Slicing: config['views'][0]['cards'][1:3]\n- Assignment: config['key'] = 'value'\n- Deletion: del config['key'] or config.pop('key')\n- List methods: append, insert, pop, remove, clear, extend\n- Dict methods: update, get, setdefault, keys, values, items\n- Loops: for, if/else, pass, break, continue\n- Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)\n- Ternary: x if condition else y\n- Iterable unpacking (* in calls/literals): f(*xs), [*xs, y]\n- Dict unpacking (**) in calls and dict literals: {**d, 'k': v}\n- Keyword arguments: func(key=value)\n- Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])\n- String methods: startswith, endswith, lower, upper, strip, split, join, replace\n- Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,\n  min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,\n  tuple, set\n\n❌ FORBIDDEN:\n- Imports: import, from, __import__\n- File operations: open, read, write\n- Dunder access: __class__, __bases__, __subclasses__\n- Dangerous builtins: eval, exec, compile, getattr, setattr, delattr, hasattr\n- Function definitions: def, class\n- Exception handling: try/except (validate with isinstance/in/.get() instead)\n- While loops: use bounded for loops or comprehensions instead\n\n🎯 PATTERNS:\n- Filter cards: cards = [c for c in cards if keep(c)]\n- Skip in a loop: prefer `continue` over an empty `pass` branch (clearer)\n- Conditionally include: build a new list and `.append(x)` only the\n  cards you want, instead of iterating the original and using if/pass\n  branches to drop entries\n- Modify in place when possible (single pass, fewer surprises) over\n  reconstructing the entire list",
           "default": null
         },
         "config_hash": {
@@ -764,7 +765,11 @@
         },
         "width": {
           "type": "int",
-          "description": "Viewport width in px."
+          "description": "Viewport width in px.",
+          "constraints": {
+            "minimum": 64,
+            "maximum": 4096
+          }
         },
         "height": {
           "type": "int | Literal['auto']",
@@ -773,6 +778,10 @@
         "viewport_presets": {
           "type": "list[ViewportPreset] | None",
           "description": "Render one or more named responsive viewports in this order: mobile (390x844), tablet (768x1024), desktop (1280x800). Overrides width/height.",
+          "constraints": {
+            "minLength": 1,
+            "maxLength": 3
+          },
           "default": null
         },
         "orientation": {
@@ -783,14 +792,23 @@
         "zoom": {
           "type": "float",
           "description": "Page zoom factor (1.0 = 100%).",
+          "constraints": {
+            "minimum": 0.1,
+            "maximum": 5.0
+          },
           "default": 1.0
         },
         "wait_ms": {
           "type": "int",
-          "description": "Extra render-settle time (ms) after the dashboard reports loaded. Raise it if a chart card (ApexCharts, mini-graph, history-graph) comes back blank."
+          "description": "Extra render-settle time (ms) after the dashboard reports loaded. Raise it if a chart card (ApexCharts, mini-graph, history-graph) comes back blank.",
+          "constraints": {
+            "minimum": 0,
+            "maximum": 30000
+          }
         },
         "full_page": {
           "type": "bool",
+          "description": "Capture the whole scrollable dashboard instead of just the viewport (use when content runs below the fold). Uses Puppet's native auto-height capture (currently capped at 4000 px); raise wait_ms for lazy cards.",
           "default": false
         },
         "theme": {
@@ -815,7 +833,11 @@
         },
         "render_timeout_seconds": {
           "type": "float",
-          "description": "HTTP render timeout in seconds."
+          "description": "HTTP render timeout in seconds.",
+          "constraints": {
+            "minimum": 1,
+            "maximum": 300
+          }
         }
       }
     },
@@ -964,11 +986,18 @@
         "limit": {
           "type": "int",
           "default": 100,
+          "constraints": {
+            "minimum": 1,
+            "maximum": 500
+          },
           "description": "Max resources to return per page (default: 100)"
         },
         "offset": {
           "type": "int",
           "default": 0,
+          "constraints": {
+            "minimum": 0
+          },
           "description": "Number of resources to skip for pagination (default: 0)"
         }
       }
@@ -1000,6 +1029,7 @@
         },
         "python_transform": {
           "type": "str | None",
+          "description": "Python expression to transform existing dashboard config. Mutually exclusive with config. Requires config_hash for validation. See PYTHON TRANSFORM SECURITY below for allowed operations. Examples: Simple: python_transform=\"config['views'][0]['cards'][0]['icon'] = 'mdi:lamp'\" Pattern: python_transform=\"for card in config['views'][0]['cards']: if 'light' in card.get('entity', ''): card['icon'] = 'mdi:lightbulb'\" Multi-op: python_transform=\"config['views'][0]['cards'][0]['icon'] = 'mdi:lamp'; del config['views'][0]['cards'][2]\" \n\nPYTHON TRANSFORM SECURITY:\n\n✅ ALLOWED:\n- Dictionary/list access: config['views'][0]['cards'][1]\n- Slicing: config['views'][0]['cards'][1:3]\n- Assignment: config['key'] = 'value'\n- Deletion: del config['key'] or config.pop('key')\n- List methods: append, insert, pop, remove, clear, extend\n- Dict methods: update, get, setdefault, keys, values, items\n- Loops: for, if/else, pass, break, continue\n- Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)\n- Ternary: x if condition else y\n- Iterable unpacking (* in calls/literals): f(*xs), [*xs, y]\n- Dict unpacking (**) in calls and dict literals: {**d, 'k': v}\n- Keyword arguments: func(key=value)\n- Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])\n- String methods: startswith, endswith, lower, upper, strip, split, join, replace\n- Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,\n  min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,\n  tuple, set\n\n❌ FORBIDDEN:\n- Imports: import, from, __import__\n- File operations: open, read, write\n- Dunder access: __class__, __bases__, __subclasses__\n- Dangerous builtins: eval, exec, compile, getattr, setattr, delattr, hasattr\n- Function definitions: def, class\n- Exception handling: try/except (validate with isinstance/in/.get() instead)\n- While loops: use bounded for loops or comprehensions instead\n\n🎯 PATTERNS:\n- Filter cards: cards = [c for c in cards if keep(c)]\n- Skip in a loop: prefer `continue` over an empty `pass` branch (clearer)\n- Conditionally include: build a new list and `.append(x)` only the\n  cards you want, instead of iterating the original and using if/pass\n  branches to drop entries\n- Modify in place when possible (single pass, fewer surprises) over\n  reconstructing the entire list",
           "default": null
         },
         "config_hash": {
@@ -1238,11 +1268,18 @@
         "limit": {
           "type": "int",
           "default": 50,
+          "constraints": {
+            "minimum": 1,
+            "maximum": 200
+          },
           "description": "Max devices to return per page in list mode (default: 50)"
         },
         "offset": {
           "type": "int",
           "default": 0,
+          "constraints": {
+            "minimum": 0
+          },
           "description": "Number of devices to skip for pagination (default: 0)"
         },
         "detail_level": {
@@ -1658,6 +1695,10 @@
         "tail_lines": {
           "type": "int | None",
           "default": null,
+          "constraints": {
+            "minimum": 1,
+            "maximum": 10000
+          },
           "description": "For log files, return only the last N lines. Recommended for home-assistant.log to avoid large responses. Default: None (return full file, or last 1000 lines for logs)"
         },
         "yaml_path": {
@@ -1729,11 +1770,18 @@
         "limit": {
           "type": "int",
           "default": 100,
+          "constraints": {
+            "minimum": 1,
+            "maximum": 500
+          },
           "description": "Max groups to return per page (default: 100)"
         },
         "offset": {
           "type": "int",
           "default": 0,
+          "constraints": {
+            "minimum": 0
+          },
           "description": "Number of groups to skip for pagination (default: 0)"
         }
       }
@@ -1864,11 +1912,18 @@
         },
         "max_results": {
           "type": "int",
+          "constraints": {
+            "minimum": 1,
+            "maximum": 100
+          },
           "description": "Maximum number of results (action='search', default: 10, max: 100)",
           "default": 10
         },
         "offset": {
           "type": "int",
+          "constraints": {
+            "minimum": 0
+          },
           "description": "Results to skip for pagination (action='search', default: 0)",
           "default": 0
         },
@@ -1949,11 +2004,18 @@
         "limit": {
           "type": "int",
           "default": 100,
+          "constraints": {
+            "minimum": 1,
+            "maximum": 500
+          },
           "description": "Max helpers to return per page (default: 100)"
         },
         "offset": {
           "type": "int",
           "default": 0,
+          "constraints": {
+            "minimum": 0
+          },
           "description": "Number of helpers to skip for pagination (default: 0)"
         }
       },
@@ -2053,6 +2115,7 @@
         },
         "initial": {
           "type": "str | int | None",
+          "description": "Initial value for applicable helper types. For input_boolean, input_select, input_number, input_text, and input_datetime: setting `initial` — even to false/0 — disables last-state restore and forces that value on every HA restart; omit unless you want the helper to reset to that value on every restart instead of restoring its last state. For counter, `initial` is just the starting value — restore-on-restart is controlled separately by `restore` (default True).",
           "default": null
         },
         "mode": {
@@ -2266,7 +2329,11 @@
         "limit": {
           "type": "int",
           "description": "Maximum number of traces to return when listing (default: 10, max: 50).",
-          "default": 10
+          "default": 10,
+          "constraints": {
+            "minimum": 1,
+            "maximum": 50
+          }
         },
         "deduplicate": {
           "type": "bool",
@@ -2286,7 +2353,10 @@
         "offset": {
           "type": "int",
           "description": "Number of traces to skip from the start of the requested order. Use with `limit` to page through stored traces when `total_available > limit`.",
-          "default": 0
+          "default": 0,
+          "constraints": {
+            "minimum": 0
+          }
         },
         "order": {
           "type": "Literal['newest', 'oldest']",
@@ -2346,12 +2416,19 @@
         "limit": {
           "type": "int | None",
           "description": "Max entries per entity. Default: 100, Max: 1000. For source=\"history\": state changes. For source=\"statistics\": aggregated rows. With multiple entity_ids, offset must be 0 and total rows returned can reach limit × len(entity_ids).",
-          "default": null
+          "default": null,
+          "constraints": {
+            "minimum": 1,
+            "maximum": 1000
+          }
         },
         "offset": {
           "type": "int | None",
           "description": "Number of entries to skip per entity for pagination. Default: 0. Offset > 0 requires a single entity_id. Use with limit and has_more/next_offset in the response.",
-          "default": null
+          "default": null,
+          "constraints": {
+            "minimum": 0
+          }
         },
         "period": {
           "type": "str",
@@ -2413,6 +2490,9 @@
         },
         "hours_back": {
           "type": "int",
+          "constraints": {
+            "minimum": 1
+          },
           "default": 1
         },
         "entity_id": {
@@ -2425,6 +2505,9 @@
         },
         "offset": {
           "type": "int",
+          "constraints": {
+            "minimum": 0
+          },
           "description": "Page deeper into source='logbook' and source='error_log' (ignored for other sources). On error_log it counts raw log lines back from the newest entry; pass the response's 'next_offset' to continue while 'has_more' is true.",
           "default": 0
         },
@@ -2443,6 +2526,10 @@
         },
         "top_n": {
           "type": "int | None",
+          "constraints": {
+            "minimum": 1
+          },
+          "description": "Max distinct issues to return when structured=True (default 20, capped at 500). Bounds the response regardless of log size.",
           "default": null
         },
         "slug": {
@@ -2525,11 +2612,18 @@
         "limit": {
           "type": "int",
           "default": 50,
+          "constraints": {
+            "minimum": 1,
+            "maximum": 200
+          },
           "description": "Max entries to return per page in list mode (default: 50)"
         },
         "offset": {
           "type": "int",
           "default": 0,
+          "constraints": {
+            "minimum": 0
+          },
           "description": "Number of entries to skip for pagination (default: 0)"
         },
         "include_diagnostics": {
@@ -2555,7 +2649,10 @@
         "diagnostics_truncate_at_bytes": {
           "type": "int | None",
           "description": "Optional byte cap on the serialized diagnostics payload (after diagnostics_fields and diagnostics_data_path have been applied). On hit, drops data and emits truncated=true, bytes_total, byte_cap, plus available_fields (when the capped value is a dict). Recommended starting point: 20000 bytes. Only applies when include_diagnostics=True.",
-          "default": null
+          "default": null,
+          "constraints": {
+            "minimum": 1
+          }
         },
         "diagnostics_data_path": {
           "type": "str | None",
@@ -2565,12 +2662,18 @@
         "diagnostics_data_offset": {
           "type": "int | None",
           "description": "Pagination start index (default 0) for list-valued diagnostics_data_path results. Ignored when diagnostics_data_path is unset, diagnostics_data_limit is unset, or the resolved value is not a list. Only applies when include_diagnostics=True.",
-          "default": 0
+          "default": 0,
+          "constraints": {
+            "minimum": 0
+          }
         },
         "diagnostics_data_limit": {
           "type": "int | None",
           "description": "Pagination window size for list-valued diagnostics_data_path results. When set with a list-resolved path, swaps data for a pagination envelope {path, items, offset, limit, total, has_more}. Default None returns the full resolved value. Workflow: probe with a list-valued diagnostics_data_path and diagnostics_data_limit=10 to walk a large list one page at a time (the exact path varies by integration version). Only applies when include_diagnostics=True.",
-          "default": null
+          "default": null,
+          "constraints": {
+            "minimum": 1
+          }
         }
       }
     },
@@ -2611,6 +2714,9 @@
           "default": null
         },
         "diagnostics_truncate_at_bytes": {
+          "constraints": {
+            "minimum": 1
+          },
           "type": "int | None",
           "default": null
         },
@@ -2619,10 +2725,16 @@
           "default": null
         },
         "diagnostics_data_offset": {
+          "constraints": {
+            "minimum": 0
+          },
           "type": "int | None",
           "default": 0
         },
         "diagnostics_data_limit": {
+          "constraints": {
+            "minimum": 1
+          },
           "type": "int | None",
           "default": null
         }
@@ -3029,6 +3141,7 @@
         },
         "python_transform": {
           "type": "str | None",
+          "description": "Python expression to transform existing scene config. Mutually exclusive with config. Requires config_hash for validation. WARNING: Expressions with infinite loops will hang the server. Examples: Add entity: python_transform=\"config['entities']['light.bed'] = {'state': 'on'}\" Update brightness: python_transform=\"config['entities']['light.kitchen']['brightness'] = 50\" Remove entity: python_transform=\"del config['entities']['light.kitchen']\" \n\nPYTHON TRANSFORM SECURITY:\n\n✅ ALLOWED:\n- Dictionary/list access: config['views'][0]['cards'][1]\n- Slicing: config['views'][0]['cards'][1:3]\n- Assignment: config['key'] = 'value'\n- Deletion: del config['key'] or config.pop('key')\n- List methods: append, insert, pop, remove, clear, extend\n- Dict methods: update, get, setdefault, keys, values, items\n- Loops: for, if/else, pass, break, continue\n- Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)\n- Ternary: x if condition else y\n- Iterable unpacking (* in calls/literals): f(*xs), [*xs, y]\n- Dict unpacking (**) in calls and dict literals: {**d, 'k': v}\n- Keyword arguments: func(key=value)\n- Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])\n- String methods: startswith, endswith, lower, upper, strip, split, join, replace\n- Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,\n  min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,\n  tuple, set\n\n❌ FORBIDDEN:\n- Imports: import, from, __import__\n- File operations: open, read, write\n- Dunder access: __class__, __bases__, __subclasses__\n- Dangerous builtins: eval, exec, compile, getattr, setattr, delattr, hasattr\n- Function definitions: def, class\n- Exception handling: try/except (validate with isinstance/in/.get() instead)\n- While loops: use bounded for loops or comprehensions instead\n\n🎯 PATTERNS:\n- Filter cards: cards = [c for c in cards if keep(c)]\n- Skip in a loop: prefer `continue` over an empty `pass` branch (clearer)\n- Conditionally include: build a new list and `.append(x)` only the\n  cards you want, instead of iterating the original and using if/pass\n  branches to drop entries\n- Modify in place when possible (single pass, fewer surprises) over\n  reconstructing the entire list",
           "default": null
         },
         "config_hash": {
@@ -3140,6 +3253,7 @@
         },
         "python_transform": {
           "type": "str | None",
+          "description": "Python expression to transform existing script config. Mutually exclusive with config. Requires config_hash for validation. WARNING: Expressions with infinite loops will hang the server. Examples: Simple: python_transform=\"config['sequence'][0]['data']['message'] = 'Hello'\" Pattern: python_transform=\"for step in config['sequence']: if step.get('alias') == 'My Step': step['data']['value'] = 100\" \n\nPYTHON TRANSFORM SECURITY:\n\n✅ ALLOWED:\n- Dictionary/list access: config['views'][0]['cards'][1]\n- Slicing: config['views'][0]['cards'][1:3]\n- Assignment: config['key'] = 'value'\n- Deletion: del config['key'] or config.pop('key')\n- List methods: append, insert, pop, remove, clear, extend\n- Dict methods: update, get, setdefault, keys, values, items\n- Loops: for, if/else, pass, break, continue\n- Comprehensions: [x for x in ...], {k: v for ...}, (x for x in ...)\n- Ternary: x if condition else y\n- Iterable unpacking (* in calls/literals): f(*xs), [*xs, y]\n- Dict unpacking (**) in calls and dict literals: {**d, 'k': v}\n- Keyword arguments: func(key=value)\n- Lambdas (e.g. for `key=`): sorted(items, key=lambda x: x['score'])\n- String methods: startswith, endswith, lower, upper, strip, split, join, replace\n- Safe builtins: isinstance, len, range, enumerate, zip, sorted, reversed,\n  min, max, sum, abs, any, all, round, str, int, float, bool, list, dict,\n  tuple, set\n\n❌ FORBIDDEN:\n- Imports: import, from, __import__\n- File operations: open, read, write\n- Dunder access: __class__, __bases__, __subclasses__\n- Dangerous builtins: eval, exec, compile, getattr, setattr, delattr, hasattr\n- Function definitions: def, class\n- Exception handling: try/except (validate with isinstance/in/.get() instead)\n- While loops: use bounded for loops or comprehensions instead\n\n🎯 PATTERNS:\n- Filter cards: cards = [c for c in cards if keep(c)]\n- Skip in a loop: prefer `continue` over an empty `pass` branch (clearer)\n- Conditionally include: build a new list and `.append(x)` only the\n  cards you want, instead of iterating the original and using if/pass\n  branches to drop entries\n- Modify in place when possible (single pass, fewer surprises) over\n  reconstructing the entire list",
           "default": null
         },
         "config_hash": {
@@ -3198,11 +3312,17 @@
         "limit": {
           "type": "int | None",
           "default": null,
+          "constraints": {
+            "minimum": 1
+          },
           "description": "Max total entities across all domains (default: unlimited for minimal, 200 for standard/full). Counts and states always complete. Use with offset for pagination."
         },
         "offset": {
           "type": "int",
           "default": 0,
+          "constraints": {
+            "minimum": 0
+          },
           "description": "Number of entities to skip for pagination (default: 0)"
         },
         "max_entities_per_domain": {
@@ -3311,11 +3431,17 @@
         "limit": {
           "type": "int",
           "default": 10,
+          "constraints": {
+            "minimum": 1
+          },
           "description": "Maximum results per surface (entities, configs). Default: 10."
         },
         "offset": {
           "type": "int",
           "default": 0,
+          "constraints": {
+            "minimum": 0
+          },
           "description": "Number of results to skip for pagination."
         },
         "exact_match": {
@@ -3361,6 +3487,10 @@
         "config_time_budget": {
           "type": "float | None",
           "default": null,
+          "constraints": {
+            "exclusiveMinimum": 0,
+            "maximum": 300
+          },
           "description": "Per-call override for the per-id config-fetch wall-clock budget (seconds). Replaces the per-type HAMCP_*_CONFIG_TIME_BUDGET defaults for the automation, script, AND scene branches. Use when a `partial: True` response names time-budget skipping. Stateless per-call: one caller raising the budget doesn't affect others. None = use the per-type env defaults."
         }
       }
@@ -3406,6 +3536,10 @@
         },
         "timeout_seconds": {
           "type": "float | None",
+          "constraints": {
+            "minimum": 0,
+            "maximum": 60
+          },
           "default": null
         },
         "validate_first": {
@@ -3528,6 +3662,9 @@
         },
         "timeout_seconds": {
           "type": "float",
+          "constraints": {
+            "minimum": 0
+          },
           "default": 10
         }
       },
@@ -3561,11 +3698,18 @@
         "limit": {
           "type": "int",
           "default": 50,
+          "constraints": {
+            "minimum": 1,
+            "maximum": 200
+          },
           "description": "Max services to return per page (default: 50)"
         },
         "offset": {
           "type": "int",
           "default": 0,
+          "constraints": {
+            "minimum": 0
+          },
           "description": "Number of services to skip for pagination (default: 0)"
         },
         "detail_level": {
@@ -3741,11 +3885,18 @@
         "older_than_days": {
           "type": "int | None",
           "default": null,
+          "constraints": {
+            "minimum": 0
+          },
           "description": "(edits.delete) Bulk-delete auto-backups older than this many days."
         },
         "limit": {
           "type": "int",
           "default": 200,
+          "constraints": {
+            "minimum": 1,
+            "maximum": 10000
+          },
           "description": "(edits.list / snapshot.list) Maximum number of entries to return."
         }
       },
@@ -4141,6 +4292,10 @@
         "tool_call_count": {
           "type": "int",
           "default": 10,
+          "constraints": {
+            "minimum": 1,
+            "maximum": 16
+          },
           "description": "Number of tool calls made since the issue started. This determines how many log entries to include. Count how many ha_* tools were called from when the issue began. Default: 10. Max: 16 (limited by 200-entry log buffer: 16*4*3=192)"
         },
         "fields": {

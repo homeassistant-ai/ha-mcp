@@ -236,6 +236,7 @@ function getBadgeInfo(annotations: Record<string, any>) {
                               : schema.type;
                             const enums = schema.enum || schema.anyOf?.flatMap((s: any) => s.enum || []) || [];
                             const hasDefault = 'default' in schema && schema.default !== undefined;
+                            const constraints = Object.entries(schema.constraints || {});
                             return (
                             <div class="flex items-start gap-2 text-sm">
                               <code class="text-amber-400 shrink-0">{name}</code>
@@ -251,6 +252,13 @@ function getBadgeInfo(annotations: Record<string, any>) {
                                     [{enums.map((e: any, i: number) => (
                                       <><code class="text-cyan-500/70">{String(e)}</code>{i < enums.length - 1 ? ', ' : ''}</>
                                     ))}]
+                                  </span>
+                                )}
+                                {constraints.length > 0 && (
+                                  <span class="text-slate-600 ml-1">
+                                    {constraints.map(([key, value]: [string, any], i: number) => (
+                                      <><code class="text-cyan-500/70">{key}: {String(value)}</code>{i < constraints.length - 1 ? ', ' : ''}</>
+                                    ))}
                                   </span>
                                 )}
                                 {hasDefault && (

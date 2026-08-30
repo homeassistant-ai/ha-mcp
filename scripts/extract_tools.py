@@ -19,6 +19,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Any, NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = REPO_ROOT / "src" / "ha_mcp" / "tools"
@@ -36,6 +37,198 @@ TOOL_FILES = sorted(list(TOOLS_DIR.glob("tools_*.py")) + [TOOLS_DIR / "backup.py
 
 ANNOTATION_KEYS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
 
+PACKAGE_ROOT = REPO_ROOT / "src" / "ha_mcp"
+
+# Pydantic ``Field`` constraint kwargs, mapped to their JSON Schema spelling.
+# They used to be visible in the raw annotation source this extractor dumped
+# into ``type``; cleaning up ``type`` must not lose them.
+FIELD_CONSTRAINTS = {
+    "ge": "minimum",
+    "gt": "exclusiveMinimum",
+    "le": "maximum",
+    "lt": "exclusiveMaximum",
+    "min_length": "minLength",
+    "max_length": "maxLength",
+    "multiple_of": "multipleOf",
+}
+
+# String methods safe to apply to an already-resolved literal.
+STR_METHODS = ("upper", "lower", "capitalize", "title", "strip", "lstrip", "rstrip")
+
+
+class ModuleScope(NamedTuple):
+    """Statically resolvable module-level names.
+
+    ``consts`` maps a name to its literal value; ``funcs`` maps a zero-argument
+    function's name to the literal it returns. Both are needed because tool
+    files build parameter descriptions out of shared constants and helpers
+    (``f"... {MAX_LIMIT}"``, ``... + get_security_documentation()``) rather than
+    inline literals, and those descriptions are the point of the catalog.
+    """
+
+    consts: dict[str, Any]
+    funcs: dict[str, Any]
+
+
+EMPTY_SCOPE = ModuleScope({}, {})
+
+
+def _static_value(node: ast.expr, scope: ModuleScope) -> Any:
+    """Resolve an expression to its literal value, or None when it cannot be.
+
+    Deliberately an interpreter over a handful of node types rather than
+    ``eval``: the generator never executes repository source.
+    """
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        return scope.consts.get(node.id)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _static_value(node.left, scope)
+        right = _static_value(node.right, scope)
+        if isinstance(left, str) and isinstance(right, str):
+            return left + right
+        return None
+    if isinstance(node, ast.JoinedStr):
+        return _joined_str_value(node, scope)
+    if isinstance(node, ast.Subscript):
+        return _subscript_value(node, scope)
+    if isinstance(node, ast.Call):
+        return _call_value(node, scope)
+    return None
+
+
+def _joined_str_value(node: ast.JoinedStr, scope: ModuleScope) -> str | None:
+    """Resolve an f-string whose interpolations are all statically known."""
+    parts: list[str] = []
+    for value in node.values:
+        if isinstance(value, ast.Constant):
+            parts.append(str(value.value))
+            continue
+        if not isinstance(value, ast.FormattedValue) or value.format_spec is not None:
+            return None
+        resolved = _static_value(value.value, scope)
+        if resolved is None:
+            return None
+        parts.append(str(resolved))
+    return "".join(parts)
+
+
+def _subscript_value(node: ast.Subscript, scope: ModuleScope) -> str | None:
+    """Resolve ``SOME_TEXT[:1]`` style slicing of a known string."""
+    target = _static_value(node.value, scope)
+    if not isinstance(target, str) or not isinstance(node.slice, ast.Slice):
+        return None
+    bounds = []
+    for part in (node.slice.lower, node.slice.upper, node.slice.step):
+        if part is None:
+            bounds.append(None)
+            continue
+        resolved = _static_value(part, scope)
+        if not isinstance(resolved, int):
+            return None
+        bounds.append(resolved)
+    return target[slice(*bounds)]
+
+
+def _call_value(node: ast.Call, scope: ModuleScope) -> Any:
+    """Resolve a zero-argument helper call or a string method on a literal."""
+    if node.args or node.keywords:
+        return None
+    if isinstance(node.func, ast.Name):
+        return scope.funcs.get(node.func.id)
+    if isinstance(node.func, ast.Attribute) and node.func.attr in STR_METHODS:
+        target = _static_value(node.func.value, scope)
+        if isinstance(target, str):
+            return getattr(target, node.func.attr)()
+    return None
+
+
+def _import_source(path: Path, node: ast.ImportFrom) -> Path | None:
+    """Map a relative ``from . import x`` to the file it reads from."""
+    if node.level == 0 or node.module is None:
+        return None
+    base = path.parent
+    for _ in range(node.level - 1):
+        base = base.parent
+    candidate = base.joinpath(*node.module.split("."))
+    for option in (candidate.with_suffix(".py"), candidate / "__init__.py"):
+        if option.is_file() and PACKAGE_ROOT in option.parents:
+            return option
+    return None
+
+
+def _apply_imports(path: Path, tree: ast.Module, scope: ModuleScope) -> None:
+    """Pull imported constants and helpers into ``scope``."""
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        source = _import_source(path, node)
+        if source is None:
+            continue
+        imported = _module_scope(source)
+        for alias in node.names:
+            local = alias.asname or alias.name
+            if alias.name in imported.consts:
+                scope.consts[local] = imported.consts[alias.name]
+            if alias.name in imported.funcs:
+                scope.funcs[local] = imported.funcs[alias.name]
+
+
+def _apply_definitions(tree: ast.Module, scope: ModuleScope) -> None:
+    """Record module-level literals and zero-argument literal-returning helpers."""
+    for node in tree.body:
+        target = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            target = node.target
+        if isinstance(target, ast.Name):
+            value = _static_value(node.value, scope)  # type: ignore[arg-type]
+            if value is not None:
+                scope.consts[target.id] = value
+        elif isinstance(node, ast.FunctionDef) and not node.args.args:
+            returns = [n for n in node.body if isinstance(n, ast.Return)]
+            if len(returns) == 1 and returns[0].value is not None:
+                value = _static_value(returns[0].value, scope)
+                if value is not None:
+                    scope.funcs[node.name] = value
+
+
+_SCOPE_CACHE: dict[Path, ModuleScope] = {}
+_RESOLVING: set[Path] = set()
+
+
+def _module_scope(path: Path) -> ModuleScope:
+    """Build the statically resolvable names for one module.
+
+    Each module is parsed once and cached: the package's import graph is wide
+    enough that re-walking it per tool file turns the extraction exponential.
+    A module already on the resolution stack (an import cycle) contributes
+    nothing rather than recursing forever, and that partial answer is not
+    cached.
+    """
+    if path in _SCOPE_CACHE:
+        return _SCOPE_CACHE[path]
+    if path in _RESOLVING:
+        return EMPTY_SCOPE
+
+    scope = ModuleScope({}, {})
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return scope
+
+    _RESOLVING.add(path)
+    try:
+        _apply_imports(path, tree, scope)
+        _apply_definitions(tree, scope)
+    finally:
+        _RESOLVING.discard(path)
+
+    _SCOPE_CACHE[path] = scope
+    return scope
+
 
 def _is_annotated(node: ast.expr) -> bool:
     """Whether ``node`` names ``Annotated``, imported bare or via ``typing``.
@@ -49,7 +242,19 @@ def _is_annotated(node: ast.expr) -> bool:
     return isinstance(node, ast.Attribute) and node.attr == "Annotated"
 
 
-def _annotated_metadata(slice_node: ast.expr) -> dict:
+def _field_keyword(info: dict, kw: ast.keyword, scope: ModuleScope) -> None:
+    """Fold one ``Field(...)`` keyword into the parameter info."""
+    if kw.arg in ("description", "default"):
+        value = _static_value(kw.value, scope)
+        if value is not None or isinstance(kw.value, ast.Constant):
+            info[kw.arg] = value
+    elif kw.arg in FIELD_CONSTRAINTS:
+        value = _static_value(kw.value, scope)
+        if value is not None:
+            info.setdefault("constraints", {})[FIELD_CONSTRAINTS[kw.arg]] = value
+
+
+def _annotated_metadata(slice_node: ast.expr, scope: ModuleScope) -> dict:
     """Read ``type`` plus any ``Field(...)`` metadata out of an Annotated slice."""
     info: dict = {}
     if not isinstance(slice_node, ast.Tuple) or not slice_node.elts:
@@ -62,14 +267,11 @@ def _annotated_metadata(slice_node: ast.expr) -> dict:
         if not isinstance(elt, ast.Call):
             continue
         for kw in elt.keywords:
-            if kw.arg in ("description", "default") and isinstance(
-                kw.value, ast.Constant
-            ):
-                info[kw.arg] = kw.value.value
+            _field_keyword(info, kw, scope)
     return info
 
 
-def _union_field_info(annotation: ast.BinOp) -> dict:
+def _union_field_info(annotation: ast.BinOp, scope: ModuleScope) -> dict:
     """Merge both sides of an ``X | Y`` annotation into one field info.
 
     ``Annotated[int, Field(ge=1)] | None`` keeps the Annotated part nested in a
@@ -77,8 +279,8 @@ def _union_field_info(annotation: ast.BinOp) -> dict:
     (``int | None``) rather than dumped as source into ``type``.
     """
     operands = [
-        _extract_field_info(annotation.left),
-        _extract_field_info(annotation.right),
+        _extract_field_info(annotation.left, scope),
+        _extract_field_info(annotation.right, scope),
     ]
     info: dict = {}
     for operand in operands:
@@ -87,16 +289,18 @@ def _union_field_info(annotation: ast.BinOp) -> dict:
     return info
 
 
-def _extract_field_info(annotation: ast.expr | None) -> dict:
+def _extract_field_info(
+    annotation: ast.expr | None, scope: ModuleScope = EMPTY_SCOPE
+) -> dict:
     """Extract type and description from Annotated[type, Field(...)] patterns."""
     if annotation is None:
         return {}
 
     if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
-        return _union_field_info(annotation)
+        return _union_field_info(annotation, scope)
 
     if isinstance(annotation, ast.Subscript) and _is_annotated(annotation.value):
-        return _annotated_metadata(annotation.slice)
+        return _annotated_metadata(annotation.slice, scope)
 
     return {"type": ast.unparse(annotation)}
 
@@ -162,7 +366,7 @@ def _extract_tool_metadata(dec: ast.Call) -> tuple[set[str], str, dict[str, bool
 
 
 def _extract_tool_params(
-    node: ast.AsyncFunctionDef,
+    node: ast.AsyncFunctionDef, scope: ModuleScope = EMPTY_SCOPE
 ) -> tuple[dict[str, dict], list[str]]:
     """Extract parameter properties and required-field names from a tool function."""
     properties: dict[str, dict] = {}
@@ -172,7 +376,7 @@ def _extract_tool_params(
     for i, arg in enumerate(node.args.args):
         if arg.arg in ("self", "ctx"):
             continue
-        p = _extract_field_info(arg.annotation)
+        p = _extract_field_info(arg.annotation, scope)
         def_idx = i - defaults_offset
         if def_idx >= 0 and def_idx < len(node.args.defaults):
             def_node = node.args.defaults[def_idx]
@@ -187,7 +391,7 @@ def _extract_tool_params(
 
 
 def _extract_tool_from_node(
-    node: ast.AsyncFunctionDef, source_file: str
+    node: ast.AsyncFunctionDef, source_file: str, scope: ModuleScope = EMPTY_SCOPE
 ) -> dict | None:
     """Build the tool-metadata dict for one function node, or None if not a tool."""
     tool_dec, tool_name = _find_tool_decorator(node)
@@ -195,7 +399,7 @@ def _extract_tool_from_node(
         return None
 
     tags, title, annotations = _extract_tool_metadata(tool_dec)
-    properties, required = _extract_tool_params(node)
+    properties, required = _extract_tool_params(node, scope)
 
     input_schema: dict = {}
     if properties:
@@ -222,11 +426,12 @@ def extract_tools() -> list[dict]:
         if not f.exists():
             continue
         tree = ast.parse(f.read_text(encoding="utf-8"))
+        scope = _module_scope(f)
 
         for node in ast.walk(tree):
             if not isinstance(node, ast.AsyncFunctionDef):
                 continue
-            tool = _extract_tool_from_node(node, f.name)
+            tool = _extract_tool_from_node(node, f.name, scope)
             if tool is not None:
                 tools.append(tool)
 

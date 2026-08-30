@@ -26,6 +26,32 @@ def _field_info(annotation_source: str) -> dict:
     return extract_tools._extract_field_info(ast.parse(annotation_source).body[0].value)
 
 
+def _params_documented_in_source() -> set[tuple[str, str]]:
+    """(tool name, parameter) pairs whose annotation carries a Field description."""
+    documented: set[tuple[str, str]] = set()
+    for path in extract_tools.TOOL_FILES:
+        if not path.exists():
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.AsyncFunctionDef):
+                continue
+            _, tool_name = extract_tools._find_tool_decorator(node)
+            if tool_name is None:
+                continue
+            for arg in node.args.args:
+                if arg.annotation is None:
+                    continue
+                if any(
+                    kw.arg == "description"
+                    for sub in ast.walk(arg.annotation)
+                    if isinstance(sub, ast.Call)
+                    for kw in sub.keywords
+                ):
+                    documented.add((tool_name, arg.arg))
+    return documented
+
+
 class TestExtractFieldInfo:
     """Annotated metadata is extracted for every spelling tool files use."""
 
@@ -83,6 +109,110 @@ class TestExtractFieldInfo:
         assert extract_tools._extract_field_info(None) == {}
 
 
+class TestFieldConstraints:
+    """``Field`` bounds survive the cleanup of ``type``."""
+
+    def test_numeric_bounds_become_schema_constraints(self):
+        info = _field_info("Annotated[int, Field(ge=1, le=60)]")
+
+        assert info["constraints"] == {"minimum": 1, "maximum": 60}
+
+    def test_exclusive_and_length_bounds(self):
+        info = _field_info(
+            "Annotated[list[str], Field(gt=0, lt=5, min_length=1, max_length=3)]"
+        )
+
+        assert info["constraints"] == {
+            "exclusiveMinimum": 0,
+            "exclusiveMaximum": 5,
+            "minLength": 1,
+            "maxLength": 3,
+        }
+
+    def test_bounds_survive_a_union(self):
+        info = _field_info("Annotated[int, Field(ge=1)] | None")
+
+        assert info["type"] == "int | None"
+        assert info["constraints"] == {"minimum": 1}
+
+    def test_no_constraints_key_without_bounds(self):
+        assert "constraints" not in _field_info(
+            "Annotated[str, Field(description='x')]"
+        )
+
+
+class TestNonLiteralDescriptions:
+    """Descriptions built from constants and helpers still reach the catalog."""
+
+    def _scope(self, consts=None, funcs=None):
+        return extract_tools.ModuleScope(consts or {}, funcs or {})
+
+    def _resolve(self, source: str, scope) -> dict:
+        return extract_tools._extract_field_info(ast.parse(source).body[0].value, scope)
+
+    def test_module_constant_reference(self):
+        scope = self._scope(consts={"_DESC": "Initial value."})
+        info = self._resolve("Annotated[str, Field(description=_DESC)]", scope)
+
+        assert info["description"] == "Initial value."
+
+    def test_fstring_interpolating_constants(self):
+        scope = self._scope(consts={"MAX_LIMIT": 500})
+        info = self._resolve(
+            "Annotated[int, Field(description=f'Capped at {MAX_LIMIT}.')]", scope
+        )
+
+        assert info["description"] == "Capped at 500."
+
+    def test_sliced_and_method_called_constant(self):
+        scope = self._scope(consts={"DESC": "capture the whole page"})
+        info = self._resolve(
+            "Annotated[bool, Field(description=f'{DESC[:1].upper()}{DESC[1:]}.')]",
+            scope,
+        )
+
+        assert info["description"] == "Capture the whole page."
+
+    def test_concatenation_with_a_zero_arg_helper(self):
+        scope = self._scope(funcs={"get_security_documentation": " SECURITY: none."})
+        info = self._resolve(
+            "Annotated[str, Field(description='Transform. '"
+            " + get_security_documentation())]",
+            scope,
+        )
+
+        assert info["description"] == "Transform.  SECURITY: none."
+
+    def test_unresolvable_description_is_omitted_not_truncated(self):
+        """A partial resolution would silently drop half the documentation."""
+        info = self._resolve(
+            "Annotated[str, Field(description='Transform. ' + unknown_helper())]",
+            self._scope(),
+        )
+
+        assert "description" not in info
+
+
+class TestModuleScope:
+    """Scope building reads constants across the package's own imports."""
+
+    @pytest.fixture(scope="class")
+    def logs_scope(self):
+        return extract_tools._module_scope(
+            REPO_ROOT / "src" / "ha_mcp" / "tools" / "tools_logs.py"
+        )
+
+    def test_constants_are_pulled_through_relative_imports(self, logs_scope):
+        assert isinstance(logs_scope.consts.get("MAX_LIMIT"), int)
+
+    def test_zero_arg_helpers_resolve_across_modules(self):
+        scope = extract_tools._module_scope(
+            REPO_ROOT / "src" / "ha_mcp" / "tools" / "tools_config_scenes.py"
+        )
+
+        assert "PYTHON TRANSFORM SECURITY" in scope.funcs["get_security_documentation"]
+
+
 class TestExtractedToolsNeverLeakAnnotationSource:
     """The generated site data must carry real types, not annotation source."""
 
@@ -116,4 +246,28 @@ class TestExtractedToolsNeverLeakAnnotationSource:
         assert described, (
             "No extracted parameter carries a description, but tool signatures "
             "use Field(description=...) throughout — extraction is broken."
+        )
+
+    def test_every_documented_parameter_resolves_its_description(self, tools):
+        """A parameter whose source documents it must not lose that text.
+
+        Descriptions built from constants, f-strings or helper calls resolve
+        statically; anything this misses reaches the site as a blank cell.
+        """
+        extracted = {
+            (tool["name"], param): schema
+            for tool in tools
+            for param, schema in tool["inputSchema"].get("properties", {}).items()
+        }
+        undocumented = [
+            f"{name}.{param}"
+            for name, param in _params_documented_in_source()
+            if (name, param) in extracted
+            and not extracted[(name, param)].get("description")
+        ]
+
+        assert not undocumented, (
+            "Parameters whose signature carries Field(description=...) but whose "
+            "text did not resolve:\n"
+            + "\n".join(f"  - {entry}" for entry in undocumented)
         )
