@@ -657,21 +657,61 @@ async def test_legacy_reports_entity_not_found_without_dispatch() -> None:
 
 
 @pytest.mark.asyncio
-async def test_legacy_reports_entity_unavailable_without_dispatch() -> None:
-    """No component: a fetched "unavailable" state raises ENTITY_UNAVAILABLE
-    immediately, distinct from ENTITY_NOT_FOUND, before any dispatch or wait."""
+async def test_legacy_dispatches_unavailable_target_and_reports_after_genuine_lapse() -> (
+    None
+):
+    """No component: a fetched "unavailable" state does NOT fast-fail before
+    dispatch, unlike a 404 — dispatching is exactly what might reconnect the
+    device, so the service call still fires. Only once ``wait_for_state_change``
+    genuinely times out AND a live re-check confirms it is STILL unavailable
+    does ENTITY_UNAVAILABLE get reported (CodeRabbit-flagged consistency fix,
+    mirroring the component path's post-dispatch-state check)."""
     ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_NONE)
     client = RoutingClient()
     client.get_state_response = {"entity_id": "light.a", "state": "unavailable"}
     call_service = _build_call_service(client)
+    tools_service.wait_for_state_change.return_value = None  # genuine timeout
 
     with patch_ws(ws, tools_service), pytest.raises(ToolError) as exc:
         await call_service(domain="light", service="turn_on", entity_id="light.a")
 
     assert "ENTITY_UNAVAILABLE" in str(exc.value)
     assert "light.a" in str(exc.value)
-    assert client.call_service_calls == []
-    tools_service.wait_for_state_change.assert_not_called()
+    # Dispatch DID happen this time — the target may have reconnected because
+    # of it, so failing before the POST would deny it that chance.
+    assert len(client.call_service_calls) == 1
+    tools_service.wait_for_state_change.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_legacy_unavailable_target_reconnected_not_reported_unavailable() -> None:
+    """A target "unavailable" at dispatch time but found in some OTHER
+    (non-unavailable) state by the live re-check after a genuine
+    ``wait_for_state_change`` timeout — it reconnected, just not to the exact
+    expected hint — is NOT reported ENTITY_UNAVAILABLE; falls through to the
+    existing generic partial/timeout warning."""
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_NONE)
+    client = RoutingClient()
+    states = iter([{"state": "unavailable"}, {"state": "off"}])
+
+    async def _get_state(entity_id: str) -> dict[str, Any]:
+        client.get_state_calls += 1
+        return next(states)
+
+    client.get_entity_state = _get_state  # type: ignore[method-assign]
+    call_service = _build_call_service(client)
+    tools_service.wait_for_state_change.return_value = None  # genuine timeout
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light", service="turn_on", entity_id="light.a"
+        )
+
+    assert resp["success"] is True
+    assert any(
+        "state change could not be verified" in w for w in resp.get("warnings", [])
+    )
+    assert len(client.call_service_calls) == 1
 
 
 @pytest.mark.asyncio

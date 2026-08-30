@@ -939,13 +939,22 @@ class ServiceTools:
         instead of trusting the caller keeps ``get_entity_state`` (which
         genuinely requires a ``str``) honestly typed.
 
-        A clean 404 (the entity does not exist) or a fetched ``"unavailable"``
-        state settle the question with certainty before any service dispatch
-        or 10s state-change wait, so raise immediately instead of silently
-        degrading into a wait that can never confirm. Any other fetch failure
-        is NOT conclusive -- it returns ``None`` and lets the call proceed as
-        before, since the entity may well exist and this could be a
-        transient blip.
+        A clean 404 (the entity does not exist) settles the question with
+        certainty before any service dispatch or 10s state-change wait, so
+        raise immediately instead of silently degrading into a wait that can
+        never confirm. Any other fetch failure is NOT conclusive -- it
+        returns ``None`` and lets the call proceed as before, since the
+        entity may well exist and this could be a transient blip.
+
+        Deliberately NOT fast-failed here: a fetched ``"unavailable"``
+        state. Unlike a 404, it does not prove the target can never respond
+        -- dispatching the service is exactly what can reconnect it (e.g. a
+        device that wakes on the very command being sent), and failing here
+        would mean that command never reaches Home Assistant at all. The
+        entity's initial state is still returned so ``_verify_state_change``
+        can classify a genuine confirmation lapse as ENTITY_UNAVAILABLE only
+        if a live re-check shows it is STILL unavailable afterward -- mirrors
+        the component path's post-dispatch-state check.
 
         A comma-separated ``entity_id`` ("light.a,light.b") is a valid
         multi-target for the service-call payload, but ``/api/states/<id>``
@@ -972,16 +981,7 @@ class ServiceTools:
             )
             return None
 
-        state = state_data.get("state") if state_data else None
-        if is_single_target and state == "unavailable":
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.ENTITY_UNAVAILABLE,
-                    f"Entity '{entity_id}' exists but is currently unavailable",
-                    context={"entity_id": entity_id},
-                )
-            )
-        return state
+        return state_data.get("state") if state_data else None
 
     async def _verify_state_change(
         self,
@@ -990,7 +990,17 @@ class ServiceTools:
         initial_state: str | None,
         response: dict[str, Any],
     ) -> None:
-        """Wait for and verify entity state change after a service call, updating response in place."""
+        """Wait for and verify entity state change after a service call, updating response in place.
+
+        An entity that was ``"unavailable"`` at dispatch time was NOT failed
+        fast (see ``_validate_entity_before_wait``) -- it may have reconnected
+        once the command actually reached it. Only once the wait genuinely
+        lapses does a fresh live re-check decide whether it's still
+        unavailable (report the precise ``ENTITY_UNAVAILABLE``) or reconnected
+        to some state other than the hint (leave the existing generic
+        partial/timeout wording) -- mirrors the component path's
+        post-dispatch-state check.
+        """
         try:
             expected = _SERVICE_TO_STATE.get(service)
             new_state = await wait_for_state_change(
@@ -1002,14 +1012,40 @@ class ServiceTools:
             )
             if new_state:
                 response["verified_state"] = new_state.get("state")
-            else:
-                response.setdefault("warnings", []).append(
-                    "Service executed but state change could not be verified within timeout."
+                return
+            if initial_state == "unavailable" and await self._still_unavailable(
+                entity_id
+            ):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.ENTITY_UNAVAILABLE,
+                        f"Entity '{entity_id}' exists but is currently unavailable",
+                        context={"entity_id": entity_id},
+                    )
                 )
+            response.setdefault("warnings", []).append(
+                "Service executed but state change could not be verified within timeout."
+            )
+        except ToolError:
+            raise
         except Exception as e:
             response.setdefault("warnings", []).append(
                 f"Service executed but state verification failed: {e}"
             )
+
+    async def _still_unavailable(self, entity_id: str) -> bool:
+        """Best-effort live re-check: True unless the entity is now known-available.
+
+        Any fetch failure (including a 404 -- the entity vanished) is NOT
+        proof of recovery, so it counts as still unavailable; only a fetched
+        state that is NOT ``"unavailable"`` counts as recovered.
+        """
+        try:
+            current = await self._client.get_entity_state(entity_id)
+        except Exception:
+            return True
+        current_state = current.get("state") if current else None
+        return current_state is None or current_state == "unavailable"
 
     @staticmethod
     def _split_return_response_envelope(
