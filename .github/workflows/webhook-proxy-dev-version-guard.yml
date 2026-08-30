@@ -8,6 +8,13 @@ on:
 permissions:
   contents: read
 
+# Cancel the previous commit's guard run when the PR is pushed again — the
+# guard's verdict only means anything for the current head. See pr.yml for the
+# full rationale.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   require-version-bump:
     runs-on: ubuntu-latest

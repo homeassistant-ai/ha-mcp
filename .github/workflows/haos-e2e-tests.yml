@@ -56,6 +56,18 @@ on:
 permissions:
   contents: read
 
+# Cancel the previous commit's lanes when a PR is pushed again — six HAOS
+# runners per push is the most expensive fan-out in the repo, and nothing
+# merges on a superseded commit's result. Non-PR events (dispatch) fall back
+# to the unique run id, so they are never cancelled. Note for the image
+# cache: `haos-e2e` is the sole writer of the shared ``haos-image-*`` key,
+# and a cancelled run saves nothing, so a rapid push train can leave the
+# cache cold one extra run. Rebuilding one image still costs far less than
+# six superseded lanes running to completion.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
