@@ -29,11 +29,11 @@
         "title": "HA-MCP Fil- & YAML-verktyg",
         "description": "Konfigurera de privilegierade fil- och YAML-redigeringstjänsterna som används av ha-mcp:s valfria fil-/YAML-verktyg. Dessa inställningar visas också i ha-mcp-serverns eget inställningsgränssnitt och tillämpas direkt, utan omstart. En icke-överskridbar spärr blockerar fortfarande känsliga sökvägar (t.ex. .storage) och nycklar för förtroendegränser (homeassistant, http, frontend, lovelace).",
         "data": {
-          "allowed_dirs": "Extra filkataloger",
+          "allowed_dirs": "Extra filvägar",
           "extra_yaml_keys": "Extra YAML-skrivnycklar"
         },
         "data_description": {
-          "allowed_dirs": "Kataloger i förhållande till konfigurationskatalogen, var och en beviljas läs- och skrivrättigheter (t.ex. pyscript). Genomgång och poster utanför konfigurationen ignoreras.",
+          "allowed_dirs": "Sökvägar relativt konfigurationskatalogen, inklusive exakta filnamn som sensor.yaml, eller sökvägar under /share, /media, /ssl och /backup. Varje post ges läs- och skrivbehörighet för den sökvägen och allt under den; ange varje sökväg som ett separat listobjekt. Sökordsbläddring (traversal) och andra otillåtna sökvägar tas bort.",
           "extra_yaml_keys": "Toppnivånycklar som ha_config_set_yaml får skriva utöver de inbyggda, för YAML-först-integrationer på denna installation (t.ex. alert2). Nycklar för förtroendegränser ignoreras."
         }
       },

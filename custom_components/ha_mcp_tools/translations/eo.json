@@ -29,11 +29,11 @@
         "title": "HA-MCP Dosieraj & YAML Iloj",
         "description": "Agordu la privilegiajn dosierajn kaj YAML-redaktajn servojn uzatajn de la laŭvolaj dosieraj/YAML-iloj de ha-mcp. Ĉi tiuj agordoj ankaŭ aperas en la propra agorda UI de la ha-mcp servilo kaj aplikiĝas tuj, sen rekomenco. Ne-superregebla malpermesa limo ankoraŭ blokas sentemajn vojojn (ekz. .storage) kaj fid-limajn ŝlosilojn (homeassistant, http, frontend, lovelace).",
         "data": {
-          "allowed_dirs": "Ekstraj dosierujoj",
+          "allowed_dirs": "Kromaj dosiervojoj",
           "extra_yaml_keys": "Ekstraj YAML-skribaj ŝlosiloj"
         },
         "data_description": {
-          "allowed_dirs": "Dosierujoj rilataj al la agorda dosierujo, ĉiu kun legado kaj skribado permesita (ekz. pyscript). Trairo kaj ekster-agordaj eniroj estas forĵetitaj.",
+          "allowed_dirs": "Vojoj relative al la agorda dosierujo, inkluzive de ekzakta dosiernomo kiel sensor.yaml, aŭ vojoj sub /share, /media, /ssl, kaj /backup. Ĉiu eniro ricevas leg- kaj skrib-permeson por tiu vojo kaj ĉio sub ĝi; enigu ĉiun vojon kiel apartan listan eron. Trairado kaj aliaj nepermesitaj vojoj estas forigitaj.",
           "extra_yaml_keys": "Ĉefnivelaj ŝlosiloj, kiujn ha_config_set_yaml povas skribi krom la enkonstruitaj, por YAML-unuaj integriĝoj en ĉi tiu instalaĵo (ekz. alert2). Fid-limaj ŝlosiloj estas forĵetitaj."
         }
       },

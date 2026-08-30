@@ -29,11 +29,11 @@
         "title": "Outils Fichier & YAML HA-MCP",
         "description": "Configurez les services privilégiés d'édition de fichiers et de YAML utilisés par les outils fichier/YAML optionnels de ha-mcp. Ces paramètres apparaissent également dans l'interface de configuration du serveur ha-mcp et s'appliquent en direct, sans redémarrage. Un plancher de refus non contournable bloque toujours les chemins sensibles (ex. .storage) et les clés de limite de confiance (homeassistant, http, frontend, lovelace).",
         "data": {
-          "allowed_dirs": "Répertoires de fichiers supplémentaires",
+          "allowed_dirs": "Chemins de fichiers supplémentaires",
           "extra_yaml_keys": "Clés d'écriture YAML supplémentaires"
         },
         "data_description": {
-          "allowed_dirs": "Répertoires relatifs au répertoire de configuration, chacun avec accès en lecture et écriture (ex. pyscript). Les traversées et les entrées hors du répertoire de configuration sont ignorées.",
+          "allowed_dirs": "Chemins relatifs au répertoire de configuration, incluant les noms de fichiers exacts tels que sensor.yaml, ou les chemins sous /share, /media, /ssl et /backup. Chaque entrée bénéficie d'un accès en lecture et en écriture pour ce chemin et tout ce qu'il contient ; saisissez chaque chemin comme un élément de liste séparé. Les parcours de répertoires (traversal) et autres chemins non autorisés sont ignorés.",
           "extra_yaml_keys": "Clés de premier niveau que ha_config_set_yaml peut écrire en plus de celles intégrées, pour les intégrations YAML-first de cette installation (ex. alert2). Les clés de limite de confiance sont ignorées."
         }
       },

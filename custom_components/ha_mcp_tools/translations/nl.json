@@ -29,11 +29,11 @@
         "title": "HA-MCP Bestands- & YAML-hulpmiddelen",
         "description": "Configureer de geprivilegieerde bestands- en YAML-bewerkingsservices die worden gebruikt door de opt-in bestands-/YAML-hulpmiddelen van ha-mcp. Deze instellingen verschijnen ook in de eigen instellingen-UI van de ha-mcp server en worden direct toegepast, zonder herstart. Een niet-overbrugbare blokkade weigert nog steeds gevoelige paden (bijv. .storage) en trust-boundary sleutels (homeassistant, http, frontend, lovelace).",
         "data": {
-          "allowed_dirs": "Extra bestandsmappen",
+          "allowed_dirs": "Extra bestandspaden",
           "extra_yaml_keys": "Extra YAML-schrijfsleutels"
         },
         "data_description": {
-          "allowed_dirs": "Mappen relatief aan de configuratiemap, elk met lees- en schrijfrechten (bijv. pyscript). Traversale en buiten-configuratie ingangen worden genegeerd.",
+          "allowed_dirs": "Paden relatief ten opzichte van deconfiguratiemap, inclusief exacte bestandsnamen zoals sensor.yaml, of paden onder /share, /media, /ssl en /backup. Elk opgegeven pad en alles daaronder krijgt lees- en schrijfrechten; voer elk pad in als een apart lijstitem. Padtraversatie en andere niet-toegestane paden worden genegeerd.",
           "extra_yaml_keys": "Top-level sleutels die ha_config_set_yaml mag schrijven naast de ingebouwde, voor YAML-first integraties op deze installatie (bijv. alert2). Trust-boundary sleutels worden genegeerd."
         }
       },

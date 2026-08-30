@@ -29,11 +29,11 @@
         "title": "Strumenti file e YAML di HA-MCP",
         "description": "Configura i servizi privilegiati di modifica di file e YAML usati dagli strumenti file/YAML opzionali di ha-mcp. Queste impostazioni compaiono anche nell'interfaccia delle impostazioni del server ha-mcp e si applicano subito, senza riavvio. Una soglia di divieto non aggirabile continua a bloccare i percorsi sensibili (per esempio .storage) e le chiavi del confine di fiducia (homeassistant, http, frontend, lovelace).",
         "data": {
-          "allowed_dirs": "Directory di file aggiuntive",
+          "allowed_dirs": "Percorsi file extra",
           "extra_yaml_keys": "Chiavi YAML scrivibili aggiuntive"
         },
         "data_description": {
-          "allowed_dirs": "Directory relative alla directory di configurazione, ciascuna con permesso di lettura e scrittura (per esempio pyscript). I percorsi che risalgono l'albero e le voci fuori dalla configurazione vengono scartati.",
+          "allowed_dirs": "Percorsi relativi alla directory di configurazione, inclusi nomi di file esatti come sensor.yaml, o percorsi sotto /share, /media, /ssl e /backup. A ciascuna voce viene concesso l'accesso in lettura e scrittura per quel percorso e per tutto ciò che si trova al di sotto; inserisci ogni percorso come elemento di elenco separato. I percorsi di attraversamento e altri non consentiti vengono scartati.",
           "extra_yaml_keys": "Chiavi di primo livello che ha_config_set_yaml può scrivere oltre a quelle integrate, per le integrazioni basate su YAML di questa installazione (per esempio alert2). Le chiavi del confine di fiducia vengono scartate."
         }
       },
