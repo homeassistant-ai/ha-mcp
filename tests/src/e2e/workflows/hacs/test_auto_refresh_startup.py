@@ -51,11 +51,11 @@ import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 
+from ha_mcp.client.rest_client import HomeAssistantCommandError
 from ha_mcp.client.websocket_client import (
     DEFAULT_COMMAND_WAIT_TIMEOUT,
     HomeAssistantWebSocketClient,
 )
-from ha_mcp.client.rest_client import HomeAssistantCommandError
 from ha_mcp.hacs_auto_refresh import MARKER_FILENAME_PREFIX, RETRY_DELAYS
 from ha_mcp.tools.hacs_registration import HACS_REFRESH_TIMEOUT
 
