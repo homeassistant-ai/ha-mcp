@@ -21,6 +21,13 @@ on:
 permissions:
   contents: read
 
+# Cancel the previous commit's build when a PR is pushed again; non-PR events
+# fall back to the unique run id, so they are never cancelled. See pr.yml for
+# the full rationale.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   build:
     permissions:

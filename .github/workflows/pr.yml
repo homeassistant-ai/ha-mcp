@@ -7,6 +7,18 @@ on:
     branches: [ master ]
   workflow_dispatch:
 
+# A new push to a PR makes the previous commit's lanes dead weight: nothing
+# merges on their result, so cancel them instead of paying for a full second
+# fan-out. Grouping on the PR number (rather than github.head_ref) keeps two
+# fork PRs that happen to share a branch name in separate groups. Non-PR
+# events (manual dispatch) fall back to the run id, which is unique per run,
+# so they land in a group of one and are never cancelled or queued behind
+# anything. Cancelled runs report against the superseded commit, so they
+# cannot leave a required check pending on the new head.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
