@@ -1,12 +1,6 @@
-"""Intentional Fast Checks smoke-test violations for #2311. Never merge."""
-
-import os
-import sys
+"""Fast Checks smoke-test file for #2311 (PR is never merged)."""
 
 
 def smoke() -> int:
-    value: int = "not an int"
-    return value
-
-
-BAD_FORMAT = {  'spacing' : 1,   'quotes'  :2 }
+    """Return a constant; exists so the diff is non-empty and clean."""
+    return 1
