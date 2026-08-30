@@ -37,33 +37,68 @@ TOOL_FILES = sorted(list(TOOLS_DIR.glob("tools_*.py")) + [TOOLS_DIR / "backup.py
 ANNOTATION_KEYS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
 
 
+def _is_annotated(node: ast.expr) -> bool:
+    """Whether ``node`` names ``Annotated``, imported bare or via ``typing``.
+
+    Tool files import it bare (``ast.Name``); the dotted ``typing.Annotated``
+    spelling (``ast.Attribute``) is accepted too so the extractor does not
+    depend on which import a file happens to use.
+    """
+    if isinstance(node, ast.Name):
+        return node.id == "Annotated"
+    return isinstance(node, ast.Attribute) and node.attr == "Annotated"
+
+
+def _annotated_metadata(slice_node: ast.expr) -> dict:
+    """Read ``type`` plus any ``Field(...)`` metadata out of an Annotated slice."""
+    info: dict = {}
+    if not isinstance(slice_node, ast.Tuple) or not slice_node.elts:
+        return info
+
+    info["type"] = ast.unparse(slice_node.elts[0])
+    # Everything after the type is metadata; bare validators (e.g.
+    # JSON_STRING_COERCION) are names rather than calls and carry nothing.
+    for elt in slice_node.elts[1:]:
+        if not isinstance(elt, ast.Call):
+            continue
+        for kw in elt.keywords:
+            if kw.arg in ("description", "default") and isinstance(
+                kw.value, ast.Constant
+            ):
+                info[kw.arg] = kw.value.value
+    return info
+
+
+def _union_field_info(annotation: ast.BinOp) -> dict:
+    """Merge both sides of an ``X | Y`` annotation into one field info.
+
+    ``Annotated[int, Field(ge=1)] | None`` keeps the Annotated part nested in a
+    union, so each side is read on its own and the types are rejoined
+    (``int | None``) rather than dumped as source into ``type``.
+    """
+    operands = [
+        _extract_field_info(annotation.left),
+        _extract_field_info(annotation.right),
+    ]
+    info: dict = {}
+    for operand in operands:
+        info.update({k: v for k, v in operand.items() if k != "type"})
+    info["type"] = " | ".join(o["type"] for o in operands if o.get("type"))
+    return info
+
+
 def _extract_field_info(annotation: ast.expr | None) -> dict:
     """Extract type and description from Annotated[type, Field(...)] patterns."""
     if annotation is None:
         return {}
-    info: dict = {}
 
-    if (
-        isinstance(annotation, ast.Subscript)
-        and isinstance(annotation.value, ast.Attribute)
-        and annotation.value.attr == "Annotated"
-    ):
-        slice_node = annotation.slice
-        if isinstance(slice_node, ast.Tuple) and slice_node.elts:
-            info["type"] = ast.unparse(slice_node.elts[0])
-            for elt in slice_node.elts[1:]:
-                if isinstance(elt, ast.Call):
-                    for kw in elt.keywords:
-                        if kw.arg == "description" and isinstance(
-                            kw.value, ast.Constant
-                        ):
-                            info["description"] = kw.value.value
-                        elif kw.arg == "default" and isinstance(kw.value, ast.Constant):
-                            info["default"] = kw.value.value
-    else:
-        info["type"] = ast.unparse(annotation)
+    if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+        return _union_field_info(annotation)
 
-    return info
+    if isinstance(annotation, ast.Subscript) and _is_annotated(annotation.value):
+        return _annotated_metadata(annotation.slice)
+
+    return {"type": ast.unparse(annotation)}
 
 
 def _tool_name_from_tool_decorator(
