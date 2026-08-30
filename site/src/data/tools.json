@@ -767,8 +767,8 @@
           "type": "int",
           "description": "Viewport width in px.",
           "constraints": {
-            "minimum": 64,
-            "maximum": 4096
+            "ge": 64,
+            "le": 4096
           }
         },
         "height": {
@@ -779,8 +779,8 @@
           "type": "list[ViewportPreset] | None",
           "description": "Render one or more named responsive viewports in this order: mobile (390x844), tablet (768x1024), desktop (1280x800). Overrides width/height.",
           "constraints": {
-            "minLength": 1,
-            "maxLength": 3
+            "min_length": 1,
+            "max_length": 3
           },
           "default": null
         },
@@ -793,8 +793,8 @@
           "type": "float",
           "description": "Page zoom factor (1.0 = 100%).",
           "constraints": {
-            "minimum": 0.1,
-            "maximum": 5.0
+            "ge": 0.1,
+            "le": 5.0
           },
           "default": 1.0
         },
@@ -802,8 +802,8 @@
           "type": "int",
           "description": "Extra render-settle time (ms) after the dashboard reports loaded. Raise it if a chart card (ApexCharts, mini-graph, history-graph) comes back blank.",
           "constraints": {
-            "minimum": 0,
-            "maximum": 30000
+            "ge": 0,
+            "le": 30000
           }
         },
         "full_page": {
@@ -835,8 +835,8 @@
           "type": "float",
           "description": "HTTP render timeout in seconds.",
           "constraints": {
-            "minimum": 1,
-            "maximum": 300
+            "ge": 1,
+            "le": 300
           }
         }
       }
@@ -987,8 +987,8 @@
           "type": "int",
           "default": 100,
           "constraints": {
-            "minimum": 1,
-            "maximum": 500
+            "ge": 1,
+            "le": 500
           },
           "description": "Max resources to return per page (default: 100)"
         },
@@ -996,7 +996,7 @@
           "type": "int",
           "default": 0,
           "constraints": {
-            "minimum": 0
+            "ge": 0
           },
           "description": "Number of resources to skip for pagination (default: 0)"
         }
@@ -1269,8 +1269,8 @@
           "type": "int",
           "default": 50,
           "constraints": {
-            "minimum": 1,
-            "maximum": 200
+            "ge": 1,
+            "le": 200
           },
           "description": "Max devices to return per page in list mode (default: 50)"
         },
@@ -1278,7 +1278,7 @@
           "type": "int",
           "default": 0,
           "constraints": {
-            "minimum": 0
+            "ge": 0
           },
           "description": "Number of devices to skip for pagination (default: 0)"
         },
@@ -1696,8 +1696,8 @@
           "type": "int | None",
           "default": null,
           "constraints": {
-            "minimum": 1,
-            "maximum": 10000
+            "ge": 1,
+            "le": 10000
           },
           "description": "For log files, return only the last N lines. Recommended for home-assistant.log to avoid large responses. Default: None (return full file, or last 1000 lines for logs)"
         },
@@ -1771,8 +1771,8 @@
           "type": "int",
           "default": 100,
           "constraints": {
-            "minimum": 1,
-            "maximum": 500
+            "ge": 1,
+            "le": 500
           },
           "description": "Max groups to return per page (default: 100)"
         },
@@ -1780,7 +1780,7 @@
           "type": "int",
           "default": 0,
           "constraints": {
-            "minimum": 0
+            "ge": 0
           },
           "description": "Number of groups to skip for pagination (default: 0)"
         }
@@ -1913,8 +1913,8 @@
         "max_results": {
           "type": "int",
           "constraints": {
-            "minimum": 1,
-            "maximum": 100
+            "ge": 1,
+            "le": 100
           },
           "description": "Maximum number of results (action='search', default: 10, max: 100)",
           "default": 10
@@ -1922,7 +1922,7 @@
         "offset": {
           "type": "int",
           "constraints": {
-            "minimum": 0
+            "ge": 0
           },
           "description": "Results to skip for pagination (action='search', default: 0)",
           "default": 0
@@ -2005,8 +2005,8 @@
           "type": "int",
           "default": 100,
           "constraints": {
-            "minimum": 1,
-            "maximum": 500
+            "ge": 1,
+            "le": 500
           },
           "description": "Max helpers to return per page (default: 100)"
         },
@@ -2014,7 +2014,7 @@
           "type": "int",
           "default": 0,
           "constraints": {
-            "minimum": 0
+            "ge": 0
           },
           "description": "Number of helpers to skip for pagination (default: 0)"
         }
@@ -2331,8 +2331,8 @@
           "description": "Maximum number of traces to return when listing (default: 10, max: 50).",
           "default": 10,
           "constraints": {
-            "minimum": 1,
-            "maximum": 50
+            "ge": 1,
+            "le": 50
           }
         },
         "deduplicate": {
@@ -2355,7 +2355,7 @@
           "description": "Number of traces to skip from the start of the requested order. Use with `limit` to page through stored traces when `total_available > limit`.",
           "default": 0,
           "constraints": {
-            "minimum": 0
+            "ge": 0
           }
         },
         "order": {
@@ -2418,8 +2418,8 @@
           "description": "Max entries per entity. Default: 100, Max: 1000. For source=\"history\": state changes. For source=\"statistics\": aggregated rows. With multiple entity_ids, offset must be 0 and total rows returned can reach limit × len(entity_ids).",
           "default": null,
           "constraints": {
-            "minimum": 1,
-            "maximum": 1000
+            "ge": 1,
+            "le": 1000
           }
         },
         "offset": {
@@ -2427,7 +2427,7 @@
           "description": "Number of entries to skip per entity for pagination. Default: 0. Offset > 0 requires a single entity_id. Use with limit and has_more/next_offset in the response.",
           "default": null,
           "constraints": {
-            "minimum": 0
+            "ge": 0
           }
         },
         "period": {
@@ -2491,7 +2491,7 @@
         "hours_back": {
           "type": "int",
           "constraints": {
-            "minimum": 1
+            "ge": 1
           },
           "default": 1
         },
@@ -2506,7 +2506,7 @@
         "offset": {
           "type": "int",
           "constraints": {
-            "minimum": 0
+            "ge": 0
           },
           "description": "Page deeper into source='logbook' and source='error_log' (ignored for other sources). On error_log it counts raw log lines back from the newest entry; pass the response's 'next_offset' to continue while 'has_more' is true.",
           "default": 0
@@ -2527,7 +2527,7 @@
         "top_n": {
           "type": "int | None",
           "constraints": {
-            "minimum": 1
+            "ge": 1
           },
           "description": "Max distinct issues to return when structured=True (default 20, capped at 500). Bounds the response regardless of log size.",
           "default": null
@@ -2613,8 +2613,8 @@
           "type": "int",
           "default": 50,
           "constraints": {
-            "minimum": 1,
-            "maximum": 200
+            "ge": 1,
+            "le": 200
           },
           "description": "Max entries to return per page in list mode (default: 50)"
         },
@@ -2622,7 +2622,7 @@
           "type": "int",
           "default": 0,
           "constraints": {
-            "minimum": 0
+            "ge": 0
           },
           "description": "Number of entries to skip for pagination (default: 0)"
         },
@@ -2651,7 +2651,7 @@
           "description": "Optional byte cap on the serialized diagnostics payload (after diagnostics_fields and diagnostics_data_path have been applied). On hit, drops data and emits truncated=true, bytes_total, byte_cap, plus available_fields (when the capped value is a dict). Recommended starting point: 20000 bytes. Only applies when include_diagnostics=True.",
           "default": null,
           "constraints": {
-            "minimum": 1
+            "ge": 1
           }
         },
         "diagnostics_data_path": {
@@ -2664,7 +2664,7 @@
           "description": "Pagination start index (default 0) for list-valued diagnostics_data_path results. Ignored when diagnostics_data_path is unset, diagnostics_data_limit is unset, or the resolved value is not a list. Only applies when include_diagnostics=True.",
           "default": 0,
           "constraints": {
-            "minimum": 0
+            "ge": 0
           }
         },
         "diagnostics_data_limit": {
@@ -2672,7 +2672,7 @@
           "description": "Pagination window size for list-valued diagnostics_data_path results. When set with a list-resolved path, swaps data for a pagination envelope {path, items, offset, limit, total, has_more}. Default None returns the full resolved value. Workflow: probe with a list-valued diagnostics_data_path and diagnostics_data_limit=10 to walk a large list one page at a time (the exact path varies by integration version). Only applies when include_diagnostics=True.",
           "default": null,
           "constraints": {
-            "minimum": 1
+            "ge": 1
           }
         }
       }
@@ -2715,7 +2715,7 @@
         },
         "diagnostics_truncate_at_bytes": {
           "constraints": {
-            "minimum": 1
+            "ge": 1
           },
           "type": "int | None",
           "default": null
@@ -2726,14 +2726,14 @@
         },
         "diagnostics_data_offset": {
           "constraints": {
-            "minimum": 0
+            "ge": 0
           },
           "type": "int | None",
           "default": 0
         },
         "diagnostics_data_limit": {
           "constraints": {
-            "minimum": 1
+            "ge": 1
           },
           "type": "int | None",
           "default": null
@@ -3313,7 +3313,7 @@
           "type": "int | None",
           "default": null,
           "constraints": {
-            "minimum": 1
+            "ge": 1
           },
           "description": "Max total entities across all domains (default: unlimited for minimal, 200 for standard/full). Counts and states always complete. Use with offset for pagination."
         },
@@ -3321,7 +3321,7 @@
           "type": "int",
           "default": 0,
           "constraints": {
-            "minimum": 0
+            "ge": 0
           },
           "description": "Number of entities to skip for pagination (default: 0)"
         },
@@ -3432,7 +3432,7 @@
           "type": "int",
           "default": 10,
           "constraints": {
-            "minimum": 1
+            "ge": 1
           },
           "description": "Maximum results per surface (entities, configs). Default: 10."
         },
@@ -3440,7 +3440,7 @@
           "type": "int",
           "default": 0,
           "constraints": {
-            "minimum": 0
+            "ge": 0
           },
           "description": "Number of results to skip for pagination."
         },
@@ -3488,8 +3488,8 @@
           "type": "float | None",
           "default": null,
           "constraints": {
-            "exclusiveMinimum": 0,
-            "maximum": 300
+            "gt": 0,
+            "le": 300
           },
           "description": "Per-call override for the per-id config-fetch wall-clock budget (seconds). Replaces the per-type HAMCP_*_CONFIG_TIME_BUDGET defaults for the automation, script, AND scene branches. Use when a `partial: True` response names time-budget skipping. Stateless per-call: one caller raising the budget doesn't affect others. None = use the per-type env defaults."
         }
@@ -3537,8 +3537,8 @@
         "timeout_seconds": {
           "type": "float | None",
           "constraints": {
-            "minimum": 0,
-            "maximum": 60
+            "ge": 0,
+            "le": 60
           },
           "default": null
         },
@@ -3663,7 +3663,7 @@
         "timeout_seconds": {
           "type": "float",
           "constraints": {
-            "minimum": 0
+            "ge": 0
           },
           "default": 10
         }
@@ -3699,8 +3699,8 @@
           "type": "int",
           "default": 50,
           "constraints": {
-            "minimum": 1,
-            "maximum": 200
+            "ge": 1,
+            "le": 200
           },
           "description": "Max services to return per page (default: 50)"
         },
@@ -3708,7 +3708,7 @@
           "type": "int",
           "default": 0,
           "constraints": {
-            "minimum": 0
+            "ge": 0
           },
           "description": "Number of services to skip for pagination (default: 0)"
         },
@@ -3886,7 +3886,7 @@
           "type": "int | None",
           "default": null,
           "constraints": {
-            "minimum": 0
+            "ge": 0
           },
           "description": "(edits.delete) Bulk-delete auto-backups older than this many days."
         },
@@ -3894,8 +3894,8 @@
           "type": "int",
           "default": 200,
           "constraints": {
-            "minimum": 1,
-            "maximum": 10000
+            "ge": 1,
+            "le": 10000
           },
           "description": "(edits.list / snapshot.list) Maximum number of entries to return."
         }
@@ -4293,8 +4293,8 @@
           "type": "int",
           "default": 10,
           "constraints": {
-            "minimum": 1,
-            "maximum": 16
+            "ge": 1,
+            "le": 16
           },
           "description": "Number of tool calls made since the issue started. This determines how many log entries to include. Count how many ha_* tools were called from when the issue began. Default: 10. Max: 16 (limited by 200-entry log buffer: 16*4*3=192)"
         },

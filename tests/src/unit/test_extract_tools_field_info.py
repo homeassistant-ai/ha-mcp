@@ -90,12 +90,14 @@ class TestExtractFieldInfo:
         assert info["type"] == "int | None"
 
     def test_union_keeps_the_description_from_its_annotated_side(self):
+        """The description lives on the Annotated operand of the union."""
         info = _field_info("Annotated[int, Field(description='Page size.')] | None")
 
         assert info["type"] == "int | None"
         assert info["description"] == "Page size."
 
     def test_field_default_is_extracted(self):
+        """``Field(default=...)`` is read alongside the signature default."""
         info = _field_info(
             "Annotated[str | None, Field(default=None, description='x')]"
         )
@@ -103,39 +105,61 @@ class TestExtractFieldInfo:
         assert info["default"] is None
 
     def test_plain_annotation_passes_through(self):
+        """A parameter with no Annotated wrapper keeps its type."""
         assert _field_info("str | None") == {"type": "str | None"}
 
     def test_no_annotation(self):
+        """An unannotated parameter yields nothing."""
         assert extract_tools._extract_field_info(None) == {}
 
 
 class TestFieldConstraints:
     """``Field`` bounds survive the cleanup of ``type``."""
 
-    def test_numeric_bounds_become_schema_constraints(self):
+    def test_numeric_bounds_are_recorded(self):
+        """Bounds keep pydantic's own kwarg names."""
         info = _field_info("Annotated[int, Field(ge=1, le=60)]")
 
-        assert info["constraints"] == {"minimum": 1, "maximum": 60}
+        assert info["constraints"] == {"ge": 1, "le": 60}
 
     def test_exclusive_and_length_bounds(self):
+        """Every supported constraint kwarg is carried through."""
         info = _field_info(
             "Annotated[list[str], Field(gt=0, lt=5, min_length=1, max_length=3)]"
         )
 
         assert info["constraints"] == {
-            "exclusiveMinimum": 0,
-            "exclusiveMaximum": 5,
-            "minLength": 1,
-            "maxLength": 3,
+            "gt": 0,
+            "lt": 5,
+            "min_length": 1,
+            "max_length": 3,
         }
 
+    def test_length_bounds_are_not_translated_to_json_schema(self):
+        """``min_length`` is ``minLength`` on a str but ``minItems`` on a list.
+
+        The annotation is a Python type, so nothing here can tell the two
+        apart — translating would mislabel one of them.
+        """
+        info = _field_info("Annotated[list[str] | None, Field(min_length=1)]")
+
+        assert set(info["constraints"]) == {"min_length"}
+
+    def test_negative_bounds_survive(self):
+        """``ge=-1`` parses as a unary minus, not a plain literal."""
+        info = _field_info("Annotated[int, Field(ge=-1, le=-0.5)]")
+
+        assert info["constraints"] == {"ge": -1, "le": -0.5}
+
     def test_bounds_survive_a_union(self):
+        """The bound sits on the Annotated side of ``... | None``."""
         info = _field_info("Annotated[int, Field(ge=1)] | None")
 
         assert info["type"] == "int | None"
-        assert info["constraints"] == {"minimum": 1}
+        assert info["constraints"] == {"ge": 1}
 
     def test_no_constraints_key_without_bounds(self):
+        """An unconstrained parameter carries no empty constraints object."""
         assert "constraints" not in _field_info(
             "Annotated[str, Field(description='x')]"
         )
@@ -145,18 +169,22 @@ class TestNonLiteralDescriptions:
     """Descriptions built from constants and helpers still reach the catalog."""
 
     def _scope(self, consts=None, funcs=None):
+        """Build a module scope from literal names."""
         return extract_tools.ModuleScope(consts or {}, funcs or {})
 
     def _resolve(self, source: str, scope) -> dict:
+        """Extract field info for one annotation under ``scope``."""
         return extract_tools._extract_field_info(ast.parse(source).body[0].value, scope)
 
     def test_module_constant_reference(self):
+        """A description that is just a shared constant."""
         scope = self._scope(consts={"_DESC": "Initial value."})
         info = self._resolve("Annotated[str, Field(description=_DESC)]", scope)
 
         assert info["description"] == "Initial value."
 
     def test_fstring_interpolating_constants(self):
+        """A description whose defaults are interpolated from constants."""
         scope = self._scope(consts={"MAX_LIMIT": 500})
         info = self._resolve(
             "Annotated[int, Field(description=f'Capped at {MAX_LIMIT}.')]", scope
@@ -165,6 +193,7 @@ class TestNonLiteralDescriptions:
         assert info["description"] == "Capped at 500."
 
     def test_sliced_and_method_called_constant(self):
+        """A shared description recapitalised for this parameter."""
         scope = self._scope(consts={"DESC": "capture the whole page"})
         info = self._resolve(
             "Annotated[bool, Field(description=f'{DESC[:1].upper()}{DESC[1:]}.')]",
@@ -174,6 +203,7 @@ class TestNonLiteralDescriptions:
         assert info["description"] == "Capture the whole page."
 
     def test_concatenation_with_a_zero_arg_helper(self):
+        """A description with shared documentation appended to it."""
         scope = self._scope(funcs={"get_security_documentation": " SECURITY: none."})
         info = self._resolve(
             "Annotated[str, Field(description='Transform. '"
@@ -198,14 +228,17 @@ class TestModuleScope:
 
     @pytest.fixture(scope="class")
     def logs_scope(self):
+        """Resolved names for the logs tool module."""
         return extract_tools._module_scope(
             REPO_ROOT / "src" / "ha_mcp" / "tools" / "tools_logs.py"
         )
 
     def test_constants_are_pulled_through_relative_imports(self, logs_scope):
+        """A constant defined in a sibling module resolves."""
         assert isinstance(logs_scope.consts.get("MAX_LIMIT"), int)
 
     def test_zero_arg_helpers_resolve_across_modules(self):
+        """A helper imported from another package module resolves."""
         scope = extract_tools._module_scope(
             REPO_ROOT / "src" / "ha_mcp" / "tools" / "tools_config_scenes.py"
         )
@@ -218,9 +251,11 @@ class TestExtractedToolsNeverLeakAnnotationSource:
 
     @pytest.fixture(scope="class")
     def tools(self) -> list[dict]:
+        """Every tool extracted from the live sources."""
         return extract_tools.extract_tools()
 
     def test_no_parameter_type_is_raw_annotated_source(self, tools):
+        """No parameter's type is an unparsed annotation dump."""
         leaked = [
             f"{tool['name']}.{param}: {schema['type']}"
             for tool in tools

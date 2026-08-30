@@ -39,18 +39,22 @@ ANNOTATION_KEYS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWor
 
 PACKAGE_ROOT = REPO_ROOT / "src" / "ha_mcp"
 
-# Pydantic ``Field`` constraint kwargs, mapped to their JSON Schema spelling.
-# They used to be visible in the raw annotation source this extractor dumped
-# into ``type``; cleaning up ``type`` must not lose them.
-FIELD_CONSTRAINTS = {
-    "ge": "minimum",
-    "gt": "exclusiveMinimum",
-    "le": "maximum",
-    "lt": "exclusiveMaximum",
-    "min_length": "minLength",
-    "max_length": "maxLength",
-    "multiple_of": "multipleOf",
-}
+# Pydantic ``Field`` constraint kwargs, recorded under their own names. They
+# used to be visible in the raw annotation source this extractor dumped into
+# ``type``; cleaning up ``type`` must not lose them. Deliberately NOT translated
+# to JSON Schema keywords: ``min_length`` means ``minLength`` on a string but
+# ``minItems`` on a list, and ``type`` here is a Python annotation
+# (``list[str] | None``) rather than a JSON Schema type, so there is nothing to
+# read the distinction from. The pydantic spelling is what the signature says.
+FIELD_CONSTRAINTS = (
+    "ge",
+    "gt",
+    "le",
+    "lt",
+    "min_length",
+    "max_length",
+    "multiple_of",
+)
 
 # String methods safe to apply to an already-resolved literal.
 STR_METHODS = ("upper", "lower", "capitalize", "title", "strip", "lstrip", "rstrip")
@@ -88,6 +92,12 @@ def _static_value(node: ast.expr, scope: ModuleScope) -> Any:
         right = _static_value(node.right, scope)
         if isinstance(left, str) and isinstance(right, str):
             return left + right
+        return None
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        # ``Field(ge=-1)`` parses as a unary minus over a literal, not a Constant.
+        operand = _static_value(node.operand, scope)
+        if isinstance(operand, (int, float)) and not isinstance(operand, bool):
+            return -operand if isinstance(node.op, ast.USub) else operand
         return None
     if isinstance(node, ast.JoinedStr):
         return _joined_str_value(node, scope)
@@ -146,13 +156,18 @@ def _call_value(node: ast.Call, scope: ModuleScope) -> Any:
 
 def _import_source(path: Path, node: ast.ImportFrom) -> Path | None:
     """Map a relative ``from . import x`` to the file it reads from."""
-    if node.level == 0 or node.module is None:
+    if node.level == 0:
         return None
     base = path.parent
     for _ in range(node.level - 1):
         base = base.parent
-    candidate = base.joinpath(*node.module.split("."))
-    for option in (candidate.with_suffix(".py"), candidate / "__init__.py"):
+    if node.module is None:
+        # ``from . import NAME`` — the names live in the package initializer.
+        candidates: tuple[Path, ...] = (base / "__init__.py",)
+    else:
+        candidate = base.joinpath(*node.module.split("."))
+        candidates = (candidate.with_suffix(".py"), candidate / "__init__.py")
+    for option in candidates:
         if option.is_file() and PACKAGE_ROOT in option.parents:
             return option
     return None
@@ -269,7 +284,7 @@ def _field_keyword(info: dict, kw: ast.keyword, scope: ModuleScope) -> None:
     elif kw.arg in FIELD_CONSTRAINTS:
         value = _static_value(kw.value, scope)
         if value is not None:
-            info.setdefault("constraints", {})[FIELD_CONSTRAINTS[kw.arg]] = value
+            info.setdefault("constraints", {})[kw.arg] = value
 
 
 def _annotated_metadata(slice_node: ast.expr, scope: ModuleScope) -> dict:
