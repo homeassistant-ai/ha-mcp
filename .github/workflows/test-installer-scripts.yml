@@ -2,6 +2,12 @@ name: Test Installer Scripts
 
 on:
   push:
+    # master only. Without a branch filter this fired on every in-repo branch
+    # push as well, so a push to an open PR's branch ran these seven jobs twice
+    # — once for `push`, once for `pull_request` — on the same commit. The
+    # `pull_request` trigger below still covers every PR, and the daily cron
+    # plus manual dispatch still cover the scripts outside one.
+    branches: [master]
     paths:
       - 'scripts/install.sh'
       - 'scripts/install-macos.sh'
