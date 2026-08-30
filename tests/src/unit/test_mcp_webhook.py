@@ -11,6 +11,7 @@ the fakes are installed before ``mcp_webhook`` binds them).
 
 from __future__ import annotations
 
+import json
 import secrets
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -383,8 +384,8 @@ class TestHaAuthGate:
         assert www.startswith("Bearer realm=")
         assert 'realm="HA-MCP"' in www
         assert (
-            f'resource_metadata="https://example.nabu.casa{OAUTH_BASE}/protected-resource"'
-            in www
+            'resource_metadata="https://example.nabu.casa'
+            f'/.well-known/oauth-protected-resource/api/webhook/{WEBHOOK_ID}"' in www
         )
 
     async def test_invalid_bearer_returns_401(self):
@@ -648,9 +649,9 @@ class TestDiscoveryViews:
 
     async def test_protected_resource_view_payload_when_live(self):
         hass = _live_hass()
-        view = mw._ProtectedResourceMetadataView(hass)
+        view = mw._WellKnownProtectedResourceView(hass)
         request = make_request(headers={"Host": "abc.ui.nabu.casa"})
-        resp = await view.get(request)
+        resp = await view.get(request, webhook_id=WEBHOOK_ID)
         assert resp.status == 200
         body = resp.json_body
         assert body["resource"] == f"https://abc.ui.nabu.casa/api/webhook/{WEBHOOK_ID}"
@@ -660,9 +661,13 @@ class TestDiscoveryViews:
         assert body["bearer_methods_supported"] == ["header"]
 
     async def test_protected_resource_view_404_when_not_live(self):
+        # Local-only cfg: no provider, so no mode is live and the scoped view
+        # 404s for the id it would otherwise serve.
         hass = _live_hass(auth_mode=WEBHOOK_AUTH_NONE)
-        view = mw._ProtectedResourceMetadataView(hass)
-        resp = await view.get(make_request(headers={"Host": "x"}))
+        view = mw._WellKnownProtectedResourceView(hass)
+        resp = await view.get(
+            make_request(headers={"Host": "x"}), webhook_id=WEBHOOK_ID
+        )
         assert resp.status == 404
 
     async def test_authorization_server_view_payload_when_live(self):
@@ -706,8 +711,10 @@ class TestDiscoveryViews:
 
     async def test_protected_resource_views_live_in_legacy_mode(self):
         hass = _live_hass(auth_mode=WEBHOOK_AUTH_LEGACY)
-        plain = mw._ProtectedResourceMetadataView(hass)
-        resp = await plain.get(make_request(headers={"Host": "abc.ui.nabu.casa"}))
+        scoped = mw._WellKnownProtectedResourceView(hass)
+        resp = await scoped.get(
+            make_request(headers={"Host": "abc.ui.nabu.casa"}), webhook_id=WEBHOOK_ID
+        )
         assert resp.status == 200
 
     def test_wellknown_protected_resource_url_is_parameterized(self):
@@ -731,25 +738,30 @@ class TestDiscoveryViews:
         # The live-found stale-binding scenario: views registered during the
         # FIRST entry keep working for a SECOND entry with a new webhook id.
         hass = _live_hass()
-        view = mw._ProtectedResourceMetadataView(hass)
+        view = mw._WellKnownProtectedResourceView(hass)
         hass.data[DOMAIN][DATA_WEBHOOK] = {
             "webhook_id": "mcp_second_entry_id",
             "auth_mode": WEBHOOK_AUTH_HA,
             "resource_server": mw.ResourceServer(hass, "mcp_second_entry_id"),
         }
-        resp = await view.get(make_request(headers={"Host": "abc.ui.nabu.casa"}))
+        request = make_request(headers={"Host": "abc.ui.nabu.casa"})
+        resp = await view.get(request, webhook_id="mcp_second_entry_id")
         assert resp.status == 200
         assert resp.json_body["resource"] == (
             "https://abc.ui.nabu.casa/api/webhook/mcp_second_entry_id"
         )
+        # The flip side of the route parameter: the FIRST entry's id stops
+        # answering, so whoever held it never learns the new one.
+        stale = await view.get(request, webhook_id=WEBHOOK_ID)
+        assert stale.status == 404
 
-    def test_metadata_views_bundle_is_seven_unique_named_views(self):
+    def test_metadata_views_bundle_is_six_unique_named_views(self):
         views = mw._metadata_views(_make_hass())
-        assert len(views) == 7
+        assert len(views) == 6
         names = {v.name for v in views}
-        assert len(names) == 7  # all unique route names
+        assert len(names) == 6  # all unique route names
         urls = {v.url for v in views}
-        assert len(urls) == 7  # all unique route paths
+        assert len(urls) == 6  # all unique route paths
 
 
 # ---------------------------------------------------------------------------
@@ -806,15 +818,26 @@ class TestNoneModeDiscovery:
         )
         assert doc["token_endpoint_auth_methods_supported"] == ["none"]
 
-    async def test_fixed_path_protected_resource_404s_in_none_mode(self):
-        # SECURITY (#1976): the fixed, guessable /protected-resource path must
-        # NOT leak the webhook id (the sole credential in none mode) to an
-        # anonymous GET. It 404s in none mode, serving only the bearer-gated
-        # modes (see test_protected_resource_view_payload_when_live for ha_auth).
-        hass = _none_live_hass()
-        request = make_request(headers={"Host": "abc.ui.nabu.casa"})
-        plain = mw._ProtectedResourceMetadataView(hass)
-        assert (await plain.get(request)).status == 404
+    async def test_no_fixed_path_view_reveals_webhook_id_in_any_mode(self):
+        # SECURITY (#1976): the webhook id must never appear in a document
+        # reachable without already presenting it. Every metadata view whose
+        # URL does NOT embed the id is fetched in each live mode and its body
+        # checked — a re-added fixed-path protected-resource document would
+        # fail here in ha_auth/legacy, which is exactly the leak that turned
+        # into a credential disclosure on a later switch back to none mode.
+        for hass in (
+            _live_hass(auth_mode=WEBHOOK_AUTH_HA),
+            _live_hass(auth_mode=WEBHOOK_AUTH_LEGACY),
+            _none_live_hass(),
+        ):
+            assert mw.active_auth_mode(hass) is not None  # the mode really is live
+            for view in mw._metadata_views(hass):
+                if "{webhook_id}" in view.url:
+                    continue
+                resp = await view.get(
+                    make_request(headers={"Host": "abc.ui.nabu.casa"})
+                )
+                assert WEBHOOK_ID not in json.dumps(resp.json_body)
 
     async def test_path_scoped_protected_resource_still_serves_in_none_mode(self):
         # The path-scoped view claude.ai's none-mode discovery actually uses
@@ -969,7 +992,7 @@ class TestRegisterWebhook:
 
     async def test_none_auth_binds_discovery_and_autoapprove_views(self, monkeypatch):
         # #1969: none mode now serves our corrected discovery + the auto-approve
-        # authorization server, so it binds the 7 discovery views, the 2
+        # authorization server, so it binds the 6 discovery views, the 2
         # unified OAuth views, and the DCR view, then registers an
         # AutoApproveProvider in cfg.
         hass = _register_hass()
@@ -988,9 +1011,9 @@ class TestRegisterWebhook:
         assert isinstance(cfg[mw.CFG_AUTOAPPROVE_PROVIDER], mw.AutoApproveProvider)
         assert cfg["resource_server"] is None
         assert cfg["oauth_provider"] is None
-        # 7 discovery views + 3 unified OAuth views (authorize/token/revoke)
+        # 6 discovery views + 3 unified OAuth views (authorize/token/revoke)
         # + 1 DCR view.
-        assert hass.http.register_view.call_count == 11
+        assert hass.http.register_view.call_count == 10
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
 
     async def test_none_ha_auth_none_switch_reuses_bound_views(self, monkeypatch):
@@ -1007,7 +1030,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_NONE,
         )
-        assert hass.http.register_view.call_count == 11
+        assert hass.http.register_view.call_count == 10
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
         await mw.async_unregister_webhook(hass)
 
@@ -1020,7 +1043,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_HA,
         )
-        assert hass.http.register_view.call_count == 11
+        assert hass.http.register_view.call_count == 10
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_HA
         await mw.async_unregister_webhook(hass)
 
@@ -1032,7 +1055,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_NONE,
         )
-        assert hass.http.register_view.call_count == 11
+        assert hass.http.register_view.call_count == 10
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
 
     async def test_ha_auth_registers_resource_server_and_views(self, monkeypatch):
@@ -1052,9 +1075,9 @@ class TestRegisterWebhook:
 
         cfg = hass.data[DOMAIN][DATA_WEBHOOK]
         assert isinstance(cfg["resource_server"], mw.ResourceServer)
-        # Seven discovery + three unified OAuth (authorize/token/revoke) + one
+        # Six discovery + three unified OAuth (authorize/token/revoke) + one
         # DCR view were bound.
-        assert hass.http.register_view.call_count == 11
+        assert hass.http.register_view.call_count == 10
         assert hass.data.get(mw._OAUTH_VIEWS_REGISTERED_KEY) is True
 
     async def test_ha_auth_isolates_cimd_fetches_from_forwarding(self, monkeypatch):
@@ -1097,7 +1120,7 @@ class TestRegisterWebhook:
     async def test_ha_auth_re_enable_reuses_bound_views(self, monkeypatch):
         # aiohttp cannot unregister a bound view; the once-per-session guard
         # lives at a TOP-LEVEL hass.data key precisely so a none->ha_auth->
-        # none->ha_auth cycle re-USES the 10 views instead of re-binding them
+        # none->ha_auth cycle re-USES the 9 views instead of re-binding them
         # (which raises and takes the whole bring-up down). Review finding:
         # only the first registration was tested.
         hass = _register_hass()
@@ -1110,7 +1133,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_HA,
         )
-        assert hass.http.register_view.call_count == 11
+        assert hass.http.register_view.call_count == 10
         await mw.async_unregister_webhook(hass)
 
         # Second enable in the same HA session: no new bindings, no raise.
@@ -1121,7 +1144,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_HA,
         )
-        assert hass.http.register_view.call_count == 11
+        assert hass.http.register_view.call_count == 10
         assert isinstance(
             hass.data[DOMAIN][DATA_WEBHOOK]["resource_server"], mw.ResourceServer
         )
@@ -1181,9 +1204,9 @@ class TestRegisterWebhook:
         cfg = hass.data[DOMAIN][DATA_WEBHOOK]
         assert isinstance(cfg["oauth_provider"], LegacyOAuthProvider)
         assert cfg["resource_server"] is None
-        # 7 discovery + 3 unified scoped (authorize/token/revoke) + 2 root
+        # 6 discovery + 3 unified scoped (authorize/token/revoke) + 2 root
         # legacy views.
-        assert hass.http.register_view.call_count == 12
+        assert hass.http.register_view.call_count == 11
         assert hass.data.get(OAUTH_ROUTE_OWNER_KEY) == DOMAIN
         assert restart_needed is False
 
@@ -1223,7 +1246,7 @@ class TestRegisterWebhook:
         assert hass.data[OAUTH_ROUTE_OWNER_KEY] == "webhook_proxy"
         # Only metadata + the three unified scoped views bind; root remains
         # add-on-owned.
-        assert hass.http.register_view.call_count == 10
+        assert hass.http.register_view.call_count == 9
         assert any(
             record.levelname == "WARNING"
             and record.name == mw.__name__
@@ -1380,7 +1403,7 @@ class TestRegisterWebhook:
         # metadata route, 404-ing clients that probe it. bind_autoapprove_views
         # uses the same flag-only-after-all-register pattern.
         hass = _register_hass()
-        # 7 metadata views; fail on the 3rd register_view, mid-bundle.
+        # 6 metadata views; fail on the 3rd register_view, mid-bundle.
         hass.http.register_view.side_effect = [None, None, RuntimeError("frozen")]
         with pytest.raises(RuntimeError):
             mw._register_metadata_views(hass)

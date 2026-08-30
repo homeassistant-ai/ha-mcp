@@ -411,17 +411,22 @@ def _bind_legacy_oauth_views(
     """Register the root OAuth /authorize + /token views for the legacy provider,
     or detect a mid-session credential change that needs an HA restart. Returns
     oauth_restart_needed."""
+    from .oauth import register_metadata_views
+
     bound_fp = hass.data.get(OAUTH_ROUTE_KEY_FINGERPRINT)
     if route_owner == DOMAIN and bound_fp == fingerprint:
         # Reload of our own entry with the SAME credentials + key: the
         # root views are already bound and current. Reuse them (HA can't
         # re-register mid-session; re-registering would only pile up
-        # shadowed duplicates). OAuth is live — no restart.
+        # shadowed duplicates). OAuth is live — no restart, UNLESS the
+        # webhook id itself rotated: the discovery views are guarded by their
+        # own flag (not this fingerprint) and register_metadata_views is the
+        # only thing that can see the id change.
         _LOGGER.debug(
             "MCP Proxy: root OAuth views already bound with the current "
             "credentials this session; reusing them (no restart)."
         )
-        return False
+        return register_metadata_views(hass, oauth_provider)
     if route_owner == DOMAIN:
         # Reload of our own entry but the credentials/key CHANGED
         # (regenerated) mid-session. HA can't re-bind the root views
@@ -437,12 +442,14 @@ def _bind_legacy_oauth_views(
         )
         return True
     # First registration this HA session.
-    oauth_provider.register_views()
+    metadata_restart = oauth_provider.register_views()
     hass.data[OAUTH_ROUTE_OWNER_KEY] = DOMAIN
     hass.data[OAUTH_ROUTE_KEY_FINGERPRINT] = fingerprint
     # A first registration happening mid-session isn't live until a
-    # full HA restart; flag it. At HA boot it binds cleanly.
-    return bool(hass.is_running)
+    # full HA restart; flag it. At HA boot it binds cleanly. The discovery
+    # views carry their own verdict (another mode may already have bound them
+    # this session under a now-rotated webhook id), so honour both.
+    return metadata_restart or bool(hass.is_running)
 
 
 async def _setup_ha_auth_oauth(
@@ -451,9 +458,10 @@ async def _setup_ha_auth_oauth(
     oauth_section: dict,
     session: aiohttp.ClientSession,
     hass_data: dict,
-) -> None:
+) -> bool:
     """Set up ha_auth OAuth (HA core is the authorization server). Mutates
-    hass_data with the resource server + mode; raises ConfigEntryError on error."""
+    hass_data with the resource server + mode; raises ConfigEntryError on error.
+    Returns oauth_restart_needed."""
     # ── ha_auth: HA core is the authorization server (see auth_native) ──
     # Hard mutual exclusion: a ha_auth section carries NO legacy credentials.
     # If client_id/client_secret keys are present the config is ambiguous
@@ -506,14 +514,16 @@ async def _setup_ha_auth_oauth(
             connector=aiohttp.TCPConnector(limit=_CIMD_CONNECTOR_LIMIT)
         )
         resource_server = ResourceServer(hass, webhook_id, None)
-        # Registers the seven discovery-document views at most once per HA
+        # Registers the six discovery-document views at most once per HA
         # session (register_metadata_views no-ops when either mode already
         # bound them — see oauth._METADATA_VIEWS_REGISTERED_KEY), so a
         # config-entry reload or a live legacy->ha_auth switch doesn't stack
         # shadowed duplicates. The scoped handlers redirect/relay into core;
         # the bare /authorize + /token remain legacy-only aliases, so there is
-        # no owner-key / fingerprint bookkeeping and no restart concept.
-        register_metadata_views(hass, resource_server)
+        # no owner-key / fingerprint bookkeeping. The one restart case is a
+        # webhook id rotated mid-session: the already-bound path-scoped
+        # discovery URL still names the OLD id, so it reports the mismatch.
+        restart_needed = register_metadata_views(hass, resource_server)
         register_autoapprove_views(hass)
         bind_dcr_view(hass)
     except Exception as err:
@@ -539,6 +549,7 @@ async def _setup_ha_auth_oauth(
     hass_data["oauth_mode"] = OAUTH_MODE_HA_AUTH
     hass_data["dcr_signing_key"] = dcr_signing_key
     hass_data["cimd_session"] = cimd_session
+    return restart_needed
 
 
 async def _setup_legacy_oauth(
@@ -665,7 +676,7 @@ async def _setup_legacy_oauth(
 
 async def _setup_none_autoapprove(
     hass: HomeAssistant, webhook_id: str, hass_data: dict
-) -> None:
+) -> bool:
     """Set up none-mode auto-approve discovery (OAuth off — issue #1969).
 
     Serves our own corrected RFC 8414/9728 discovery documents plus an invisible
@@ -680,6 +691,8 @@ async def _setup_none_autoapprove(
     enhancement layered on top of the already-working proxy. A failure must not
     tear the working webhook down — it only means claude.ai's rare discovery
     fallback isn't helped; the endpoint still forwards.
+
+    Returns oauth_restart_needed (False on the fail-open path).
     """
     try:
         from .oauth import register_metadata_views
@@ -694,8 +707,11 @@ async def _setup_none_autoapprove(
         # install must work via any external URL.
         provider = AutoApproveProvider(hass, webhook_id, None)
         # All three view bundles bind at most once per HA session (guarded); a
-        # none<->ha_auth switch reuses them, so no restart is needed.
-        register_metadata_views(hass, provider)
+        # none<->ha_auth switch reuses them, so no restart is needed. The one
+        # exception is a webhook id rotated mid-session: the path-scoped
+        # discovery URL bound earlier this session still names the OLD id and
+        # HA cannot rebind it, so register_metadata_views reports that.
+        restart_needed = register_metadata_views(hass, provider)
         register_autoapprove_views(hass)
         bind_dcr_view(hass)
     except Exception:
@@ -705,7 +721,7 @@ async def _setup_none_autoapprove(
             "forwards — only claude.ai's rare OAuth-discovery fallback is "
             "unassisted)."
         )
-        return
+        return False
     hass_data["dcr_signing_key"] = dcr_signing_key
     hass_data[AUTOAPPROVE_PROVIDER_KEY] = provider
     hass_data["oauth_mode"] = OAUTH_MODE_NONE_AUTOAPPROVE
@@ -714,6 +730,7 @@ async def _setup_none_autoapprove(
         "MCP connectors that run OAuth discovery still resolve against this "
         "add-on (issue #1969). The webhook itself stays unauthenticated."
     )
+    return restart_needed
 
 
 async def _setup_oauth_section(
@@ -737,8 +754,9 @@ async def _setup_oauth_section(
     oauth_section = proxy_config.get("oauth")
     oauth_mode = oauth_section.get("mode") if isinstance(oauth_section, dict) else None
     if isinstance(oauth_section, dict) and oauth_mode == OAUTH_MODE_HA_AUTH:
-        await _setup_ha_auth_oauth(hass, webhook_id, oauth_section, session, hass_data)
-        return False
+        return await _setup_ha_auth_oauth(
+            hass, webhook_id, oauth_section, session, hass_data
+        )
     if isinstance(oauth_section, dict) and oauth_mode not in (
         None,
         OAUTH_MODE_LEGACY,
@@ -761,10 +779,10 @@ async def _setup_oauth_section(
     # server so claude.ai's intermittent OAuth discovery resolves against us, not
     # HA core's broken origin-root doc (issue #1969). Fails open — the webhook
     # forwarder stays unauthenticated and never 401s (see _setup_none_autoapprove
-    # / the AUTOAPPROVE_PROVIDER_KEY-not-"oauth" split). No restart is ever
-    # needed, so oauth_restart_needed stays False.
-    await _setup_none_autoapprove(hass, webhook_id, hass_data)
-    return False
+    # / the AUTOAPPROVE_PROVIDER_KEY-not-"oauth" split). None mode still has ONE
+    # restart case: the operator rotated the webhook id mid-session, and the
+    # path-scoped discovery URL for the new id can only be bound at startup.
+    return await _setup_none_autoapprove(hass, webhook_id, hass_data)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

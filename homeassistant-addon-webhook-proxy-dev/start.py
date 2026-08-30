@@ -734,7 +734,13 @@ def _read_integration_domain() -> str | None:
 
 
 def _probe_oauth_active(attempts: int = 3, delay: int = 2) -> bool:
-    """Probe the OAuth protected-resource metadata endpoint.
+    """Probe the OAuth authorization-server metadata endpoint.
+
+    The RFC 8414 authorization-server document is the right probe target: it
+    is public by design, carries no webhook id, and is served in every OAuth
+    mode — but only by the OAuth-aware integration module. (The
+    protected-resource document is no longer served at a fixed path; its only
+    location now embeds the webhook id, which this probe must not publish.)
 
     Returns True only if HA serves the metadata URL — which means the
     OAuth-enforcing integration code is the one actually loaded in HA's
@@ -758,8 +764,8 @@ def _probe_oauth_active(attempts: int = 3, delay: int = 2) -> bool:
     for attempt in range(attempts):
         domain = _read_integration_domain()
         if domain:
-            result = _ha_core_api("GET", f"/{domain}/oauth/protected-resource")
-            if isinstance(result, dict) and "authorization_servers" in result:
+            result = _ha_core_api("GET", f"/{domain}/oauth/authorization-server")
+            if isinstance(result, dict) and "authorization_endpoint" in result:
                 return True
         if attempt < attempts - 1:
             time.sleep(delay)

@@ -39,7 +39,7 @@ from __future__ import annotations
 import logging
 import secrets
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import aiohttp
 from aiohttp import web
@@ -352,8 +352,6 @@ class AutoApproveAuthorizeView(HomeAssistantView):
         if forward_id != client_id:
             params.popall("client_id", None)
             params["client_id"] = forward_id
-
-        from urllib.parse import urlencode
 
         # Percent-encode the query instead of handing the params to yarl: yarl
         # legally leaves ":" and "/" literal inside query values (RFC 3986

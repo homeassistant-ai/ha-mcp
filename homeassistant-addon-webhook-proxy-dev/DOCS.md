@@ -124,9 +124,10 @@ The URL stays the same across app restarts because the webhook ID is persisted a
 1. **Stop** the Webhook Proxy app.
 2. **Delete** the persisted webhook ID file. Open the app's filesystem (e.g. via the SSH/Terminal app or a file browser) and remove `/data/webhook_id.txt` for the proxy app. (Stopping then uninstalling and reinstalling the app also achieves this.)
 3. **Start** the app. A fresh webhook ID and URL are generated on first launch.
-4. **Copy the new URL** from the app logs and paste it into your MCP client(s). The old URL is now dead.
+4. **Restart Home Assistant** when the *Restart Home Assistant* Repair card appears (Settings → System → Repairs). The old URL stops answering as soon as the app starts; the new URL's OAuth discovery is served after the restart.
+5. **Copy the new URL** from the app logs and paste it into your MCP client(s). The old URL is now dead.
 
-The old webhook ID is not retained anywhere on disk after the file is deleted, and the integration's previous registration is dropped when the app stops.
+The old webhook ID is not retained anywhere on disk after the file is deleted, the integration's previous registration is dropped when the app stops, and the previous URL's OAuth discovery document answers 404 from the first start with the new ID — it never serves the new ID to whoever held the old one.
 
 #### Enable OAuth (Beta) for stronger protection
 

@@ -649,8 +649,9 @@ async def test_scoped_authorize_redirects_into_core_when_ha_auth_live(
         allow_redirects=False,
     )
     assert resp.status == 302
-    # Parse rather than substring-match: yarl legally leaves ':' and '/'
-    # unencoded inside query values (RFC 3986 permits them in the query).
+    # Parse rather than substring-match: the forwarded query is fully
+    # percent-encoded, so the raw Location never carries a literal ':' or '/'
+    # in a value.
     from urllib.parse import parse_qs, urlparse
 
     location_header = resp.headers["Location"]
@@ -721,12 +722,14 @@ async def test_ha_auth_authorize_percent_encodes_the_forwarded_query(
 ):
     """Forward a loopback callback percent-encoded, not as a literal URL.
 
-    yarl legally leaves ":" and "/" unencoded inside a query value, which
-    renders a native-app callback as ``redirect_uri=http://127.0.0.1:1234/cb``.
-    Reverse proxies shipping a generic "block common exploits" ruleset -- Nginx
-    Proxy Manager enables one per host with a checkbox -- match
-    ``[a-zA-Z0-9_]=http://`` and answer 403 before core ever sees the request,
-    stranding every native-app client behind such a proxy.
+    The forward was previously built with ``yarl.URL().with_query()``, which
+    legally leaves ":" and "/" unencoded inside a query value and so rendered
+    a native-app callback as
+    ``redirect_uri=http://127.0.0.1:19877/mcp/oauth/callback``. Reverse
+    proxies shipping a generic "block common exploits" ruleset (Nginx Proxy
+    Manager is a common one) match ``[a-zA-Z0-9_]=http://`` and answer 403
+    before core ever sees the request, stranding every native-app client
+    behind such a proxy.
     """
     import re
     from urllib.parse import parse_qs, urlparse
@@ -744,9 +747,15 @@ async def test_ha_auth_authorize_percent_encodes_the_forwarded_query(
     location = resp.headers["Location"]
     # The exact pattern those proxy rulesets match must not survive the hop.
     assert re.search(r"[a-zA-Z0-9_]=http://", location) is None
-    # ...while the parameters themselves are untouched.
-    query = parse_qs(urlparse(location).query)
+    # Stronger than the ruleset's own pattern: nothing in the forwarded query
+    # is left in a form a "block common exploits" filter could latch onto.
+    raw_query = urlparse(location).query
+    assert ":" not in raw_query and "/" not in raw_query
+    # ...while redirect_uri, client_id and state survive the encoding
+    # round-trip unchanged.
+    query = parse_qs(raw_query)
     assert query["redirect_uri"] == ["http://127.0.0.1:19877/mcp/oauth/callback"]
+    assert query["client_id"] == ["http://127.0.0.1:19877"]
     assert query["state"] == ["xyz"]
 
 

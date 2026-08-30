@@ -29,7 +29,7 @@ mapping); the ``ha_auth`` bearer check + discovery documents mirror the add-on's
 ``auth_native.py`` + the ``ha_auth`` subset of ``oauth.py``; the ``legacy``
 provider + its root ``/authorize`` + ``/token`` views live in
 :mod:`oauth_legacy`, ported from the ``legacy`` subset of the add-on's
-``oauth.py``. The seven RFC 8414 / RFC 9728 discovery views below are shared by
+``oauth.py``. The six RFC 8414 / RFC 9728 discovery views below are shared by
 ``ha_auth``, ``legacy``, and ``none`` (which serves a distinct auto-approve
 authorization-server document pointing at :mod:`oauth_autoapprove`'s endpoints)
 — see :func:`active_auth_mode`.
@@ -387,39 +387,6 @@ def _none_mode_authorization_server_document(base: str) -> dict[str, Any]:
     }
 
 
-class _ProtectedResourceMetadataView(HomeAssistantView):
-    """RFC 9728 Protected Resource Metadata."""
-
-    requires_auth = False
-    cors_allowed = True
-    url = f"{OAUTH_BASE}/protected-resource"
-    name = "ha_mcp_tools:oauth:protected-resource"
-
-    def __init__(self, hass: HomeAssistant) -> None:
-        """Bind the view to the HA instance; liveness is resolved per request."""
-        self._hass = hass
-
-    async def get(self, request: web.Request) -> web.Response:
-        """Serve the protected-resource document for the bearer-gated modes only.
-
-        SECURITY (#1976 review): this ANONYMOUS, fixed (guessable) path exposes
-        ``resource: <base>/api/webhook/<id>``. In none mode the webhook id is the
-        SOLE credential, so serving it here would leak it to any unauthenticated
-        GET. Serve only for ``ha_auth``/``legacy`` (where the id is not a secret
-        and the 401 ``WWW-Authenticate`` pointer legitimately directs a client
-        here); 404 otherwise. The PATH-SCOPED well-known view still serves in none
-        mode — its caller must already know the id (it is a route parameter).
-        """
-        if active_auth_mode(self._hass) not in (WEBHOOK_AUTH_HA, WEBHOOK_AUTH_LEGACY):
-            return _json_not_found()
-        webhook_id = _active_webhook_id(self._hass)
-        if webhook_id is None:
-            return _json_not_found()
-        return web.json_response(
-            _protected_resource_document(webhook_id, _build_base_url(request))
-        )
-
-
 class _AuthorizationServerMetadataView(HomeAssistantView):
     """RFC 8414 Authorization Server Metadata.
 
@@ -450,12 +417,23 @@ class _AuthorizationServerMetadataView(HomeAssistantView):
 
 
 class _WellKnownProtectedResourceView(HomeAssistantView):
-    """RFC 9728 §3.1 path-scoped Protected Resource Metadata.
+    """RFC 9728 §3.1 path-scoped Protected Resource Metadata — the ONLY
+    protected-resource document this integration serves.
 
-    Same document as :class:`_ProtectedResourceMetadataView`, served at the
-    well-known location derived from the webhook resource URL — claude.ai's
-    first fallback probe when the 401's ``resource_metadata`` pointer is
-    missing. The webhook id is a ROUTE PARAMETER (not baked into the path at
+    Served at the well-known location derived from the webhook resource URL
+    (``/.well-known/oauth-protected-resource/api/webhook/<id>``), which is also
+    where the webhook's 401 ``resource_metadata`` challenge points, and which is
+    claude.ai's first fallback probe when that pointer is missing.
+
+    SECURITY (#1976 review): there is deliberately NO fixed-path variant of this
+    document. A fixed, guessable path handed ``resource: <base>/api/webhook/<id>``
+    to any anonymous GET while ``ha_auth``/``legacy`` was on, and a later switch
+    back to ``none`` mode — where the webhook id is the SOLE credential —
+    promoted that already-published value into the credential. This view's
+    caller must already hold the id (it is a route parameter), so the document
+    discloses nothing in any mode.
+
+    The webhook id is a ROUTE PARAMETER (not baked into the path at
     registration): a remove + re-add of the entry mints a new webhook id in the
     same HA session, and the bound view must serve whichever id is currently
     live (404 for any other). Standalone view (not a subclass of the plain
@@ -496,10 +474,11 @@ class _WellKnownAuthorizationServerMetadataView(_AuthorizationServerMetadataView
 
 
 def _metadata_views(hass: HomeAssistant) -> list[HomeAssistantView]:
-    """Build the seven discovery-document views, shared by ha_auth and legacy
-    (mode-agnostic — each view resolves the active mode per request)."""
+    """Build the six discovery-document views, shared by ha_auth and legacy
+    (mode-agnostic — each view resolves the active mode per request): the
+    path-scoped protected-resource document, the authorization-server document,
+    and the four RFC 8414 / OIDC well-known authorization-server locations."""
     views: list[HomeAssistantView] = [
-        _ProtectedResourceMetadataView(hass),
         _AuthorizationServerMetadataView(hass),
         _WellKnownProtectedResourceView(hass),
     ]
@@ -528,7 +507,7 @@ def _metadata_views(hass: HomeAssistant) -> list[HomeAssistantView]:
 
 
 def _register_metadata_views(hass: HomeAssistant) -> None:
-    """Register the seven discovery views at most once per HA session.
+    """Register the six discovery views at most once per HA session.
 
     aiohttp cannot unregister a bound view, so a reload / re-enable / re-add /
     ha_auth<->legacy mode switch must all reuse the already-bound views — they
@@ -551,15 +530,21 @@ def _register_metadata_views(hass: HomeAssistant) -> None:
     hass.data[_OAUTH_VIEWS_REGISTERED_KEY] = True
 
 
-def _build_unauthorized_response(request: web.Request) -> web.Response:
+def _build_unauthorized_response(request: web.Request, webhook_id: str) -> web.Response:
     """Build the 401 + ``WWW-Authenticate`` challenge MCP clients use to discover.
 
-    Per RFC 9728 §5.1 / MCP spec, the ``resource_metadata`` parameter points to
-    the protected-resource metadata URL where the client finds the authorization
-    server.
+    Per RFC 9728 §5.1 / MCP 2026-07-28 Authorization Server Discovery, the
+    ``resource_metadata`` parameter points to the protected-resource metadata
+    URL where the client finds the authorization server.
     """
     base = _build_base_url(request)
-    metadata_url = f"{base}{OAUTH_BASE}/protected-resource"
+    # RFC 9728 §3.1 path-scoped location. The pointer names the id, but this
+    # 401 is only produced on a request TO /api/webhook/<id>, so the caller
+    # already holds it; there is no fixed-path document to point at (see
+    # _WellKnownProtectedResourceView).
+    metadata_url = (
+        f"{base}/.well-known/oauth-protected-resource/api/webhook/{webhook_id}"
+    )
     return web.Response(
         status=401,
         text="Unauthorized",
@@ -592,10 +577,10 @@ async def _check_webhook_auth(
     if resource_server is not None and not await resource_server.validate_request(
         request
     ):
-        return _build_unauthorized_response(request)
+        return _build_unauthorized_response(request, cfg.get("webhook_id", ""))
     oauth_provider: LegacyOAuthProvider | None = cfg.get("oauth_provider")
     if oauth_provider is not None and not oauth_provider.validate_bearer(request):
-        return _build_unauthorized_response(request)
+        return _build_unauthorized_response(request, cfg.get("webhook_id", ""))
     return None
 
 

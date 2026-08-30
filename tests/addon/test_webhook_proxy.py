@@ -2486,6 +2486,29 @@ def _wellknown_oauth_urls(oauth_mod, webhook_id):
     }
 
 
+def _scoped_only_prm(oauth_mod):
+    """True when the flavor serves ONLY the path-scoped protected-resource
+    document (fixed-path view removed; scoped view carries the bound id)."""
+    return not hasattr(oauth_mod, "ProtectedResourceMetadataView")
+
+
+def _probe_metadata_target(start_mod):
+    """The (path suffix, required key) the flavor's `_probe_oauth_active` uses.
+
+    Feature-DETECTED from the flavor's own start.py source, for the same reason
+    as `_wellknown_oauth_urls`: the promote workflow copies dev's code onto
+    stable without touching tests. Dev probes the RFC 8414 authorization-server
+    document (public by design, carries no webhook id); stable still probes the
+    fixed-path protected-resource one.
+    """
+    import inspect
+
+    src = inspect.getsource(start_mod._probe_oauth_active)
+    if "authorization-server" in src:
+        return "authorization-server", "authorization_endpoint"
+    return "protected-resource", "authorization_servers"
+
+
 class TestOAuthSetupEntry:
     """async_setup_entry creates and registers an OAuthProvider when the
     config has an oauth section with non-empty creds."""
@@ -2537,12 +2560,14 @@ class TestOAuthSetupEntry:
         provider = hass.data[mod.DOMAIN]["oauth"]
         assert provider is not None
         assert provider.client_id == "client-1234567890ABCDEF"
-        # 4 core OAuth views, plus the well-known metadata variants on flavors
-        # that ship them (feature-detected — see _wellknown_oauth_urls), plus
-        # the two unified scoped dispatchers that legacy mode now also binds,
-        # plus the scoped revocation dispatcher bound with them (#2248).
+        # 4 core OAuth views (3 on flavors that dropped the fixed-path
+        # protected-resource document), plus the well-known metadata variants
+        # on flavors that ship them (feature-detected — see
+        # _wellknown_oauth_urls), plus the two unified scoped dispatchers that
+        # legacy mode now also binds, plus the scoped revocation dispatcher
+        # bound with them (#2248).
         expected_views = (
-            4
+            (3 if _scoped_only_prm(oauth) else 4)
             + len(_wellknown_oauth_urls(oauth, "mcp_test"))
             + (2 if _unified_oauth_routes() else 0)
             + (1 if _scoped_revoke_supported() else 0)
@@ -2817,6 +2842,16 @@ class TestOAuthRestartRepairTrigger:
             hass.data[
                 f"webhook_proxy_oauth_autoapprove_views_registered_{mod.DOMAIN}"
             ] = True
+        # Same premise again for the discovery-document bundle: register_views
+        # bound it in the earlier session too, under this config's webhook id.
+        # The reuse branch now re-consults the metadata registrar (it is the
+        # only thing that can notice a rotated webhook id), so an unseeded
+        # guard would read as "never bound" and re-register the bundle.
+        hass.data[oauth._METADATA_VIEWS_REGISTERED_KEY] = True
+        if hasattr(oauth, "_METADATA_VIEWS_BOUND_WEBHOOK_ID_KEY"):
+            hass.data[oauth._METADATA_VIEWS_BOUND_WEBHOOK_ID_KEY] = (
+                self._oauth_config()["webhook_id"]
+            )
         repairs.RESTART_MARKER_FILE.write_text('{"reason": "stale"}')
         with (
             patch.object(mod, "_read_config", return_value=self._oauth_config()),
@@ -3497,7 +3532,13 @@ class TestProtectedResourceView:
         oauth, provider = _provider_for_view_tests(
             tmp_path, public_base_url="https://legit.example"
         )
-        view = oauth.ProtectedResourceMetadataView(provider)
+        # Same document either way; on scoped-only flavors the path-scoped view
+        # is the only one that serves it.
+        view = (
+            oauth.WellKnownProtectedResourceView(provider)
+            if _scoped_only_prm(oauth)
+            else oauth.ProtectedResourceMetadataView(provider)
+        )
         request = _make_view_request(headers={"Host": "evil.example"})
 
         with patch.object(oauth.web, "json_response") as json_resp:
@@ -3573,6 +3614,16 @@ class TestWellKnownMetadataViews:
         with patch.object(oauth.web, "json_response") as json_resp:
             await view.get(request)
         wellknown_body = json_resp.call_args.args[0]
+        if _scoped_only_prm(oauth):
+            # Nothing left to compare against — this IS the only
+            # protected-resource document, so pin its content literally.
+            assert wellknown_body == {
+                "resource": "https://legit.example/api/webhook/mcp_webhook_id_aaaa",
+                "authorization_servers": [f"https://legit.example{oauth.OAUTH_BASE}"],
+                "bearer_methods_supported": ["header"],
+                "resource_documentation": "https://github.com/homeassistant-ai/ha-mcp",
+            }
+            return
         with patch.object(oauth.web, "json_response") as json_resp:
             await oauth.ProtectedResourceMetadataView(provider).get(request)
         assert wellknown_body == json_resp.call_args.args[0]
@@ -3603,6 +3654,64 @@ class TestWellKnownMetadataViews:
         # No DCR: the proxy has fixed credentials, so the document must not
         # advertise a registration endpoint (clients would try it and fail).
         assert "registration_endpoint" not in canonical
+
+    async def test_scoped_prm_404s_once_bound_id_is_no_longer_live(self, tmp_path):
+        """A rotated webhook id must not be served through the OLD id's URL.
+
+        The scoped view is an exact-path bind, so HA keeps serving the old URL
+        until it restarts; whoever holds the old id must get a 404 there, never
+        the new id.
+        """
+        oauth, bound = _provider_for_view_tests(
+            tmp_path, public_base_url="https://legit.example"
+        )
+        self._skip_unless_shipped(oauth)
+        if not _scoped_only_prm(oauth):
+            pytest.skip("flavor does not carry the bound-id check yet")
+        view = oauth.WellKnownProtectedResourceView(bound)
+        rotated = oauth.OAuthProvider(
+            hass=bound._hass,
+            client_id="client-id-1234567890ABCDEF",
+            client_secret="client-secret-very-secret",
+            webhook_id="mcp_webhook_id_bbbb",
+            signing_key=b"\x00" * 32,
+            public_base_url="https://legit.example",
+        )
+        bound._hass.data = {
+            oauth.DOMAIN: {"oauth": rotated, "oauth_mode": oauth.MODE_LEGACY}
+        }
+        request = _make_view_request(headers={"Host": "legit.example"})
+        with patch.object(oauth.web, "json_response") as jr:
+            await view.get(request)
+        assert jr.call_args.kwargs["status"] == 404
+        assert "mcp_webhook_id_bbbb" not in json.dumps(jr.call_args.args[0])
+
+    def test_register_metadata_views_reports_restart_when_webhook_id_changes(
+        self, tmp_path
+    ):
+        """The registrar reports the one case a restart is genuinely needed."""
+        oauth, first = _provider_for_view_tests(tmp_path)
+        self._skip_unless_shipped(oauth)
+        if not _scoped_only_prm(oauth):
+            pytest.skip("flavor's register_metadata_views returns no verdict")
+        hass = first._hass
+        hass.data = {}
+        hass.http = MagicMock()
+        assert oauth.register_metadata_views(hass, first) is False
+        assert hass.http.register_view.call_count == 6
+        # Same id on a reload: bound views are reused, no restart.
+        assert oauth.register_metadata_views(hass, first) is False
+        rotated = oauth.OAuthProvider(
+            hass=hass,
+            client_id="client-id-1234567890ABCDEF",
+            client_secret="client-secret-very-secret",
+            webhook_id="mcp_webhook_id_bbbb",
+            signing_key=b"\x00" * 32,
+            public_base_url=None,
+        )
+        assert oauth.register_metadata_views(hass, rotated) is True
+        # It never rebinds — HA cannot drop a bound view until it restarts.
+        assert hass.http.register_view.call_count == 6
 
 
 class TestAuthorizeViewGet:
@@ -4708,15 +4817,18 @@ class TestProbeOAuthActive:
         return _import_start()
 
     def test_probe_returns_true_when_metadata_endpoint_returns_json(self, start):
+        _path, key = _probe_metadata_target(start)
+        value = (
+            "https://h/api/mcp_proxy/oauth/authorize"
+            if key == "authorization_endpoint"
+            else ["https://h/api/mcp_proxy/oauth"]
+        )
         with (
             patch.object(start, "_read_integration_domain", return_value="mcp_proxy"),
             patch.object(
                 start,
                 "_ha_core_api",
-                return_value={
-                    "resource": "https://h/api/webhook/x",
-                    "authorization_servers": ["https://h/api/mcp_proxy/oauth"],
-                },
+                return_value={"resource": "https://h/api/webhook/x", key: value},
             ),
         ):
             assert start._probe_oauth_active() is True
@@ -4745,7 +4857,7 @@ class TestProbeOAuthActive:
             assert start._probe_oauth_active() is False
         assert sleep.call_count == 2
 
-    def test_probe_returns_false_when_authorization_servers_missing(self, start):
+    def test_probe_returns_false_when_authorization_endpoint_missing(self, start):
         # A different endpoint accidentally exists at the same URL
         sleep = MagicMock()
         with (
@@ -4770,7 +4882,13 @@ class TestProbeOAuthActive:
         path: the probe retries and returns True once the endpoint reports
         active on a later attempt."""
         sleep = MagicMock()
-        results = [None, {"authorization_servers": ["https://h/oauth"]}]
+        _path, key = _probe_metadata_target(start)
+        value = (
+            "https://h/oauth/authorize"
+            if key == "authorization_endpoint"
+            else ["https://h/oauth"]
+        )
+        results = [None, {key: value}]
         with (
             patch.object(start, "_read_integration_domain", return_value="mcp_proxy"),
             patch.object(start, "_ha_core_api", side_effect=results),
@@ -4785,11 +4903,12 @@ class TestProbeOAuthActive:
         it works for both the prod variant (mcp_proxy) and the fork-dev
         variant (mcp_proxy_dev) without any code change."""
         captured = {}
+        doc_path, key = _probe_metadata_target(start)
 
         def fake_api(method, path):
             captured["method"] = method
             captured["path"] = path
-            return {"authorization_servers": []}
+            return {key: "https://h/oauth/authorize"}
 
         with (
             patch.object(
@@ -4799,7 +4918,7 @@ class TestProbeOAuthActive:
         ):
             start._probe_oauth_active()
 
-        assert captured["path"] == "/mcp_proxy_dev/oauth/protected-resource"
+        assert captured["path"] == f"/mcp_proxy_dev/oauth/{doc_path}"
 
 
 class TestOAuthSetupEntryRegistersExpectedViews:
@@ -4851,11 +4970,12 @@ class TestOAuthSetupEntryRegistersExpectedViews:
         # issue-#1714 well-known metadata variants register those too
         # (feature-detected — see _wellknown_oauth_urls).
         expected = {
-            f"{CURRENT['oauth_base']}/protected-resource",
             f"{CURRENT['oauth_base']}/authorization-server",
             "/authorize",
             "/token",
         } | _wellknown_oauth_urls(oauth, "mcp_test")
+        if not _scoped_only_prm(oauth):
+            expected.add(f"{CURRENT['oauth_base']}/protected-resource")
         if _unified_oauth_routes():
             # The unified scoped dispatchers bind in every mode; the root
             # views above stay as the legacy compatibility aliases.
@@ -4889,7 +5009,17 @@ class TestUnauthorizedResponseShape:
         ww = kwargs["headers"]["WWW-Authenticate"]
         # Pinned base means evil.example is NOT in the metadata URL
         assert "evil.example" not in ww
-        assert f"https://legit.example{CURRENT['oauth_base']}/protected-resource" in ww
+        if _scoped_only_prm(oauth):
+            # The pointer is the RFC 9728 §3.1 path-scoped URL — the only
+            # protected-resource document left.
+            assert (
+                "https://legit.example/.well-known/oauth-protected-resource"
+                "/api/webhook/mcp_webhook_id_aaaa" in ww
+            )
+        else:
+            assert (
+                f"https://legit.example{CURRENT['oauth_base']}/protected-resource" in ww
+            )
 
 
 class TestHaAuthMode:
@@ -4978,9 +5108,10 @@ class TestHaAuthMode:
             call.args[0].url for call in hass.http.register_view.call_args_list
         }
         expected = {
-            f"{CURRENT['oauth_base']}/protected-resource",
             f"{CURRENT['oauth_base']}/authorization-server",
         } | _wellknown_oauth_urls(oauth, "mcp_test")
+        if not _scoped_only_prm(oauth):
+            expected.add(f"{CURRENT['oauth_base']}/protected-resource")
         if _unified_oauth_routes():
             expected |= {
                 f"{CURRENT['oauth_base']}/authorize",
@@ -5134,7 +5265,7 @@ class TestHaAuthMode:
             # A second setup (config-entry reload) must NOT re-register the views.
             await mod.async_setup_entry(hass, MagicMock())
         assert first == (
-            7
+            (6 if _scoped_only_prm(oauth) else 7)
             + (2 if _unified_oauth_routes() else 0)
             + (1 if _scoped_revoke_supported() else 0)
             + (1 if _dcr_registration_supported() else 0)
@@ -5143,6 +5274,42 @@ class TestHaAuthMode:
         # The register-once flag lives in oauth.py (a top-level hass.data key),
         # not on the integration package.
         assert hass.data[oauth._METADATA_VIEWS_REGISTERED_KEY] is True
+
+    async def test_ha_auth_setup_reports_restart_when_webhook_id_changed(
+        self, hass, tmp_path
+    ):
+        """A webhook id rotated mid-session raises the restart Repair.
+
+        The path-scoped discovery URL bound this session names the OLD id and
+        HA cannot rebind it, so the new id has no discovery URL until a
+        restart — the one case where a reload is not enough.
+        """
+        mod, oauth, _an = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
+        if not _scoped_only_prm(oauth):
+            pytest.skip("flavor does not detect a rotated webhook id yet")
+        repairs = _bind_repairs(mod, tmp_path)
+        rotated = self._ha_auth_config() | {"webhook_id": "mcp_rotated"}
+        with (
+            patch.object(
+                mod,
+                "_read_config",
+                side_effect=[self._ha_auth_config(), rotated],
+            ),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+            patch.object(repairs, "create_issue") as mock_create,
+            patch.object(repairs, "_write_marker"),
+            patch.object(repairs, "_delete_issue_only"),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+            mock_create.assert_not_called()
+            hass.http.register_view.reset_mock()
+            await mod.async_setup_entry(hass, MagicMock())
+        mock_create.assert_called_once_with(hass, mod.DOMAIN)
+        # HA cannot rebind a bound view, so nothing was registered again...
+        assert hass.http.register_view.call_count == 0
+        # ...and the recorded bound id stays the one the URLs actually carry.
+        assert hass.data[oauth._METADATA_VIEWS_BOUND_WEBHOOK_ID_KEY] == "mcp_test"
 
     async def test_register_once_flag_survives_unload(self, hass, tmp_path):
         """The register-once flags outlive the config-entry data they gate.
@@ -5162,7 +5329,7 @@ class TestHaAuthMode:
         ):
             await mod.async_setup_entry(hass, MagicMock())
             assert hass.http.register_view.call_count == (
-                7
+                (6 if _scoped_only_prm(oauth) else 7)
                 + (2 if _unified_oauth_routes() else 0)
                 + (1 if _scoped_revoke_supported() else 0)
                 + (1 if _dcr_registration_supported() else 0)
@@ -5194,10 +5361,10 @@ class TestHaAuthMode:
     async def test_ha_auth_then_legacy_does_not_reregister_metadata(
         self, hass, tmp_path
     ):
-        """A live ha_auth -> legacy switch reuses the already-bound seven
+        """A live ha_auth -> legacy switch reuses the already-bound
         metadata views: legacy's register_views() routes them through the same
         flag-guarded registrar, so the second setup registers ONLY the two root
-        views, never a duplicate of the seven."""
+        views, never a duplicate of the metadata bundle."""
         mod, oauth, auth_native = _import_ha_auth_stack(tmp_secret_dir=tmp_path)
         _bind_repairs(mod, tmp_path)
         # Boot-time so legacy binds its root views cleanly (no restart Repair).
@@ -5213,7 +5380,7 @@ class TestHaAuthMode:
         ):
             await mod.async_setup_entry(hass, MagicMock())  # ha_auth discovery
             assert hass.http.register_view.call_count == (
-                7
+                (6 if _scoped_only_prm(oauth) else 7)
                 + (2 if _unified_oauth_routes() else 0)
                 + (1 if _scoped_revoke_supported() else 0)
                 + (1 if _dcr_registration_supported() else 0)
@@ -5224,7 +5391,7 @@ class TestHaAuthMode:
             call.args[0].url for call in hass.http.register_view.call_args_list
         }
         assert registered == {"/authorize", "/token"}
-        # None of the seven metadata views were registered a second time.
+        # None of the metadata views were registered a second time.
         assert not (registered & _wellknown_oauth_urls(oauth, "mcp_test"))
         assert hass.data[mod.DOMAIN]["oauth_mode"] == mod.OAUTH_MODE_LEGACY
 
@@ -5245,8 +5412,11 @@ class TestHaAuthMode:
             patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
         ):
             await mod.async_setup_entry(hass, MagicMock())  # legacy views + root
+            # metadata bundle + the two root aliases legacy binds.
             assert hass.http.register_view.call_count == (
-                (11 if _unified_oauth_routes() else 9)
+                (6 if _scoped_only_prm(oauth) else 7)
+                + 2
+                + (2 if _unified_oauth_routes() else 0)
                 + (1 if _scoped_revoke_supported() else 0)
             )
             hass.http.register_view.reset_mock()
@@ -5415,8 +5585,13 @@ class TestHaAuthMode:
     async def test_prm_document_ha_auth_matches_legacy_shape(self, tmp_path):
         oauth, rs = self._resource_server(tmp_path)
         request = _make_view_request(headers={"Host": "ignored"})
+        prm_view = (
+            oauth.WellKnownProtectedResourceView(rs)
+            if _scoped_only_prm(oauth)
+            else oauth.ProtectedResourceMetadataView(rs)
+        )
         with patch.object(oauth.web, "json_response") as jr:
-            await oauth.ProtectedResourceMetadataView(rs).get(request)
+            await prm_view.get(request)
         body = jr.call_args.args[0]
         assert body["resource"] == (
             "https://legit.example/api/webhook/mcp_webhook_id_aaaa"
@@ -5707,10 +5882,12 @@ class TestHaAuthMode:
             signing_key=b"\x00" * 32,
         )
         req = _make_view_request(headers={"Host": "h"})
-        for view in (
-            oauth.ProtectedResourceMetadataView(provider),
-            oauth.AuthorizationServerMetadataView(provider),
-        ):
+        prm_view = (
+            oauth.WellKnownProtectedResourceView(provider)
+            if _scoped_only_prm(oauth)
+            else oauth.ProtectedResourceMetadataView(provider)
+        )
+        for view in (prm_view, oauth.AuthorizationServerMetadataView(provider)):
             with patch.object(oauth.web, "json_response") as jr:
                 await view.get(req)
             assert jr.call_args.kwargs.get("status") == 404
@@ -5760,10 +5937,12 @@ class TestHaAuthMode:
             signing_key=b"\x00" * 32,
         )
         req = _make_view_request(headers={"Host": "h"})
-        for view in (
-            oauth.ProtectedResourceMetadataView(provider),
-            oauth.AuthorizationServerMetadataView(provider),
-        ):
+        prm_view = (
+            oauth.WellKnownProtectedResourceView(provider)
+            if _scoped_only_prm(oauth)
+            else oauth.ProtectedResourceMetadataView(provider)
+        )
+        for view in (prm_view, oauth.AuthorizationServerMetadataView(provider)):
             with patch.object(oauth.web, "json_response") as jr:
                 await view.get(req)
             assert jr.call_args.kwargs.get("status") == 404
@@ -5812,10 +5991,17 @@ class TestHaAuthMode:
             oauth.build_unauthorized_response(req, ha)
         ha_ww = rc.call_args.kwargs["headers"]["WWW-Authenticate"]
         assert legacy_ww == ha_ww
-        assert legacy_ww == (
-            'Bearer realm="MCP Proxy", resource_metadata='
-            f'"https://myhost.example{oauth.OAUTH_BASE}/protected-resource"'
-        )
+        if _scoped_only_prm(oauth):
+            assert legacy_ww == (
+                'Bearer realm="MCP Proxy", resource_metadata='
+                '"https://myhost.example/.well-known/oauth-protected-resource'
+                '/api/webhook/mcp_webhook_id_aaaa"'
+            )
+        else:
+            assert legacy_ww == (
+                'Bearer realm="MCP Proxy", resource_metadata='
+                f'"https://myhost.example{oauth.OAUTH_BASE}/protected-resource"'
+            )
 
     # ---- the ha_auth AS document is served identically at all 4 well-known URLs ----
 
@@ -6480,11 +6666,70 @@ class TestNoneAutoApproveMode:
         # NOT leak the webhook id (the sole credential in none mode) to an
         # anonymous GET — it 404s in none-autoapprove mode.
         _mod, oauth, autoapprove, _an = _import_none_autoapprove_stack()
+        if _scoped_only_prm(oauth):
+            pytest.skip("flavor no longer ships the fixed-path document")
         hass, provider = self._none_live_hass(oauth, autoapprove)
         request = _make_view_request(headers={"Host": "legit.example"})
         with patch.object(oauth.web, "json_response") as jr:
             await oauth.ProtectedResourceMetadataView(provider).get(request)
         assert jr.call_args.kwargs["status"] == 404
+
+    async def test_no_fixed_path_view_reveals_webhook_id_in_any_mode(self):
+        # The webhook id must never appear in a document reachable without
+        # already presenting it: every metadata view whose URL does not embed
+        # the id is fetched in each live mode and its body checked. The
+        # #1976 mode gate is gone because there is no fixed-path document left
+        # to gate — this pins that there is none in ANY mode, not just none.
+        _mod, oauth, autoapprove, auth_native = _import_none_autoapprove_stack()
+        if not _scoped_only_prm(oauth):
+            pytest.skip("flavor still ships the fixed-path document")
+        webhook_id = "mcp_test"
+        request = _make_view_request(headers={"Host": "legit.example"})
+        for provider in (
+            self._none_live_hass(oauth, autoapprove, webhook_id)[1],
+            self._ha_auth_live_provider(oauth, auth_native, webhook_id),
+            self._legacy_live_provider(oauth, webhook_id),
+        ):
+            for view in oauth._metadata_views(provider):
+                if webhook_id in view.url:
+                    continue
+                with patch.object(oauth.web, "json_response") as jr:
+                    await view.get(request)
+                body = json.dumps(jr.call_args.args[0])
+                assert webhook_id not in body, f"{view.url} leaks the webhook id"
+
+    @staticmethod
+    def _ha_auth_live_provider(oauth, auth_native, webhook_id):
+        """A ResourceServer whose hass reports ha_auth as the live mode."""
+        hass = MagicMock()
+        hass.data = {}
+        rs = auth_native.ResourceServer(hass, webhook_id, None)
+        hass.data[oauth.DOMAIN] = {
+            "webhook_id": webhook_id,
+            "oauth": rs,
+            "oauth_mode": oauth.MODE_HA_AUTH,
+        }
+        return rs
+
+    @staticmethod
+    def _legacy_live_provider(oauth, webhook_id):
+        """An OAuthProvider whose hass reports legacy as the live mode."""
+        hass = MagicMock()
+        hass.data = {}
+        provider = oauth.OAuthProvider(
+            hass=hass,
+            client_id="client-id-1234567890ABCDEF",
+            client_secret="client-secret-very-secret",
+            webhook_id=webhook_id,
+            signing_key=b"\x00" * 32,
+            public_base_url=None,
+        )
+        hass.data[oauth.DOMAIN] = {
+            "webhook_id": webhook_id,
+            "oauth": provider,
+            "oauth_mode": oauth.MODE_LEGACY,
+        }
+        return provider
 
     async def test_path_scoped_protected_resource_still_serves_in_none_mode(self):
         # The path-scoped view (URL embeds the id) KEEPS serving in none mode —
@@ -6803,9 +7048,10 @@ class TestNoneAutoApproveMode:
             call.args[0].url for call in hass.http.register_view.call_args_list
         }
         metadata = {
-            f"{CURRENT['oauth_base']}/protected-resource",
             f"{CURRENT['oauth_base']}/authorization-server",
         } | _wellknown_oauth_urls(oauth, "mcp_test")
+        if not _scoped_only_prm(oauth):
+            metadata.add(f"{CURRENT['oauth_base']}/protected-resource")
         autoapprove_urls = {
             f"{CURRENT['oauth_base']}/authorize",
             f"{CURRENT['oauth_base']}/token",
