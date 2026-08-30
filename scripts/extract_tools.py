@@ -119,7 +119,7 @@ def _subscript_value(node: ast.Subscript, scope: ModuleScope) -> str | None:
     target = _static_value(node.value, scope)
     if not isinstance(target, str) or not isinstance(node.slice, ast.Slice):
         return None
-    bounds = []
+    bounds: list[int | None] = []
     for part in (node.slice.lower, node.slice.upper, node.slice.step):
         if part is None:
             bounds.append(None)
@@ -175,24 +175,42 @@ def _apply_imports(path: Path, tree: ast.Module, scope: ModuleScope) -> None:
                 scope.funcs[local] = imported.funcs[alias.name]
 
 
+def _assigned_literal(node: ast.stmt) -> tuple[str, ast.expr] | None:
+    """The (name, value expression) of a simple module-level assignment."""
+    if isinstance(node, ast.Assign) and len(node.targets) == 1:
+        target = node.targets[0]
+        if isinstance(target, ast.Name):
+            return target.id, node.value
+    if isinstance(node, ast.AnnAssign) and node.value is not None:
+        if isinstance(node.target, ast.Name):
+            return node.target.id, node.value
+    return None
+
+
+def _returned_literal(node: ast.stmt) -> tuple[str, ast.expr] | None:
+    """The (name, returned expression) of a zero-argument function."""
+    if not isinstance(node, ast.FunctionDef) or node.args.args:
+        return None
+    returns = [n for n in node.body if isinstance(n, ast.Return)]
+    if len(returns) != 1 or returns[0].value is None:
+        return None
+    return node.name, returns[0].value
+
+
 def _apply_definitions(tree: ast.Module, scope: ModuleScope) -> None:
     """Record module-level literals and zero-argument literal-returning helpers."""
     for node in tree.body:
-        target = None
-        if isinstance(node, ast.Assign) and len(node.targets) == 1:
-            target = node.targets[0]
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            target = node.target
-        if isinstance(target, ast.Name):
-            value = _static_value(node.value, scope)  # type: ignore[arg-type]
+        assigned = _assigned_literal(node)
+        if assigned is not None:
+            value = _static_value(assigned[1], scope)
             if value is not None:
-                scope.consts[target.id] = value
-        elif isinstance(node, ast.FunctionDef) and not node.args.args:
-            returns = [n for n in node.body if isinstance(n, ast.Return)]
-            if len(returns) == 1 and returns[0].value is not None:
-                value = _static_value(returns[0].value, scope)
-                if value is not None:
-                    scope.funcs[node.name] = value
+                scope.consts[assigned[0]] = value
+            continue
+        returned = _returned_literal(node)
+        if returned is not None:
+            value = _static_value(returned[1], scope)
+            if value is not None:
+                scope.funcs[returned[0]] = value
 
 
 _SCOPE_CACHE: dict[Path, ModuleScope] = {}
