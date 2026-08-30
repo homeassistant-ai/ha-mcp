@@ -51,7 +51,10 @@ import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 
-from ha_mcp.client.rest_client import HomeAssistantCommandError
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
 from ha_mcp.client.websocket_client import (
     DEFAULT_COMMAND_WAIT_TIMEOUT,
     HomeAssistantWebSocketClient,
@@ -127,6 +130,14 @@ async def _wait_for_hacs_ws_ready(container_info: dict) -> None:
             try:
                 await client.send_command("hacs/repositories/list")
                 return
+            except HomeAssistantCommandTimeout:
+                # HACS registered the handler but has not answered yet — it
+                # populates its catalogue on the first boot after the
+                # fresh-config restart. That is the slow-runner case this
+                # helper exists for, and HomeAssistantCommandTimeout is a
+                # SIBLING of HomeAssistantCommandError, not a subclass, so it
+                # needs its own arm. The deadline below is the only stop.
+                pass
             except HomeAssistantCommandError as err:
                 if not (
                     err.code == "unknown_command"

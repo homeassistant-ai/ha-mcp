@@ -7085,6 +7085,53 @@ class TestNoneAutoApproveMode:
         mock_create.assert_not_called()
         mock_write.assert_not_called()
 
+    async def test_none_mode_rotation_raises_the_shared_restart_repair(
+        self, hass, tmp_path
+    ):
+        """A rotation with OAuth OFF must raise the same restart Repair.
+
+        Review finding: the none branch now forwards register_metadata_views'
+        verdict, so this path reaches create_issue for the first time. Pin
+        WHICH Repair that becomes — the shared restart issue, whose strings
+        cover both causes — not merely that the verdict was True.
+        """
+        mod, oauth, _aa, _an = _import_none_autoapprove_stack(tmp_path)
+        if not _scoped_only_prm(oauth):
+            pytest.skip("flavor does not detect a rotated webhook id yet")
+        repairs = _bind_repairs(mod, tmp_path)
+        base = {
+            "target_url": "http://127.0.0.1:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+            "webhook_id": "mcp_test",
+        }
+        rotated = base | {"webhook_id": "mcp_rotated"}
+        with (
+            patch.object(mod, "_read_config", side_effect=[base, rotated]),
+            patch.object(mod, "async_register"),
+            patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
+            patch.object(repairs, "create_issue") as mock_create,
+            patch.object(repairs, "_write_marker"),
+            patch.object(repairs, "_delete_issue_only"),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+            mock_create.assert_not_called()
+            await mod.async_setup_entry(hass, MagicMock())
+        mock_create.assert_called_once_with(hass, mod.DOMAIN)
+        # The default issue id is the shared restart Repair, and its strings
+        # must not be the OAuth-only wording any more (the operator here never
+        # enabled OAuth).
+        assert repairs.ISSUE_ID == "oauth_restart_required"
+        strings = json.loads(
+            (Path(PROXY_ADDON_DIR) / CURRENT["component"] / "strings.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        issue = strings["issues"][repairs.ISSUE_ID]
+        blurb = issue["title"] + issue["fix_flow"]["step"]["confirm"]["description"]
+        assert "webhook ID was rotated" in blurb, (
+            "the shared Repair's strings must describe the rotation cause too, "
+            "or a none-mode operator is told OAuth was enabled"
+        )
+
     async def test_setup_failure_fails_open_keeps_plain_proxy(self, hass, tmp_path):
         """Unlike ha_auth/legacy, a none-mode auto-approve setup failure must NOT
         tear down the (intentionally unauthenticated) webhook — it just skips the

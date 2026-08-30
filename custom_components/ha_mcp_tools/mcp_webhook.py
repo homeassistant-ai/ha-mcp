@@ -577,10 +577,10 @@ async def _check_webhook_auth(
     if resource_server is not None and not await resource_server.validate_request(
         request
     ):
-        return _build_unauthorized_response(request, cfg.get("webhook_id", ""))
+        return _build_unauthorized_response(request, cfg["webhook_id"])
     oauth_provider: LegacyOAuthProvider | None = cfg.get("oauth_provider")
     if oauth_provider is not None and not oauth_provider.validate_bearer(request):
-        return _build_unauthorized_response(request, cfg.get("webhook_id", ""))
+        return _build_unauthorized_response(request, cfg["webhook_id"])
     return None
 
 
