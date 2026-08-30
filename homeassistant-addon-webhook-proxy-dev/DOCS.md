@@ -183,9 +183,9 @@ The generated values are persisted at `/data/oauth_creds.json` inside the app, s
 
 **OAuth endpoints:**
 
-All three behaviors advertise proxy-owned endpoints under `/api/mcp_proxy_dev/oauth`, so a cached client configuration remains on the proxy across mode switches:
+All three behaviors advertise proxy-owned endpoints under `/api/mcp_proxy_dev/oauth` (plus the webhook-scoped `.well-known` document), so a cached client configuration remains on the proxy across mode switches:
 
-- `/api/mcp_proxy_dev/oauth/protected-resource` — RFC 9728 protected-resource metadata (`legacy` and `ha_auth` only: in none mode this fixed route returns 404, because its metadata would reveal the credential-bearing webhook URL — none-mode clients use the webhook-ID-scoped `.well-known` route instead)
+- `/.well-known/oauth-protected-resource/api/webhook/<webhook-id>` — RFC 9728 protected-resource metadata, served in every mode at the path derived from the webhook URL (the only location: a caller must already hold the webhook ID to reach it, so discovery never reveals the credential-bearing URL; the webhook's 401 challenge points here)
 - `/api/mcp_proxy_dev/oauth/authorization-server` — RFC 8414 authorization-server metadata
 - `/api/mcp_proxy_dev/oauth/authorize` — mode-dispatched authorization endpoint
 - `/api/mcp_proxy_dev/oauth/token` — mode-dispatched token endpoint

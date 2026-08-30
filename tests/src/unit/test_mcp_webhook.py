@@ -1120,7 +1120,7 @@ class TestRegisterWebhook:
     async def test_ha_auth_re_enable_reuses_bound_views(self, monkeypatch):
         # aiohttp cannot unregister a bound view; the once-per-session guard
         # lives at a TOP-LEVEL hass.data key precisely so a none->ha_auth->
-        # none->ha_auth cycle re-USES the 9 views instead of re-binding them
+        # none->ha_auth cycle re-USES the 10 views instead of re-binding them
         # (which raises and takes the whole bring-up down). Review finding:
         # only the first registration was tested.
         hass = _register_hass()

@@ -852,10 +852,16 @@ class WellKnownProtectedResourceView(HomeAssistantView):
     serves, steering the flow into HA-core native OAuth where the proxy's
     client_id can never work.
 
-    Exact-path bind, deliberately not a `{webhook_id}` route parameter: aiohttp
-    resolves an exact path before a dynamic one under the same prefix, which is
-    what lets this view and the in-process component's parameterised view
-    coexist on one HA (each answers its own id). The cost is that HA cannot
+    Exact-path bind, deliberately not a `{webhook_id}` route parameter: aiohttp's
+    `UrlDispatcher.resolve` walks the request path from the most specific
+    segment upwards and consults the resources indexed under each key in turn,
+    so an exact-path resource (indexed under the full path) is tried before a
+    `{webhook_id}` resource (indexed under the prefix) whatever their
+    registration order — registration order only breaks ties between resources
+    sharing one index key. That is what lets this view and the in-process
+    component's parameterised view coexist on one HA (each answers its own id);
+    `tests/src/unit/test_prm_route_precedence.py` pins it against the real
+    router. The cost is that HA cannot
     rebind this URL when the operator rotates the webhook id mid-session, so
     `get` 404s once the bound id is no longer the live one (the old URL must
     not keep serving the NEW id to whoever held the old one), and
