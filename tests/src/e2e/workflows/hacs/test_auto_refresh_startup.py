@@ -51,7 +51,11 @@ import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 
-from ha_mcp.client.websocket_client import DEFAULT_COMMAND_WAIT_TIMEOUT
+from ha_mcp.client.websocket_client import (
+    DEFAULT_COMMAND_WAIT_TIMEOUT,
+    HomeAssistantWebSocketClient,
+)
+from ha_mcp.client.rest_client import HomeAssistantCommandError
 from ha_mcp.hacs_auto_refresh import MARKER_FILENAME_PREFIX, RETRY_DELAYS
 from ha_mcp.tools.hacs_registration import HACS_REFRESH_TIMEOUT
 
@@ -85,6 +89,48 @@ NUDGE_MARKER_TIMEOUT = (
 )
 
 
+# HACS registers its WebSocket handlers late in HA's boot, and this fixture
+# restarts HA with a fresh config before each test. Until those handlers exist
+# ``hacs/repositories/list`` answers ``unknown_command`` FAST, so the nudge's
+# attempts at 0 s, 30 s and 90 s can all fall inside that window on a slow
+# runner — and the next one, at 210 s, lands after NUDGE_MARKER_TIMEOUT below.
+# The budget below deliberately covers only the happy path plus ONE slow
+# failure; it is not a HACS-boot timeout. So wait for HACS to be reachable
+# BEFORE launching, from the test process, and the launcher's first attempt
+# succeeds. Bound it by the nudge's own schedule: if HACS is not up by then the
+# lane could never have passed anyway, and the message says which it was.
+HACS_WS_READY_TIMEOUT = sum(RETRY_DELAYS) + DEFAULT_COMMAND_WAIT_TIMEOUT
+
+
+async def _wait_for_hacs_ws_ready(container_info: dict) -> None:
+    """Block until the container's HACS answers ``hacs/repositories/list``."""
+    client = HomeAssistantWebSocketClient(
+        container_info["base_url"], container_info.get("token", TEST_TOKEN)
+    )
+    assert await client.connect(), "could not open the HA WebSocket for the probe"
+    try:
+        deadline = asyncio.get_running_loop().time() + HACS_WS_READY_TIMEOUT
+        while True:
+            try:
+                await client.send_command("hacs/repositories/list")
+                return
+            except HomeAssistantCommandError as err:
+                if not (
+                    err.code == "unknown_command"
+                    or "unknown command" in str(err).lower()
+                ):
+                    raise
+            if asyncio.get_running_loop().time() >= deadline:
+                pytest.fail(
+                    "HACS never registered its WebSocket handlers within "
+                    f"{HACS_WS_READY_TIMEOUT:.0f}s of the fresh-config restart, "
+                    "so no launcher could complete the startup nudge here."
+                )
+            await asyncio.sleep(2.0)
+    finally:
+        await client.disconnect()
+
+
 @pytest.mark.hacs
 async def test_stdio_launcher_runs_the_startup_nudge(
     ha_container_with_fresh_config, tmp_path
@@ -93,6 +139,7 @@ async def test_stdio_launcher_runs_the_startup_nudge(
     logger.info("Testing the HACS startup nudge through the stdio launcher...")
 
     container_info = ha_container_with_fresh_config
+    await _wait_for_hacs_ws_ready(container_info)
 
     # Use the same explicit environment as the stdio fixtures, plus this test's
     # config dir. HA_MCP_DISABLE_UPDATE_CHECK is intentionally absent because it
@@ -296,6 +343,7 @@ async def test_web_launcher_runs_the_startup_nudge(
     logger.info("Testing the HACS startup nudge through the ha-mcp-web launcher...")
 
     container_info = ha_container_with_fresh_config
+    await _wait_for_hacs_ws_ready(container_info)
     env = _http_launcher_env(container_info["base_url"], tmp_path)
     env["HOMEASSISTANT_TOKEN"] = TEST_TOKEN
 
