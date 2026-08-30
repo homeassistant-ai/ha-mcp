@@ -304,3 +304,5 @@ validates legacy `dashboard_path` values (rejects URLs, query strings,
 fragments, `..`, and backslashes) and checks the first route segment against
 Home Assistant's registered Lovelace dashboards. A raw path therefore cannot
 use Puppet's independent credential to render another frontend panel.
+
+<!-- smoke test #2311: docs-only skip path; never merged -->
