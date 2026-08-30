@@ -197,8 +197,9 @@ handler remaps the intentional error to `INTERNAL_ERROR`.
 
 For validation, call
 `raise_tool_error(create_error_response(ErrorCode.VALIDATION_INVALID_PARAMETER, ...))`.
-For service failures, use `ErrorCode.SERVICE_CALL_FAILED` and the service's
-reported error. Batch items may append `create_error_response(...)` without
+For service failures, check `result.get("success")` and raise
+`ErrorCode.SERVICE_CALL_FAILED` with `result.get("error", "Operation failed")`
+as the message. Batch items may append `create_error_response(...)` without
 raising. Use `raise_error=False` only when the payload must be adjusted before
 raising, and never add timezone metadata to errors.
 

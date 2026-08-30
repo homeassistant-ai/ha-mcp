@@ -120,10 +120,10 @@ Never create a follow-up issue or pull request without explicit approval.
 Before proposing one, the work must not be achievable by mirroring a nearby
 pattern; it must either present a real design choice with named alternatives
 or be a genuinely large mechanical migration; it must change the review
-surface, have a concrete benefit, and remain actionable. If any test fails,
-fix it now or let it go—do not file an issue merely to “track” it. Bot nits
-are fixed or dismissed in the current review, not converted into backlog
-noise.
+surface, have a concrete benefit, and remain actionable. If any of those
+conditions fails, fix it now or let it go—do not file an issue merely to
+“track” it. Bot nits are fixed or dismissed in the current review, not
+converted into backlog noise.
 
 Do not use “non-blocking,” “post-merge follow-up,” “nice to have,”
 “pre-existing,” or similar phrasing to hide a legitimate current finding.
