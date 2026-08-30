@@ -2673,7 +2673,7 @@ class TestListEditsAndLegacy:
     async def test_warnings_reach_the_tool_response(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Top-level warnings contract (AGENTS.md Return Values): present when
+        # Top-level warnings contract (.gemini/styleguide.md Tool Tags and Return Values): present when
         # the legacy fetch was suppressed, omitted entirely when clean.
         from ha_mcp.tools.backup import _edits_list
 

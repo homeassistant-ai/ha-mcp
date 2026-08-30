@@ -2,7 +2,7 @@
 Utility tools for Home Assistant MCP server.
 
 Template evaluation. The log tools that used to share this module are in
-``tools_logs`` and its helper modules, split out under AGENTS.md § Module Size.
+``tools_logs`` and its helper modules, split out under .gemini/styleguide.md § Tool Consolidation and Module Size.
 """
 
 import logging

@@ -1706,7 +1706,7 @@ class HomeAssistantSmartMCPServer:
         predicates honest. Tier 2/3 in degraded mode raise so the
         caller gets a clear error instead of a confusing empty result.
         Tool-level failures raise ``ToolError`` (via
-        ``raise_tool_error``) per AGENTS.md, so clients see
+        ``raise_tool_error``) per .gemini/styleguide.md, so clients see
         ``isError=true`` rather than a success payload with an
         embedded error.
         """

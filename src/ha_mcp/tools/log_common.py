@@ -2,7 +2,7 @@
 
 Constants, parameter coercion and the cross-source warning rules that every
 source uses, with no dependency on any particular one of them. Split out of
-``tools_utility`` under AGENTS.md § Module Size; the per-source fetchers live in
+``tools_utility`` under .gemini/styleguide.md § Tool Consolidation and Module Size; the per-source fetchers live in
 ``log_sources`` and ``log_sources_supervisor``, and the tool surface in
 ``tools_logs``.
 """

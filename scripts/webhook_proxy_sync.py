@@ -158,7 +158,7 @@ def promote_version(current_stable: str, bump: str) -> str:
 def reset_version(current_dev: str, current_stable: str) -> str:
     """Next dev version, strictly increasing AND sorting ahead of stable.
 
-    ``new_base = max(next_stable_patch, dev_base)``: AGENTS.md's rule is that
+    ``new_base = max(next_stable_patch, dev_base)``: the scoped Webhook Proxy AGENTS rule is that
     the dev base is the NEXT stable patch (stable ``2.0.2`` → ``2.0.3.devN``)
     so dev always sorts ahead of the stable it will promote into — under
     PEP 440 a ``X.Y.Z.devN`` pre-release sorts BEHIND ``X.Y.Z``, so basing

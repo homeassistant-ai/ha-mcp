@@ -846,7 +846,7 @@ async def wait_for_ha_event(
         # KeyError, etc.) is a bug, not a transient, and should surface
         # immediately with a clear traceback rather than being indistinguishable
         # from "no matching event arrived". Matches the
-        # _POLLING_TRANSIENT_ERRORS discipline AGENTS.md mandates.
+        # _POLLING_TRANSIENT_ERRORS discipline tests/AGENTS.md mandates.
         trigger_result = trigger()
         if asyncio.iscoroutine(trigger_result):
             await trigger_result

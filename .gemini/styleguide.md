@@ -1,5 +1,12 @@
 # ha-mcp Code Review Guidelines
 
+[`AGENTS.md`](../AGENTS.md) is the canonical repository entry point and owns
+agent behavior, permission, testing, scope, and workflow rules. This document
+owns code-level conventions and review criteria that agents load when they are
+changing or reviewing code. Keep a rule in one owner and link to it elsewhere;
+if this file and `AGENTS.md` conflict, follow `AGENTS.md` and repair the
+duplicate guidance in the same change.
+
 ## Project Context
 
 **ha-mcp** is a Model Context Protocol (MCP) server that enables AI assistants to control Home Assistant smart homes. It provides tools for entity control, automations, device management, and configuration via Home Assistant's REST and WebSocket APIs.
@@ -18,7 +25,10 @@
 
 ## Test Coverage Requirements
 
-Use best judgement - not all changes require new tests, but the overall feature/tool should be tested.
+The behavioral decision about when to write and run tests is canonical in
+[`AGENTS.md` → Testing and verification](../AGENTS.md#testing-and-verification).
+Reviewers use the severity guidance below to assess whether a change satisfies
+that policy.
 
 **When tests ARE required (HIGH severity):**
 - New MCP tools in `src/ha_mcp/tools/` without any E2E tests
@@ -72,37 +82,126 @@ Verify that safety annotations match actual tool behavior:
 - State-changing operations should have `idempotentHint: True` only if safe to retry
 - Tool with `openWorldHint: True` must reach an external, third-party-authored world (HACS store, app (add-on) repositories, GitHub release feeds, arbitrary import URLs); a tool whose domain is the local Home Assistant instance should use `False`. It is open-world if its output carries externally-authored content back to the client, even when a local integration (HACS, Supervisor, HA Core) makes the actual network call on its behalf
 
+FastMCP defaults are `readOnlyHint=False`, `destructiveHint=True`,
+`idempotentHint=False`, and `openWorldHint=True`.
+
+Set `openWorldHint` explicitly on every tool because FastMCP defaults it to
+`true`, which otherwise silently misclassifies local Home Assistant tools.
+Annotations describe behavior against current supported upstream versions.
+
 Flag HIGH severity if annotation contradicts actual behavior in the implementation.
 
 ## Tool Naming Convention
 
-The canonical tool naming rules — approved verbs, the optional `ha_<namespace>_<verb>_<noun>` shape, and the list of accepted exceptions — are defined in [`AGENTS.md` → Writing MCP Tools → Naming Convention](../AGENTS.md#naming-convention). Treat that section as the single source of truth and consult it when reviewing.
+Use `ha_<verb>_<noun>`:
+
+- `get`: one item, such as `ha_get_state`.
+- `list`: a collection, such as `ha_list_services`.
+- `search`: a filtered query, such as `ha_search`.
+- `set`: create or update, such as `ha_config_set_helper`.
+- `delete`: delete a dashboard, config entry, or file.
+- `remove`: remove a registry item.
+- `call`: execute an operation.
+- `manage`: one interface intentionally combining multiple operations.
+
+Grouped families may insert a namespace:
+`ha_<namespace>_<verb>_<noun>`. Established namespaces include `ha_config_*`
+and developer-mode-only `ha_dev_*`.
+
+Accepted natural-name exceptions are:
+
+- `ha_restart`, `ha_reload_core`, `ha_eval_template`
+- `ha_report_issue`, `ha_import_blueprint`
+- `ha_read_file`, `ha_write_file`, `ha_bulk_control`
+
+When no verb fits, update this list rather than forcing an inaccurate name.
+This section is the single source of truth for tool naming.
 
 Flag MEDIUM severity if a tool name violates the rules defined there.
 
 ## Tool File Organization
 
-New tools MUST be in `tools_<domain>.py` with `register_<domain>_tools()` function. Tools are auto-discovered by registry - no manual registration needed.
+New tools belong in `src/ha_mcp/tools/tools_<domain>.py` with a
+`register_<domain>_tools()` function. The registry auto-discovers it; do not
+add manual central registration.
+
+`@tool` from `fastmcp.tools` must be the outermost decorator, above
+`@log_tool_usage`, so the final method keeps `__fastmcp__`.
+`register_tool_methods()` discovers decorated methods and adds them to the
+server.
+
+```python
+from typing import Any
+
+from fastmcp.tools import tool
+
+from .helpers import log_tool_usage, register_tool_methods
+
+
+class DomainTools:
+    def __init__(self, client):
+        self._client = client
+
+    @tool(
+        name="ha_<verb>_<noun>",
+        tags={"Category Name"},
+        annotations={"readOnlyHint": True, "openWorldHint": False},
+    )
+    @log_tool_usage
+    async def ha_<verb>_<noun>(self, param: str) -> dict[str, Any]:
+        """<Action verb> <what the tool does in one sentence>."""
+        ...
+
+
+def register_<domain>_tools(mcp, client, **kwargs):
+    register_tool_methods(mcp, DomainTools(client))
+```
 
 ## Structured Error Responses
 
-All error handling MUST use:
+Tool-level failures raise `ToolError`, which sets MCP `isError=true`.
+Batch-item failures inside a successful result array are the only exception.
+Never return a plain error dictionary from a tool-level failure.
+
+Use the helpers in `errors.py` and `helpers.py`; do not construct raw error
+payloads. In exception blocks, `exception_to_structured_error()` raises by
+default:
 
 ```python
-from ..errors import create_error_response, ErrorCode
-return create_error_response(
-    code=ErrorCode.APPROPRIATE_CODE,
-    message="Clear error description",
-    suggestions=["Actionable suggestion"]
-)
+from fastmcp.exceptions import ToolError
+
+from .helpers import exception_to_structured_error
+
+try:
+    ...
+except ToolError:
+    raise
+except Exception as exc:
+    exception_to_structured_error(
+        exc,
+        context={"entity_id": entity_id},
+        suggestions=["Verify the entity exists"],
+    )
 ```
 
-Flag HIGH severity if errors use plain exceptions or dict returns instead of structured errors from `errors.py`.
+The explicit `except ToolError: raise` guard is required when the `try`
+body may call `raise_tool_error()`; otherwise a broad handler remaps the
+intentional error to `INTERNAL_ERROR`.
+
+For validation, call
+`raise_tool_error(create_error_response(ErrorCode.VALIDATION_INVALID_PARAMETER, ...))`.
+For service failures, use `ErrorCode.SERVICE_CALL_FAILED` and the service's
+reported error. Batch items may append `create_error_response(...)` without
+raising. Use `raise_error=False` only when the payload must be adjusted before
+raising, and never add timezone metadata to errors.
+
+Flag HIGH severity when a tool returns a plain error, swallows `ToolError`, or
+bypasses the shared structured-error helpers.
 
 
 ## Code Conventions
 
-## MCP Tool Docstrings
+### MCP Tool Docstrings
 
 These rules apply to new or modified tool docstrings in the PR diff only -- not to pre-existing docstrings in unchanged files.
 
@@ -112,7 +211,7 @@ These rules apply to new or modified tool docstrings in the PR diff only -- not 
 - References a non-existent tool (e.g., `ha_get_domain_docs` -- the correct name is `ha_get_skill_guide`)
 - Embeds a full parameter schema instead of deferring to `ha_get_skill_guide`
 - Is a workflow-entry tool but gives no hint about the next natural tool to call
-- Multi-line docstring does not follow the structure template: (1) what the tool does, (2) when NOT to use it with preferred alternatives, (3) when to use it, (4) caveats. See AGENTS.md "Tool Docstrings" for details.
+- Multi-line docstring does not follow this structure: (1) what the tool does, (2) when NOT to use it with preferred alternatives, (3) when to use it, and (4) caveats.
 
 **Do NOT flag:**
 - Concise one-liners on straightforward tools (progressive disclosure: brief by default)
@@ -126,7 +225,7 @@ These rules apply to new or modified tool docstrings in the PR diff only -- not 
 
 1. **Comments**: Only for non-obvious logic - too many comments is an anti-pattern (code should be self-documenting)
 2. **CHANGELOG.md**: Auto-generated via semantic-release (don't edit manually)
-3. **Apps, not add-ons**: Home Assistant 2026.2 renamed add-ons to apps. New user-facing text says **app (add-on)** on first mention and **app** after it; the retired term never stands alone. Identifiers are not automatically exempt — upstream renamed the container prefix to `app_`, while the REST API keeps serving the Apps API at `/addons/...` and puts `/v2/apps` behind the `supervisor_v2_api` feature flag (off by default) — so check each one instead of assuming. What does keep the old spelling: add-on slugs, the `addon` issue label, `homeassistant-addon*/` paths, and the literal pre-2026.2 menu labels inside a compatibility note. Flag MEDIUM severity when new documentation names the product with the old term by itself.
+3. **Apps, not add-ons**: Follow the canonical terminology and identifier exceptions in [the development reference](../docs/agents/development.md#terminology-apps-not-add-ons). Flag MEDIUM severity when new user-facing text uses the retired product term by itself.
 
 ## Architecture Alignment
 
@@ -134,6 +233,58 @@ These rules apply to new or modified tool docstrings in the PR diff only -- not 
 2. **Shared logic**: Use service layer (`smart_search/`, `device_control.py`)
 3. **WebSocket operations**: Verify state changes in real-time
 4. **Tool completion**: Operations should wait for completion (not just API acknowledgment)
+
+## Tool Tags and Return Values
+
+Every tool needs a native FastMCP `tags={"Category Name"}`. Tags feed the
+generated README table, `site/src/data/tools.json`, and the Home Assistant app
+documentation. `sync-tool-docs.yml` regenerates them after merge; use
+`python scripts/extract_tools.py` only when local generated output is needed.
+
+Successful tool responses use:
+
+```python
+{"success": True, "data": result}
+{"success": True, "data": result, "warnings": ["Actionable warning"]}
+```
+
+`warnings` is always a top-level `list[str]`, omitted when empty. It is
+never nested in `data` and never represented by a singular `warning`
+string. Tool-level failure raises `ToolError`; only an item inside a batch
+result may use `{"success": False, "error": {...}}`.
+
+## Tool Waiting Behavior
+
+Tools wait for logical completion instead of returning on API acknowledgement
+when a reliable completion signal exists. An optional `wait` parameter
+defaults to `True`:
+
+- Configuration operations poll until the entity is queryable or removed.
+- State-changing service calls poll for the expected state transition.
+- Fire-and-forget automation triggers and external async operations return
+  immediately.
+- Query tools return immediately and do not expose `wait`.
+
+Use the shared helpers in `src/ha_mcp/tools/util_helpers.py`:
+`wait_for_entity_registered()`, `wait_for_entity_removed()`, and
+`wait_for_state_change()`. For bulk work, callers may use `wait=False` and
+then batch-verify.
+
+## Tool Consolidation and Module Size
+
+When another tool fully covers a tool's behavior, remove the redundant tool and
+update references rather than adding a deprecation shim. Fewer, more distinct
+tools improve model selection. Combine frequently chained operations when the
+combined interface remains coherent.
+
+Consolidation, renaming with a migration path, parameter evolution, and return
+restructuring are not breaking when the same outcome and information remain
+available. Removing functionality with no replacement is breaking.
+
+Keep modules focused. Around 1,000 lines is a review signal that a module may
+span multiple concerns, not a mechanical limit. Split along responsibilities
+and update internal imports and test patch targets together; internal Python
+module paths are not a public MCP tool contract.
 
 ## Context Engineering & Progressive Disclosure
 
@@ -203,7 +354,7 @@ comments* and *Nitpick comments* — inside collapsed sections of the review
 body rather than as inline threads, so they create no unresolved-thread
 signal and a green check while unaddressed. Everything must be addressed:
 read each review body in full and assess those findings exactly like inline
-comments. See AGENTS.md § *PR Review Comments* for the full-body sweep.
+comments. See the [GitHub workflow reference](../docs/agents/github-workflow.md#review-comments) for the full-body sweep.
 
 ## Non-Blocking Suggestions and Scope
 

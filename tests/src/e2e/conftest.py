@@ -13,7 +13,7 @@ time, so checking os.environ for a pre-set URL is not a reliable guard here.
 Protection against accidental real-HA usage is instead ensured by:
   - Guard 1: Docker must be available (testcontainers requirement)
   - Guard 3: HA API must become ready within 60s (container health check)
-  - AGENTS.md: documents correct test-run commands
+  - tests/AGENTS.md and docs/agents/development.md: document test commands
 """
 
 import asyncio

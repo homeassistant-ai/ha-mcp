@@ -9,8 +9,8 @@ failure: rename ``.gemini/styleguide.md`` and both CodeRabbit and the Codex
 review request point at nothing, quietly.
 
 Same pattern as ``test_ruff_scope_covers_the_tree.py`` (pins a tool's config to
-the tree) and ``test_locale_parity.py::test_agents_md_states_the_current_ceilings``
-(pins AGENTS.md prose to the real values).
+the tree) and ``test_locale_parity.py::test_locale_readme_states_the_current_ceilings``
+(pins the canonical locale guide to the real values).
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ def _subsection(text: str, title: str) -> str | None:
     """The body of one ``### `` subsection, or ``None`` when absent.
 
     Scoped rather than grepping the whole document, for the reason given in
-    ``test_locale_parity.py::_agents_md_section``: a whole-file grep answers a
+    ``test_locale_parity.py::_locale_readme_section``: a whole-file grep answers a
     question about the file, not about the section it claims to guard.
 
     Terminates on any heading of level 1-3 or end of input. Both bounds matter:

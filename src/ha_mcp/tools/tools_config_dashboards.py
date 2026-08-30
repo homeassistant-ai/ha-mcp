@@ -2200,7 +2200,7 @@ class DashboardConfigTools:
 
         config_hash: str | None = compute_config_hash(config)
 
-        # Warn-don't-truncate (AGENTS.md Return Values): the walker covers
+        # Warn-don't-truncate (.gemini/styleguide.md Tool Tags and Return Values): the walker covers
         # cards / card / custom_fields / states containers and stops at
         # the depth bound, so neither a depth-truncated search nor a
         # search over a dashboard carrying a non-traversed child-bearing

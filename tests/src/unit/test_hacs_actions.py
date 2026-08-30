@@ -481,7 +481,7 @@ class TestManageHacsRemove:
         ws.send_command.assert_not_awaited()
 
     async def test_remove_returns_top_level_success_envelope(self, tools):
-        # AGENTS.md response contract: {"success": True, "data": ...} at the
+        # .gemini/styleguide.md response contract: {"success": True, "data": ...} at the
         # TOP level. add_timezone_metadata wraps its payload under "data", so
         # the handler must hoist success above the wrapper — with the real
         # wrapper shape (not the identity stand-in) the envelope holds.

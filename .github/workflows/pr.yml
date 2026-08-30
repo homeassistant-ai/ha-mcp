@@ -246,9 +246,11 @@ jobs:
 
     - name: Docs Size Check
       run: |
-        size=$(LC_ALL=C.UTF-8 wc -m < AGENTS.md)
-        if [ "$size" -gt 40000 ]; then
-          echo "::warning file=AGENTS.md::AGENTS.md is ${size} chars (>40k). Claude Code will show a startup performance warning."
+        chars=$(LC_ALL=C.UTF-8 wc -m < AGENTS.md)
+        lines=$(wc -l < AGENTS.md)
+        if [ "$chars" -gt 16000 ] || [ "$lines" -gt 200 ]; then
+          echo "::error file=AGENTS.md::AGENTS.md is ${chars} Unicode characters and ${lines} lines; keep the canonical startup guidance at or below 16000 characters and 200 lines, and move scoped detail to linked documents."
+          exit 1
         fi
 
     - name: HACS validation

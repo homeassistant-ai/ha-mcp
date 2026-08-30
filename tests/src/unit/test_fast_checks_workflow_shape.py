@@ -52,6 +52,20 @@ def _step_name(step: dict[str, Any]) -> str:
     return step.get("name") or "(checkout)"
 
 
+def test_docs_size_check_enforces_root_instruction_budgets() -> None:
+    """The startup-context budget is a hard gate, not an ignorable warning."""
+    step = next(step for step in _steps() if _step_name(step) == "Docs Size Check")
+    run = str(step["run"])
+
+    assert "LC_ALL=C.UTF-8 wc -m < AGENTS.md" in run
+    assert "wc -l < AGENTS.md" in run
+    assert "16000" in run
+    assert "200" in run
+    assert "::error file=AGENTS.md" in run
+    assert "exit 1" in run
+    assert "::warning file=AGENTS.md" not in run
+
+
 def test_clean_tree_validators_precede_pr_controlled_execution() -> None:
     """ORDER IS LOAD-BEARING: uv sync runs the PR's own PEP 517 backend."""
     names = [_step_name(step) for step in _steps()]

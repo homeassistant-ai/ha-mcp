@@ -63,7 +63,7 @@ async def test_selector_dry_run_never_dispatches(
 async def test_dry_run_surfaces_resolution_warnings_at_top_level(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Per AGENTS.md, `warnings` must be top-level, never nested under
+    """Per .gemini/styleguide.md, `warnings` must be top-level, never nested under
     `resolution` -- a consumer that only reads the top-level key must still
     see a hidden-entity degradation."""
     resolution_with_warning = BulkSelectorResolution(

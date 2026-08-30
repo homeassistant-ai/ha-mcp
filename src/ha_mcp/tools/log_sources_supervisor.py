@@ -5,7 +5,7 @@ Separate from ``log_sources`` because these two reach Home Assistant through
 Supervisor rather than Core, and carry the whole token/role error vocabulary
 that follows from it. Mixed into ``LogTools`` (``tools_logs``).
 
-Split out of ``tools_utility`` under AGENTS.md § Module Size.
+Split out of ``tools_utility`` under .gemini/styleguide.md § Tool Consolidation and Module Size.
 """
 
 from typing import Any, Literal, NoReturn
