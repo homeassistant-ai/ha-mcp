@@ -19,6 +19,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -52,6 +53,17 @@ PACKAGE_ROOT = REPO_ROOT / "src" / "ha_mcp"
 # (``list[str] | None``) rather than a JSON Schema type, so there is nothing to
 # read the distinction from.
 FIELD_OWN_KEYS = ("description", "default")
+
+# f-string conversions, keyed by ``ast.FormattedValue.conversion``: -1 is none,
+# and the rest are the ord() of the ``!s`` / ``!r`` / ``!a`` flag. Ignoring
+# these would render ``f"{X!r}"`` unquoted — a wrong description rather than a
+# missing one.
+_CONVERSIONS: dict[int, Callable[[Any], str]] = {
+    -1: str,
+    ord("s"): str,
+    ord("r"): repr,
+    ord("a"): ascii,
+}
 
 # String methods safe to apply to an already-resolved literal.
 STR_METHODS = ("upper", "lower", "capitalize", "title", "strip", "lstrip", "rstrip")
@@ -121,7 +133,7 @@ def _joined_str_value(node: ast.JoinedStr, scope: ModuleScope) -> Any:
         resolved = _static_value(value.value, scope)
         if resolved is UNRESOLVED:
             return UNRESOLVED
-        parts.append(str(resolved))
+        parts.append(_CONVERSIONS[value.conversion](resolved))
     return "".join(parts)
 
 

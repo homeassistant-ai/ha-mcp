@@ -196,6 +196,15 @@ class TestNonLiteralDescriptions:
 
         assert info["description"] == "Capped at 500."
 
+    def test_fstring_conversions_are_applied(self):
+        """``!r`` quotes the value; ignoring it yields a wrong description."""
+        scope = self._scope(consts={"SEP": ","})
+        info = self._resolve(
+            "Annotated[str, Field(description=f'Split on {SEP!r}.')]", scope
+        )
+
+        assert info["description"] == "Split on ','."
+
     def test_sliced_and_method_called_constant(self):
         scope = self._scope(consts={"DESC": "capture the whole page"})
         info = self._resolve(
