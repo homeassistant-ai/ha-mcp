@@ -215,9 +215,22 @@ def _assigned_literal(node: ast.stmt) -> tuple[str, ast.expr] | None:
     return None
 
 
+def _takes_no_arguments(args: ast.arguments) -> bool:
+    """Whether the function can genuinely be called with no arguments.
+
+    Every parameter kind counts, not just ``args``: a helper with a required
+    positional-only or keyword-only parameter raises ``TypeError`` when called
+    bare, so resolving ``helper()`` to its return value would describe code
+    that cannot run.
+    """
+    return not (
+        args.posonlyargs or args.args or args.kwonlyargs or args.vararg or args.kwarg
+    )
+
+
 def _returned_literal(node: ast.stmt) -> tuple[str, ast.expr] | None:
     """The (name, returned expression) of a zero-argument function."""
-    if not isinstance(node, ast.FunctionDef) or node.args.args:
+    if not isinstance(node, ast.FunctionDef) or not _takes_no_arguments(node.args):
         return None
     returns = [n for n in node.body if isinstance(n, ast.Return)]
     if len(returns) != 1 or returns[0].value is None:
@@ -365,8 +378,15 @@ def _union_field_info(annotation: ast.BinOp, scope: ModuleScope) -> dict:
         _extract_field_info(annotation.right, scope),
     ]
     info: dict = {}
-    for operand in operands:
-        info.update({k: v for k, v in operand.items() if k != "type"})
+    # Metadata belongs to the branch that declared it. ``X | None`` — the only
+    # shape in practice — has exactly one branch carrying any, so it applies to
+    # the parameter. Two branches carrying metadata (``Annotated[int,
+    # Field(ge=1)] | Annotated[str, Field(min_length=1)]``) cannot be flattened
+    # without claiming each branch's rules govern the whole parameter, so none
+    # is published rather than a false one.
+    described = [o for o in operands if any(k != "type" for k in o)]
+    if len(described) == 1:
+        info.update({k: v for k, v in described[0].items() if k != "type"})
     info["type"] = " | ".join(o["type"] for o in operands if o.get("type"))
     return info
 

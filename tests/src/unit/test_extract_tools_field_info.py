@@ -173,6 +173,55 @@ class TestFieldConstraints:
         )
 
 
+class TestUnionMetadata:
+    """Metadata belongs to the branch that declared it."""
+
+    def test_metadata_from_the_single_annotated_branch_applies(self):
+        info = _field_info("Annotated[int, Field(ge=1, description='n')] | None")
+
+        assert info["type"] == "int | None"
+        assert info["constraints"] == {"ge": 1}
+        assert info["description"] == "n"
+
+    def test_two_annotated_branches_publish_no_flattened_metadata(self):
+        """Neither branch's rules govern the whole parameter."""
+        info = _field_info(
+            "Annotated[int, Field(ge=1)] | Annotated[str, Field(min_length=1)]"
+        )
+
+        assert info["type"] == "int | str"
+        assert "constraints" not in info
+
+    def test_same_named_constraints_are_not_silently_overwritten(self):
+        info = _field_info(
+            "Annotated[int, Field(ge=1)] | Annotated[float, Field(ge=99)]"
+        )
+
+        assert "constraints" not in info
+
+
+class TestZeroArgumentHelpers:
+    """Only a helper that can actually be called bare is resolved."""
+
+    def _funcs(self, source: str) -> dict:
+        scope = extract_tools.ModuleScope({}, {})
+        extract_tools._apply_definitions(ast.parse(source), scope)
+        return scope.funcs
+
+    def test_a_truly_zero_argument_helper_resolves(self):
+        assert self._funcs("def docs():\n    return 'text'\n") == {"docs": "text"}
+
+    def test_a_keyword_only_parameter_disqualifies_the_helper(self):
+        """``docs()`` would raise TypeError, so its return value is not its value."""
+        assert self._funcs("def docs(*, mode):\n    return 'text'\n") == {}
+
+    def test_a_positional_only_parameter_disqualifies_the_helper(self):
+        assert self._funcs("def docs(mode, /):\n    return 'text'\n") == {}
+
+    def test_varargs_disqualify_the_helper(self):
+        assert self._funcs("def docs(*a, **k):\n    return 'text'\n") == {}
+
+
 class TestMetadataSelection:
     """Only ``Field`` keywords describe the parameter."""
 
