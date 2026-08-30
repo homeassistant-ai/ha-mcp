@@ -48,7 +48,8 @@
         "/.github/workflows/.*\\.yml$/"
       ],
       "matchStrings": [
-        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+.*?\\S+:(?<currentValue>[\\d.]+)"
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+.*?\\S+:(?<currentValue>[\\d.]+)",
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+version: \"(?<currentValue>[\\d.]+)\""
       ],
       "depNameTemplate": "{{{depName}}}",
       "datasourceTemplate": "{{{datasource}}}"
@@ -90,6 +91,14 @@
     }
   ],
   "packageRules": [
+    {
+      "description": "The setup-uv version pin (github-releases) and the uv container image (docker) must move together: pr.yml's Fast Checks lane and unit-tests job assume the same uv version",
+      "matchDepNames": [
+        "astral-sh/uv",
+        "ghcr.io/astral-sh/uv"
+      ],
+      "groupName": "uv"
+    },
     {
       "description": "Keep Python interpreter changes coordinated while allowing same-tag digest refreshes",
       "matchManagers": [

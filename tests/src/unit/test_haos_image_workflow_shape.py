@@ -220,31 +220,37 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
     workflow = _workflow(beta_path)
 
     triggers = workflow[True]
-    assert triggers["pull_request"] is None
+    assert "pull_request" not in triggers, (
+        "beta lanes must not run per PR push (#2311) - a per-PR beta failure "
+        "blames every open PR for an upstream change none of them made"
+    )
     assert triggers["push"]["branches"] == ["master"]
     assert triggers["schedule"]
     assert all(entry.get("cron") for entry in triggers["schedule"])
     assert {entry["cron"] for entry in triggers["schedule"]} == {
         cron for _job_id, _mode, cron, _stable_job_id in lane_specs
     }, "the shared file must carry exactly the two lanes' nightly slots"
-    classifier = next(
-        step
-        for step in _job_steps(workflow["jobs"]["changes"])
-        if step.get("id") == "filter"
+    # No `changes` classifier job (#2311): with pull_request gone every
+    # surviving trigger is a trusted ref, so a docs-only classifier could only
+    # ever compute run=true while burning a runner per nightly and per merge.
+    assert "changes" not in workflow["jobs"], (
+        "a docs-only classifier is dead weight here - no pull_request trigger "
+        "means it can never authorize a skip (#2311)"
     )
-    assert "git diff --no-renames --name-only --diff-filter=ACMD" in classifier["run"]
 
     for beta_job_id, mode, cron, stable_job_id in lane_specs:
         job = workflow["jobs"][beta_job_id]
 
-        assert job["needs"] == "changes"
-        assert "needs.changes.outputs.run != 'false'" in job["if"]
+        assert "needs" not in job, (
+            f"{beta_job_id} gained a needs: dependency - nothing in this "
+            "workflow should gate the lanes any more (#2311)"
+        )
         assert f"github.event.schedule == '{cron}'" in job["if"], (
             f"{beta_job_id} must claim its own nightly slot, or the shared "
             "schedule trigger starts it on the other lane's cron too"
         )
         assert "github.event_name != 'schedule'" in job["if"], (
-            f"{beta_job_id} would never run on pull_request / push / dispatch, "
+            f"{beta_job_id} would never run on push / dispatch, "
             "where github.event.schedule is empty"
         )
         for other_cron in (c for _j, _m, c, _s in lane_specs if c != cron):

@@ -1,9 +1,10 @@
 name: Validate
 
+# No pull_request trigger: PR-time HACS and Hassfest run as steps of pr.yml's
+# Fast Checks lane (issue #2311). What stays here is the post-merge and weekly
+# sweep, which catches upstream validator changes that no PR would have run.
 on:
   push:
-    branches: [master]
-  pull_request:
     branches: [master]
   schedule:
     - cron: "0 6 * * 1"
