@@ -23,7 +23,11 @@ from ..client.rest_client import (
 from ..client.websocket_client import get_websocket_client
 from ..client.websocket_listener import start_websocket_listener
 from ..config import get_global_settings
-from ..errors import ErrorCode, create_error_response
+from ..errors import (
+    ErrorCode,
+    create_entity_unavailable_after_dispatch_error,
+    create_error_response,
+)
 from ..utils.domain_handlers import get_domain_handler
 from ..utils.operation_manager import (
     fail_pending_operation,
@@ -43,7 +47,7 @@ from .helpers import (
     safe_progress,
 )
 from .tools_service import BulkControlOperation
-from .util_helpers import _SERVICE_TO_STATE
+from .util_helpers import _SERVICE_TO_STATE, is_single_entity_target
 
 logger = logging.getLogger(__name__)
 
@@ -1016,11 +1020,18 @@ class DeviceControlTools:
         by ``_build_bulk_response`` exactly as the legacy dispatch result is; an op
         whose ``async_call`` raised under the batch (``error`` set / not dispatched)
         maps to a structured ``SERVICE_CALL_FAILED`` error and is NOT re-dispatched
-        (D9). When ``validate_first`` (the default) is set and the target's captured
-        pre-state is null (the entity does not exist), the op maps to a structured
-        ``ENTITY_NOT_FOUND`` failure — parity with the legacy per-op validation. A
-        captured pre-state of ``"unavailable"`` maps to a distinct
-        ``ENTITY_UNAVAILABLE`` failure the same way.
+        (D9). When ``validate_first`` (the default) is set and ``entity_id`` is a
+        single literal entity ID (see ``is_single_entity_target`` — a comma-joined
+        multi-target or magic broadcast target like ``"all"`` is skipped entirely,
+        since its transition row proves nothing about whether the possibly-
+        successful dispatch landed), a captured pre-state that is null (the entity
+        does not exist) maps to a structured ``ENTITY_NOT_FOUND`` failure — parity
+        with the legacy per-op validation. A captured pre-state of ``"unavailable"``
+        maps to a distinct ``ENTITY_UNAVAILABLE`` failure, but only once BOTH the op
+        is unconfirmed AND the post-dispatch state still shows unavailable — unlike
+        the not-found branch, an unavailable target can legitimately reconnect and
+        confirm mid-dispatch, so this check is doubly gated rather than symmetric
+        with it.
         """
         service_call = {
             "domain": row["domain"],
@@ -1048,7 +1059,11 @@ class DeviceControlTools:
         # the correct array length, and that proves nothing about existence. So
         # look for a transition row at all first; only a present row with a null
         # old_state means a genuinely absent entity.
-        if op.get("validate_first", True) and row.get("entity_ids"):
+        if (
+            op.get("validate_first", True)
+            and row.get("entity_ids")
+            and is_single_entity_target(entity_id)
+        ):
             transition = next(
                 (
                     t
@@ -1071,32 +1086,44 @@ class DeviceControlTools:
                     )
                     err["service_call"] = service_call
                     return err
-                new_state = transition.get("new_state")
-                still_unavailable = new_state is None or (
-                    isinstance(new_state, dict)
-                    and new_state.get("state") == "unavailable"
-                )
                 if (
-                    not component_op.get("confirmed")
-                    and isinstance(old_state, dict)
+                    isinstance(old_state, dict)
                     and old_state.get("state") == "unavailable"
-                    and still_unavailable
                 ):
-                    # Gated on NOT confirmed AND still unavailable per the best-
-                    # available post-dispatch read: unlike a nonexistent entity,
-                    # an "unavailable" one legitimately stays in the component's
-                    # confirmation wait and can reconnect and transition
-                    # mid-dispatch (see _confirmable_entity_ids) — a confirmed op,
-                    # or one whose new_state shows it reconnected to some OTHER
-                    # state (just not the expected hint), must never be reported
-                    # as this failure just because its PRE-state was unavailable.
-                    err = create_error_response(
-                        ErrorCode.ENTITY_UNAVAILABLE,
-                        f"Entity '{entity_id}' exists but is currently unavailable",
-                        context={"entity_id": entity_id, "action": action},
-                    )
-                    err["service_call"] = service_call
-                    return err
+                    new_state = transition.get("new_state")
+                    if new_state is None and not component_op.get("confirmed"):
+                        # Removed during the dispatch -- a more specific outcome
+                        # than "still unavailable", which would falsely assert it
+                        # still exists.
+                        err = create_error_response(
+                            ErrorCode.ENTITY_NOT_FOUND,
+                            f"Entity not found: {entity_id}",
+                            suggestions=[
+                                "Use ha_search to find the correct entity",
+                                "Check the entity is not disabled in Home Assistant",
+                            ],
+                            context={"entity_id": entity_id, "action": action},
+                        )
+                        err["service_call"] = service_call
+                        return err
+                    if (
+                        not component_op.get("confirmed")
+                        and isinstance(new_state, dict)
+                        and new_state.get("state") == "unavailable"
+                    ):
+                        # Gated on NOT confirmed AND still unavailable per the
+                        # best-available post-dispatch read: unlike a nonexistent
+                        # entity, an "unavailable" one legitimately stays in the
+                        # component's confirmation wait and can reconnect and
+                        # transition mid-dispatch (see _confirmable_entity_ids) —
+                        # a confirmed op, or one whose new_state shows it
+                        # reconnected to some OTHER state (just not the expected
+                        # hint), must never be reported as this failure just
+                        # because its PRE-state was unavailable.
+                        err = create_entity_unavailable_after_dispatch_error(entity_id)
+                        err["action"] = action
+                        err["service_call"] = service_call
+                        return err
         final_state = next(
             (
                 t["new_state"].get("state")

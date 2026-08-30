@@ -318,6 +318,116 @@ async def test_unavailable_entity_reports_unavailable_after_genuine_lapse() -> N
 
     assert "ENTITY_UNAVAILABLE" in str(exc.value)
     assert "light.b" in str(exc.value)
+    # dispatched: True in the structured context (kingpanther13 review) — the
+    # caller must be able to tell this apart from a command that never went
+    # out, so it doesn't blindly retry a non-idempotent service.
+    assert '"dispatched": true' in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_component_skips_magic_broadcast_target_real_prep() -> None:
+    """kingpanther13-flagged, live-verified regression: entity_id="all" (Home
+    Assistant's ``ENTITY_MATCH_ALL`` broadcast target) is not a literal entity,
+    so the REAL component prep captures a null pre-state for it exactly like a
+    genuinely nonexistent entity — but the consumer must NOT report
+    ENTITY_NOT_FOUND, since the broadcast dispatch may (and typically does)
+    land successfully. Falls through to the generic partial/timeout wording.
+    """
+    bus = _FakeBus()
+    services = _FakeCallServices(known={("light", "turn_off")})
+    hass = _call_hass([], services, bus)
+
+    msg = {
+        "type": wsapi.WS_CALL_SERVICE,
+        "domain": "light",
+        "service": "turn_off",
+        "entity_ids": ["all"],
+        "wait": True,
+        "timeout": 0.05,
+        "expected_state": "off",
+    }
+    extra = await wsapi._call_service_prep(hass, msg)
+    component_result = wsapi._do_call_service(hass, msg, **extra)
+
+    assert component_result["dispatched"] is True
+    assert component_result["confirmed"] is False
+    assert services.call_count == 1
+    # No listener registered for "all" -- excluded from the wait exactly like a
+    # nonexistent entity would be (the component itself has no special
+    # knowledge of "all"; the exclusion from ENTITY_NOT_FOUND happens entirely
+    # on the consumer side, exercised below).
+    assert bus.listeners == []
+
+    tools = ServiceTools(ContractClient(), device_tools=MagicMock())
+    resp = tools._build_component_call_response(
+        component_result,
+        domain="light",
+        service="turn_off",
+        entity_id="all",
+        data=None,
+        should_wait=True,
+        return_response=False,
+        verbose=False,
+        fields=None,
+        attribute_keys=None,
+    )
+
+    assert resp["success"] is True
+    assert resp["partial"] is True
+
+
+@pytest.mark.asyncio
+async def test_component_reports_not_found_when_removed_mid_dispatch() -> None:
+    """kingpanther13-flagged regression: a target whose pre-state was
+    "unavailable" but that was REMOVED from the state machine during the
+    dispatch (``_post_state``'s live re-read finds nothing) is a more specific
+    and more accurate outcome than "still unavailable" — which would falsely
+    assert it still exists — so the consumer reports ENTITY_NOT_FOUND, not
+    ENTITY_UNAVAILABLE."""
+    bus = _FakeBus()
+
+    def _on_call() -> None:
+        # Mirrors the entity being removed (e.g. its integration unloaded)
+        # while the blocking dispatch is in flight.
+        del hass.states._by_id["light.b"]
+
+    services = _FakeCallServices(known={("light", "turn_on")}, on_call=_on_call)
+    hass = _call_hass([FakeState("light.b", state="unavailable")], services, bus)
+
+    msg = {
+        "type": wsapi.WS_CALL_SERVICE,
+        "domain": "light",
+        "service": "turn_on",
+        "entity_ids": ["light.b"],
+        "wait": True,
+        "timeout": 0.05,
+        "expected_state": "on",
+    }
+    extra = await wsapi._call_service_prep(hass, msg)
+    component_result = wsapi._do_call_service(hass, msg, **extra)
+
+    assert component_result["confirmed"] is False
+    (transition,) = component_result["transitions"]
+    assert transition["old_state"]["state"] == "unavailable"
+    assert transition["new_state"] is None
+
+    tools = ServiceTools(ContractClient(), device_tools=MagicMock())
+    with pytest.raises(ToolError) as exc:
+        tools._build_component_call_response(
+            component_result,
+            domain="light",
+            service="turn_on",
+            entity_id="light.b",
+            data=None,
+            should_wait=True,
+            return_response=False,
+            verbose=False,
+            fields=None,
+            attribute_keys=None,
+        )
+
+    assert "ENTITY_NOT_FOUND" in str(exc.value)
+    assert "ENTITY_UNAVAILABLE" not in str(exc.value)
 
 
 @pytest.mark.asyncio

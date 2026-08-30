@@ -6205,10 +6205,15 @@ def _bulk_op_record(
     maps every target to this op's confirmation hint (``_SERVICE_TO_STATE``) so the
     waiter + immediate-match key off it; ``dispatched`` / ``error`` / ``response``
     start empty and are filled during dispatch. ``confirmable_entity_ids`` excludes
-    any target whose captured pre-state is ``None`` (nonexistent) or ``"unavailable"``
-    — it can never emit a confirming event, so it is never worth the shared wait (see
-    ``_confirmable_entity_ids``); ``should_confirm`` is true only when the batch is
-    waiting AND this op has at least one such target.
+    ONLY a target whose captured pre-state is ``None`` (nonexistent) — it can never
+    emit a confirming event, so it is never worth the shared wait (see
+    ``_confirmable_entity_ids``). Deliberately NOT excluded from it: a target
+    already ``"unavailable"``, which can legitimately reconnect and confirm
+    mid-dispatch. ``should_confirm`` stays intent-level (``bool(wait and
+    entity_ids)`` — the FULL list, not the confirmable subset): a
+    ``validate_first=False`` caller that skips the not-found/unavailable error
+    mapping still needs ``partial=True`` on a genuinely-excluded target, not a
+    bare unconfirmed-but-not-partial result.
     """
     entity_ids = list(op.get("entity_ids") or [])
     expected_state = op.get("expected_state")

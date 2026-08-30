@@ -405,6 +405,36 @@ def create_entity_not_found_error(
     )
 
 
+def create_entity_unavailable_after_dispatch_error(entity_id: str) -> dict[str, Any]:
+    """Create an ENTITY_UNAVAILABLE error for a target whose command already dispatched.
+
+    Distinct from a bare "unavailable" report: by the time this fires, the
+    confirmation wait has already lapsed, which only happens AFTER the
+    service call reached Home Assistant. The caller must not read this as
+    "the command never went out" and blindly retry a non-idempotent service
+    (e.g. ``toggle``) — that would double-apply a write that may have already
+    landed. ``context["dispatched"]`` makes that explicit for a caller that
+    only inspects structured fields rather than the message.
+    """
+    return create_error_response(
+        ErrorCode.ENTITY_UNAVAILABLE,
+        f"Entity '{entity_id}' exists but is currently unavailable",
+        details=(
+            f"The service call for '{entity_id}' was already dispatched to Home "
+            "Assistant -- it may have taken effect even though the entity's "
+            "state could not be confirmed within the timeout."
+        ),
+        suggestions=[
+            "The command was already sent -- check the entity's current state "
+            "with ha_get_state before retrying",
+            "Avoid re-issuing a non-idempotent service (e.g. toggle) that could "
+            "double-apply if the original command did land",
+            "Check if the device is powered on and connected",
+        ],
+        context={"entity_id": entity_id, "dispatched": True},
+    )
+
+
 def create_service_error(
     domain: str,
     service: str,

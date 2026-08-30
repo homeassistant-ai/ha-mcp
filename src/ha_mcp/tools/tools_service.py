@@ -25,6 +25,7 @@ from ..errors import (
     ErrorCode,
     create_connection_error,
     create_entity_not_found_error,
+    create_entity_unavailable_after_dispatch_error,
     create_error_response,
     create_validation_error,
 )
@@ -55,6 +56,7 @@ from .util_helpers import (
     BLOCKED_WS_WRITE_COMMANDS,
     JSON_STRING_COERCION,
     compact_service_result,
+    is_single_entity_target,
     parse_json_param,
     parse_string_list_param,
     project_entity_record,
@@ -956,16 +958,19 @@ class ServiceTools:
         if a live re-check shows it is STILL unavailable afterward -- mirrors
         the component path's post-dispatch-state check.
 
-        A comma-separated ``entity_id`` ("light.a,light.b") is a valid
-        multi-target for the service-call payload, but ``/api/states/<id>``
-        has no comma syntax and 404s on the literal joined string -- that 404
-        proves nothing about whether the individual targets exist, so the
-        fast-fail is skipped entirely for one (matching the component route's
-        own comma exclusion in ``_maybe_component_call_service``).
+        A comma-separated ``entity_id`` ("light.a,light.b") or a Home
+        Assistant magic broadcast target (``entity_id="all"`` /
+        ``ENTITY_MATCH_ALL``, or ``"none"``) is a valid target for the
+        service-call payload, but the single-entity ``/api/states/<id>``
+        endpoint has no way to resolve either -- a 404 there proves nothing
+        about whether the underlying call can succeed, so the fast-fail is
+        skipped entirely for one (see ``is_single_entity_target``; matches
+        the component route's own comma exclusion in
+        ``_maybe_component_call_service``).
         """
         if entity_id is None:
             return None
-        is_single_target = "," not in entity_id
+        is_single_target = is_single_entity_target(entity_id)
         try:
             state_data = await self._client.get_entity_state(entity_id)
         except HomeAssistantAPIError as e:
@@ -1017,11 +1022,7 @@ class ServiceTools:
                 entity_id
             ):
                 raise_tool_error(
-                    create_error_response(
-                        ErrorCode.ENTITY_UNAVAILABLE,
-                        f"Entity '{entity_id}' exists but is currently unavailable",
-                        context={"entity_id": entity_id},
-                    )
+                    create_entity_unavailable_after_dispatch_error(entity_id)
                 )
             response.setdefault("warnings", []).append(
                 "Service executed but state change could not be verified within timeout."
@@ -1040,19 +1041,31 @@ class ServiceTools:
         A 404 here means the entity was REMOVED since the initial fetch — a
         more specific outcome than "still unavailable", so it raises
         ENTITY_NOT_FOUND directly rather than being folded into it. Any other
-        fetch failure (network blip) or a response with no usable ``state``
-        is inconclusive, not proof either way, so it returns ``False`` and
-        lets the caller fall through to the generic verification-failed
-        wording instead of confidently asserting an unproven "still
-        unavailable".
+        fetch failure (network blip, an expired token surfacing as
+        ``HomeAssistantAuthError`` -- a sibling of ``HomeAssistantAPIError``,
+        not a subclass, so it lands in the generic branch below) or a
+        response with no usable ``state`` is inconclusive, not proof either
+        way, so it returns ``False`` and lets the caller fall through to the
+        generic verification-failed wording instead of confidently asserting
+        an unproven "still unavailable". Logged at WARNING (matching the
+        sibling re-check in ``_validate_entity_before_wait`` and
+        ``wait_for_state_change`` in util_helpers.py) so an operational
+        failure here -- an expired token, in particular -- leaves a
+        server-side trace instead of silently reading as a generic timeout.
         """
         try:
             current = await self._client.get_entity_state(entity_id)
         except HomeAssistantAPIError as e:
             if e.status_code == 404:
                 raise_tool_error(create_entity_not_found_error(entity_id))
+            logger.warning(
+                f"Post-timeout unavailable re-check for {entity_id} failed: {e} — treating as inconclusive"
+            )
             return False
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"Post-timeout unavailable re-check for {entity_id} failed: {e} — treating as inconclusive"
+            )
             return False
         return isinstance(current, dict) and current.get("state") == "unavailable"
 
@@ -1551,31 +1564,50 @@ class ServiceTools:
     ) -> None:
         """Report why a confirmation never landed, once it's certain it never will.
 
-        Only reached when the component result was NOT confirmed. The
-        transition's ``old_state`` is ``None`` for an entity absent from the
-        state machine at pre-dispatch time — the component excludes it from the
-        wait entirely (it structurally cannot ever confirm), so an unconfirmed
-        result with a null ``old_state`` is unambiguous: raise ENTITY_NOT_FOUND
-        immediately. A real state dict whose ``state`` is ``"unavailable"``
-        stayed IN the component's confirmation wait (unlike a nonexistent
-        target, it can legitimately reconnect and transition mid-dispatch — the
-        caller only reaches this branch after that chance has already lapsed),
-        so raise ENTITY_UNAVAILABLE -- but ONLY if ``new_state`` (the best-
-        available POST-dispatch read: ``_post_state`` re-reads live if the
-        listener's exact expected-state event never arrived) shows it is
-        STILL unavailable. A target that reconnected but settled on some
-        state other than the hint (e.g. a lock that reached "locking", not
-        yet "locked") is demonstrably no longer unavailable even though this
-        op never confirmed -- reporting it as ENTITY_UNAVAILABLE from the
-        stale pre-state alone would discard that real result. No-op (returns)
-        for any other unconfirmed target — a real, available entity whose
-        confirming event simply never arrived, OR no transition row at all
-        (``_dispatched_unconfirmed_result``'s empty ``transitions`` after a
-        post-dispatch formatting failure — the write already landed, so an
-        absent row proves nothing about existence) — leaving the caller's
-        existing generic partial/timeout wording for those genuine-ambiguity
-        cases.
+        Only reached when the component result was NOT confirmed. No-op
+        (returns) unless ``entity_id`` is a single literal entity ID (see
+        ``is_single_entity_target``): a comma-joined multi-target or a Home
+        Assistant magic broadcast target (``"all"`` / ``"none"``) is never a
+        literal entity in the state machine, so its transition row carries a
+        null ``old_state`` unconditionally -- that proves nothing about
+        whether the (possibly successful) broadcast landed, unlike a genuine
+        single-entity miss.
+
+        For a real single-entity target: the transition's ``old_state`` is
+        ``None`` for an entity absent from the state machine at pre-dispatch
+        time — the component excludes it from the wait entirely (it
+        structurally cannot ever confirm), so an unconfirmed result with a
+        null ``old_state`` is unambiguous: raise ENTITY_NOT_FOUND immediately.
+        A real state dict whose ``state`` is ``"unavailable"`` stayed IN the
+        component's confirmation wait (unlike a nonexistent target, it can
+        legitimately reconnect and transition mid-dispatch — the caller only
+        reaches this branch after that chance has already lapsed); what
+        happened to it by ``new_state`` (the best-available POST-dispatch
+        read: ``_post_state`` re-reads live if the listener's exact
+        expected-state event never arrived) then decides the outcome:
+
+        * ``new_state`` is ``None`` — the entity was REMOVED during the
+          dispatch, a more specific outcome than "still unavailable" (which
+          would falsely assert it still exists), so raise ENTITY_NOT_FOUND.
+        * ``new_state`` still shows ``"unavailable"`` — raise
+          ENTITY_UNAVAILABLE.
+        * ``new_state`` shows anything else — the target reconnected but
+          settled on some state other than the hint (e.g. a lock that
+          reached "locking", not yet "locked"), demonstrably no longer
+          unavailable even though this op never confirmed. Reporting it as
+          ENTITY_UNAVAILABLE from the stale pre-state alone would discard
+          that real result, so no-op instead.
+
+        No-op also for any other unconfirmed target — a real, available
+        entity whose confirming event simply never arrived, OR no transition
+        row at all (``_dispatched_unconfirmed_result``'s empty
+        ``transitions`` after a post-dispatch formatting failure — the write
+        already landed, so an absent row proves nothing about existence) —
+        leaving the caller's existing generic partial/timeout wording for
+        those genuine-ambiguity cases.
         """
+        if not is_single_entity_target(entity_id):
+            return
         transition = next(
             (
                 t
@@ -1589,22 +1621,17 @@ class ServiceTools:
         old_state = transition.get("old_state")
         if old_state is None:
             raise_tool_error(create_entity_not_found_error(entity_id))
-        new_state = transition.get("new_state")
-        still_unavailable = new_state is None or (
-            isinstance(new_state, dict) and new_state.get("state") == "unavailable"
-        )
-        if (
-            isinstance(old_state, dict)
-            and old_state.get("state") == "unavailable"
-            and still_unavailable
+        if not (
+            isinstance(old_state, dict) and old_state.get("state") == "unavailable"
         ):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.ENTITY_UNAVAILABLE,
-                    f"Entity '{entity_id}' exists but is currently unavailable",
-                    context={"entity_id": entity_id},
-                )
-            )
+            return
+        new_state = transition.get("new_state")
+        if new_state is None:
+            # Removed during the dispatch -- a more specific outcome than
+            # "still unavailable", which would falsely assert it still exists.
+            raise_tool_error(create_entity_not_found_error(entity_id))
+        if isinstance(new_state, dict) and new_state.get("state") == "unavailable":
+            raise_tool_error(create_entity_unavailable_after_dispatch_error(entity_id))
 
     def _build_component_call_response(
         self,
@@ -1633,12 +1660,14 @@ class ServiceTools:
         timeout path produces (``_build_timeout_response``).
         """
         transitions = component_result.get("transitions") or []
-        # A target the component's pre-dispatch read already proved unconfirmable
-        # (nonexistent, or already "unavailable") never reaches ``confirmed`` —
-        # check that BEFORE building a generic partial/timeout response, using the
-        # same ``old_state`` signal ``device_control.py``'s bulk-op mapping already
-        # reads from this identical transitions shape. A genuine confirmation lapse
-        # on a real, available target (old_state present, not "unavailable") falls
+        # A nonexistent target's pre-dispatch read excludes it from the wait
+        # entirely, so it can never reach ``confirmed``; an "unavailable" one
+        # stays eligible and CAN reach it (a genuine reconnect-and-confirm) —
+        # only an UNCONFIRMED result is checked here, before building a generic
+        # partial/timeout response, using the same ``old_state``/``new_state``
+        # signal ``device_control.py``'s bulk-op mapping already reads from
+        # this identical transitions shape. A genuine confirmation lapse on a
+        # real, available target (old_state present, not "unavailable") falls
         # through unchanged to the existing partial-success wording below.
         if (
             should_wait
@@ -1692,9 +1721,13 @@ class ServiceTools:
                 )
         if should_wait:
             if component_result.get("partial"):
-                # Dispatched, but the confirming state_changed did not arrive within
-                # the wait — the same partial-success contract the legacy timeout
-                # path reports (success stays True; verification is never a failure).
+                # Reached only when _raise_for_missing_or_unavailable_target above
+                # did NOT raise -- i.e. a genuine confirmation lapse on a real,
+                # available target whose confirming state_changed simply never
+                # arrived within the wait. success stays True here (the same
+                # partial-success contract the legacy timeout path reports);
+                # unlike this generic case, a target proven nonexistent or still
+                # unavailable is a raised ToolError, not a partial success.
                 response["partial"] = True
                 response.setdefault("warnings", []).append(
                     "Service executed but state change could not be verified "
@@ -1974,9 +2007,12 @@ class ServiceTools:
 
             # Legacy REST path (component absent, or it never dispatched): capture
             # initial state before the call for the WS-subscribe verification. A
-            # settled bad target (404 / "unavailable") raises here, BEFORE the
-            # dispatch below, so a known-invalid single-entity call never reaches
-            # the service POST or the 10s confirmation wait.
+            # settled 404 (single-entity target definitely does not exist) raises
+            # here, BEFORE the dispatch below, so a known-invalid call never
+            # reaches the service POST or the 10s confirmation wait. An
+            # "unavailable" target is NOT fast-failed here -- dispatching is
+            # exactly what might reconnect it; see _verify_state_change for its
+            # post-dispatch classification instead.
             initial_state = None
             if should_wait:
                 initial_state = await self._validate_entity_before_wait(entity_id)
