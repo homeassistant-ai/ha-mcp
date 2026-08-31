@@ -49,7 +49,7 @@ from __future__ import annotations
 import logging
 import secrets
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import aiohttp
 from aiohttp import web
@@ -303,13 +303,23 @@ class AutoApproveAuthorizeView(HomeAssistantView):
         if forward_id != client_id:
             params.popall("client_id", None)
             params["client_id"] = forward_id
-        import yarl
 
         # Keep the browser hop relative, matching the token leg. Browsers cannot
         # be made to send X-Forwarded-Host, so this is consistency rather than a
         # vulnerability fix.
-        target = yarl.URL("/auth/authorize").with_query(params)
-        return web.Response(status=302, headers={"Location": str(target)})
+
+        # Percent-encode the query instead of handing the params to yarl: yarl
+        # legally leaves ":" and "/" literal inside query values (RFC 3986
+        # permits both in the query component), so a loopback client's callback
+        # forwards as ``redirect_uri=http://127.0.0.1:1234/callback``. Reverse
+        # proxies shipping a generic "block common exploits" ruleset -- Nginx
+        # Proxy Manager enables one per host with a checkbox -- match
+        # ``[a-zA-Z0-9_]=http://`` and answer 403 before core ever sees the
+        # request, stranding every native-app client behind such a proxy.
+        # Full encoding is semantically identical and survives those filters.
+        query = urlencode(list(params.items()))
+        target = f"/auth/authorize?{query}" if query else "/auth/authorize"
+        return web.Response(status=302, headers={"Location": target})
 
     async def post(self, request: web.Request) -> web.Response:
         """Handle a legacy-mode consent submission on the scoped route."""

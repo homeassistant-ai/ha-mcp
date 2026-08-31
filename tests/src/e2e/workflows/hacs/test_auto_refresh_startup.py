@@ -51,7 +51,14 @@ import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 
-from ha_mcp.client.websocket_client import DEFAULT_COMMAND_WAIT_TIMEOUT
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+)
+from ha_mcp.client.websocket_client import (
+    DEFAULT_COMMAND_WAIT_TIMEOUT,
+    HomeAssistantWebSocketClient,
+)
 from ha_mcp.hacs_auto_refresh import MARKER_FILENAME_PREFIX, RETRY_DELAYS
 from ha_mcp.tools.hacs_registration import HACS_REFRESH_TIMEOUT
 
@@ -85,7 +92,71 @@ NUDGE_MARKER_TIMEOUT = (
 )
 
 
+# HACS registers its WebSocket handlers late in HA's boot, and this fixture
+# restarts HA with a fresh config before each test. Until those handlers exist
+# ``hacs/repositories/list`` answers ``unknown_command`` FAST, so the nudge's
+# attempts at 0 s, 30 s and 90 s can all fall inside that window on a slow
+# runner — and the next one, at 210 s, lands after NUDGE_MARKER_TIMEOUT below.
+# The budget below deliberately covers only the happy path plus ONE slow
+# failure; it is not a HACS-boot timeout. So wait for HACS to be reachable
+# BEFORE launching, from the test process, and the launcher's first attempt
+# succeeds. Bound it by the nudge's own schedule: if HACS is not up by then the
+# lane could never have passed anyway, and the message says which it was.
+HACS_WS_READY_TIMEOUT = sum(RETRY_DELAYS) + DEFAULT_COMMAND_WAIT_TIMEOUT
+
+# pytest.ini caps every test FUNCTION at 300 s, which the readiness wait alone
+# can exceed on a genuinely broken HACS — and then the timeout kills the test
+# before the helper's own message says which stage never came up. Each
+# positive lane therefore carries its own budget: readiness + the marker window
+# + slack for the launcher to start and stop. Derived, not a literal, so
+# raising either schedule cannot silently outgrow it.
+POSITIVE_LANE_TIMEOUT = HACS_WS_READY_TIMEOUT + NUDGE_MARKER_TIMEOUT + 60.0
+
+
+async def _wait_for_hacs_ws_ready(container_info: dict) -> None:
+    """Block until the container's HACS answers ``hacs/repositories/list``."""
+    client = HomeAssistantWebSocketClient(
+        container_info["base_url"], container_info.get("token", TEST_TOKEN)
+    )
+    # connect() opens the socket and starts its reader before it returns, and
+    # a cancellation in between bypasses its own cleanup — so the finally must
+    # already be armed when connect() runs; disconnect() tolerates a client
+    # that never got that far.
+    try:
+        if not await client.connect():
+            pytest.fail("could not open the HA WebSocket for the HACS probe")
+        deadline = asyncio.get_running_loop().time() + HACS_WS_READY_TIMEOUT
+        while True:
+            try:
+                await client.send_command("hacs/repositories/list")
+                return
+            except HomeAssistantCommandTimeout:
+                # HACS registered the handler but has not answered yet — it
+                # populates its catalogue on the first boot after the
+                # fresh-config restart. That is the slow-runner case this
+                # helper exists for, and HomeAssistantCommandTimeout is a
+                # SIBLING of HomeAssistantCommandError, not a subclass, so it
+                # needs its own arm. The deadline below is the only stop.
+                pass
+            except HomeAssistantCommandError as err:
+                if not (
+                    err.code == "unknown_command"
+                    or "unknown command" in str(err).lower()
+                ):
+                    raise
+            if asyncio.get_running_loop().time() >= deadline:
+                pytest.fail(
+                    "HACS never registered its WebSocket handlers within "
+                    f"{HACS_WS_READY_TIMEOUT:.0f}s of the fresh-config restart, "
+                    "so no launcher could complete the startup nudge here."
+                )
+            await asyncio.sleep(2.0)
+    finally:
+        await client.disconnect()
+
+
 @pytest.mark.hacs
+@pytest.mark.timeout(POSITIVE_LANE_TIMEOUT)
 async def test_stdio_launcher_runs_the_startup_nudge(
     ha_container_with_fresh_config, tmp_path
 ):
@@ -93,6 +164,7 @@ async def test_stdio_launcher_runs_the_startup_nudge(
     logger.info("Testing the HACS startup nudge through the stdio launcher...")
 
     container_info = ha_container_with_fresh_config
+    await _wait_for_hacs_ws_ready(container_info)
 
     # Use the same explicit environment as the stdio fixtures, plus this test's
     # config dir. HA_MCP_DISABLE_UPDATE_CHECK is intentionally absent because it
@@ -289,6 +361,7 @@ async def _spawn_http_launcher(command: str, env: dict[str, str]) -> _HttpLaunch
 
 
 @pytest.mark.hacs
+@pytest.mark.timeout(POSITIVE_LANE_TIMEOUT)
 async def test_web_launcher_runs_the_startup_nudge(
     ha_container_with_fresh_config, tmp_path
 ):
@@ -296,8 +369,9 @@ async def test_web_launcher_runs_the_startup_nudge(
     logger.info("Testing the HACS startup nudge through the ha-mcp-web launcher...")
 
     container_info = ha_container_with_fresh_config
+    await _wait_for_hacs_ws_ready(container_info)
     env = _http_launcher_env(container_info["base_url"], tmp_path)
-    env["HOMEASSISTANT_TOKEN"] = TEST_TOKEN
+    env["HOMEASSISTANT_TOKEN"] = container_info.get("token", TEST_TOKEN)
 
     def marker_files():
         return list(tmp_path.glob(f"{MARKER_FILENAME_PREFIX}_*.json"))

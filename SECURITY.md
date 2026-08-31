@@ -277,6 +277,18 @@ mode** option in the entry options:
     metadata-honoring clients are unaffected; metadata-ignoring clients that
     guess root paths reach the app instead.
 
+Discovery never publishes the webhook id, in any of the three modes. The only
+protected-resource document the entry serves is the path-scoped one at
+`/.well-known/oauth-protected-resource/api/webhook/<id>`, which a caller can
+reach only by already holding the id, and the webhook's 401 challenge points
+there rather than at a fixed, guessable path. Switching from `ha_auth` or
+`legacy` back to the secret-URL posture therefore does not promote a published
+value into the sole credential. Component versions before 2.1.1 also served the
+document at a fixed path, where it handed the full webhook URL to any
+unauthenticated GET while `ha_auth` or `legacy` was on; an install that ran
+either mode reachable from the internet on such a version should use the
+entry's **Regenerate connect secrets now** option once.
+
 The connect notification deliberately carries no secrets: Home Assistant
 shows persistent notifications to every authenticated user, so the webhook
 URL (the credential in the default posture) is surfaced only on
@@ -302,11 +314,13 @@ the proxy returns 503 whenever the server is not running.
 ### Webhook Proxy app (`ha_mcp_webhook_proxy`)
 
 In the app's `ha_auth` mode the Home Assistant login is the credential, not
-the webhook URL. The URL without a Bearer gets a 401, and the URL is not
-withheld: as in any OAuth mode, the RFC 9728 protected-resource document
-advertises it at a fixed unauthenticated path so clients can discover the
-endpoint. (This is the difference from the app's default posture with OAuth
-disabled, where the URL is withheld because it alone is the credential.)
+the webhook URL. The URL without a Bearer gets a 401, and that 401 points at
+the RFC 9728 protected-resource document served under the webhook's own path
+(`/.well-known/oauth-protected-resource/api/webhook/<id>`) — the only
+protected-resource document the app serves, and one a caller can reach only by
+already holding the id. Discovery therefore never publishes the webhook id in
+any mode, which is what lets the default posture with OAuth disabled keep
+treating that URL as the sole credential.
 
 **`ha_auth` is an access gate, not per-user authorization.** It validates the
 inbound Bearer against Home Assistant core and accepts any token core still
@@ -330,11 +344,18 @@ deactivate the account, which Home Assistant honors immediately by dropping that
 user's refresh tokens. Turning the app's OAuth mode off revokes nobody, and
 loosens the boundary: the webhook id persists across the switch, so that posture
 falls back to treating as the sole credential a URL every `ha_auth` client
-already holds — and one that was advertised anonymously the whole time `ha_auth`
-was on. Treat any webhook id that has served `ha_auth` as public, and rotate it
-(the app's DOCS.md, "Rotating the webhook URL") when moving to the URL-secret
-posture. The in-process entry's admin restriction is a property of that entry,
-not a guarantee of the app.
+already holds. Rotate the id (the app's DOCS.md, "Rotating the webhook URL")
+when moving to the URL-secret posture. A fixed-path protected-resource document
+also handed that URL to any anonymous GET the whole time `ha_auth` or `legacy`
+was on, on app versions before 3.0.3.dev2 (dev channel) and before the stable
+release that promotes it: an install that ran either mode reachable from the
+internet on such a version should treat its webhook id as public and rotate
+once, whichever posture it is moving to. From this version no anonymous URL publishes the id,
+and a rotation takes effect immediately — the previous id's discovery URL
+answers 404 as soon as the app restarts with the new id, and a Repair prompts
+for the Home Assistant restart that binds the new id's discovery URL. The
+in-process entry's admin restriction is a property of that entry, not a
+guarantee of the app.
 
 The app's `legacy` mode carries the same properties as the in-process
 `legacy` mode described above — the component's implementation was ported from

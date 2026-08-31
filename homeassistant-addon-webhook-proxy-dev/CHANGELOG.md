@@ -9,6 +9,28 @@ history from before the fork.
 -->
 
 
+## v3.0.3.dev2 (2026-08-30)
+
+### Security
+
+- The webhook id is no longer published by any anonymous discovery URL. The
+  fixed-path protected-resource document (`/api/mcp_proxy_dev/oauth/protected-resource`)
+  handed the full webhook URL to any unauthenticated GET while `ha_auth` or
+  `legacy` mode was on; it is removed. The webhook's 401 challenge now points at
+  the RFC 9728 path-scoped document, whose URL already contains the id.
+- After the operator rotates the webhook id (`/data/webhook_id.txt`), the old
+  id's discovery URL stops answering immediately instead of serving the new id
+  until the next Home Assistant restart. A restart Repair is raised so the new
+  id's discovery URL gets bound; existing installs that ran `ha_auth` or `legacy`
+  reachable from the internet before this version may wish to rotate once.
+
+### Bug Fixes
+
+- `ha_auth`: percent-encode the query forwarded to core's `/auth/authorize`, so a
+  native-app client's loopback callback is not rejected by reverse proxies that
+  block `=http://` in query strings (Nginx Proxy Manager "Block Common Exploits").
+
+
 ## v3.0.1.dev1 (2026-08-16)
 
 Version line rebased onto the 3.0.0 stable base by the promote PR

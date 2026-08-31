@@ -66,12 +66,12 @@ SECRET_FILE = Path("/config/.mcp_proxy_dev_oauth_secret")
 DOMAIN = "mcp_proxy_dev"
 
 # TOP-LEVEL hass.data key (deliberately NOT under DOMAIN, so it survives
-# async_unload_entry's hass.data.pop(DOMAIN)) recording that the seven
+# async_unload_entry's hass.data.pop(DOMAIN)) recording that the six
 # discovery-document metadata views are bound to aiohttp for this HA session.
 # HA registers views with no route name and leaves the router unfrozen, so a
 # duplicate registration does NOT raise — aiohttp lets the first-registered
 # path win and silently shadows the later one; HA also can't unregister a bound
-# view until it restarts. So register_metadata_views must bind the seven at
+# view until it restarts. So register_metadata_views must bind the six at
 # most once: a same-mode ha_auth reload, a legacy->ha_auth switch, or a
 # ha_auth->legacy switch all reuse the already-bound views instead of stacking
 # silently-shadowed duplicate routes on every reload/switch.
@@ -83,6 +83,17 @@ DOMAIN = "mcp_proxy_dev"
 # once this dev code promotes to stable.
 _METADATA_VIEWS_REGISTERED_KEY = (
     f"webhook_proxy_oauth_metadata_views_registered_{DOMAIN}"
+)
+
+# Companion to the flag above: the webhook id the bound path-scoped
+# protected-resource view embeds in its URL. HA cannot rebind a view
+# mid-session, so when a later setup arrives with a DIFFERENT id (the operator
+# rotated /data/webhook_id.txt), the scoped URL for the new id cannot exist
+# until HA restarts — register_metadata_views reports that so the caller can
+# raise the restart Repair. Top-level (not under DOMAIN) for the same reason
+# as the flag: it must survive async_unload_entry's hass.data.pop(DOMAIN).
+_METADATA_VIEWS_BOUND_WEBHOOK_ID_KEY = (
+    f"webhook_proxy_oauth_metadata_views_webhook_id_{DOMAIN}"
 )
 
 # OAuth mode markers. Mirrored as auth_native.HA_AUTH_MODE and __init__.py's
@@ -608,10 +619,10 @@ class OAuthProvider:
     # View registration
     # -----------------------------------------------------------------
 
-    def register_views(self) -> None:
+    def register_views(self) -> bool:
         """Register the legacy OAuth endpoints with HA's HTTP layer.
 
-        Delegates the seven discovery-document views to the shared,
+        Delegates the six discovery-document views to the shared,
         flag-guarded `register_metadata_views` (which binds them at most once
         per HA session — see `_METADATA_VIEWS_REGISTERED_KEY`), then registers
         ONLY the two root views (`AuthorizeView` + `TokenView`). The unified
@@ -621,10 +632,13 @@ class OAuthProvider:
         metadata registrar avoids silently-shadowed duplicate discovery views.
         The two root aliases stay gated by the caller's route-owner/fingerprint
         logic in __init__.py.
+
+        Returns `register_metadata_views`'s restart-needed verdict.
         """
-        register_metadata_views(self._hass, self)
+        restart_needed = register_metadata_views(self._hass, self)
         for view in (AuthorizeView(self), TokenView(self)):
             self._hass.http.register_view(view)
+        return restart_needed
 
     # -----------------------------------------------------------------
     # Token issuance / validation
@@ -754,56 +768,6 @@ class OAuthProvider:
 # ---------------------------------------------------------------------------
 
 
-class ProtectedResourceMetadataView(HomeAssistantView):
-    """RFC 9728 Protected Resource Metadata (fixed, guessable path)."""
-
-    requires_auth = False
-    cors_allowed = True
-    url = f"{OAUTH_BASE}/protected-resource"
-    name = "mcp_proxy_dev:oauth:protected-resource"
-
-    # SECURITY (#1976 review): this fixed path exposes ``resource:
-    # <base>/api/webhook/<id>``. In none-autoapprove mode the webhook id is the
-    # SOLE credential, so this ANONYMOUS, guessable path must NOT serve it there.
-    # The path-scoped subclass flips this True — its URL already embeds the id,
-    # so its caller must already know it (no leak).
-    _serves_in_none_mode = False
-
-    def __init__(self, provider: MetadataProvider) -> None:
-        self._provider = provider
-
-    async def get(self, request: web.Request) -> web.Response:
-        hass = getattr(self._provider, "_hass", None)
-        if hass is None or not await _addon_alive(hass):
-            return _json_not_found()
-        # The protected-resource document has the same shape in every OAuth
-        # mode; 404 when no mode is live (entry unloaded / OAuth off) so a
-        # stale-bound view acts like an unregistered route. URLs are built via
-        # the ACTIVE mode's provider, not the instance this view was bound with,
-        # so a live mode switch also switches the base-URL policy (legacy:
-        # pinned; ha_auth: host-derived).
-        mode = _active_oauth_mode(self._provider)
-        if mode is None:
-            return _json_not_found()
-        # In none-autoapprove mode only the path-scoped subclass may serve (see
-        # _serves_in_none_mode above); the fixed-path view 404s to avoid leaking
-        # the credential-bearing webhook id anonymously (#1976 review).
-        if mode == MODE_NONE_AUTOAPPROVE and not self._serves_in_none_mode:
-            return _json_not_found()
-        provider = _active_provider(self._provider)
-        base = provider.base_url_for(request)
-        return web.json_response(
-            {
-                "resource": provider.resource_url(base),
-                "authorization_servers": [provider.authorization_server_url(base)],
-                "bearer_methods_supported": ["header"],
-                "resource_documentation": (
-                    "https://github.com/homeassistant-ai/ha-mcp"
-                ),
-            }
-        )
-
-
 class AuthorizationServerMetadataView(HomeAssistantView):
     """RFC 8414 Authorization Server Metadata."""
 
@@ -868,36 +832,83 @@ class AuthorizationServerMetadataView(HomeAssistantView):
         )
 
 
-class WellKnownProtectedResourceView(ProtectedResourceMetadataView):
-    """RFC 9728 §3.1 path-scoped Protected Resource Metadata.
+class WellKnownProtectedResourceView(HomeAssistantView):
+    """RFC 9728 §3.1 path-scoped Protected Resource Metadata — the ONLY
+    protected-resource document this integration serves.
 
-    Same document as `ProtectedResourceMetadataView`, served at the
-    well-known location derived from the webhook resource URL
-    (`/.well-known/oauth-protected-resource/api/webhook/<id>`). Captured
-    live in issue #1714: when the 401's `WWW-Authenticate`
-    `resource_metadata` pointer is missing (stripped by a proxy in front,
-    or a transient setup window), this path is claude.ai's FIRST fallback
-    probe — and when it 404s the client falls through to the HOST-ROOT
-    `/.well-known/oauth-protected-resource`, which HA core itself serves
-    whenever it can resolve an external URL, steering the flow into
-    HA-core native OAuth (`/auth/authorize`) where the proxy's client_id
-    can never work. Serving this view keeps discovery on the proxy even
-    without the pointer.
+    Served at the well-known location derived from the webhook resource URL
+    (`/.well-known/oauth-protected-resource/api/webhook/<id>`), which is also
+    where the webhook's 401 `resource_metadata` challenge points. Its caller
+    must already hold the id (it is part of the path), so the document never
+    discloses it — that is why there is no fixed-path variant: a fixed,
+    guessable path handed the id to any anonymous GET in ha_auth/legacy mode,
+    and a later switch to none mode then promoted that published value into
+    the sole credential.
+
+    Captured live in issue #1714: when the 401's pointer is missing (stripped
+    by a proxy in front, or a transient setup window), this path is claude.ai's
+    FIRST fallback probe — and when it 404s the client falls through to the
+    HOST-ROOT `/.well-known/oauth-protected-resource`, which HA core itself
+    serves, steering the flow into HA-core native OAuth where the proxy's
+    client_id can never work.
+
+    Exact-path bind, deliberately not a `{webhook_id}` route parameter: aiohttp's
+    `UrlDispatcher.resolve` walks the request path from the most specific
+    segment upwards and consults the resources indexed under each key in turn,
+    so an exact-path resource (indexed under the full path) is tried before a
+    `{webhook_id}` resource (indexed under the prefix) whatever their
+    registration order — registration order only breaks ties between resources
+    sharing one index key. That is what lets this view and the in-process
+    component's parameterised view coexist on one HA (each answers its own id);
+    `tests/src/unit/test_prm_route_precedence.py` pins it against the real
+    router. The cost is that HA cannot
+    rebind this URL when the operator rotates the webhook id mid-session, so
+    `get` 404s once the bound id is no longer the live one (the old URL must
+    not keep serving the NEW id to whoever held the old one), and
+    `register_metadata_views` reports the mismatch so setup raises the
+    click-to-restart Repair that binds the new id's URL.
     """
 
+    requires_auth = False
+    cors_allowed = True
     name = "mcp_proxy_dev:oauth:wellknown-protected-resource"
 
-    # Path-scoped: the URL already embeds the webhook id, so the caller must
-    # already know it — serving in none-autoapprove mode leaks nothing (#1976).
-    # This is the doc claude.ai's none-mode discovery actually uses.
-    _serves_in_none_mode = True
-
     def __init__(self, provider: MetadataProvider) -> None:
-        super().__init__(provider)
+        self._provider = provider
+        self._bound_webhook_id = provider.webhook_id
         # Instance-level URL: the well-known path embeds this install's
         # webhook id, which is only known at runtime.
         self.url = (
             f"/.well-known/oauth-protected-resource/api/webhook/{provider.webhook_id}"
+        )
+
+    async def get(self, request: web.Request) -> web.Response:
+        hass = getattr(self._provider, "_hass", None)
+        if hass is None or not await _addon_alive(hass):
+            return _json_not_found()
+        # Same document shape in every OAuth mode; 404 when no mode is live
+        # (entry unloaded / OAuth off) so a stale-bound view acts like an
+        # unregistered route. URLs are built via the ACTIVE mode's provider,
+        # not the instance this view was bound with, so a live mode switch also
+        # switches the base-URL policy (legacy: pinned; ha_auth: host-derived).
+        if _active_oauth_mode(self._provider) is None:
+            return _json_not_found()
+        provider = _active_provider(self._provider)
+        # The id in this view's URL is no longer the live one: the operator
+        # rotated it. Anyone still holding the OLD id must not learn the new
+        # one here — 404 exactly as an unregistered route would.
+        if provider.webhook_id != self._bound_webhook_id:
+            return _json_not_found()
+        base = provider.base_url_for(request)
+        return web.json_response(
+            {
+                "resource": provider.resource_url(base),
+                "authorization_servers": [provider.authorization_server_url(base)],
+                "bearer_methods_supported": ["header"],
+                "resource_documentation": (
+                    "https://github.com/homeassistant-ai/ha-mcp"
+                ),
+            }
         )
 
 
@@ -1206,17 +1217,16 @@ class TokenView(HomeAssistantView):
 
 
 def _metadata_views(provider: MetadataProvider) -> list[HomeAssistantView]:
-    """Build the seven discovery-document views bound to ``provider``.
+    """Build the six discovery-document views bound to ``provider``.
 
-    The canonical protected-resource + authorization-server documents, the
-    path-scoped protected-resource document, and the four RFC 8414 / OIDC
-    well-known authorization-server locations (issue #1714). These serve the
-    same content in both OAuth modes (the AS view dispatches per-request); the
-    root `AuthorizeView` + `TokenView` are legacy-only and added by
-    `OAuthProvider.register_views`, never here.
+    The path-scoped protected-resource document, the authorization-server
+    document, and the four RFC 8414 / OIDC well-known authorization-server
+    locations (issue #1714). These serve the same content in both OAuth modes
+    (the AS view dispatches per-request); the root `AuthorizeView` +
+    `TokenView` are legacy-only and added by `OAuthProvider.register_views`,
+    never here.
     """
     views: list[HomeAssistantView] = [
-        ProtectedResourceMetadataView(provider),
         AuthorizationServerMetadataView(provider),
         WellKnownProtectedResourceView(provider),
     ]
@@ -1244,27 +1254,45 @@ def _metadata_views(provider: MetadataProvider) -> list[HomeAssistantView]:
     return views
 
 
-def register_metadata_views(hass: HomeAssistant, provider: MetadataProvider) -> None:
-    """Register the seven shared OAuth discovery-document views.
+def register_metadata_views(hass: HomeAssistant, provider: MetadataProvider) -> bool:
+    """Register the six shared OAuth discovery-document views.
 
-    ``provider`` is an `auth_native.ResourceServer` (ha_auth) or an
-    `OAuthProvider` (legacy, which routes its seven views through here); the
-    views read its `base_url_for`, `resource_url`, `authorization_server_url`,
-    `webhook_id`, and `_hass` (read by `_active_oauth_mode` AND
-    `_active_provider` for per-request mode/provider dispatch).
+    ``provider`` is an `auth_native.ResourceServer` (ha_auth), an
+    `OAuthProvider` (legacy, which routes its views through here) or the
+    none-mode `AutoApproveProvider`; the views read its `base_url_for`,
+    `resource_url`, `authorization_server_url`, `webhook_id`, and `_hass`
+    (read by `_active_oauth_mode` AND `_active_provider` for per-request
+    mode/provider dispatch).
 
-    Idempotent per HA session: the seven views bind at most once — a same-mode
-    reload or a legacy<->ha_auth switch reuses the already-bound views rather
-    than stacking silently-shadowed duplicate routes (a duplicate registration
-    does not raise — aiohttp lets the first-registered path win — and HA can't
-    drop a bound view until it restarts). The guard flag lives at a top-level
-    hass.data key so it survives async_unload_entry's pop(DOMAIN).
+    Idempotent per HA session: the six views bind at most once — a same-mode
+    reload or a mode switch reuses the already-bound views rather than
+    stacking silently-shadowed duplicates (a duplicate registration does not
+    raise — aiohttp lets the first-registered path win — and HA can't drop a
+    bound view until it restarts). Both guard keys live at top-level
+    hass.data keys so they survive async_unload_entry's pop(DOMAIN).
+
+    Returns True when the already-bound path-scoped protected-resource view
+    embeds a DIFFERENT webhook id than ``provider`` carries — the operator
+    rotated the id mid-session, so the new id's discovery URL cannot be bound
+    until HA restarts (the old one already 404s). The caller surfaces that as
+    the restart Repair. False on a fresh bind or an unchanged id.
     """
     if hass.data.get(_METADATA_VIEWS_REGISTERED_KEY):
-        return
+        bound_id = hass.data.get(_METADATA_VIEWS_BOUND_WEBHOOK_ID_KEY)
+        if bound_id != provider.webhook_id:
+            _LOGGER.warning(
+                "MCP Proxy: the webhook id changed since the OAuth discovery "
+                "views were bound this session; the discovery URL for the new "
+                "id is served only after a Home Assistant restart (the old "
+                "id's URL no longer answers)."
+            )
+            return True
+        return False
     for view in _metadata_views(provider):
         hass.http.register_view(view)
     hass.data[_METADATA_VIEWS_REGISTERED_KEY] = True
+    hass.data[_METADATA_VIEWS_BOUND_WEBHOOK_ID_KEY] = provider.webhook_id
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -1278,14 +1306,20 @@ def build_unauthorized_response(
     """Build the 401 + WWW-Authenticate response that MCP clients use to
     discover the OAuth endpoints.
 
-    Per RFC 9728 §5.1 / MCP 2025-06-18 spec: WWW-Authenticate's
-    resource_metadata parameter points to the protected-resource metadata
-    URL, where the client finds the authorization server URL. We use the
-    provider's configured public base URL (when set) so the metadata URL
-    isn't built from attacker-supplied Host headers.
+    Per RFC 9728 §5.1 / MCP 2026-07-28 Authorization Server Discovery:
+    WWW-Authenticate's resource_metadata parameter points to the
+    protected-resource metadata URL, where the client finds the authorization
+    server URL. We use the provider's configured public base URL (when set) so
+    the metadata URL isn't built from attacker-supplied Host headers.
     """
     base = provider.base_url_for(request)
-    metadata_url = f"{base}{OAUTH_BASE}/protected-resource"
+    # RFC 9728 §3.1 path-scoped location: the pointer names the id, but this
+    # 401 is only ever produced on a request TO /api/webhook/<id>, so the
+    # caller already holds it. There is no fixed-path document to point at —
+    # see WellKnownProtectedResourceView for why.
+    metadata_url = (
+        f"{base}/.well-known/oauth-protected-resource/api/webhook/{provider.webhook_id}"
+    )
     return web.Response(
         status=401,
         text="Unauthorized",

@@ -355,8 +355,8 @@ class TestPrebindOAuthViews:
 
         eentry._prebind_oauth_views(hass, self._legacy_entry())
 
-        # 7 discovery + 3 scoped authorize/token/revoke + 2 root legacy aliases.
-        assert hass.http.register_view.call_count == 12
+        # 6 discovery + 3 scoped authorize/token/revoke + 2 root legacy aliases.
+        assert hass.http.register_view.call_count == 11
         assert hass.data.get(oauth_legacy.OAUTH_ROUTE_OWNER_KEY) == oauth_legacy._DOMAIN
 
     @pytest.mark.parametrize(
@@ -374,9 +374,9 @@ class TestPrebindOAuthViews:
 
         eentry._prebind_oauth_views(hass, entry)
 
-        # 7 discovery + 3 scoped authorize/token/revoke + 1 DCR registration
+        # 6 discovery + 3 scoped authorize/token/revoke + 1 DCR registration
         # route.
-        assert hass.http.register_view.call_count == 11
+        assert hass.http.register_view.call_count == 10
 
     def test_webhook_disabled_binds_nothing(self):
         hass = _make_hass()
@@ -401,9 +401,9 @@ class TestPrebindOAuthViews:
         eentry._prebind_oauth_views(hass, entry)
 
         # Root aliases wait for credentials, but advertised scoped routes must
-        # still beat Home Assistant's HTTP freeze: 7 discovery + 3 scoped
+        # still beat Home Assistant's HTTP freeze: 6 discovery + 3 scoped
         # authorize/token/revoke.
-        assert hass.http.register_view.call_count == 10
+        assert hass.http.register_view.call_count == 9
 
     def test_route_conflict_is_swallowed_at_setup(self):
         # The webhook-proxy add-on owning the root routes makes
@@ -420,8 +420,8 @@ class TestPrebindOAuthViews:
 
         assert hass.data[oauth_legacy.OAUTH_ROUTE_OWNER_KEY] == "webhook_proxy_addon"
         # The foreign owner blocks only the root aliases; scoped routes remain
-        # (7 discovery + 3 scoped authorize/token/revoke).
-        assert hass.http.register_view.call_count == 10
+        # (6 discovery + 3 scoped authorize/token/revoke).
+        assert hass.http.register_view.call_count == 9
 
 
 class TestEnsureSecretsLegacyWiring:
