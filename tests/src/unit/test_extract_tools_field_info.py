@@ -224,6 +224,12 @@ class TestZeroArgumentHelpers:
 
         assert self._funcs(source) == {}
 
+    def test_a_single_conditional_return_disqualifies_the_helper(self):
+        """Falling past the ``if`` returns None, so the string is not its value."""
+        source = "def docs():\n    if enabled:\n        return 'A'\n"
+
+        assert self._funcs(source) == {}
+
     def test_a_keyword_only_parameter_disqualifies_the_helper(self):
         """``docs()`` would raise TypeError, so its return value is not its value."""
         assert self._funcs("def docs(*, mode):\n    return 'text'\n") == {}

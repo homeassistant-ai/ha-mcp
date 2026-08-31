@@ -234,12 +234,16 @@ def _returned_literal(node: ast.stmt) -> tuple[str, ast.expr] | None:
     The whole body is searched, not just its top level: a helper that returns
     one string inside an ``if`` and another after it has no single value, and
     taking the last one would publish whichever branch the source happened to
-    end with.
+    end with. That single return must also sit at the top level — one nested in
+    an ``if`` leaves the helper returning ``None`` whenever the branch is not
+    taken, so its value is not the string it sometimes returns.
     """
     if not isinstance(node, ast.FunctionDef) or not _takes_no_arguments(node.args):
         return None
     returns = [n for n in ast.walk(node) if isinstance(n, ast.Return)]
     if len(returns) != 1 or returns[0].value is None:
+        return None
+    if not any(stmt is returns[0] for stmt in node.body):
         return None
     return node.name, returns[0].value
 
