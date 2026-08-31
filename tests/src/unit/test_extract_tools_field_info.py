@@ -26,6 +26,16 @@ def _field_info(annotation_source: str) -> dict:
     return extract_tools._extract_field_info(ast.parse(annotation_source).body[0].value)
 
 
+def _has_description(schema: dict) -> bool:
+    """Whether a parameter carries description text a reader can use.
+
+    Truthiness alone would accept ``"   "`` — text the site renders as a blank
+    cell, which is the failure these assertions exist to catch.
+    """
+    description = schema.get("description")
+    return isinstance(description, str) and bool(description.strip())
+
+
 def _params_documented_in_source() -> set[tuple[str, str]]:
     """(tool name, parameter) pairs whose annotation carries a Field description."""
     documented: set[tuple[str, str]] = set()
@@ -428,7 +438,7 @@ class TestExtractedToolsNeverLeakAnnotationSource:
             param
             for tool in tools
             for param, schema in tool["inputSchema"].get("properties", {}).items()
-            if schema.get("description")
+            if _has_description(schema)
         ]
 
         assert described, (
@@ -450,7 +460,7 @@ class TestExtractedToolsNeverLeakAnnotationSource:
         undocumented = [
             f"{name}.{param}"
             for name, param in _params_documented_in_source()
-            if not extracted.get((name, param), {}).get("description")
+            if not _has_description(extracted.get((name, param), {}))
         ]
 
         assert not undocumented, (
