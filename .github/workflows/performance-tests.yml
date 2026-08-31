@@ -24,6 +24,14 @@ on:
 permissions:
   contents: read
 
+# Cancel the previous commit's run when a PR is pushed again. push/schedule/
+# dispatch runs fall back to the unique run id, so master keeps one run per
+# commit — the perf history is per-commit and must not be thinned out. See
+# pr.yml for the full rationale.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache

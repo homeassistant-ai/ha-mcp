@@ -20,6 +20,13 @@ permissions:
   contents: read
   pull-requests: read
 
+# Cancel the previous run when the PR is pushed or (un)labeled again — the
+# guard's verdict only means anything for the current head and label set. See
+# pr.yml for the full rationale.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   guard-stable-edits:
     runs-on: ubuntu-latest
