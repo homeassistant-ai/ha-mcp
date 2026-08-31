@@ -434,6 +434,20 @@ class TestRequiredParameters:
             assert required == ["width"], annotation
             assert "default" not in properties["width"], annotation
 
+    def test_default_factory_makes_a_parameter_optional(self):
+        """pydantic calls the factory when the argument is omitted.
+
+        The callable itself is not published — it is how the value is made,
+        not a value, and a function is not JSON.
+        """
+        properties, required = _tool_params(
+            "tags: Annotated[list[str], Field(default_factory=list, description='T')]"
+        )
+
+        assert required == []
+        assert "default" not in properties["tags"]
+        assert extract_tools.UNRESOLVED_KEYWORDS == []
+
     def test_every_required_name_has_a_property_to_point_at(self):
         """A required name with no property is a schema nothing can render."""
         properties, required = _tool_params("foo")

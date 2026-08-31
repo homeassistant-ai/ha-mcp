@@ -437,6 +437,10 @@ def _field_keyword(info: dict, kw: ast.keyword, scope: ModuleScope) -> None:
     """Fold one ``Field(...)`` keyword into the parameter info."""
     if kw.arg is None:
         return  # ``Field(**kwargs)`` splat — no keyword name to record.
+    if kw.arg == "default_factory":
+        # A factory is how the value is MADE, not a value to publish, and the
+        # callable is not JSON. Requiredness reads it; the catalog does not.
+        return
     if kw.arg == "default" and _is_ellipsis(kw.value):
         # pydantic's explicit "required" marker, not a value. Publishing it
         # would put an Ellipsis in the catalog, which is not JSON.
@@ -622,11 +626,17 @@ def _is_ellipsis(node: ast.expr) -> bool:
 
 
 def _declares_field_default(annotation: ast.expr | None) -> bool:
-    """Whether the annotation declares a Field default, resolvable or not."""
+    """Whether the annotation declares a default at all, resolvable or not.
+
+    Wider than ``_field_default_node``, which supplies a VALUE:
+    ``default_factory=list`` makes the parameter optional to pydantic without
+    giving the catalog anything publishable, and a callable is not JSON.
+    """
     if annotation is None:
         return False
     return any(
         _field_default_node(sub) is not None
+        or any(kw.arg == "default_factory" for kw in sub.keywords)
         for sub in ast.walk(annotation)
         if _is_field_call(sub)
     )
