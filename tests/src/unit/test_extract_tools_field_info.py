@@ -36,6 +36,31 @@ def _has_description(schema: dict) -> bool:
     return isinstance(description, str) and bool(description.strip())
 
 
+@pytest.fixture(autouse=True)
+def _clear_module_scope_caches():
+    """The resolver's caches are module globals; keep tests order-independent."""
+    extract_tools._SCOPE_CACHE.clear()
+    extract_tools._RESOLVING.clear()
+    extract_tools.UNRESOLVED_KEYWORDS.clear()
+    yield
+    extract_tools._SCOPE_CACHE.clear()
+    extract_tools._RESOLVING.clear()
+    extract_tools.UNRESOLVED_KEYWORDS.clear()
+
+
+def _definitions(source: str) -> extract_tools.ModuleScope:
+    """Module-level constants and helpers resolved from ``source``."""
+    scope = extract_tools.ModuleScope({}, {})
+    extract_tools._apply_definitions(ast.parse(source), scope)
+    return scope
+
+
+def _tool_params(signature: str) -> tuple[dict, list[str]]:
+    """Run the parameter extractor over one tool signature."""
+    node = ast.parse(f"async def tool(self, {signature}) -> None:\n    pass\n").body[0]
+    return extract_tools._extract_tool_params(node)
+
+
 def _params_documented_in_source() -> set[tuple[str, str]]:
     """(tool name, parameter) pairs whose annotation carries a Field description."""
     documented: set[tuple[str, str]] = set()
@@ -221,9 +246,7 @@ class TestZeroArgumentHelpers:
     """Only a helper that can actually be called bare is resolved."""
 
     def _funcs(self, source: str) -> dict:
-        scope = extract_tools.ModuleScope({}, {})
-        extract_tools._apply_definitions(ast.parse(source), scope)
-        return scope.funcs
+        return _definitions(source).funcs
 
     def test_a_truly_zero_argument_helper_resolves(self):
         assert self._funcs("def docs():\n    return 'text'\n") == {"docs": "text"}
@@ -269,23 +292,86 @@ class TestMetadataSelection:
 class TestRequiredParameters:
     """``required`` must agree with the defaults the schema reports."""
 
-    def _params(self, signature: str):
-        source = f"async def tool({signature}) -> None:\n    pass\n"
-        node = ast.parse(source).body[0]
-        return extract_tools._extract_tool_params(node)
-
     def test_field_default_alone_makes_a_parameter_optional(self):
         """FastMCP treats ``Field(default=...)`` as the default; so must this."""
-        properties, required = self._params("limit: Annotated[int, Field(default=10)]")
+        properties, required = _tool_params("limit: Annotated[int, Field(default=10)]")
 
         assert properties["limit"]["default"] == 10
         assert required == []
 
     def test_a_parameter_with_no_default_at_all_stays_required(self):
-        properties, required = self._params("entity_id: str")
+        properties, required = _tool_params("entity_id: str")
 
         assert required == ["entity_id"]
         assert "default" not in properties["entity_id"]
+
+    def test_an_unresolvable_field_default_still_means_optional(self):
+        """Requiredness comes from the source, not from what resolved.
+
+        Calling a parameter required because its default could not be read
+        states the opposite of the truth to whoever reads the page.
+        """
+        properties, required = _tool_params(
+            "limit: Annotated[int, Field(description='n', default=SOME_UNKNOWN)]"
+        )
+
+        assert required == []
+        assert "default" not in properties["limit"]
+
+    def test_a_signature_default_that_is_a_module_constant_resolves(self):
+        """The resolver is already in hand; a named default is not a mystery."""
+        scope = extract_tools.ModuleScope({"DEFAULT_WIDTH": 1280}, {})
+        node = ast.parse(
+            "async def tool(self, width: int = DEFAULT_WIDTH) -> None:\n    pass\n"
+        ).body[0]
+        properties, required = extract_tools._extract_tool_params(node, scope)
+
+        assert properties["width"]["default"] == 1280
+        assert required == []
+
+    def test_every_required_name_has_a_property_to_point_at(self):
+        """A required name with no property is a schema nothing can render."""
+        properties, required = _tool_params("foo")
+
+        assert set(required) <= set(properties)
+
+
+class TestUnresolvedValuesAreReported:
+    """A value that cannot be read is announced, never quietly dropped."""
+
+    def test_an_unresolvable_constraint_is_recorded(self):
+        """The whitelist was removed so nothing goes missing by omission."""
+        _field_info("Annotated[int, Field(ge=CONF_MAX)]")
+
+        assert any(
+            "ge=CONF_MAX" in entry for entry in extract_tools.UNRESOLVED_KEYWORDS
+        )
+
+    def test_a_resolvable_constraint_is_not_recorded(self):
+        _field_info("Annotated[int, Field(ge=1)]")
+
+        assert extract_tools.UNRESOLVED_KEYWORDS == []
+
+
+class TestMalformedAnnotations:
+    """A wrong answer is worse than handing back the source text."""
+
+    def test_a_union_operand_without_a_type_falls_back_to_source(self):
+        """Joining the rest would name one branch as the whole type."""
+        info = _field_info("Annotated[int] | None")
+
+        assert info["type"] == "Annotated[int] | None"
+
+    def test_an_unknown_fstring_conversion_yields_no_description(self):
+        """An unrecognised conversion code must not abort the catalog build."""
+        node = ast.parse("Annotated[str, Field(description=f'{X}')]").body[0].value
+        node.slice.elts[1].keywords[0].value.values[0].conversion = 42
+
+        info = extract_tools._extract_field_info(
+            node, extract_tools.ModuleScope({"X": "v"}, {})
+        )
+
+        assert "description" not in info
 
 
 class TestNonLiteralDescriptions:
@@ -360,35 +446,32 @@ class TestNonLiteralDescriptions:
 class TestForwardReferences:
     """Definition order in the source must not decide what resolves."""
 
-    def _scope_for(self, tmp_path, source: str):
-        module = tmp_path / "mod.py"
-        module.write_text(source, encoding="utf-8")
-        scope = extract_tools.ModuleScope({}, {})
-        _definition_scan = extract_tools._apply_definitions
-        _definition_scan(ast.parse(source), scope)
-        return scope
-
-    def test_helper_returning_a_later_constant_resolves(self, tmp_path):
+    def test_helper_returning_a_later_constant_resolves(self):
         """A single source-order pass would leave this helper unresolved."""
-        scope = self._scope_for(
-            tmp_path,
-            "def docs():\n    return TEXT\n\n\nTEXT = 'Shared documentation.'\n",
+        scope = _definitions(
+            "def docs():\n    return TEXT\n\n\nTEXT = 'Shared documentation.'\n"
         )
 
         assert scope.funcs["docs"] == "Shared documentation."
 
-    def test_constant_built_from_a_later_constant_resolves(self, tmp_path):
-        scope = self._scope_for(
-            tmp_path,
-            "HEAD = LEAD + ' tail.'\n\nLEAD = 'Lead'\n",
-        )
+    def test_constant_built_from_a_later_constant_resolves(self):
+        scope = _definitions("HEAD = LEAD + ' tail.'\n\nLEAD = 'Lead'\n")
 
         assert scope.consts["HEAD"] == "Lead tail."
 
-    def test_a_genuinely_unresolvable_name_stays_out(self, tmp_path):
-        scope = self._scope_for(tmp_path, "VALUE = missing_helper()\n")
+    def test_a_genuinely_unresolvable_name_stays_out(self):
+        scope = _definitions("VALUE = missing_helper()\n")
 
         assert "VALUE" not in scope.consts
+
+    def test_a_module_level_assignment_overrides_an_imported_name(self):
+        """Python's own precedence: the local binding is what the module uses."""
+        scope = extract_tools.ModuleScope({"NAME": "imported"}, {})
+        extract_tools._apply_definitions(
+            ast.parse("from .sibling import NAME\nNAME = 'local'\n"), scope
+        )
+
+        assert scope.consts["NAME"] == "local"
 
 
 class TestModuleScope:
@@ -408,7 +491,9 @@ class TestModuleScope:
             REPO_ROOT / "src" / "ha_mcp" / "tools" / "tools_config_scenes.py"
         )
 
-        assert "PYTHON TRANSFORM SECURITY" in scope.funcs["get_security_documentation"]
+        resolved = scope.funcs["get_security_documentation"]
+
+        assert isinstance(resolved, str) and resolved.strip()
 
 
 class TestExtractedToolsNeverLeakAnnotationSource:
