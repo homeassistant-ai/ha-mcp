@@ -155,6 +155,15 @@ class TestFieldConstraints:
             "allow_inf_nan": False,
         }
 
+    def test_alias_choices_resolve_to_the_accepted_names(self):
+        """The alternative spellings a caller may use are part of the contract."""
+        info = _field_info(
+            "Annotated[int | None, Field(validation_alias="
+            "AliasChoices('min_value', 'min'))]"
+        )
+
+        assert info["constraints"] == {"validation_alias": ["min_value", "min"]}
+
     def test_negative_bounds_survive(self):
         """``ge=-1`` parses as a unary minus, not a plain literal."""
         info = _field_info("Annotated[int, Field(ge=-1, le=-0.5)]")
