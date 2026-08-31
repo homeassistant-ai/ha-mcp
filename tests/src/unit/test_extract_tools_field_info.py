@@ -183,6 +183,13 @@ class TestUnionMetadata:
         assert info["constraints"] == {"ge": 1}
         assert info["description"] == "n"
 
+    def test_metadata_is_not_published_across_a_non_optional_branch(self):
+        """``ge=1`` says nothing about the ``str`` a caller may pass instead."""
+        info = _field_info("Annotated[int, Field(ge=1)] | str")
+
+        assert info["type"] == "int | str"
+        assert "constraints" not in info
+
     def test_two_annotated_branches_publish_no_flattened_metadata(self):
         """Neither branch's rules govern the whole parameter."""
         info = _field_info(
@@ -210,6 +217,12 @@ class TestZeroArgumentHelpers:
 
     def test_a_truly_zero_argument_helper_resolves(self):
         assert self._funcs("def docs():\n    return 'text'\n") == {"docs": "text"}
+
+    def test_a_conditional_return_disqualifies_the_helper(self):
+        """Two return paths mean no single value; the last one is not it."""
+        source = "def docs():\n    if enabled:\n        return 'A'\n    return 'B'\n"
+
+        assert self._funcs(source) == {}
 
     def test_a_keyword_only_parameter_disqualifies_the_helper(self):
         """``docs()`` would raise TypeError, so its return value is not its value."""

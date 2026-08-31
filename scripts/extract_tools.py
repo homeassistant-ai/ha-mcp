@@ -229,10 +229,16 @@ def _takes_no_arguments(args: ast.arguments) -> bool:
 
 
 def _returned_literal(node: ast.stmt) -> tuple[str, ast.expr] | None:
-    """The (name, returned expression) of a zero-argument function."""
+    """The (name, returned expression) of a zero-argument function.
+
+    The whole body is searched, not just its top level: a helper that returns
+    one string inside an ``if`` and another after it has no single value, and
+    taking the last one would publish whichever branch the source happened to
+    end with.
+    """
     if not isinstance(node, ast.FunctionDef) or not _takes_no_arguments(node.args):
         return None
-    returns = [n for n in node.body if isinstance(n, ast.Return)]
+    returns = [n for n in ast.walk(node) if isinstance(n, ast.Return)]
     if len(returns) != 1 or returns[0].value is None:
         return None
     return node.name, returns[0].value
@@ -378,14 +384,15 @@ def _union_field_info(annotation: ast.BinOp, scope: ModuleScope) -> dict:
         _extract_field_info(annotation.right, scope),
     ]
     info: dict = {}
-    # Metadata belongs to the branch that declared it. ``X | None`` — the only
-    # shape in practice — has exactly one branch carrying any, so it applies to
-    # the parameter. Two branches carrying metadata (``Annotated[int,
-    # Field(ge=1)] | Annotated[str, Field(min_length=1)]``) cannot be flattened
-    # without claiming each branch's rules govern the whole parameter, so none
-    # is published rather than a false one.
+    # Metadata belongs to the branch that declared it, and only ``X | None``
+    # lets it stand for the parameter: ``None`` carries no values of its own to
+    # contradict it. Anywhere else — a second metadata-bearing branch, or a
+    # plain type like ``Annotated[int, Field(ge=1)] | str`` — publishing it
+    # would claim one branch's rules govern values of the other, so nothing is
+    # published rather than something false.
     described = [o for o in operands if any(k != "type" for k in o)]
-    if len(described) == 1:
+    others = [o for o in operands if o is not described[0]] if described else []
+    if len(described) == 1 and all(o.get("type") == "None" for o in others):
         info.update({k: v for k, v in described[0].items() if k != "type"})
     info["type"] = " | ".join(o["type"] for o in operands if o.get("type"))
     return info
