@@ -870,24 +870,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data[DOMAIN] = hass_data
 
-    # The integration is set up. If OAuth was (re)configured on a mid-session
-    # setup, its root views aren't live until a full HA restart, so surface the
-    # HACS-style restart Repair; otherwise (OAuth off, or set up cleanly during
-    # HA boot) any prior "needs HA restart for OAuth" marker is now stale, so
-    # clear it. Marker writes/cleanup are filesystem I/O and run in the
-    # executor; the issue-registry calls are synchronous and safe on the loop.
+    # The integration is set up. Two things can only take effect at HA
+    # startup — OAuth (re)configured mid-session, whose root views aren't live
+    # yet, and a webhook id rotated mid-session, whose path-scoped discovery
+    # URL cannot be bound — so either surfaces the HACS-style restart Repair.
+    # Otherwise (set up cleanly during HA boot, nothing pending) any prior
+    # restart marker is now stale, so clear it. Marker writes/cleanup are
+    # filesystem I/O and run in the executor; the issue-registry calls are
+    # synchronous and safe on the loop.
     from .repairs import _clear_marker, _delete_issue_only, _write_marker, create_issue
 
     if oauth_restart_needed:
-        # OAuth was (re)configured on a mid-session setup — it isn't live until
-        # a full HA restart. Surface the HACS-style restart Repair (+ marker so
-        # it survives to the next boot). A boot-time setup takes the else branch
-        # and clears it once OAuth is genuinely active.
+        # Something needs a full HA restart to become live: OAuth
+        # (re)configured mid-session, or — with OAuth OFF too — a rotated
+        # webhook id whose discovery URL only binds at startup. Surface the
+        # HACS-style restart Repair (+ marker so it survives to the next boot).
+        # A boot-time setup takes the else branch and clears it once the
+        # pending change is genuinely live.
         await hass.async_add_executor_job(_write_marker)
         create_issue(hass, DOMAIN)
     else:
-        # OAuth off, or set up during HA boot (views bound cleanly) — no restart
-        # needed; clear any stale marker/issue.
+        # Set up during HA boot (views bound cleanly) with no rotated id —
+        # no restart needed; clear any stale marker/issue.
         await hass.async_add_executor_job(_clear_marker)
         _delete_issue_only(hass, DOMAIN)
 
