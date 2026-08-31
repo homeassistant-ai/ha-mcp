@@ -7,9 +7,9 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
-# Every PR-triggered stable lane, and both beta lanes, were merged into one
-# workflow file each (#2292/#2302) so a push starts one shared `changes`
-# classifier per file instead of one per lane.
+# Stable and beta HAOS lanes each live in one consolidated workflow file
+# (#2292/#2302). Stable PR lanes share one `changes` classifier; both beta
+# lanes participate in every surviving workflow event.
 _STABLE_WORKFLOW = "haos-e2e-tests.yml"
 _BETA_WORKFLOW = "haos-e2e-beta-tests.yml"
 # 7 actual consumers (the six HAOS lanes + the image builder); the floor is what
@@ -199,20 +199,19 @@ def test_beta_lane_discovery_does_not_depend_on_attestation(tmp_path: Path) -> N
 def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
     """Both beta lanes share one workflow and one manifest-keyed qcow2 cache.
 
-    The lanes live in a single workflow file so one `changes` classifier serves
-    both. `schedule` is a workflow-level trigger, so each lane's `if:` has to
-    claim its own cron — otherwise the merged file starts BOTH lanes on BOTH
-    nightly slots, doubling the QEMU spend and the beta cache contention.
+    The lanes live in a single workflow file for each user-originated master
+    update, nightly schedule, or manual dispatch. The cache-writing inaddon
+    lane runs first, then the embedded lane consumes its image.
     """
     lane_specs = (
-        ("haos-e2e-inaddon-beta", "inaddon", "0 6 * * *", "haos-e2e-inaddon"),
-        ("haos-e2e-embedded-beta", "embedded", "0 8 * * *", "haos-e2e-embedded"),
+        ("haos-e2e-inaddon-beta", "inaddon", "haos-e2e-inaddon"),
+        ("haos-e2e-embedded-beta", "embedded", "haos-e2e-embedded"),
     )
     beta_resolvers: list[str] = []
     beta_cache_keys: list[str] = []
     assert _beta_lane_jobs() == {
         (_BETA_WORKFLOW, beta_job_id, mode)
-        for beta_job_id, mode, _cron, _stable_job_id in lane_specs
+        for beta_job_id, mode, _stable_job_id in lane_specs
     }
 
     beta_path = _WORKFLOW_DIR / _BETA_WORKFLOW
@@ -221,15 +220,18 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
 
     triggers = workflow[True]
     assert "pull_request" not in triggers, (
-        "beta lanes must not run per PR push (#2311) - a per-PR beta failure "
-        "blames every open PR for an upstream change none of them made"
+        "beta compatibility runs after changes land on master, not on every "
+        "push to an open PR"
     )
     assert triggers["push"]["branches"] == ["master"]
-    assert triggers["schedule"]
-    assert all(entry.get("cron") for entry in triggers["schedule"])
-    assert {entry["cron"] for entry in triggers["schedule"]} == {
-        cron for _job_id, _mode, cron, _stable_job_id in lane_specs
-    }, "the shared file must carry exactly the two lanes' nightly slots"
+    assert triggers["schedule"] == [{"cron": "17 3 * * *"}]
+    assert workflow["concurrency"] == {
+        "group": (
+            "${{ github.workflow }}-${{ github.event_name == "
+            "'workflow_dispatch' && github.run_id || 'full' }}"
+        ),
+        "cancel-in-progress": True,
+    }
     # No `changes` classifier job (#2311): with pull_request gone every
     # surviving trigger is a trusted ref, so a docs-only classifier could only
     # ever compute run=true while burning a runner per nightly and per merge.
@@ -238,25 +240,19 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
         "means it can never authorize a skip (#2311)"
     )
 
-    for beta_job_id, mode, cron, stable_job_id in lane_specs:
+    for beta_job_id, mode, stable_job_id in lane_specs:
         job = workflow["jobs"][beta_job_id]
 
-        assert "needs" not in job, (
-            f"{beta_job_id} gained a needs: dependency - nothing in this "
-            "workflow should gate the lanes any more (#2311)"
-        )
-        assert f"github.event.schedule == '{cron}'" in job["if"], (
-            f"{beta_job_id} must claim its own nightly slot, or the shared "
-            "schedule trigger starts it on the other lane's cron too"
-        )
-        assert "github.event_name != 'schedule'" in job["if"], (
-            f"{beta_job_id} would never run on push / dispatch, "
-            "where github.event.schedule is empty"
-        )
-        for other_cron in (c for _j, _m, c, _s in lane_specs if c != cron):
-            assert other_cron not in job["if"], (
-                f"{beta_job_id} also answers {other_cron}, so one cron would "
-                "start both lanes"
+        if mode == "inaddon":
+            assert "needs" not in job
+            assert "if" not in job
+        else:
+            assert job["needs"] == "haos-e2e-inaddon-beta", (
+                "the embedded lane must wait for the sole cache writer"
+            )
+            assert job["if"] == "${{ !cancelled() }}", (
+                "the embedded lane must continue after a writer failure, but "
+                "not after a superseding run cancels the workflow"
             )
         steps = _job_steps(job)
 

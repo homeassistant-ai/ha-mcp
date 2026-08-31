@@ -373,51 +373,24 @@ def test_every_e2e_lane_is_claimed_by_exactly_one_table() -> None:
     )
 
 
-def test_every_beta_cron_is_claimed_by_exactly_one_lane_gate() -> None:
-    """Each beta cron must be claimed by exactly one job's ``if:`` gate.
-
-    The merged beta workflow declares both nightly crons at the workflow
-    level, and each lane claims its own inside its ``if:``. The two copies of
-    each cron string must stay in lockstep: editing one side leaves a lane
-    whose gate matches no declared cron, so it silently stops running nightly
-    — the lane reports nothing, and nothing else notices (#2302 review).
-    """
+def test_beta_schedule_runs_every_lane_without_cron_gates() -> None:
+    """The single shared beta cron must not be restricted to one lane."""
     workflow = yaml.safe_load(
         (_WORKFLOW_DIR / "haos-e2e-beta-tests.yml").read_text(encoding="utf-8")
     )
     triggers = workflow.get("on") or workflow.get(True) or {}
     declared = [entry["cron"] for entry in triggers.get("schedule", [])]
-    assert declared, "the beta workflow must keep its nightly schedule"
+    assert len(declared) == 1, "the beta workflow must keep one nightly schedule"
 
-    lane_conditions = [
-        str(job.get("if") or "")
+    lanes = {
+        job_id: job
         for job_id, job in (workflow.get("jobs") or {}).items()
         if isinstance(job, dict) and job_id != "changes"
-    ]
-    for cron in declared:
-        claimants = [cond for cond in lane_conditions if cron in cond]
-        assert len(claimants) == 1, (
-            f"cron {cron!r} must be claimed by exactly ONE beta lane gate; "
-            f"found {len(claimants)}. A cron no lane claims runs nothing on "
-            f"its slot; one claimed twice starts both lanes on it."
-        )
-    # And the reverse direction: a lane gating on a cron string the workflow
-    # never declares (a typo'd edit of one copy) matches no schedule event and
-    # silently skips its nightly run, while every declared cron still finds
-    # its one claimant above. Each gate must contain exactly one cron literal,
-    # and it must be a declared one.
-    cron_literal = re.compile(r"'([^']*(?:\*|\d)[^']*\*[^']*)'")
-    for cond in lane_conditions:
-        crons_in_gate = [
-            lit
-            for lit in cron_literal.findall(cond)
-            if lit.count(" ") == 4  # five cron fields
-        ]
-        assert len(crons_in_gate) == 1, (
-            f"each beta lane gate must name exactly one cron; {cond!r} names "
-            f"{crons_in_gate}"
-        )
-        assert crons_in_gate[0] in declared, (
-            f"lane gate claims undeclared cron {crons_in_gate[0]!r}; the "
-            f"workflow schedules {declared} — the two copies drifted"
+    }
+    assert lanes, "the beta workflow must retain its E2E lanes"
+    for job_id, job in lanes.items():
+        condition = str(job.get("if") or "")
+        assert "github.event.schedule" not in condition, (
+            f"{job_id} must run on the shared nightly schedule, not claim a "
+            "lane-specific cron"
         )

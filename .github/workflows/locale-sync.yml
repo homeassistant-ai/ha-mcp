@@ -31,8 +31,8 @@ name: Locale Sync
 # BLOCKS the push — machine translations are recomputable, so dropping them
 # loses nothing. (3) The English-source staleness check runs separately and
 # does NOT block the push: after a clean run the only way it fails is a
-# held feature-gated stub key awaiting human review (see AGENTS.md
-# § Translations), which is routine — blocking on it would wedge every
+# held feature-gated stub key awaiting human review (see the locale README
+# § English changes and retranslation), which is routine — blocking would wedge
 # unrelated translation and re-burn the Gemini quota daily until someone
 # runs update_locale_baseline.py. It reddens the job instead.
 #
@@ -313,7 +313,7 @@ jobs:
          steps.staleness.outcome == 'failure')
       run: |
         if [ "${{ steps.translate.outcome }}" != "success" ]; then
-          echo "::error::scripts/translate_locales.py did not finish cleanly; any finished strings are exported for the push job (see its result for whether they landed) and the remainder is recorded in the progress file. Re-run this workflow — or let tomorrow's cron — continue from it, or hand-translate per AGENTS.md § Translations."
+          echo "::error::scripts/translate_locales.py did not finish cleanly; any finished strings are exported for the push job (see its result for whether they landed) and the remainder is recorded in the progress file. Re-run this workflow — or let tomorrow's cron — continue from it, or hand-translate per src/ha_mcp/settings_ui/locales/README.md#english-changes-and-retranslation."
         fi
         if [ "${{ steps.verify.outcome }}" = "failure" ]; then
           echo "::error::content-completeness verification failed after a clean translate run, so nothing will be pushed — the output may be corrupt (English pasted back, parity broken). The pytest output above names exactly what is off."

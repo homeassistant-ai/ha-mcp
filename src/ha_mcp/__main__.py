@@ -1040,7 +1040,7 @@ def _is_running_in_container() -> bool:
     so the bind host alone can't tell a loopback-only deployment from a
     LAN-reachable one — the default-path warning would be a false positive
     for every container. Container deployments are hardened through the
-    published guidance instead (AGENTS.md -> Docker; the add-on
+    published guidance instead (docs/agents/development.md -> Docker; the add-on
     auto-generates a secret path).
     """
     # Docker writes /.dockerenv; Podman writes /run/.containerenv.

@@ -52,7 +52,7 @@ uv run lefthook install --reset-hooks-path
 - **Bot reviews**: Address every CodeRabbit finding, inline and top-level.
   CodeRabbit nests some findings (Outside diff range, Nitpick) inside
   collapsed sections of its review bodies rather than inline threads — read
-  the full bodies. See AGENTS.md § PR Review Comments for the sweep
+  the full bodies. See the [GitHub workflow reference](docs/agents/github-workflow.md#review-comments) for the sweep
 - **Translations**: A language ships on all four translated surfaces or not at
   all. Read `src/ha_mcp/settings_ui/locales/README.md` first. Changing an
   English string owes no translations — the post-merge locale-sync workflow

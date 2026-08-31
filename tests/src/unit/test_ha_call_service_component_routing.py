@@ -21,8 +21,10 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
     HomeAssistantCommandError,
     HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
@@ -101,14 +103,78 @@ def _partial_result(entity_id: str = "light.a") -> dict[str, Any]:
     }
 
 
+def _not_found_result(entity_id: str = "light.a") -> dict[str, Any]:
+    """The component's shape for a target absent from the state machine.
+
+    ``old_state`` is None (the component's ``pre.get(eid)`` read found nothing).
+    ``should_confirm`` stays intent-level (True) even though the target was
+    excluded from the actual wait, so ``partial`` is True here too — a
+    ``validate_first=False``-style caller that doesn't inspect ``old_state``
+    still sees the same dispatched-but-unconfirmed shape it always has.
+    """
+    return {
+        "domain": "light",
+        "service": "turn_on",
+        "dispatched": True,
+        "confirmed": False,
+        "partial": True,
+        "transitions": [
+            {
+                "entity_id": entity_id,
+                "old_state": None,
+                "new_state": None,
+                "changed": False,
+                "attributes_changed": [],
+            }
+        ],
+    }
+
+
+def _unavailable_result(entity_id: str = "light.a") -> dict[str, Any]:
+    """The component's shape for a target whose confirmation genuinely lapsed
+    while STILL unavailable (both pre- and post-dispatch reads show it).
+
+    Unlike a nonexistent target, "unavailable" stays IN the confirmation wait
+    (it can legitimately reconnect and transition mid-dispatch) — this fixture
+    represents the case where it did not, so ``partial`` is True exactly like
+    any other genuine confirmation lapse. ``new_state`` is a real "unavailable"
+    dict here, not ``None`` — a ``None`` ``new_state`` means the entity was
+    REMOVED during the dispatch (a distinct, more specific outcome; see
+    ``_removed_mid_dispatch_result``).
+    """
+    return {
+        "domain": "light",
+        "service": "turn_on",
+        "dispatched": True,
+        "confirmed": False,
+        "partial": True,
+        "transitions": [
+            {
+                "entity_id": entity_id,
+                "old_state": _state(entity_id, "unavailable"),
+                "new_state": _state(entity_id, "unavailable"),
+                "changed": False,
+                "attributes_changed": [],
+            }
+        ],
+    }
+
+
 class RoutingClient:
-    """Credentialed HA client spy: tallies the legacy REST POST + initial-state GET."""
+    """Credentialed HA client spy: tallies the legacy REST POST + initial-state GET.
+
+    ``get_state_response`` / ``get_state_exception`` let a test override the
+    default "always off" initial-state fetch to exercise the legacy
+    entity_not_found / entity_unavailable fast-fail path.
+    """
 
     def __init__(self) -> None:
         self.base_url = "http://ha.local:8123"
         self.token = "tok"
         self.call_service_calls: list[dict[str, Any]] = []
         self.get_state_calls = 0
+        self.get_state_response: dict[str, Any] | None = None
+        self.get_state_exception: Exception | None = None
 
     async def call_service(
         self,
@@ -130,6 +196,10 @@ class RoutingClient:
 
     async def get_entity_state(self, entity_id: str) -> dict[str, Any]:
         self.get_state_calls += 1
+        if self.get_state_exception is not None:
+            raise self.get_state_exception
+        if self.get_state_response is not None:
+            return self.get_state_response
         return {"entity_id": entity_id, "state": "off"}
 
 
@@ -330,6 +400,28 @@ async def test_comma_multi_target_uses_legacy_not_component() -> None:
 
 
 @pytest.mark.asyncio
+async def test_comma_multi_target_survives_404_on_states_endpoint() -> None:
+    """Regression: /api/states/<id> has no comma syntax and 404s on a literal
+    joined "light.a,light.b" even when both individual entities are real — that
+    404 must NOT be misread as ENTITY_NOT_FOUND for the (valid) multi-target
+    service call. Caught by CI's E2E suite:
+    TestCallServiceResultProjection::test_comma_separated_entity_id_filters_to_target_set.
+    """
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_CALL)
+    client = RoutingClient()
+    client.get_state_exception = HomeAssistantAPIError("not found", status_code=404)
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light", service="turn_on", entity_id="light.a,light.b"
+        )
+
+    assert resp["success"] is True
+    assert len(client.call_service_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_return_response_passed_through() -> None:
     """return_response threads to the component and its service_response is surfaced."""
     result = _confirmed_result("light.a")
@@ -378,6 +470,162 @@ async def test_return_response_null_still_emits_the_key() -> None:
 
     assert "service_response" in resp
     assert resp["service_response"] is None
+
+
+@pytest.mark.asyncio
+async def test_component_reports_entity_not_found_immediately() -> None:
+    """A component result whose target was never confirmable (old_state=None)
+    raises a structured ENTITY_NOT_FOUND instead of the generic partial/timeout
+    wording — and never falls back to the legacy REST path."""
+    ws = make_ws(
+        "ha_mcp_tools/call_service",
+        info_result=_CAPS_CALL,
+        cmd_result=_not_found_result("light.cuisine"),
+    )
+    client = RoutingClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service), pytest.raises(ToolError) as exc:
+        await call_service(domain="light", service="turn_on", entity_id="light.cuisine")
+
+    assert "ENTITY_NOT_FOUND" in str(exc.value)
+    assert "light.cuisine" in str(exc.value)
+    assert client.call_service_calls == []
+    assert client.get_state_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_component_reports_entity_unavailable_immediately() -> None:
+    """A component result whose target's captured pre-state was "unavailable"
+    raises a structured ENTITY_UNAVAILABLE, distinct from ENTITY_NOT_FOUND.
+
+    The error carries ``dispatched: True`` in its structured context (kingpanther13
+    review): by the time this raises, the confirmation wait has already lapsed,
+    which only happens AFTER the service call reached Home Assistant — a caller
+    that only inspects structured fields must be able to tell this apart from a
+    command that never went out, so it doesn't blindly retry a non-idempotent
+    service and double-apply an already-landed write.
+    """
+    ws = make_ws(
+        "ha_mcp_tools/call_service",
+        info_result=_CAPS_CALL,
+        cmd_result=_unavailable_result("light.a"),
+    )
+    client = RoutingClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service), pytest.raises(ToolError) as exc:
+        await call_service(domain="light", service="turn_on", entity_id="light.a")
+
+    assert "ENTITY_UNAVAILABLE" in str(exc.value)
+    assert "light.a" in str(exc.value)
+    assert '"dispatched": true' in str(exc.value)
+    assert client.call_service_calls == []
+    assert client.get_state_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_component_skips_magic_broadcast_target() -> None:
+    """kingpanther13-flagged, live-verified regression: entity_id="all"
+    (Home Assistant's ``ENTITY_MATCH_ALL`` broadcast target) is not a literal
+    entity in the state machine, so its captured pre-state is null just like a
+    genuinely nonexistent entity — but it must NOT be reported ENTITY_NOT_FOUND,
+    since the broadcast dispatch may have (and typically does) land successfully.
+    Falls through to the generic partial/timeout wording instead."""
+    result = {
+        "domain": "light",
+        "service": "turn_off",
+        "dispatched": True,
+        "confirmed": False,
+        "partial": True,
+        "transitions": [
+            {
+                "entity_id": "all",
+                "old_state": None,
+                "new_state": None,
+                "changed": False,
+                "attributes_changed": [],
+            }
+        ],
+    }
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_CALL, cmd_result=result)
+    client = RoutingClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(domain="light", service="turn_off", entity_id="all")
+
+    assert resp["success"] is True
+    assert resp["partial"] is True
+    assert any(
+        "state change could not be verified" in w for w in resp.get("warnings", [])
+    )
+
+
+@pytest.mark.asyncio
+async def test_component_reports_not_found_when_removed_mid_dispatch() -> None:
+    """kingpanther13-flagged regression: a target whose pre-state was
+    "unavailable" but whose post-dispatch ``new_state`` is null was REMOVED
+    during the dispatch — a more specific and more accurate outcome than "still
+    unavailable" (which would falsely assert it still exists) — reports
+    ENTITY_NOT_FOUND, not ENTITY_UNAVAILABLE."""
+    result = {
+        "domain": "light",
+        "service": "turn_on",
+        "dispatched": True,
+        "confirmed": False,
+        "partial": True,
+        "transitions": [
+            {
+                "entity_id": "light.a",
+                "old_state": _state("light.a", "unavailable"),
+                "new_state": None,
+                "changed": False,
+                "attributes_changed": [],
+            }
+        ],
+    }
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_CALL, cmd_result=result)
+    client = RoutingClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service), pytest.raises(ToolError) as exc:
+        await call_service(domain="light", service="turn_on", entity_id="light.a")
+
+    assert "ENTITY_NOT_FOUND" in str(exc.value)
+    assert "ENTITY_UNAVAILABLE" not in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_empty_transitions_after_dispatch_does_not_report_not_found() -> None:
+    """CodeRabbit-flagged regression: an unconfirmed component result with an
+    EMPTY transitions list (the ``_dispatched_unconfirmed_result`` shape a
+    post-dispatch formatting failure produces — the write already landed, the
+    entity demonstrably exists) must NOT be misread as ENTITY_NOT_FOUND. A
+    missing transition row proves nothing about existence, unlike a present row
+    with a null ``old_state``."""
+    result = {
+        "domain": "light",
+        "service": "turn_on",
+        "dispatched": True,
+        "confirmed": False,
+        "partial": True,
+        "transitions": [],
+    }
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_CALL, cmd_result=result)
+    client = RoutingClient()
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light", service="turn_on", entity_id="light.a"
+        )
+
+    assert resp["success"] is True
+    assert resp["partial"] is True
+    assert any(
+        "state change could not be verified" in w for w in resp.get("warnings", [])
+    )
 
 
 @pytest.mark.asyncio
@@ -469,6 +717,206 @@ async def test_no_capability_uses_legacy_post() -> None:
     assert resp["success"] is True
     assert len(client.call_service_calls) == 1
     assert not _call_service_frames(ws)
+
+
+@pytest.mark.asyncio
+async def test_legacy_reports_entity_not_found_without_dispatch() -> None:
+    """No component: a clean 404 on the initial-state GET raises ENTITY_NOT_FOUND
+    immediately, BEFORE the legacy service POST and BEFORE the 10s WS-subscribe
+    wait — the regression this pins is the pointless wait for a target that can
+    never emit a confirming state change."""
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_NONE)
+    client = RoutingClient()
+    client.get_state_exception = HomeAssistantAPIError("not found", status_code=404)
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service), pytest.raises(ToolError) as exc:
+        await call_service(domain="light", service="turn_on", entity_id="light.cuisine")
+
+    assert "ENTITY_NOT_FOUND" in str(exc.value)
+    assert "light.cuisine" in str(exc.value)
+    # Dispatch never happened: the 404 settled the question before the POST.
+    assert client.call_service_calls == []
+    tools_service.wait_for_state_change.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_legacy_dispatches_unavailable_target_and_reports_after_genuine_lapse() -> (
+    None
+):
+    """No component: a fetched "unavailable" state does NOT fast-fail before
+    dispatch, unlike a 404 — dispatching is exactly what might reconnect the
+    device, so the service call still fires. Only once ``wait_for_state_change``
+    genuinely times out AND a live re-check confirms it is STILL unavailable
+    does ENTITY_UNAVAILABLE get reported (CodeRabbit-flagged consistency fix,
+    mirroring the component path's post-dispatch-state check)."""
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_NONE)
+    client = RoutingClient()
+    client.get_state_response = {"entity_id": "light.a", "state": "unavailable"}
+    call_service = _build_call_service(client)
+    tools_service.wait_for_state_change.return_value = None  # genuine timeout
+
+    with patch_ws(ws, tools_service), pytest.raises(ToolError) as exc:
+        await call_service(domain="light", service="turn_on", entity_id="light.a")
+
+    assert "ENTITY_UNAVAILABLE" in str(exc.value)
+    assert "light.a" in str(exc.value)
+    # dispatched: True in the structured context (kingpanther13 review) — the
+    # caller must be able to tell this apart from a command that never went
+    # out, so it doesn't blindly retry a non-idempotent service.
+    assert '"dispatched": true' in str(exc.value)
+    # Dispatch DID happen this time — the target may have reconnected because
+    # of it, so failing before the POST would deny it that chance.
+    assert len(client.call_service_calls) == 1
+    tools_service.wait_for_state_change.assert_called_once()
+    # Two fetches: the initial pre-dispatch read, plus the post-timeout live
+    # re-check that actually decided the "still unavailable" classification.
+    assert client.get_state_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_skips_magic_broadcast_target() -> None:
+    """kingpanther13-flagged, live-verified regression: entity_id="all"
+    (Home Assistant's ``ENTITY_MATCH_ALL`` broadcast target) is not a literal
+    entity, so ``/api/states/all`` 404s even though the broadcast itself is a
+    valid, working target — that 404 must NOT fast-fail the call before
+    dispatch (pre-PR, the broad ``except`` in the predecessor of
+    ``_validate_entity_before_wait`` swallowed it and let the call through;
+    this pins that the fix doesn't regress it back to a hard failure)."""
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_NONE)
+    client = RoutingClient()
+    client.get_state_exception = HomeAssistantAPIError("not found", status_code=404)
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(domain="light", service="turn_off", entity_id="all")
+
+    assert resp["success"] is True
+    # Dispatch happened — the 404 on the magic target never fast-failed it.
+    assert len(client.call_service_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_unavailable_target_reconnected_not_reported_unavailable() -> None:
+    """A target "unavailable" at dispatch time but found in some OTHER
+    (non-unavailable) state by the live re-check after a genuine
+    ``wait_for_state_change`` timeout — it reconnected, just not to the exact
+    expected hint — is NOT reported ENTITY_UNAVAILABLE; falls through to the
+    existing generic partial/timeout warning."""
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_NONE)
+    client = RoutingClient()
+    states = iter([{"state": "unavailable"}, {"state": "off"}])
+
+    async def _get_state(entity_id: str) -> dict[str, Any]:
+        client.get_state_calls += 1
+        return next(states)
+
+    client.get_entity_state = _get_state  # type: ignore[method-assign]
+    call_service = _build_call_service(client)
+    tools_service.wait_for_state_change.return_value = None  # genuine timeout
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light", service="turn_on", entity_id="light.a"
+        )
+
+    assert resp["success"] is True
+    assert any(
+        "state change could not be verified" in w for w in resp.get("warnings", [])
+    )
+    assert len(client.call_service_calls) == 1
+    # Two fetches: the initial pre-dispatch read, plus the post-timeout live
+    # re-check that found the reconnect and skipped the false ENTITY_UNAVAILABLE.
+    assert client.get_state_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_unavailable_target_removed_reports_not_found_not_unavailable() -> (
+    None
+):
+    """CodeRabbit-flagged regression: a target "unavailable" at dispatch time
+    that 404s on the post-timeout live re-check was REMOVED, a more specific
+    outcome than "still unavailable" — reports ENTITY_NOT_FOUND, not
+    ENTITY_UNAVAILABLE."""
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_NONE)
+    client = RoutingClient()
+    responses: list[Any] = [
+        {"state": "unavailable"},
+        HomeAssistantAPIError("gone", status_code=404),
+    ]
+
+    async def _get_state(entity_id: str) -> dict[str, Any]:
+        client.get_state_calls += 1
+        result = responses.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    client.get_entity_state = _get_state  # type: ignore[method-assign]
+    call_service = _build_call_service(client)
+    tools_service.wait_for_state_change.return_value = None  # genuine timeout
+
+    with patch_ws(ws, tools_service), pytest.raises(ToolError) as exc:
+        await call_service(domain="light", service="turn_on", entity_id="light.a")
+
+    assert "ENTITY_NOT_FOUND" in str(exc.value)
+    assert "ENTITY_UNAVAILABLE" not in str(exc.value)
+    assert client.get_state_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_unavailable_recheck_transient_error_falls_through() -> None:
+    """CodeRabbit-flagged regression: a non-404 failure on the post-timeout live
+    re-check is inconclusive, not proof of "still unavailable" — falls through
+    to the existing generic verification-failed warning instead of a
+    confidently-wrong ENTITY_UNAVAILABLE."""
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_NONE)
+    client = RoutingClient()
+    responses: list[Any] = [
+        {"state": "unavailable"},
+        HomeAssistantConnectionError("network blip"),
+    ]
+
+    async def _get_state(entity_id: str) -> dict[str, Any]:
+        client.get_state_calls += 1
+        result = responses.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    client.get_entity_state = _get_state  # type: ignore[method-assign]
+    call_service = _build_call_service(client)
+    tools_service.wait_for_state_change.return_value = None  # genuine timeout
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light", service="turn_on", entity_id="light.a"
+        )
+
+    assert resp["success"] is True
+    assert any(
+        "state change could not be verified" in w for w in resp.get("warnings", [])
+    )
+    assert not any("unavailable" in w.lower() for w in resp.get("warnings", []))
+    assert client.get_state_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_transient_fetch_error_still_dispatches() -> None:
+    """No component: a non-404 fetch failure is NOT conclusive — the call still
+    dispatches and waits as before (best-effort degrade, unchanged behavior)."""
+    ws = make_ws("ha_mcp_tools/call_service", info_result=_CAPS_NONE)
+    client = RoutingClient()
+    client.get_state_exception = HomeAssistantConnectionError("network blip")
+    call_service = _build_call_service(client)
+
+    with patch_ws(ws, tools_service):
+        resp = await call_service(
+            domain="light", service="turn_on", entity_id="light.a"
+        )
+
+    assert resp["success"] is True
+    assert len(client.call_service_calls) == 1
 
 
 @pytest.mark.asyncio

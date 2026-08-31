@@ -18,12 +18,46 @@ from ha_mcp.tools.util_helpers import (
     fetch_integration_diagnostics,
     filter_active_repairs,
     get_logger_levels,
+    is_single_entity_target,
     normalize_log_level,
     parse_diagnostics_fields,
     parse_json_param,
     parse_string_list_param,
     project_repair_fields,
 )
+
+
+class TestIsSingleEntityTarget:
+    """Test is_single_entity_target function."""
+
+    def test_normal_entity_id_is_single_target(self):
+        """A plain domain.object_id entity ID is a single target."""
+        assert is_single_entity_target("light.kitchen") is True
+
+    def test_comma_separated_is_not_single_target(self):
+        """A comma-separated multi-target list is not a single target."""
+        assert is_single_entity_target("light.a,light.b") is False
+
+    def test_entity_match_all_is_not_single_target(self):
+        """Home Assistant's ENTITY_MATCH_ALL broadcast target ("all") has no
+        dot, so it is not treated as a single real entity."""
+        assert is_single_entity_target("all") is False
+
+    def test_entity_match_none_is_not_single_target(self):
+        """Home Assistant's ENTITY_MATCH_NONE target ("none") is likewise
+        excluded by the same dotless heuristic."""
+        assert is_single_entity_target("none") is False
+
+    def test_none_is_not_single_target(self):
+        """A None entity_id (a service call with no target) is not a single
+        target either."""
+        assert is_single_entity_target(None) is False
+
+    def test_dotless_typo_is_not_single_target(self):
+        """A malformed, dotless entity_id degrades the same way as a magic
+        target -- the fast-fail is skipped, not a hard failure, for any
+        string this shape."""
+        assert is_single_entity_target("lightlivingroom") is False
 
 
 class TestParseStringListParam:

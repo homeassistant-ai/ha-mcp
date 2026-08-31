@@ -11,6 +11,7 @@ from ha_mcp.errors import (
     create_config_error,
     create_connection_error,
     create_entity_not_found_error,
+    create_entity_unavailable_after_dispatch_error,
     create_error_response,
     create_service_error,
     create_timeout_error,
@@ -250,6 +251,31 @@ class TestCreateEntityNotFoundError:
         )
 
         assert response["error"]["details"] == "Sensor was deleted"
+
+
+class TestCreateEntityUnavailableAfterDispatchError:
+    """Tests for create_entity_unavailable_after_dispatch_error function."""
+
+    def test_structure_and_dispatched_context(self):
+        """Response carries the distinct code, entity_id, and dispatched=True."""
+        response = create_entity_unavailable_after_dispatch_error("switch.pump")
+
+        assert response["success"] is False
+        assert response["error"]["code"] == "ENTITY_UNAVAILABLE"
+        assert "switch.pump" in response["error"]["message"]
+        assert response["entity_id"] == "switch.pump"
+        assert response["dispatched"] is True
+
+    def test_details_and_suggestions_mention_dispatch(self):
+        """The details/suggestions warn against retrying a non-idempotent service,
+        distinguishing this from a bare 'unavailable' report where the command
+        never went out."""
+        response = create_entity_unavailable_after_dispatch_error("light.porch")
+
+        assert "already dispatched" in response["error"]["details"]
+        suggestions = " ".join(response["error"]["suggestions"])
+        assert "already sent" in suggestions
+        assert "double-apply" in suggestions
 
 
 class TestCreateServiceError:

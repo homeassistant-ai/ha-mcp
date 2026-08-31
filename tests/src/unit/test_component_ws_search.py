@@ -798,16 +798,15 @@ class TestInfo:
         accidental downgrade (an old component tree copied over reverts BOTH
         files together — lockstep alone would pass) and makes every version
         change a conscious, review-visible test edit. Update the literal when
-        bumping; WHEN to bump is AGENTS.md's release-cycle rule ("Version
-        bumps ride the stable release cycle") — never narrate the current
-        stable/pending state in comments here, it rots on the next release.
+        bumping; WHEN to bump is docs/agents/custom-component.md's version-cycle
+        rule. Do not narrate current stable/pending state here; it quickly rots.
         """
         manifest = json.loads(
             (
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
             ).read_text(encoding="utf-8")
         )
-        assert manifest["version"] == COMPONENT_VERSION == "2.1.0"
+        assert manifest["version"] == COMPONENT_VERSION == "2.1.1"
 
 
 # =============================================================================

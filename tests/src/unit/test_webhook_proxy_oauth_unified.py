@@ -680,6 +680,62 @@ async def test_ha_auth_authorize_uses_dedicated_cimd_session(oauth_stack, monkey
     assert forwarded["client_id"] == ["https://callback.example"]
 
 
+async def test_ha_auth_authorize_percent_encodes_the_forwarded_query(
+    oauth_stack, monkeypatch
+):
+    """The proxy flavor forwards a loopback callback percent-encoded (#2318).
+
+    Mirrors the component test: the proxy copy is hand-maintained, and nothing
+    else pins the two implementations together. The forward was previously
+    built with ``yarl.URL().with_query()``, which legally leaves ":" and "/"
+    unencoded inside a query value, so a native-app callback rendered as
+    ``redirect_uri=http://127.0.0.1:19877/mcp/oauth/callback``. Reverse proxies
+    shipping a generic "block common exploits" ruleset (Nginx Proxy Manager is
+    a common one) match ``[a-zA-Z0-9_]=http://`` and answer 403 before core
+    ever sees the request.
+    """
+    import re
+
+    oauth = oauth_stack.oauth
+    autoapprove = oauth_stack.autoapprove
+    indirect = oauth_stack.indirect
+    hass = _hass(oauth, oauth.MODE_HA_AUTH)
+    hass.data[oauth.DOMAIN][autoapprove.CFG_CIMD_SESSION] = object()
+    monkeypatch.setattr(
+        indirect,
+        "resolve_forward_client_id",
+        AsyncMock(return_value="http://127.0.0.1:19877"),
+    )
+
+    response = await autoapprove.AutoApproveAuthorizeView(hass).get(
+        _oauth_request(
+            query={
+                "response_type": "code",
+                "client_id": "http://127.0.0.1:19877",
+                "redirect_uri": "http://127.0.0.1:19877/mcp/oauth/callback",
+                "code_challenge": "a" * 43,
+                "code_challenge_method": "S256",
+                "state": "xyz",
+            }
+        )
+    )
+
+    assert response.status == 302
+    location = response.headers["Location"]
+    # The exact pattern those proxy rulesets match must not survive the hop.
+    assert re.search(r"[a-zA-Z0-9_]=http://", location) is None
+    # Stronger than the ruleset's own pattern: nothing in the forwarded query
+    # is left in a form a "block common exploits" filter could latch onto.
+    raw_query = urlparse(location).query
+    assert ":" not in raw_query and "/" not in raw_query
+    # ...while redirect_uri, client_id and state survive the encoding
+    # round-trip unchanged.
+    forwarded = parse_qs(raw_query)
+    assert forwarded["redirect_uri"] == ["http://127.0.0.1:19877/mcp/oauth/callback"]
+    assert forwarded["client_id"] == ["http://127.0.0.1:19877"]
+    assert forwarded["state"] == ["xyz"]
+
+
 async def test_ha_auth_token_307s_passthrough_identity(oauth_stack):
     """An unchanged token body stays client-side so core sees the real IP."""
     oauth, autoapprove = oauth_stack.oauth, oauth_stack.autoapprove

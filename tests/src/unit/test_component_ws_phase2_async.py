@@ -166,7 +166,7 @@ class TestCapabilityPresence:
     # duplicating the literal here only doubled per-bump churn and bred
     # release-cycle narration in comments that rotted as soon as the next
     # stable shipped (a "Pending 1.2.3" claim outlived its truth by one
-    # release). Bump rules live in AGENTS.md.
+    # release). Bump rules live in docs/agents/custom-component.md.
 
 
 # =============================================================================
