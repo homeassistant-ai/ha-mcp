@@ -6,12 +6,13 @@ name: HAOS E2E Tests (beta)
 # `haos-e2e-inaddon-beta` is the sole writer of that cache;
 # `haos-e2e-embedded-beta` restores only (and can build locally on a miss).
 #
-# Both lanes run together for every master push, the nightly schedule, and
-# manual dispatch.
+# Both lanes run for every user-originated master push, the nightly schedule,
+# and manual dispatch. The embedded lane waits for the cache-writing inaddon
+# lane so a cache miss does not start two identical image builds.
 
 on:
   # Test committed ha-mcp code against upcoming beta Supervisor and Core
-  # releases. Run on each master update so regressions introduced by our
+  # releases. Run on each user-originated master update so regressions from our
   # changes surface after merge, and nightly so deliberate upstream beta
   # changes that require an ha-mcp adaptation surface before stable release.
   #
@@ -43,10 +44,11 @@ on:
 permissions:
   contents: read
 
-# A newer master, scheduled, or manually dispatched run makes the previous
-# beta compatibility result obsolete, so keep only the latest run.
+# Push and scheduled runs are full compatibility checks, so a newer one
+# supersedes an older one. Manual dispatches may target only part of the suite;
+# give each one a unique group so it cannot cancel or replace a full run.
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'full' }}
   cancel-in-progress: true
 
 env:
@@ -334,6 +336,11 @@ jobs:
 
   haos-e2e-embedded-beta:
     name: HAOS E2E Tests (embedded beta)
+    # Wait for the sole cache writer to finish priming a new beta image. Still
+    # run if the inaddon suite fails after saving it, and build locally if that
+    # lane failed before the save; only a cancelled workflow suppresses this.
+    needs: haos-e2e-inaddon-beta
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-22.04
     # The embedded beta lane receives extra headroom for the per-worker runtime
     # package installation inside the resource-constrained QEMU guest.
@@ -442,9 +449,9 @@ jobs:
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-beta-test-image.qcow2
 
-      # The inaddon beta lane is the sole saver for this shared beta key.
-      # This lane can still build on a miss, while its later daily schedule
-      # normally restores the image primed by the inaddon beta lane.
+      # The inaddon beta lane is the sole saver for this shared beta key. This
+      # dependent lane restores the primed image, or builds locally if the
+      # writer failed before saving it.
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1

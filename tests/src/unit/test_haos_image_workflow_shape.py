@@ -9,7 +9,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
 # Stable and beta HAOS lanes each live in one consolidated workflow file
 # (#2292/#2302). Stable PR lanes share one `changes` classifier; both beta
-# lanes run for every surviving workflow event.
+# lanes participate in every surviving workflow event.
 _STABLE_WORKFLOW = "haos-e2e-tests.yml"
 _BETA_WORKFLOW = "haos-e2e-beta-tests.yml"
 # 7 actual consumers (the six HAOS lanes + the image builder); the floor is what
@@ -199,9 +199,9 @@ def test_beta_lane_discovery_does_not_depend_on_attestation(tmp_path: Path) -> N
 def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
     """Both beta lanes share one workflow and one manifest-keyed qcow2 cache.
 
-    The lanes live in a single workflow file and run together for each master
-    update, nightly schedule, or manual dispatch. A newer run supersedes an
-    older one because only the latest compatibility result is actionable.
+    The lanes live in a single workflow file for each user-originated master
+    update, nightly schedule, or manual dispatch. The cache-writing inaddon
+    lane runs first, then the embedded lane consumes its image.
     """
     lane_specs = (
         ("haos-e2e-inaddon-beta", "inaddon", "haos-e2e-inaddon"),
@@ -226,7 +226,10 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
     assert triggers["push"]["branches"] == ["master"]
     assert triggers["schedule"] == [{"cron": "17 3 * * *"}]
     assert workflow["concurrency"] == {
-        "group": "${{ github.workflow }}",
+        "group": (
+            "${{ github.workflow }}-${{ github.event_name == "
+            "'workflow_dispatch' && github.run_id || 'full' }}"
+        ),
         "cancel-in-progress": True,
     }
     # No `changes` classifier job (#2311): with pull_request gone every
@@ -240,14 +243,17 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
     for beta_job_id, mode, stable_job_id in lane_specs:
         job = workflow["jobs"][beta_job_id]
 
-        assert "needs" not in job, (
-            f"{beta_job_id} gained a needs: dependency - nothing in this "
-            "workflow should gate the lanes any more (#2311)"
-        )
-        assert "if" not in job, (
-            f"{beta_job_id} must run for every master push, nightly schedule, "
-            "and manual dispatch"
-        )
+        if mode == "inaddon":
+            assert "needs" not in job
+            assert "if" not in job
+        else:
+            assert job["needs"] == "haos-e2e-inaddon-beta", (
+                "the embedded lane must wait for the sole cache writer"
+            )
+            assert job["if"] == "${{ !cancelled() }}", (
+                "the embedded lane must continue after a writer failure, but "
+                "not after a superseding run cancels the workflow"
+            )
         steps = _job_steps(job)
 
         resolve = next(
