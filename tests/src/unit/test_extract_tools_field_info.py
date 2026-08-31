@@ -61,6 +61,40 @@ def _tool_params(signature: str) -> tuple[dict, list[str]]:
     return extract_tools._extract_tool_params(node)
 
 
+def _constraints_declared_in_source() -> dict[tuple[str, str], set[str]]:
+    """Resolvable non-description Field kwargs, per (tool name, parameter).
+
+    ``validation_alias=AliasChoices(...)`` is deliberately not resolved — the
+    three parameters using it spell the shorthand out in their own prose — so
+    only kwargs with a literal value are demanded here.
+    """
+    declared: dict[tuple[str, str], set[str]] = {}
+    for path in extract_tools.TOOL_FILES:
+        if not path.exists():
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.AsyncFunctionDef):
+                continue
+            _, tool_name = extract_tools._find_tool_decorator(node)
+            if tool_name is None:
+                continue
+            for arg in node.args.args:
+                if arg.annotation is None:
+                    continue
+                kwargs = {
+                    kw.arg
+                    for sub in ast.walk(arg.annotation)
+                    if extract_tools._is_field_call(sub)
+                    for kw in sub.keywords
+                    if kw.arg not in (None, "description", "default")
+                    and isinstance(kw.value, (ast.Constant, ast.UnaryOp))
+                }
+                if kwargs:
+                    declared[(tool_name, arg.arg)] = kwargs
+    return declared
+
+
 def _params_documented_in_source() -> set[tuple[str, str]]:
     """(tool name, parameter) pairs whose annotation carries a Field description."""
     documented: set[tuple[str, str]] = set()
@@ -224,6 +258,14 @@ class TestUnionMetadata:
 
         assert info["type"] == "int | str"
         assert "constraints" not in info
+
+    def test_a_three_way_union_publishes_no_metadata(self):
+        """``ge`` on the int branch says nothing about the str a caller may pass."""
+        info = _field_info("Annotated[int, Field(ge=1, description='n')] | str | None")
+
+        assert info["type"] == "int | str | None"
+        assert "constraints" not in info
+        assert "description" not in info
 
     def test_two_annotated_branches_publish_no_flattened_metadata(self):
         """Neither branch's rules govern the whole parameter."""
@@ -474,6 +516,104 @@ class TestForwardReferences:
         assert scope.consts["NAME"] == "local"
 
 
+class TestResolverRejections:
+    """The evaluator's boundaries — what it declines to read, and why."""
+
+    def test_a_format_spec_is_not_resolved(self):
+        """Formatting is evaluation; the catalog reads, it does not compute."""
+        scope = extract_tools.ModuleScope({"MAX": 500}, {})
+        info = extract_tools._extract_field_info(
+            ast.parse("Annotated[int, Field(description=f'{MAX:g}')]").body[0].value,
+            scope,
+        )
+
+        assert "description" not in info
+
+    def test_a_non_slice_subscript_is_not_resolved(self):
+        scope = extract_tools.ModuleScope({"DESC": "text"}, {})
+        info = extract_tools._extract_field_info(
+            ast.parse("Annotated[str, Field(description=DESC[0])]").body[0].value,
+            scope,
+        )
+
+        assert "description" not in info
+
+    def test_a_helper_call_with_arguments_is_not_resolved(self):
+        scope = extract_tools.ModuleScope({}, {"docs": "text"})
+        info = extract_tools._extract_field_info(
+            ast.parse("Annotated[str, Field(description=docs('x'))]").body[0].value,
+            scope,
+        )
+
+        assert "description" not in info
+
+    def test_only_allowlisted_string_methods_run(self):
+        """This allowlist is what backs "never executes repository source"."""
+        scope = extract_tools.ModuleScope({"DESC": "a b"}, {})
+        info = extract_tools._extract_field_info(
+            ast.parse("Annotated[str, Field(description=DESC.split())]").body[0].value,
+            scope,
+        )
+
+        assert "description" not in info
+
+    def test_a_field_kwargs_splat_contributes_nothing(self):
+        info = _field_info("Annotated[int, Field(**COMMON)]")
+
+        assert info == {"type": "int"}
+
+
+class TestImportResolution:
+    """Every import spelling the package uses, and the containment guard."""
+
+    def _source(self, statement: str):
+        node = ast.parse(statement).body[0]
+        return extract_tools._import_source(
+            extract_tools.TOOLS_DIR / "tools_logs.py", node
+        )
+
+    def test_relative_module_import(self):
+        assert self._source("from .log_common import MAX_LIMIT") == (
+            extract_tools.TOOLS_DIR / "log_common.py"
+        )
+
+    def test_package_initializer_import(self):
+        assert self._source("from . import NAME") == (
+            extract_tools.TOOLS_DIR / "__init__.py"
+        )
+
+    def test_parent_package_import(self):
+        assert self._source("from ..utils.python_sandbox import x") == (
+            extract_tools.PACKAGE_ROOT / "utils" / "python_sandbox.py"
+        )
+
+    def test_absolute_intra_package_import(self):
+        """The package writes both spellings; both name the same file."""
+        assert self._source("from ha_mcp.utils.python_sandbox import x") == (
+            extract_tools.PACKAGE_ROOT / "utils" / "python_sandbox.py"
+        )
+
+    def test_an_import_from_outside_the_package_is_declined(self):
+        """The containment guard is what keeps the extractor out of the world."""
+        assert self._source("from os import path") is None
+        assert self._source("from pydantic import Field") is None
+
+    def test_an_aliased_name_is_bound_under_its_local_spelling(self):
+        scope = extract_tools.ModuleScope({}, {})
+        extract_tools._apply_imports(
+            extract_tools.TOOLS_DIR / "tools_logs.py",
+            ast.parse("from .log_common import MAX_LIMIT as CAP"),
+            scope,
+        )
+
+        source_scope = extract_tools._module_scope(
+            extract_tools.TOOLS_DIR / "log_common.py"
+        )
+
+        assert scope.consts["CAP"] == source_scope.consts["MAX_LIMIT"]
+        assert "MAX_LIMIT" not in scope.consts
+
+
 class TestModuleScope:
     """Scope building reads constants across the package's own imports."""
 
@@ -529,6 +669,25 @@ class TestExtractedToolsNeverLeakAnnotationSource:
         assert described, (
             "No extracted parameter carries a description, but tool signatures "
             "use Field(description=...) throughout — extraction is broken."
+        )
+
+    def test_every_declared_constraint_reaches_the_schema(self, tools):
+        """Constraints get the same source-derived guard descriptions have."""
+        extracted = {
+            (tool["name"], param): schema.get("constraints", {})
+            for tool in tools
+            for param, schema in tool["inputSchema"].get("properties", {}).items()
+        }
+        missing = [
+            f"{name}.{param}: {kwarg}"
+            for (name, param), kwargs in _constraints_declared_in_source().items()
+            for kwarg in kwargs
+            if kwarg not in extracted.get((name, param), {})
+        ]
+
+        assert not missing, (
+            "Field constraint(s) declared in a tool signature that never reach "
+            "the catalog:\n" + "\n".join(f"  - {entry}" for entry in missing)
         )
 
     def test_every_documented_parameter_resolves_its_description(self, tools):
