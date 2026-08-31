@@ -61,6 +61,45 @@ def _tool_params(signature: str) -> tuple[dict, list[str]]:
     return extract_tools._extract_tool_params(node)
 
 
+def _governing_annotation(annotation: ast.expr | None) -> ast.expr | None:
+    """The ``Annotated`` node whose metadata governs the whole parameter.
+
+    Spelled out here rather than borrowed from the extractor, so these
+    invariants stay an independent statement of the contract: metadata governs
+    the parameter when the annotation is ``Annotated[...]``, or an optional
+    whose every other branch is ``None``. Anywhere else — a second
+    metadata-bearing branch, or a plain sibling type — the extractor
+    deliberately publishes nothing, and demanding it here would fail a correct
+    extraction.
+    """
+    if annotation is None:
+        return None
+    if isinstance(annotation, ast.Subscript) and extract_tools._is_annotated(
+        annotation.value
+    ):
+        return annotation
+    if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+        operands: list[ast.expr] = []
+
+        def _flatten(node: ast.expr) -> None:
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+                _flatten(node.left)
+                _flatten(node.right)
+            else:
+                operands.append(node)
+
+        _flatten(annotation)
+        annotated = [
+            o
+            for o in operands
+            if isinstance(o, ast.Subscript) and extract_tools._is_annotated(o.value)
+        ]
+        others = [o for o in operands if o not in annotated]
+        if len(annotated) == 1 and all(ast.unparse(o) == "None" for o in others):
+            return annotated[0]
+    return None
+
+
 def _constraints_declared_in_source() -> dict[tuple[str, str], set[str]]:
     """Resolvable non-description Field kwargs, per (tool name, parameter).
 
@@ -82,9 +121,12 @@ def _constraints_declared_in_source() -> dict[tuple[str, str], set[str]]:
             for arg in node.args.args:
                 if arg.annotation is None:
                     continue
+                governing = _governing_annotation(arg.annotation)
+                if governing is None:
+                    continue
                 kwargs = {
                     kw.arg
-                    for sub in ast.walk(arg.annotation)
+                    for sub in ast.walk(governing)
                     if extract_tools._is_field_call(sub)
                     for kw in sub.keywords
                     if kw.arg not in (None, "description", "default")
@@ -109,12 +151,13 @@ def _params_documented_in_source() -> set[tuple[str, str]]:
             if tool_name is None:
                 continue
             for arg in node.args.args:
-                if arg.annotation is None:
+                governing = _governing_annotation(arg.annotation)
+                if governing is None:
                     continue
                 if any(
                     kw.arg == "description"
-                    for sub in ast.walk(arg.annotation)
-                    if isinstance(sub, ast.Call)
+                    for sub in ast.walk(governing)
+                    if extract_tools._is_field_call(sub)
                     for kw in sub.keywords
                 ):
                     documented.add((tool_name, arg.arg))
