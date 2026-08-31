@@ -226,7 +226,11 @@ def _apply_imports(path: Path, tree: ast.Module, scope: ModuleScope) -> bool:
         if source in _RESOLVING:
             hit_cycle = True
             continue
-        imported = _module_scope(source)
+        imported, imported_complete = _resolve_module(source)
+        # A cut two modules down still leaves THIS scope built from a partial
+        # answer, so incompleteness propagates rather than stopping where the
+        # cycle was seen.
+        hit_cycle = hit_cycle or not imported_complete
         for alias in node.names:
             local = alias.asname or alias.name
             if alias.name in imported.consts:
@@ -342,19 +346,26 @@ _RESOLVING: set[Path] = set()
 
 
 def _module_scope(path: Path) -> ModuleScope:
-    """Build the statically resolvable names for one module.
+    """The statically resolvable names for one module."""
+    return _resolve_module(path)[0]
+
+
+def _resolve_module(path: Path) -> tuple[ModuleScope, bool]:
+    """Build one module's scope, and report whether it is complete.
 
     Each module is parsed once and cached: without it, each of the ~490
     lookups in a run re-walks its whole import subtree. A module already on the
     resolution stack (an import cycle) contributes nothing rather than
-    recursing forever, and a scope built through such a cut is NOT cached —
-    caching it would answer every later lookup with a permanently incomplete
-    module, and which module lost names would depend on file iteration order.
+    recursing forever, and no scope built through such a cut is cached — not
+    the one that saw the cycle, and not any module that imported through it.
+    Caching those would answer every later lookup with a permanently
+    incomplete module, and which module lost names would depend on file
+    iteration order.
     """
     if path in _SCOPE_CACHE:
-        return _SCOPE_CACHE[path]
+        return _SCOPE_CACHE[path], True
     if path in _RESOLVING:
-        return _new_scope()
+        return _new_scope(), False
 
     scope = _new_scope()
     try:
@@ -370,7 +381,7 @@ def _module_scope(path: Path) -> ModuleScope:
             file=sys.stderr,
         )
         _SCOPE_CACHE[path] = scope
-        return scope
+        return scope, True
 
     _RESOLVING.add(path)
     try:
@@ -381,7 +392,7 @@ def _module_scope(path: Path) -> ModuleScope:
 
     if not hit_cycle:
         _SCOPE_CACHE[path] = scope
-    return scope
+    return scope, not hit_cycle
 
 
 def _is_annotated(node: ast.expr) -> bool:

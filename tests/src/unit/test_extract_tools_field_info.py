@@ -614,6 +614,70 @@ class TestImportResolution:
         assert "MAX_LIMIT" not in scope.consts
 
 
+class TestImportCycles:
+    """A scope built through a cycle is incomplete and must not be cached."""
+
+    def _package(self, tmp_path, files: dict[str, str]):
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("", encoding="utf-8")
+        for name, source in files.items():
+            (pkg / name).write_text(source, encoding="utf-8")
+        return pkg
+
+    def test_no_module_in_a_cycle_is_cached(self, tmp_path, monkeypatch):
+        """Including the ones that only imported THROUGH the cut.
+
+        A → B → C → A: C sees the cycle, but B is built from C's partial
+        answer, so caching B would serve an incomplete module for the rest of
+        the run — and which module lost names would depend on file order.
+        """
+        pkg = self._package(
+            tmp_path,
+            {
+                "a.py": "from .b import B_NAME\nA_NAME = 'a'\n",
+                "b.py": "from .c import C_NAME\nB_NAME = 'b'\n",
+                "c.py": "from .a import A_NAME\nC_NAME = 'c'\n",
+            },
+        )
+        monkeypatch.setattr(extract_tools, "PACKAGE_ROOT", pkg)
+
+        extract_tools._module_scope(pkg / "a.py")
+
+        assert not any(
+            pkg / name in extract_tools._SCOPE_CACHE
+            for name in ("a.py", "b.py", "c.py")
+        )
+
+    def test_an_acyclic_import_chain_is_cached(self, tmp_path, monkeypatch):
+        """The cache is what keeps the walk from re-expanding per tool file."""
+        pkg = self._package(
+            tmp_path,
+            {
+                "a.py": "from .b import B_NAME\n",
+                "b.py": "B_NAME = 'b'\n",
+            },
+        )
+        monkeypatch.setattr(extract_tools, "PACKAGE_ROOT", pkg)
+
+        scope = extract_tools._module_scope(pkg / "a.py")
+
+        assert scope.consts["B_NAME"] == "b"
+        assert pkg / "b.py" in extract_tools._SCOPE_CACHE
+
+    def test_an_unreadable_module_degrades_instead_of_crashing(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """One bad file must not abort the catalog — but it must say so."""
+        pkg = self._package(tmp_path, {"broken.py": "def (\n"})
+        monkeypatch.setattr(extract_tools, "PACKAGE_ROOT", pkg)
+
+        scope = extract_tools._module_scope(pkg / "broken.py")
+
+        assert scope.consts == {}
+        assert "cannot read module scope" in capsys.readouterr().err
+
+
 class TestModuleScope:
     """Scope building reads constants across the package's own imports."""
 
