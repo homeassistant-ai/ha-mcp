@@ -155,15 +155,6 @@ class TestFieldConstraints:
             "allow_inf_nan": False,
         }
 
-    def test_alias_choices_resolve_to_the_accepted_names(self):
-        """The alternative spellings a caller may use are part of the contract."""
-        info = _field_info(
-            "Annotated[int | None, Field(validation_alias="
-            "AliasChoices('min_value', 'min'))]"
-        )
-
-        assert info["constraints"] == {"validation_alias": ["min_value", "min"]}
-
     def test_negative_bounds_survive(self):
         """``ge=-1`` parses as a unary minus, not a plain literal."""
         info = _field_info("Annotated[int, Field(ge=-1, le=-0.5)]")
@@ -459,12 +450,12 @@ class TestExtractedToolsNeverLeakAnnotationSource:
         undocumented = [
             f"{name}.{param}"
             for name, param in _params_documented_in_source()
-            if (name, param) in extracted
-            and not extracted[(name, param)].get("description")
+            if not extracted.get((name, param), {}).get("description")
         ]
 
         assert not undocumented, (
             "Parameters whose signature carries Field(description=...) but whose "
-            "text did not resolve:\n"
+            "text did not resolve (a parameter missing from the catalog "
+            "entirely counts — the site cannot show that loss at all):\n"
             + "\n".join(f"  - {entry}" for entry in undocumented)
         )

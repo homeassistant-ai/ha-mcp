@@ -156,14 +156,6 @@ def _subscript_value(node: ast.Subscript, scope: ModuleScope) -> Any:
 
 def _call_value(node: ast.Call, scope: ModuleScope) -> Any:
     """Resolve a zero-argument helper call or a string method on a literal."""
-    if isinstance(node.func, ast.Name) and node.func.id == "AliasChoices":
-        # ``validation_alias=AliasChoices("min_value", "min")`` names the other
-        # spellings a caller may use. The old raw-annotation dump showed them
-        # by accident; a cleaned-up type must not be the reason they vanish.
-        names = [_static_value(arg, scope) for arg in node.args]
-        if node.keywords or not names or not all(isinstance(n, str) for n in names):
-            return UNRESOLVED
-        return names
     if node.args or node.keywords:
         return UNRESOLVED
     if isinstance(node.func, ast.Name):
