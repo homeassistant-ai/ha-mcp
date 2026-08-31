@@ -244,9 +244,15 @@ function getBadgeInfo(annotations: Record<string, any>) {
                             // demand instead.
                             const description = schema.description || '';
                             const isLongDescription = description.length > 600;
+                            const leadLength = 140;
+                            // The summary stays visible while open, so the panel
+                            // carries only what the lead has not already shown.
                             const descriptionLead = isLongDescription
-                              ? description.slice(0, 140).trimEnd() + '…'
+                              ? description.slice(0, leadLength).trimEnd()
                               : description;
+                            const descriptionRest = isLongDescription
+                              ? description.slice(leadLength)
+                              : '';
                             return (
                             <div class="flex items-start gap-2 text-sm">
                               <code class="text-amber-400 shrink-0">{name}</code>
@@ -256,9 +262,9 @@ function getBadgeInfo(annotations: Record<string, any>) {
                               <span class="text-slate-600">-</span>
                               <span class="text-slate-400">
                                 {isLongDescription ? (
-                                  <details class="inline">
-                                    <summary class="cursor-pointer marker:text-slate-600">{descriptionLead}</summary>
-                                    <span class="block mt-1 whitespace-pre-line">{description}</span>
+                                  <details class="group inline">
+                                    <summary class="cursor-pointer marker:text-slate-600">{descriptionLead}<span class="group-open:hidden">…</span></summary>
+                                    <span class="block mt-1 whitespace-pre-line">{descriptionRest}</span>
                                   </details>
                                 ) : description}
                                 {typeStr && <span class="text-slate-600 ml-1">({typeStr})</span>}

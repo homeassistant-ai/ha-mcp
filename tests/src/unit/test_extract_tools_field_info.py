@@ -414,6 +414,26 @@ class TestRequiredParameters:
         assert properties["width"]["default"] == 1280
         assert required == []
 
+    def test_a_positional_field_default_is_a_default(self):
+        """``Field(5)`` and ``Field(default=5)`` mean the same to pydantic."""
+        properties, required = _tool_params(
+            "width: Annotated[int, Field(5, description='W')]"
+        )
+
+        assert properties["width"]["default"] == 5
+        assert required == []
+
+    def test_field_ellipsis_is_pydantic_s_required_marker_not_a_default(self):
+        """Both spellings: ``Field(...)`` and ``Field(default=...)``."""
+        for annotation in (
+            "Annotated[int, Field(..., description='W')]",
+            "Annotated[int, Field(default=..., description='W')]",
+        ):
+            properties, required = _tool_params(f"width: {annotation}")
+
+            assert required == ["width"], annotation
+            assert "default" not in properties["width"], annotation
+
     def test_every_required_name_has_a_property_to_point_at(self):
         """A required name with no property is a schema nothing can render."""
         properties, required = _tool_params("foo")
@@ -431,6 +451,18 @@ class TestUnresolvedValuesAreReported:
         assert any(
             "ge=CONF_MAX" in entry for entry in extract_tools.UNRESOLVED_KEYWORDS
         )
+
+    def test_an_unresolvable_positional_default_is_recorded(self):
+        _field_info("Annotated[int, Field(NOT_KNOWN)]")
+
+        assert any("NOT_KNOWN" in entry for entry in extract_tools.UNRESOLVED_KEYWORDS)
+
+    def test_a_deliberately_unresolved_callable_is_not_reported(self):
+        """A standing entry every run is what trains a reader to skip the new one."""
+        _field_info("Annotated[int, Field(validation_alias=AliasChoices('a', 'b'))]")
+        _field_info("Annotated[int, Field(default=cast(Any, None))]")
+
+        assert extract_tools.UNRESOLVED_KEYWORDS == []
 
     def test_a_resolvable_constraint_is_not_recorded(self):
         _field_info("Annotated[int, Field(ge=1)]")

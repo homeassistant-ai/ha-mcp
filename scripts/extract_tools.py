@@ -337,9 +337,25 @@ def _apply_definitions(tree: ast.Module, scope: ModuleScope) -> None:
         pass
 
 
+# Callables whose result is deliberately not resolved, so the warning below
+# stays a signal instead of opening every run with the same known entries —
+# the standing ones are what train a reader to skip the new one. ``cast`` is a
+# typing no-op with no value to publish; ``AliasChoices`` names alternative
+# spellings that each affected description already gives in prose.
+ACCEPTED_UNRESOLVED = ("cast", "AliasChoices")
+
 # ``Field`` keywords that could not be resolved, reported once at the end of a
 # run: each one is documentation the catalog silently does not carry.
 UNRESOLVED_KEYWORDS: list[str] = []
+
+
+def _record_unresolved(label: str, expr: ast.expr) -> None:
+    """Note a value the catalog will not carry, unless it is an accepted one."""
+    if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name):
+        if expr.func.id in ACCEPTED_UNRESOLVED:
+            return
+    UNRESOLVED_KEYWORDS.append(f"{label}={ast.unparse(expr)}")
+
 
 _SCOPE_CACHE: dict[Path, ModuleScope] = {}
 _RESOLVING: set[Path] = set()
@@ -421,12 +437,16 @@ def _field_keyword(info: dict, kw: ast.keyword, scope: ModuleScope) -> None:
     """Fold one ``Field(...)`` keyword into the parameter info."""
     if kw.arg is None:
         return  # ``Field(**kwargs)`` splat — no keyword name to record.
+    if kw.arg == "default" and _is_ellipsis(kw.value):
+        # pydantic's explicit "required" marker, not a value. Publishing it
+        # would put an Ellipsis in the catalog, which is not JSON.
+        return
     value = _static_value(kw.value, scope)
     if value is UNRESOLVED:
         # The whitelist was removed so a keyword could not go missing by
         # omission; a keyword that fails to RESOLVE would go missing just as
         # quietly, so it is reported instead.
-        UNRESOLVED_KEYWORDS.append(f"{kw.arg}={ast.unparse(kw.value)}")
+        _record_unresolved(kw.arg, kw.value)
         return
     if kw.arg in FIELD_OWN_KEYS:
         info[kw.arg] = value
@@ -449,9 +469,23 @@ def _annotated_metadata(slice_node: ast.expr, scope: ModuleScope) -> dict:
     for elt in slice_node.elts[1:]:
         if not _is_field_call(elt):
             continue
+        positional = _field_default_node(elt)
+        if positional is not None and not elt.keywords:
+            _field_positional_default(info, positional, scope)
         for kw in elt.keywords:
             _field_keyword(info, kw, scope)
+        if positional is not None and elt.keywords and "default" not in info:
+            _field_positional_default(info, positional, scope)
     return info
+
+
+def _field_positional_default(info: dict, node: ast.expr, scope: ModuleScope) -> None:
+    """Record ``Field(5, ...)`` — the positional spelling of a default."""
+    value = _static_value(node, scope)
+    if value is UNRESOLVED:
+        _record_unresolved("default", node)
+        return
+    info["default"] = value
 
 
 def _union_field_info(annotation: ast.BinOp, scope: ModuleScope) -> dict:
@@ -568,15 +602,33 @@ def _extract_tool_metadata(dec: ast.Call) -> tuple[set[str], str, dict[str, bool
     return tags, title, annotations
 
 
+def _field_default_node(call: ast.Call) -> ast.expr | None:
+    """The default a ``Field(...)`` call declares, by either spelling.
+
+    ``Field(5)`` and ``Field(default=5)`` mean the same thing to pydantic.
+    ``Field(...)`` does NOT: the Ellipsis is pydantic's explicit marker that
+    the parameter is required, so it is not a default in either position.
+    """
+    for kw in call.keywords:
+        if kw.arg == "default":
+            return None if _is_ellipsis(kw.value) else kw.value
+    if call.args and not _is_ellipsis(call.args[0]):
+        return call.args[0]
+    return None
+
+
+def _is_ellipsis(node: ast.expr) -> bool:
+    return isinstance(node, ast.Constant) and node.value is Ellipsis
+
+
 def _declares_field_default(annotation: ast.expr | None) -> bool:
-    """Whether the annotation declares ``Field(default=...)``, resolvable or not."""
+    """Whether the annotation declares a Field default, resolvable or not."""
     if annotation is None:
         return False
     return any(
-        kw.arg == "default"
+        _field_default_node(sub) is not None
         for sub in ast.walk(annotation)
         if _is_field_call(sub)
-        for kw in sub.keywords
     )
 
 
@@ -600,7 +652,7 @@ def _extract_tool_params(
             if value is not UNRESOLVED:
                 p.setdefault("default", value)
             else:
-                UNRESOLVED_KEYWORDS.append(f"{arg.arg}={ast.unparse(def_node)}")
+                _record_unresolved(arg.arg, def_node)
         elif not _declares_field_default(arg.annotation):
             # ``Field(default=...)`` alone makes the parameter optional, so a
             # signature default is not the only thing that can supply one. Read
