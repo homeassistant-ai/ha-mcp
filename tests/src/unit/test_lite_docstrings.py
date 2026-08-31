@@ -360,11 +360,10 @@ class TestLiteDocstringsMappingInvariants:
         )
 
     def test_every_lite_description_starts_with_action_verb(self) -> None:
-        """AGENTS.md tool-docstring rule: first word is an action verb.
+        """Style-guide tool-docstring rule: first word is an action verb.
 
-        Verb list mirrors AGENTS.md > Tool Docstrings > Required for
-        every tool. ``Create`` covers ``Create or update`` openers used
-        on the consolidated set_* tools.
+        Verb list mirrors `.gemini/styleguide.md` > MCP Tool Docstrings.
+        ``Create`` covers ``Create or update`` on consolidated set_* tools.
         """
         from ha_mcp.server import HomeAssistantSmartMCPServer
 

@@ -53,7 +53,7 @@ for gating access behind an external identity provider instead of per-user HA
 tokens, the OIDC entrypoint (`ha-mcp-oidc`; see [docs/oidc.md](docs/oidc.md)),
 behind a TLS-terminating reverse proxy (see
 [OAuth Mode](#oauth-mode--beta-warning) below). Deployment guidance:
-[AGENTS.md → Docker](AGENTS.md#docker).
+[development reference → Docker](docs/agents/development.md#docker).
 
 By default the HTTP entrypoints bind to `0.0.0.0` so they are reachable from
 other machines on the LAN. To restrict to the local machine, set

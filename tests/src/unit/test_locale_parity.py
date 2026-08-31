@@ -74,7 +74,7 @@ from locale_rules import (  # noqa: E402
 )
 
 SETTINGS_LOCALES = _REPO_ROOT / "src" / "ha_mcp" / "settings_ui" / "locales"
-AGENTS_MD = _REPO_ROOT / "AGENTS.md"
+LOCALE_README = SETTINGS_LOCALES / "README.md"
 COMPONENT_TRANSLATIONS = (
     _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "translations"
 )
@@ -398,13 +398,13 @@ def test_best_effort_locale_surface_problems_are_warning_only() -> None:
     issues: list[str] = []
     locale_lines = [
         line
-        for line in AGENTS_MD.read_text(encoding="utf-8").splitlines()
+        for line in LOCALE_README.read_text(encoding="utf-8").splitlines()
         if "names every file:" in line
     ]
     documented = set(re.findall(r"`([A-Za-z-]+)`", "\n".join(locale_lines)))
     for locale in sorted(BEST_EFFORT_LOCALES):
         if locale not in documented:
-            issues.append(f"AGENTS.md does not list {locale}")
+            issues.append(f"the locale README does not list {locale}")
         paths = (
             SETTINGS_LOCALES / f"{locale}.json",
             COMPONENT_TRANSLATIONS / f"{locale}.json",
@@ -993,7 +993,7 @@ def test_settings_catalog_keys_name_real_groups_and_tools(locale: str) -> None:
 def test_settings_messages_carry_no_key_english_dropped(locale: str) -> None:
     """The one direction nothing else here looks in.
 
-    ``messages`` may omit keys — English is the per-key fallback, and AGENTS.md
+    ``messages`` may omit keys — English is the per-key fallback, and the locale guide
     states the allowance — so this asserts the other direction only. A key with
     no English counterpart is not a fallback, it is text that reaches nobody:
     ``build_payload`` ships it and ``t()`` never asks for it.
@@ -1430,7 +1430,7 @@ def _literal_parity_pairs(locale: str) -> list[tuple[str, str, str, str]]:
     # catalogs do NOT translate, so its moving is stub-review work rather than
     # a rewrite the sync owes: `_plan_settings` filters those keys out of its
     # work list, `_repin_baseline` holds them stale until a human confirms the
-    # stub, and AGENTS.md names the exception. Stripping the suffix to match
+    # stub, and the locale guide names the exception. Stripping the suffix to match
     # the catalog's bare key would drop that tool out of this check while its
     # translation is still current and nothing is coming to replace it —
     # silently, and for exactly as long as the human review takes.
@@ -2574,41 +2574,62 @@ def test_a_localised_on_screen_name_is_reported() -> None:
     ]
 
 
-def _agents_md_section(title: str) -> str:
-    """The body of one ``## `` section of AGENTS.md.
+def _locale_readme_section(title: str) -> str:
+    """The body of one ``## `` section of the canonical locale guide.
 
     Scoping matters: a check that greps the whole file answers a question
     about the file, not about the section it claims to guard, and any future
     sentence elsewhere carrying the same shape would fail it.
     """
-    text = AGENTS_MD.read_text("utf-8")
+    text = LOCALE_README.read_text("utf-8")
     match = re.search(
-        rf"^## {re.escape(title)}$(.*?)(?=^## )", text, re.MULTILINE | re.DOTALL
+        rf"^## {re.escape(title)}$(.*?)(?=^#{{1,2}} |\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
     )
-    assert match, f"AGENTS.md has no '## {title}' section — this test guards it"
+    assert match, f"locale README has no '## {title}' section — this test guards it"
     return match.group(1)
 
 
-def test_agents_md_states_the_current_ceilings() -> None:
+def test_locale_readme_states_the_current_ceilings() -> None:
     """The documented percentages are the ones a contributor plans against.
 
     Same reason the locale list below is pinned: the prose went stale the
     moment the constant moved, and nothing tied the two together.
     """
-    section = _agents_md_section("Translations")
-    documented = set(re.findall(r"(\d+)% for the", section))
-
-    assert documented == {
-        f"{_MAX_ENGLISH_IDENTICAL_SHARE:.0%}".rstrip("%"),
-        f"{_MAX_COMPONENT_IDENTICAL_SHARE:.0%}".rstrip("%"),
-    }, (
-        f"AGENTS.md § Translations documents ceilings {sorted(documented)} but "
-        f"the constants are {_MAX_ENGLISH_IDENTICAL_SHARE:.0%} and "
-        f"{_MAX_COMPONENT_IDENTICAL_SHARE:.0%}. Update the prose."
+    section = _locale_readme_section("What CI checks")
+    surface = re.search(
+        r"At most (\d+)% of this catalog's `messages`, and (\d+)% of its "
+        r"`tools` texts",
+        section,
+    )
+    projection = re.search(
+        r"The (\d+)% ceiling also applies\s+independently to each generated "
+        r"app projection",
+        section,
+    )
+    component = re.search(r"Component catalogs allow (\d+)%", section)
+    assert surface and projection and component
+    expected_english = f"{_MAX_ENGLISH_IDENTICAL_SHARE:.0%}".rstrip("%")
+    expected_component = f"{_MAX_COMPONENT_IDENTICAL_SHARE:.0%}".rstrip("%")
+    documented = {
+        "messages": surface.group(1),
+        "tools": surface.group(2),
+        "app projections": projection.group(1),
+        "component catalogs": component.group(1),
+    }
+    expected = {
+        "messages": expected_english,
+        "tools": expected_english,
+        "app projections": expected_english,
+        "component catalogs": expected_component,
+    }
+    assert documented == expected, (
+        f"locale README documents ceilings {documented} but expected {expected}"
     )
 
 
-def test_agents_md_lists_every_shipped_locale() -> None:
+def test_locale_readme_lists_every_shipped_locale() -> None:
     """The documented list went stale the moment ``fr`` landed.
 
     It is the one place a contributor looks up which languages exist, and
@@ -2616,10 +2637,10 @@ def test_agents_md_lists_every_shipped_locale() -> None:
     """
     marker = "names every file:"
     lines = [
-        line for line in AGENTS_MD.read_text("utf-8").splitlines() if marker in line
+        line for line in LOCALE_README.read_text("utf-8").splitlines() if marker in line
     ]
     assert len(lines) == 1, (
-        f"expected exactly one AGENTS.md line containing {marker!r} to carry "
+        f"expected exactly one locale README line containing {marker!r} to carry "
         f"the locale list, found {len(lines)} — update this test alongside the "
         "section it guards"
     )
@@ -2630,7 +2651,7 @@ def test_agents_md_lists_every_shipped_locale() -> None:
     }
 
     assert documented - BEST_EFFORT_LOCALES == shipped - BEST_EFFORT_LOCALES, (
-        "AGENTS.md § Translations lists "
+        "locale README lists "
         f"{sorted(documented)} but the shipped catalogs are {sorted(shipped)}. "
         "Update the line so the documented set matches what ships."
     )

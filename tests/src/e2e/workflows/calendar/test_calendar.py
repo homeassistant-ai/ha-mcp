@@ -456,7 +456,7 @@ class TestCalendarEventLifecycle:
 
         series_uid: str | None = None
         try:
-            # Poll until all 3 occurrences materialize (per AGENTS.md
+            # Poll until all 3 occurrences materialize (per tests/AGENTS.md
             # "poll after creating entities").
             events_data = await wait_for_tool_result(
                 mcp_client,
@@ -592,7 +592,7 @@ class TestCalendarEventLifecycle:
 
         # Poll until the just-created event surfaces in the list endpoint —
         # HA backends (CalDAV, Google) may not index immediately after create
-        # returns. Per AGENTS.md § "E2E tests: poll after creating entities".
+        # returns. Per tests/AGENTS.md § E2E Test Patterns.
         event_uid: str | None = None
         timed_out = False
         try:

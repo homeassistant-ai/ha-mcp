@@ -1970,7 +1970,7 @@ class SystemTools:
             # A ToolError (incl. one re-raised by _reraise_if_fatal) carries the
             # MCP isError contract — let it reach ha_get_system_health's own
             # ``except ToolError: raise`` instead of being demoted to a section
-            # error string here (AGENTS.md error-handling guard pattern).
+            # error string here (.gemini/styleguide.md structured-error guard pattern).
             raise
         except Exception as e:
             _reraise_if_fatal(e)

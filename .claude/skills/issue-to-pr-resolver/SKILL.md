@@ -35,7 +35,7 @@ cd "worktree/issue-$ARGUMENTS"
 
 **Philosophy:** Work autonomously. Don't ask about every small decision. Fix unrelated test failures encountered. Document all choices for the final summary.
 
-If a non-obvious choice has significant consequences, create two mutually exclusive PRs (one per approach) and let the user choose.
+If a non-obvious choice has significant consequences, present the available options to the user and let them choose.
 
 ## Phase 3: Create PR
 

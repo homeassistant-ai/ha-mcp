@@ -1,1061 +1,180 @@
-# CLAUDE.md
+# AGENTS.md
 
-Guidance for Claude Code when working with this repository.
+Canonical agent guidance for the Home Assistant MCP Server repository.
+
+## Instruction structure
+
+- `AGENTS.md` is the canonical source. `CLAUDE.md` is a symlink to it; edit `AGENTS.md` only.
+- This root file owns repository-wide behavior, permissions, scope, and testing policy. Linked documents own topic-specific detail.
+- Before working, read every applicable `AGENTS.md` from the repository root through the target directory; narrower files supplement every broader ancestor.
+- Follow ordinary Markdown links when the task enters their scope. Do not replace them with `@imports`: imports load every linked byte at startup and defeat progressive disclosure.
+- If linked guidance conflicts with this file's behavioral rules, this file controls. Repair the conflicting duplicate rather than choosing silently.
 
 ## Repository Structure
 
-This repository uses a worktree-based development workflow.
+This repository uses `worktree/` for isolated branches and `local/` for scratch data; both are gitignored. Source is under `src/ha_mcp/`, component code under `custom_components/ha_mcp_tools/`, tests under `tests/`, the website under `site/`, and Home Assistant app flavors under `homeassistant-addon*/`.
 
-**Documentation Setup:**
-- This file is `AGENTS.md` (the canonical source)
-- `CLAUDE.md` is a symlink pointing to `AGENTS.md`
-- Read either file - they're the same content
-- Commit changes to `AGENTS.md`, the symlink will automatically reflect them
-
-**Directory Structure:**
-```
-<repo-root>/                           # Main repository (checkout master here)
-├── AGENTS.md                          # This file (canonical source)
-├── CLAUDE.md -> AGENTS.md             # Symlink for convenience
-├── worktree/                          # Git worktrees (gitignored)
-│   ├── issue-42/                      # Feature branch worktree
-│   └── fix-something/                 # Fix branch worktree
-├── local/                             # Scratch work (gitignored)
-└── .claude/skills/                    # Slash-command skills
-```
-
-**Quick command:** Use `/wt <branch-name>` skill to create worktree automatically.
+Read the [development reference](docs/agents/development.md) for commands and architecture. Workflow helpers live in `.claude/skills/`; inspect a helper's own instructions when it is explicitly invoked rather than duplicating its inventory here.
 
 ## Worktree Workflow
 
-### Creating Worktrees
-
-**ALWAYS create worktrees in the `worktree/` subdirectory**, not at the repository root.
+Create feature worktrees under `worktree/` from an up-to-date
+`origin/master`. A documentation-only adjustment is the sole exception that
+may be committed directly on `master` or `main`:
 
 ```bash
-git worktree add worktree/issue-42 -b issue-42
-git worktree add worktree/feat-new-feature -b feat/new-feature
+git fetch origin master
+git worktree add worktree/<name> -b <branch> origin/master
 ```
 
-**Cleanup:** `git worktree remove worktree/<name>` or `git worktree prune` for stale references.
-
-### Skills
-
-All workflow automation is implemented as skills in `.claude/skills/` and invoked with `/skill-name <args>`:
-
-| Skill | Command | Purpose |
-|-------|---------|---------|
-| **issue-analysis** | `/issue-analysis <number>` | Deep issue analysis — codebase exploration, implementation planning, architectural assessment. Posts structured comment and applies labels. |
-| **issue-to-pr-resolver** | `/issue-to-pr-resolver <number>` | End-to-end issue implementation: worktree creation → implementation with tests → draft PR → iterative CI/review resolution until merge-ready. |
-| **my-pr-checker** | `/my-pr-checker <number>` | Review and manage YOUR OWN PRs — check CI, resolve review threads, fix issues, iterate until all checks pass. |
-| **contrib-pr-review** | `/contrib-pr-review <number>` | Review external contributor PRs for safety, quality, and readiness. |
-| **contributors-update** | `/contributors-update` | Find merged PR authors missing from README and update the contributors list after approval. |
-| **wt** | `/wt <branch-name>` | Create git worktree in `worktree/` subdirectory with up-to-date master. |
-| **bat-adhoc** | `/bat-adhoc [scenario]` | Ad-hoc bot acceptance testing with dynamically generated scenarios. |
-| **bat-story-eval** | `/bat-story-eval --baseline v6.6.1` | Diff-based story evaluation: two-version comparison, regression detection. |
+Before committing, verify that the working directory is the intended checkout.
+For a non-documentation change, also verify that the branch is not
+`master`/`main`. Preserve unrelated dirty changes in every checkout. Remove a
+worktree only when its branch is no longer needed and the user has authorized
+any associated destructive cleanup.
+The repository-root checkout is where `master` is kept; `git worktree prune`
+removes stale worktree references.
 
 ## Project Overview
 
-**Home Assistant MCP Server** - A production MCP server enabling AI assistants to control Home Assistant smart homes. Provides tools for entity control, automations, device management, and more.
-
-- **Repo**: `homeassistant-ai/ha-mcp`
-- **Package**: `ha-mcp` on PyPI
-- **Python**: 3.13 only
+**Home Assistant MCP Server** is a Python 3.13 FastMCP server that lets AI assistants control and configure Home Assistant through MCP. The repository is `homeassistant-ai/ha-mcp`; the package is `ha-mcp` on PyPI.
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for the threat model, scope, and reporting
-instructions. The threat model section documents the key design decisions that
-define what ha-mcp does and doesn't defend against (trusted MCP clients, local
-network boundary, OAuth Bearer token design, single-tenant standard mode, HA
-permission scope).
+Read [`SECURITY.md`](SECURITY.md) before changing authentication, OAuth, webhooks, network exposure, proxies, filesystem access, or trust boundaries. Its threat model defines the trusted MCP-client assumption, local-network boundary, Bearer-token posture, tenant model, and Home Assistant permission scope.
 
-**Security advisories:** The API exposes an advisory's body but not its
-discussion thread, where the maintainer disposition (dismiss-vs-fix and the
-agreed fix scope) lives. Confirm the scope from that thread (GitHub UI or ask a
-maintainer) before writing the fix.
+A security advisory's API body does not include its discussion thread. Confirm maintainer disposition and fix scope from the private thread or a maintainer before implementing an advisory fix.
 
 ## External Documentation
 
-When implementing features or debugging, consult these resources:
+Use current primary sources. The [development reference](docs/agents/development.md#external-documentation) links the Home Assistant REST/WebSocket APIs, Home Assistant Core, FastMCP, MCP specification, and app-development documentation.
 
-| Resource | URL | Use For |
-|----------|-----|---------|
-| **Home Assistant REST API** | https://developers.home-assistant.io/docs/api/rest | Entity states, services, config |
-| **Home Assistant WebSocket API** | https://developers.home-assistant.io/docs/api/websocket | Real-time events, subscriptions |
-| **HA Core Source** | `gh api /search/code -f q="... repo:home-assistant/core"` | Undocumented APIs (don't clone) |
-| **HA App (add-on) Development** | https://developers.home-assistant.io/docs/apps | App packaging, config.yaml |
-| **FastMCP Documentation** | https://gofastmcp.com/getting-started/welcome | MCP server framework |
-| **MCP Specification** | https://modelcontextprotocol.io/docs | Protocol details |
+## Agent-document formatting
+
+Keep this file short enough to load on every task:
+
+- Hard limit: 16,000 Unicode characters and 200 lines.
+- Keep only broadly applicable, high-value behavior in the root. Put coding conventions and subsystem procedures in their closest durable owner.
+- Retain a short section here for each major topic and state when and why to read its linked document.
+- Use ordinary Markdown links, not imports. A link must name the document's scope; avoid blind “see also” references.
+- Give each rule one canonical owner. Link instead of copying exact lists, commands, examples, or policy prose into multiple files.
+- Keep volatile counts, file inventories, workflow catalogs, historical incidents, and tutorials out of startup context; place them beside the code or process they describe.
+- Prefer short directives with concrete triggers. Explain rationale where a future editor might otherwise “simplify” a load-bearing rule.
+- Use descriptive headings, fenced code blocks, and CommonMark blank lines around headings and lists. Do not use decorative formatting as structure.
+- When guidance changes, check `AGENTS.md`, scoped `AGENTS.md` files, the style guide, contributing docs, tests, and inline references for drift.
 
 ## Issue & PR Management
 
+Do not create, edit, label, close, or comment on an issue or pull request without user authorization for that write. Draft the exact proposed text first when approval has not already been given.
+
+The detailed label taxonomy, issue-analysis query, bot behavior, review commands, CI loop, and release automation live in the [GitHub workflow reference](docs/agents/github-workflow.md).
+
 ### Automated Code Review
 
-**Codex** reviews PRs automatically (`pr-codex-review-request.yml` /
-`pr-codex-review-delivery.yml`; posts as `chatgpt-codex-connector[bot]`).
-Gemini Code Assist is retired — Google sunset its GitHub review activities and
-the app now only posts sunset-notice banners, so `.gemini/config.yaml`
-disables it fully. `.gemini/styleguide.md` remains the repo's review-criteria
-document (code quality, test coverage, security patterns, MCP conventions,
-safety annotation accuracy): the `@codex review` request comment points Codex
-at it explicitly, and the Claude review skills below apply it.
+After every push, inspect human and automated feedback. Codex and CodeRabbit findings are hypotheses: verify them against current source, tests, and contracts. Human feedback has priority. Read every CodeRabbit review body in full because collapsed outside-diff and nitpick findings may create no unresolved thread.
 
-**CodeRabbit** (GitHub app, posts as `coderabbitai[bot]`) reviews drafts too —
-`.coderabbit.yaml` sets `reviews.auto_review.drafts: true`, since every PR here
-opens as a draft, and `auto_pause_after_reviewed_commits: 0` so it keeps
-reviewing every push instead of going quiet after five. That spends the
-per-developer hourly review allowance faster; a rate-limited push says so in a
-comment and never blocks merge, and CodeRabbit's `rate limit` command reports
-whether reviews are available without consuming one. It auto-detects `AGENTS.md` as review criteria;
-`.gemini/styleguide.md` is added through
-`knowledge_base.code_guidelines.filePatterns` (see the comment there). Repo YAML
-outranks the UI settings (only org/workspace Global Overrides beat it) and does
-not merge with them — any key it omits falls back to CodeRabbit's schema
-defaults, not to UI values. A change to `.coderabbit.yaml` never applies to the
-PR making it: on open-source repos CodeRabbit honours only the base branch's
-config, so the PR reports `Configuration used: defaults` and the change takes
-effect on merge.
+CodeRabbit intentionally reviews drafts with `reviews.auto_review.drafts: true` and `auto_pause_after_reviewed_commits: 0`. Bot-authored dependency and promotion pull requests are excluded from automatic review but retain manual review commands. Exact configuration and rationale are in the [GitHub workflow reference](docs/agents/github-workflow.md#automated-review).
 
-**Bot-authored PRs are excluded from automatic review by both tools** —
-Dependabot, Renovate, and the `github-actions[bot]` webhook-proxy promote PRs
-(dev → stable copies whose content was already reviewed in their dev PRs).
-Enforced in `.coderabbit.yaml` `ignore_usernames` and the `pull_request_target`
-admission list in `pr-codex-review-request.yml`, pinned to each other by
-`test_coderabbit_config.py`. A maintainer can still summon a review on a
-promote PR: `@coderabbitai review`, or for Codex a comment that is exactly
-`/review` (or `@ghhamcp review`) — the `issue_comment` admission list
-deliberately omits `github-actions[bot]` to keep that lever.
-
-**Division of Labor:**
-- **Codex (automatic)**: Code quality, test coverage, generic security, MCP conventions
-- **CodeRabbit (automatic, drafts included)**: Line-level review against `AGENTS.md` and `.gemini/styleguide.md`, PR walkthrough and summary
-- **Claude `/contrib-pr-review` (on-demand)**: Repo-specific security (AGENTS.md, .github/, .claude/), detailed test analysis, PR size assessment, issue linkage
-- **Claude `/my-pr-checker` (lifecycle)**: Resolve threads, fix issues, monitor CI, create improvement PRs
-
-### Issue Labels
-
-**Triage-state labels** (applied during manual triage):
-
-| Label | Meaning |
-|-------|---------|
-| `ready-to-implement` | Clear path, no decisions needed |
-| `needs-choices` | Multiple approaches, needs stakeholder input |
-| `needs-info` | Awaiting clarification from reporter. `close-needs-info.yml` clocks from the label event: reminders on days 3/5/6, auto-close on day 7 without an author reply; an author reply removes the label |
-| `priority: high/medium/low` | Relative priority |
-| `triaged` | Automated triage complete (historical — applied by the retired `issue-triage.yml` bot) |
-| `triage-failed` | Automated triage failed (historical — applied by the retired `issue-triage.yml` bot) |
-| `issue-analyzed` | Deep Claude analysis complete |
-
-**Bug-class labels** (applied via `.github/ISSUE_TEMPLATE/` form selection, CodeRabbit auto-labeling, or manual triage):
-
-| Label | Meaning |
-|-------|---------|
-| `runtime-bug` | Bug occurring during normal operation (post-startup) |
-| `startup-bug` | Bug during startup, install, or connect |
-| `agent-behavior` | AI agent behavior or workflow feedback (tool selection, prompt drift, etc.) |
-
-**Scope labels** (manually applied during triage; orthogonal to bug-class — an issue can carry both `runtime-bug` AND a scope marker):
-
-| Label | Meaning |
-|-------|---------|
-| `addon` | Issue is specific to the Home Assistant app (add-on) deployment (`homeassistant-addon/`, Supervisor ingress) |
-| `docker` | Issue is specific to the Docker / containerized deployment (`Dockerfile`, container env) |
-| `javascript` | Issue concerns the project website / Astro app (TypeScript) under `site/` |
-
-**Lifecycle labels** (manually applied; do not double as close-reasons):
-
-| Label | Meaning |
-|-------|---------|
-| `wontfix` | Issue is valid but will not be addressed. Typically used when closing an issue to record the rejection rationale. |
-| `blocked` | Forward progress depends on an unresolved external item (upstream HA change, a sibling PR, a pending design decision). Recorded so a sweeper search can find what's waiting |
-
-**Tracking / automation labels** (applied by tooling):
-
-| Label | Meaning |
-|-------|---------|
-| `python-upgrade` | Auto-attached to every Renovate-managed PR (including non-Python dependency updates) via `renovate.json` global `labels` array. |
-
-### Issue Analysis Workflow
-
-- **Automated Triage (CodeRabbit)**: `issue_enrichment` in `.coderabbit.yaml`. On new and edited issues CodeRabbit posts an enrichment comment (possible duplicates, related issues and PRs, suggested assignees) and auto-applies labels per `labeling_instructions`. Plans are manual: comment `@coderabbitai plan` on an issue, or tick the Create Plan checkbox in the enrichment comment. (Replaces the retired GitHub Models `issue-triage.yml` bot.)
-- **Deep Analysis (Claude)**: When user says "analyze issues", list issues missing `issue-analyzed` label, then invoke `/issue-analysis <number>` for each sequentially (the skill drafts analysis for user approval before posting).
-
-```bash
-gh issue list --state open --json number,title,labels --jq '.[] | select(.labels | map(.name) | contains(["issue-analyzed"]) | not) | "#\(.number): \(.title)"'
-```
-
-### PR Review Comments
-
-**Always check for comments after pushing to a PR.** They come from bots
-(Codex, CodeRabbit, Copilot) or humans. Address human comments with highest
-priority; treat bot comments as suggestions to assess, not commands.
-
-**Read every CodeRabbit review body in full — findings hide outside the
-inline threads.** CodeRabbit folds findings into collapsed sections of the
-review body (`Outside diff range comments`, `Nitpick comments`) that never
-create inline threads, so zero unresolved threads and a green CodeRabbit
-check both look clean while findings sit unaddressed. A findings-free pass
-posts no new review at all — it edits the existing walkthrough comment in
-place — so also check that comment's `updated_at`. After each CodeRabbit
-review, sweep the full bodies before calling the round clean, e.g.:
-
-```bash
-# Findings hidden in review bodies (positive counts only):
-gh api repos/{owner}/{repo}/pulls/{n}/reviews --paginate --jq '.[].body' \
-  | grep -oiE "(outside diff range|nitpick) comments \([1-9][0-9]*\)|actionable comments posted: [1-9][0-9]*"
-# In-place walkthrough edits (a findings-free pass posts no review row):
-gh api repos/{owner}/{repo}/issues/{n}/comments --paginate \
-  --jq '.[] | select(.user.login=="coderabbitai[bot]") | .updated_at'
-```
-
-Any `Outside diff range` or `Nitpick` hit means findings only the full body
-shows — open it and assess them like any other review comment.
-
-**Reply, then resolve.** After addressing an inline comment, reply on its
-thread documenting the fix, then mark the thread resolved. When a review has
-inline comments, do both: reply per-thread *and* post one PR-level summary
-comment. Leave a thread open only when the reply asks the reviewer for
-clarification. Unresolved threads block merge even after approval: the merge
-button stays disabled until every thread is resolved.
-
-The `/my-pr-checker` skill carries the exact commands (the inline-reply
-`pulls/<PR>/comments/<id>/replies` endpoint, the PR-level review, and the
-`resolveReviewThread` GraphQL mutation, whose input field is `threadId`, not
-`pullRequestReviewThreadId`).
+For an accepted inline finding, implement the fix, reply with evidence, resolve the thread, and include one pull-request-level summary when the review had inline comments. Leave a thread open only while requesting clarification.
 
 ## Git & PR Policies
 
-**CRITICAL - Never commit directly to master, except for documentation-only adjustments.**
+- Never commit directly to `master` or `main` except for a documentation-only adjustment.
+- Never push or open a pull request without explicit user permission.
+- Open every pull request as a draft. Mark it ready only when explicitly asked, after refreshing its description and verifying required CI and reviews.
+- Never merge, close, delete branches, publish, release, or otherwise finalize work without explicit approval for that exact action.
+- Preserve the pull-request template headings and generated review sections.
+- Make routine, reversible implementation decisions autonomously. Ask before a choice materially changes scope, public behavior, architecture, or review surface; do not create competing pull requests without approval.
+- Choose for long-term codebase health, not implementation speed; maintainability-improving refactors are valid when they fit the user's scope.
+- Draft descriptions may remain provisional. Refresh the description before marking ready and after later scope changes while ready. Do not claim readiness from stale checks or a different head SHA.
 
-You are STRICTLY PROHIBITED from committing to `master` or `main` branch. Always use worktrees for feature work:
+### Testing and verification
 
-```bash
-# Use /wt skill or manually:
-git worktree add worktree/<branch-name> -b <branch-name>
-cd worktree/<branch-name>
-```
+Testing behavior belongs in this root because it applies to every code change:
 
-**Before any commit, verify:**
-1. Current branch: `git rev-parse --abbrev-ref HEAD` (must NOT be master/main)
-2. In worktree: `pwd` (must be in `worktree/` subdirectory)
-
-**Never push or create PRs without user permission.**
-
-**Always create PRs as draft.** Use `gh pr create --draft`. Only mark a PR as ready for review (`gh pr ready <PR>`) when explicitly requested by the user. **Before marking ready, update the PR description** to reflect all changes made since the PR was created.
-
-### PR Workflow
-
-**After creating or updating a PR, always follow this workflow:**
-
-1. **Update tests if needed**
-2. **Commit and push**
-3. **Wait for CI** (~3 min for tests to start and complete):
-   ```bash
-   sleep 180
-   ```
-4. **Check CI status**:
-   ```bash
-   gh pr checks <PR>
-   ```
-5. **Check for review comments** (see "PR Review Comments" section above)
-6. **Fix any failures**:
-   ```bash
-   # View failed run logs
-   gh run view <run-id> --log-failed
-
-   # Or find the run ID from PR
-   gh pr checks <PR> --json | jq '.[] | select(.conclusion == "failure") | .detailsUrl'
-   ```
-7. **Address review comments** if any (prioritize human comments)
-8. **Update PR description** if the scope changed (only when PR is already marked as ready)
-9. **Repeat steps 2-8 until:**
-   - ✅ All CI checks green
-   - ✅ All comments addressed
-   - ✅ PR ready for merge
-
-### PR Execution Philosophy
-
-**Work autonomously during PR implementation:**
-- Don't ask the user about every small choice or decision during implementation
-- Make reasonable technical decisions based on codebase patterns and best practices
-- Fix unrelated test failures encountered during CI (even if time-consuming)
-- Document choices for final summary
-
-**Making implementation choices:**
-- **DO NOT** choose based on what's faster to implement
-- **DO** consider long-term codebase health - refactoring that benefits maintainability is valid
-- **For non-obvious choices with consequences**: Create 2 mutually exclusive PRs (one for each approach) and let user choose
-- **For obvious choices**: Implement and document in final summary
-
-**When you notice an improvement during a PR**: fix it in place by default. See [Boy Scout Rule — Handling Discovered Improvements](#boy-scout-rule--handling-discovered-improvements) below for the deferral scale.
-
-**Final reporting:** Once the PR is ready, post an Implementation Summary comment on the PR (choices made, problems encountered) and give the user a short summary.
+- Bug fixes require a failing regression test first, then the minimal fix.
+- New MCP tools need E2E coverage. Any existing tool without tests gains E2E coverage even when it is not otherwise part of the current pull request. Core changes in `client/`, `server.py`, or `errors.py` need focused coverage.
+- Refactors with strong existing coverage, documentation-only changes, minor parameters on well-tested tools, and utilities already exercised by E2E may not need a new test.
+- Run the smallest relevant tests after changes. Read [`tests/AGENTS.md`](tests/AGENTS.md) for lanes, markers, polling, and test patterns, and the [development reference](docs/agents/development.md#test-commands) for exact commands.
+- Run relevant E2E tests without waiting to be asked. Let pytest report unavailable prerequisites or skips rather than assuming them.
+- Run the full E2E suite only before claiming the full suite passes; a focused file is partial evidence and must be described that way.
+- Fix unrelated test failures encountered during CI, even when time-consuming, subject to the Boy Scout scope rules below.
+- Match verification to risk. Documentation-only work needs structural checks such as links, generated-file drift, size, and workflow shape—not unrelated application E2E.
+- Never state that tests, lint, builds, CI, or review are clean without fresh evidence from the relevant command or current pull-request head.
 
 ### Boy Scout Rule — Handling Discovered Improvements
 
-**IMPORTANT — Default is fix-in-place.** "Boy Scout Rule" means leave touched code better than you found it. "Improve incrementally" means commit-by-commit within *this* PR — not across follow-up PRs. Deferral is the exception, not the default. Weigh fix-in-place sweeps against regression risk: if a sweep would meaningfully expand the diff or change the review surface, treat it as Mid-sized and ask the user.
+Leave touched code better than you found it. Fix-in-place is the default, but the user's scope controls meaningful expansion. “Improve incrementally” means commit-by-commit within this pull request, not across follow-up pull requests.
 
-**Never open a follow-up PR or issue without explicit user approval.**
-
-When you notice something while working on a PR, apply this scale:
-
-| What you find | Action |
+| Finding | Action |
 |---|---|
-| **Small** — a few lines, clearly in scope (see examples below) | **Fix in this PR** as a separate commit. No mention in PR description. |
-| **Mid-sized** — meaningful effort, worth doing but out of scope (e.g. adding a new helper module that doesn't exist yet, a gap that needs non-trivial new test scaffolding, a code-quality issue that's *not* really low) | **Pause before pushing.** Ask the user whether to bundle. |
-| **Large / unrelated** — many files, design decisions, different subsystem (e.g. would double the diff size or change the review surface, code quality is *really* low / technical debt) | Mention in PR description only if the user confirms. Open a separate issue **only if** the user asks AND you can state a concrete benefit in one sentence. |
+| Small and clearly related—including missing or weak tests in the touched area and straightforward test-quality fixes | Fix in this pull request, preferably as a distinct commit. |
+| Mid-sized or meaningfully expands the diff | Pause before pushing and ask whether to bundle it. |
+| Large, unrelated, or a different subsystem | Explain the scope change and ask; do not silently defer or expand. |
 
-**"Small" examples — fix these inline, no mention needed:**
+About 200 changed lines is a should-I-ask heuristic, not a bundling cap. Work
+of any size may stay in the pull request when it is not grossly out of scope;
+estimate honestly and do not inflate the estimate to justify deferral.
 
-- Typo, dead import, misnamed local
-- Stale docstring/comment or stale reference
-- 1–N line cleanup of code in this diff
-- Multi-site sweep of the same pattern you can grep for
-- Missing test for code you're touching (add the test without refactoring the surrounding code)
-- Low coverage for the area you're working in
-- Straightforward test-quality fix (better assertions, clearer names, removing duplication)
-- "Mirror X parity onto Y" where Y is in the diff
-- Migrating a singular→list or similar shape-consistency fix
-- Drift between docs and live state you can fix by reading both
+Never create a follow-up issue or pull request without explicit approval.
+Before proposing one, the work must not be achievable by mirroring a nearby
+pattern; it must either present a real design choice with named alternatives
+or be a genuinely large mechanical migration; it must change the review
+surface, have a concrete benefit, and remain actionable. If any of those
+conditions fails, fix it now or let it go—do not file an issue merely to
+“track” it. Bot nits are fixed or dismissed in the current review, not
+converted into backlog noise.
 
-**When to ask the user about bundling.** ~200 lines is a *should-I-ask* heuristic, not a bundling cap. Under ~200 lines: bundle without asking. Over ~200 lines: ask the user whether to bundle — but **bundling at any size is fine if the work is not grossly out of scope**. The 200-line mark exists so the user hears about large bundled changes before they land, not to push large work out of the PR. Estimate honestly; do not inflate to manufacture a reason to defer.
-
-**Anti-noise gate — before filing any follow-up issue or PR, all three must be true:**
-
-1. The work is genuinely too large to bundle (i.e. truly out of scope, not just over the ~200-line ask-heuristic above). **All three sub-tests must pass:**
-   (a) It cannot be done by mirroring an existing sibling pattern in the same file or a closely-related file.
-   (b) You can name the actual design choice in one sentence with two named alternatives, **OR** the work is a genuinely large mechanical migration (e.g. *"replace `requests` with `httpx` across 40 sites"*) that exceeds this PR's scope by size alone.
-   (c) It would meaningfully change this PR's review surface, not just add to it.
-2. You can name a concrete end-user-facing or maintainer benefit in one sentence.
-3. A maintainer reading the issue 6 months later would act on it, not close as stale.
-
-If any are false: fix it now, or let it go. **Do not file an issue to "track" it.**
-
-**Scope is the user's call, not yours.** Before deferring anything, explicitly ask with a specific reason: *"I think this is out of scope because [X]. Fix here or defer?"* — do not silently drop it.
-
-The following phrases are red flags that you're making a scope decision unilaterally (list is non-exhaustive — match on intent, not exact string): "post-merge follow-up", "follow-up consideration", "forward-looking note", "nice to have", "Happy to file an issue", "out of scope for this PR", "not blocking this PR", "pre-existing — not touching it" (pre-existing is not a reason to skip; addressing pre-existing things is the point of this rule), "real design work, not N lines", "worth tracking as a follow-up issue".
-
-**Code-review bot suggestions** (Codex, CodeRabbit, Copilot non-blocking nits): apply inline or dismiss. Never spawn a follow-up issue from a bot suggestion unless the user explicitly confirms it's a large, out-of-scope change. See `.gemini/styleguide.md` § *Non-Blocking Suggestions and Scope* for the bot-side rule.
-
-### Urgent Release Process
-
-Critical fixes follow the normal development flow: branch from `master`, merge
-the fix to `master`, then manually dispatch `semver-release.yml` from `master`.
-Use its `force` input only when a release is required without a releasable
-`feat`, `fix`, `perf`, `refactor`, breaking `!`, or `BREAKING CHANGE` commit
-since the previous stable tag.
-
-### Test Coverage Requirements
-
-**When tests ARE required:**
-- New MCP tools in `src/ha_mcp/tools/` without any E2E tests
-- Tools that previously had NO tests — add E2E tests even if not part of current PR
-- Core functionality changes in `client/`, `server.py`, or `errors.py` without coverage
-- Bug fixes — use TDD: write the failing regression test first, then fix the code so the test passes
-
-**When tests may NOT be required:**
-- Refactoring with existing comprehensive test coverage
-- Documentation-only changes (`*.md` files)
-- Minor parameter additions to well-tested tools
-- Internal utilities already covered by E2E tests
-
-**When to open an issue instead:** See § *Boy Scout Rule — Handling Discovered Improvements* for the gate. Never open without explicit user approval.
+Do not use “non-blocking,” “post-merge follow-up,” “nice to have,”
+“pre-existing,” or similar phrasing to hide a legitimate current finding.
+This list is non-exhaustive: match the intent, and remember that pre-existing
+problems are the point of the Boy Scout rule. State the finding and let the
+user decide scope.
 
 ## CI/CD Workflows
 
-| Workflow | Trigger | Purpose |
-|----------|---------|---------|
-| `pr.yml` | PR opened | Lint, type check |
-| `e2e-tests.yml` | PR to master | Full E2E tests (~3 min) |
-| `publish-dev.yml` | Push to master | Dev release `.devN` |
-| `notify-dev-channel.yml` | Push to master (src/) | Comment on PRs/issues with dev testing instructions |
-| `semver-release.yml` | Biweekly Wed 10:00 UTC or manual dispatch | Stable release (cuts version tag + GitHub release) |
-| `release-publish.yml` | After SemVer Release (`workflow_run`) or manual dispatch | Publish stable Docker image (`:latest` + `:stable` + semver) + MCP registry |
-| `build-binary.yml` | Release | Linux/macOS/Windows binaries |
-| `addon-publish.yml` | Release | HA app update |
-| `sync-tool-docs.yml` | Push to master (`src/ha_mcp/tools/`, `scripts/extract_tools.py`) | Regenerate `tools.json`, README, DOCS.md |
-| `locale-sync.yml` | Daily schedule + manual dispatch | Machine-translate stale/missing strings post-merge and push them straight to master |
-
-**Docker image tags** (`ghcr.io/homeassistant-ai/ha-mcp`): stable releases push `:latest` + `:stable` + semver tags (`release-publish.yml`); dev builds push only `:dev` + `:dev-<sha>` (`publish-dev.yml`) — **never `:latest`**, which is reserved for stable. The HA app images live in separate repos (`-addon-{arch}`, `-addon-dev-{arch}`) and are selected by an explicit `version:` pin, not by `:latest`.
+Read the [workflow inventory and invariants](docs/agents/github-workflow.md#cicd-workflows) before editing `.github/workflows/`. In `pr.yml`, HACS and Hassfest must run before any pull-request-controlled code. The AGENTS size check may run first because it only reads this file.
 
 ## Development Commands
 
-### Setup
-```bash
-uv sync --group dev        # Install with dev dependencies
-uv run ha-mcp              # Run MCP server (stdio; needs interactive stdin)
-uv run ha-mcp-web          # Run HTTP server; web settings UI at http://localhost:8086/mcp/settings (see src/ha_mcp/settings_ui/AGENTS.md)
-cp .env.example .env       # Configure HA connection
-```
-
-### Testing
-E2E tests are in `tests/src/e2e/` (not `tests/e2e/`). Tests use **testcontainers** to spin up
-an isolated Docker HA instance — Docker daemon must be running.
-
-```bash
-# Run FULL E2E suite (required before claiming all tests pass)
-# -n2 is optimal locally (each worker spins up its own HA container;
-# more workers add memory pressure without proportional speedup).
-# CI uses -n3 tuned for 2-vCPU GitHub runners with 15GB RAM.
-cd tests && uv run pytest src/e2e/ -n2 --dist loadscope -v --tb=short
-
-# Run specific file (partial coverage only — never substitute for full suite)
-cd tests && uv run pytest src/e2e/workflows/automation/test_lifecycle.py -v
-
-# Interactive test environment
-uv run hamcp-test-env                    # Interactive mode
-uv run hamcp-test-env --no-interactive   # For automation
-```
-
-**CRITICAL RULES:**
-- Always run from the `tests/` directory so pytest picks up the correct `conftest.py`
-- Always run the **full suite** before declaring tests pass
-- `tests/.env.test` contains placeholder values only; testcontainers sets the real URL dynamically
-- Never set `HOMEASSISTANT_URL` manually in your shell before running tests
-- **Always run relevant e2e tests after making changes**, without waiting to be asked. Identify the relevant test file(s) for the area you changed and run them. Do not assume Docker is unavailable or prerequisites are missing — just run them and let pytest report what is skipped and why.
-
-Test token centralized in `tests/test_constants.py`.
-
-**Unit tests** (`tests/src/unit/`, no Docker) — run them in parallel, as CI does
-(`pr.yml`); serial takes 25+ minutes for ~11k tests:
-
-```bash
-cd tests && uv run pytest src/unit/ -n auto --tb=short
-```
-
-`tests/pytest.ini` sets `--maxfail=3`, so a run reporting "3 failed" has stopped
-early rather than finished — pass `--maxfail=0` when you need the full picture.
-
-### Code Quality
-
-C901 (mccabe complexity ≤10) is enforced repo-wide with zero per-file exemptions (issue #925 cleared the grandfathered list) — never reintroduce a `["C901"]` per-file-ignore; extract helpers instead.
-
-```bash
-uv run ruff check src/ tests/ --fix
-# Note: --fix removes unused imports from non-__init__ modules (lefthook runs it on commit with
-# stage_fixed). When adding an import, include its first use in the same change or it gets stripped.
-uv run mypy src/
-```
-
-### Docker
-```bash
-# Stdio mode (Claude Desktop) — local-only, no network exposure
-docker run --rm -i \
-  -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \
-  ghcr.io/homeassistant-ai/ha-mcp:latest
-
-# HTTP mode (loopback only, same-host LLM client)
-# Connect URL: http://127.0.0.1:8086/mcp  (default MCP_SECRET_PATH)
-docker run -d -p 127.0.0.1:8086:8086 \
-  -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \
-  ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web
-
-# HTTP mode (LAN-reachable) — generate the secret first so you can configure the MCP client with it
-MCP_SECRET="/private_$(python3 -c 'import secrets; print(secrets.token_urlsafe(16))')"
-echo "MCP_SECRET_PATH=$MCP_SECRET"
-docker run -d -p 8086:8086 \
-  -e HOMEASSISTANT_URL=... -e HOMEASSISTANT_TOKEN=... \
-  -e MCP_SECRET_PATH="$MCP_SECRET" \
-  ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web
-```
-
-See [SECURITY.md](SECURITY.md) for authentication and network binding details.
+The minimal setup is `uv sync --group dev`; run stdio with `uv run ha-mcp` and HTTP/settings UI with `uv run ha-mcp-web`. Exact test, lint, Docker, and research commands are in the [development reference](docs/agents/development.md). Contributor setup is in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Architecture
 
-```
-src/ha_mcp/
-├── server.py          # Main server with FastMCP
-├── __main__.py        # Entrypoint (CLI handlers)
-├── config.py          # Pydantic settings management
-├── errors.py          # 38 structured error codes
-├── client/
-│   ├── rest_client.py       # HTTP REST API client
-│   ├── websocket_client.py  # Real-time state monitoring
-│   └── websocket_listener.py
-├── auth/
-│   ├── provider.py          # OAuth provider (HTTP mode)
-│   └── consent_form.py      # OAuth consent screen
-├── tools/             # 36 modules, auto-discovered
-│   ├── registry.py          # Lazy auto-discovery
-│   ├── smart_search/        # Fuzzy entity search
-│   ├── device_control.py    # WebSocket-verified control
-│   ├── best_practice_checker.py # Reactive HA config validator (warns + embeds skill content)
-│   ├── tools_*.py           # Domain-specific tools
-│   └── util_helpers.py      # Shared utilities
-├── utils/
-│   ├── fuzzy_search.py      # textdistance-based matching
-│   ├── domain_handlers.py   # HA domain logic
-│   ├── operation_manager.py # Async operation tracking
-│   ├── skill_loader.py      # Skills-vendor file loader (used by ha_get_skill_guide and write tools)
-│   ├── usage_logger.py      # Per-tool usage telemetry
-│   ├── data_paths.py        # Canonical data directory paths
-│   ├── python_sandbox.py    # Sandboxed Python-expression eval for python_transform on config tools
-│   ├── kill_signal_diagnostics.py # Kill-signal (SIGTERM/SIGINT/SIGHUP) shutdown diagnostics
-│   └── config_hash.py       # Shared optimistic-locking hash (automation/script/scene/dashboard/energy)
-└── resources/
-    ├── card_types.json
-    └── dashboard_guide.md
-```
-
-### Key Patterns
-
-**Tools Registry**: Auto-discovers `tools_*.py` modules with `register_*_tools()` functions. No changes needed when adding new modules.
-
-**Lazy Initialization**: Server, client, and tools created on-demand for fast startup.
-
-**Service Layer**: Business logic in `smart_search/`, `device_control.py` separate from tool modules.
-
-**WebSocket Verification**: Device operations verified via real-time state changes.
-
-**Tool Completion Semantics**: Tools should wait for operations to complete before returning, with optional `wait` parameter for control.
+Tools are lazy-discovered from `tools_*.py`; shared business logic belongs in service modules; WebSocket-backed operations verify state changes; and tools wait for logical completion when possible. Read the [architecture map](docs/agents/development.md#architecture) and the [code review style guide](.gemini/styleguide.md) before structural code changes.
 
 ## Terminology: apps, not add-ons
 
-Home Assistant 2026.2 renamed add-ons to apps, and the old term is deprecated.
-In anything a user or an agent reads — documentation, tool titles and
-descriptions, settings-UI strings, config-flow text — write **app (add-on)** on
-first mention and **app** afterwards, capitalised where the sentence calls for
-it. The retired term never stands on its own.
-
-Identifiers are not automatically exempt: check each one before assuming it
-stayed, because upstream has been moving them too. Measured against Supervisor
-`main` and this repo: the container prefix is **`app_`** now, with `addon_` only
-a legacy fallback (`tests/src/haos_runtime.py` reads the name from docker rather
-than assuming either); the REST API still documents and serves the Apps API at
-`/addons/...`, which is what this server calls, while `/v2/apps` is a separate
-v2 surface mounted only when the `supervisor_v2_api` feature flag is on —
-off by default, added in 2026-04 with v1 kept backward-compatible, absent from
-older Supervisors, and returning `apps` where v1 returns `addons`; and
-`developers.home-assistant.io/docs/add-ons` redirects to `/docs/apps`.
-
-What genuinely keeps the old spelling: add-on slugs, the `addon` issue label,
-the `homeassistant-addon*/` directories, this project's own `deployment_mode`
-value `addon`, and the literal pre-2026.2 menu labels inside a compatibility
-note (on those versions the panel really is *Add-ons*).
+In user- and agent-facing text, write **app (add-on)** on first mention and **app** afterwards. Identifiers require case-by-case verification; established slugs, paths, labels, API routes, and compatibility text may retain the old spelling. The exact exceptions live in the [development reference](docs/agents/development.md#terminology-apps-not-add-ons).
 
 ## Writing MCP Tools
 
-### Naming Convention
-`ha_<verb>_<noun>`:
-- `get` — single item (`ha_get_state`)
-- `list` — collections (`ha_list_services`)
-- `search` — filtered queries (`ha_search`)
-- `set` — create/update (`ha_config_set_helper`)
-- `delete` — delete dashboards, config entries, or files (`ha_config_delete_dashboard`, `ha_delete_file`)
-- `remove` — remove registry items (`ha_remove_entity`, `ha_remove_area_or_floor`)
-- `call` — execute (`ha_call_service`, `ha_call_event`)
-- `manage` — multi-modal tools combining several operations behind one interface (`ha_manage_app`)
-
-**Namespace prefixes**: An optional `<namespace>_` prefix between `ha_` and the verb is allowed for grouped tool families that share a domain. The full shape becomes `ha_<namespace>_<verb>_<noun>`:
-- `ha_config_<verb>_<noun>` — config-management tools (`ha_config_set_helper`, `ha_config_set_automation`, `ha_config_remove_automation`, `ha_config_delete_dashboard`)
-- `ha_dev_<verb>_<noun>` — developer-mode tools (`ha_dev_manage_server`, `ha_dev_manage_settings`); registered only when the `enable_dev_mode` setting is on (Developer section at the bottom of the web settings UI's Server Settings tab)
-
-**Accepted exceptions**: A small set of tools name a single, distinct operation where forcing a `<verb>_<noun>` shape would read worse than the natural name. These are accepted as-is and should not be flagged:
-- `ha_restart`, `ha_reload_core`, `ha_eval_template`
-- `ha_report_issue`, `ha_import_blueprint`
-- `ha_read_file`, `ha_write_file`, `ha_bulk_control`
-
-**Adding new verbs**: When no existing verb fits a new tool's purpose, add the verb to the approved-verbs list above rather than forcing a poor fit. `.gemini/styleguide.md` points back to this section as the single source of truth, so updates here propagate automatically.
-
-### Tool Structure
-Create `tools_<domain>.py` in `src/ha_mcp/tools/`. Registry auto-discovers it.
-
-```python
-from fastmcp.tools import tool
-from .helpers import log_tool_usage, register_tool_methods
-
-class DomainTools:
-    def __init__(self, client):
-        self._client = client
-
-    @tool(name="ha_<verb>_<noun>", tags={"Category Name"}, annotations={"readOnlyHint": True, "idempotentHint": True})
-    @log_tool_usage
-    async def ha_<verb>_<noun>(self, param: str) -> dict[str, Any]:
-        """<Action verb> <what this tool does -- one sentence>.
-
-        <Optional: second sentence for key behavioral distinction or modes>
-        """
-        # Add to the docstring above only when genuinely needed:
-        # RELATED TOOLS: ha_next(): why to call this after (workflow-entry tools only)
-        # EXAMPLES: ha_<verb>_<noun>("realistic_value")  -- non-obvious call patterns only
-        # When NOT to use: route to preferred alternatives
-        # Caveats: destructive side-effects, non-obvious gotchas
-        # For complex schemas: use ha_get_skill_guide
-
-def register_<domain>_tools(mcp, client, **kwargs):
-    register_tool_methods(mcp, DomainTools(client))
-```
-
-`@tool` (from `fastmcp.tools`) attaches metadata to the method. `@tool` must be the outermost decorator (above `@log_tool_usage`) so that `__fastmcp__` is present on the final method object. `register_tool_methods()` auto-discovers all `@tool`-decorated methods and calls `mcp.add_tool()` for each. The registry discovers `register_*_tools` functions by convention.
-
-### Tool Docstrings
-
-The single-line template is the default -- extend it only where it genuinely helps.
-
-**Required for every tool:**
-- Starts with an action verb (`Get`, `List`, `Search`, `Create`, `Update`, `Delete`, `Remove`, `Execute`, `Call`, `Manage`)
-- One sentence describing what the tool does (not how)
-
-**Add `RELATED TOOLS` when** the tool is a workflow entry point and the natural next step is not obvious.
-Example: `ha_search` hints at `ha_get_state`.
-
-**Add `EXAMPLES` when** the tool has multiple modes or non-obvious parameters.
-Omit when a single required parameter makes the call self-evident.
-
-**For multi-line docstrings, follow this structure** (based on
-[Anthropic's tool design guidance](https://www.anthropic.com/engineering/writing-tools-for-agents)):
-1. What the tool does (required first sentence, action verb)
-2. When NOT to use it — name the preferred alternatives
-3. When to use it — valid use cases
-4. Caveats — consequences, post-actions, destructive side-effects
-
-Consequence statements are plain prose: "This permanently deletes the dashboard.
-A backup is created before every edit." Route safety concerns through `annotations`
-(`destructiveHint`, `idempotentHint`, `readOnlyHint`), not docstring keywords.
-
-**Defer complex schemas** instead of embedding them:
-`# For complex schemas: use ha_get_skill_guide`
-
-**What NOT to include:** full parameter documentation, type descriptions already in the
-signature, HA domain internals the model already knows, or motivational prose.
-
-
-### Tool Tags
-
-Every tool needs `tags={"Category Name"}` (native FastMCP parameter). Drives the README table, `site/src/data/tools.json`, and `homeassistant-addon/DOCS.md`. These are auto-regenerated on merge by `sync-tool-docs.yml` — no manual regeneration needed. For local testing: `python scripts/extract_tools.py`
-
-### Safety Annotations
-| Annotation | Default | Use For |
-|------------|---------|--------|
-| `readOnlyHint: True` | `False` | Tool does not modify its environment |
-| `destructiveHint: True` | `True` | Tool may perform destructive updates (only meaningful when `readOnlyHint` is false). Set to `False` for non-destructive writes (e.g., creating a record) |
-| `idempotentHint: True` | `False` | Repeated calls with same args have no additional effect (only meaningful when `readOnlyHint` is false) |
-| `openWorldHint: True` | `True` | Tool reaches an external, third-party-authored world (HACS store, app repositories, GitHub release feeds, arbitrary import URLs). Set to `False` when the tool's domain is the local Home Assistant instance. A tool is also open-world if its output carries externally-authored content back to the client, even when a local integration (HACS, Supervisor, HA Core) makes the actual network call on its behalf — `ha_get_overview` and `ha_get_system_health` embed the update-check field that reaches PyPI / the Supervisor store, while `ha_get_blueprint` and `ha_config_list_dashboard_resources` return externally-authored content from purely local reads. Required on every tool — the default is `true`, so an omitted value silently marks a local tool as open-world |
-
-**Version baseline:** annotations describe a tool's behavior against current
-upstream versions of any external engine or component it drives; a side effect
-that exists only in outdated external builds does not demote the tool to
-write-classified — document the update requirement in the tool's docs instead
-(e.g. the screenshot engine's old `settheme` write, #1991).
-
-### Error Handling
-
-**Always use the dedicated error functions** from `errors.py` and `helpers.py`. Never construct raw error dicts manually — the helpers ensure consistent structure, error codes, and suggestions across all tools.
-
-**All tool-level failures must raise `ToolError`** (sets `isError=true` per MCP spec). Batch item failures within result arrays are the only exception — those return structured dicts without raising.
-
-**Pattern A — Exception blocks** (most common): call `exception_to_structured_error` without `return` — it raises `ToolError` by default:
-```python
-from .helpers import exception_to_structured_error, raise_tool_error
-from fastmcp.exceptions import ToolError
-
-try:
-    # ... tool logic ...
-except ToolError:
-    raise  # must re-raise; prevents ToolError being swallowed by outer except
-except Exception as e:
-    exception_to_structured_error(
-        e,
-        context={"entity_id": entity_id},
-        suggestions=["Verify entity exists", "Check HA connection"],
-    )
-```
-
-The `except ToolError: raise` guard is required whenever `raise_tool_error()` or validation errors are called inside the same `try` block — without it, `except Exception` catches the `ToolError` and re-maps it to `INTERNAL_ERROR`.
-
-**Pattern B — Input validation errors**: use `raise_tool_error(create_error_response(ErrorCode.VALIDATION_INVALID_PARAMETER, message, context={...}, suggestions=[...]))`.
-
-**Pattern C — Service call failures**: check `result.get("success")` and raise with `ErrorCode.SERVICE_CALL_FAILED` using `result.get("error", "Operation failed")` as the message.
-
-**Pattern D — Batch item failures** (items inside a results list — do NOT raise):
-```python
-results.append(create_error_response(
-    ErrorCode.SERVICE_CALL_FAILED,
-    str(e),
-    context={"entity_id": eid},
-))
-```
-
-Only use `raise_error=False` on `exception_to_structured_error` when you need to mutate the dict before raising. Never add `add_timezone_metadata` to errors.
-
-`exception_to_structured_error` auto-classifies 404s, auth errors, timeouts by exception type. Pass `context={"entity_id": ...}` for automatic `ENTITY_NOT_FOUND` on 404s. Available helpers: `create_entity_not_found_error`, `create_connection_error`, `create_auth_error`, `create_service_error`, `create_validation_error`, `create_config_error`, `create_timeout_error`, `create_error_response`.
-
-### Return Values
-```python
-{"success": True, "data": result}                     # Success
-{"success": True, "data": result, "warnings": [...]}  # Degraded (top-level list[str], omit when empty)
-raise ToolError(json.dumps({...}))                    # Tool-level failure (isError=true)
-{"success": False, "error": {...}}                    # Batch item failure only (in results list)
-```
-
-`warnings` is always a top-level `list[str]`, never nested inside `data` and never a singular `"warning": "..."` string. See `tools_config_helpers.py::HelperResponse` / `_helper_response` for the canonical shape and `tests/src/unit/test_helper_response_shape.py` for the contract assertions.
-
-### Tool Consolidation
-When a tool's functionality is fully covered by another tool, **remove** the redundant tool rather than deprecating it. Fewer tools reduces cognitive load for AI agents and improves decision-making. Do not add deprecation notices or shims — just delete the tool and update any docstring references to point to the replacement.
-
-This project's tool count exceeds the [10-20 tool threshold](https://ai.google.dev/gemini-api/docs/function-calling) where selection accuracy degrades. Reducing count is a priority — combine frequently chained operations into one tool and ensure each tool has a clear, distinct purpose. See [Anthropic's tool design blog](https://www.anthropic.com/engineering/writing-tools-for-agents) for guidance.
-
-| Pattern | Example | Guideline |
-|---------|---------|-----------|
-| Tool A is a strict subset of Tool B | `ha_dashboard_find_card` fully covered by `ha_config_get_dashboard` | Consolidate (remove A) |
-| Frequently chained operations | Multi-step workflows combined into one tool | Consolidate — reduces round-trips |
-
-**Breaking changes**: only removing functionality with no alternative requires a major bump. Consolidation and renaming are not breaking.
-
-**Context engineering**: provide minimum context; let models fetch more via `ha_get_skill_guide`. Favor statelessness and content-derived hashes for optimistic locking.
-
-### Module Size
-
-Keep modules focused. Past ~1000 lines (Pylint's `max-module-lines` default) a module usually spans multiple concerns and is worth splitting along those concerns. Pick whatever decomposition fits and fix the internal imports (and any test patch targets) that reference the moved code as part of the move. There's no external import contract to preserve: it's one project, and MCP tools are resolved dynamically at runtime by name (and renaming isn't breaking either, see Tool Consolidation).
+Before adding or modifying a tool, read [`.gemini/styleguide.md`](.gemini/styleguide.md). It owns tool naming, decorator order, tags, safety annotations, `ToolError` handling, return shapes, docstrings, consolidation, module size, and progressive disclosure.
 
 ## Tool Waiting Behavior
 
-**Principle**: MCP tools should wait for operations to complete before returning, not just acknowledge API success.
-
-Tools have an optional `wait` parameter (default `True`) that polls for completion. Use `wait=False` for bulk operations, then batch-verify. Categories:
-- **Config ops** (automations, helpers, scripts): Wait by default (poll until entity queryable/removed)
-- **Service calls** (lights, switches): Wait for state change on state-changing services (turn_on, turn_off, toggle, etc.)
-- **Async ops** (automation triggers, external integrations): Return immediately (not state-changing)
-- **Query ops** (get_state, search): Return immediately (no `wait` parameter)
-
-**Shared utilities** in `src/ha_mcp/tools/util_helpers.py`:
-- `wait_for_entity_registered(client, entity_id)` — polls until entity accessible via state API
-- `wait_for_entity_removed(client, entity_id)` — polls until entity no longer accessible
-- `wait_for_state_change(client, entity_id, expected_state)` — polls until state changes
+Tools wait for completion when a reliable signal exists; query and fire-and-forget operations return immediately. The canonical categories and shared helpers are in [`.gemini/styleguide.md` → Tool Waiting Behavior](.gemini/styleguide.md#tool-waiting-behavior).
 
 ## Custom Component
 
-The `custom_components/ha_mcp_tools/` integration ships separately from the
-`ha-mcp` server package (it reaches the HA instance via HACS), so CI cannot
-fully validate a component change before merge.
-
-- **Version bumps ride the stable release cycle — do not bump per PR or per
-  push.** The component version (`manifest.json` `version` + `COMPONENT_VERSION`
-  in `const.py`, kept in lockstep by the parity test) should lead the last
-  **stable** release by exactly one pending version, so everything merged since
-  the last stable cut ships together under one number on the next stable
-  release. Check the pending state with `git show
-  stable:custom_components/ha_mcp_tools/const.py | grep COMPONENT_VERSION` vs
-  master, then:
-  - **Level with stable** (no pending version yet): bump once — patch by
-    default — to open the pending version.
-  - **Already ahead of stable** (a pending version exists): do **not** bump;
-    your change rides under the existing pending version.
-  - Raise the pending version further only to **escalate the bump level** — e.g.
-    the pending version is a patch but your change warrants a minor — and then
-    go straight to that minor, not an extra patch. Never go past the current
-    pending version otherwise; per-revision bumps skip never-shipped numbers and
-    desync the version from the release cycle.
-  - CI enforces the level-with-stable case twice: the PR-level **Component
-    Version Gate** fails a component change whose manifest version does not
-    strictly lead the mirror's released stable (equal = bump to open the
-    pending version; behind = a stale tree or bad merge resurrected an old
-    version), and the mirror sync's stable tag step fails loud
-    when an already-tagged version's component content has drifted (changes
-    merged onto a shipped version would otherwise strand with no installable
-    release — the gap is a PR opened while a version is pending that merges
-    only after that version goes stable, which re-runs no PR checks).
-- **When the change adds a service or argument the server depends on**, this PR
-  must **open a fresh pending component version** (bump `manifest.json` +
-  `COMPONENT_VERSION`) and raise `MIN_COMPONENT_VERSION` in
-  `src/ha_mcp/tools/tools_filesystem.py` to that same new version. This is the
-  one case that **overrides** the "already ahead of stable → do not bump" rule
-  above: bump here even if a pending version already exists. `get_caller_token`
-  reports the manifest version and the server gates on it, so without the gate
-  the old and new component are indistinguishable: a caller on the old version
-  passes the check and then hits raw "service not found" errors instead of an
-  actionable "update" prompt. **Never floor at a version any build lacking the
-  behaviour also reports** – an already-shipped version, or a pending version
-  that was opened *before* this behaviour landed. Such a build passes the gate
-  yet lacks the behaviour, defeating the gate (#1946: the floor was set to a
-  1.1.0 that had already shipped without the gated behaviours, so 1.1.0 builds
-  split into with/without and the gate could not tell them apart).
-- **Keep the component backward-compatible with the released server.** The
-  component (HACS) and the server (app / PyPI / Docker) follow the same
-  release cycle but are updated independently per install, so a new component
-  can run against an *older* server. Never remove or tighten an existing service
-  schema (e.g. dropping a param from a strict `vol.Schema`) without a shim the
-  prior server still satisfies; the version gate can't protect this direction
-  (the old server is the caller). Remove the shim once the matching
-  `MIN_COMPONENT_VERSION` server is the floor.
-- **Live-test on the dev server immediately after merge**, before the next
-  stable cut. The component path cannot be fully exercised by CI pre-merge.
-
-### Two entry types, one shared command surface
-
-One domain, two config-entry types with different jobs: **HA-MCP Server** runs
-the ha-mcp server in-process and exposes it through a HA webhook, and **File &
-YAML Tools** registers the privileged filesystem/YAML HA services. Since
-component 2.1.0 (#2289/#2291) **both** entries register the shared
-`ha_mcp_tools/*` WebSocket command surface, so an external server (app, Docker,
-uvx/PyPI) reaches those in-process capabilities through the tools entry alone.
-The surface is entry-agnostic (every handler reads live HA-core state, never the
-tools entry's `hass.data`), `async_register_command` is idempotent, and HA
-offers **no unregister** — the commands survive an entry unload and stay
-registered until HA restarts. Don't try to tear them down on unload; do pop that
-entry's `hass.data` caches so the next setup re-reads storage.
-
-**The privileged filesystem/YAML HA services stay tools-entry-ONLY** — never
-reachable from a server-entry-only install. Because `ha_mcp_tools/info` now
-answers on both entries, the server gates those services on the additive
-`tools_services` field in that handshake (#2292), not on the general capability
-list.
-
-When you add or change component-backed functionality:
-- update the server consumer, its capability gate, and its legacy fallback under
-  `src/ha_mcp/` in the same PR as the producer in `custom_components/ha_mcp_tools/`;
-- make the shared command serve identically from both entries — a handler that
-  reads tools-entry state breaks the server-entry-only install silently;
-- keep anything privileged or beta behind an explicit tools-entry signal (the
-  `tools_services` caps field), never behind the general capability handshake;
-- exercise both topologies with the no-tools lanes (`E2E_NO_TOOLS_ENTRY=1`, see
-  `tests/AGENTS.md` § *No-tools lanes*).
+Before changing `custom_components/ha_mcp_tools/` or a server dependency on it, read the [custom-component guide](docs/agents/custom-component.md). It owns the pending-version cycle, minimum-version gate, backward compatibility, two-entry command surface, and post-merge live-test requirement.
+Functionality used by the embedded server must be registered on the shared
+command surface available from the server entry; never leave it on the tools
+entry alone. Only the privileged filesystem and YAML services remain
+intentionally tools-entry-only.
 
 ## Translations
 
-**One canonical store, generated projections, automated retranslation**
-(issue #2083). The settings UI catalogs
-(`src/ha_mcp/settings_ui/locales/<code>.json`) are the canonical store for
-every string except the component's config flow: the app option strings
-live there under `addon.<key>.*` (plus `features.<key>.*` for options the
-settings UI also shows, and `addon_stable.<key>.*` for a stable-flavor
-wording deviation). Both app flavors' `translations/*.yaml` and the
-`FEATURE_META` block in `settings.js` are **generated** from that store by
-`scripts/generate_locales.py` — never edit them by hand;
-`test_derived_catalogs_match_the_canonical_store` fails until you regenerate.
-Each flavor's key list is its own `config.yaml` `schema:`, so the two YAMLs
-are different projections of the one store, and cross-surface wording
-identity holds by construction.
-
-A language ships on all four surfaces or not at all —
-`tests/src/unit/test_locale_parity.py` enforces it. The same Home Assistant
-language code (`cs`, `de`, `eo`, `es`, `fr`, `it`, `ko`, `nl`, `pl`, `ru`, `sv`, `tlh`, `zh-Hans`) names every file:
-`src/ha_mcp/settings_ui/locales/<code>.json`,
-`custom_components/ha_mcp_tools/translations/<code>.json`, and
-`homeassistant-addon{,-dev}/translations/<code>.yaml`.
-
-`tlh` is the deliberate best-effort exception. It is a hand-maintained novelty
-locale, remains available on all four surfaces when its files are valid, and
-uses English per-key fallback when they are incomplete. It is excluded from
-automatic translation planning so it consumes no model quota. Catalog parsing,
-surface registration, generated drift, and generated add-on schema-coverage
-problems are reported as warnings rather than blocking CI or locale-sync.
-Strict completeness and literal-parity gates do not apply to `tlh`: settings-UI
-completeness and literal parity are not checked, generated add-on coverage gaps
-are warning-only, missing entries fall back to English, and imperfect novelty
-copy is accepted without a diagnostic. Every other locale and every shared,
-English-side pipeline failure remain hard failures.
-
-That list of codes is itself pinned by
-`test_agents_md_lists_every_shipped_locale`: adding a language means adding its
-code here, in the same PR, or the suite goes red. To add a language, add the
-two authored catalogs (settings UI + component), regenerate, and let the
-translation pipeline below fill the strings. The component catalog may start
-empty; the settings one may not start `meta`-only, because four ungated checks
-read the shipped catalogs themselves: every decided `Decision` outcome and
-every `PredicateOp` operator needs a translated word
-(`policies.pending.decision.*`, `policies.operators.*` — a value that still
-spells the backend literal counts as untranslated), so does
-`policies.pending.already_decided`, the sentence those words are interpolated
-into, and at least one translated key must have English that addresses the
-reader in the second person, which is where `scripts/translate_locales.py`
-reads the catalog's address register.
-`policies.operators.exists_long` is the trap in that list: the condition editor
-renders it as its own dropdown label, but it is UI-only rather than a
-`PredicateOp` member, so no enum-derived check asks for it and a catalog
-without it reads English there until the sync fills it. Each surface reads that
-register from its own catalog, so a component catalog left at a key or two
-rests on whichever of them addresses the reader — losing it costs the engine
-the register for every later string of that language and says so only on
-stderr, which is why
-`test_every_shipped_component_catalog_gets_reader_addressing_samples` pins it.
-Author two such keys rather than one: a run that rewords one of them queues it,
-and queued keys are dropped from the sample candidates, so a surface resting on
-a single anchor is anchorless in precisely the run that rewrites it —
-`test_component_samples_survive_their_own_anchor_being_queued` pins that.
-`src/ha_mcp/settings_ui/locales/README.md` names the tests — including the one
-that skips locally until `tests/js/` has its npm dependencies.
-
-Settings UI catalogs are auto-discovered (no registration). Their `messages` may
-omit keys — English is the per-key fallback — but may not carry one `en.json`
-lacks: nothing renders it. `tool_groups` and `tools` may do neither: each locale
-must carry exactly the renderable group headings and every tool name, no key
-more and none fewer. The check derives the tool set from
-the sources (`scripts/extract_tools.py`), not from the committed
-`site/src/data/tools.json` — the check must not depend on a generated
-artifact that a separate post-merge workflow keeps current. Separately from
-those key rules, both authored surfaces cap how much *text* a catalog
-may leave byte-identical to English or omit outright, so a stub cannot ride the
-fallbacks: 5% for the settings UI `messages`, its `tools` titles and
-descriptions, and each generated app projection (per flavor, computed from
-the canonical store), and 15% for the component catalogs,
-which carry the product names as keys of their own. On top of that share, a
-`tools` entry whose title *and* description are *both* byte-identical to English
-fails by name however small its share — for feature-gated tools against either
-English rendering, the `FEATURE_GATED_TOOLS` stub or the parsed docstring.
-Component catalogs need every `strings.json` key with identical
-`{placeholders}`.
-
-**Changing an English string is a one-place edit** (`en.json` `messages`, a
-tool docstring, or `strings.json` + component `en.json`), and the machine
-translates the rest: `scripts/translate_locales.py` reads the English-source
-baseline diff (`tests/src/unit/locale_source_baseline.json`), retranslates
-the changed or missing keys in every language via the Gemini API free tier
-using `GEMINI_API_KEY`, validates placeholders and markup, regenerates
-the derived catalogs, and repins the baseline. The `locale-sync.yml` workflow
-runs it AFTER merge, on a daily schedule, and pushes the result straight to
-master with the release App credential (the same pattern as the version-bump
-bots and `sync-tool-docs.yml`) — so any PR, fork or same-repo, merges
-without owing translations, and one sync run picks up everything merged
-since the last one. The checks that police translated content (missing or
-orphaned keys, staleness against the baseline, cross-surface shared wording,
-the untranslated-share ceilings, filled tool sections) are gated behind
-`LOCALE_COMPLETENESS_CHECKS=1` and run in that workflow, not in PR CI —
-`test_locale_sync_gate_shape.py` pins the wiring. What a PR still owes is
-deterministic and engine-free: regenerate the derived catalogs
-(`python scripts/generate_locales.py`) when a canonical English string
-changes, and placeholder parity on component keys whose English is current.
-To choose the wording yourself, translate in your own PR **and run
-`python scripts/update_locale_baseline.py` in it** — the repinned baseline
-is what tells the next sync your wording already covers the changed English
-(hand-edits win); without the repin the sync retranslates the key and
-overwrites you. Run `scripts/translate_locales.py` locally instead to
-machine-fill in-PR or to use a different engine (it repins for you).
-The baseline pins the English each translation was written against, because
-key parity cannot see a string whose meaning changed: #1993 flipped a policy
-string from ALL-match to ANY-match and left the Chinese text asserting the
-opposite. `python scripts/update_locale_baseline.py` repins it manually after
-a hand-translation pass.
-
-**A catalog that lands after a reword is never queued for the keys it missed.**
-The pin moves when the English does, so a language whose PR was open across
-that reword merges with the older wording already translated, and the sync sees
-a hash that matches: no plan, no correction, indefinitely. Nothing else catches
-it either — key parity sees a value and the share ceiling sees a translated
-one. When a locale PR spans an English change, diff the affected keys against
-that surface's own English before merging — `en.json` for `messages`, the tool
-definitions for `tools` (`en.json` ships that section empty), and
-`custom_components/ha_mcp_tools/strings.json` for the component catalog.
-Numbers and code-ish literals are the cheap tell, since a reword usually moves
-one, and `test_translations_keep_english_numbers_and_identifiers` checks
-exactly that across all three. Repinning is not the repair — it
-writes the same hash and queues nothing. Deleting the stale value is: the
-planner treats a missing key as work for that locale alone.
-
-**A tool docstring is one of those English strings.** `en.json` ships `tools`
-empty, so the English a `tools` entry translates is read from the tool
-definition in `src/ha_mcp/tools/` — the `title=` kwarg and the summary
-paragraph of the docstring, or the `FEATURE_GATED_TOOLS` stub where a gated
-tool shows one instead. Editing that summary moves the English out from under
-six catalogs; the pipeline retranslates them. A parameter's
-`Field(description=...)` is NOT in the baseline — only the title and the
-docstring summary are — so editing one owes no translation work. One
-deliberate exception: a
-change to a feature-gated tool's PARSED docstring (its stub unchanged) is
-stub-review work, not translation work — the pipeline holds that baseline key
-stale, and the locale-sync run stays red until a human confirms the stub
-still describes the tool and runs `python scripts/update_locale_baseline.py`.
-
-**Rate limits and outages degrade loudly, never silently.** The sync is intended
-to remain on Gemini's free tier. Active RPM and RPD limits are project- and
-tier-specific and are shown in Google AI Studio. Engine calls use a
-conservative fixed interval rather than claiming one universal free-tier
-ceiling, and retry transient errors (429/5xx,
-timeouts) with backoff; a request that keeps failing marks its strings failed
-and the run continues, and two consecutive dead batches stop the run early
-instead of burning the remaining quota. A partial run — a daily-quota hit,
-an outage — still commits every finished translation plus
-`tests/src/unit/locale_sync_progress.json`, which the next run reads to
-resume where it stopped: **re-running the workflow — or just waiting for the
-next day's cron — is the entire recovery procedure.** Only a fully
-successful run repins the baseline and deletes the progress file, so the
-sync runs stay red until every string is translated and nothing
-unvalidated ever ships. **The fallback when the engine is down is a human**:
-anyone can hand-translate the strings the dry-run
-lists, run `python scripts/generate_locales.py` and
-`python scripts/update_locale_baseline.py`, and open an ordinary PR — the
-next sync run no-ops (it also cleans up any committed progress file).
-Hand-edits always win; the machine only ever touches strings whose English
-changed. The engine itself is one function (`_call_gemini`) with
-`GEMINI_API_URL` / `GEMINI_MODEL` / `GEMINI_API_KEY` overrides for any
-Gemini-compatible endpoint, so replacing the provider stays a one-function
-change.
-
-The Webhook Proxy app and its bundled integration stay **English-only by
-decision** — not worth the upkeep. The test records that, so any other new
-catalog directory fails until it is either translated everywhere or listed as
-English-only alongside them.
+Before any translation or translatable-English change, read the [canonical locale guide](src/ha_mcp/settings_ui/locales/README.md). It owns the current language set, four-surface parity, generated projections, best-effort Klingon exception, completeness thresholds, English-source baseline, post-merge translation, and recovery. Never hand-edit generated app catalogs.
 
 ## Home Assistant App
 
-**Required files:**
-- `repository.yaml` (root) - For HA app store recognition
-- `homeassistant-addon/config.yaml` - Must match `pyproject.toml` version
-
-**Two app flavors:** `homeassistant-addon/` (stable, slug `ha_mcp`) and
-`homeassistant-addon-dev/` (dev channel, slug `ha_mcp_dev`) are *separate*
-apps with *separate* `config.yaml` files.
-
-**Functional config is NOT auto-synced between them.** The release pipeline
-only syncs the *version* (the `update-addon-config` job) and the *changelog*
-(the `Copy changelog to addon directory` step in `semver-release.yml`) into
-`homeassistant-addon/`. Functional keys — `ingress`, `ports`,
-`host_network`, `options`/`schema`, etc. — must be edited **by hand** in each
-flavor. When you add a non-beta capability to the dev app that should also
-ship on stable (e.g. `ingress` for the web Settings UI / "Open Web UI" button),
-mirror it into `homeassistant-addon/config.yaml` **in the same PR**. Assuming
-"the release pipeline handles it" is what kept `ingress` off the stable app.
-Beta-only keys are the deliberate exception — see the NOTE in
-`homeassistant-addon/config.yaml` and `docs/beta.md`.
-
-### Webhook Proxy app: dev-first, promote-only
-
-**Any work on the Webhook Proxy app must start by reading
-[`homeassistant-addon-webhook-proxy/AGENTS.md`](homeassistant-addon-webhook-proxy/AGENTS.md)**
-— it owns the full flow (flavors, versioning guard, promotion, testing).
-The short version: `homeassistant-addon-webhook-proxy/` (stable) is never
-edited directly by a PR in regular operation; every change (code *and* docs)
-lands on `homeassistant-addon-webhook-proxy-dev/` with a version bump, and
-stable is updated only via the manual promote workflow.
-
-**Docs**: https://developers.home-assistant.io/docs/apps
+Before changing `homeassistant-addon*/`, read the [Home Assistant app guide](docs/agents/home-assistant-apps.md). Webhook Proxy work additionally requires its scoped [`AGENTS.md`](homeassistant-addon-webhook-proxy/AGENTS.md) and always follows the dev-first, promote-only flow.
 
 ## API Research
 
-Search HA Core without cloning (500MB+ repo):
-```bash
-# Search for patterns
-gh search code "use_blueprint" --repo home-assistant/core path:tests --json path --limit 10
-
-# Fetch file contents (base64 encoded)
-gh api /repos/home-assistant/core/contents/homeassistant/components/automation/config.py \
-  --jq '.content' | base64 -d > /tmp/ha_config.py
-```
+Use `gh search code` and `gh api` against Home Assistant Core rather than cloning it only for a lookup. Commands and source-verification guidance are in the [development reference](docs/agents/development.md#api-research).
 
 ## Release Process
 
-Uses [semantic-release](https://python-semantic-release.readthedocs.io/) with conventional commits.
-
-| Prefix | Bump | Changelog |
-|--------|------|-----------|
-| `fix:`, `perf:`, `refactor:` | Patch | User-facing |
-| `feat:` | Minor | User-facing |
-| `feat!:` or `BREAKING CHANGE:` | Major | User-facing |
-| `chore:`, `ci:`, `test:` | No release | Internal |
-| `docs:` | No release | User-facing |
-| `*:(internal)` | Same as type | Internal |
-
-**Use `(internal)` scope** for changes that aren't user-facing:
-```bash
-feat(internal): Log package version on startup  # Internal, not in user changelog
-feat: Add dark mode                             # User-facing
-```
-
-| Channel | When Updated |
-|---------|--------------|
-| Dev (`.devN`) | Every master commit |
-| Stable | Biweekly (Wednesday 10:00 UTC) |
-
-Manual release: Actions > SemVer Release > Run workflow.
+Semantic-release prefixes, channels, urgent releases, workflow ownership, and manual dispatch guidance are in the [GitHub workflow reference](docs/agents/github-workflow.md#releases). Component and Home Assistant app changes also follow their linked subsystem release rules.
