@@ -27,10 +27,10 @@ const sortedFiles = Object.keys(fileGroups).sort();
 // the rest of the parameter list, so a long description opens on demand: the
 // summary shows the lead, and the panel carries only what the lead has not
 // already shown.
-export const DESCRIPTION_FOLD_THRESHOLD = 600;
-export const DESCRIPTION_LEAD_LENGTH = 140;
+const DESCRIPTION_FOLD_THRESHOLD = 600;
+const DESCRIPTION_LEAD_LENGTH = 140;
 
-export function foldDescription(description: string) {
+function foldDescription(description: string) {
   const text = description || '';
   if (text.length <= DESCRIPTION_FOLD_THRESHOLD) {
     return { folded: false, lead: text, rest: '' };

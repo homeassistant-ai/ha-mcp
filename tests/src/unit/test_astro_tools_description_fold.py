@@ -6,6 +6,8 @@ inline in the markup so it can be exercised here: the JSDOM harness reaches
 rendering choice drifts silently.
 """
 
+import html
+import json
 import re
 from pathlib import Path
 
@@ -17,18 +19,23 @@ REPO_ROOT = Path(__file__).parent.parent.parent.parent
 TOOLS_ASTRO = REPO_ROOT / "site" / "src" / "pages" / "tools.astro"
 
 
-def _frontmatter() -> str:
-    """The page's frontmatter, with Astro's import lines dropped.
+# The harness has no module resolution, and the rest of the frontmatter walks
+# the catalog it imports, so the imports are replaced with inert stubs rather
+# than dropped — dropping them leaves the grouping loops throwing before the
+# helper under test is ever reached.
+_IMPORT_STUBS = "const Layout = null;\nconst Nav = null;\nconst toolsData = [];\n"
 
-    The imports pull in components the fold rule does not touch, and the
-    harness has no module resolution.
-    """
-    match = re.match(r"---\n(.*?)\n---\n", TOOLS_ASTRO.read_text(encoding="utf-8"), re.S)
-    assert match, "tools.astro has no frontmatter block"
-    body = match.group(1)
-    return "\n".join(
-        line for line in body.splitlines() if not line.startswith("import ")
+
+def _frontmatter() -> str:
+    """The page's frontmatter, with its imports stubbed out."""
+    match = re.match(
+        r"---\n(.*?)\n---\n", TOOLS_ASTRO.read_text(encoding="utf-8"), re.S
     )
+    assert match, "tools.astro has no frontmatter block"
+    body = "\n".join(
+        line for line in match.group(1).splitlines() if not line.startswith("import ")
+    )
+    return _IMPORT_STUBS + body
 
 
 def _fold(description: str) -> dict:
@@ -38,16 +45,13 @@ def _fold(description: str) -> dict:
         _frontmatter(),
         language="ts",
         invoke=(
-            "globalThis.__out = JSON.stringify("
-            f"foldDescription({description!r}));"
-            "document.title = globalThis.__out;"
+            "document.body.setAttribute("
+            f"'data-fold', JSON.stringify(foldDescription({description!r})));"
         ),
     )
-    match = re.search(r"<title>(.*?)</title>", result.dom, re.S)
+    match = re.search(r'<body data-fold="(.*?)">', result.dom, re.S)
     assert match, f"no result captured; dom was {result.dom[:400]}"
-    import json
-
-    return json.loads(match.group(1))
+    return json.loads(html.unescape(match.group(1)))
 
 
 class TestDescriptionFold:
@@ -92,4 +96,4 @@ class TestFoldRuleIsPinnedToTheTemplate:
         [("DESCRIPTION_FOLD_THRESHOLD", 600), ("DESCRIPTION_LEAD_LENGTH", 140)],
     )
     def test_declared_constant(self, name: str, value: int):
-        assert re.search(rf"export const {name} = {value};", _frontmatter())
+        assert re.search(rf"const {name} = {value};", _frontmatter())
