@@ -18,7 +18,9 @@ import ast
 import json
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any, NamedTuple, TypeGuard
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = REPO_ROOT / "src" / "ha_mcp" / "tools"
@@ -36,34 +38,512 @@ TOOL_FILES = sorted(list(TOOLS_DIR.glob("tools_*.py")) + [TOOLS_DIR / "backup.py
 
 ANNOTATION_KEYS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
 
+PACKAGE_ROOT = REPO_ROOT / "src" / "ha_mcp"
 
-def _extract_field_info(annotation: ast.expr | None) -> dict:
-    """Extract type and description from Annotated[type, Field(...)] patterns."""
+# ``Field`` keywords with a home of their own in the extracted parameter.
+# Every OTHER keyword that resolves statically is recorded under
+# ``constraints`` — ``ge``/``le``, but also ``strict``, ``allow_inf_nan`` and
+# whatever a future signature reaches for. A whitelist here would drop those
+# silently, and unwrapping ``Annotated`` took away the raw source that used to
+# expose them.
+#
+# Names stay as pydantic spells them, deliberately NOT translated to JSON
+# Schema keywords: ``min_length`` means ``minLength`` on a string but
+# ``minItems`` on a list, and ``type`` here is a Python annotation
+# (``list[str] | None``) rather than a JSON Schema type, so there is nothing to
+# read the distinction from.
+FIELD_OWN_KEYS = ("description", "default")
+
+# f-string conversions, keyed by ``ast.FormattedValue.conversion``: -1 is none,
+# and the rest are the ord() of the ``!s`` / ``!r`` / ``!a`` flag. Ignoring
+# these would render ``f"{X!r}"`` unquoted — a wrong description rather than a
+# missing one.
+_CONVERSIONS: dict[int, Callable[[Any], str]] = {
+    -1: str,
+    ord("s"): str,
+    ord("r"): repr,
+    ord("a"): ascii,
+}
+
+# String methods safe to apply to an already-resolved literal.
+STR_METHODS = ("upper", "lower", "capitalize", "title", "strip", "lstrip", "rstrip")
+
+
+class ModuleScope(NamedTuple):
+    """Statically resolvable module-level names.
+
+    ``consts`` maps a name to its literal value; ``funcs`` maps a zero-argument
+    function's name to the literal it returns. Both are needed because tool
+    files build parameter descriptions out of shared constants and helpers
+    (``f"... {MAX_LIMIT}"``, ``... + get_security_documentation()``) rather than
+    inline literals, and those descriptions are the point of the catalog.
+    """
+
+    consts: dict[str, Any]
+    funcs: dict[str, Any]
+
+
+def _new_scope() -> ModuleScope:
+    """A scope with nothing resolved.
+
+    Built fresh each time rather than shared: ``ModuleScope`` freezes its two
+    slots, not the dicts inside them, so one module-level instance handed out
+    as a default argument would let a single future write poison every later
+    resolution in the process.
+    """
+    return ModuleScope({}, {})
+
+
+# Distinct from None, which is itself a resolvable value: ``DEFAULT = None``
+# assigned to a name and then passed as ``Field(default=DEFAULT)`` must survive.
+UNRESOLVED: Any = object()
+
+
+def _static_value(node: ast.expr, scope: ModuleScope) -> Any:
+    """Resolve an expression to its value, or ``UNRESOLVED`` when it cannot be.
+
+    Deliberately an interpreter over a handful of node types rather than
+    ``eval``: the generator never executes repository source.
+    """
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        return scope.consts.get(node.id, UNRESOLVED)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _static_value(node.left, scope)
+        right = _static_value(node.right, scope)
+        if isinstance(left, str) and isinstance(right, str):
+            return left + right
+        return UNRESOLVED
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        # ``Field(ge=-1)`` parses as a unary minus over a literal, not a Constant.
+        operand = _static_value(node.operand, scope)
+        if isinstance(operand, (int, float)) and not isinstance(operand, bool):
+            return -operand if isinstance(node.op, ast.USub) else operand
+        return UNRESOLVED
+    if isinstance(node, ast.JoinedStr):
+        return _joined_str_value(node, scope)
+    if isinstance(node, ast.Subscript):
+        return _subscript_value(node, scope)
+    if isinstance(node, ast.Call):
+        return _call_value(node, scope)
+    return UNRESOLVED
+
+
+def _joined_str_value(node: ast.JoinedStr, scope: ModuleScope) -> Any:
+    """Resolve an f-string whose interpolations are all statically known."""
+    parts: list[str] = []
+    for value in node.values:
+        if isinstance(value, ast.Constant):
+            parts.append(str(value.value))
+            continue
+        if not isinstance(value, ast.FormattedValue) or value.format_spec is not None:
+            return UNRESOLVED
+        resolved = _static_value(value.value, scope)
+        if resolved is UNRESOLVED:
+            return UNRESOLVED
+        convert = _CONVERSIONS.get(value.conversion)
+        if convert is None:
+            return UNRESOLVED
+        parts.append(convert(resolved))
+    return "".join(parts)
+
+
+def _subscript_value(node: ast.Subscript, scope: ModuleScope) -> Any:
+    """Resolve ``SOME_TEXT[:1]`` style slicing of a known string."""
+    target = _static_value(node.value, scope)
+    if not isinstance(target, str) or not isinstance(node.slice, ast.Slice):
+        return UNRESOLVED
+    bounds: list[int | None] = []
+    for part in (node.slice.lower, node.slice.upper, node.slice.step):
+        if part is None:
+            bounds.append(None)
+            continue
+        resolved = _static_value(part, scope)
+        if not isinstance(resolved, int):
+            return UNRESOLVED
+        bounds.append(resolved)
+    return target[slice(*bounds)]
+
+
+def _call_value(node: ast.Call, scope: ModuleScope) -> Any:
+    """Resolve a zero-argument helper call or a string method on a literal."""
+    if node.args or node.keywords:
+        return UNRESOLVED
+    if isinstance(node.func, ast.Name):
+        return scope.funcs.get(node.func.id, UNRESOLVED)
+    if isinstance(node.func, ast.Attribute) and node.func.attr in STR_METHODS:
+        target = _static_value(node.func.value, scope)
+        if isinstance(target, str):
+            return getattr(target, node.func.attr)()
+    return UNRESOLVED
+
+
+def _import_source(path: Path, node: ast.ImportFrom) -> Path | None:
+    """Map an import to the file it reads from, relative or absolute.
+
+    Confined to ``src/ha_mcp``: a name resolved from outside the package is
+    not this repo's to publish, and the guard is what stops a crafted import
+    walking the extractor into site-packages.
+    """
+    if node.level == 0:
+        # ``from ha_mcp.tools.x import NAME`` — same names, absolute spelling.
+        if node.module is None or node.module.split(".")[0] != PACKAGE_ROOT.name:
+            return None
+        base = PACKAGE_ROOT.parent
+        parts = node.module.split(".")
+    else:
+        base = path.parent
+        for _ in range(node.level - 1):
+            base = base.parent
+        # ``from . import NAME`` — the names live in the package initializer.
+        parts = node.module.split(".") if node.module else []
+    candidate = base.joinpath(*parts)
+    candidates = (
+        (candidate / "__init__.py",)
+        if not parts
+        else (candidate.with_suffix(".py"), candidate / "__init__.py")
+    )
+    for option in candidates:
+        if option.is_file() and PACKAGE_ROOT in option.parents:
+            return option
+    return None
+
+
+def _apply_imports(path: Path, tree: ast.Module, scope: ModuleScope) -> bool:
+    """Pull imported constants and helpers into ``scope``.
+
+    Returns whether any import was cut short by the cycle guard, which makes
+    the resulting scope incomplete and therefore unsafe to cache.
+    """
+    hit_cycle = False
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        source = _import_source(path, node)
+        if source is None:
+            continue
+        if source in _RESOLVING:
+            hit_cycle = True
+            continue
+        imported, imported_complete = _resolve_module(source)
+        # A cut two modules down still leaves THIS scope built from a partial
+        # answer, so incompleteness propagates rather than stopping where the
+        # cycle was seen.
+        hit_cycle = hit_cycle or not imported_complete
+        for alias in node.names:
+            local = alias.asname or alias.name
+            if alias.name in imported.consts:
+                scope.consts[local] = imported.consts[alias.name]
+            if alias.name in imported.funcs:
+                scope.funcs[local] = imported.funcs[alias.name]
+    return hit_cycle
+
+
+def _assigned_literal(node: ast.stmt) -> tuple[str, ast.expr] | None:
+    """The (name, value expression) of a simple module-level assignment."""
+    if isinstance(node, ast.Assign) and len(node.targets) == 1:
+        target = node.targets[0]
+        if isinstance(target, ast.Name):
+            return target.id, node.value
+    if isinstance(node, ast.AnnAssign) and node.value is not None:
+        if isinstance(node.target, ast.Name):
+            return node.target.id, node.value
+    return None
+
+
+def _takes_no_arguments(args: ast.arguments) -> bool:
+    """Whether the function can genuinely be called with no arguments.
+
+    Rejects a helper that declares ANY parameter — including ``*args`` /
+    ``**kwargs`` and defaulted ones, which would in fact be callable bare.
+    Deliberately conservative rather than a requiredness test: a helper that
+    takes parameters at all is one whose return value may depend on them, and
+    a wrong description is worse than a missing one.
+    """
+    return not (
+        args.posonlyargs or args.args or args.kwonlyargs or args.vararg or args.kwarg
+    )
+
+
+def _returned_literal(node: ast.stmt) -> tuple[str, ast.expr] | None:
+    """The (name, returned expression) of a zero-argument function.
+
+    The whole body is searched, not just its top level: a helper that returns
+    one string inside an ``if`` and another after it has no single value, and
+    taking the last one would publish whichever branch the source happened to
+    end with. That single return must also sit at the top level — one nested in
+    an ``if`` leaves the helper returning ``None`` whenever the branch is not
+    taken, so its value is not the string it sometimes returns.
+    """
+    if not isinstance(node, ast.FunctionDef) or not _takes_no_arguments(node.args):
+        return None
+    returns = [n for n in ast.walk(node) if isinstance(n, ast.Return)]
+    if len(returns) != 1 or returns[0].value is None:
+        return None
+    if returns[0] not in node.body:
+        return None
+    return node.name, returns[0].value
+
+
+def _record(
+    table: dict[str, Any],
+    defined: set[str],
+    name: str,
+    expr: ast.expr,
+    scope: ModuleScope,
+) -> bool:
+    """Resolve ``expr`` into ``table``; report whether that resolved anything new.
+
+    ``defined`` holds the names this module defines itself, so a module-level
+    assignment overrides a name of the same spelling pulled in by an earlier
+    import — which is what Python does — while a name already resolved from
+    this module is left alone, so the fixed-point loop terminates.
+    """
+    if name in defined:
+        return False
+    value = _static_value(expr, scope)
+    if value is UNRESOLVED:
+        return False
+    table[name] = value
+    defined.add(name)
+    return True
+
+
+def _definition_pass(tree: ast.Module, scope: ModuleScope, defined: set[str]) -> bool:
+    """Resolve what it can this pass; report whether anything new resolved."""
+    progressed = False
+    for node in tree.body:
+        assigned = _assigned_literal(node)
+        if assigned is not None:
+            progressed |= _record(scope.consts, defined, *assigned, scope)
+            continue
+        returned = _returned_literal(node)
+        if returned is not None:
+            progressed |= _record(scope.funcs, defined, *returned, scope)
+    return progressed
+
+
+def _apply_definitions(tree: ast.Module, scope: ModuleScope) -> None:
+    """Record module-level literals and zero-argument literal-returning helpers.
+
+    Repeated until nothing new resolves: a single source-order pass misses a
+    name that is defined after its use (a helper returning a constant declared
+    lower in the file), and the parameter that reads it would silently lose its
+    description.
+    """
+    defined: set[str] = set()
+    while _definition_pass(tree, scope, defined):
+        pass
+
+
+# Callables whose result is deliberately not resolved, so the warning below
+# stays a signal instead of opening every run with the same known entries —
+# the standing ones are what train a reader to skip the new one. ``cast`` is a
+# typing no-op with no value to publish; ``AliasChoices`` names alternative
+# spellings that each affected description already gives in prose.
+ACCEPTED_UNRESOLVED = ("cast", "AliasChoices")
+
+# ``Field`` keywords that could not be resolved, reported once at the end of a
+# run: each one is documentation the catalog silently does not carry.
+UNRESOLVED_KEYWORDS: list[str] = []
+
+
+def _record_unresolved(label: str, expr: ast.expr) -> None:
+    """Note a value the catalog will not carry, unless it is an accepted one."""
+    if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name):
+        if expr.func.id in ACCEPTED_UNRESOLVED:
+            return
+    UNRESOLVED_KEYWORDS.append(f"{label}={ast.unparse(expr)}")
+
+
+_SCOPE_CACHE: dict[Path, ModuleScope] = {}
+_RESOLVING: set[Path] = set()
+
+
+def _module_scope(path: Path) -> ModuleScope:
+    """The statically resolvable names for one module."""
+    return _resolve_module(path)[0]
+
+
+def _resolve_module(path: Path) -> tuple[ModuleScope, bool]:
+    """Build one module's scope, and report whether it is complete.
+
+    Each module is parsed once and cached: without it, each of the ~490
+    lookups in a run re-walks its whole import subtree. A module already on the
+    resolution stack (an import cycle) contributes nothing rather than
+    recursing forever, and no scope built through such a cut is cached — not
+    the one that saw the cycle, and not any module that imported through it.
+    Caching those would answer every later lookup with a permanently
+    incomplete module, and which module lost names would depend on file
+    iteration order.
+    """
+    if path in _SCOPE_CACHE:
+        return _SCOPE_CACHE[path], True
+    if path in _RESOLVING:
+        return _new_scope(), False
+
+    scope = _new_scope()
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, UnicodeDecodeError) as exc:
+        # Tolerated so one bad file cannot abort the catalog, but never
+        # silently: every constant and helper this module owns stops resolving
+        # for every importer, which would otherwise surface only as text
+        # missing from the site.
+        print(
+            f"warning: cannot read module scope from {path}: "
+            f"{type(exc).__name__}: {exc} — names it defines will not resolve",
+            file=sys.stderr,
+        )
+        _SCOPE_CACHE[path] = scope
+        return scope, True
+
+    _RESOLVING.add(path)
+    try:
+        hit_cycle = _apply_imports(path, tree, scope)
+        _apply_definitions(tree, scope)
+    finally:
+        _RESOLVING.discard(path)
+
+    if not hit_cycle:
+        _SCOPE_CACHE[path] = scope
+    return scope, not hit_cycle
+
+
+def _is_annotated(node: ast.expr) -> bool:
+    """Whether ``node`` names ``Annotated``, imported bare or via ``typing``.
+
+    Tool files import it bare (``ast.Name``); the dotted ``typing.Annotated``
+    spelling (``ast.Attribute``) is accepted too so the extractor does not
+    depend on which import a file happens to use.
+    """
+    if isinstance(node, ast.Name):
+        return node.id == "Annotated"
+    return isinstance(node, ast.Attribute) and node.attr == "Annotated"
+
+
+def _is_field_call(node: ast.AST) -> TypeGuard[ast.Call]:
+    """Whether ``node`` is a pydantic ``Field(...)`` call."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id == "Field"
+    return isinstance(func, ast.Attribute) and func.attr == "Field"
+
+
+def _field_keyword(info: dict, kw: ast.keyword, scope: ModuleScope) -> None:
+    """Fold one ``Field(...)`` keyword into the parameter info."""
+    if kw.arg is None:
+        return  # ``Field(**kwargs)`` splat — no keyword name to record.
+    if kw.arg == "default_factory":
+        # A factory is how the value is MADE, not a value to publish, and the
+        # callable is not JSON. Requiredness reads it; the catalog does not.
+        return
+    if kw.arg == "default" and _is_ellipsis(kw.value):
+        # pydantic's explicit "required" marker, not a value. Publishing it
+        # would put an Ellipsis in the catalog, which is not JSON.
+        return
+    value = _static_value(kw.value, scope)
+    if value is UNRESOLVED:
+        # The whitelist was removed so a keyword could not go missing by
+        # omission; a keyword that fails to RESOLVE would go missing just as
+        # quietly, so it is reported instead.
+        _record_unresolved(kw.arg, kw.value)
+        return
+    if kw.arg in FIELD_OWN_KEYS:
+        info[kw.arg] = value
+    else:
+        info.setdefault("constraints", {})[kw.arg] = value
+
+
+def _annotated_metadata(slice_node: ast.expr, scope: ModuleScope) -> dict:
+    """Read ``type`` plus any ``Field(...)`` metadata out of an Annotated slice."""
+    info: dict = {}
+    if not isinstance(slice_node, ast.Tuple) or not slice_node.elts:
+        return info
+
+    info["type"] = ast.unparse(slice_node.elts[0])
+    # Everything after the type is metadata, but only ``Field(...)`` carries
+    # keywords this catalog describes. A bare validator (JSON_STRING_COERCION)
+    # is a name rather than a call; another metadata call's keywords are its
+    # own, and recording them as constraints would invent a rule pydantic
+    # never applied.
+    for elt in slice_node.elts[1:]:
+        if not _is_field_call(elt):
+            continue
+        positional = _field_default_node(elt)
+        if positional is not None and not elt.keywords:
+            _field_positional_default(info, positional, scope)
+        for kw in elt.keywords:
+            _field_keyword(info, kw, scope)
+        if positional is not None and elt.keywords and "default" not in info:
+            _field_positional_default(info, positional, scope)
+    return info
+
+
+def _field_positional_default(info: dict, node: ast.expr, scope: ModuleScope) -> None:
+    """Record ``Field(5, ...)`` — the positional spelling of a default."""
+    value = _static_value(node, scope)
+    if value is UNRESOLVED:
+        _record_unresolved("default", node)
+        return
+    info["default"] = value
+
+
+def _union_field_info(annotation: ast.BinOp, scope: ModuleScope) -> dict:
+    """Merge both sides of an ``X | Y`` annotation into one field info.
+
+    ``Annotated[int, Field(ge=1)] | None`` keeps the Annotated part nested in a
+    union, so each side is read on its own and the types are rejoined
+    (``int | None``) rather than dumped as source into ``type``.
+    """
+    operands = [
+        _extract_field_info(annotation.left, scope),
+        _extract_field_info(annotation.right, scope),
+    ]
+    info: dict = {}
+    # Metadata belongs to the branch that declared it, and only ``X | None``
+    # lets it stand for the parameter: ``None`` carries no values of its own to
+    # contradict it. Anywhere else — a second metadata-bearing branch, or a
+    # plain type like ``Annotated[int, Field(ge=1)] | str`` — publishing it
+    # would claim one branch's rules govern values of the other, so nothing is
+    # published rather than something false.
+    described = [o for o in operands if any(k != "type" for k in o)]
+    others = [o for o in operands if o is not described[0]] if described else []
+    if len(described) == 1 and all(o.get("type") == "None" for o in others):
+        info.update({k: v for k, v in described[0].items() if k != "type"})
+    if all(o.get("type") for o in operands):
+        info["type"] = " | ".join(o["type"] for o in operands)
+    else:
+        # One side yielded no type (a malformed ``Annotated``). Joining the
+        # rest would hand the reader the other branch as the whole type — a
+        # confidently wrong answer where the source text is at least honest.
+        info["type"] = ast.unparse(annotation)
+    return info
+
+
+def _extract_field_info(
+    annotation: ast.expr | None, scope: ModuleScope | None = None
+) -> dict:
+    """Extract a parameter's type, description, default and Field constraints.
+
+    ``scope`` supplies the module-level names a description or bound may be
+    built from; omitted, only literals resolve. A union dispatches to
+    ``_union_field_info``.
+    """
+    scope = scope if scope is not None else _new_scope()
     if annotation is None:
         return {}
-    info: dict = {}
 
-    if (
-        isinstance(annotation, ast.Subscript)
-        and isinstance(annotation.value, ast.Attribute)
-        and annotation.value.attr == "Annotated"
-    ):
-        slice_node = annotation.slice
-        if isinstance(slice_node, ast.Tuple) and slice_node.elts:
-            info["type"] = ast.unparse(slice_node.elts[0])
-            for elt in slice_node.elts[1:]:
-                if isinstance(elt, ast.Call):
-                    for kw in elt.keywords:
-                        if kw.arg == "description" and isinstance(
-                            kw.value, ast.Constant
-                        ):
-                            info["description"] = kw.value.value
-                        elif kw.arg == "default" and isinstance(kw.value, ast.Constant):
-                            info["default"] = kw.value.value
-    else:
-        info["type"] = ast.unparse(annotation)
+    if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+        return _union_field_info(annotation, scope)
 
-    return info
+    if isinstance(annotation, ast.Subscript) and _is_annotated(annotation.value):
+        return _annotated_metadata(annotation.slice, scope)
+
+    return {"type": ast.unparse(annotation)}
 
 
 def _tool_name_from_tool_decorator(
@@ -126,10 +606,47 @@ def _extract_tool_metadata(dec: ast.Call) -> tuple[set[str], str, dict[str, bool
     return tags, title, annotations
 
 
+def _field_default_node(call: ast.Call) -> ast.expr | None:
+    """The default a ``Field(...)`` call declares, by either spelling.
+
+    ``Field(5)`` and ``Field(default=5)`` mean the same thing to pydantic.
+    ``Field(...)`` does NOT: the Ellipsis is pydantic's explicit marker that
+    the parameter is required, so it is not a default in either position.
+    """
+    for kw in call.keywords:
+        if kw.arg == "default":
+            return None if _is_ellipsis(kw.value) else kw.value
+    if call.args and not _is_ellipsis(call.args[0]):
+        return call.args[0]
+    return None
+
+
+def _is_ellipsis(node: ast.expr) -> bool:
+    return isinstance(node, ast.Constant) and node.value is Ellipsis
+
+
+def _declares_field_default(annotation: ast.expr | None) -> bool:
+    """Whether the annotation declares a default at all, resolvable or not.
+
+    Wider than ``_field_default_node``, which supplies a VALUE:
+    ``default_factory=list`` makes the parameter optional to pydantic without
+    giving the catalog anything publishable, and a callable is not JSON.
+    """
+    if annotation is None:
+        return False
+    return any(
+        _field_default_node(sub) is not None
+        or any(kw.arg == "default_factory" for kw in sub.keywords)
+        for sub in ast.walk(annotation)
+        if _is_field_call(sub)
+    )
+
+
 def _extract_tool_params(
-    node: ast.AsyncFunctionDef,
+    node: ast.AsyncFunctionDef, scope: ModuleScope | None = None
 ) -> tuple[dict[str, dict], list[str]]:
     """Extract parameter properties and required-field names from a tool function."""
+    scope = scope if scope is not None else _new_scope()
     properties: dict[str, dict] = {}
     required: list[str] = []
     defaults_offset = len(node.args.args) - len(node.args.defaults)
@@ -137,22 +654,32 @@ def _extract_tool_params(
     for i, arg in enumerate(node.args.args):
         if arg.arg in ("self", "ctx"):
             continue
-        p = _extract_field_info(arg.annotation)
+        p = _extract_field_info(arg.annotation, scope)
         def_idx = i - defaults_offset
-        if def_idx >= 0 and def_idx < len(node.args.defaults):
+        if 0 <= def_idx < len(node.args.defaults):
             def_node = node.args.defaults[def_idx]
-            if isinstance(def_node, ast.Constant):
-                p.setdefault("default", def_node.value)
-        else:
+            value = _static_value(def_node, scope)
+            if value is not UNRESOLVED:
+                p.setdefault("default", value)
+            else:
+                _record_unresolved(arg.arg, def_node)
+        elif not _declares_field_default(arg.annotation):
+            # ``Field(default=...)`` alone makes the parameter optional, so a
+            # signature default is not the only thing that can supply one. Read
+            # that from the source rather than from whether the value happened
+            # to resolve: a default nobody could resolve still means the
+            # parameter is optional, and claiming it is required states the
+            # opposite of the truth.
             required.append(arg.arg)
-        if p:
-            properties[arg.arg] = p
+        # Emitted even when nothing resolved, so a name in ``required`` always
+        # has a property to point at.
+        properties[arg.arg] = p
 
     return properties, required
 
 
 def _extract_tool_from_node(
-    node: ast.AsyncFunctionDef, source_file: str
+    node: ast.AsyncFunctionDef, source_file: str, scope: ModuleScope | None = None
 ) -> dict | None:
     """Build the tool-metadata dict for one function node, or None if not a tool."""
     tool_dec, tool_name = _find_tool_decorator(node)
@@ -160,7 +687,7 @@ def _extract_tool_from_node(
         return None
 
     tags, title, annotations = _extract_tool_metadata(tool_dec)
-    properties, required = _extract_tool_params(node)
+    properties, required = _extract_tool_params(node, scope)
 
     input_schema: dict = {}
     if properties:
@@ -187,11 +714,12 @@ def extract_tools() -> list[dict]:
         if not f.exists():
             continue
         tree = ast.parse(f.read_text(encoding="utf-8"))
+        scope = _module_scope(f)
 
         for node in ast.walk(tree):
             if not isinstance(node, ast.AsyncFunctionDef):
                 continue
-            tool = _extract_tool_from_node(node, f.name)
+            tool = _extract_tool_from_node(node, f.name, scope)
             if tool is not None:
                 tools.append(tool)
 
@@ -398,6 +926,14 @@ def _extract_and_apply(args: argparse.Namespace) -> None:
     """
     tools = extract_tools()
     cat_count = len({t["tags"][0] for t in tools if t["tags"]})
+    if UNRESOLVED_KEYWORDS:
+        print(
+            f"warning: {len(UNRESOLVED_KEYWORDS)} value(s) did not resolve and "
+            "are absent from the catalog:",
+            file=sys.stderr,
+        )
+        for entry in sorted(set(UNRESOLVED_KEYWORDS)):
+            print(f"  - {entry}", file=sys.stderr)
     print(f"Extracted {len(tools)} tools across {cat_count} categories")
 
     if args.check:

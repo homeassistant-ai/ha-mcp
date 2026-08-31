@@ -22,6 +22,26 @@ for (const tool of toolsData) {
 }
 const sortedFiles = Object.keys(fileGroups).sort();
 
+// A handful of parameters document a whole sub-language (the python_transform
+// sandbox rules run past 2000 characters, ~20x the median). Inline they bury
+// the rest of the parameter list, so a long description opens on demand: the
+// summary shows the lead, and the panel carries only what the lead has not
+// already shown.
+const DESCRIPTION_FOLD_THRESHOLD = 600;
+const DESCRIPTION_LEAD_LENGTH = 140;
+
+function foldDescription(description: string) {
+  const text = description || '';
+  if (text.length <= DESCRIPTION_FOLD_THRESHOLD) {
+    return { folded: false, lead: text, rest: '' };
+  }
+  return {
+    folded: true,
+    lead: text.slice(0, DESCRIPTION_LEAD_LENGTH).trimEnd(),
+    rest: text.slice(DESCRIPTION_LEAD_LENGTH),
+  };
+}
+
 // Helper to get badge color based on annotations
 function getBadgeInfo(annotations: Record<string, any>) {
   if (annotations.readOnlyHint) return { label: 'read', color: 'bg-green-500/20 text-green-400 border-green-500/30' };
@@ -236,6 +256,14 @@ function getBadgeInfo(annotations: Record<string, any>) {
                               : schema.type;
                             const enums = schema.enum || schema.anyOf?.flatMap((s: any) => s.enum || []) || [];
                             const hasDefault = 'default' in schema && schema.default !== undefined;
+                            const constraints = Object.entries(schema.constraints || {});
+                            // A handful of parameters document a whole sub-language
+                            // (the python_transform sandbox rules run past 2000
+                            // characters, ~20x the median). Inline, they bury the
+                            // rest of the parameter list, so anything long opens on
+                            // demand instead.
+                            const description = schema.description || '';
+                            const fold = foldDescription(description);
                             return (
                             <div class="flex items-start gap-2 text-sm">
                               <code class="text-amber-400 shrink-0">{name}</code>
@@ -244,13 +272,25 @@ function getBadgeInfo(annotations: Record<string, any>) {
                               )}
                               <span class="text-slate-600">-</span>
                               <span class="text-slate-400">
-                                {schema.description || ''}
+                                {fold.folded ? (
+                                  <details class="group inline">
+                                    <summary class="cursor-pointer marker:text-slate-600">{fold.lead}<span class="group-open:hidden">…</span></summary>
+                                    <span class="block mt-1 whitespace-pre-line">{fold.rest}</span>
+                                  </details>
+                                ) : description}
                                 {typeStr && <span class="text-slate-600 ml-1">({typeStr})</span>}
                                 {enums.length > 0 && (
                                   <span class="text-slate-600 ml-1">
                                     [{enums.map((e: any, i: number) => (
                                       <><code class="text-cyan-500/70">{String(e)}</code>{i < enums.length - 1 ? ', ' : ''}</>
                                     ))}]
+                                  </span>
+                                )}
+                                {constraints.length > 0 && (
+                                  <span class="text-slate-600 ml-1">
+                                    {constraints.map(([key, value]: [string, any], i: number) => (
+                                      <><code class="text-cyan-500/70">{key}: {String(value)}</code>{i < constraints.length - 1 ? ', ' : ''}</>
+                                    ))}
                                   </span>
                                 )}
                                 {hasDefault && (
