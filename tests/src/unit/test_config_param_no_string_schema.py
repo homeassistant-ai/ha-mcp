@@ -316,3 +316,27 @@ def test_bulk_operation_validate_first_requires_a_strict_boolean(invalid_value):
         ]
         is False
     )
+
+
+def test_ha_call_service_params_all_have_descriptions():
+    """Every ha_call_service schema property carries a non-empty description.
+
+    Regression guard for PR #2327 / issue #2324: a bare Annotated[..., None]
+    (no Field(description=...)) silently drops the property's schema
+    description, so this would not catch a docstring lying about behavior —
+    only a param that goes fully undocumented again.
+    """
+    from ha_mcp.tools.tools_service import register_service_tools
+
+    properties = _get_tool_parameters(
+        register_service_tools, "ha_call_service"
+    )["properties"]
+
+    undocumented = [
+        name
+        for name, schema in properties.items()
+        if not schema.get("description", "").strip()
+    ]
+    assert not undocumented, (
+        f"ha_call_service params missing a schema description: {undocumented}"
+    )

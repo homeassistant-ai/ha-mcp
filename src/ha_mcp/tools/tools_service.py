@@ -1642,7 +1642,8 @@ class ServiceTools:
             Field(
                 description=(
                     "Service domain (e.g. 'light', 'climate', 'automation'). "
-                    "Required unless ws_command is set."
+                    "Required for a service call; must be omitted when ws_command "
+                    "is set."
                 ),
             ),
         ] = None,
@@ -1651,7 +1652,8 @@ class ServiceTools:
             Field(
                 description=(
                     "Service name within domain (e.g. 'turn_on', 'set_temperature', "
-                    "'trigger'). Required unless ws_command is set."
+                    "'trigger'). Required for a service call; must be omitted when "
+                    "ws_command is set."
                 ),
             ),
         ] = None,
@@ -1659,8 +1661,10 @@ class ServiceTools:
             str | None,
             Field(
                 description=(
-                    "Entity ID(s) the service call targets (e.g. 'light.living_room'). "
-                    "Optional for services that don't target a specific entity."
+                    "Entity ID(s) the service call targets — one ID "
+                    "('light.living_room') or several comma-separated "
+                    "('light.a,light.b'). Optional for services that don't target "
+                    "a specific entity. Must be omitted when ws_command is set."
                 ),
             ),
         ] = None,
@@ -1671,7 +1675,8 @@ class ServiceTools:
                 description=(
                     "Extra service-call parameters beyond entity_id (e.g. "
                     "{'temperature': 22} for climate.set_temperature). Also carries "
-                    "the raw command payload when ws_command is set."
+                    "the raw command payload when ws_command is set. If entity_id "
+                    "is also present in data, the entity_id parameter wins."
                 ),
             ),
         ] = None,
@@ -1681,7 +1686,8 @@ class ServiceTools:
                 description=(
                     "If True, the service's response data is returned once, as "
                     "the top-level 'service_response' key — never nested inside "
-                    "'result' (default False)."
+                    "'result' (default: False). Must stay False when ws_command "
+                    "is set."
                 ),
             ),
         ] = False,
@@ -1690,8 +1696,12 @@ class ServiceTools:
             Field(
                 description=(
                     "If True (default), wait for the entity state to change "
-                    "before returning. Only applies to state-changing services "
-                    "on a single entity."
+                    "before returning. Applies only to state-changing services "
+                    "called with a single entity_id. A comma-separated "
+                    "multi-target does not get confirmed by this: it falls "
+                    "through to a legacy path that polls for the literal "
+                    "composite entity_id and times out after 10s. Set "
+                    "wait=False for multi-target calls."
                 ),
             ),
         ] = True,
@@ -1776,8 +1786,6 @@ class ServiceTools:
         ```
 
         **Key behavior:**
-        - **wait** (default True): wait for the entity state to change before
-          returning. Only applies to state-changing services on a single entity.
         - **Result compaction (default ON)**: ``result`` is trimmed
           to the targeted entity's record (drops parent-group propagation) and
           stripped of ``context`` / ``last_*`` metadata and heavy attribute
@@ -1785,9 +1793,6 @@ class ServiceTools:
           for the raw changed-state records, or ``result_fields`` /
           ``result_attribute_keys`` for explicit per-record projection (mirrors
           ``ha_get_state``).
-        - **return_response** (default False): the service's response data is
-          returned once, as the top-level ``service_response`` key — never nested
-          inside ``result``, which carries the changed entity states.
 
         **For detailed service documentation, use ha_get_skill_guide.**
 
