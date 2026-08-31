@@ -5647,11 +5647,23 @@ async def _call_service_prep(
        domain, so it holds no matter which path reaches this function.
     2. **ServiceNotFound** before dispatch, so an unknown service is a clean
        ``SERVICE_NOT_FOUND`` and never a landed-but-unreported write.
-    3. Pre-state capture for each ``entity_id`` (a synchronous in-memory read).
+    3. Pre-state capture for each ``entity_id`` (a synchronous in-memory read). A
+       target whose captured state is ``None`` — absent from the state machine, so
+       it structurally cannot ever emit a ``state_changed`` for this dispatch — is
+       excluded from the wait entirely (:func:`_confirmable_entity_ids`); waiting on
+       it would only burn the full ``timeout`` to learn what the pre-state already
+       proved. An ``"unavailable"`` target stays IN the wait (unlike a nonexistent
+       one, it can legitimately reconnect and transition mid-dispatch — excluding it
+       too would silently miss that), so ``should_confirm`` itself stays keyed off
+       the full ``entity_ids`` (intent to confirm), not the narrower confirmable
+       subset — a ``validate_first=False`` caller that intentionally skips the
+       not-found/unavailable error mapping still needs ``partial=True`` on a
+       genuinely-excluded target, not a bare unconfirmed-but-not-partial result.
     4. Register the expected-aware ``EVENT_STATE_CHANGED`` waiter BEFORE the dispatch
-       (D5) so a fast entity's event can't arrive before the listener exists. The
-       waiter confirms only on reaching the server's ``expected_state`` hint (skipping
-       intermediate/noise events); a ``None`` hint keeps any-first-event confirmation.
+       (D5) so a fast entity's event can't arrive before the listener exists, scoped
+       to only the confirmable targets from step 3. The waiter confirms only on
+       reaching the server's ``expected_state`` hint (skipping intermediate/noise
+       events); a ``None`` hint keeps any-first-event confirmation.
     5. Fire exactly ONE ``async_call`` (``blocking=True``); flip ``dispatched``
        immediately after so a post-dispatch problem is never retried as a failed
        call (D3/D9).
@@ -5695,22 +5707,32 @@ async def _call_service_prep(
     wait = msg.get("wait", True)
     timeout = msg.get("timeout", CALL_SERVICE_DEFAULT_TIMEOUT)
     return_response = msg.get("return_response", False)
-    should_confirm = bool(wait and entity_ids)
     # The server's confirmation HINT (``_SERVICE_TO_STATE.get(service)``), applied to
     # every confirmation target. Absent / None keeps any-first-event confirmation.
     expected_state = msg.get("expected_state")
     expected_by_entity = dict.fromkeys(entity_ids, expected_state)
 
+    # should_confirm stays keyed off the full entity_ids (intent to confirm) — see
+    # the docstring's step 3 for why this must NOT narrow to the confirmable subset.
+    should_confirm = bool(wait and entity_ids)
+
     # 3. Pre-state capture (synchronous in-memory reads, guarded against drift).
     pre = {eid: _state_as_dict(_state_get(hass, eid)) for eid in entity_ids}
+    # Only a target whose pre-dispatch state proves it can possibly report a
+    # confirming event is worth actually waiting on (see
+    # ``_confirmable_entity_ids``) — a target absent from the state machine can
+    # never emit one, so waiting on it is certain to burn the full ``timeout`` for
+    # no new information; the server reads the certain ``None`` old_state straight
+    # off the transition instead.
+    confirmable_entity_ids = _confirmable_entity_ids(entity_ids, pre)
 
-    # 4. Register-before-fire (D5): only when there is something to confirm.
+    # 4. Register-before-fire (D5): only when there is something worth confirming.
     evt: Any = None
     captured: dict[str, Any] = {}
     unsub: Any = None
-    if should_confirm:
+    if should_confirm and confirmable_entity_ids:
         evt, captured, unsub = _register_transition_waiter(
-            hass, set(entity_ids), expected_by_entity
+            hass, set(confirmable_entity_ids), expected_by_entity
         )
 
     # 5. Dispatch exactly once. 6. Immediate-match + bounded wait. 7. Build the diff.
@@ -5729,9 +5751,13 @@ async def _call_service_prep(
             return_response=return_response,
         )
         dispatched = True
-        if should_confirm:
+        # ``evt`` is None when nothing was worth waiting on (should_confirm was
+        # True but every target was excluded as unconfirmable) — there is then
+        # nothing that could ever confirm, so skip the wait outright rather than
+        # awaiting an event that was never registered to fire.
+        if should_confirm and evt is not None:
             await _await_confirmation(
-                hass, entity_ids, expected_by_entity, captured, evt, timeout
+                hass, confirmable_entity_ids, expected_by_entity, captured, evt, timeout
             )
         result = _build_call_service_result(
             hass,
@@ -5762,6 +5788,26 @@ async def _call_service_prep(
         if unsub is not None:
             unsub()
     return {"result": result}
+
+
+def _confirmable_entity_ids(entity_ids: list[str], pre: Mapping[str, Any]) -> list[str]:
+    """Targets whose pre-dispatch state proves they can possibly confirm.
+
+    A target absent from the state machine (``pre[eid] is None``) can never emit a
+    confirming ``state_changed`` for this dispatch — HA no-ops a service call for
+    an entity id that matches nothing, and nothing will register that id mid-call
+    either. Excluding it from the wait lets the server read the certain outcome
+    straight off the transition's ``None`` ``old_state`` instead of burning the
+    full timeout to learn nothing new.
+
+    Deliberately NOT excluded: a target whose captured state is ``"unavailable"``.
+    Unlike a nonexistent id, an unavailable entity can legitimately reconnect and
+    transition during the blocking dispatch (the very case ``ENTITY_UNAVAILABLE``
+    exists to distinguish from a real failure would itself go undetected if the
+    listener were never registered) — so it stays in the wait and is judged by
+    whether it actually confirmed, not excluded upfront.
+    """
+    return [eid for eid in entity_ids if pre.get(eid) is not None]
 
 
 def _guard_call_service_target(hass: HomeAssistant, domain: str, service: str) -> None:
@@ -5953,6 +5999,9 @@ def _build_call_service_result(
         _call_service_transition(eid, pre.get(eid), _post_state(hass, eid, captured))
         for eid in entity_ids
     ]
+    # Against the FULL entity_ids, not just the confirmable subset: an excluded
+    # (nonexistent) target can never land in captured, so this naturally stays
+    # False whenever one is present — exactly right, since it never confirmed.
     confirmed = bool(should_confirm and set(entity_ids) <= set(captured))
     result: dict[str, Any] = {
         "domain": domain,
@@ -6155,19 +6204,36 @@ def _bulk_op_record(
     ``pre`` is the synchronous in-memory pre-state per target; ``expected_by_entity``
     maps every target to this op's confirmation hint (``_SERVICE_TO_STATE``) so the
     waiter + immediate-match key off it; ``dispatched`` / ``error`` / ``response``
-    start empty and are filled during dispatch; ``should_confirm`` is true only when
-    the batch is waiting AND this op names targets to confirm.
+    start empty and are filled during dispatch. ``confirmable_entity_ids`` excludes
+    ONLY a target whose captured pre-state is ``None`` (nonexistent) — it can never
+    emit a confirming event, so it is never worth the shared wait (see
+    ``_confirmable_entity_ids``). Deliberately NOT excluded from it: a target
+    already ``"unavailable"``, which can legitimately reconnect and confirm
+    mid-dispatch. ``should_confirm`` stays intent-level (``bool(wait and
+    entity_ids)`` — the FULL list, not the confirmable subset): a
+    ``validate_first=False`` caller that skips the not-found/unavailable error
+    mapping still needs ``partial=True`` on a genuinely-excluded target, not a
+    bare unconfirmed-but-not-partial result.
     """
     entity_ids = list(op.get("entity_ids") or [])
     expected_state = op.get("expected_state")
+    pre = {eid: _state_as_dict(_state_get(hass, eid)) for eid in entity_ids}
+    confirmable_entity_ids = _confirmable_entity_ids(entity_ids, pre)
     return {
         "domain": op["domain"],
         "service": op["service"],
         "service_data": op.get("service_data") or {},
         "entity_ids": entity_ids,
+        "confirmable_entity_ids": confirmable_entity_ids,
         "expected_by_entity": dict.fromkeys(entity_ids, expected_state),
+        # Intent-level (full entity_ids), NOT the confirmable subset — mirrors
+        # ``_call_service_prep``'s should_confirm: a validate_first=False caller
+        # that intentionally skips the not-found/unavailable error mapping still
+        # needs partial=True on a genuinely-excluded target, not a bare
+        # unconfirmed-but-not-partial result. confirmable_entity_ids scopes ONLY
+        # which targets are actually worth registering a listener / waiting for.
         "should_confirm": bool(wait and entity_ids),
-        "pre": {eid: _state_as_dict(_state_get(hass, eid)) for eid in entity_ids},
+        "pre": pre,
         "evt": None,
         "captured": {},
         "dispatched": False,
@@ -6210,9 +6276,9 @@ def _bulk_register_all(hass: HomeAssistant, ops: list[dict[str, Any]]) -> list[A
     unsubs: list[Any] = []
     try:
         for op in ops:
-            if op["should_confirm"]:
+            if op["should_confirm"] and op["confirmable_entity_ids"]:
                 evt, captured, unsub = _register_transition_waiter(
-                    hass, set(op["entity_ids"]), op["expected_by_entity"]
+                    hass, set(op["confirmable_entity_ids"]), op["expected_by_entity"]
                 )
                 op["evt"] = evt
                 op["captured"] = captured
@@ -6267,7 +6333,10 @@ def _bulk_match_immediate(hass: HomeAssistant, ops: list[dict[str, Any]]) -> Non
     for op in ops:
         if op["should_confirm"] and op["dispatched"]:
             _match_immediate(
-                hass, op["entity_ids"], op["expected_by_entity"], op["captured"]
+                hass,
+                op["confirmable_entity_ids"],
+                op["expected_by_entity"],
+                op["captured"],
             )
 
 
@@ -6289,7 +6358,10 @@ async def _bulk_wait_all(ops: list[dict[str, Any]], timeout: float) -> None:
         for op in ops
         if op["should_confirm"]
         and op["dispatched"]
-        and not (set(op["entity_ids"]) <= set(op["captured"]))
+        # evt is None when nothing was worth waiting on for this op (every
+        # target was excluded as unconfirmable) — nothing could ever set it.
+        and op["evt"] is not None
+        and not (set(op["confirmable_entity_ids"]) <= set(op["captured"]))
     ]
     if not waiters:
         return
@@ -6330,6 +6402,9 @@ def _build_bulk_op_result(hass: HomeAssistant, op: Mapping[str, Any]) -> dict[st
         )
         for eid in entity_ids
     ]
+    # Against the FULL entity_ids, not just the confirmable subset: an excluded
+    # (nonexistent) target can never land in captured, so this naturally stays
+    # False whenever one is present — exactly right, since it never confirmed.
     confirmed = bool(should_confirm and dispatched and set(entity_ids) <= set(captured))
     result: dict[str, Any] = {
         "domain": op["domain"],

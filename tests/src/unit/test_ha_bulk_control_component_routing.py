@@ -371,6 +371,44 @@ async def test_validate_first_nonexistent_entity_maps_to_not_found() -> None:
 
 
 @pytest.mark.asyncio
+async def test_empty_transitions_after_dispatch_does_not_report_not_found() -> None:
+    """CodeRabbit-flagged regression (mirrored from the single-call fix): an
+    unconfirmed op with an EMPTY transitions list (the
+    ``_dispatched_unconfirmed_bulk_result`` shape a post-dispatch formatting
+    failure produces — the write already landed, the entity demonstrably
+    exists) must NOT be misread as ENTITY_NOT_FOUND. A missing transition row
+    proves nothing about existence, unlike a present row with a null
+    ``old_state``."""
+    unconfirmed_op = {
+        "domain": "light",
+        "service": "turn_on",
+        "entity_ids": ["light.a"],
+        "dispatched": True,
+        "confirmed": False,
+        "partial": True,
+        "transitions": [],
+    }
+    ws = make_ws(
+        "ha_mcp_tools/bulk_call_service",
+        info_result=_CAPS_BULK,
+        cmd_result=_bulk_result([unconfirmed_op]),
+    )
+    client = BulkRoutingClient()
+    tools = DeviceControlTools(client)
+
+    with patch_ws(ws, device_control):
+        resp = await tools.bulk_device_control(
+            operations=[{"entity_id": "light.a", "action": "on"}],
+            parallel=True,
+        )
+
+    assert resp["failed_commands"] == 0
+    (result,) = resp["results"]
+    assert "error" not in result
+    assert result["partial"] is True
+
+
+@pytest.mark.asyncio
 async def test_validate_first_false_allows_null_prestate_op() -> None:
     """With validate_first False, a null pre-state op is NOT forced to ENTITY_NOT_FOUND
     — it maps as a normal dispatched (partial) op, mirroring the legacy skip."""
