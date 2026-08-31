@@ -237,6 +237,16 @@ function getBadgeInfo(annotations: Record<string, any>) {
                             const enums = schema.enum || schema.anyOf?.flatMap((s: any) => s.enum || []) || [];
                             const hasDefault = 'default' in schema && schema.default !== undefined;
                             const constraints = Object.entries(schema.constraints || {});
+                            // A handful of parameters document a whole sub-language
+                            // (the python_transform sandbox rules run past 2000
+                            // characters, ~20x the median). Inline, they bury the
+                            // rest of the parameter list, so anything long opens on
+                            // demand instead.
+                            const description = schema.description || '';
+                            const isLongDescription = description.length > 600;
+                            const descriptionLead = isLongDescription
+                              ? description.slice(0, 140).trimEnd() + '…'
+                              : description;
                             return (
                             <div class="flex items-start gap-2 text-sm">
                               <code class="text-amber-400 shrink-0">{name}</code>
@@ -245,7 +255,12 @@ function getBadgeInfo(annotations: Record<string, any>) {
                               )}
                               <span class="text-slate-600">-</span>
                               <span class="text-slate-400">
-                                {schema.description || ''}
+                                {isLongDescription ? (
+                                  <details class="inline">
+                                    <summary class="cursor-pointer marker:text-slate-600">{descriptionLead}</summary>
+                                    <span class="block mt-1 whitespace-pre-line">{description}</span>
+                                  </details>
+                                ) : description}
                                 {typeStr && <span class="text-slate-600 ml-1">({typeStr})</span>}
                                 {enums.length > 0 && (
                                   <span class="text-slate-600 ml-1">
