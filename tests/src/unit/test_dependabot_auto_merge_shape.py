@@ -46,6 +46,18 @@ def test_approval_is_bound_to_the_current_head_and_dedicated_token() -> None:
     assert approval["env"]["GH_TOKEN"] == ("${{ secrets.DEPENDABOT_APPROVAL_TOKEN }}")
 
 
+def test_auto_merge_uses_dedicated_token_so_push_workflows_run() -> None:
+    steps = _workflow()["jobs"]["dependabot"]["steps"]
+    auto_merge = next(
+        step for step in steps if step["name"] == "Enable auto-merge for Dependabot PRs"
+    )
+
+    assert auto_merge["env"] == {
+        "PR_URL": "${{ github.event.pull_request.html_url }}",
+        "GH_TOKEN": "${{ secrets.DEPENDABOT_APPROVAL_TOKEN }}",
+    }
+
+
 def test_approval_and_auto_merge_share_security_aware_eligibility() -> None:
     steps = _workflow()["jobs"]["dependabot"]["steps"]
     metadata = next(step for step in steps if step.get("id") == "metadata")

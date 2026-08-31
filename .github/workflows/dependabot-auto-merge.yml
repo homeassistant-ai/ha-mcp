@@ -45,7 +45,8 @@ jobs:
       - name: Enable auto-merge for Dependabot PRs
         if: ${{ (steps.metadata.outputs.alert-state == 'OPEN' && !contains(steps.metadata.outputs.dependency-names, ',')) || contains(fromJson('["version-update:semver-minor","version-update:semver-patch"]'), steps.metadata.outputs.update-type) }}
         run: gh pr merge --auto --squash "$PR_URL"
+        # GITHUB_TOKEN would suppress workflows triggered by the eventual
+        # merge push. The dedicated maintainer token preserves normal push CI.
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.DEPENDABOT_APPROVAL_TOKEN }}

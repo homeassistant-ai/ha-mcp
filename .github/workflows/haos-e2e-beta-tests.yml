@@ -1,41 +1,27 @@
 name: HAOS E2E Tests (beta)
 
-# Both beta HAOS lanes live in this file (#2292 / #2302). They were separate
-# workflows, each carrying its own identical copy of the "Detect relevant
-# changes" classifier job; one `changes` job now feeds both.
+# Both beta HAOS lanes live in this file (#2292 / #2302). They keep their
+# existing job ids, names, steps, and shared ``haos-beta-image-*`` cache key
+# for a qcow2 baked with the current beta Supervisor and Home Assistant Core.
+# `haos-e2e-inaddon-beta` is the sole writer of that cache;
+# `haos-e2e-embedded-beta` restores only (and can build locally on a miss).
 #
-# The lanes are unchanged apart from the schedule gate described below: same
-# job ids, same job NAMES, same steps, and the same shared
-# ``haos-beta-image-*`` cache key for a qcow2 baked with the current beta
-# Supervisor and beta Home Assistant Core. `haos-e2e-inaddon-beta` is still the
-# sole writer of that cache; `haos-e2e-embedded-beta` restores only (it can
-# still build locally on a miss).
-#
-# SCHEDULE GATING: the two lanes deliberately keep different nightly slots, but
-# `schedule` is a property of the workflow, not of a job — a merged file would
-# otherwise start BOTH lanes on BOTH crons. So each lane's `if:` appends a
-# `github.event.schedule` term to its `if:` predicate: inaddon beta
-# answers 06:00 UTC, embedded beta 08:00 UTC. Every non-schedule event
-# (push, workflow_dispatch) leaves `github.event.schedule` empty,
-# which is what the `github.event_name != 'schedule'` disjunct lets through, so
-# both lanes still run on those.
+# Both lanes run together for every master push, the nightly schedule, and
+# manual dispatch.
 
 on:
-  # NOT on pull_request (#2311). The load-bearing reason is attribution: a
-  # per-PR beta failure blames every open PR for an upstream change none of
-  # them made (test_haos_image_workflow_shape.py pins this). It also cost ~21
-  # runner-minutes per push to answer a question that moves nightly (upstream
-  # beta) or per-merge (our code): a beta incompatibility surfaces on the
-  # merge commit via the push trigger, upstream breakage within a day via the
-  # crons. No docs-only classifier here any more — every surviving trigger is
-  # a trusted ref where the suite should simply run.
+  # Test committed ha-mcp code against upcoming beta Supervisor and Core
+  # releases. Run on each master update so regressions introduced by our
+  # changes surface after merge, and nightly so deliberate upstream beta
+  # changes that require an ha-mcp adaptation surface before stable release.
+  #
+  # Do not run on pull_request pushes: stable HAOS lanes cover PR changes,
+  # while maintainers own beta compatibility fixes after changes land.
   push:
     branches: [master]
   schedule:
-    # One cron per lane — see SCHEDULE GATING above; each lane's `if:` claims
-    # exactly one of these.
-    - cron: '0 6 * * *'
-    - cron: '0 8 * * *'
+    # 03:17 UTC is 11:17 PM EDT.
+    - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
       pytest_args:
@@ -57,6 +43,12 @@ on:
 permissions:
   contents: read
 
+# A newer master, scheduled, or manually dispatched run makes the previous
+# beta compatibility result obsolete, so keep only the latest run.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
 env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
@@ -65,12 +57,6 @@ env:
 jobs:
   haos-e2e-inaddon-beta:
     name: HAOS E2E Tests (inaddon beta)
-    # Only this lane's own cron starts it; see SCHEDULE GATING in the file
-    # header. The master-push and dispatch events leave `github.event.schedule`
-    # empty and are admitted by the `github.event_name != 'schedule'` disjunct
-    # — with pull_request gone (#2311) that disjunct is what lets every
-    # non-cron trigger through.
-    if: ${{ !cancelled() && (github.event_name != 'schedule' || github.event.schedule == '0 6 * * *') }}
     runs-on: ubuntu-22.04
     timeout-minutes: 75
 
@@ -348,12 +334,6 @@ jobs:
 
   haos-e2e-embedded-beta:
     name: HAOS E2E Tests (embedded beta)
-    # Only this lane's own cron starts it; see SCHEDULE GATING in the file
-    # header. The master-push and dispatch events leave `github.event.schedule`
-    # empty and are admitted by the `github.event_name != 'schedule'` disjunct
-    # — with pull_request gone (#2311) that disjunct is what lets every
-    # non-cron trigger through.
-    if: ${{ !cancelled() && (github.event_name != 'schedule' || github.event.schedule == '0 8 * * *') }}
     runs-on: ubuntu-22.04
     # The embedded beta lane receives extra headroom for the per-worker runtime
     # package installation inside the resource-constrained QEMU guest.
