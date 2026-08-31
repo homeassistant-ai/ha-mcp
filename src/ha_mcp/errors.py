@@ -426,9 +426,9 @@ def create_entity_unavailable_after_dispatch_error(entity_id: str) -> dict[str, 
         ),
         suggestions=[
             "The command was already sent -- check the entity's current state "
-            "with ha_get_state before retrying",
+            + "with ha_get_state before retrying",
             "Avoid re-issuing a non-idempotent service (e.g. toggle) that could "
-            "double-apply if the original command did land",
+            + "double-apply if the original command did land",
             "Check if the device is powered on and connected",
         ],
         context={"entity_id": entity_id, "dispatched": True},
