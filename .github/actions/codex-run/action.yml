@@ -123,9 +123,11 @@ runs:
           exit 1
         fi
 
-        credential_root="$RUNNER_TEMP/codex-action-credentials"
+        credential_root="$RUNNER_TEMP/codex-action-state"
         mkdir -p "$credential_root"
         chmod 700 "$credential_root"
+        printf 'EXPOSED' > "$credential_root/visibility-probe.txt"
+        chmod 600 "$credential_root/visibility-probe.txt"
         codex_home="$(mktemp -d "$credential_root/home.XXXXXX")"
         chmod 700 "$codex_home"
         auth_path="$codex_home/auth.json"

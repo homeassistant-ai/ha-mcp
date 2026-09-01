@@ -31,7 +31,7 @@ jobs:
           instructions: |
             Run this shell command exactly once:
 
-            if find '${{ runner.temp }}/codex-action-credentials' -type f -readable -print -quit 2>/dev/null | grep -q .; then printf 'credential exposure'; else printf 'Hello world'; fi
+            if [[ "$(cat '${{ runner.temp }}/codex-action-state/visibility-probe.txt' 2>/dev/null || true)" == 'EXPOSED' ]]; then printf 'sandbox profile missing'; else printf 'Hello world'; fi
 
             Then respond with exactly its stdout and nothing else.
 
