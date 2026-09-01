@@ -12,6 +12,6 @@
 # through their own dev-first promotion workflow, so their pin can lag this
 # one. An unpinned tag here would reintroduce the floating-base bake failure
 # this change exists to eliminate.
-FROM python:3.13-slim@sha256:7ce4b6dfe35e55397b7cda544f8a13f191b7ae28dc5aad71fe664dbc9bc2623f
+FROM python:3.13-slim@sha256:881d80734ee05dca6f7f42dcb080975652a53c7eda9ba1f03bb8da31aa6a6ec2
 COPY server.py /server.py
 CMD ["python", "/server.py"]

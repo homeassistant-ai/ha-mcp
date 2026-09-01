@@ -181,14 +181,20 @@ _AUDIT_LANES: tuple[tuple[str, str], ...] = (
 
 _SELECTOR_NAMES = ("E2E_BACKEND", "HAOS_TEST_MODE")
 
-# Workflows whose e2e-pytest jobs are deliberately NOT topology lanes and so
-# stay outside the two tables. Every OTHER workflow in the directory is
+# Jobs that run the e2e suite but are deliberately NOT topology lanes, so they
+# stay outside the two tables. Every OTHER e2e job in the directory is
 # discovered by glob, so a topology lane introduced in a brand-new workflow
 # file fails the completeness check until it is classified — hand-listing the
 # lane files here would exempt the next file the same way the tables used to
 # exempt the next lane (Codex review on the #2302 follow-up).
-_NON_TOPOLOGY_WORKFLOWS: dict[str, str] = {
-    "performance-tests.yml": (
+#
+# Keyed by (workflow, job_id), not by workflow: excluding the whole FILE would
+# exempt every job in it, including a topology lane added to it later, and that
+# lane would then sit in neither table with this module still green — the same
+# blanket-exemption shape the paragraph above rejects, applied to files
+# instead of lanes (Codex review on #2309).
+_NON_TOPOLOGY_JOBS: dict[tuple[str, str], str] = {
+    ("performance-tests.yml", "performance-tests"): (
         "benchmark over src/e2e/performance/, not a topology lane paired "
         "against anything"
     ),
@@ -199,6 +205,10 @@ _NON_TOPOLOGY_WORKFLOWS: dict[str, str] = {
 # that defaults to `src/e2e/`. Matching `uv run pytest` alone would also sweep
 # in pr.yml's unit-tests and docker-validation jobs.
 _E2E_TARGET = re.compile(r"src/e2e/|\$\{?PYTEST_PATHS")
+
+# What an e2e pytest step points at, with whatever follows `src/e2e/`
+# captured: empty means the whole suite, non-empty means a subset.
+_E2E_SUITE_TARGET = re.compile(r"(?:tests/)?src/e2e/([^\s\"']*)")
 
 # Floor on the discovered count, so a predicate that quietly stops matching (a
 # workflow restructure, a renamed input) fails here rather than reporting an
@@ -230,6 +240,35 @@ def _pytest_step(workflow: str, job_id: str) -> dict[str, Any]:
         f"{[step.get('name') for step in steps]}"
     )
     return steps[0]
+
+
+def _uncommented(run: str) -> str:
+    """A step's shell body with its comment-only lines dropped.
+
+    A retired command left behind as `# uv run pytest src/e2e/...` is not an
+    invocation, but it reads as one to any substring match — and the check
+    that an excluded job still targets its subset would then be satisfied by
+    the comment while the real command has moved elsewhere.
+    """
+    return "\n".join(
+        line for line in run.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
+def _job_pytest_run(workflow: str, job_id: str) -> str:
+    """The pytest command a job runs, joined across its steps.
+
+    Matched on the invocation, for the reason ``_pytest_step`` gives above: a
+    diagnostics step's prose mentions pytest without running it, and joining
+    that prose in would let a stale `src/e2e/...` string satisfy a check about
+    what the job actually invokes. Comment lines go for the same reason.
+    """
+    return "\n".join(
+        _uncommented(str(step.get("run", "")))
+        for step in _job(workflow, job_id).get("steps", [])
+        if isinstance(step, dict)
+        and "uv run pytest" in _uncommented(str(step.get("run", "")))
+    )
 
 
 def _step_env(step: dict[str, Any]) -> dict[str, Any]:
@@ -303,18 +342,25 @@ def test_container_audit_lane_reports_the_full_failure_surface(
     )
 
 
-def _discover_e2e_lanes() -> set[tuple[str, str]]:
-    """Every ``(workflow, job)`` in the workflow dir that runs the e2e suite."""
+def _discover_e2e_lanes(directory: Path | None = None) -> set[tuple[str, str]]:
+    """Every ``(workflow, job)`` in a workflow dir that runs the e2e suite.
+
+    The directory is a parameter so the exclusion's job-scoping can be
+    exercised against a fixture: proving that a non-excluded job in an
+    EXCLUDED workflow is still discovered needs a second job in that file,
+    which the real directory does not have.
+    """
+    root = _WORKFLOW_DIR if directory is None else directory
     discovered: set[tuple[str, str]] = set()
-    for path in sorted((*_WORKFLOW_DIR.glob("*.yml"), *_WORKFLOW_DIR.glob("*.yaml"))):
+    for path in sorted((*root.glob("*.yml"), *root.glob("*.yaml"))):
         workflow = path.name
-        if workflow in _NON_TOPOLOGY_WORKFLOWS:
-            continue
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             continue
         for job_id, job in (data.get("jobs") or {}).items():
             if not isinstance(job, dict):
+                continue
+            if (workflow, job_id) in _NON_TOPOLOGY_JOBS:
                 continue
             for step in job.get("steps", []):
                 if not isinstance(step, dict):
@@ -370,6 +416,114 @@ def test_every_e2e_lane_is_claimed_by_exactly_one_table() -> None:
         f"below the {_MIN_DISCOVERED_LANES} that exist today — the discovery "
         "predicate stopped matching, and an empty sweep passes the checks "
         "above vacuously"
+    )
+
+
+def test_every_non_topology_exclusion_names_a_job_that_exists() -> None:
+    """An exclusion whose job is gone carries a rationale nobody can check.
+
+    A misspelled key is caught by the completeness test above — the job it
+    failed to exclude turns up unclaimed. A key for a job that no longer
+    exists is caught by nothing: it excludes an empty set forever, and its
+    stated reason quietly stops describing anything.
+    """
+    for (workflow, job_id), reason in _NON_TOPOLOGY_JOBS.items():
+        path = _WORKFLOW_DIR / workflow
+        assert path.is_file(), f"{workflow} no longer exists, but is excluded"
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        jobs = (data or {}).get("jobs") or {}
+        assert job_id in jobs, (
+            f"{workflow}::{job_id} is excluded as {reason!r} but the workflow "
+            f"has no such job — the exclusion now covers nothing"
+        )
+        # And it must be excludable on its merits, not on the author's
+        # say-so: a topology lane hand-written into this dict would be hidden
+        # from the completeness sweep as thoroughly as the file-scoped key
+        # used to hide its whole file. What marks a lane as a topology lane is
+        # the selectors it is parametrized with, so ask THIS job for them.
+        #
+        # Scoped to the job, never to the file: a sibling topology lane in the
+        # same file legitimately carries these names, and that arrangement is
+        # exactly what test_an_excluded_job_does_not_exempt_its_neighbours
+        # exists to permit. A whole-file substring test would forbid the very
+        # configuration this module blesses one test further down.
+        job = _job(workflow, job_id)
+        # Workflow-level env is inherited by every job in the file, so it
+        # parametrizes this one as surely as its own. A sibling job's private
+        # env does not, which is why this reads three scopes and not the file.
+        workflow_env = (data or {}).get("env") or {}
+        job_env = job.get("env") or {}
+        env_keys = (
+            set(workflow_env)
+            | set(job_env)
+            | {
+                key
+                for step in job.get("steps", [])
+                if isinstance(step, dict)
+                for key in _step_env(step)
+            }
+        )
+        marks_a_lane = env_keys & {*_SELECTOR_NAMES, "E2E_NO_TOOLS_ENTRY"}
+        assert not marks_a_lane, (
+            f"{workflow}::{job_id} is parametrized with "
+            f"{sorted(marks_a_lane)}, which is what makes a job a topology "
+            "lane — an exclusion cannot be the thing that keeps it out of the "
+            "tables"
+        )
+
+        # Absence of the selectors is not proof: the default container
+        # topology carries none of them either, so a job repurposed to run
+        # the ordinary suite would pass the check above and stay hidden
+        # forever, since discovery skips it before it ever reads the command.
+        # So require the positive property instead — the job must still run
+        # only a subset of the e2e tree, which is what its rationale claims.
+        targets = _E2E_SUITE_TARGET.findall(str(_job_pytest_run(workflow, job_id)))
+        assert targets, (
+            f"{workflow}::{job_id} no longer targets the e2e tree at all, so "
+            "the exclusion is describing a job that is not what it was"
+        )
+        whole_suite = [target for target in targets if not target.strip("/")]
+        assert not whole_suite, (
+            f"{workflow}::{job_id} now runs the whole e2e suite, not the "
+            f"subset {reason!r} describes — that is an ordinary lane wearing "
+            "an exclusion, and discovery skips it before it reads the command"
+        )
+
+
+def test_an_excluded_job_does_not_exempt_its_neighbours(tmp_path: Path) -> None:
+    """The exclusion is per job, and this is the case that proves it.
+
+    Keyed by workflow, excluding one benchmark job would exempt the whole
+    file: a topology lane added to it later would be discovered by nothing,
+    sit in neither table, and leave this module green while every env contract
+    it should carry goes unchecked (Codex review on #2309).
+
+    The real workflow dir cannot show this — the excluded file holds exactly
+    one job — so the fixture puts a topology lane next to the excluded one,
+    under the excluded file's own name.
+    """
+    if not _NON_TOPOLOGY_JOBS:
+        pytest.skip("nothing is excluded, so there is no scoping to check")
+    workflow, excluded_job = next(iter(_NON_TOPOLOGY_JOBS))
+    (tmp_path / workflow).write_text(
+        "jobs:\n"
+        f"  {excluded_job}:\n"
+        "    steps:\n"
+        "      - run: cd tests && uv run pytest src/e2e/performance/ -m perf\n"
+        "  a-topology-lane-added-later:\n"
+        "    steps:\n"
+        "      - run: cd tests && uv run pytest src/e2e/ --tb=short\n",
+        encoding="utf-8",
+    )
+
+    discovered = _discover_e2e_lanes(tmp_path)
+
+    assert (workflow, "a-topology-lane-added-later") in discovered, (
+        "a topology lane sharing a file with an excluded job was skipped — "
+        "the exclusion is keyed by workflow, so it exempts the whole file"
+    )
+    assert (workflow, excluded_job) not in discovered, (
+        "the excluded job itself must still be excluded"
     )
 
 

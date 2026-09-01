@@ -19,6 +19,9 @@ CodeRabbit reviews drafts. `.coderabbit.yaml` deliberately sets:
 - `reviews.auto_review.drafts: true`
 - `auto_pause_after_reviewed_commits: 0`
   (the schema default pauses after five reviewed commits)
+- `reviews.pre_merge_checks.docstrings.mode: "off"`
+  (the default 80% repository-wide coverage quota is disabled; ordinary
+  guideline-based docstring review remains enabled)
 
 The second setting spends the per-developer hourly review allowance faster. A
 rate-limited push reports that state in a comment and does not block merging;
