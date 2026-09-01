@@ -78,6 +78,16 @@ _CAPS_SEARCH_VIS = {
     "capabilities": ["search", "search_visibility"],
     "limits": {},
 }
+_CAPS_SEARCH_VIS_ALLOW_AUTH = {
+    "schema_version": 1,
+    "component_version": "2.1.1",
+    "capabilities": [
+        "search",
+        "search_visibility",
+        "search_visibility_allowlist_authorization",
+    ],
+    "limits": {},
+}
 
 
 def _write_active_deny(tmp_path, monkeypatch) -> None:
@@ -88,6 +98,19 @@ def _write_active_deny(tmp_path, monkeypatch) -> None:
             enabled=True,
             exclude_categories=[],
             deny_entity_ids=["light.kitchen"],
+        ),
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+
+def _write_active_allow(tmp_path, monkeypatch) -> None:
+    """An enabled config that authorizes only ``sensor.kitchen_temp``."""
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(
+            enabled=True,
+            exclude_categories=["diagnostic"],
+            allow_entity_ids=["sensor.kitchen_temp"],
         ),
     )
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
@@ -160,6 +183,53 @@ async def test_active_filter_without_capability_uses_legacy(
     entity_ids = {e["entity_id"] for e in resp["entities"]}
     assert "light.kitchen" not in entity_ids
     assert "sensor.kitchen_temp" in entity_ids
+
+
+@pytest.mark.asyncio
+async def test_active_allowlist_without_authorization_capability_uses_legacy(
+    tmp_path, monkeypatch
+) -> None:
+    """An old visibility component cannot serve the revised allowlist contract."""
+    _write_active_allow(tmp_path, monkeypatch)
+    ws = make_ws(
+        "ha_mcp_tools/search",
+        info_result=_CAPS_SEARCH_VIS,
+        cmd_result=_entity_search_result(),
+    )
+    client = RoutingClient()
+    ha_search = _build_ha_search(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await ha_search(query="kitchen")
+
+    assert not _search_calls(ws)
+    assert client.get_states_calls == 1
+    entity_ids = {e["entity_id"] for e in resp["entities"]}
+    assert entity_ids == {"sensor.kitchen_temp"}
+
+
+@pytest.mark.asyncio
+async def test_active_allowlist_with_authorization_capability_routes_component(
+    tmp_path, monkeypatch
+) -> None:
+    """The revised capability opts the component into allowlist authorization."""
+    _write_active_allow(tmp_path, monkeypatch)
+    ws = make_ws(
+        "ha_mcp_tools/search",
+        info_result=_CAPS_SEARCH_VIS_ALLOW_AUTH,
+        cmd_result=_entity_search_result(),
+    )
+    client = RoutingClient()
+    ha_search = _build_ha_search(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await ha_search(query="kitchen")
+
+    assert resp["success"] is True
+    assert client.get_states_calls == 0
+    calls = _search_calls(ws)
+    assert len(calls) == 1
+    assert calls[0].kwargs["visibility"]["allow_entity_ids"] == ["sensor.kitchen_temp"]
 
 
 @pytest.mark.asyncio

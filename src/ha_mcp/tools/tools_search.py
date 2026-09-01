@@ -2396,11 +2396,12 @@ class SearchTools:
         # hidden entities through the fast path. The ``search_visibility``
         # capability closes that: a component that advertises it accepts the raw
         # hide config (``VisibilityConfig.to_wire``) as the ``visibility`` param
-        # and excludes hidden entities before its own counts/pagination, exactly
-        # as the legacy path does — so a visibility-active install can still take
-        # the fast path. Without the capability an active filter stays on the
-        # legacy path; with no active filter the plain ``search`` route runs with
-        # no ``visibility`` param (old components keep working). ``ha_get_overview``
+        # and excludes hidden entities before its own counts/pagination. The later
+        # ``search_visibility_allowlist_authorization`` flag opts into the revised
+        # allowlist precedence; an active allowlist falls back to legacy unless the
+        # component advertises both flags. With no active filter the plain
+        # ``search`` route runs with no ``visibility`` param (old components keep
+        # working). ``ha_get_overview``
         # needs no analogous gate — it re-applies the filter server-side over the
         # component's raw slices. Checked only when the component would otherwise
         # serve, so the common (no-component / filter-off) install pays nothing.
@@ -2438,8 +2439,10 @@ class SearchTools:
         - filter inactive → ``(True, None)``: the plain component search, no
           ``visibility`` param (parity with a pre-``search_visibility`` component).
         - filter active + ``search_visibility`` capability + config serialized →
-          ``(True, <wire dict>)``: the component applies the hide dimensions
-          in-process.
+          ``(True, <wire dict>)`` when the filter has no allowlist, or when the
+          component also advertises ``search_visibility_allowlist_authorization``.
+          That second flag proves it implements the revised rule where allowlist
+          matches authorize past category, HA-hidden, and Assist filters.
         - filter active without the capability, or the config could not be loaded
           → ``(False, None)``: the legacy path applies the filter server-side
           before the counts/pagination (fail-closed to legacy on a bad config,
@@ -2452,9 +2455,17 @@ class SearchTools:
         active, visibility = await visibility_state_and_wire()
         if not active:
             return True, None
-        if component_supports(caps, "search_visibility") and visibility is not None:
-            return True, visibility
-        return False, None
+        if not component_supports(caps, "search_visibility") or visibility is None:
+            return False, None
+        allowlist_active = any(
+            visibility.get(key)
+            for key in ("allow_entity_ids", "allow_areas", "allow_labels")
+        )
+        if allowlist_active and not component_supports(
+            caps, "search_visibility_allowlist_authorization"
+        ):
+            return False, None
+        return True, visibility
 
     async def _ha_search_via_component(
         self,

@@ -156,6 +156,7 @@ class TestCapabilityPresence:
             "services_list",
             "reference_data",
             "search_visibility",
+            "search_visibility_allowlist_authorization",
             "server_entry",
         ):
             assert cap in wsapi.CAPABILITIES

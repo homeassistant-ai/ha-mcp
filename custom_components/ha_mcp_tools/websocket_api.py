@@ -2,9 +2,10 @@
 
 This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
 ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
-capability gate. It registers twenty-three commands. It advertises twenty-five
-capabilities: twenty-two command capabilities plus three additive flags
-(dashboards_doc_search, search_visibility, and search_entity_membership);
+capability gate. It registers twenty-three commands. It advertises twenty-six
+capabilities: twenty-two command capabilities plus four additive flags
+(dashboards_doc_search, search_visibility, search_entity_membership, and
+search_visibility_allowlist_authorization);
 the info handshake carries no capability entry:
 
 * ``ha_mcp_tools/info`` — the handshake: ``schema_version`` + ``capabilities[]``
@@ -111,6 +112,10 @@ the info handshake carries no capability entry:
   :func:`_visibility_hidden_set` mirrors the server's ``hidden_entity_ids``, with
   the Assist dimension delegated to core's ``async_should_expose``), so
   ``ha_search`` can route through the component even with an active filter. A
+  second ``search_visibility_allowlist_authorization`` capability declares the
+  revised precedence where an allowlist match authorizes past category,
+  HA-hidden, and Assist filters; a server that needs those semantics keeps an
+  older component on its legacy search path. A
   degraded dimension (unknown ``exclude_category`` / empty-registry allowlist /
   unavailable Assist) fails open, and :func:`_visibility_warnings` returns the
   resolver-parity ``visibility_warnings`` the response carries so the filtering is
@@ -376,6 +381,11 @@ CAPABILITIES: list[str] = [
     # would ignore the param is never sent it (param-sniffing is banned for
     # routing; the CAPABILITIES flag is what the server gates on).
     "search_visibility",
+    # A semantic flag on search_visibility: this component implements the revised
+    # allowlist contract where a match authorizes past category, HA-hidden, and
+    # Assist filters. A newer server with an active allowlist requires this flag;
+    # otherwise it uses its legacy resolver rather than trusting old precedence.
+    "search_visibility_allowlist_authorization",
     "server_entry",
     # The WRITE counterpart of ``server_entry`` (Phase 3). The server gates its
     # ``ha_dev_manage_server(update_source)`` embedded-mode direct-write on this; an

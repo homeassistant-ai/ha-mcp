@@ -747,6 +747,7 @@ class TestInfo:
             "services_list",
             "reference_data",
             "search_visibility",
+            "search_visibility_allowlist_authorization",
             "server_entry",
             "server_entry_update",
             "call_service",
