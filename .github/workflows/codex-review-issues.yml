@@ -1,0 +1,58 @@
+name: Codex example - review open issues
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: codex-auth-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  review-issues:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Collect authorized issue context
+        run: |
+          set -euo pipefail
+          mkdir -p .codex-context
+          gh issue list \
+            --state open \
+            --limit 100 \
+            --json number,title,body,author,labels,comments,createdAt,updatedAt,url \
+            > .codex-context/issues.json
+          jq -e 'length > 0' .codex-context/issues.json >/dev/null
+
+      - name: Ask Codex to review open issues
+        id: codex
+        uses: ./.github/actions/codex-run
+        with:
+          codex-auth: ${{ secrets.CODEX_AUTH }}
+          sandbox: read-only
+          instructions: |
+            Read .codex-context/issues.json and review every open issue in that file.
+            Identify likely duplicates, missing information, plausible root
+            causes, and concrete fix or triage suggestions. Compare issues
+            against the checked-out code when useful. Do not use network tools
+            or modify files or external state. Return a concise Markdown report
+            in the final response.
+
+      - name: Persist refreshed Codex auth
+        if: ${{ always() }}
+        uses: ./.github/actions/codex-update-auth
+        with:
+          codex-auth-path: ${{ steps.codex.outputs.auth-path }}
+          original-codex-auth: ${{ steps.codex.outputs.original-auth-path }}
+          gh-token: ${{ secrets.CODEX_AUTH_PAT }}
+          repository: ${{ github.repository }}

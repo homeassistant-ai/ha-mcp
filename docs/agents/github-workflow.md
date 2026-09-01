@@ -176,6 +176,9 @@ summary only when the pull request actually reaches that state.
 | `addon-publish.yml` | Release | Home Assistant app publishing. |
 | `sync-tool-docs.yml` | Push to `master` touching tool sources or `scripts/extract_tools.py` | Regenerate `tools.json`, README, and app `DOCS.md`. |
 | `locale-sync.yml` | Daily or manual | Post-merge translations pushed directly to `master`. |
+| `test.yml` | Manual | Smoke-test the generic Codex action and secret refresh. |
+| `codex-review-issues.yml` | Manual | Write a read-only open-issue report to Actions logs. |
+| `codex-review-prs.yml` | Manual | Write a read-only open-PR report to Actions logs. |
 
 Stable container releases publish `:latest`, `:stable`, and semantic-version
 tags. Development builds publish only `:dev` and `:dev-<sha>`; `:latest`

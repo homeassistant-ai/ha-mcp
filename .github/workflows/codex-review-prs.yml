@@ -1,0 +1,75 @@
+name: Codex example - review open pull requests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  issues: read
+  pull-requests: read
+  statuses: read
+
+concurrency:
+  group: codex-auth-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  review-pull-requests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Collect authorized pull-request context
+        run: |
+          set -euo pipefail
+          mkdir -p .codex-context/pull-requests
+          mapfile -t numbers < <(
+            gh pr list \
+              --state open \
+              --limit 100 \
+              --json number \
+              --jq '.[].number'
+          )
+          if [[ "${#numbers[@]}" -eq 0 ]]; then
+            echo "::error::No open pull requests found."
+            exit 1
+          fi
+          for number in "${numbers[@]}"; do
+            gh pr view "$number" \
+              --json number,title,body,author,isDraft,reviewDecision,mergeStateStatus,reviewRequests,reviews,comments,statusCheckRollup,files,headRefName,baseRefName,additions,deletions,changedFiles,url \
+              > ".codex-context/pull-requests/pr-$number.json"
+            gh pr diff "$number" \
+              > ".codex-context/pull-requests/pr-$number.patch"
+          done
+
+      - name: Ask Codex to review open pull requests
+        id: codex
+        uses: ./.github/actions/codex-run
+        with:
+          codex-auth: ${{ secrets.CODEX_AUTH }}
+          sandbox: read-only
+          instructions: |
+            Read every JSON and patch file under
+            .codex-context/pull-requests/. Review each represented PR's
+            description, diff, draft state, reviews, requested reviewers,
+            checks and mergeability. Summarize current status, important risks,
+            likely blockers, and the best next action for each PR. Do not use
+            network tools or modify files or external state. Return a concise
+            Markdown report in the final response.
+
+      - name: Persist refreshed Codex auth
+        if: ${{ always() }}
+        uses: ./.github/actions/codex-update-auth
+        with:
+          codex-auth-path: ${{ steps.codex.outputs.auth-path }}
+          original-codex-auth: ${{ steps.codex.outputs.original-auth-path }}
+          gh-token: ${{ secrets.CODEX_AUTH_PAT }}
+          repository: ${{ github.repository }}
