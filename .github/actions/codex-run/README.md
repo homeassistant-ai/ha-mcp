@@ -106,7 +106,7 @@ Validated on 2026-08-31 in the dedicated
 [`ha-mcp-workflows-dev`](https://github.com/homeassistant-ai/ha-mcp-workflows-dev)
 bench with Codex CLI `0.151.0`:
 
-- [Hello World run 33461948410](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/33461948410)
+- [Hello World run 33462458640](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/33462458640)
   executed a model-requested shell probe that would report credential exposure
   if any action auth file were readable, returned the exact expected output,
   and forced a `CODEX_AUTH` rewrite through the renewed repository-scoped PAT.

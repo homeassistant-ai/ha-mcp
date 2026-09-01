@@ -40,9 +40,12 @@ jobs:
           OUTPUT_PATH: ${{ steps.codex.outputs.output-path }}
         run: |
           set -euo pipefail
-          actual="$(tr -d '\r' < "$OUTPUT_PATH")"
-          if [[ "$actual" != "Hello world" ]]; then
-            echo "::error::Expected 'Hello world', received '$actual'."
+          normalized="$(mktemp "$RUNNER_TEMP/codex-output-normalized.XXXXXX")"
+          expected="$(mktemp "$RUNNER_TEMP/codex-output-expected.XXXXXX")"
+          tr -d '\r' < "$OUTPUT_PATH" > "$normalized"
+          printf 'Hello world' > "$expected"
+          if ! cmp -s "$expected" "$normalized"; then
+            echo "::error::Codex output did not exactly match 'Hello world'."
             exit 1
           fi
 
