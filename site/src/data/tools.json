@@ -3604,31 +3604,37 @@
   {
     "name": "ha_call_service",
     "title": "Call Service",
-    "description": "Execute Home Assistant services to control entities and trigger automations.\n\nThis is the universal tool for controlling all Home Assistant entities. Services follow\nthe pattern domain.service (e.g., light.turn_on, climate.set_temperature).\n\n**Basic Usage:**\n```python\n# Turn on a light\nha_call_service(\"light\", \"turn_on\", entity_id=\"light.living_room\")\n\n# Set temperature with parameters\nha_call_service(\"climate\", \"set_temperature\",\n              entity_id=\"climate.thermostat\", data={\"temperature\": 22})\n\n# Trigger automation\nha_call_service(\"automation\", \"trigger\", entity_id=\"automation.morning_routine\")\n\n# Universal controls work with any entity\nha_call_service(\"homeassistant\", \"toggle\", entity_id=\"switch.porch_light\")\n```\n\n**Key behavior:**\n- **wait** (default True): wait for the entity state to change before\n  returning. Only applies to state-changing services on a single entity.\n- **Result compaction (default ON)**: ``result`` is trimmed\n  to the targeted entity's record (drops parent-group propagation) and\n  stripped of ``context`` / ``last_*`` metadata and heavy attribute\n  lists (``effect_list``, ``hue_scenes``). Escape hatches: ``verbose=True``\n  for the raw changed-state records, or ``result_fields`` /\n  ``result_attribute_keys`` for explicit per-record projection (mirrors\n  ``ha_get_state``).\n- **return_response** (default False): the service's response data is\n  returned once, as the top-level ``service_response`` key — never nested\n  inside ``result``, which carries the changed entity states.\n\n**For detailed service documentation, use ha_get_skill_guide.**\n\nCommon patterns: Use ha_get_state() to check current values before making changes.\nUse ha_search() to find correct entity IDs.\n\n**WebSocket command escape hatch (advanced):**\nA few Home Assistant operations are WebSocket-only commands, not\nregistered services — most notably dismissing a Repairs issue. Pass\n``ws_command`` (instead of domain/service) to send one, with its\nparameters in ``data``:\n```python\n# Dismiss a repair (get domain/issue_id from ha_get_overview repairs\n# or ha_get_system_health include=\"repairs\")\nha_call_service(ws_command=\"repairs/ignore_issue\",\n                data={\"domain\": \"sun\", \"issue_id\": \"abc\", \"ignore\": True})\n```\nOnly one-shot request/response commands are supported; streaming/two-phase\nand service-invoking commands are rejected, and the other service\nparameters (entity_id, return_response, etc.) don't apply.",
+    "description": "Execute Home Assistant services to control entities and trigger automations.\n\nThis is the universal tool for controlling all Home Assistant entities. Services follow\nthe pattern domain.service (e.g., light.turn_on, climate.set_temperature).\n\n**Basic Usage:**\n```python\n# Turn on a light\nha_call_service(\"light\", \"turn_on\", entity_id=\"light.living_room\")\n\n# Set temperature with parameters\nha_call_service(\"climate\", \"set_temperature\",\n              entity_id=\"climate.thermostat\", data={\"temperature\": 22})\n\n# Trigger automation\nha_call_service(\"automation\", \"trigger\", entity_id=\"automation.morning_routine\")\n\n# Universal controls work with any entity\nha_call_service(\"homeassistant\", \"toggle\", entity_id=\"switch.porch_light\")\n```\n\n**Key behavior:**\n- **Result compaction (default ON)**: ``result`` is trimmed\n  to the targeted entity's record (drops parent-group propagation) and\n  stripped of ``context`` / ``last_*`` metadata and heavy attribute\n  lists (``effect_list``, ``hue_scenes``). Escape hatches: ``verbose=True``\n  for the raw changed-state records, or ``result_fields`` /\n  ``result_attribute_keys`` for explicit per-record projection (mirrors\n  ``ha_get_state``).\n\n**For detailed service documentation, use ha_get_skill_guide.**\n\nCommon patterns: Use ha_get_state() to check current values before making changes.\nUse ha_search() to find correct entity IDs.\n\n**WebSocket command escape hatch (advanced):**\nA few Home Assistant operations are WebSocket-only commands, not\nregistered services — most notably dismissing a Repairs issue. Pass\n``ws_command`` (instead of domain/service) to send one, with its\nparameters in ``data``:\n```python\n# Dismiss a repair (get domain/issue_id from ha_get_overview repairs\n# or ha_get_system_health include=\"repairs\")\nha_call_service(ws_command=\"repairs/ignore_issue\",\n                data={\"domain\": \"sun\", \"issue_id\": \"abc\", \"ignore\": True})\n```\nOnly one-shot request/response commands are supported; streaming/two-phase\nand service-invoking commands are rejected, and the other service\nparameters (entity_id, return_response, etc.) don't apply.",
     "inputSchema": {
       "properties": {
         "domain": {
           "type": "str | None",
+          "description": "Service domain (e.g. 'light', 'climate', 'automation'). Required for a service call; must be omitted when ws_command is set.",
           "default": null
         },
         "service": {
           "type": "str | None",
+          "description": "Service name within domain (e.g. 'turn_on', 'set_temperature', 'trigger'). Required for a service call; must be omitted when ws_command is set.",
           "default": null
         },
         "entity_id": {
           "type": "str | None",
+          "description": "Entity ID(s) the service call targets — one ID ('light.living_room') or several comma-separated ('light.a,light.b'). Optional for services that don't target a specific entity. Must be omitted when ws_command is set.",
           "default": null
         },
         "data": {
           "type": "dict[str, Any] | None",
+          "description": "Extra service-call parameters beyond entity_id (e.g. {'temperature': 22} for climate.set_temperature). Also carries the raw command payload when ws_command is set. If entity_id is also present in data, the entity_id parameter wins.",
           "default": null
         },
         "return_response": {
           "type": "bool",
+          "description": "If True, the service's response data is returned once, as the top-level 'service_response' key — never nested inside 'result' (default: False). Must stay False when ws_command is set.",
           "default": false
         },
         "wait": {
           "type": "bool",
+          "description": "If True (default), wait for the entity state to change before returning. Applies only to state-changing services called with a single entity_id. A comma-separated multi-target does not get confirmed by this: it falls through to a legacy path that polls for the literal composite entity_id and times out after 10s. Set wait=False for multi-target calls.",
           "default": true
         },
         "verbose": {
