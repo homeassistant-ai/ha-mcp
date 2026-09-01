@@ -256,39 +256,51 @@ def _scrub_hidden_references(
         return value, False
 
     if isinstance(value, dict):
-        entity_id = value.get("entity_id")
-        if isinstance(entity_id, str) and _text_names_hidden(entity_id, hidden, regex):
-            return _DROP_HIDDEN_REFERENCE, True
-
-        scrubbed_dict: dict[Any, Any] = {}
-        changed = False
-        for key, item in value.items():
-            if isinstance(key, str) and _text_names_hidden(key, hidden, regex):
-                changed = True
-                continue
-            scrubbed_item, item_changed = _scrub_hidden_references(
-                item, hidden, regex
-            )
-            changed = changed or item_changed
-            if scrubbed_item is _DROP_HIDDEN_REFERENCE:
-                continue
-            scrubbed_dict[key] = scrubbed_item
-        return scrubbed_dict, changed
+        return _scrub_hidden_mapping(value, hidden, regex)
 
     if isinstance(value, (list, tuple)):
-        scrubbed_list: list[Any] = []
-        changed = False
-        for item in value:
-            scrubbed_item, item_changed = _scrub_hidden_references(
-                item, hidden, regex
-            )
-            changed = changed or item_changed
-            if scrubbed_item is _DROP_HIDDEN_REFERENCE:
-                continue
-            scrubbed_list.append(scrubbed_item)
-        return scrubbed_list, changed
+        return _scrub_hidden_sequence(value, hidden, regex)
 
     return value, False
+
+
+def _scrub_hidden_mapping(
+    value: dict[Any, Any],
+    hidden: set[str],
+    regex: re.Pattern[str] | None,
+) -> tuple[Any, bool]:
+    entity_id = value.get("entity_id")
+    if isinstance(entity_id, str) and _text_names_hidden(entity_id, hidden, regex):
+        return _DROP_HIDDEN_REFERENCE, True
+
+    scrubbed_dict: dict[Any, Any] = {}
+    changed = False
+    for key, item in value.items():
+        if isinstance(key, str) and _text_names_hidden(key, hidden, regex):
+            changed = True
+            continue
+        scrubbed_item, item_changed = _scrub_hidden_references(item, hidden, regex)
+        changed = changed or item_changed
+        if scrubbed_item is _DROP_HIDDEN_REFERENCE:
+            continue
+        scrubbed_dict[key] = scrubbed_item
+    return scrubbed_dict, changed
+
+
+def _scrub_hidden_sequence(
+    value: list[Any] | tuple[Any, ...],
+    hidden: set[str],
+    regex: re.Pattern[str] | None,
+) -> tuple[list[Any], bool]:
+    scrubbed_list: list[Any] = []
+    changed = False
+    for item in value:
+        scrubbed_item, item_changed = _scrub_hidden_references(item, hidden, regex)
+        changed = changed or item_changed
+        if scrubbed_item is _DROP_HIDDEN_REFERENCE:
+            continue
+        scrubbed_list.append(scrubbed_item)
+    return scrubbed_list, changed
 
 
 def _add_state_relationship_warning(value: Any) -> None:

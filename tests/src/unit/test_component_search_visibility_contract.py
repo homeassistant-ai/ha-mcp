@@ -196,9 +196,7 @@ _SCENARIOS = [
     _Scenario(
         id="allow_match_overrides_category_and_assist",
         ents=(
-            _Ent(
-                "light.vismark_allowed", category="diagnostic", hidden_by="user"
-            ),
+            _Ent("light.vismark_allowed", category="diagnostic", hidden_by="user"),
             _Ent("light.vismark_drop"),
         ),
         exposed=frozenset(),

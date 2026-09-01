@@ -747,9 +747,7 @@ class TestOutboundScan:
             assert any("relationship references" in w for w in rendered["warnings"])
             assert "device_tracker.hidden" not in json.dumps(rendered)
 
-    async def test_get_state_non_json_hidden_reference_still_refused(
-        self, set_config
-    ):
+    async def test_get_state_non_json_hidden_reference_still_refused(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
         mw = make_mw(get_client=FakeClient)
         with pytest.raises(ToolError) as exc:
