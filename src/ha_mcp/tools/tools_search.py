@@ -27,6 +27,7 @@ from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
 from ..utils.entity_membership import normalize_member_entity_ids
 from ..utils.fuzzy_search import apply_hidden_penalty
+from ..visibility.model import VisibilityWire, wire_has_allowlist_dimensions
 from ..visibility.resolver import (
     device_registry_needed_for_visibility,
     load_hidden_set,
@@ -2399,11 +2400,10 @@ class SearchTools:
         # and excludes hidden entities before its own counts/pagination. The later
         # ``search_visibility_allowlist_authorization`` flag opts into the revised
         # allowlist precedence; an active allowlist falls back to legacy unless the
-        # component advertises both flags. With no active filter the plain
-        # ``search`` route runs with no ``visibility`` param (old components keep
-        # working). ``ha_get_overview``
-        # needs no analogous gate — it re-applies the filter server-side over the
-        # component's raw slices. Checked only when the component would otherwise
+        # component advertises both flags. With no active filter, the plain
+        # ``search`` route runs without a ``visibility`` param, so old components
+        # keep working. ``ha_get_overview`` needs no analogous gate — it reapplies
+        # the filter over the component's raw slices. Checked only when it would
         # serve, so the common (no-component / filter-off) install pays nothing.
         if (
             req.query_text
@@ -2430,7 +2430,7 @@ class SearchTools:
 
     async def _resolve_component_search_visibility(
         self, caps: Any
-    ) -> tuple[bool, dict[str, Any] | None]:
+    ) -> tuple[bool, VisibilityWire | None]:
         """Decide the ha_search route under the entity-visibility gate.
 
         Returns ``(route_component, visibility_param)`` for a caller that has
@@ -2457,10 +2457,7 @@ class SearchTools:
             return True, None
         if not component_supports(caps, "search_visibility") or visibility is None:
             return False, None
-        allowlist_active = any(
-            visibility.get(key)
-            for key in ("allow_entity_ids", "allow_areas", "allow_labels")
-        )
+        allowlist_active = wire_has_allowlist_dimensions(visibility)
         if allowlist_active and not component_supports(
             caps, "search_visibility_allowlist_authorization"
         ):
@@ -2472,7 +2469,7 @@ class SearchTools:
         req: _ResolvedSearch,
         ctx: Context | None,
         *,
-        visibility: dict[str, Any] | None = None,
+        visibility: VisibilityWire | None = None,
         caps: Any = None,
     ) -> dict[str, Any] | None:
         """Serve ha_search from the component; ``None`` ⇒ run the legacy path.
@@ -2551,7 +2548,7 @@ class SearchTools:
         req: _ResolvedSearch,
         ctx: Context | None,
         *,
-        visibility: dict[str, Any] | None,
+        visibility: VisibilityWire | None,
     ) -> dict[str, Any] | None:
         """Serve a ``dashboard``-including request from both legs (issue #2289).
 
@@ -2647,7 +2644,7 @@ class SearchTools:
     async def _send_component_search(
         self,
         req: _ResolvedSearch,
-        visibility: dict[str, Any] | None = None,
+        visibility: VisibilityWire | None = None,
         *,
         dashboard_split: bool = False,
     ) -> dict[str, Any]:

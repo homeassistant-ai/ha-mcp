@@ -372,8 +372,7 @@ async def test_ws_establish_failure_on_visibility_path_falls_back_to_legacy(
 async def test_unloadable_config_fails_closed_to_legacy(tmp_path, monkeypatch) -> None:
     """A malformed config file → fail-closed to legacy, never an unfiltered component.
 
-    ``visibility_filter_active`` fails closed to True on a load error and
-    ``load_visibility_wire`` returns None (no config to serialize), so the
+    ``visibility_state_and_wire`` returns ``(True, None)`` on a load error, so the
     capability branch cannot route — the request stays on the legacy path.
     """
     (tmp_path / VISIBILITY_FILENAME).write_text("{ not valid json", encoding="utf-8")

@@ -151,6 +151,16 @@ _SCENARIOS = [
         expected=frozenset({"light.vismark_keep"}),
     ),
     _Scenario(
+        id="allow_entity_ids_states_only_skips_unavailable_assist",
+        ents=(),
+        states_only=("light.vismark_keep", "light.vismark_drop"),
+        config=_cfg(
+            allow_entity_ids=["light.vismark_keep"], respect_assist_exposure=True
+        ),
+        assist_available=False,
+        expected=frozenset({"light.vismark_keep"}),
+    ),
+    _Scenario(
         id="allow_entity_ids_restrict",
         ents=(_Ent("light.vismark_keep"), _Ent("light.vismark_drop")),
         states_only=("light.vismark_ghost",),
@@ -459,6 +469,8 @@ async def test_component_visibility_matches_legacy(
     # server never re-fetched the state machine or re-applied the filter on top.
     assert comp_client.get_states_calls == 0
     assert comp_client.ws_types == Counter()
+    assert set(comp_resp.get("warnings", [])) == set(scenario.expected_warnings)
+    assert set(legacy_resp.get("warnings", [])) == set(scenario.expected_warnings)
 
 
 # --- degradation-warning parity ----------------------------------------------
@@ -498,6 +510,19 @@ _WARNING_SCENARIOS = [
         assist_available=False,
         expected=frozenset({"light.vismark_a", "light.vismark_b"}),
         expected_warnings=frozenset({resolver._ASSIST_UNAVAILABLE_WARNING}),
+    ),
+    _Scenario(
+        id="explicit_allow_survives_empty_registry_area_degradation",
+        ents=(),
+        states_only=("light.vismark_keep", "light.vismark_drop"),
+        config=_cfg(
+            allow_entity_ids=["light.vismark_keep"],
+            allow_areas=["office"],
+            respect_assist_exposure=True,
+        ),
+        assist_available=False,
+        expected=frozenset({"light.vismark_keep"}),
+        expected_warnings=frozenset({resolver._ALLOWLIST_REGISTRY_EMPTY_WARNING}),
     ),
 ]
 

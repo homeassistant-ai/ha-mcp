@@ -1,6 +1,6 @@
 """Pure resolver: compute the hidden entity_id set from a registry list + config.
 
-The filter has an explicit precedence ladder. Concrete deny/entity-area-label
+The filter has an explicit precedence ladder. Concrete deny IDs and area/label
 exclusions always win. When an allowlist is active, a matching entity is
 authorized past the broad automatic category, Home Assistant hidden-state, and
 Assist-exposure filters; nonmatching entities are hidden. Without an allowlist,
@@ -14,7 +14,7 @@ import logging
 from typing import Any
 
 from ..utils.data_paths import get_data_dir
-from .model import VisibilityConfig
+from .model import VisibilityConfig, VisibilityWire
 from .persistence import load_visibility_config
 
 logger = logging.getLogger(__name__)
@@ -225,6 +225,7 @@ def _excluded_by_dimensions(
     labels: set[str],
     device_area: dict[str, str],
     device_labels: dict[str, list[str]],
+    *,
     automatic_excludes_active: bool,
 ) -> set[str]:
     """Return registry entities hidden by automatic or hard excludes.
@@ -492,12 +493,12 @@ def hidden_entity_ids(
     # Allowlist and Assist both reach states-only entities. An effective allowlist
     # authorizes past Assist; when a registry-derived allowlist degrades open, no
     # match remains to authorize and the broad Assist filter becomes applicable.
-    assist_requested = config.respect_assist_exposure and not allow_active
-    if allow_active or assist_requested:
+    assist_applies = config.respect_assist_exposure and not allow_active
+    if allow_active or assist_applies:
         candidate_ids = set(registry_by_id)
         candidate_ids |= set(state_device_class)
-        assist_active = assist_requested and assist_overrides is not None
-        if assist_requested and assist_overrides is None:
+        assist_active = assist_applies and assist_overrides is not None
+        if assist_applies and assist_overrides is None:
             # The seam could not supply Assist data; skip that dimension rather
             # than hide everything, and tell the operator. Under strict mode a
             # skipped Assist dimension could leak an un-exposed entity, so raise.
@@ -607,13 +608,6 @@ async def _fetch_assist_exposure(
         return None, False
 
 
-def config_has_active_allowlist(config: VisibilityConfig) -> bool:
-    """Whether at least one allowlist dimension is configured and enabled."""
-    return config.enabled and bool(
-        config.allow_entity_ids or config.allow_areas or config.allow_labels
-    )
-
-
 def _allowlist_degrades_without_registry(
     registry_result: object,
     states_result: object | None,
@@ -624,7 +618,9 @@ def _allowlist_degrades_without_registry(
         return False
     if not isinstance(registry_result, dict) or not registry_result.get("success"):
         return False
-    entries = registry_result.get("result")
+    entries = registry_result.get("result", [])
+    # A successful response with no ``result`` key is an empty registry, not a
+    # malformed payload; keep this in sync with ``_usable_registry_entries``.
     if not isinstance(entries, list):
         return False
     return not _index_registry_by_id(entries) and bool(
@@ -700,37 +696,13 @@ async def visibility_filter_active() -> bool:
     return config_has_active_hide_dimensions(config)
 
 
-async def load_visibility_wire() -> dict[str, Any] | None:
-    """Serialize the visibility config for the component ``search`` fast path.
-
-    Loads the same memoized config ``visibility_filter_active`` reads and returns
-    its hide dimensions via ``VisibilityConfig.to_wire`` — the ``visibility``
-    param the ha_search consumer hands the ha_mcp_tools component when it
-    advertises the ``search_visibility`` capability, letting the component apply
-    the hide dimensions in-process instead of the server dropping to the legacy
-    path. Returns ``None`` on a load error so the caller keeps the legacy path
-    (there is no config to push into the component), matching the fail-closed-to-
-    legacy policy ``visibility_filter_active`` uses for the same gate. Reuses
-    ``get_data_dir`` so a test redirecting ``resolver.get_data_dir`` steers this
-    too.
-    """
-    try:
-        config = await asyncio.to_thread(load_visibility_config, get_data_dir())
-    except Exception:
-        return None
-    return config.to_wire()
-
-
-async def visibility_state_and_wire() -> tuple[bool, dict[str, Any] | None]:
+async def visibility_state_and_wire() -> tuple[bool, VisibilityWire | None]:
     """Load the visibility config once and report both ``(active, wire)``.
 
-    Single-load counterpart to calling ``visibility_filter_active`` and
-    ``load_visibility_wire`` back to back for the same gate — the config is
-    memoized, so the pair only costs an extra ``os.stat``, but the component
-    ``search_visibility`` gate is the one caller that always needs both, so
-    this collapses it to one load. Fails **closed** to ``(True, None)`` on a
-    load error, mirroring ``visibility_filter_active``'s fail-closed-to-legacy
-    policy: keep the legacy path, and there is no config to serialize.
+    The component ``search_visibility`` gate needs both values from one config
+    snapshot. Fails **closed** to ``(True, None)`` on a load error, mirroring
+    ``visibility_filter_active``'s fail-closed-to-legacy policy: keep the legacy
+    path, and there is no config to serialize.
     """
     try:
         config = await asyncio.to_thread(load_visibility_config, get_data_dir())
@@ -798,7 +770,7 @@ async def load_hidden_set(
     try:
         assist_overrides: dict[str, bool] | None = None
         expose_new = False
-        allowlist_active = config_has_active_allowlist(config)
+        allowlist_active = config.enabled_allowlist_active
         assist_needed = not allowlist_active or _allowlist_degrades_without_registry(
             registry_result, states_result, config
         )

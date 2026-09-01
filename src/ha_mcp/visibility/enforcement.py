@@ -20,8 +20,9 @@ escape hatch — "refuse on contact":
   Generic results are refused rather than token-redacted because adjacent values
   may still be the hidden entity's data and mutation could corrupt an arbitrary
   schema. The bounded exception is a JSON ``ha_get_state`` result for a visible
-  entity: hidden relationship references are omitted, a warning is added, and the
-  result is scanned again. Non-JSON or still-matching state output is refused.
+  entity: fields, mapping keys, list items, or related records that name hidden
+  entities are omitted, a warning is added, and the result is scanned again.
+  Non-JSON, un-warnable, or still-matching state output is refused.
 - **Unscannable surfaces are refused wholesale** while enforce is active — sandbox
   code execution and screenshot/pixel output can read arbitrary state that no text
   scan can attribute to an entity.
@@ -52,7 +53,7 @@ import re
 import time
 from collections.abc import Callable
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
@@ -91,8 +92,9 @@ _DASHBOARD_TOOL = "ha_config_get_dashboard"
 _DASHBOARD_SET_TOOL = "ha_config_set_dashboard"
 _CUSTOM_TOOL = "ha_manage_custom_tool"
 
-# Tool deliberately outside the visibility barrier unless the operator opts in.
+# Diagnostic tool deliberately outside the visibility barrier unless opted in.
 _REPORT_ISSUE_TOOL = "ha_report_issue"
+# State reads have a shape-bounded scrub exception before the outbound scan.
 _STATE_TOOL = "ha_get_state"
 
 _SANDBOX_REASON = (
@@ -107,9 +109,10 @@ _FAIL_CLOSED_REASON = (
     "The entity visibility data could not be loaded, so enforce mode fails closed "
     "rather than risk leaking a restricted entity."
 )
-_STATE_RELATIONSHIP_WARNING = (
-    "Some relationship references were omitted because entity visibility "
-    "enforce mode hides those entities."
+_STATE_CONTENT_WARNING = (
+    "Some content was omitted because it referenced entities hidden by Entity "
+    "Visibility enforce mode. Review Entity Visibility settings if this result "
+    "seems incomplete."
 )
 _CONFIG_LOAD_FAILED_REASON = (
     "The entity visibility config (entity_visibility.json) could not be loaded and "
@@ -235,6 +238,8 @@ def _serialize_result(result: ToolResult) -> str:
     return "\n".join(parts)
 
 
+# Sentinel returned for a hidden-naming string value or a mapping whose
+# ``entity_id`` is hidden; its enclosing mapping/sequence omits that value.
 _DROP_HIDDEN_REFERENCE = object()
 
 
@@ -248,12 +253,12 @@ def _scrub_hidden_references(
     value: Any,
     hidden: set[str],
     regex: re.Pattern[str] | None,
-) -> tuple[Any, bool]:
-    """Remove hidden entity references from a JSON-shaped state result."""
+) -> tuple[Any, int]:
+    """Return a scrubbed JSON-shaped value and the number of omitted references."""
     if isinstance(value, str):
         if _text_names_hidden(value, hidden, regex):
-            return _DROP_HIDDEN_REFERENCE, True
-        return value, False
+            return _DROP_HIDDEN_REFERENCE, 1
+        return value, 0
 
     if isinstance(value, dict):
         return _scrub_hidden_mapping(value, hidden, regex)
@@ -261,84 +266,140 @@ def _scrub_hidden_references(
     if isinstance(value, (list, tuple)):
         return _scrub_hidden_sequence(value, hidden, regex)
 
-    return value, False
+    return value, 0
 
 
 def _scrub_hidden_mapping(
     value: dict[Any, Any],
     hidden: set[str],
     regex: re.Pattern[str] | None,
-) -> tuple[Any, bool]:
+) -> tuple[Any, int]:
     entity_id = value.get("entity_id")
     if isinstance(entity_id, str) and _text_names_hidden(entity_id, hidden, regex):
-        return _DROP_HIDDEN_REFERENCE, True
+        return _DROP_HIDDEN_REFERENCE, 1
 
     scrubbed_dict: dict[Any, Any] = {}
-    changed = False
+    removed = 0
     for key, item in value.items():
         if isinstance(key, str) and _text_names_hidden(key, hidden, regex):
-            changed = True
+            removed += 1
             continue
-        scrubbed_item, item_changed = _scrub_hidden_references(item, hidden, regex)
-        changed = changed or item_changed
+        scrubbed_item, item_removed = _scrub_hidden_references(item, hidden, regex)
+        removed += item_removed
         if scrubbed_item is _DROP_HIDDEN_REFERENCE:
             continue
         scrubbed_dict[key] = scrubbed_item
-    return scrubbed_dict, changed
+    return scrubbed_dict, removed
 
 
 def _scrub_hidden_sequence(
     value: list[Any] | tuple[Any, ...],
     hidden: set[str],
     regex: re.Pattern[str] | None,
-) -> tuple[list[Any], bool]:
+) -> tuple[list[Any], int]:
     scrubbed_list: list[Any] = []
-    changed = False
+    removed = 0
     for item in value:
-        scrubbed_item, item_changed = _scrub_hidden_references(item, hidden, regex)
-        changed = changed or item_changed
+        scrubbed_item, item_removed = _scrub_hidden_references(item, hidden, regex)
+        removed += item_removed
         if scrubbed_item is _DROP_HIDDEN_REFERENCE:
             continue
         scrubbed_list.append(scrubbed_item)
-    return scrubbed_list, changed
+    return scrubbed_list, removed
 
 
-def _add_state_relationship_warning(value: Any) -> None:
+def _add_state_content_warning(value: Any) -> bool:
+    """Attach the omission warning, or return False when the shape cannot carry it."""
     if not isinstance(value, dict):
-        return
+        return False
     warnings = value.get("warnings")
-    if isinstance(warnings, list):
-        if _STATE_RELATIONSHIP_WARNING not in warnings:
-            warnings.append(_STATE_RELATIONSHIP_WARNING)
-    elif warnings is None:
-        value["warnings"] = [_STATE_RELATIONSHIP_WARNING]
+    if warnings is None:
+        value["warnings"] = [_STATE_CONTENT_WARNING]
+        return True
+    if not isinstance(warnings, list):
+        return False
+    if _STATE_CONTENT_WARNING not in warnings:
+        warnings.append(_STATE_CONTENT_WARNING)
+    return True
+
+
+class _ScrubAttempt(NamedTuple):
+    """One JSON representation's scrubbed value and commit decision."""
+
+    value: Any
+    omissions: int
+    warnable: bool
+
+
+class _ScrubTally(NamedTuple):
+    """Committed omissions plus representations that could not carry a warning."""
+
+    omissions: int
+    mutated_representations: int
+    unwarnable_representations: int
+
+
+def _scrub_state_representation(
+    value: Any,
+    hidden: set[str],
+    regex: re.Pattern[str] | None,
+) -> _ScrubAttempt:
+    """Scrub one JSON value, retaining its original unless a warning can attach."""
+    scrubbed, omissions = _scrub_hidden_references(value, hidden, regex)
+    if not omissions:
+        return _ScrubAttempt(value, 0, True)
+    if scrubbed is _DROP_HIDDEN_REFERENCE or not _add_state_content_warning(scrubbed):
+        return _ScrubAttempt(value, omissions, False)
+    return _ScrubAttempt(scrubbed, omissions, True)
 
 
 def _scrub_state_result(
     result: ToolResult,
     hidden: set[str],
     regex: re.Pattern[str] | None,
-) -> None:
-    """Filter hidden relationship ids from ha_get_state's JSON representations."""
+) -> _ScrubTally:
+    """Scrub ha_get_state JSON representations while preserving a warning.
+
+    A representation is replaced only when its top-level shape can carry the
+    generic omission warning. Otherwise the original is retained so the caller's
+    post-scrub scan refuses it rather than silently returning filtered content.
+    Returns committed omission/mutation counts plus the number of representations
+    retained for the final refusal scan because they could not carry the warning.
+    """
+    omissions_total = 0
+    mutated_representations = 0
+    unwarnable_representations = 0
     structured = getattr(result, "structured_content", None)
     if structured is not None:
-        scrubbed, changed = _scrub_hidden_references(structured, hidden, regex)
-        if changed and scrubbed is not _DROP_HIDDEN_REFERENCE:
-            _add_state_relationship_warning(scrubbed)
-            result.structured_content = scrubbed
+        attempt = _scrub_state_representation(structured, hidden, regex)
+        if attempt.omissions and attempt.warnable:
+            result.structured_content = attempt.value
+            omissions_total += attempt.omissions
+            mutated_representations += 1
+        elif attempt.omissions:
+            unwarnable_representations += 1
 
     for block in getattr(result, "content", None) or []:
-        text = getattr(block, "text", None)
-        if not isinstance(text, str):
+        text_value = getattr(block, "text", None)
+        if not isinstance(text_value, str):
             continue
         try:
-            parsed = json.loads(text)
-        except (json.JSONDecodeError, ValueError):
+            parsed = json.loads(text_value)
+        except json.JSONDecodeError:
             continue
-        scrubbed, changed = _scrub_hidden_references(parsed, hidden, regex)
-        if changed and scrubbed is not _DROP_HIDDEN_REFERENCE:
-            _add_state_relationship_warning(scrubbed)
-            block.text = json.dumps(scrubbed, default=str)
+        attempt = _scrub_state_representation(parsed, hidden, regex)
+        if attempt.omissions and attempt.warnable:
+            block.text = json.dumps(attempt.value)
+            omissions_total += attempt.omissions
+            mutated_representations += 1
+        elif attempt.omissions:
+            unwarnable_representations += 1
+
+    return _ScrubTally(
+        omissions_total,
+        mutated_representations,
+        unwarnable_representations,
+    )
 
 
 def _tool_error_text(exc: ToolError) -> str:
@@ -648,11 +709,25 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
                 logger.info("visibility enforce: refused tool error from %s", name)
                 _raise_enforced(name, _outbound_reason(name))
             raise
+        scrub_tally = _ScrubTally(0, 0, 0)
         if name == _STATE_TOOL:
-            _scrub_state_result(result, hidden, regex)
+            scrub_tally = _scrub_state_result(result, hidden, regex)
         if regex is not None and regex.search(_serialize_result(result)):
+            if name == _STATE_TOOL and scrub_tally.unwarnable_representations:
+                logger.info(
+                    "visibility enforce: ha_get_state scrub could not attach its "
+                    "omission warning to %d JSON representation(s)",
+                    scrub_tally.unwarnable_representations,
+                )
             logger.info("visibility enforce: refused result from %s", name)
             _raise_enforced(name, _outbound_reason(name))
+        if name == _STATE_TOOL and scrub_tally.mutated_representations:
+            logger.info(
+                "visibility enforce: scrubbed %d omission(s) across %d "
+                "ha_get_state JSON representation(s)",
+                scrub_tally.omissions,
+                scrub_tally.mutated_representations,
+            )
         return result
 
 

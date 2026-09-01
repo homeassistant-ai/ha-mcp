@@ -421,27 +421,27 @@ The filter uses a precedence ladder:
   no allow match remains to authorize past Assist, so this filter applies again.
   Because HA offers no single "effective exposure" API, the decision is
   reconstructed client-side from two extra websocket reads per search — the set
-  of entities
-  explicitly exposed to the assistant (`expose_entity/list`, which reports only
-  the *exposed* ones) and the "expose new entities" flag that drives the default
-  branch; if either read fails the dimension is skipped with a `warnings` note
-  rather than hiding everything. A registry entity's explicit override — exposed
-  *or* un-exposed — is read directly from the entity-registry `options` the
-  registry list already carries, so an explicit un-expose is honored. One residual
-  limit: for an entity that lives only in the state machine (a YAML/template entity
-  with no entity-registry entry), HA surfaces it through `expose_entity/list` only
-  when it is *exposed*; an explicit un-expose cannot be observed there, so such an
-  entity falls to its domain/device-class default and stays visible (fail-open).
+  of entities explicitly exposed to the assistant (`expose_entity/list`, which
+  reports only the *exposed* ones) and the "expose new entities" flag that drives
+  the default branch; if either read fails the dimension is skipped with a
+  `warnings` note rather than hiding everything. A registry entity's explicit
+  override — exposed *or* un-exposed — is read directly from the entity-registry
+  `options` the registry list already carries, so an explicit un-expose is honored.
+  One residual limit: for an entity that lives only in the state machine (a
+  YAML/template entity with no entity-registry entry), HA surfaces it through
+  `expose_entity/list` only when it is *exposed*; an explicit un-expose cannot be
+  observed there, so such an entity falls to its domain/device-class default and
+  stays visible (fail-open).
 
 #### Enforce mode
 
 Set `"enforce": true` (or the **Enforce mode** toggle in the Entity Visibility
 tab) to turn the same hidden set into a genuine read barrier applied across tool
 reads, not just `ha_search` / `ha_get_overview`. The default exception is
-`ha_report_issue`, described below. `enforce` is not a hide
-dimension — it does not change *which* entities are hidden, only how strongly the
-hiding is applied — so it is inert unless the filter is also `enabled` with at
-least one active hide dimension. What it covers:
+`ha_report_issue`, described below. `enforce` is not a hide dimension — it does
+not change *which* entities are hidden, only how strongly the hiding is applied —
+so it is inert unless the filter is also `enabled` with at least one active hide
+dimension. What it covers:
 
 - **Direct reads are concealed.** A call whose arguments name a hidden entity_id
   exactly (`ha_get_state`, `ha_get_history`, …) is refused *before the tool
@@ -457,12 +457,13 @@ least one active hide dimension. What it covers:
   automation, script, scene, helper, or dashboard record that references a
   hidden entity is omitted from the config results (in the default soft mode
   such records still appear — that is the documented soft-filter behavior).
-- **Allowed state reads filter hidden relationships.** A JSON `ha_get_state`
-  result for a visible entity may contain relationship attributes naming hidden
-  entities (for example, a person's diagnostic device trackers). Those references
-  are omitted while the visible entity's own state is returned, and the response
-  receives a warning. Non-JSON output or any hidden reference left after filtering
-  is still refused by the normal outbound scan.
+- **Allowed state reads filter hidden content.** A JSON `ha_get_state` result for
+  a visible entity may contain fields, mapping keys, list items, or related
+  records that name hidden entities (for example, a person's diagnostic device
+  trackers). That content is omitted while the visible entity's own state is
+  returned, and the response receives a generic warning. Non-JSON output, a
+  shape that cannot carry the warning, or any hidden reference left after
+  filtering is refused by the normal outbound scan.
 - **Other content reads are refused on contact.** An ordinary dashboard config,
   template result, automation/script body, trace, log, or file read whose output
   would surface a hidden entity_id is refused with a generic
@@ -500,10 +501,9 @@ falls back to the last good read from this session — and with none available,
 tool calls are refused rather than risk leaking a restricted entity. If no
 config can be read, `ha_report_issue` follows its safe unrestricted default;
 if a last-good config opted it in, it fails closed too. The hidden set is cached
-for ~30s, so an area/label
-membership change in Home Assistant can take up to that long to take effect for
-the area/label dimensions (a config edit in the settings UI applies on the next
-call).
+for ~30s, so an area/label membership change in Home Assistant can take up to
+that long to take effect for the area/label dimensions (a config edit in the
+settings UI applies on the next call).
 
 Because refuse-on-contact applies to the *whole* hidden set, broad hide
 dimensions make refusals frequent: with the default `diagnostic`/`config`

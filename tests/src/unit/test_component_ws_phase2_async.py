@@ -1257,6 +1257,26 @@ class TestSearchVisibilityPlacement:
         res = wsapi._do_search(h, {"query": "", "visibility": {}})
         assert res["entity_total_matches"] == 2
 
+    def test_effective_allowlist_skips_assist_probe(self, monkeypatch):
+        h = self._hass_and_view(monkeypatch)
+
+        def _unexpected_probe(hass):
+            raise AssertionError("Assist availability must not be probed")
+
+        monkeypatch.setattr(wsapi, "_assist_exposure_available", _unexpected_probe)
+        res = wsapi._do_search(
+            h,
+            {
+                "query": "",
+                "visibility": {
+                    "allow_entity_ids": ["light.a"],
+                    "respect_assist_exposure": True,
+                },
+            },
+        )
+
+        assert {e["entity_id"] for e in res["entities"]} == {"light.a"}
+
     def test_assist_seam_wired_in_do_search(self, monkeypatch):
         h = self._hass_and_view(monkeypatch)
         # Assist available (its store is set up) so the dimension runs and consults
