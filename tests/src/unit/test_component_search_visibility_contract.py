@@ -469,8 +469,20 @@ async def test_component_visibility_matches_legacy(
     # server never re-fetched the state machine or re-applied the filter on top.
     assert comp_client.get_states_calls == 0
     assert comp_client.ws_types == Counter()
-    assert set(comp_resp.get("warnings", [])) == set(scenario.expected_warnings)
-    assert set(legacy_resp.get("warnings", [])) == set(scenario.expected_warnings)
+    # The entity-only search intentionally carries an unrelated config-body intent
+    # warning. Pin only this contract's Entity Visibility warnings.
+    comp_visibility_warnings = {
+        warning
+        for warning in comp_resp.get("warnings", [])
+        if warning.startswith("Entity visibility")
+    }
+    legacy_visibility_warnings = {
+        warning
+        for warning in legacy_resp.get("warnings", [])
+        if warning.startswith("Entity visibility")
+    }
+    assert comp_visibility_warnings == set(scenario.expected_warnings)
+    assert legacy_visibility_warnings == set(scenario.expected_warnings)
 
 
 # --- degradation-warning parity ----------------------------------------------
