@@ -328,9 +328,9 @@ def test_ha_call_service_params_all_have_descriptions():
     """
     from ha_mcp.tools.tools_service import register_service_tools
 
-    properties = _get_tool_parameters(
-        register_service_tools, "ha_call_service"
-    )["properties"]
+    properties = _get_tool_parameters(register_service_tools, "ha_call_service")[
+        "properties"
+    ]
 
     undocumented = [
         name

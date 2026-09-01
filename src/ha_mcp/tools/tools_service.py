@@ -1845,8 +1845,12 @@ class ServiceTools:
             )
 
             # Determine if we should wait for state change:
-            # Only for state-changing services on a single entity, not for
+            # Only for state-changing services with an entity_id set, not for
             # trigger/reload/fire-and-forget services or services without entities.
+            # A comma-separated multi-target entity_id is not excluded here — it
+            # still falls through to the legacy path, which polls for the literal
+            # composite entity_id and times out after 10s (see the wait Field
+            # description and _maybe_component_call_service).
             # This server-side decision (D6) also chooses whether to hand the
             # component wait+entity_ids: a non-state-changing call passes wait
             # implicitly false and no confirmation targets.
