@@ -1,5 +1,11 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 reviews:
+  # Disable only the repository-wide percentage quota (default: warning at
+  # 80%). Ordinary review still applies the docstring rules in the code
+  # guidelines to new and modified tool docstrings.
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
   auto_review:
     drafts: true
     base_branches:
