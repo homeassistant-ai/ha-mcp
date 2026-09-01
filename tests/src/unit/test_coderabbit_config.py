@@ -141,6 +141,20 @@ def test_draft_reviews_are_enabled() -> None:
     )
 
 
+def test_docstring_coverage_pre_merge_check_is_disabled() -> None:
+    """Docstrings stay reviewable without enforcing a repository-wide quota."""
+    pre_merge_checks = _config()["reviews"].get("pre_merge_checks")
+
+    assert pre_merge_checks is not None, (
+        "reviews.pre_merge_checks is missing — CodeRabbit would restore its "
+        "default docstring coverage warning"
+    )
+    assert pre_merge_checks.get("docstrings", {}).get("mode") == "off", (
+        "reviews.pre_merge_checks.docstrings.mode must be 'off' — this disables "
+        "only the percentage-based coverage check, not ordinary docstring review"
+    )
+
+
 def test_bot_authors_stay_unreviewed() -> None:
     """The skip list is exact in both directions.
 
