@@ -403,17 +403,32 @@ def test_every_non_topology_exclusion_names_a_job_that_exists() -> None:
             f"{workflow}::{job_id} is excluded as {reason!r} but the workflow "
             f"has no such job — the exclusion now covers nothing"
         )
-        # And it must be excludable on its merits, not on the author's say-so:
-        # a topology lane hand-written into this dict would be hidden from the
-        # completeness sweep as thoroughly as the file-scoped key used to hide
-        # its whole file. A topology lane is what carries the selectors.
-        text = path.read_text(encoding="utf-8")
-        for selector in (*_SELECTOR_NAMES, "E2E_NO_TOOLS_ENTRY"):
-            assert selector not in text, (
-                f"{workflow} sets {selector}, so {job_id} is parametrized like "
-                "a topology lane — an exclusion cannot be the thing that keeps "
-                "it out of the tables"
-            )
+        # And it must be excludable on its merits, not on the author's
+        # say-so: a topology lane hand-written into this dict would be hidden
+        # from the completeness sweep as thoroughly as the file-scoped key
+        # used to hide its whole file. What marks a lane as a topology lane is
+        # the selectors it is parametrized with, so ask THIS job for them.
+        #
+        # Scoped to the job, never to the file: a sibling topology lane in the
+        # same file legitimately carries these names, and that arrangement is
+        # exactly what test_an_excluded_job_does_not_exempt_its_neighbours
+        # exists to permit. A whole-file substring test would forbid the very
+        # configuration this module blesses one test further down.
+        job = _job(workflow, job_id)
+        job_env = job.get("env") or {}
+        env_keys = set(job_env) | {
+            key
+            for step in job.get("steps", [])
+            if isinstance(step, dict)
+            for key in _step_env(step)
+        }
+        marks_a_lane = env_keys & {*_SELECTOR_NAMES, "E2E_NO_TOOLS_ENTRY"}
+        assert not marks_a_lane, (
+            f"{workflow}::{job_id} is parametrized with "
+            f"{sorted(marks_a_lane)}, which is what makes a job a topology "
+            "lane — an exclusion cannot be the thing that keeps it out of the "
+            "tables"
+        )
 
 
 def test_an_excluded_job_does_not_exempt_its_neighbours(tmp_path: Path) -> None:
