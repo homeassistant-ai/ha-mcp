@@ -114,6 +114,12 @@ reads (dashboards, templates, automations, traces, logs, files) that would
 surface a hidden entity_id are refused on contact. Those enforced paths fail
 closed when registry data cannot be loaded.
 
+One schema-bounded exception preserves an allowed entity's state: JSON
+`ha_get_state` results omit attributes, list items, or related records that name
+a hidden entity and add a generic warning. The result is scanned again after
+filtering; non-JSON output or any surviving hidden reference is refused. Direct
+requests for the hidden related entity remain concealed before execution.
+
 One diagnostic path is deliberately outside that guarantee by default:
 `ha_report_issue` bypasses both scans while `restrict_report_issue` is false,
 even when visibility data is healthy, and its report may contain logs naming a

@@ -17,9 +17,11 @@ escape hatch — "refuse on contact":
   (a template, an automation body, a service target list), or whose *output* would
   surface one, is refused with a generic ``ENTITY_VISIBILITY_ENFORCED`` error that
   never names the matched id.
-  The whole result is refused rather than token-redacted because adjacent values
-  may still be the hidden entity's data, and generic mutation could corrupt an
-  arbitrary tool schema or diagnostic payload.
+  Generic results are refused rather than token-redacted because adjacent values
+  may still be the hidden entity's data and mutation could corrupt an arbitrary
+  schema. The bounded exception is a JSON ``ha_get_state`` result for a visible
+  entity: hidden relationship references are omitted, a warning is added, and the
+  result is scanned again. Non-JSON or still-matching state output is refused.
 - **Unscannable surfaces are refused wholesale** while enforce is active — sandbox
   code execution and screenshot/pixel output can read arbitrary state that no text
   scan can attribute to an entity.
@@ -91,6 +93,7 @@ _CUSTOM_TOOL = "ha_manage_custom_tool"
 
 # Tool deliberately outside the visibility barrier unless the operator opts in.
 _REPORT_ISSUE_TOOL = "ha_report_issue"
+_STATE_TOOL = "ha_get_state"
 
 _SANDBOX_REASON = (
     "'{name}' executes sandbox code that can read arbitrary Home Assistant state, "
@@ -103,6 +106,10 @@ _SCREENSHOT_REASON = (
 _FAIL_CLOSED_REASON = (
     "The entity visibility data could not be loaded, so enforce mode fails closed "
     "rather than risk leaking a restricted entity."
+)
+_STATE_RELATIONSHIP_WARNING = (
+    "Some relationship references were omitted because entity visibility "
+    "enforce mode hides those entities."
 )
 _CONFIG_LOAD_FAILED_REASON = (
     "The entity visibility config (entity_visibility.json) could not be loaded and "
@@ -226,6 +233,100 @@ def _serialize_result(result: ToolResult) -> str:
         except (TypeError, ValueError):
             parts.append(str(structured))
     return "\n".join(parts)
+
+
+_DROP_HIDDEN_REFERENCE = object()
+
+
+def _text_names_hidden(
+    text: str, hidden: set[str], regex: re.Pattern[str] | None
+) -> bool:
+    return text in hidden or (regex is not None and regex.search(text) is not None)
+
+
+def _scrub_hidden_references(
+    value: Any,
+    hidden: set[str],
+    regex: re.Pattern[str] | None,
+) -> tuple[Any, bool]:
+    """Remove hidden entity references from a JSON-shaped state result."""
+    if isinstance(value, str):
+        if _text_names_hidden(value, hidden, regex):
+            return _DROP_HIDDEN_REFERENCE, True
+        return value, False
+
+    if isinstance(value, dict):
+        entity_id = value.get("entity_id")
+        if isinstance(entity_id, str) and _text_names_hidden(entity_id, hidden, regex):
+            return _DROP_HIDDEN_REFERENCE, True
+
+        scrubbed_dict: dict[Any, Any] = {}
+        changed = False
+        for key, item in value.items():
+            if isinstance(key, str) and _text_names_hidden(key, hidden, regex):
+                changed = True
+                continue
+            scrubbed_item, item_changed = _scrub_hidden_references(
+                item, hidden, regex
+            )
+            changed = changed or item_changed
+            if scrubbed_item is _DROP_HIDDEN_REFERENCE:
+                continue
+            scrubbed_dict[key] = scrubbed_item
+        return scrubbed_dict, changed
+
+    if isinstance(value, (list, tuple)):
+        scrubbed_list: list[Any] = []
+        changed = False
+        for item in value:
+            scrubbed_item, item_changed = _scrub_hidden_references(
+                item, hidden, regex
+            )
+            changed = changed or item_changed
+            if scrubbed_item is _DROP_HIDDEN_REFERENCE:
+                continue
+            scrubbed_list.append(scrubbed_item)
+        return scrubbed_list, changed
+
+    return value, False
+
+
+def _add_state_relationship_warning(value: Any) -> None:
+    if not isinstance(value, dict):
+        return
+    warnings = value.get("warnings")
+    if isinstance(warnings, list):
+        if _STATE_RELATIONSHIP_WARNING not in warnings:
+            warnings.append(_STATE_RELATIONSHIP_WARNING)
+    elif warnings is None:
+        value["warnings"] = [_STATE_RELATIONSHIP_WARNING]
+
+
+def _scrub_state_result(
+    result: ToolResult,
+    hidden: set[str],
+    regex: re.Pattern[str] | None,
+) -> None:
+    """Filter hidden relationship ids from ha_get_state's JSON representations."""
+    structured = getattr(result, "structured_content", None)
+    if structured is not None:
+        scrubbed, changed = _scrub_hidden_references(structured, hidden, regex)
+        if changed and scrubbed is not _DROP_HIDDEN_REFERENCE:
+            _add_state_relationship_warning(scrubbed)
+            result.structured_content = scrubbed
+
+    for block in getattr(result, "content", None) or []:
+        text = getattr(block, "text", None)
+        if not isinstance(text, str):
+            continue
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        scrubbed, changed = _scrub_hidden_references(parsed, hidden, regex)
+        if changed and scrubbed is not _DROP_HIDDEN_REFERENCE:
+            _add_state_relationship_warning(scrubbed)
+            block.text = json.dumps(scrubbed, default=str)
 
 
 def _tool_error_text(exc: ToolError) -> str:
@@ -512,11 +613,11 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
         if config is None:
             return await call_next(context)
         try:
-            _hidden, regex = await self._hidden_and_regex(config)
+            hidden, regex = await self._hidden_and_regex(config)
         except VisibilityDataUnavailable:
             _raise_enforced(effective_name, _FAIL_CLOSED_REASON)
         return await self._call_and_scan_outbound(
-            effective_name, context, call_next, regex
+            effective_name, context, call_next, hidden, regex
         )
 
     async def _call_and_scan_outbound(
@@ -524,6 +625,7 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
         name: str,
         context: MiddlewareContext,
         call_next: CallNext,
+        hidden: set[str],
         regex: re.Pattern[str] | None,
     ) -> Any:
         """Run the tool; refuse if its output (or a tool error) names a hidden id."""
@@ -534,6 +636,8 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
                 logger.info("visibility enforce: refused tool error from %s", name)
                 _raise_enforced(name, _outbound_reason(name))
             raise
+        if name == _STATE_TOOL:
+            _scrub_state_result(result, hidden, regex)
         if regex is not None and regex.search(_serialize_result(result)):
             logger.info("visibility enforce: refused result from %s", name)
             _raise_enforced(name, _outbound_reason(name))

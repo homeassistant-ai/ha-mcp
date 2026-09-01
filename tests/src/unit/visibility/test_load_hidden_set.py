@@ -82,6 +82,31 @@ def test_load_hidden_set_fetches_assist_and_hides_unexposed(tmp_path, monkeypatc
     assert hidden == {"light.b"}
 
 
+def test_load_hidden_set_allowlist_skips_assist_fetch(tmp_path, monkeypatch):
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(
+            enabled=True,
+            exclude_categories=["diagnostic"],
+            allow_entity_ids=["light.a"],
+            respect_assist_exposure=True,
+        ),
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    reg = {
+        "success": True,
+        "result": [
+            {"entity_id": "light.a", "entity_category": "diagnostic"},
+            {"entity_id": "light.b"},
+        ],
+    }
+    hidden, warnings = asyncio.run(
+        resolver.load_hidden_set(reg, None, _FakeAssistClient(fail=True))
+    )
+    assert hidden == {"light.b"}
+    assert warnings == []
+
+
 def test_load_hidden_set_assist_fetch_fails_soft(tmp_path, monkeypatch):
     save_visibility_config(
         tmp_path,

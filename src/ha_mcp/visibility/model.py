@@ -27,8 +27,9 @@ class VisibilityConfig(BaseModel):
     deny_entity_ids: list[str] = Field(default_factory=list)
     exclude_areas: list[str] = Field(default_factory=list)
     exclude_labels: list[str] = Field(default_factory=list)
-    # Allowlist (opt-in restrict mode): when any allow_* is non-empty the filter
-    # inverts to "hide everything not matched here". Empty => allowlist inactive.
+    # Allowlist restrict mode: nonmatches hide; matches authorize past the broad
+    # category/HA-hidden/Assist filters. Concrete deny IDs and excluded area/label
+    # conflicts remain hidden. Empty => allowlist inactive.
     allow_entity_ids: list[str] = Field(default_factory=list)
     allow_areas: list[str] = Field(default_factory=list)
     allow_labels: list[str] = Field(default_factory=list)
@@ -37,7 +38,8 @@ class VisibilityConfig(BaseModel):
     respect_assist_exposure: bool = False
     # Enforce mode (issue #2015): when true, hiding is applied strongly across tool
     # reads instead of only decluttering ha_search / ha_get_overview — direct reads
-    # are concealed and content reads that would surface a hidden id are refused.
+    # are concealed and content reads that would surface a hidden id are refused,
+    # except that visible ha_get_state records filter hidden relationship ids.
     # The report-tool exception is controlled separately below. This is NOT a hide
     # dimension: it changes how strongly the same hidden set is applied, not which
     # entities are hidden, so it is deliberately absent from ``to_wire`` and

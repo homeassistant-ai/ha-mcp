@@ -393,30 +393,30 @@ directory (the same directory as `tool_policy.json`; `/data` in the app) with
 }
 ```
 
-The filter is a conjunction of independent dimensions: an entity is shown only if
-it passes every active one.
+The filter uses a precedence ladder:
 
-- **Excludes / denylist.** An entity is hidden when its `entity_category` is in
-  `exclude_categories`, its `entity_id` is in `deny_entity_ids`, or its area/label
-  is in `exclude_areas` / `exclude_labels`. `exclude_categories` accepts only Home
-  Assistant's two entity categories (`diagnostic`, `config`); an unknown value is
-  ignored and surfaced as a `warnings` entry on the next read rather than silently
-  doing nothing. Set `exclude_hidden: true` to also fold in entities already
-  marked hidden in Home Assistant.
+- **Hard excludes.** `deny_entity_ids` and concrete `exclude_areas` /
+  `exclude_labels` entries always hide a matching entity, even if an allowlist
+  also matches it. These settings represent an explicit conflict resolution:
+  deny/exclude wins.
+- **Broad filters.** `exclude_categories` hides Home Assistant's `diagnostic` and
+  `config` categories; unknown values are ignored and surfaced as a `warnings`
+  entry on the next read. Set `exclude_hidden: true` to also hide entities marked
+  hidden in Home Assistant. These broad filters apply normally when no allowlist
+  is active.
 - **Allowlist.** The moment any of `allow_entity_ids` / `allow_areas` /
-  `allow_labels` is non-empty, the filter inverts to *restrict* mode: only
-  entities matching an allowlist stay visible and everything else – including
-  entities added later – is hidden. Leave all three empty to keep the allowlist
-  off. `deny_entity_ids` still wins over an allow match — and so does any
-  `exclude_*` match: an entity an allowlist would admit but an
-  `exclude_categories` / `exclude_areas` / `exclude_labels` also hides stays
-  hidden (every dimension can only hide, so any one hide is enough — the allow
-  dimensions cannot un-hide what another dimension excluded).
+  `allow_labels` is non-empty, the filter enters *restrict* mode: nonmatching
+  entities are hidden, including entities added later. A matching entity is
+  authorized past the broad category, Home Assistant hidden-state, and Assist
+  exposure filters. Hard `deny_entity_ids`, `exclude_areas`, and `exclude_labels`
+  conflicts still win. Leave all three allowlist fields empty to disable restrict
+  mode.
 - **Respect Assist exposure.** With `respect_assist_exposure: true` the filter
   hides entities not effectively exposed to Home Assistant's Assist
   (`conversation`) assistant, mirroring `async_should_expose` (an explicit
   per-entity exposure override wins; otherwise, if the instance exposes new
-  entities, the entity's domain and device-class defaults decide). Because HA
+  entities, the entity's domain and device-class defaults decide). This broad
+  filter is not fetched or applied while an allowlist is active. Because HA
   offers no single "effective exposure" API, the decision is reconstructed
   client-side from two extra websocket reads per search — the set of entities
   explicitly exposed to the assistant (`expose_entity/list`, which reports only
@@ -454,7 +454,13 @@ least one active hide dimension. What it covers:
   automation, script, scene, helper, or dashboard record that references a
   hidden entity is omitted from the config results (in the default soft mode
   such records still appear — that is the documented soft-filter behavior).
-- **Content reads are refused on contact.** An ordinary dashboard config,
+- **Allowed state reads filter hidden relationships.** A JSON `ha_get_state`
+  result for a visible entity may contain relationship attributes naming hidden
+  entities (for example, a person's diagnostic device trackers). Those references
+  are omitted while the visible entity's own state is returned, and the response
+  receives a warning. Non-JSON output or any hidden reference left after filtering
+  is still refused by the normal outbound scan.
+- **Other content reads are refused on contact.** An ordinary dashboard config,
   template result, automation/script body, trace, log, or file read whose output
   would surface a hidden entity_id is refused with a generic
   `ENTITY_VISIBILITY_ENFORCED` error that never names the matched id.

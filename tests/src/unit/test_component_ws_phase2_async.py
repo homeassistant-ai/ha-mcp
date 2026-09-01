@@ -960,6 +960,54 @@ class TestVisibilityHiddenSet:
         )
         assert hidden == {"light.both"}
 
+    def test_allow_match_overrides_category_and_assist(self):
+        view = make_view(
+            entity={
+                "sensor.allowed": FakeRegEntry(
+                    "sensor.allowed",
+                    entity_category="diagnostic",
+                    hidden_by="user",
+                ),
+                "sensor.drop": FakeRegEntry("sensor.drop"),
+            }
+        )
+        calls = []
+
+        def _not_exposed(eid):
+            calls.append(eid)
+            return False
+
+        hidden = wsapi._visibility_hidden_set(
+            view,
+            [FakeState("sensor.allowed"), FakeState("sensor.drop")],
+            {
+                "exclude_categories": ["diagnostic"],
+                "allow_entity_ids": ["sensor.allowed"],
+                "respect_assist_exposure": True,
+            },
+            _not_exposed,
+        )
+        assert hidden == {"sensor.drop"}
+        assert calls == []
+
+    def test_explicit_exclude_area_wins_over_allow(self):
+        view = make_view(
+            entity={
+                "light.conflict": FakeRegEntry("light.conflict", area_id="office"),
+                "light.allowed": FakeRegEntry("light.allowed", area_id="kitchen"),
+            }
+        )
+        hidden = wsapi._visibility_hidden_set(
+            view,
+            [FakeState("light.conflict"), FakeState("light.allowed")],
+            {
+                "exclude_areas": ["office"],
+                "allow_entity_ids": ["light.conflict", "light.allowed"],
+            },
+            _always_expose,
+        )
+        assert hidden == {"light.conflict"}
+
     def test_allow_device_inherited_area_and_label(self):
         # allow_areas/allow_labels restrict mode must also resolve device
         # inheritance: an entity with no direct area_id/labels is kept when
@@ -1117,6 +1165,19 @@ class TestVisibilityWarnings:
         )
         assert warnings == []
 
+    def test_allowlist_makes_unavailable_assist_irrelevant(self):
+        view = make_view(entity={"light.a": FakeRegEntry("light.a")})
+        warnings = wsapi._visibility_warnings(
+            view,
+            [FakeState("light.a")],
+            {
+                "allow_entity_ids": ["light.a"],
+                "respect_assist_exposure": True,
+            },
+            assist_available=False,
+        )
+        assert warnings == []
+
     def test_multiple_degradations_all_surface(self):
         view = make_view()
         warnings = wsapi._visibility_warnings(
@@ -1132,7 +1193,6 @@ class TestVisibilityWarnings:
         assert set(warnings) == {
             wsapi._unknown_categories_warning({"bogus"}),
             wsapi._ALLOWLIST_REGISTRY_EMPTY_WARNING,
-            wsapi._ASSIST_UNAVAILABLE_WARNING,
         }
 
 

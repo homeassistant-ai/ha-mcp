@@ -5021,9 +5021,9 @@ def _visibility_hidden_set(
 
     A pure replication of ``visibility.resolver.hidden_entity_ids`` over the live
     ``_RegistryView`` + ``states`` (rather than the WS ``{success, result}``
-    payloads the server passes): a conjunction of independent hide dimensions —
-    the deny list, the category / hidden / area / label excludes (area/labels are
-    device-inherited), the allow-list restrict mode, and the Assist dimension. The
+    payloads the server passes), including its precedence: concrete deny and
+    area/label excludes win; an allowlist match authorizes past the broad category,
+    Home Assistant hidden-state, and Assist filters. The
     Assist dimension delegates to the injectable ``should_expose_fn(entity_id) ->
     bool`` (:func:`_assist_should_expose` in production — a READ-ONLY reconstruction
     of core's ``async_should_expose`` from the explicit exposure map + expose_new +
@@ -5033,11 +5033,11 @@ def _visibility_hidden_set(
     computed defaults back, which this fast path must not do (see
     :func:`_assist_should_expose`).
 
-    ``should_expose_fn`` is consulted only when ``respect_assist_exposure`` is set
-    AND ``assist_available`` is True. When the config requests the Assist dimension
-    but the exposure machinery is unavailable (``assist_available=False``), the
-    dimension is SKIPPED — hiding nothing by Assist — mirroring the resolver's
-    "skip the dimension when its data is unavailable" fail-open (the paired
+    ``should_expose_fn`` is consulted only when ``respect_assist_exposure`` is set,
+    no allowlist is active, and ``assist_available`` is True. When the config
+    requests the Assist dimension but the exposure machinery is unavailable
+    (``assist_available=False``), the dimension is SKIPPED — hiding nothing by
+    Assist — mirroring the resolver's fail-open behavior (the paired
     degradation warning is surfaced by :func:`_visibility_warnings`). Kept a
     standalone pure function so it is unit-testable without the full search
     pipeline.
@@ -5052,14 +5052,10 @@ def _visibility_hidden_set(
     allow_areas = set(visibility.get("allow_areas") or [])
     allow_labels = set(visibility.get("allow_labels") or [])
     respect_assist = bool(visibility.get("respect_assist_exposure"))
-    # ``assist_active`` gates the per-entity Assist should_expose sub-check (skipped
-    # when the config asks for Assist but its data is unavailable). The allow/assist
-    # loop below is guarded by ``allow_active or respect_assist`` — a structural
-    # mirror of the resolver's guard, not a functional requirement: when Assist is
-    # requested-but-unavailable and no allowlist is set, the loop runs but hides
-    # nothing (both sub-checks are inert). Kept identical so the two paths match.
-    assist_active = respect_assist and assist_available
     allow_active = bool(allow_areas or allow_labels or allow_entity_ids)
+    configured_allow_active = allow_active
+    # An allowlist authorizes past the broad Assist filter.
+    assist_active = respect_assist and assist_available and not allow_active
 
     registry_by_id = _registry_index_by_id(view)
     # states-only entity universe (YAML/template entities absent from the registry
@@ -5086,8 +5082,9 @@ def _visibility_hidden_set(
         exclude_areas,
         exclude_labels,
         hidden,
+        automatic_excludes_active=not configured_allow_active,
     )
-    if allow_active or respect_assist:
+    if allow_active or assist_active:
         _apply_visibility_allow_assist(
             view,
             registry_by_id,
@@ -5133,8 +5130,10 @@ def _visibility_warnings(
     if unknown:
         warnings.append(_unknown_categories_warning(unknown))
 
+    allow_entity_ids = set(visibility.get("allow_entity_ids") or [])
     allow_areas = set(visibility.get("allow_areas") or [])
     allow_labels = set(visibility.get("allow_labels") or [])
+    allow_active = bool(allow_entity_ids or allow_areas or allow_labels)
     registry_by_id = _registry_index_by_id(view)
     state_ids = {
         eid for eid in (getattr(s, "entity_id", None) for s in states or []) if eid
@@ -5145,7 +5144,11 @@ def _visibility_warnings(
     if (allow_areas or allow_labels) and not registry_by_id and state_ids:
         warnings.append(_ALLOWLIST_REGISTRY_EMPTY_WARNING)
 
-    if bool(visibility.get("respect_assist_exposure")) and not assist_available:
+    if (
+        bool(visibility.get("respect_assist_exposure"))
+        and not allow_active
+        and not assist_available
+    ):
         warnings.append(_ASSIST_UNAVAILABLE_WARNING)
 
     return warnings
@@ -5170,22 +5173,23 @@ def _apply_visibility_excludes(
     exclude_areas: set[str],
     exclude_labels: set[str],
     hidden: set[str],
+    automatic_excludes_active: bool,
 ) -> None:
-    """Add the exclude-dimension hits to ``hidden`` (registry-derived, deny-first).
+    """Add automatic and hard exclude hits to ``hidden``.
 
-    Mirrors the resolver's exclude loop. The empty-set dimensions are inert (``x in
-    set()`` / ``set() & x`` are falsy), so an inactive dimension hides nothing
-    without a guard; only ``exclude_hidden`` is a bool flag and keeps its guard.
+    Category/HA-hidden filters are skipped for an allowlist; concrete area/label
+    exclusions remain hard conflicts and always apply.
     """
     for eid, entry in registry_by_id.items():
         if eid in denied:
             continue
-        if _enum_value(getattr(entry, "entity_category", None)) in categories:
-            hidden.add(eid)
-            continue
-        if exclude_hidden and getattr(entry, "hidden_by", None) is not None:
-            hidden.add(eid)
-            continue
+        if automatic_excludes_active:
+            if _enum_value(getattr(entry, "entity_category", None)) in categories:
+                hidden.add(eid)
+                continue
+            if exclude_hidden and getattr(entry, "hidden_by", None) is not None:
+                hidden.add(eid)
+                continue
         if _effective_area_for_entry(view, entry) in exclude_areas:
             hidden.add(eid)
             continue
@@ -5207,20 +5211,19 @@ def _apply_visibility_allow_assist(
 ) -> None:
     """Add allow-restrict + Assist hits to ``hidden`` over registry + states.
 
-    These conjunctive filters must reach states-only entities, so they iterate the
-    full candidate universe. Mirrors the resolver's allow/assist loop. ``should_expose_fn``
-    is consulted only when ``assist_active`` (Assist requested AND its data
-    available); an unavailable-Assist request degrades to no Assist hiding here,
-    with the warning surfaced separately.
+    Both filters reach states-only entities. An allow match authorizes past Assist;
+    ``should_expose_fn`` is therefore consulted only without an allowlist when
+    Assist was requested and its data is available.
     """
     for eid in registry_by_id.keys() | state_ids:
         if eid in hidden:
             continue
         entry = registry_by_id.get(eid)
-        if allow_active and not _entity_allowed(
-            view, eid, entry, allow_entity_ids, allow_areas, allow_labels
-        ):
-            hidden.add(eid)
+        if allow_active:
+            if not _entity_allowed(
+                view, eid, entry, allow_entity_ids, allow_areas, allow_labels
+            ):
+                hidden.add(eid)
             continue
         if assist_active and not should_expose_fn(eid):
             hidden.add(eid)

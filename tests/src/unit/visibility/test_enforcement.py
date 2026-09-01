@@ -687,6 +687,78 @@ class TestProxyUnwrap:
 
 
 class TestOutboundScan:
+    async def test_get_state_omits_hidden_relationship_references(self, set_config):
+        set_config(
+            enabled=True,
+            enforce=True,
+            exclude_categories=["diagnostic"],
+            allow_entity_ids=["person.allowed"],
+        )
+        client = FakeClient(
+            registry={
+                "success": True,
+                "result": [
+                    {"entity_id": "person.allowed", "entity_category": None},
+                    {
+                        "entity_id": "device_tracker.hidden_a",
+                        "entity_category": "diagnostic",
+                    },
+                    {
+                        "entity_id": "device_tracker.hidden_b",
+                        "entity_category": "diagnostic",
+                    },
+                ],
+            },
+            states=[
+                {"entity_id": "person.allowed", "attributes": {}},
+                {"entity_id": "device_tracker.hidden_a", "attributes": {}},
+                {"entity_id": "device_tracker.hidden_b", "attributes": {}},
+            ],
+        )
+        payload = {
+            "data": {
+                "entity_id": "person.allowed",
+                "state": "home",
+                "attributes": {
+                    "source": "device_tracker.hidden_a",
+                    "device_trackers": [
+                        "device_tracker.hidden_a",
+                        "device_tracker.hidden_b",
+                    ],
+                    "friendly_name": "Allowed person",
+                },
+            },
+            "metadata": {"time_zone": "UTC"},
+        }
+        mw = make_mw(get_client=lambda: client)
+
+        result = await mw.on_call_tool(
+            make_context("ha_get_state", {"entity_id": "person.allowed"}),
+            _returns(text_result(json.dumps(payload), structured=payload)),
+        )
+
+        structured = result.structured_content
+        text = json.loads(result.content[0].text)
+        for rendered in (structured, text):
+            attrs = rendered["data"]["attributes"]
+            assert "source" not in attrs
+            assert attrs["device_trackers"] == []
+            assert attrs["friendly_name"] == "Allowed person"
+            assert any("relationship references" in w for w in rendered["warnings"])
+            assert "device_tracker.hidden" not in json.dumps(rendered)
+
+    async def test_get_state_non_json_hidden_reference_still_refused(
+        self, set_config
+    ):
+        set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
+        mw = make_mw(get_client=FakeClient)
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_get_state", {"entity_id": "light.allowed"}),
+                _returns(text_result("relationship: sensor.foo")),
+            )
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
     async def test_text_content_hit_refused_without_naming_entity(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
         mw = make_mw(get_client=FakeClient)

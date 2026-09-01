@@ -194,6 +194,36 @@ _SCENARIOS = [
         expected=frozenset({"light.vismark_viadev"}),
     ),
     _Scenario(
+        id="allow_match_overrides_category_and_assist",
+        ents=(
+            _Ent(
+                "light.vismark_allowed", category="diagnostic", hidden_by="user"
+            ),
+            _Ent("light.vismark_drop"),
+        ),
+        exposed=frozenset(),
+        config=VisibilityConfig(
+            enabled=True,
+            exclude_categories=["diagnostic"],
+            exclude_hidden=True,
+            allow_entity_ids=["light.vismark_allowed"],
+            respect_assist_exposure=True,
+        ),
+        expected=frozenset({"light.vismark_allowed"}),
+    ),
+    _Scenario(
+        id="explicit_exclude_area_wins_over_allow",
+        ents=(
+            _Ent("light.vismark_conflict", area_id="office"),
+            _Ent("light.vismark_allowed", area_id="kitchen"),
+        ),
+        config=_cfg(
+            exclude_areas=["office"],
+            allow_entity_ids=["light.vismark_conflict", "light.vismark_allowed"],
+        ),
+        expected=frozenset({"light.vismark_allowed"}),
+    ),
+    _Scenario(
         id="assist_via_injected_fake",
         ents=(_Ent("light.vismark_a"), _Ent("light.vismark_b")),
         exposed=frozenset({"light.vismark_b"}),

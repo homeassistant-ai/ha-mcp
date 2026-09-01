@@ -1,10 +1,10 @@
 """Pure resolver: compute the hidden entity_id set from a registry list + config.
 
-The filter is a conjunction of independent hide dimensions: an entity is shown
-only if it passes *all* active dimensions (deny, allowlist, Assist exposure,
-excludes). Because every dimension can only *hide*, never un-hide, the order in
-which they are applied does not affect the final set - there is no priority
-ladder to reason about, only a union of hide reasons.
+The filter has an explicit precedence ladder. Concrete deny/entity-area-label
+exclusions always win. When an allowlist is active, a matching entity is
+authorized past the broad automatic category, Home Assistant hidden-state, and
+Assist-exposure filters; nonmatching entities are hidden. Without an allowlist,
+all configured filters apply normally.
 """
 
 from __future__ import annotations
@@ -225,23 +225,25 @@ def _excluded_by_dimensions(
     labels: set[str],
     device_area: dict[str, str],
     device_labels: dict[str, list[str]],
+    automatic_excludes_active: bool,
 ) -> set[str]:
-    """Return registry entities hidden by a category/hidden/area/label exclude.
+    """Return registry entities hidden by automatic or hard excludes.
 
-    Exclude dimensions are registry-derived: they hide an entity that *has* a
-    matching category/hidden flag/area/label. A states-only entity has none of
-    these, so (correctly) is never excluded - the loop stays registry-based.
+    Category and HA-hidden filters are broad automatic exclusions and are skipped
+    for an active allowlist. Concrete area/label exclusions remain hard conflicts
+    and always win. All are registry-derived, so states-only entities cannot match.
     """
     excluded: set[str] = set()
     for eid, entry in registry_by_id.items():
         if eid in denied:
             continue  # already hidden via the seed
-        if categories and entry.get("entity_category") in categories:
-            excluded.add(eid)
-            continue
-        if config.exclude_hidden and entry.get("hidden_by") is not None:
-            excluded.add(eid)
-            continue
+        if automatic_excludes_active:
+            if categories and entry.get("entity_category") in categories:
+                excluded.add(eid)
+                continue
+            if config.exclude_hidden and entry.get("hidden_by") is not None:
+                excluded.add(eid)
+                continue
         if areas and _effective_area(entry, device_area) in areas:
             excluded.add(eid)
             continue
@@ -293,17 +295,23 @@ def _candidate_hidden(
         if eid in hidden:
             continue
         entry = registry_by_id.get(eid)
-        if allow_active and not (
-            eid in allow_entity_ids
-            or (
-                entry is not None and _effective_area(entry, device_area) in allow_areas
-            )
-            or (
-                entry is not None
-                and allow_labels.intersection(_effective_labels(entry, device_labels))
-            )
-        ):
-            newly_hidden.add(eid)
+        if allow_active:
+            if not (
+                eid in allow_entity_ids
+                or (
+                    entry is not None
+                    and _effective_area(entry, device_area) in allow_areas
+                )
+                or (
+                    entry is not None
+                    and allow_labels.intersection(
+                        _effective_labels(entry, device_labels)
+                    )
+                )
+            ):
+                newly_hidden.add(eid)
+            # A match authorizes the entity past the broad Assist filter; a miss
+            # is already hidden by restrict mode.
             continue
         if assist_active:
             # Effective device_class: a registry override wins, else the live
@@ -396,8 +404,9 @@ def hidden_entity_ids(
     ``load_hidden_set`` reads from ``homeassistant/expose_entity/list`` — the only
     exposure source for states-only entities with no registry entry — and
     ``expose_new`` is HA's "expose new entities" flag. Note the ha-mcp visibility
-    precedence (a conjunction of hide dimensions) is separate from HA's own
-    async_should_expose precedence, which only the Assist dimension mirrors.
+    precedence is separate from HA's own ``async_should_expose`` precedence:
+    hard ID/area/label exclusions win, then an allow match authorizes past the
+    broad category/hidden/Assist filters.
     """
     if not config.enabled:
         return set(), []
@@ -447,6 +456,7 @@ def hidden_entity_ids(
     # active it inverts the default: an entity is hidden unless it matches one of
     # the allow dimensions. Empty allow_* => inactive => nothing hidden by allow.
     allow_active = bool(allow_areas or allow_labels or allow_entity_ids)
+    configured_allow_active = allow_active
 
     # Fail-open guard: an area/label allowlist needs registry data to match. If
     # the registry came back empty (success but no usable entries) those
@@ -478,17 +488,18 @@ def hidden_entity_ids(
         labels,
         device_area,
         device_labels,
+        automatic_excludes_active=not configured_allow_active,
     )
 
-    # Allowlist + Assist are conjunctive filters that must also reach states-only
-    # entities, so they iterate the full candidate universe (registry ∪ states)
-    # rather than just the registry. Without a states list they degrade to the
-    # registry set.
-    if allow_active or config.respect_assist_exposure:
+    # Allowlist and Assist both reach states-only entities. An allowlist match
+    # authorizes past Assist, so Assist is irrelevant whenever an allowlist was
+    # configured (including when a registry-derived allowlist degrades open).
+    assist_requested = config.respect_assist_exposure and not configured_allow_active
+    if allow_active or assist_requested:
         candidate_ids = set(registry_by_id)
         candidate_ids |= set(state_device_class)
-        assist_active = config.respect_assist_exposure and assist_overrides is not None
-        if config.respect_assist_exposure and assist_overrides is None:
+        assist_active = assist_requested and assist_overrides is not None
+        if assist_requested and assist_overrides is None:
             # The seam could not supply Assist data; skip that dimension rather
             # than hide everything, and tell the operator. Under strict mode a
             # skipped Assist dimension could leak an un-exposed entity, so raise.
@@ -596,6 +607,13 @@ async def _fetch_assist_exposure(
         # so recording a second one would double-warn on one root cause.
         logger.warning("assist exposure fetch failed; dimension skipped", exc_info=True)
         return None, False
+
+
+def config_has_active_allowlist(config: VisibilityConfig) -> bool:
+    """Whether at least one allowlist dimension is configured and enabled."""
+    return config.enabled and bool(
+        config.allow_entity_ids or config.allow_areas or config.allow_labels
+    )
 
 
 def config_needs_device_registry(config: VisibilityConfig) -> bool:
@@ -764,7 +782,12 @@ async def load_hidden_set(
     try:
         assist_overrides: dict[str, bool] | None = None
         expose_new = False
-        if config.enabled and config.respect_assist_exposure and client is not None:
+        if (
+            config.enabled
+            and config.respect_assist_exposure
+            and not config_has_active_allowlist(config)
+            and client is not None
+        ):
             assist_overrides, expose_new = await _fetch_assist_exposure(client)
         return hidden_entity_ids(
             registry_result,

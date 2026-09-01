@@ -456,16 +456,16 @@ def test_allowlist_deny_still_wins():
     assert _hidden(reg, cfg) == {"light.kitchen"}
 
 
-def test_allow_and_exclude_compose_exclude_wins_over_allow():
-    # Central invariant: hide dimensions compose. An allow dimension and an
-    # exclude dimension are active simultaneously, so an entity that an allowlist
-    # matches but an exclude also matches must stay hidden (exclude wins) - a
-    # refactor that let restrict mode skip the exclude loop would leak it.
+def test_allow_match_overrides_category_and_hidden_filters():
+    # An active allowlist is an authorization boundary: a matching entity stays
+    # visible even when a broad automatic category filter also matches it. Hard
+    # deny/entity-area-label exclusions can still hide an allowlisted entity.
     reg = _reg(
-        # diagnostic AND in the allowed area -> exclude must still hide it.
+        # Diagnostic AND in the allowed area -> the allow match authorizes it.
         {
             "entity_id": "sensor.diag_allowed",
             "entity_category": "diagnostic",
+            "hidden_by": "user",
             "area_id": "kitchen",
         },
         # allowed area, not excluded -> the one entity that stays visible.
@@ -476,9 +476,46 @@ def test_allow_and_exclude_compose_exclude_wins_over_allow():
     cfg = VisibilityConfig(
         enabled=True,
         exclude_categories=["diagnostic"],
+        exclude_hidden=True,
         allow_areas=["kitchen"],
     )
-    assert _hidden(reg, cfg) == {"sensor.diag_allowed", "light.bedroom"}
+    assert _hidden(reg, cfg) == {"light.bedroom"}
+
+
+def test_explicit_exclude_area_still_wins_over_allow_match():
+    reg = _reg(
+        {"entity_id": "light.conflict", "area_id": "office"},
+        {"entity_id": "light.allowed", "area_id": "kitchen"},
+    )
+    cfg = VisibilityConfig(
+        enabled=True,
+        exclude_categories=[],
+        exclude_areas=["office"],
+        allow_entity_ids=["light.conflict", "light.allowed"],
+    )
+    assert _hidden(reg, cfg) == {"light.conflict"}
+
+
+def test_allow_match_overrides_assist_exposure():
+    reg = _reg(
+        {"entity_id": "sensor.allowed", "entity_category": "diagnostic"},
+        {"entity_id": "sensor.not_allowed"},
+    )
+    cfg = VisibilityConfig(
+        enabled=True,
+        exclude_categories=["diagnostic"],
+        allow_entity_ids=["sensor.allowed"],
+        respect_assist_exposure=True,
+    )
+    hidden, warnings = hidden_entity_ids(
+        reg,
+        cfg,
+        None,
+        {"sensor.allowed": False, "sensor.not_allowed": False},
+        False,
+    )
+    assert hidden == {"sensor.not_allowed"}
+    assert warnings == []
 
 
 def test_empty_registry_with_area_allowlist_degrades_open_not_blank():
