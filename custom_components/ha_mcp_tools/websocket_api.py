@@ -1118,10 +1118,10 @@ def _do_search(
         # :func:`_visibility_hidden_set`.
         if isinstance(visibility, Mapping) and visibility:
             states_list = _iter_states(hass)
-            allowlist_state = _visibility_allowlist_state(view, states_list, visibility)
+            inventory = _visibility_inventory(view, states_list, visibility)
             assist_applies = (
                 bool(visibility.get("respect_assist_exposure"))
-                and not allowlist_state.active
+                and not inventory.allowlist.active
             )
             # Short-circuit the probe unless Assist applies. True on the skipped
             # path means there is no Assist degradation to report; the hidden-set
@@ -1133,9 +1133,14 @@ def _do_search(
                 visibility,
                 lambda eid: _assist_should_expose(hass, eid),
                 assist_available=assist_available,
+                inventory=inventory,
             )
             visibility_warnings = _visibility_warnings(
-                view, states_list, visibility, assist_available=assist_available
+                view,
+                states_list,
+                visibility,
+                assist_available=assist_available,
+                inventory=inventory,
             )
             if hidden:
                 scored_entities = [
@@ -5018,10 +5023,20 @@ class _AllowlistState(NamedTuple):
     degraded: bool
 
 
+class _VisibilityInventory(NamedTuple):
+    """Registry/state indexes and allowlist state shared by one search."""
+
+    registry_by_id: dict[str, Any]
+    state_ids: set[str]
+    allowlist: _AllowlistState
+
+
 def _visibility_allowlist_state(
-    view: _RegistryView, states: Any, visibility: Mapping[str, Any]
+    registry_by_id: Mapping[str, Any],
+    state_ids: set[str],
+    visibility: Mapping[str, Any],
 ) -> _AllowlistState:
-    """Resolve allowlist activity from the same inventory on every search seam.
+    """Resolve allowlist activity from one precomputed search inventory.
 
     ``degraded`` deliberately remains true when an explicit ``allow_entity_ids``
     list keeps restrict mode active: only the registry-derived allow dimensions
@@ -5033,11 +5048,7 @@ def _visibility_allowlist_state(
     registry_dimensions_active = bool(
         visibility.get("allow_areas") or visibility.get("allow_labels")
     )
-    degraded = (
-        registry_dimensions_active
-        and not _registry_index_by_id(view)
-        and bool(_state_entity_ids(states))
-    )
+    degraded = registry_dimensions_active and not registry_by_id and bool(state_ids)
     if entity_ids_active:
         active = True
     elif degraded:
@@ -5045,6 +5056,19 @@ def _visibility_allowlist_state(
     else:
         active = registry_dimensions_active
     return _AllowlistState(active, degraded)
+
+
+def _visibility_inventory(
+    view: _RegistryView, states: Any, visibility: Mapping[str, Any]
+) -> _VisibilityInventory:
+    """Build the registry/state inventory once for one visibility computation."""
+    registry_by_id = _registry_index_by_id(view)
+    state_ids = _state_entity_ids(states)
+    return _VisibilityInventory(
+        registry_by_id,
+        state_ids,
+        _visibility_allowlist_state(registry_by_id, state_ids, visibility),
+    )
 
 
 def _unknown_categories_warning(unknown_categories: set[str]) -> str:
@@ -5062,6 +5086,7 @@ def _visibility_hidden_set(
     should_expose_fn: Any,
     *,
     assist_available: bool = True,
+    inventory: _VisibilityInventory | None = None,
 ) -> set[str]:
     """Compute the opt-in hidden entity_id set, mirroring the server's resolver.
 
@@ -5099,11 +5124,13 @@ def _visibility_hidden_set(
     allow_labels = set(visibility.get("allow_labels") or [])
     respect_assist = bool(visibility.get("respect_assist_exposure"))
 
-    registry_by_id = _registry_index_by_id(view)
+    if inventory is None:
+        inventory = _visibility_inventory(view, states, visibility)
+    registry_by_id = inventory.registry_by_id
     # states-only entity universe (YAML/template entities absent from the registry
     # that the allow / Assist dimensions must still be able to hide).
-    state_ids = _state_entity_ids(states)
-    allowlist_state = _visibility_allowlist_state(view, states, visibility)
+    state_ids = inventory.state_ids
+    allowlist_state = inventory.allowlist
     allow_active, allowlist_degraded = allowlist_state
     # Fail-open guard: registry-derived allow dimensions cannot match when the
     # registry is empty but states-only candidates exist.
@@ -5150,6 +5177,7 @@ def _visibility_warnings(
     visibility: Mapping[str, Any],
     *,
     assist_available: bool = True,
+    inventory: _VisibilityInventory | None = None,
 ) -> list[str]:
     """Degradation warnings for a visibility computation, mirroring the resolver.
 
@@ -5174,7 +5202,9 @@ def _visibility_warnings(
     if unknown:
         warnings.append(_unknown_categories_warning(unknown))
 
-    allowlist_state = _visibility_allowlist_state(view, states, visibility)
+    if inventory is None:
+        inventory = _visibility_inventory(view, states, visibility)
+    allowlist_state = inventory.allowlist
     allow_active, allowlist_degraded = allowlist_state
     if allowlist_degraded:
         warnings.append(_ALLOWLIST_REGISTRY_EMPTY_WARNING)

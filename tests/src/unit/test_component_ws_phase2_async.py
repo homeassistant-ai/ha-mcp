@@ -1277,6 +1277,31 @@ class TestSearchVisibilityPlacement:
 
         assert {e["entity_id"] for e in res["entities"]} == {"light.a"}
 
+    def test_visibility_registry_inventory_built_once(self, monkeypatch):
+        h = self._hass_and_view(monkeypatch)
+        real_all_entity_entries = wsapi._all_entity_entries
+        enumeration_count = 0
+
+        def _counted_entries(view):
+            nonlocal enumeration_count
+            enumeration_count += 1
+            return real_all_entity_entries(view)
+
+        monkeypatch.setattr(wsapi, "_all_entity_entries", _counted_entries)
+        res = wsapi._do_search(
+            h,
+            {
+                "query": "",
+                "visibility": {
+                    "allow_entity_ids": ["light.a"],
+                    "respect_assist_exposure": True,
+                },
+            },
+        )
+
+        assert {e["entity_id"] for e in res["entities"]} == {"light.a"}
+        assert enumeration_count == 1
+
     def test_assist_seam_wired_in_do_search(self, monkeypatch):
         h = self._hass_and_view(monkeypatch)
         # Assist available (its store is set up) so the dimension runs and consults

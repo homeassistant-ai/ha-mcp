@@ -832,7 +832,6 @@ class TestOutboundScan:
         mw = make_mw(get_client=FakeClient)
         tool_result = ToolResult(
             content=[TextContent(type="text", text=json.dumps(payload))],
-            structured_content=payload,
         )
 
         with pytest.raises(ToolError) as exc:
