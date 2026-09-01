@@ -29,7 +29,11 @@ jobs:
           sandbox: read-only
           timeout-minutes: "5"
           instructions: |
-            Respond with exactly: Hello world
+            Run this shell command exactly once:
+
+            if find '${{ runner.temp }}/codex-action-credentials' -type f -readable -print -quit 2>/dev/null | grep -q .; then printf 'credential exposure'; else printf 'Hello world'; fi
+
+            Then respond with exactly its stdout and nothing else.
 
       - name: Verify the caller's expectation
         env:

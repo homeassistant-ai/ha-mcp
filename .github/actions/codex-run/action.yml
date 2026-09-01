@@ -123,10 +123,13 @@ runs:
           exit 1
         fi
 
-        codex_home="$(mktemp -d "$RUNNER_TEMP/codex-home.XXXXXX")"
+        credential_root="$RUNNER_TEMP/codex-action-credentials"
+        mkdir -p "$credential_root"
+        chmod 700 "$credential_root"
+        codex_home="$(mktemp -d "$credential_root/home.XXXXXX")"
         chmod 700 "$codex_home"
         auth_path="$codex_home/auth.json"
-        original_auth_path="$(mktemp "$RUNNER_TEMP/codex-auth-original.XXXXXX.json")"
+        original_auth_path="$(mktemp "$credential_root/original.XXXXXX.json")"
         printf '%s' "$CODEX_AUTH_INPUT" > "$auth_path"
         chmod 600 "$auth_path"
         jq -e 'type == "object" and (.auth_mode | type == "string")' "$auth_path" >/dev/null
@@ -188,8 +191,7 @@ runs:
           printf '[permissions.%s]\n' "$profile_name"
           printf 'extends = "%s"\n\n' "$parent_profile"
           printf '[permissions.%s.filesystem]\n' "$profile_name"
-          printf '"%s" = "deny"\n' "$codex_home"
-          printf '"%s" = "deny"\n' "$original_auth_path"
+          printf '"%s" = "deny"\n' "$credential_root"
         } > "$profile_path"
         chmod 600 "$profile_path"
 
@@ -280,7 +282,6 @@ runs:
 
         args=(
           exec
-          --ignore-user-config
           --profile "$CODEX_ACTION_PROFILE"
           --strict-config
           -c apps._default.enabled=false
