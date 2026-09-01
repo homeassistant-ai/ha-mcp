@@ -23,7 +23,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      GH_TOKEN: ${{ github.token }}
       ITEM_LIMIT: ${{ inputs.limit }}
     steps:
       - name: Checkout
@@ -32,6 +31,8 @@ jobs:
           persist-credentials: false
 
       - name: Collect authorized issue context
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [[ ! "$ITEM_LIMIT" =~ ^[1-9][0-9]*$ ]] || (( ITEM_LIMIT > 50 )); then

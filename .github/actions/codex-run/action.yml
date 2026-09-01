@@ -110,7 +110,7 @@ runs:
           /*) workdir_candidate="$WORKING_DIRECTORY_INPUT" ;;
           *) workdir_candidate="$GITHUB_WORKSPACE/$WORKING_DIRECTORY_INPUT" ;;
         esac
-        workdir="$(realpath "$workdir_candidate")"
+        workdir="$(realpath -m "$workdir_candidate")"
         case "$workdir/" in
           "$GITHUB_WORKSPACE/"*) ;;
           *)
@@ -118,6 +118,10 @@ runs:
             exit 1
             ;;
         esac
+        if [[ ! -d "$workdir" ]]; then
+          echo "::error::working-directory does not point to a directory."
+          exit 1
+        fi
 
         codex_home="$(mktemp -d "$RUNNER_TEMP/codex-home.XXXXXX")"
         chmod 700 "$codex_home"
@@ -136,7 +140,7 @@ runs:
             /*) instructions_candidate="$INSTRUCTIONS_FILE_INPUT" ;;
             *) instructions_candidate="$GITHUB_WORKSPACE/$INSTRUCTIONS_FILE_INPUT" ;;
           esac
-          instructions_source="$(realpath "$instructions_candidate")"
+          instructions_source="$(realpath -m "$instructions_candidate")"
           case "$instructions_source/" in
             "$GITHUB_WORKSPACE/"*) ;;
             *)
@@ -164,12 +168,30 @@ runs:
             /*) schema_candidate="$OUTPUT_SCHEMA_INPUT" ;;
             *) schema_candidate="$GITHUB_WORKSPACE/$OUTPUT_SCHEMA_INPUT" ;;
           esac
-          schema_path="$(realpath "$schema_candidate")"
+          schema_path="$(realpath -m "$schema_candidate")"
           if [[ ! -f "$schema_path" ]]; then
             echo "::error::output-schema does not point to a file."
             exit 1
           fi
         fi
+
+        profile_name=ci-action
+        profile_path="$codex_home/$profile_name.config.toml"
+        case "$SANDBOX_INPUT" in
+          read-only) parent_profile=:read-only ;;
+          workspace-write) parent_profile=:workspace ;;
+        esac
+        {
+          printf 'default_permissions = "%s"\n\n' "$profile_name"
+          printf '[shell_environment_policy]\n'
+          printf 'inherit = "core"\n\n'
+          printf '[permissions.%s]\n' "$profile_name"
+          printf 'extends = "%s"\n\n' "$parent_profile"
+          printf '[permissions.%s.filesystem]\n' "$profile_name"
+          printf '"%s" = "deny"\n' "$codex_home"
+          printf '"%s" = "deny"\n' "$original_auth_path"
+        } > "$profile_path"
+        chmod 600 "$profile_path"
 
         {
           echo "CODEX_HOME=$codex_home"
@@ -179,6 +201,7 @@ runs:
           echo "CODEX_ACTION_SCHEMA=$schema_path"
           echo "CODEX_ACTION_ALLOW_SHELL=$allow_shell"
           echo "CODEX_ACTION_TIMEOUT_MINUTES=$TIMEOUT_MINUTES_INPUT"
+          echo "CODEX_ACTION_PROFILE=$profile_name"
         } >> "$GITHUB_ENV"
         {
           echo "output-path=$output_path"
@@ -230,6 +253,20 @@ runs:
 
         bwrap --version
 
+    - name: Verify credential isolation
+      shell: bash
+      run: |
+        set -euo pipefail
+        codex sandbox \
+          --profile "$CODEX_ACTION_PROFILE" \
+          --permission-profile "$CODEX_ACTION_PROFILE" \
+          --cd "$CODEX_ACTION_WORKDIR" \
+          -- \
+          bash -c '[[ ! -r "$1" && ! -r "$2" ]]' \
+          _ \
+          "$CODEX_HOME/auth.json" \
+          "${{ steps.prepare.outputs.original-auth-path }}"
+
     - id: agent
       name: Run Codex
       shell: bash
@@ -244,10 +281,11 @@ runs:
         args=(
           exec
           --ignore-user-config
+          --profile "$CODEX_ACTION_PROFILE"
+          --strict-config
           -c apps._default.enabled=false
           --ephemeral
           --color never
-          --sandbox "$SANDBOX_INPUT"
           --cd "$CODEX_ACTION_WORKDIR"
           --output-last-message "$CODEX_ACTION_OUTPUT"
         )

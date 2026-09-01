@@ -24,6 +24,12 @@ once without overwriting an earlier result or auth snapshot. The invocation
 timeout should remain shorter than the caller's job timeout, leaving time for
 the separate auth-persistence step.
 
+Model-executed commands inherit only Codex's `core` shell environment. A named
+filesystem permission profile masks both `CODEX_HOME` and the original auth
+snapshot, and the action probes those paths through `codex sandbox` before it
+runs the agent. This keeps authentication unavailable even when a trusted
+caller enables the shell.
+
 When the caller also supplies a repository-scoped token with `Secrets: write`,
 it can invoke the separate `codex-update-auth` action under `if: always()` to
 persist a refreshed `auth.json`. Keeping this step separate prevents ordinary
@@ -39,7 +45,7 @@ jobs:
   analyze:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/codex-run
@@ -64,7 +70,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/codex-run
@@ -98,13 +104,13 @@ Validated on 2026-08-31 in the dedicated
 [`ha-mcp-workflows-dev`](https://github.com/homeassistant-ai/ha-mcp-workflows-dev)
 bench with Codex CLI `0.151.0`:
 
-- [Hello World run 33459225512](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/33459225512)
+- [Hello World run 33460140551](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/33460140551)
   passed the verbatim instruction assertion and forced a `CODEX_AUTH` rewrite
   through the renewed repository-scoped secret-writer PAT.
-- [Issue review run 33459227873](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/33459227873)
+- [Issue review run 33460186362](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/33460186362)
   analyzed fixtures `#62`–`#65`, including the deliberate `#62/#63` duplicate,
   from a caller-built prompt with the shell disabled.
-- [Pull-request review run 33459231108](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/33459231108)
+- [Pull-request review run 33460188532](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/33460188532)
   analyzed fixtures `#66`–`#68` from caller-collected metadata, patches and
   inline review-thread state with the shell disabled.
 
