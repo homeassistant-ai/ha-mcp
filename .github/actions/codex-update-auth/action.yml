@@ -52,6 +52,18 @@ runs:
           echo "::error::Codex auth file or original snapshot is missing."
           exit 1
         fi
+        if ! jq -e \
+          'type == "object" and (.auth_mode | type == "string" and length > 0)' \
+          "$CODEX_AUTH_PATH" \
+          >/dev/null; then
+          echo "::error::Refusing to persist malformed Codex auth JSON."
+          exit 1
+        fi
+        refreshed_codex_home="$(dirname "$CODEX_AUTH_PATH")"
+        if ! CODEX_HOME="$refreshed_codex_home" codex login status >/dev/null; then
+          echo "::error::Refusing to persist auth rejected by the installed Codex CLI."
+          exit 1
+        fi
         force_update="${FORCE_UPDATE,,}"
         if [[ "$force_update" != "true" && "$force_update" != "false" ]]; then
           echo "::error::force-update must be true or false."
