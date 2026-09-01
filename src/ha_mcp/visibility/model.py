@@ -1,8 +1,9 @@
 """Config model for the opt-in entity visibility filter (issue #1728)."""
 
-from __future__ import annotations
-
-from typing import TypedDict
+# No ``from __future__ import annotations``: under PEP 563 ``NotRequired`` reaches
+# the TypedDict metaclass as a string and ``VisibilityWire.__optional_keys__``
+# comes back empty, which the cross-seam schema contract test relies on.
+from typing import NotRequired, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -11,8 +12,16 @@ class VisibilityWire(TypedDict):
     """Exact visibility payload the server emits to component search.
 
     Keep these fields in lockstep with :meth:`VisibilityConfig.to_wire` and the
-    component's visibility schema. Receivers still capability-gate the payload;
-    this type only describes what the server emits.
+    component's visibility schema. The server gates on the receiver's advertised
+    capabilities before sending (``_resolve_component_search_visibility``); this
+    type only describes what it emits.
+
+    The nine required keys are exactly :meth:`VisibilityConfig.to_wire`.
+    ``allowlist_authorization`` is added by the server only for a component that
+    advertises ``search_visibility_allowlist_authorization`` and opts it into the
+    revised precedence (an allow match authorizes past the category, HA-hidden,
+    and Assist filters). Absent, the component keeps the legacy conjunctive
+    precedence, so a newer component stays correct against an older server.
     """
 
     exclude_categories: list[str]
@@ -24,6 +33,7 @@ class VisibilityWire(TypedDict):
     allow_areas: list[str]
     allow_labels: list[str]
     respect_assist_exposure: bool
+    allowlist_authorization: NotRequired[bool]
 
 
 def wire_has_allowlist_dimensions(visibility: VisibilityWire) -> bool:
@@ -91,10 +101,11 @@ class VisibilityConfig(BaseModel):
     def to_wire(self) -> VisibilityWire:
         """Serialize the hide dimensions for the component ``search`` fast path.
 
-        Emits exactly the fields the ha_mcp_tools component's ``search``
-        ``visibility`` param consumes (``_visibility_hidden_set``) — the nine hide
-        dimensions, one-to-one with what ``config_has_active_hide_dimensions`` and
-        ``hidden_entity_ids`` read. ``version``/``enabled`` are omitted: the
+        Emits the nine hide dimensions the ha_mcp_tools component's ``search``
+        ``visibility`` param consumes (``_visibility_hidden_set``), one-to-one
+        with what ``config_has_active_hide_dimensions`` and ``hidden_entity_ids``
+        read. The optional ``allowlist_authorization`` flag is not a dimension;
+        the routing gate adds it per receiver. ``version``/``enabled`` are omitted: the
         component applies the dimensions unconditionally, and the server only ever
         sends this dict when the filter is active, so an ``enabled`` gate would be
         redundant. Kept in lockstep with ``_visibility_hidden_set``; a new

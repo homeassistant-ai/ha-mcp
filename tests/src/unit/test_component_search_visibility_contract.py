@@ -38,7 +38,7 @@ import pytest
 from ha_mcp.client.rest_client import HomeAssistantCommandError
 from ha_mcp.tools import tools_search
 from ha_mcp.visibility import resolver
-from ha_mcp.visibility.model import VisibilityConfig
+from ha_mcp.visibility.model import VisibilityConfig, VisibilityWire
 from ha_mcp.visibility.persistence import save_visibility_config
 
 from ._component_routing_helpers import make_ws, patch_ws
@@ -593,11 +593,16 @@ def test_component_warning_constants_match_resolver() -> None:
 def test_component_visibility_schema_keys_match_server_to_wire() -> None:
     """The component's enumerated ``visibility`` schema keys equal the server's wire set.
 
-    The component now rejects unknown ``visibility`` keys (enumerated schema), so its
-    known-key set must stay in lockstep with ``VisibilityConfig.to_wire`` — otherwise
-    a dimension the server sends would be rejected, or a dropped dimension would be
-    silently accepted. Pins both sides of the "new dimension ⇒ new capability" rule.
+    The component rejects unknown ``visibility`` keys (enumerated schema), so its
+    known-key set must stay in lockstep with ``VisibilityWire`` — otherwise a key the
+    server sends would be rejected, or a dropped one would be silently accepted. Two
+    halves are pinned: ``to_wire`` emits exactly the REQUIRED keys (the hide
+    dimensions), and the component knows exactly the required keys plus the optional
+    ones (today just ``allowlist_authorization``, the precedence flag the server adds
+    per receiver capability). Pins both sides of the "new dimension ⇒ new capability"
+    rule.
     """
-    assert set(VisibilityConfig().to_wire()) == set(wsapi._VISIBILITY_LIST_KEYS) | set(
-        wsapi._VISIBILITY_BOOL_KEYS
-    )
+    assert set(VisibilityConfig().to_wire()) == set(VisibilityWire.__required_keys__)
+    assert set(VisibilityWire.__required_keys__) | set(
+        VisibilityWire.__optional_keys__
+    ) == set(wsapi._VISIBILITY_LIST_KEYS) | set(wsapi._VISIBILITY_BOOL_KEYS)

@@ -8,6 +8,12 @@ param and excludes hidden entities itself, so a visibility-active install can
 still take the fast path. These tests pin the four-way gate:
 
 - filter active + ``search_visibility`` → component WITH the ``visibility`` param
+  (the nine hide dimensions and NOTHING else — an old component's strict schema
+  rejects an unknown key)
+- filter active + ``search_visibility_allowlist_authorization`` → the wire also
+  carries ``allowlist_authorization: True``, the key that opts the component into
+  the revised allowlist precedence. It rides on the CAPABILITY, not on whether an
+  allowlist happens to be configured
 - filter active + only ``search`` → legacy (the pre-capability behaviour)
 - filter inactive → component WITHOUT the param (old components keep working)
 - component error on the visibility path → legacy fallback (filter still applied)
@@ -153,8 +159,11 @@ async def test_active_filter_with_capability_routes_component_with_param(
     assert len(calls) == 1
     visibility = calls[0].kwargs.get("visibility")
     assert visibility is not None, "visibility param must ride the component request"
-    # Exactly the nine hide dimensions — no ``enabled`` / ``version`` leakage.
+    # Exactly the nine hide dimensions — no ``enabled`` / ``version`` leakage, and
+    # no ``allowlist_authorization``: this component does not advertise the
+    # capability, so its strict ten-key-unaware schema must never see that key.
     assert set(visibility) == _WIRE_KEYS
+    assert "allowlist_authorization" not in visibility
     assert visibility["deny_entity_ids"] == ["light.kitchen"]
     assert visibility["exclude_categories"] == []
 
@@ -230,6 +239,42 @@ async def test_active_allowlist_with_authorization_capability_routes_component(
     calls = _search_calls(ws)
     assert len(calls) == 1
     assert calls[0].kwargs["visibility"]["allow_entity_ids"] == ["sensor.kitchen_temp"]
+    # The wire flag — not the capability alone — is what tells the component to
+    # apply the revised precedence.
+    assert calls[0].kwargs["visibility"]["allowlist_authorization"] is True
+
+
+@pytest.mark.asyncio
+async def test_deny_only_config_with_authorization_capability_still_sends_flag(
+    tmp_path, monkeypatch
+) -> None:
+    """The wire flag rides on the CAPABILITY, not on an active allowlist.
+
+    A deny-only config has no allow dimensions, so both precedences agree on the
+    outcome; the server still stamps the key for a capable component so the
+    component's own resolution is unambiguous and the wire shape does not vary
+    with the config.
+    """
+    _write_active_deny(tmp_path, monkeypatch)
+    ws = make_ws(
+        "ha_mcp_tools/search",
+        info_result=_CAPS_SEARCH_VIS_ALLOW_AUTH,
+        cmd_result=_entity_search_result(),
+    )
+    client = RoutingClient()
+    ha_search = _build_ha_search(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await ha_search(query="kitchen")
+
+    assert resp["success"] is True
+    assert client.get_states_calls == 0
+    calls = _search_calls(ws)
+    assert len(calls) == 1
+    visibility = calls[0].kwargs["visibility"]
+    assert set(visibility) == _WIRE_KEYS | {"allowlist_authorization"}
+    assert visibility["allowlist_authorization"] is True
+    assert visibility["deny_entity_ids"] == ["light.kitchen"]
 
 
 @pytest.mark.asyncio

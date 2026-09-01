@@ -1322,6 +1322,11 @@ def _merge_component_visibility_warnings(
             response,
             [w for w in component_visibility_warnings if isinstance(w, str)],
         )
+    elif component_visibility_warnings is not None:
+        logger.warning(
+            "component visibility_warnings ignored: expected a list, got %s",
+            type(component_visibility_warnings).__name__,
+        )
 
 
 async def _scrub_component_config_buckets(
@@ -2397,11 +2402,13 @@ class SearchTools:
         # hidden entities through the fast path. The ``search_visibility``
         # capability closes that: a component that advertises it accepts the raw
         # hide config (``VisibilityConfig.to_wire``) as the ``visibility`` param
-        # and excludes hidden entities before its own counts/pagination. The later
-        # ``search_visibility_allowlist_authorization`` flag opts into the revised
-        # allowlist precedence; an active allowlist falls back to legacy unless the
-        # component advertises both flags. With no active filter, the plain
-        # ``search`` route runs without a ``visibility`` param, so old components
+        # and excludes hidden entities before its own counts/pagination. The
+        # ``search_visibility_allowlist_authorization`` capability adds the
+        # ``allowlist_authorization`` wire key, which opts the component into the
+        # revised allowlist precedence; without it an active allowlist falls back
+        # to legacy (see ``_resolve_component_search_visibility``). With no active
+        # filter, the plain ``search`` route runs without a ``visibility`` param,
+        # so old components
         # keep working. ``ha_get_overview`` needs no analogous gate — it reapplies
         # the filter over the component's raw slices. Checked only when it would
         # serve, so the common (no-component / filter-off) install pays nothing.
@@ -2438,15 +2445,21 @@ class SearchTools:
 
         - filter inactive → ``(True, None)``: the plain component search, no
           ``visibility`` param (parity with a pre-``search_visibility`` component).
-        - filter active + ``search_visibility`` capability + config serialized →
-          ``(True, <wire dict>)`` when the filter has no allowlist, or when the
-          component also advertises ``search_visibility_allowlist_authorization``.
-          That second flag proves it implements the revised rule where allowlist
-          matches authorize past category, HA-hidden, and Assist filters.
-        - filter active without the capability, or the config could not be loaded
-          → ``(False, None)``: the legacy path applies the filter server-side
-          before the counts/pagination (fail-closed to legacy on a bad config,
-          matching ``visibility_state_and_wire``'s fail-closed pairing).
+        - filter active + ``search_visibility`` + config serialized:
+          - component also advertises ``search_visibility_allowlist_authorization``
+            → ``(True, <wire dict + allowlist_authorization: True>)``. The key opts
+            the component into the revised rule (an allow match authorizes past
+            category, HA-hidden, and Assist filters). It is never sent to a
+            component lacking the capability: that component's strict schema would
+            reject it, and the key's absence is what keeps a newer component on the
+            legacy precedence the released server still applies in its own
+            outbound scan.
+          - no allowlist dimensions → ``(True, <wire dict>)``: the nine-key wire;
+            with no allow dimensions the two precedences agree.
+          - allowlist active without the capability → ``(False, None)``.
+        - config could not be loaded → ``(False, None)``: the legacy path applies
+          the filter server-side before the counts/pagination (fail-closed to
+          legacy, matching ``visibility_state_and_wire``'s fail-closed pairing).
 
         ``visibility_state_and_wire`` loads the config once for both the active
         gate and its wire form, instead of the active check and the wire fetch
@@ -2457,10 +2470,10 @@ class SearchTools:
             return True, None
         if not component_supports(caps, "search_visibility") or visibility is None:
             return False, None
-        allowlist_active = wire_has_allowlist_dimensions(visibility)
-        if allowlist_active and not component_supports(
-            caps, "search_visibility_allowlist_authorization"
-        ):
+        if component_supports(caps, "search_visibility_allowlist_authorization"):
+            authorized: VisibilityWire = {**visibility, "allowlist_authorization": True}
+            return True, authorized
+        if wire_has_allowlist_dimensions(visibility):
             return False, None
         return True, visibility
 

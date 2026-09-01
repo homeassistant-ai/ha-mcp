@@ -920,7 +920,13 @@ class TestVisibilityHiddenSet:
         assert hidden == set()
 
     def test_allow_empty_registry_guard_reenables_assist(self):
-        """A dropped area allowlist no longer overrides the broad Assist filter."""
+        """A dropped area allowlist no longer overrides the broad Assist filter.
+
+        The wire opts into the revised precedence, so an allow match WOULD have
+        authorized past Assist — but the area dimension degraded open and no
+        ``allow_entity_ids`` remain, so no allowlist is active to authorize
+        anything and Assist applies to every candidate.
+        """
         view = make_view()
         states = [FakeState("sensor.exposed"), FakeState("sensor.hidden")]
         calls = []
@@ -935,6 +941,7 @@ class TestVisibilityHiddenSet:
             {
                 "allow_areas": ["kitchen"],
                 "respect_assist_exposure": True,
+                "allowlist_authorization": True,
             },
             _exposed,
         )
@@ -985,6 +992,7 @@ class TestVisibilityHiddenSet:
         assert hidden == {"light.both"}
 
     def test_allow_match_overrides_category_and_assist(self):
+        """Revised precedence (``allowlist_authorization`` on the wire)."""
         view = make_view(
             entity={
                 "sensor.allowed": FakeRegEntry(
@@ -1008,11 +1016,66 @@ class TestVisibilityHiddenSet:
                 "exclude_categories": ["diagnostic"],
                 "allow_entity_ids": ["sensor.allowed"],
                 "respect_assist_exposure": True,
+                "allowlist_authorization": True,
             },
             _not_exposed,
         )
         assert hidden == {"sensor.drop"}
         assert calls == []
+
+    def test_legacy_wire_allow_match_still_faces_category_filter(self):
+        """Without the wire flag an allow match does NOT authorize past categories.
+
+        The pre-PR conjunctive semantics, which an older server still applies in
+        its own outbound scan: a newer component paired with it must agree, or
+        the search would surface entities that server then refuses.
+        """
+        view = make_view(
+            entity={
+                "sensor.allowed": FakeRegEntry(
+                    "sensor.allowed", entity_category="diagnostic"
+                ),
+                "sensor.drop": FakeRegEntry("sensor.drop"),
+            }
+        )
+        hidden = wsapi._visibility_hidden_set(
+            view,
+            [FakeState("sensor.allowed"), FakeState("sensor.drop")],
+            {
+                "exclude_categories": ["diagnostic"],
+                "allow_entity_ids": ["sensor.allowed"],
+            },
+            _always_expose,
+        )
+        assert hidden == {"sensor.allowed", "sensor.drop"}
+
+    def test_legacy_wire_allow_match_still_faces_assist_filter(self):
+        """Without the wire flag a matched entity is still Assist-checked."""
+        view = make_view(
+            entity={
+                "sensor.allowed": FakeRegEntry("sensor.allowed"),
+                "sensor.drop": FakeRegEntry("sensor.drop"),
+            }
+        )
+        calls = []
+
+        def _not_exposed(eid):
+            calls.append(eid)
+            return False
+
+        hidden = wsapi._visibility_hidden_set(
+            view,
+            [FakeState("sensor.allowed"), FakeState("sensor.drop")],
+            {
+                "allow_entity_ids": ["sensor.allowed"],
+                "respect_assist_exposure": True,
+            },
+            _not_exposed,
+        )
+        assert hidden == {"sensor.allowed", "sensor.drop"}
+        # The nonmatching entity is hidden by the allowlist without an Assist
+        # probe; the matched one IS probed, and fails.
+        assert calls == ["sensor.allowed"]
 
     def test_explicit_exclude_area_wins_over_allow(self):
         view = make_view(
@@ -1190,6 +1253,25 @@ class TestVisibilityWarnings:
         assert warnings == []
 
     def test_allowlist_makes_unavailable_assist_irrelevant(self):
+        """An AUTHORIZING allowlist makes the Assist dimension moot, so no warning."""
+        view = make_view(entity={"light.a": FakeRegEntry("light.a")})
+        warnings = wsapi._visibility_warnings(
+            view,
+            [FakeState("light.a")],
+            {
+                "allow_entity_ids": ["light.a"],
+                "respect_assist_exposure": True,
+                "allowlist_authorization": True,
+            },
+            assist_available=False,
+        )
+        assert warnings == []
+
+    def test_legacy_wire_allowlist_still_warns_on_unavailable_assist(self):
+        """Without the wire flag Assist still applies alongside the allowlist.
+
+        So its unavailability is a real degradation the operator must see.
+        """
         view = make_view(entity={"light.a": FakeRegEntry("light.a")})
         warnings = wsapi._visibility_warnings(
             view,
@@ -1200,7 +1282,7 @@ class TestVisibilityWarnings:
             },
             assist_available=False,
         )
-        assert warnings == []
+        assert warnings == [wsapi._ASSIST_UNAVAILABLE_WARNING]
 
     def test_multiple_degradations_all_surface(self):
         view = make_view()
@@ -1258,6 +1340,7 @@ class TestSearchVisibilityPlacement:
         assert res["entity_total_matches"] == 2
 
     def test_effective_allowlist_skips_assist_probe(self, monkeypatch):
+        """An AUTHORIZING allowlist makes Assist moot, so its probe is skipped."""
         h = self._hass_and_view(monkeypatch)
 
         def _unexpected_probe(hass):
@@ -1271,11 +1354,40 @@ class TestSearchVisibilityPlacement:
                 "visibility": {
                     "allow_entity_ids": ["light.a"],
                     "respect_assist_exposure": True,
+                    "allowlist_authorization": True,
                 },
             },
         )
 
         assert {e["entity_id"] for e in res["entities"]} == {"light.a"}
+
+    def test_legacy_wire_allowlist_still_probes_assist(self, monkeypatch):
+        """Without the wire flag Assist still applies, so the probe must run."""
+        h = self._hass_and_view(monkeypatch)
+        probes = []
+
+        def _probe(hass):
+            probes.append(hass)
+            return True
+
+        monkeypatch.setattr(wsapi, "_assist_exposure_available", _probe)
+        monkeypatch.setattr(
+            wsapi, "_assist_should_expose", lambda hass, eid: eid != "light.a"
+        )
+        res = wsapi._do_search(
+            h,
+            {
+                "query": "",
+                "visibility": {
+                    "allow_entity_ids": ["light.a"],
+                    "respect_assist_exposure": True,
+                },
+            },
+        )
+
+        assert probes
+        # light.b fails the allowlist, light.a matches but fails Assist.
+        assert res["entities"] == []
 
     def test_visibility_registry_inventory_built_once(self, monkeypatch):
         h = self._hass_and_view(monkeypatch)
@@ -1295,6 +1407,7 @@ class TestSearchVisibilityPlacement:
                 "visibility": {
                     "allow_entity_ids": ["light.a"],
                     "respect_assist_exposure": True,
+                    "allowlist_authorization": True,
                 },
             },
         )
@@ -1342,7 +1455,7 @@ class TestSearchVisibilitySchema:
         )
         assert out["visibility"] == {"exclude_hidden": True}
 
-    def test_accepts_all_nine_known_keys(self, monkeypatch):
+    def test_accepts_all_ten_known_keys(self, monkeypatch):
         visibility = {
             "exclude_categories": ["config"],
             "deny_entity_ids": ["light.a"],
@@ -1353,6 +1466,7 @@ class TestSearchVisibilitySchema:
             "allow_labels": ["lb2"],
             "exclude_hidden": True,
             "respect_assist_exposure": True,
+            "allowlist_authorization": True,
         }
         assert set(visibility) == set(wsapi._VISIBILITY_LIST_KEYS) | set(
             wsapi._VISIBILITY_BOOL_KEYS

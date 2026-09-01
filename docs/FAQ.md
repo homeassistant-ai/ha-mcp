@@ -417,8 +417,9 @@ The filter uses a precedence ladder:
   per-entity exposure override wins; otherwise, if the instance exposes new
   entities, the entity's domain and device-class defaults decide). This broad
   filter is not fetched or applied while an effective allowlist remains active.
-  If an area/label allowlist degrades open because the entity registry is empty,
-  no allow match remains to authorize past Assist, so this filter applies again.
+  If an area/label allowlist degrades open because the entity registry is empty
+  and no `allow_entity_ids` are configured, no allow match remains to authorize
+  past Assist, so this filter applies again.
   Because HA offers no single "effective exposure" API, the decision is
   reconstructed client-side from two extra websocket reads per search — the set
   of entities explicitly exposed to the assistant (`expose_entity/list`, which

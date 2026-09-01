@@ -243,48 +243,48 @@ def _serialize_result(result: ToolResult) -> str:
 _DROP_HIDDEN_REFERENCE = object()
 
 
-def _text_names_hidden(
-    text: str, hidden: set[str], regex: re.Pattern[str] | None
-) -> bool:
-    return text in hidden or (regex is not None and regex.search(text) is not None)
+def _names_hidden(text: str, regex: re.Pattern[str] | None) -> bool:
+    """Whether a string is, or embeds, a hidden entity_id.
+
+    ``regex`` is the boundary-aware alternation over the whole hidden set
+    (``_build_hidden_regex``), ``None`` only when that set is empty, so an exact
+    id match is already covered.
+    """
+    return regex is not None and regex.search(text) is not None
 
 
 def _scrub_hidden_references(
-    value: Any,
-    hidden: set[str],
-    regex: re.Pattern[str] | None,
+    value: Any, regex: re.Pattern[str] | None
 ) -> tuple[Any, int]:
     """Return a scrubbed JSON-shaped value and the number of omitted references."""
     if isinstance(value, str):
-        if _text_names_hidden(value, hidden, regex):
+        if _names_hidden(value, regex):
             return _DROP_HIDDEN_REFERENCE, 1
         return value, 0
 
     if isinstance(value, dict):
-        return _scrub_hidden_mapping(value, hidden, regex)
+        return _scrub_hidden_mapping(value, regex)
 
     if isinstance(value, (list, tuple)):
-        return _scrub_hidden_sequence(value, hidden, regex)
+        return _scrub_hidden_sequence(value, regex)
 
     return value, 0
 
 
 def _scrub_hidden_mapping(
-    value: dict[Any, Any],
-    hidden: set[str],
-    regex: re.Pattern[str] | None,
+    value: dict[Any, Any], regex: re.Pattern[str] | None
 ) -> tuple[Any, int]:
     entity_id = value.get("entity_id")
-    if isinstance(entity_id, str) and _text_names_hidden(entity_id, hidden, regex):
+    if isinstance(entity_id, str) and _names_hidden(entity_id, regex):
         return _DROP_HIDDEN_REFERENCE, 1
 
     scrubbed_dict: dict[Any, Any] = {}
     removed = 0
     for key, item in value.items():
-        if isinstance(key, str) and _text_names_hidden(key, hidden, regex):
+        if isinstance(key, str) and _names_hidden(key, regex):
             removed += 1
             continue
-        scrubbed_item, item_removed = _scrub_hidden_references(item, hidden, regex)
+        scrubbed_item, item_removed = _scrub_hidden_references(item, regex)
         removed += item_removed
         if scrubbed_item is _DROP_HIDDEN_REFERENCE:
             continue
@@ -293,14 +293,12 @@ def _scrub_hidden_mapping(
 
 
 def _scrub_hidden_sequence(
-    value: list[Any] | tuple[Any, ...],
-    hidden: set[str],
-    regex: re.Pattern[str] | None,
+    value: list[Any] | tuple[Any, ...], regex: re.Pattern[str] | None
 ) -> tuple[list[Any], int]:
     scrubbed_list: list[Any] = []
     removed = 0
     for item in value:
-        scrubbed_item, item_removed = _scrub_hidden_references(item, hidden, regex)
+        scrubbed_item, item_removed = _scrub_hidden_references(item, regex)
         removed += item_removed
         if scrubbed_item is _DROP_HIDDEN_REFERENCE:
             continue
@@ -324,7 +322,13 @@ def _add_state_content_warning(value: Any) -> bool:
 
 
 class _ScrubAttempt(NamedTuple):
-    """One JSON representation's scrubbed value and commit decision."""
+    """One JSON representation's scrub outcome.
+
+    ``value`` is the scrubbed copy (warning attached) only when ``warnable`` is
+    true; otherwise it is the untouched original, retained so the outbound scan
+    still sees the hidden reference. ``warnable`` is vacuously true when
+    ``omissions`` is zero.
+    """
 
     value: Any
     omissions: int
@@ -340,12 +344,10 @@ class _ScrubTally(NamedTuple):
 
 
 def _scrub_state_representation(
-    value: Any,
-    hidden: set[str],
-    regex: re.Pattern[str] | None,
+    value: Any, regex: re.Pattern[str] | None
 ) -> _ScrubAttempt:
     """Scrub one JSON value, retaining its original unless a warning can attach."""
-    scrubbed, omissions = _scrub_hidden_references(value, hidden, regex)
+    scrubbed, omissions = _scrub_hidden_references(value, regex)
     if not omissions:
         return _ScrubAttempt(value, 0, True)
     if scrubbed is _DROP_HIDDEN_REFERENCE or not _add_state_content_warning(scrubbed):
@@ -354,24 +356,21 @@ def _scrub_state_representation(
 
 
 def _scrub_state_result(
-    result: ToolResult,
-    hidden: set[str],
-    regex: re.Pattern[str] | None,
+    result: ToolResult, regex: re.Pattern[str] | None
 ) -> _ScrubTally:
     """Scrub ha_get_state JSON representations while preserving a warning.
 
     A representation is replaced only when its top-level shape can carry the
-    generic omission warning. Otherwise the original is retained so the caller's
-    post-scrub scan refuses it rather than silently returning filtered content.
-    Returns committed omission/mutation counts plus the number of representations
-    retained for the final refusal scan because they could not carry the warning.
+    generic omission warning. Otherwise the original is retained and counted in
+    ``unwarnable_representations`` so the caller refuses the result rather than
+    silently returning filtered content.
     """
     omissions_total = 0
     mutated_representations = 0
     unwarnable_representations = 0
     structured = getattr(result, "structured_content", None)
     if structured is not None:
-        attempt = _scrub_state_representation(structured, hidden, regex)
+        attempt = _scrub_state_representation(structured, regex)
         if attempt.omissions and attempt.warnable:
             result.structured_content = attempt.value
             omissions_total += attempt.omissions
@@ -387,7 +386,7 @@ def _scrub_state_result(
             parsed = json.loads(text_value)
         except json.JSONDecodeError:
             continue
-        attempt = _scrub_state_representation(parsed, hidden, regex)
+        attempt = _scrub_state_representation(parsed, regex)
         if attempt.omissions and attempt.warnable:
             block.text = json.dumps(attempt.value)
             omissions_total += attempt.omissions
@@ -686,11 +685,11 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
         if config is None:
             return await call_next(context)
         try:
-            hidden, regex = await self._hidden_and_regex(config)
+            _hidden, regex = await self._hidden_and_regex(config)
         except VisibilityDataUnavailable:
             _raise_enforced(effective_name, _FAIL_CLOSED_REASON)
         return await self._call_and_scan_outbound(
-            effective_name, context, call_next, hidden, regex
+            effective_name, context, call_next, regex
         )
 
     async def _call_and_scan_outbound(
@@ -698,7 +697,6 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
         name: str,
         context: MiddlewareContext,
         call_next: CallNext,
-        hidden: set[str],
         regex: re.Pattern[str] | None,
     ) -> Any:
         """Run the tool; refuse if its output (or a tool error) names a hidden id."""
@@ -711,17 +709,20 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
             raise
         scrub_tally = _ScrubTally(0, 0, 0)
         if name == _STATE_TOOL:
-            scrub_tally = _scrub_state_result(result, hidden, regex)
-        if regex is not None and regex.search(_serialize_result(result)):
-            if name == _STATE_TOOL and scrub_tally.unwarnable_representations:
+            scrub_tally = _scrub_state_result(result, regex)
+            if scrub_tally.unwarnable_representations:
+                # A retained original still names a hidden id; refuse here rather
+                # than rely on the scan below catching it.
                 logger.info(
                     "visibility enforce: ha_get_state scrub could not attach its "
-                    "omission warning to %d JSON representation(s)",
+                    "omission warning to %d JSON representation(s); refused",
                     scrub_tally.unwarnable_representations,
                 )
+                _raise_enforced(name, _outbound_reason(name))
+        if regex is not None and regex.search(_serialize_result(result)):
             logger.info("visibility enforce: refused result from %s", name)
             _raise_enforced(name, _outbound_reason(name))
-        if name == _STATE_TOOL and scrub_tally.mutated_representations:
+        if scrub_tally.mutated_representations:
             logger.info(
                 "visibility enforce: scrubbed %d omission(s) across %d "
                 "ha_get_state JSON representation(s)",

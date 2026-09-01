@@ -455,15 +455,20 @@ def hidden_entity_ids(
     allow_entity_ids = set(config.allow_entity_ids)
     # An allowlist is active only when at least one allow_* dimension is set. When
     # active it inverts the default: an entity is hidden unless it matches one of
-    # the allow dimensions. Empty allow_* => inactive => nothing hidden by allow.
+    # the allow dimensions, and a match authorizes it past the broad
+    # category/HA-hidden/Assist filters (never past deny or area/label excludes).
+    # Empty allow_* => inactive => nothing hidden by allow.
     allow_active = bool(allow_areas or allow_labels or allow_entity_ids)
+
     # Fail-open guard: an area/label allowlist needs registry data to match. If
     # the registry came back empty (success but no usable entries) those
     # dimensions can match nothing, so restrict mode would hide every candidate -
     # the fail-closed blank the design forbids. Drop the registry-derived allow
     # dimensions and warn; a registry-independent allow_entity_ids list still
     # applies. Only fires when there are states-only candidates to protect.
-    if (allow_areas or allow_labels) and not registry_by_id and state_device_class:
+    if _registry_allowlist_degrades(
+        allow_areas, allow_labels, registry_by_id, state_device_class
+    ):
         if strict:
             raise VisibilityDataUnavailable(_ALLOWLIST_REGISTRY_EMPTY_WARNING)
         warnings.append(_ALLOWLIST_REGISTRY_EMPTY_WARNING)
@@ -491,8 +496,8 @@ def hidden_entity_ids(
     )
 
     # Allowlist and Assist both reach states-only entities. An effective allowlist
-    # authorizes past Assist; when a registry-derived allowlist degrades open, no
-    # match remains to authorize and the broad Assist filter becomes applicable.
+    # authorizes past Assist. Only a full degradation re-enables Assist: when the
+    # guard above fired and no allow_entity_ids remain, allow_active is False.
     assist_applies = config.respect_assist_exposure and not allow_active
     if allow_active or assist_applies:
         candidate_ids = set(registry_by_id)
@@ -576,8 +581,18 @@ async def _fetch_assist_exposure(
             ),
         )
         if not (isinstance(exposed_res, dict) and exposed_res.get("success")):
+            logger.warning(
+                "assist exposure fetch: expose_entity/list unsuccessful (%s); "
+                "dimension skipped",
+                exposed_res,
+            )
             return None, False
         if not (isinstance(new_res, dict) and new_res.get("success")):
+            logger.warning(
+                "assist exposure fetch: expose_new_entities/get unsuccessful (%s); "
+                "dimension skipped",
+                new_res,
+            )
             # Without the expose_new flag the default-exposure branch can't be
             # computed; degrade the whole dimension (skip + warn) rather than
             # assume a value - assuming False would wrongly hide default-domain
@@ -608,12 +623,33 @@ async def _fetch_assist_exposure(
         return None, False
 
 
+def _registry_allowlist_degrades(
+    allow_areas: set[str],
+    allow_labels: set[str],
+    registry_by_id: dict[str, Any],
+    state_device_class: dict[str, str | None],
+) -> bool:
+    """The empty-registry fail-open guard: area/label allow dimensions cannot match.
+
+    Shared by ``hidden_entity_ids`` (which then drops those dimensions) and the
+    Assist prefetch predicate below, so the two cannot drift apart.
+    """
+    return bool(
+        (allow_areas or allow_labels) and not registry_by_id and state_device_class
+    )
+
+
 def _allowlist_degrades_without_registry(
     registry_result: object,
     states_result: object | None,
     config: VisibilityConfig,
 ) -> bool:
-    """Whether the empty-registry guard drops every configured allow dimension."""
+    """Whether the empty-registry guard drops every configured allow dimension.
+
+    ``load_hidden_set`` uses it to decide whether Assist exposure data must still
+    be fetched: a surviving ``allow_entity_ids`` list keeps the allowlist active,
+    so Assist stays irrelevant.
+    """
     if config.allow_entity_ids or not (config.allow_areas or config.allow_labels):
         return False
     if not isinstance(registry_result, dict) or not registry_result.get("success"):
@@ -623,8 +659,11 @@ def _allowlist_degrades_without_registry(
     # malformed payload; keep this in sync with ``_usable_registry_entries``.
     if not isinstance(entries, list):
         return False
-    return not _index_registry_by_id(entries) and bool(
-        _index_state_device_class(states_result)
+    return _registry_allowlist_degrades(
+        set(config.allow_areas),
+        set(config.allow_labels),
+        _index_registry_by_id(entries),
+        _index_state_device_class(states_result),
     )
 
 

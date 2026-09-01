@@ -239,8 +239,8 @@ def test_strict_allowlist_makes_unavailable_assist_irrelevant(tmp_path, monkeypa
 def test_load_hidden_set_assist_partial_failure_degrades_dimension(
     tmp_path, monkeypatch
 ):
-    # default-exposure branch cannot be computed, so the whole dimension degrades
     # expose_entity/list succeeds but expose_new/get fails: without the flag the
+    # default-exposure branch cannot be computed, so the whole dimension degrades
     # (skipped + warning) rather than assuming expose_new=False and wrongly hiding
     # a default-domain entity that has no explicit override.
     save_visibility_config(
