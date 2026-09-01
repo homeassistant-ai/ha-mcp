@@ -4,7 +4,12 @@ description: Run arbitrary caller-provided instructions with Codex in the checke
 inputs:
   instructions:
     description: Instructions passed to Codex verbatim on stdin.
-    required: true
+    required: false
+    default: ""
+  instructions-file:
+    description: Optional repository-relative file passed to Codex verbatim instead of instructions.
+    required: false
+    default: ""
   codex-auth:
     description: Raw auth.json content stored in the CODEX_AUTH secret.
     required: true
@@ -20,6 +25,14 @@ inputs:
     description: Codex filesystem sandbox (read-only or workspace-write).
     required: false
     default: read-only
+  allow-shell:
+    description: Whether Codex may execute shell commands. Disable for attacker-controlled context.
+    required: false
+    default: "true"
+  timeout-minutes:
+    description: Maximum duration of the Codex invocation; keep below the caller job timeout.
+    required: false
+    default: "10"
   model:
     description: Optional model override. Empty uses the authenticated account default.
     required: false
@@ -55,8 +68,11 @@ runs:
       env:
         CODEX_AUTH_INPUT: ${{ inputs.codex-auth }}
         INSTRUCTIONS_INPUT: ${{ inputs.instructions }}
+        INSTRUCTIONS_FILE_INPUT: ${{ inputs.instructions-file }}
         WORKING_DIRECTORY_INPUT: ${{ inputs.working-directory }}
         SANDBOX_INPUT: ${{ inputs.sandbox }}
+        ALLOW_SHELL_INPUT: ${{ inputs.allow-shell }}
+        TIMEOUT_MINUTES_INPUT: ${{ inputs.timeout-minutes }}
         OUTPUT_SCHEMA_INPUT: ${{ inputs.output-schema }}
       run: |
         set -euo pipefail
@@ -65,7 +81,11 @@ runs:
           echo "::error::The CODEX_AUTH secret is missing."
           exit 1
         fi
-        if [[ -z "${INSTRUCTIONS_INPUT:-}" ]]; then
+        if [[ -n "${INSTRUCTIONS_INPUT:-}" && -n "${INSTRUCTIONS_FILE_INPUT:-}" ]]; then
+          echo "::error::Set instructions or instructions-file, not both."
+          exit 1
+        fi
+        if [[ -z "${INSTRUCTIONS_INPUT:-}" && -z "${INSTRUCTIONS_FILE_INPUT:-}" ]]; then
           echo "::error::Codex instructions must not be empty."
           exit 1
         fi
@@ -76,6 +96,15 @@ runs:
             exit 1
             ;;
         esac
+        allow_shell="${ALLOW_SHELL_INPUT,,}"
+        if [[ "$allow_shell" != "true" && "$allow_shell" != "false" ]]; then
+          echo "::error::allow-shell must be true or false."
+          exit 1
+        fi
+        if [[ ! "$TIMEOUT_MINUTES_INPUT" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::timeout-minutes must be a positive integer."
+          exit 1
+        fi
 
         case "$WORKING_DIRECTORY_INPUT" in
           /*) workdir_candidate="$WORKING_DIRECTORY_INPUT" ;;
@@ -93,15 +122,41 @@ runs:
         codex_home="$(mktemp -d "$RUNNER_TEMP/codex-home.XXXXXX")"
         chmod 700 "$codex_home"
         auth_path="$codex_home/auth.json"
-        original_auth_path="$RUNNER_TEMP/codex-auth-original.json"
+        original_auth_path="$(mktemp "$RUNNER_TEMP/codex-auth-original.XXXXXX.json")"
         printf '%s' "$CODEX_AUTH_INPUT" > "$auth_path"
         chmod 600 "$auth_path"
         jq -e 'type == "object" and (.auth_mode | type == "string")' "$auth_path" >/dev/null
         cp "$auth_path" "$original_auth_path"
         chmod 600 "$original_auth_path"
 
-        output_path="$RUNNER_TEMP/codex-last-message.md"
-        : > "$output_path"
+        output_path="$(mktemp "$RUNNER_TEMP/codex-last-message.XXXXXX.md")"
+        instructions_path="$(mktemp "$RUNNER_TEMP/codex-instructions.XXXXXX.txt")"
+        if [[ -n "$INSTRUCTIONS_FILE_INPUT" ]]; then
+          case "$INSTRUCTIONS_FILE_INPUT" in
+            /*) instructions_candidate="$INSTRUCTIONS_FILE_INPUT" ;;
+            *) instructions_candidate="$GITHUB_WORKSPACE/$INSTRUCTIONS_FILE_INPUT" ;;
+          esac
+          instructions_source="$(realpath "$instructions_candidate")"
+          case "$instructions_source/" in
+            "$GITHUB_WORKSPACE/"*) ;;
+            *)
+              echo "::error::instructions-file must stay inside GITHUB_WORKSPACE."
+              exit 1
+              ;;
+          esac
+          if [[ ! -f "$instructions_source" ]]; then
+            echo "::error::instructions-file does not point to a file."
+            exit 1
+          fi
+          cp "$instructions_source" "$instructions_path"
+        else
+          printf '%s' "$INSTRUCTIONS_INPUT" > "$instructions_path"
+        fi
+        if [[ ! -s "$instructions_path" ]]; then
+          echo "::error::Codex instructions must not be empty."
+          exit 1
+        fi
+        chmod 600 "$instructions_path"
 
         schema_path=""
         if [[ -n "$OUTPUT_SCHEMA_INPUT" ]]; then
@@ -120,7 +175,10 @@ runs:
           echo "CODEX_HOME=$codex_home"
           echo "CODEX_ACTION_WORKDIR=$workdir"
           echo "CODEX_ACTION_OUTPUT=$output_path"
+          echo "CODEX_ACTION_INSTRUCTIONS=$instructions_path"
           echo "CODEX_ACTION_SCHEMA=$schema_path"
+          echo "CODEX_ACTION_ALLOW_SHELL=$allow_shell"
+          echo "CODEX_ACTION_TIMEOUT_MINUTES=$TIMEOUT_MINUTES_INPUT"
         } >> "$GITHUB_ENV"
         {
           echo "output-path=$output_path"
@@ -163,15 +221,11 @@ runs:
         profile_target=/etc/apparmor.d/bwrap-userns-restrict
         if [[ -f "$profile_source" ]]; then
           sudo install -m 0644 "$profile_source" "$profile_target"
-          if sudo apparmor_parser -r "$profile_target"; then
-            echo "Loaded the Bubblewrap AppArmor profile."
-          else
-            echo "::warning::Could not load the Bubblewrap AppArmor profile; using the sysctl fallback."
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
+          sudo apparmor_parser -r "$profile_target"
+          echo "Loaded the Bubblewrap AppArmor profile."
         elif [[ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || true)" == "1" ]]; then
-          echo "::warning::Bubblewrap AppArmor profile unavailable; using the sysctl fallback."
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          echo "::error::Bubblewrap requires an AppArmor profile on this restricted runner."
+          exit 1
         fi
 
         bwrap --version
@@ -206,8 +260,21 @@ runs:
         if [[ -n "$CODEX_ACTION_SCHEMA" ]]; then
           args+=(--output-schema "$CODEX_ACTION_SCHEMA")
         fi
+        if [[ "$CODEX_ACTION_ALLOW_SHELL" == "false" ]]; then
+          args+=(--disable shell_tool)
+        fi
 
-        printf '%s\n' "$INSTRUCTIONS_INPUT" | codex "${args[@]}" -
+        set +e
+        timeout --signal=TERM --kill-after=30s \
+          "${CODEX_ACTION_TIMEOUT_MINUTES}m" \
+          codex "${args[@]}" - \
+          < "$CODEX_ACTION_INSTRUCTIONS"
+        codex_status=$?
+        set -e
+        if [[ "$codex_status" -eq 124 ]]; then
+          echo "::error::Codex exceeded the ${CODEX_ACTION_TIMEOUT_MINUTES}-minute invocation timeout."
+        fi
+        exit "$codex_status"
 
     - name: Show final Codex output
       if: ${{ always() }}

@@ -9,6 +9,7 @@ permissions:
 concurrency:
   group: codex-auth-${{ github.repository }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   hello-world:
@@ -26,6 +27,7 @@ jobs:
         with:
           codex-auth: ${{ secrets.CODEX_AUTH }}
           sandbox: read-only
+          timeout-minutes: "5"
           instructions: |
             Respond with exactly: Hello world
 
