@@ -208,7 +208,7 @@ _E2E_TARGET = re.compile(r"src/e2e/|\$\{?PYTEST_PATHS")
 
 # What an e2e pytest step points at, with whatever follows `src/e2e/`
 # captured: empty means the whole suite, non-empty means a subset.
-_E2E_SUITE_TARGET = re.compile(r"(?:tests/)?src/e2e/(\S*)")
+_E2E_SUITE_TARGET = re.compile(r"(?:tests/)?src/e2e/([^\s\"']*)")
 
 # Floor on the discovered count, so a predicate that quietly stops matching (a
 # workflow restructure, a renamed input) fails here rather than reporting an
@@ -242,18 +242,32 @@ def _pytest_step(workflow: str, job_id: str) -> dict[str, Any]:
     return steps[0]
 
 
+def _uncommented(run: str) -> str:
+    """A step's shell body with its comment-only lines dropped.
+
+    A retired command left behind as `# uv run pytest src/e2e/...` is not an
+    invocation, but it reads as one to any substring match — and the check
+    that an excluded job still targets its subset would then be satisfied by
+    the comment while the real command has moved elsewhere.
+    """
+    return "\n".join(
+        line for line in run.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
 def _job_pytest_run(workflow: str, job_id: str) -> str:
     """The pytest command a job runs, joined across its steps.
 
     Matched on the invocation, for the reason ``_pytest_step`` gives above: a
     diagnostics step's prose mentions pytest without running it, and joining
-    that prose in would let a stale `src/e2e/...` string in a comment satisfy
-    a check about what the job actually invokes.
+    that prose in would let a stale `src/e2e/...` string satisfy a check about
+    what the job actually invokes. Comment lines go for the same reason.
     """
     return "\n".join(
-        str(step.get("run", ""))
+        _uncommented(str(step.get("run", "")))
         for step in _job(workflow, job_id).get("steps", [])
-        if isinstance(step, dict) and "uv run pytest" in str(step.get("run", ""))
+        if isinstance(step, dict)
+        and "uv run pytest" in _uncommented(str(step.get("run", "")))
     )
 
 
@@ -434,13 +448,21 @@ def test_every_non_topology_exclusion_names_a_job_that_exists() -> None:
         # exists to permit. A whole-file substring test would forbid the very
         # configuration this module blesses one test further down.
         job = _job(workflow, job_id)
+        # Workflow-level env is inherited by every job in the file, so it
+        # parametrizes this one as surely as its own. A sibling job's private
+        # env does not, which is why this reads three scopes and not the file.
+        workflow_env = (data or {}).get("env") or {}
         job_env = job.get("env") or {}
-        env_keys = set(job_env) | {
-            key
-            for step in job.get("steps", [])
-            if isinstance(step, dict)
-            for key in _step_env(step)
-        }
+        env_keys = (
+            set(workflow_env)
+            | set(job_env)
+            | {
+                key
+                for step in job.get("steps", [])
+                if isinstance(step, dict)
+                for key in _step_env(step)
+            }
+        )
         marks_a_lane = env_keys & {*_SELECTOR_NAMES, "E2E_NO_TOOLS_ENTRY"}
         assert not marks_a_lane, (
             f"{workflow}::{job_id} is parametrized with "
