@@ -1824,12 +1824,74 @@ class ServiceTools:
     @log_tool_usage
     async def ha_call_service(
         self,
-        domain: str | None = None,
-        service: str | None = None,
-        entity_id: str | None = None,
-        data: Annotated[dict[str, Any] | None, JSON_STRING_COERCION] = None,
-        return_response: bool = False,
-        wait: bool = True,
+        domain: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Service domain (e.g. 'light', 'climate', 'automation'). "
+                    "Required for a service call; must be omitted when ws_command "
+                    "is set."
+                ),
+            ),
+        ] = None,
+        service: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Service name within domain (e.g. 'turn_on', 'set_temperature', "
+                    "'trigger'). Required for a service call; must be omitted when "
+                    "ws_command is set."
+                ),
+            ),
+        ] = None,
+        entity_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Entity ID(s) the service call targets — one ID "
+                    "('light.living_room') or several comma-separated "
+                    "('light.a,light.b'). Optional for services that don't target "
+                    "a specific entity. Must be omitted when ws_command is set."
+                ),
+            ),
+        ] = None,
+        data: Annotated[
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Extra service-call parameters beyond entity_id (e.g. "
+                    "{'temperature': 22} for climate.set_temperature). Also carries "
+                    "the raw command payload when ws_command is set. If entity_id "
+                    "is also present in data, the entity_id parameter wins."
+                ),
+            ),
+        ] = None,
+        return_response: Annotated[
+            bool,
+            Field(
+                description=(
+                    "If True, the service's response data is returned once, as "
+                    "the top-level 'service_response' key — never nested inside "
+                    "'result' (default: False). Must stay False when ws_command "
+                    "is set."
+                ),
+            ),
+        ] = False,
+        wait: Annotated[
+            bool,
+            Field(
+                description=(
+                    "If True (default), wait for the entity state to change "
+                    "before returning. Applies only to state-changing services "
+                    "called with a single entity_id. A comma-separated "
+                    "multi-target does not get confirmed by this: it falls "
+                    "through to a legacy path that polls for the literal "
+                    "composite entity_id and times out after 10s. Set "
+                    "wait=False for multi-target calls."
+                ),
+            ),
+        ] = True,
         verbose: Annotated[
             bool,
             Field(
@@ -1911,8 +1973,6 @@ class ServiceTools:
         ```
 
         **Key behavior:**
-        - **wait** (default True): wait for the entity state to change before
-          returning. Only applies to state-changing services on a single entity.
         - **Result compaction (default ON)**: ``result`` is trimmed
           to the targeted entity's record (drops parent-group propagation) and
           stripped of ``context`` / ``last_*`` metadata and heavy attribute
@@ -1920,9 +1980,6 @@ class ServiceTools:
           for the raw changed-state records, or ``result_fields`` /
           ``result_attribute_keys`` for explicit per-record projection (mirrors
           ``ha_get_state``).
-        - **return_response** (default False): the service's response data is
-          returned once, as the top-level ``service_response`` key — never nested
-          inside ``result``, which carries the changed entity states.
 
         **For detailed service documentation, use ha_get_skill_guide.**
 
@@ -1975,8 +2032,12 @@ class ServiceTools:
             )
 
             # Determine if we should wait for state change:
-            # Only for state-changing services on a single entity, not for
+            # Only for state-changing services with an entity_id set, not for
             # trigger/reload/fire-and-forget services or services without entities.
+            # A comma-separated multi-target entity_id is not excluded here — it
+            # still falls through to the legacy path, which polls for the literal
+            # composite entity_id and times out after 10s (see the wait Field
+            # description and _maybe_component_call_service).
             # This server-side decision (D6) also chooses whether to hand the
             # component wait+entity_ids: a non-state-changing call passes wait
             # implicitly false and no confirmation targets.
