@@ -90,26 +90,42 @@ jobs:
   code-quality-gate:
     name: CodeQL Gate
     runs-on: ubuntu-latest
-    # BACKSTOP ONLY - the per-language step caps below are the real control.
-    # It has to exceed their sum: a JOB cap "automatically cancels" the job
-    # (workflow-syntax docs), and a cancelled run skips every
-    # `success() || failure()` step, so a job cap that fired first would take
-    # the second language's report down with it. A STEP cap instead kills only
-    # that step's process ("killing the process"), so the step FAILS and
-    # `failure()` stays true, and the later steps still report.
-    timeout-minutes: 45
+    # BACKSTOP ONLY, and it must never be the cap that fires. A JOB cap
+    # "automatically cancels" the job (workflow-syntax docs), and a cancelled
+    # run skips every `success() || failure()` step, so a job cap that fired
+    # first would take the second language's report down with it. A STEP cap
+    # instead kills only that step's process ("killing the process"), so the
+    # step FAILS, `failure()` stays true, and the later steps still report.
+    #
+    # That only holds if EVERY step is capped and this number exceeds their
+    # sum - otherwise the uncapped steps eat the margin and the job cap
+    # becomes the binding constraint after all. Every step below therefore
+    # carries a budget; they total 57. The 3 minutes of slack cover what
+    # cannot carry a budget of its own: job setup, per-step overhead, and the
+    # implicit post-job steps. test_codeql_workflow_shape.py asserts all three
+    # halves - no uncapped step, and a slack of at least those 3 minutes.
+    #
+    # The budgets are sized off an observed run, generously, but they do turn
+    # slow infrastructure into a red required check where it used to be merely
+    # slow: a cold Python setup or a stalled artifact upload now fails the
+    # gate rather than dragging it out. That is the trade for a hung analysis
+    # no longer being able to hide the other language's result.
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        timeout-minutes: 2
         with:
           persist-credentials: false
 
       - name: Set up Python
+        timeout-minutes: 2
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.13"
 
       - name: Install CodeQL CLI
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -141,6 +157,7 @@ jobs:
 
       - name: Upload SARIF artifact (python)
         if: success() || failure()
+        timeout-minutes: 2
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: codeql-quality-sarif-python
@@ -149,6 +166,7 @@ jobs:
 
       - name: Gate on findings (python)
         if: success() || failure()
+        timeout-minutes: 2
         run: python scripts/codeql_quality_gate.py quality-python.sarif
 
       - name: Create CodeQL database (javascript)
@@ -178,6 +196,7 @@ jobs:
 
       - name: Upload SARIF artifact (javascript)
         if: success() || failure()
+        timeout-minutes: 2
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: codeql-quality-sarif-javascript
@@ -186,4 +205,5 @@ jobs:
 
       - name: Gate on findings (javascript)
         if: success() || failure()
+        timeout-minutes: 2
         run: python scripts/codeql_quality_gate.py quality-javascript.sarif

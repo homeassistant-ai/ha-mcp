@@ -49,24 +49,45 @@ _REQUIRED_CONTEXT = "CodeQL Gate"
 
 _LANGUAGES = ("python", "javascript")
 
+# Minutes the job cap must clear the step-cap sum by. Job setup, per-step
+# overhead and the implicit post-job steps count against the job cap and
+# cannot carry a `timeout-minutes` of their own.
+_JOB_CAP_SLACK = 3
+
+
+def _is_budget(value: object) -> bool:
+    """True for a value a workflow can actually use as `timeout-minutes`.
+
+    `bool` is a subclass of `int`, so a stray `true` would pass an
+    `isinstance(value, int)` check and then sum as 1, quietly shrinking the
+    total the job cap is measured against. The docs also require a positive
+    integer, so 0 is not a budget either.
+    """
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
 
 def _workflow() -> dict[str, Any]:
+    """The workflow as YAML, re-read on every call so no test caches it."""
     return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
 
 
 def _gate_job() -> dict[str, Any]:
+    """The single job the fold produced, keyed by its id."""
     return _workflow()["jobs"]["code-quality-gate"]
 
 
 def _steps() -> list[dict[str, Any]]:
+    """The gate job's steps, in workflow order - order is load-bearing here."""
     return _gate_job()["steps"]
 
 
 def _step_name(step: dict[str, Any]) -> str:
+    """A step's name, or a placeholder for the unnamed checkout step."""
     return step.get("name") or "(checkout)"
 
 
 def _run(step: dict[str, Any]) -> str:
+    """A step's shell body, empty for `uses:` steps that have none."""
     return str(step.get("run", ""))
 
 
@@ -172,30 +193,59 @@ def test_uploaded_artifacts_are_named_per_language() -> None:
     assert len(set(names)) == len(names) == len(_LANGUAGES)
 
 
-def test_each_language_has_a_step_budget_the_job_cap_cannot_pre_empt() -> None:
-    """A hung python analysis must not cost javascript its report.
+def test_the_job_cap_can_never_be_the_cap_that_fires() -> None:
+    """A hung step must not cost the other language its report.
 
-    Only step-level caps can do that: a job-level cap cancels, and a cancelled
-    run skips the ``success() || failure()`` steps this file pins above. The
-    relation - not either number - is what is load-bearing, so it is asserted
-    as a relation.
+    Only a step cap can do that: a job cap cancels, and a cancelled run skips
+    the ``success() || failure()`` steps this file pins above. So the job cap
+    has to be unreachable, and it is unreachable only when EVERY step carries
+    a budget and the job cap exceeds their sum. Capping just the analyses
+    leaves the uncapped steps free to eat the margin, which puts the job cap
+    back in play as the binding constraint - the exact hole two reviewers
+    found in the first version of this guard.
+
+    Strictly greater, not `>=`: equality leaves nothing for the implicit
+    post-job steps, which take time and cannot be capped.
     """
     job = _gate_job()
-    heavy = [step for step in _steps() if "gh codeql database" in _run(step)]
-    assert len(heavy) == 2 * len(_LANGUAGES), (
-        "expected a create and an analyze step per language"
+    budgets = [step.get("timeout-minutes") for step in _steps()]
+    uncapped = [
+        _step_name(step)
+        for step, budget in zip(_steps(), budgets, strict=True)
+        if not _is_budget(budget)
+    ]
+    assert not uncapped, (
+        f"steps without a usable budget: {uncapped} - an uncapped step can "
+        "consume the job budget, and the job cap then cancels the run instead "
+        "of a step cap failing it, taking the remaining reports with it"
     )
-    budgets = [step.get("timeout-minutes") for step in heavy]
-    assert all(isinstance(value, int) for value in budgets), (
-        "an uncapped create/analyze step can burn the whole job budget and "
-        "let the job cap cancel the other language out of its report"
+    total = sum(value for value in budgets if _is_budget(value))
+    slack = job["timeout-minutes"] - total
+    assert slack >= _JOB_CAP_SLACK, (
+        f"job cap {job['timeout-minutes']} leaves {slack} minutes over the "
+        f"step-cap sum {total}, under the {_JOB_CAP_SLACK} the workflow "
+        "comment claims - job setup, per-step overhead and the implicit "
+        "post-job steps all run against the job cap and none can be capped, "
+        "so the margin is the only thing covering them"
     )
-    total = sum(value for value in budgets if isinstance(value, int))
-    assert job["timeout-minutes"] >= total, (
-        f"job cap {job['timeout-minutes']} is below the sum of the step caps "
-        f"{total} - the job would cancel before a step cap fires, and a "
-        "cancelled run skips the remaining language entirely"
-    )
+
+
+def test_each_language_keeps_the_budget_its_matrix_leg_had() -> None:
+    """The matrix gave each leg its own runner and its own 20 minutes.
+
+    Serially the two share a job, so the guarantee survives only as
+    per-language step budgets that still add up to the same 20 minutes.
+    """
+    for language in _LANGUAGES:
+        budget = sum(
+            step["timeout-minutes"]
+            for step in _steps()
+            if "gh codeql database" in _run(step) and language in _step_name(step)
+        )
+        assert budget == 20, (
+            f"{language} now gets {budget} minutes of analysis budget, not the "
+            "20 its matrix leg had"
+        )
 
 
 def test_each_language_builds_and_analyzes_its_own_database_directory() -> None:
