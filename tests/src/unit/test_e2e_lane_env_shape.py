@@ -243,11 +243,17 @@ def _pytest_step(workflow: str, job_id: str) -> dict[str, Any]:
 
 
 def _job_pytest_run(workflow: str, job_id: str) -> str:
-    """The pytest command a job runs, joined across its steps."""
+    """The pytest command a job runs, joined across its steps.
+
+    Matched on the invocation, for the reason ``_pytest_step`` gives above: a
+    diagnostics step's prose mentions pytest without running it, and joining
+    that prose in would let a stale `src/e2e/...` string in a comment satisfy
+    a check about what the job actually invokes.
+    """
     return "\n".join(
         str(step.get("run", ""))
         for step in _job(workflow, job_id).get("steps", [])
-        if isinstance(step, dict) and "pytest" in str(step.get("run", ""))
+        if isinstance(step, dict) and "uv run pytest" in str(step.get("run", ""))
     )
 
 
@@ -481,10 +487,10 @@ def test_an_excluded_job_does_not_exempt_its_neighbours(tmp_path: Path) -> None:
         "jobs:\n"
         f"  {excluded_job}:\n"
         "    steps:\n"
-        "      - run: uv run pytest tests/src/e2e/performance/ -m perf\n"
+        "      - run: cd tests && uv run pytest src/e2e/performance/ -m perf\n"
         "  a-topology-lane-added-later:\n"
         "    steps:\n"
-        "      - run: uv run pytest src/e2e/ --tb=short\n",
+        "      - run: cd tests && uv run pytest src/e2e/ --tb=short\n",
         encoding="utf-8",
     )
 
