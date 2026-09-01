@@ -5155,8 +5155,6 @@ def _visibility_warnings(
     # otherwise blank.
     if (allow_areas or allow_labels) and not registry_by_id and state_ids:
         warnings.append(_ALLOWLIST_REGISTRY_EMPTY_WARNING)
-        allow_areas = set()
-        allow_labels = set()
         allow_active = bool(allow_entity_ids)
 
     if (
