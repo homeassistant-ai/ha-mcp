@@ -11,7 +11,41 @@ name: CodeQL Code Quality
 # merge — that is how alerts 33-40 landed. Running the same default
 # code-scanning suite in this gate catches them pre-merge.
 #
-# Languages gated (one matrix leg each), both scanning the whole tree
+# ONE JOB, BOTH LANGUAGES (#2311): python and javascript used to be a two-leg
+# matrix plus an aggregating gate job — three check runs for two analyses.
+# They are folded into this single job so the workflow reports ONE check run
+# and pays for ONE checkout / Python setup / CodeQL CLI install instead of
+# two. The job keeps the name `CodeQL Gate`, so the required-status-check
+# context on the master ruleset is unchanged and needs no maintainer edit.
+#
+# The matrix also gave each language its OWN runner and its own 20-minute
+# budget. Serially they share one job, so the create+analyze steps carry
+# per-language step caps summing to that same 20 minutes each. Without them a
+# hung python analysis would consume javascript's time and the job cap would
+# then cancel the run, which skips the javascript steps entirely.
+#
+# FAILURE ATTRIBUTION IS LOAD-BEARING: the matrix ran `fail-fast: false`, so a
+# python finding never hid a javascript one. Running the two serially in one
+# job removes that for free, so it is restored by hand — every step from the
+# first SARIF upload onward carries `if: success() || failure()`, which keeps
+# later steps reporting after an earlier red while still stopping a cancelled
+# run. `always()` is deliberately NOT used: it would keep burning runner
+# minutes after a cancel. Same idiom as pr.yml's Fast Checks lane; both
+# clauses are pinned by tests/src/unit/test_codeql_workflow_shape.py.
+#
+# Each language gets its OWN CodeQL database directory and its OWN SARIF file.
+# Separate matrix legs had separate filesystems, so sharing either name was
+# harmless; serially in one job it is not. A shared SARIF name would let a
+# failed analysis leave the previous language's file in place and the next
+# gate step would report python findings as javascript ones; a shared database
+# directory would strand the wrong language's database for the same reason.
+#
+# The SARIF upload steps moved from `if: always()` to the same
+# `if: success() || failure()` as the rest of the job. Deliberate: a cancelled
+# run no longer uploads a partial artifact, which is the price of not paying
+# for the remainder of the job after a cancel.
+#
+# Languages gated (one step group each), both scanning the whole tree
 # (--source-root .):
 #   - python      vendored fixtures under tests/initial_test_state/ are dropped
 #                 by scripts/codeql_quality_gate.py's PATHS_IGNORE.
@@ -53,76 +87,123 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  code-quality:
-    name: CodeQL Code Quality (${{ matrix.language }})
+  code-quality-gate:
+    name: CodeQL Gate
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - language: python
-            suite: codeql/python-queries:codeql-suites/python-code-quality.qls
-            security_suite: codeql/python-queries:codeql-suites/python-code-scanning.qls
-          - language: javascript
-            suite: codeql/javascript-queries:codeql-suites/javascript-code-quality.qls
-            security_suite: codeql/javascript-queries:codeql-suites/javascript-code-scanning.qls
+    # BACKSTOP ONLY, and it must never be the cap that fires. A JOB cap
+    # "automatically cancels" the job (workflow-syntax docs), and a cancelled
+    # run skips every `success() || failure()` step, so a job cap that fired
+    # first would take the second language's report down with it. A STEP cap
+    # instead kills only that step's process ("killing the process"), so the
+    # step FAILS, `failure()` stays true, and the later steps still report.
+    #
+    # That only holds if EVERY step is capped and this number exceeds their
+    # sum - otherwise the uncapped steps eat the margin and the job cap
+    # becomes the binding constraint after all. Every step below therefore
+    # carries a budget; they total 57. The 3 minutes of slack cover what
+    # cannot carry a budget of its own: job setup, per-step overhead, and the
+    # implicit post-job steps. test_codeql_workflow_shape.py asserts all three
+    # halves - no uncapped step, and a slack of at least those 3 minutes.
+    #
+    # The budgets are sized off an observed run, generously, but they do turn
+    # slow infrastructure into a red required check where it used to be merely
+    # slow: a cold Python setup or a stalled artifact upload now fails the
+    # gate rather than dragging it out. That is the trade for a hung analysis
+    # no longer being able to hide the other language's result.
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        timeout-minutes: 2
         with:
           persist-credentials: false
 
       - name: Set up Python
+        timeout-minutes: 2
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.13"
 
       - name: Install CodeQL CLI
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh extensions install github/gh-codeql
           gh codeql set-version latest
 
-      - name: Create CodeQL database (${{ matrix.language }})
+      - name: Create CodeQL database (python)
+        timeout-minutes: 8
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh codeql database create ha-mcp-db \
-            --language=${{ matrix.language }} \
+          gh codeql database create ha-mcp-db-python \
+            --language=python \
             --build-mode=none \
             --source-root . \
             --overwrite
 
-      - name: Analyze with ${{ matrix.language }} quality + security suites
+      - name: Analyze with python quality + security suites
+        timeout-minutes: 12
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh codeql database analyze ha-mcp-db \
-            ${{ matrix.suite }} \
-            ${{ matrix.security_suite }} \
+          gh codeql database analyze ha-mcp-db-python \
+            codeql/python-queries:codeql-suites/python-code-quality.qls \
+            codeql/python-queries:codeql-suites/python-code-scanning.qls \
             --format=sarif-latest \
-            --output quality.sarif \
+            --output quality-python.sarif \
             --download
 
-      - name: Upload SARIF artifact
-        if: always()
+      - name: Upload SARIF artifact (python)
+        if: success() || failure()
+        timeout-minutes: 2
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: codeql-quality-sarif-${{ matrix.language }}
-          path: quality.sarif
+          name: codeql-quality-sarif-python
+          path: quality-python.sarif
           if-no-files-found: warn
 
-      - name: Gate on findings
-        run: python scripts/codeql_quality_gate.py quality.sarif
+      - name: Gate on findings (python)
+        if: success() || failure()
+        timeout-minutes: 2
+        run: python scripts/codeql_quality_gate.py quality-python.sarif
 
-  code-quality-gate:
-    name: CodeQL Gate
-    if: ${{ always() }}
-    needs: code-quality
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require every CodeQL analysis to pass
-        run: test "${{ needs.code-quality.result }}" = "success"
+      - name: Create CodeQL database (javascript)
+        if: success() || failure()
+        timeout-minutes: 8
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh codeql database create ha-mcp-db-javascript \
+            --language=javascript \
+            --build-mode=none \
+            --source-root . \
+            --overwrite
+
+      - name: Analyze with javascript quality + security suites
+        if: success() || failure()
+        timeout-minutes: 12
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh codeql database analyze ha-mcp-db-javascript \
+            codeql/javascript-queries:codeql-suites/javascript-code-quality.qls \
+            codeql/javascript-queries:codeql-suites/javascript-code-scanning.qls \
+            --format=sarif-latest \
+            --output quality-javascript.sarif \
+            --download
+
+      - name: Upload SARIF artifact (javascript)
+        if: success() || failure()
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: codeql-quality-sarif-javascript
+          path: quality-javascript.sarif
+          if-no-files-found: warn
+
+      - name: Gate on findings (javascript)
+        if: success() || failure()
+        timeout-minutes: 2
+        run: python scripts/codeql_quality_gate.py quality-javascript.sarif
