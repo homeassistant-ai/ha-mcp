@@ -206,6 +206,10 @@ _NON_TOPOLOGY_JOBS: dict[tuple[str, str], str] = {
 # in pr.yml's unit-tests and docker-validation jobs.
 _E2E_TARGET = re.compile(r"src/e2e/|\$\{?PYTEST_PATHS")
 
+# What an e2e pytest step points at, with whatever follows `src/e2e/`
+# captured: empty means the whole suite, non-empty means a subset.
+_E2E_SUITE_TARGET = re.compile(r"(?:tests/)?src/e2e/(\S*)")
+
 # Floor on the discovered count, so a predicate that quietly stops matching (a
 # workflow restructure, a renamed input) fails here rather than reporting an
 # empty sweep as full coverage.
@@ -236,6 +240,15 @@ def _pytest_step(workflow: str, job_id: str) -> dict[str, Any]:
         f"{[step.get('name') for step in steps]}"
     )
     return steps[0]
+
+
+def _job_pytest_run(workflow: str, job_id: str) -> str:
+    """The pytest command a job runs, joined across its steps."""
+    return "\n".join(
+        str(step.get("run", ""))
+        for step in _job(workflow, job_id).get("steps", [])
+        if isinstance(step, dict) and "pytest" in str(step.get("run", ""))
+    )
 
 
 def _step_env(step: dict[str, Any]) -> dict[str, Any]:
@@ -428,6 +441,24 @@ def test_every_non_topology_exclusion_names_a_job_that_exists() -> None:
             f"{sorted(marks_a_lane)}, which is what makes a job a topology "
             "lane — an exclusion cannot be the thing that keeps it out of the "
             "tables"
+        )
+
+        # Absence of the selectors is not proof: the default container
+        # topology carries none of them either, so a job repurposed to run
+        # the ordinary suite would pass the check above and stay hidden
+        # forever, since discovery skips it before it ever reads the command.
+        # So require the positive property instead — the job must still run
+        # only a subset of the e2e tree, which is what its rationale claims.
+        targets = _E2E_SUITE_TARGET.findall(str(_job_pytest_run(workflow, job_id)))
+        assert targets, (
+            f"{workflow}::{job_id} no longer targets the e2e tree at all, so "
+            "the exclusion is describing a job that is not what it was"
+        )
+        whole_suite = [target for target in targets if not target.strip("/")]
+        assert not whole_suite, (
+            f"{workflow}::{job_id} now runs the whole e2e suite, not the "
+            f"subset {reason!r} describes — that is an ordinary lane wearing "
+            "an exclusion, and discovery skips it before it reads the command"
         )
 
 
