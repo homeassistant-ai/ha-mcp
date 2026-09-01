@@ -104,7 +104,7 @@ Validated on 2026-08-31 in the dedicated
 [`ha-mcp-workflows-dev`](https://github.com/homeassistant-ai/ha-mcp-workflows-dev)
 bench with Codex CLI `0.151.0`:
 
-- [Hello World run 33460140551](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/33460140551)
+- [Hello World run 33460597113](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/33460597113)
   passed the verbatim instruction assertion and forced a `CODEX_AUTH` rewrite
   through the renewed repository-scoped secret-writer PAT.
 - [Issue review run 33460186362](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/33460186362)

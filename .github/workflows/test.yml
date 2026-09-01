@@ -36,7 +36,7 @@ jobs:
           OUTPUT_PATH: ${{ steps.codex.outputs.output-path }}
         run: |
           set -euo pipefail
-          actual="$(tr -d '\r\n' < "$OUTPUT_PATH")"
+          actual="$(tr -d '\r' < "$OUTPUT_PATH")"
           if [[ "$actual" != "Hello world" ]]; then
             echo "::error::Expected 'Hello world', received '$actual'."
             exit 1
