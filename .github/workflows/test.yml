@@ -1,4 +1,4 @@
-name: Codex Hello World Tests
+name: Codex example - hello world
 
 on:
   workflow_dispatch:
@@ -6,75 +6,46 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: codex-auth-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
-  codex-hello:
+  hello-world:
     runs-on: ubuntu-latest
-
-    env:
-      PYTHON_VERSION: "3.13"
-      CODEX_CLI_MODEL: "gpt-4.1-mini"
-      CODEX_CLI_MODEL_FALLBACKS: "gpt-4o-mini gpt-4o-mini-2024-08-06 gpt-4.1 gpt-4o-mini-2024-05-13"
-
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
-      - name: Ensure Codex secrets available
-        id: ensure_codex_secrets
-        env:
-          CODEX_AUTH: ${{ secrets.CODEX_AUTH }}
-          CODEX_AUTH_PAT: ${{ secrets.CODEX_AUTH_PAT }}
-        run: |
-          if [ -n "${CODEX_AUTH}" ] && [ -n "${CODEX_AUTH_PAT}" ]; then
-            echo "available=true" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          echo "available=false" >> "${GITHUB_OUTPUT}"
-          echo "::notice::Codex secrets missing; skipping tests."
+      - name: Run arbitrary instructions
+        id: codex
+        uses: ./.github/actions/codex-run
+        with:
+          codex-auth: ${{ secrets.CODEX_AUTH }}
+          sandbox: read-only
+          instructions: |
+            Respond with exactly: Hello world
 
-      - name: Prepare Codex authentication
-        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
+      - name: Verify the caller's expectation
         env:
-          CODEX_AUTH: ${{ secrets.CODEX_AUTH }}
-          RUNNER_TEMP: ${{ runner.temp }}
+          OUTPUT_PATH: ${{ steps.codex.outputs.output-path }}
         run: |
           set -euo pipefail
-          auth_path="$HOME/.codex/auth.json"
-          mkdir -p "$(dirname "$auth_path")"
-          printf '%s' "$CODEX_AUTH" > "$auth_path"
-          chmod 600 "$auth_path"
-          echo "Wrote Codex auth to $auth_path"
+          actual="$(tr -d '\r\n' < "$OUTPUT_PATH")"
+          if [[ "$actual" != "Hello world" ]]; then
+            echo "::error::Expected 'Hello world', received '$actual'."
+            exit 1
+          fi
 
-      - name: Install Node and Codex CLI
-        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
-        run: |
-          npm install -g @openai/codex@latest
-
-      - name: Simple hello world
-        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
-        run: |
-          codex --version
-          codex exec --skip-git-repo-check --full-auto "say hello"
-
-      - name: Structured hello world
-        if: ${{ steps.ensure_codex_secrets.outputs.available == 'true' }}
-        run: |
-          set -uo pipefail
-          : "${CODEX_CLI_MODEL_FALLBACKS:=}"
-          echo "=== Structured output ==="
-          cat <<'JSON' > schema.json
-          {
-            "type": "object",
-            "properties": {
-              "message": { "type": "string" }
-            },
-            "required": ["message"],
-            "additionalProperties": false
-          }
-          JSON
-          success=0
-          mkdir -p codex_artifacts
-          codex exec \
-              --output-schema schema.json \
-              -o "${output_path}" \
-              "Output a JSON object with key 'message' set to 'hello world'."
+      - name: Validate secret-writer PAT and persist auth
+        if: ${{ always() }}
+        uses: ./.github/actions/codex-update-auth
+        with:
+          codex-auth-path: ${{ steps.codex.outputs.auth-path }}
+          original-codex-auth: ${{ steps.codex.outputs.original-auth-path }}
+          gh-token: ${{ secrets.CODEX_AUTH_PAT }}
+          repository: ${{ github.repository }}
+          force-update: "true"

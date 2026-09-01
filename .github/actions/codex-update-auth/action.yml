@@ -1,72 +1,69 @@
 name: Refresh Codex auth secret
-description: Update the CODEX_AUTH GitHub secret if the local auth.json changed.
+description: Persist auth.json when Codex refreshes it during a workflow.
+
 inputs:
-  codex_auth_path:
-    description: Path to the Codex auth.json file
+  codex-auth-path:
+    description: Path to auth.json after Codex exits.
     required: true
-  original_codex_auth:
-    description: Path to the original auth snapshot for comparison
-    required: false
-  gh_token:
-    description: Token with permission to update repository secrets
-    required: false
+  original-codex-auth:
+    description: Path to the pre-run auth.json snapshot.
+    required: true
+  gh-token:
+    description: Token allowed to update Actions secrets in the target repository.
+    required: true
   repository:
-    description: Target repository (owner/name)
+    description: Target repository in owner/name form.
     required: true
+  secret-name:
+    description: Repository secret to update.
+    required: false
+    default: CODEX_AUTH
+  force-update:
+    description: Rewrite the secret even when auth.json is unchanged.
+    required: false
+    default: "false"
+
+outputs:
+  updated:
+    description: Whether the secret changed.
+    value: ${{ steps.refresh.outputs.updated }}
+
 runs:
   using: composite
   steps:
     - id: refresh
       shell: bash
       env:
-        CODEX_AUTH_PATH: ${{ inputs.codex_auth_path }}
-        ORIGINAL_CODEX_AUTH: ${{ inputs.original_codex_auth }}
-        GH_TOKEN: ${{ inputs.gh_token }}
-        GITHUB_REPOSITORY: ${{ inputs.repository }}
+        CODEX_AUTH_PATH: ${{ inputs.codex-auth-path }}
+        ORIGINAL_CODEX_AUTH: ${{ inputs.original-codex-auth }}
+        GH_TOKEN: ${{ inputs.gh-token }}
+        TARGET_REPOSITORY: ${{ inputs.repository }}
+        SECRET_NAME: ${{ inputs.secret-name }}
+        FORCE_UPDATE: ${{ inputs.force-update }}
       run: |
         set -euo pipefail
+        echo "updated=false" >> "$GITHUB_OUTPUT"
 
         if [[ -z "${GH_TOKEN:-}" ]]; then
-          echo "Skipping secret refresh (GH_TOKEN not provided)."
-          exit 0
+          echo "::error::gh-token is required to persist refreshed Codex auth."
+          exit 1
         fi
-
-        if [[ -z "${CODEX_AUTH_PATH:-}" || ! -f "$CODEX_AUTH_PATH" ]]; then
-          echo "Skipping secret refresh (auth file not found)."
-          exit 0
+        if [[ ! -f "$CODEX_AUTH_PATH" || ! -f "$ORIGINAL_CODEX_AUTH" ]]; then
+          echo "::error::Codex auth file or original snapshot is missing."
+          exit 1
         fi
-
-        if [[ -z "${ORIGINAL_CODEX_AUTH:-}" || ! -f "$ORIGINAL_CODEX_AUTH" ]]; then
-          echo "Original auth snapshot missing; skipping secret refresh."
-          exit 0
+        force_update="${FORCE_UPDATE,,}"
+        if [[ "$force_update" != "true" && "$force_update" != "false" ]]; then
+          echo "::error::force-update must be true or false."
+          exit 1
         fi
-
-        if cmp -s "$ORIGINAL_CODEX_AUTH" "$CODEX_AUTH_PATH"; then
+        if [[ "$force_update" == "false" ]] && cmp -s "$ORIGINAL_CODEX_AUTH" "$CODEX_AUTH_PATH"; then
           echo "Codex auth unchanged; no secret update needed."
           exit 0
         fi
 
-        echo "::notice::Codex auth.json changed; refreshing CODEX_AUTH secret via GitHub REST API."
-        read_key_output="$(gh api repos/${GITHUB_REPOSITORY}/actions/secrets/public-key --jq '[.key_id, .key] | @tsv')"
-        IFS=$'\t' read -r key_id public_key <<<"$read_key_output"
-
-        encrypted_value=$(PUBLIC_KEY="$public_key" AUTH_PATH="$CODEX_AUTH_PATH" uv run --frozen python - <<'PY'
-import base64
-import os
-from pathlib import Path
-from nacl import public
-
-key = base64.b64decode(os.environ["PUBLIC_KEY"])
-auth = Path(os.environ["AUTH_PATH"]).read_bytes()
-sealed = public.SealedBox(public.PublicKey(key))
-print(base64.b64encode(sealed.encrypt(auth)).decode())
-PY
-)
-
-        gh api --method PUT \
-          repos/${GITHUB_REPOSITORY}/actions/secrets/CODEX_AUTH \
-          -H "Accept: application/vnd.github+json" \
-          -f encrypted_value="$encrypted_value" \
-          -f key_id="$key_id"
-
-        echo "Updated CODEX_AUTH secret via REST API."
+        gh secret set "$SECRET_NAME" \
+          --repo "$TARGET_REPOSITORY" \
+          < "$CODEX_AUTH_PATH"
+        echo "updated=true" >> "$GITHUB_OUTPUT"
+        echo "Updated $SECRET_NAME in $TARGET_REPOSITORY."
