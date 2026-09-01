@@ -456,8 +456,6 @@ def hidden_entity_ids(
     # active it inverts the default: an entity is hidden unless it matches one of
     # the allow dimensions. Empty allow_* => inactive => nothing hidden by allow.
     allow_active = bool(allow_areas or allow_labels or allow_entity_ids)
-    configured_allow_active = allow_active
-
     # Fail-open guard: an area/label allowlist needs registry data to match. If
     # the registry came back empty (success but no usable entries) those
     # dimensions can match nothing, so restrict mode would hide every candidate -
@@ -488,13 +486,13 @@ def hidden_entity_ids(
         labels,
         device_area,
         device_labels,
-        automatic_excludes_active=not configured_allow_active,
+        automatic_excludes_active=not allow_active,
     )
 
-    # Allowlist and Assist both reach states-only entities. An allowlist match
-    # authorizes past Assist, so Assist is irrelevant whenever an allowlist was
-    # configured (including when a registry-derived allowlist degrades open).
-    assist_requested = config.respect_assist_exposure and not configured_allow_active
+    # Allowlist and Assist both reach states-only entities. An effective allowlist
+    # authorizes past Assist; when a registry-derived allowlist degrades open, no
+    # match remains to authorize and the broad Assist filter becomes applicable.
+    assist_requested = config.respect_assist_exposure and not allow_active
     if allow_active or assist_requested:
         candidate_ids = set(registry_by_id)
         candidate_ids |= set(state_device_class)
@@ -613,6 +611,24 @@ def config_has_active_allowlist(config: VisibilityConfig) -> bool:
     """Whether at least one allowlist dimension is configured and enabled."""
     return config.enabled and bool(
         config.allow_entity_ids or config.allow_areas or config.allow_labels
+    )
+
+
+def _allowlist_degrades_without_registry(
+    registry_result: object,
+    states_result: object | None,
+    config: VisibilityConfig,
+) -> bool:
+    """Whether the empty-registry guard drops every configured allow dimension."""
+    if config.allow_entity_ids or not (config.allow_areas or config.allow_labels):
+        return False
+    if not isinstance(registry_result, dict) or not registry_result.get("success"):
+        return False
+    entries = registry_result.get("result")
+    if not isinstance(entries, list):
+        return False
+    return not _index_registry_by_id(entries) and bool(
+        _index_state_device_class(states_result)
     )
 
 
@@ -782,10 +798,14 @@ async def load_hidden_set(
     try:
         assist_overrides: dict[str, bool] | None = None
         expose_new = False
+        allowlist_active = config_has_active_allowlist(config)
+        assist_needed = not allowlist_active or _allowlist_degrades_without_registry(
+            registry_result, states_result, config
+        )
         if (
             config.enabled
             and config.respect_assist_exposure
-            and not config_has_active_allowlist(config)
+            and assist_needed
             and client is not None
         ):
             assist_overrides, expose_new = await _fetch_assist_exposure(client)

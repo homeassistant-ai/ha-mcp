@@ -486,8 +486,9 @@ _WARNING_SCENARIOS = [
         id="empty_registry_allowlist_warns",
         ents=(),
         states_only=("light.vismark_g1", "light.vismark_g2"),
-        config=_cfg(allow_areas=["office"]),
-        expected=frozenset({"light.vismark_g1", "light.vismark_g2"}),
+        exposed=frozenset({"light.vismark_g1"}),
+        config=_cfg(allow_areas=["office"], respect_assist_exposure=True),
+        expected=frozenset({"light.vismark_g1"}),
         expected_warnings=frozenset({resolver._ALLOWLIST_REGISTRY_EMPTY_WARNING}),
     ),
     _Scenario(
@@ -529,13 +530,9 @@ async def test_component_warnings_match_legacy(
     assert comp_warnings == legacy_warnings, (
         f"warning drift for {scenario.id}: {comp_warnings} != {legacy_warnings}"
     )
-    # Where the registry is non-empty the surviving sets must still match (the
-    # empty-registry allowlist scenario only pins warning parity — the point of
-    # its degradation is that filtering was skipped).
-    if scenario.ents:
-        comp_ids = {e["entity_id"] for e in comp_resp["entities"]}
-        legacy_ids = {e["entity_id"] for e in legacy_resp["entities"]}
-        assert comp_ids == legacy_ids == set(scenario.expected)
+    comp_ids = {e["entity_id"] for e in comp_resp["entities"]}
+    legacy_ids = {e["entity_id"] for e in legacy_resp["entities"]}
+    assert comp_ids == legacy_ids == set(scenario.expected)
 
 
 def test_component_warning_constants_match_resolver() -> None:

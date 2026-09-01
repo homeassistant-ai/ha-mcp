@@ -416,9 +416,12 @@ The filter uses a precedence ladder:
   (`conversation`) assistant, mirroring `async_should_expose` (an explicit
   per-entity exposure override wins; otherwise, if the instance exposes new
   entities, the entity's domain and device-class defaults decide). This broad
-  filter is not fetched or applied while an allowlist is active. Because HA
-  offers no single "effective exposure" API, the decision is reconstructed
-  client-side from two extra websocket reads per search — the set of entities
+  filter is not fetched or applied while an effective allowlist remains active.
+  If an area/label allowlist degrades open because the entity registry is empty,
+  no allow match remains to authorize past Assist, so this filter applies again.
+  Because HA offers no single "effective exposure" API, the decision is
+  reconstructed client-side from two extra websocket reads per search — the set
+  of entities
   explicitly exposed to the assistant (`expose_entity/list`, which reports only
   the *exposed* ones) and the "expose new entities" flag that drives the default
   branch; if either read fails the dimension is skipped with a `warnings` note
@@ -524,8 +527,8 @@ call. A missing file leaves the filter off; an *invalid* one leaves the filter
 off for search/overview (with a `warnings` note) while enforce-mode safety falls
 back to the session's last good config — with none, tool calls are refused until
 the file is fixed (see *Enforce mode* above). When the filter is enabled but the
-registry read degrades, search results are unfiltered with a `warnings` note
-rather than silently wrong.
+registry read degrades, registry-derived dimensions are skipped with a `warnings`
+note while dimensions that still have usable data continue to apply.
 
 ---
 

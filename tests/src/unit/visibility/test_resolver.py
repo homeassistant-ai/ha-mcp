@@ -533,6 +533,30 @@ def test_empty_registry_with_area_allowlist_degrades_open_not_blank():
     assert any("registry returned no entries" in w for w in warnings)
 
 
+def test_empty_registry_area_allowlist_degrades_to_assist_filter():
+    """A dropped registry allowlist no longer overrides the broad Assist filter."""
+    reg = {"success": True, "result": []}
+    states = [
+        {"entity_id": "sensor.exposed", "attributes": {}},
+        {"entity_id": "sensor.hidden", "attributes": {}},
+    ]
+    cfg = VisibilityConfig(
+        enabled=True,
+        exclude_categories=[],
+        allow_areas=["kitchen"],
+        respect_assist_exposure=True,
+    )
+    hidden, warnings = hidden_entity_ids(
+        reg,
+        cfg,
+        states,
+        {"sensor.exposed": True},
+        True,
+    )
+    assert hidden == {"sensor.hidden"}
+    assert any("registry returned no entries" in w for w in warnings)
+
+
 def test_empty_registry_allowlist_still_honors_allow_entity_ids():
     # allow_entity_ids is registry-independent, so it keeps restricting even when
     # the area dimension degraded: only the explicitly allowed id survives.

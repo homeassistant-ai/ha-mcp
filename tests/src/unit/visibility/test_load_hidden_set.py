@@ -107,6 +107,33 @@ def test_load_hidden_set_allowlist_skips_assist_fetch(tmp_path, monkeypatch):
     assert warnings == []
 
 
+def test_degraded_area_allowlist_fetches_assist(tmp_path, monkeypatch):
+    """An empty-registry area allowlist re-enables and fetches the Assist filter."""
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(
+            enabled=True,
+            exclude_categories=[],
+            allow_areas=["kitchen"],
+            respect_assist_exposure=True,
+        ),
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    reg = {"success": True, "result": []}
+    states = [
+        {"entity_id": "sensor.exposed", "attributes": {}},
+        {"entity_id": "sensor.hidden", "attributes": {}},
+    ]
+    client = _FakeExposeSeamClient(
+        exposed={"sensor.exposed": {"conversation": True}}, expose_new=True
+    )
+
+    hidden, warnings = asyncio.run(resolver.load_hidden_set(reg, states, client))
+
+    assert hidden == {"sensor.hidden"}
+    assert any("registry returned no entries" in warning for warning in warnings)
+
+
 def test_load_hidden_set_assist_fetch_fails_soft(tmp_path, monkeypatch):
     save_visibility_config(
         tmp_path,

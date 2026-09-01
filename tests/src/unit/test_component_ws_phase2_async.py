@@ -919,6 +919,29 @@ class TestVisibilityHiddenSet:
         )
         assert hidden == set()
 
+    def test_allow_empty_registry_guard_reenables_assist(self):
+        """A dropped area allowlist no longer overrides the broad Assist filter."""
+        view = make_view()
+        states = [FakeState("sensor.exposed"), FakeState("sensor.hidden")]
+        calls = []
+
+        def _exposed(eid):
+            calls.append(eid)
+            return eid == "sensor.exposed"
+
+        hidden = wsapi._visibility_hidden_set(
+            view,
+            states,
+            {
+                "allow_areas": ["kitchen"],
+                "respect_assist_exposure": True,
+            },
+            _exposed,
+        )
+
+        assert hidden == {"sensor.hidden"}
+        assert set(calls) == {"sensor.exposed", "sensor.hidden"}
+
     def test_allow_labels_restrict_mode(self):
         # allow_labels restrict mode: kept only when the entity carries an
         # allowed label directly, OR inherits it from its device; an entity
@@ -1194,6 +1217,7 @@ class TestVisibilityWarnings:
         assert set(warnings) == {
             wsapi._unknown_categories_warning({"bogus"}),
             wsapi._ALLOWLIST_REGISTRY_EMPTY_WARNING,
+            wsapi._ASSIST_UNAVAILABLE_WARNING,
         }
 
 

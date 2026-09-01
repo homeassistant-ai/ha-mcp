@@ -5063,9 +5063,6 @@ def _visibility_hidden_set(
     allow_labels = set(visibility.get("allow_labels") or [])
     respect_assist = bool(visibility.get("respect_assist_exposure"))
     allow_active = bool(allow_areas or allow_labels or allow_entity_ids)
-    configured_allow_active = allow_active
-    # An allowlist authorizes past the broad Assist filter.
-    assist_active = respect_assist and assist_available and not allow_active
 
     registry_by_id = _registry_index_by_id(view)
     # states-only entity universe (YAML/template entities absent from the registry
@@ -5082,6 +5079,11 @@ def _visibility_hidden_set(
         allow_labels = set()
         allow_active = bool(allow_entity_ids)
 
+    # An effective allowlist authorizes past the broad Assist filter. If the
+    # registry-derived allow dimensions degraded open, no match remains to
+    # authorize and Assist applies again.
+    assist_active = respect_assist and assist_available and not allow_active
+
     hidden: set[str] = set(denied)
     _apply_visibility_excludes(
         view,
@@ -5092,7 +5094,7 @@ def _visibility_hidden_set(
         exclude_areas,
         exclude_labels,
         hidden,
-        automatic_excludes_active=not configured_allow_active,
+        automatic_excludes_active=not allow_active,
     )
     if allow_active or assist_active:
         _apply_visibility_allow_assist(
@@ -5153,6 +5155,9 @@ def _visibility_warnings(
     # otherwise blank.
     if (allow_areas or allow_labels) and not registry_by_id and state_ids:
         warnings.append(_ALLOWLIST_REGISTRY_EMPTY_WARNING)
+        allow_areas = set()
+        allow_labels = set()
+        allow_active = bool(allow_entity_ids)
 
     if (
         bool(visibility.get("respect_assist_exposure"))
