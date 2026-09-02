@@ -92,6 +92,7 @@ jobs:
         echo "All registries failed" && exit 1
 
     - name: Run full E2E test suite
+      id: e2e-suite
       # Per-test coverage rides along on this lane only (#2311). It sits on the
       # master-push workflow rather than on a PR lane so no pull request pays
       # for it, and on THIS lane because the server under test runs inside the
@@ -131,9 +132,14 @@ jobs:
         COVERAGE_FILE: ${{ github.workspace }}/coverage-e2e.dat
 
     - name: Upload e2e coverage data
-      # Not `always()`: a cancelled run leaves a partial data file, and an
-      # artifact holding one is indistinguishable from a real measurement.
-      if: ${{ !cancelled() }}
+      # Gated on the suite step SUCCEEDING, not merely on the run surviving.
+      # `tests/pytest.ini` stops after three failures, so a failed run leaves a
+      # data file covering only the tests reached before the stop — a partial
+      # measurement under a name that promises a complete one, which is the
+      # exact confusion the rest of this lane exists to prevent. An explicit
+      # status-check function also suppresses the implicit `success()`, so the
+      # step outcome has to be named here rather than assumed.
+      if: ${{ !cancelled() && steps.e2e-suite.outcome == 'success' }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
         name: coverage-e2e

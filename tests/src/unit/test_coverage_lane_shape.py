@@ -217,3 +217,60 @@ def test_coverage_source_is_configured_in_the_file_not_on_the_command_line() -> 
         "[tool.coverage.run] relative_files must stay on, or a data file can "
         "only be reported on the machine that wrote it"
     )
+
+    coverage_config = config["tool"]["coverage"]
+    # relative_files is relative to the WORKING DIRECTORY, so the e2e lane -
+    # which runs pytest from tests/ - records absolute paths whatever the run
+    # section says. This mapping is the only thing that lets the two lanes'
+    # data files combine into one file set instead of two.
+    assert coverage_config.get("paths", {}).get("source") == [
+        "src/ha_mcp",
+        "*/src/ha_mcp",
+    ], (
+        "[tool.coverage.paths] source must map both spellings onto the first "
+        "entry, or a combine across the two lanes silently yields two "
+        "unrelated file sets rather than one"
+    )
+    # Default is false, and a JSON report written without it is well-formed
+    # with every `contexts` map empty - so anything downstream reads "no test
+    # touches this line" from data that simply was not written.
+    assert coverage_config.get("json", {}).get("show_contexts") is True, (
+        "[tool.coverage.json] show_contexts must stay on, or the per-test "
+        "contexts the e2e lane collects never reach a JSON report"
+    )
+
+
+@pytest.mark.parametrize(("workflow", "job_id", "step_name"), _COVERAGE_LANES)
+def test_the_upload_waits_for_a_run_that_actually_finished(
+    workflow: str, job_id: str, step_name: str
+) -> None:
+    """A failed run leaves a partial data file under a complete-sounding name.
+
+    `tests/pytest.ini` stops the e2e suite after three failures, so the data
+    file from a red run describes only the tests reached before the stop. An
+    artifact of that is not distinguishable from a real measurement by anything
+    a consumer can see, which is worse than no artifact.
+
+    Gating on `!cancelled()` alone does not do it: cancellation is one of the
+    ways a run ends early, and the ordinary one - a failing test - is the other.
+    So the upload has to name the producing step's outcome, which also means
+    that step has to keep its `id`.
+    """
+    step = _step(workflow, job_id, step_name)
+    step_id = step.get("id")
+    assert step_id, (
+        f"{workflow}::{job_id} pytest step lost its `id`, so no later step can "
+        "condition on whether it succeeded"
+    )
+    upload = next(
+        candidate
+        for candidate in _job(workflow, job_id).get("steps", [])
+        if isinstance(candidate, dict)
+        and "upload-artifact" in str(candidate.get("uses", ""))
+    )
+    condition = str(upload.get("if", ""))
+    assert f"steps.{step_id}.outcome == 'success'" in condition, (
+        f"{workflow}::{job_id} uploads its coverage artifact without requiring "
+        f"that {step_id} succeeded, so a red run publishes a partial data file "
+        "under a name that promises a complete one"
+    )

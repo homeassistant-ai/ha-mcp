@@ -494,6 +494,7 @@ jobs:
       run: cd tests/js && corepack npm ci
 
     - name: Run unit tests
+      id: unit-suite
       # Coverage rides along here (#2311) so the cost and the reach of a test
       # can be read off data instead of argued from heuristics.
       #
@@ -522,9 +523,12 @@ jobs:
         --ignore=tests/addon/test_addon_startup.py
 
     - name: Upload unit coverage data
-      # Not `always()`: a cancelled run leaves a partial data file, and an
-      # artifact holding one is indistinguishable from a real measurement.
-      if: ${{ !cancelled() }}
+      # Gated on the suite step SUCCEEDING: a failed or cancelled run leaves a
+      # partial data file, and an artifact holding one is indistinguishable by
+      # name from a complete measurement. Naming the step outcome rather than
+      # relying on step ordering also keeps the upload alive when a LATER step
+      # fails, where the coverage data is in fact complete.
+      if: ${{ !cancelled() && steps.unit-suite.outcome == 'success' }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
         name: coverage-unit
