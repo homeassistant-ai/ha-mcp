@@ -329,11 +329,13 @@ def _candidate_hidden(
 def _usable_registry_entries(
     registry_result: object, strict: bool, warnings: list[str]
 ) -> list[Any] | None:
-    """Return the registry entries list, or None to degrade to denylist-only.
+    """Return the registry entries list, or None to degrade to registry-independent
+    dimensions only.
 
     A degraded registry (not a success dict, or a non-list ``result``) fails OPEN
     for search callers — logs, appends ``_REGISTRY_UNAVAILABLE_WARNING``, and
-    returns None so the caller honors just the denylist. Under ``strict`` it raises
+    returns None so the caller honors just the denylist and an explicit
+    ``allow_entity_ids`` list. Under ``strict`` it raises
     :class:`VisibilityDataUnavailable` instead (enforcement fails closed).
     """
     if not isinstance(registry_result, dict) or not registry_result.get("success"):
@@ -376,9 +378,10 @@ def hidden_entity_ids(
     silently leaks the entities an enforced area/label/allow deny should conceal.
     Benign notes (unknown ``exclude_categories``) still warn, never raise.
 
-    ``hidden`` is empty when disabled or the registry payload is unusable
-    (fail-open — never hide on bad input), except the denylist which needs no
-    registry data and is honored regardless. ``warnings`` carries operator-facing
+    ``hidden`` is empty when disabled. When the registry payload is unusable the
+    registry-derived dimensions fail open (never hide on bad input); the denylist
+    and an explicit ``allow_entity_ids`` list need no registry data and are
+    honored regardless. ``warnings`` carries operator-facing
     notes (degraded registry, dropped unknown categories, an empty-registry
     allowlist degradation, missing Assist data) for the caller to surface at the
     response level.
