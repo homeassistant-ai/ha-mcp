@@ -308,6 +308,35 @@ dev = [
     "pyyaml>=6.0",
 ]
 
+# Coverage measurement (#2311). CI collects coverage on two lanes so the cost
+# of a test can be argued from data rather than from heuristics; the settings
+# that make those two runs comparable belong here rather than on either lane's
+# command line.
+[tool.coverage.run]
+# `source` has to live in the config file, not on the command line, or
+# `relative_files` cannot resolve the origin (coverage.py config reference).
+# That is also why the lanes pass a bare `--cov`.
+source = ["ha_mcp"]
+# Store repo-relative paths, so a data file collected on one lane can be
+# reported or diffed against one collected on another.
+relative_files = true
+
+[tool.coverage.paths]
+# The two lanes run pytest from different directories — the unit lane from the
+# repository root, the e2e lane from `tests/` — and `relative_files` is
+# relative to the working directory, so the e2e lane records absolute paths
+# whatever this file says. `coverage combine` RUN FROM THE REPOSITORY ROOT maps
+# both spellings onto the first entry; run from anywhere else the canonical
+# path does not resolve and the two lanes stay two separate file sets.
+source = ["src/ha_mcp", "*/src/ha_mcp"]
+
+[tool.coverage.json]
+# A JSON report drops per-test contexts unless this is on (default false), and
+# says nothing about having dropped them: the report is well-formed, every
+# `contexts` map is simply empty. Anything downstream that keys off contexts
+# would then measure an empty set and read it as "no test touches this line".
+show_contexts = true
+
 # Semantic versioning configuration
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]

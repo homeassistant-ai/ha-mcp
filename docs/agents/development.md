@@ -65,6 +65,38 @@ tests take more than 25 minutes serial, so run them in parallel as shown.
 a report with three failures may be an early stop; use `--maxfail=0` only when
 the complete failure set is actually needed.
 
+### Coverage data
+
+Two CI lanes collect coverage (#2311) and upload the data file as a build
+artifact: `Unit Tests` in `pr.yml` (line coverage, artifact `coverage-unit`)
+and `E2E Tests` in `e2e-tests.yml`, the master-push lane, which additionally
+records a context per test (artifact `coverage-e2e`). No pull-request lane pays
+for the e2e measurement.
+
+The two lanes run pytest from different directories, and `relative_files` is
+relative to the working directory, so the unit data file records repo-relative
+paths and the e2e one absolute paths. `coverage combine` reconciles them
+through `[tool.coverage.paths]` **when run from the repository root**; run
+anywhere else the canonical path does not resolve and the two data files stay
+two unrelated file sets.
+
+```bash
+# Report on a downloaded artifact, or diff two of them.
+uv run coverage combine --keep coverage-unit.dat coverage-e2e.dat
+uv run coverage json          # per-test contexts included; see below
+```
+
+A JSON report is much larger than the data file it comes from — in one probe
+roughly 500x — because `[tool.coverage.json] show_contexts` writes every
+context of every line. Report locally from the artifact rather than having CI
+produce JSON.
+
+Collecting contexts requires the default measurement core. Under
+`COVERAGE_CORE=sysmon`, coverage 7.10.6 on Python 3.13 records only some of the
+contexts and reports no error, so leave the core alone whenever `--cov-context` is in play;
+for line coverage alone the two cores agree exactly and sysmon is the cheaper
+one, which is why the unit lane selects it.
+
 Do not set `HOMEASSISTANT_URL` manually before testcontainer E2E tests.
 `tests/.env.test` contains placeholders, and the fixture supplies the real
 URL dynamically. The shared token is in `tests/test_constants.py`.

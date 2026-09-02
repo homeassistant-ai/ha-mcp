@@ -494,7 +494,23 @@ jobs:
       run: cd tests/js && corepack npm ci
 
     - name: Run unit tests
-      run: uv run pytest tests/src/unit/ -n auto --tb=short -v
+      # Coverage rides along here (#2311) so the cost and the reach of a test
+      # can be read off data instead of argued from heuristics.
+      #
+      # `sysmon` is the cheap core. Measured over the full unit suite on one
+      # noisy box: three uninstrumented runs at 145-177 s, two sysmon runs at
+      # 162-182 s, one default-core run at 247 s. The first two ranges overlap;
+      # the default core sits well outside both. It is safe on THIS lane
+      # because the lane asks for line coverage only, which the two cores
+      # record identically (13,344 lines over 222 files, no difference either
+      # way). It is NOT safe with `--cov-context`, and the e2e lane in
+      # e2e-tests.yml carries that measurement.
+      env:
+        COVERAGE_FILE: coverage-unit.dat
+        COVERAGE_CORE: sysmon
+      run: >-
+        uv run pytest tests/src/unit/ -n auto --tb=short -v
+        --cov --cov-report=term
 
     - name: Run add-on structure tests
       # tests/addon/ validates add-on packaging / config.yaml structure (e.g.
@@ -504,6 +520,20 @@ jobs:
       run: >-
         uv run pytest tests/addon/ -n auto --tb=short -v
         --ignore=tests/addon/test_addon_startup.py
+
+    - name: Upload unit coverage data
+      # Not `always()`: a cancelled run leaves a partial data file, and an
+      # artifact holding one is indistinguishable from a real measurement.
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: coverage-unit
+        # Named rather than left as coverage.py's default `.coverage`: this
+        # action skips hidden files unless told otherwise, so the dotfile would
+        # have produced an empty artifact and no error.
+        path: coverage-unit.dat
+        if-no-files-found: error
+        retention-days: 14
 
   # Comprehensive E2E validation for all PRs
   e2e-validation:

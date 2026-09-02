@@ -92,6 +92,26 @@ jobs:
         echo "All registries failed" && exit 1
 
     - name: Run full E2E test suite
+      # Per-test coverage rides along on this lane only (#2311). It sits on the
+      # master-push workflow rather than on a PR lane so no pull request pays
+      # for it, and on THIS lane because the server under test runs inside the
+      # pytest process here, which is what makes its lines measurable at all.
+      #
+      # Three properties of the instrument, each of which fails silently when
+      # got wrong, so none of the flags below is decoration:
+      #   * `--cov-config` is explicit because this step runs pytest from
+      #     `tests/`, and coverage.py reads its configuration from the working
+      #     directory only. Without it the root pyproject.toml is never seen
+      #     and the run measures a different, smaller set of files.
+      #   * the default `ctrace` core is deliberate. With COVERAGE_CORE=sysmon
+      #     the same tests recorded contexts for 27 of 35 of them and reported
+      #     nothing about the other 8. sysmon does not support dynamic contexts
+      #     (coverage.py configuration reference) and, as of coverage 7.10.6 on
+      #     the Python this repo pins, neither warns nor falls back to a core that
+      #     does.
+      #   * no JSON report is written. `coverage json` with contexts ran to
+      #     roughly 500x the size of the data file it came from; whoever
+      #     reports on this downloads the artifact and reports locally.
       run: |
         echo "🚀 Running full E2E test suite with 3 workers..."
         cd tests
@@ -99,11 +119,30 @@ jobs:
           -n3 \
           --dist loadscope \
           --tb=short \
-          -v
+          -v \
+          --cov \
+          --cov-config=../pyproject.toml \
+          --cov-context=test \
+          --cov-report=term
         echo "✅ Full E2E test suite passed"
       env:
         HAMCP_ENV_FILE: "tests/.env.test"
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        COVERAGE_FILE: ${{ github.workspace }}/coverage-e2e.dat
+
+    - name: Upload e2e coverage data
+      # Not `always()`: a cancelled run leaves a partial data file, and an
+      # artifact holding one is indistinguishable from a real measurement.
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: coverage-e2e
+        # Named rather than left as coverage.py's default `.coverage`: this
+        # action skips hidden files unless told otherwise, so the dotfile would
+        # have produced an empty artifact and no error.
+        path: coverage-e2e.dat
+        if-no-files-found: error
+        retention-days: 14
 
   # Container backend with the ha_mcp_tools component ABSENT (#2292): mirrors
   # pr.yml's e2e-validation-no-component on master push. The same full E2E

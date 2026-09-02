@@ -56,6 +56,9 @@ logs/
 # Test files
 pytest_cache/
 .coverage
+# The CI lanes name their data file so upload-artifact does not skip it as a
+# hidden file; xdist's per-worker shards share the prefix.
+coverage-*.dat*
 htmlcov/
 
 # Test environment runtime data
