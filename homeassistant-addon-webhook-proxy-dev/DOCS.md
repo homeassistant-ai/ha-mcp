@@ -169,7 +169,7 @@ Set **OAuth Mode** to `legacy` (or leave it unset if you are upgrading an existi
      Use your own OAuth client).
    ```
 5. In your MCP client, configure the OAuth fields:
-   - **Claude.ai:** when adding the connector, on the second wizard step keep **Authentication: Always required**, pick **OAuth client: Use your own OAuth client**, and paste the Client ID and Client Secret. Claude.ai completes the rest automatically (consent screen → token exchange → bearer token).
+   - **Claude.ai:** when adding the connector, on the second wizard step keep **Authentication: Always required**, pick **OAuth client: Use your own OAuth client**, and paste the Client ID and Client Secret. Click **Add**, then the connector's **Connect** button — Claude.ai completes the rest (consent screen → token exchange → bearer token).
    - **Other clients:** configure the same Client ID + Client Secret in the client's OAuth settings if it supports OAuth 2.1 with manual client registration.
 
 The generated values are persisted at `/data/oauth_creds.json` inside the app, so they stay the same across restarts.
