@@ -1750,7 +1750,7 @@ def _log_startup_urls(
         log_info(f"    OAuth Client ID:     {oauth_client_id}")
         log_info(f"    OAuth Client Secret: {oauth_client_secret}")
         log_info("    Paste both into the OAuth fields of your MCP client's")
-        log_info("    connector setup (Claude.ai: OAuth client → Use your own OAuth client).")
+        log_info("    connector setup (Claude.ai: connector → Advanced settings).")
         log_info("    These values persist at /data/oauth_creds.json — same")
         log_info("    values across addon restarts.")
     if debug_logging:

@@ -165,7 +165,8 @@ Set **OAuth Mode** to `legacy` (or leave it unset if you are upgrading an existi
      OAuth Client ID:     hamcp-1a2b3c4d5e6f7890abcdef1234567890
      OAuth Client Secret: kX9pQ4mZ2vL8nR3sT6uW1yA5cB7dF0gH...
      Paste both into the OAuth fields of your MCP client's
-     connector setup (Claude.ai: OAuth client → Use your own OAuth client).
+     connector setup (Claude.ai: OAuth client ->
+     Use your own OAuth client).
    ```
 5. In your MCP client, configure the OAuth fields:
    - **Claude.ai:** when adding the connector, on the second wizard step keep **Authentication: Always required**, pick **OAuth client: Use your own OAuth client**, and paste the Client ID and Client Secret. Claude.ai completes the rest automatically (consent screen → token exchange → bearer token).
