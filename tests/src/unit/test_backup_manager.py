@@ -612,8 +612,13 @@ def test_ha_manage_blueprints_carries_auto_backup_decorator() -> None:
     assert "blueprint_{kw.get(" in head, "the backup domain no longer follows `domain`"
     assert 'id_param="path"' in head, "ha_manage_blueprints wrong/missing id_param"
     assert 'kw.get("action") != "delete"' in head, (
-        "ha_manage_blueprints lost the delete-only skip_fn — every action would "
+        "ha_manage_blueprints lost the delete-only skip_fn - every action would "
         "now attempt a snapshot"
+    )
+    assert 'not kw.get("confirm")' in head, (
+        "ha_manage_blueprints lost the confirm half of its skip_fn - an "
+        "unconfirmed delete changes nothing, but would again pay a component "
+        "file read and an outbound source_url re-fetch before being refused"
     )
 
 
@@ -2512,7 +2517,7 @@ class TestBlueprintDecoratorWiring:
         return with_auto_backup(
             domain_fn=lambda kw: f"blueprint_{kw.get('domain') or 'automation'}",
             id_param="path",
-            skip_fn=lambda kw: kw.get("action") != "delete",
+            skip_fn=lambda kw: kw.get("action") != "delete" or not kw.get("confirm"),
             client=object(),
         )(_bp_noop_tool)
 
@@ -2551,11 +2556,30 @@ class TestBlueprintDecoratorWiring:
         )
         assert calls == []
 
+    async def test_unconfirmed_delete_captures_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The tool refuses an unconfirmed delete and changes nothing, so
+        capturing for it would pay a component read and, with no component, an
+        outbound re-fetch of a third-party source_url for no reason."""
+        calls = await self._run(
+            monkeypatch,
+            action="delete",
+            domain="automation",
+            path=_BP_PATH,
+            confirm=False,
+        )
+        assert calls == []
+
     async def test_delete_resolves_the_blueprint_domain_target(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls = await self._run(
-            monkeypatch, action="delete", domain="automation", path=_BP_PATH
+            monkeypatch,
+            action="delete",
+            domain="automation",
+            path=_BP_PATH,
+            confirm=True,
         )
         assert calls == [("blueprint_automation", _BP_PATH, "_bp_noop_tool")]
 
@@ -2563,7 +2587,7 @@ class TestBlueprintDecoratorWiring:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls = await self._run(
-            monkeypatch, action="delete", domain="script", path=_BP_PATH
+            monkeypatch, action="delete", domain="script", path=_BP_PATH, confirm=True
         )
         assert calls[0][0] == "blueprint_script"
 

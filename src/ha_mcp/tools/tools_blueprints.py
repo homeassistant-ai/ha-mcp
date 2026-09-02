@@ -37,6 +37,13 @@ logger = logging.getLogger(__name__)
 
 _VALID_DOMAINS = ("automation", "script")
 
+# The reference lookup runs only to enrich an error that is already being
+# raised, so inheriting send_command's 30s default would make a rejected
+# delete hang far longer than the delete itself. Same reasoning and same
+# leash as ``smart_search/_graph.py``'s ``_GRAPH_TIMEOUT_S``. Popped by the
+# client; never reaches Home Assistant.
+_RELATED_TIMEOUT_S = 5.0
+
 
 def _error_text(response: dict[str, Any], fallback: str) -> str:
     """Render Home Assistant's WebSocket error payload as a message string.
@@ -112,10 +119,16 @@ class BlueprintTools:
             "title": "Manage Blueprints",
         },
     )
+    # ``confirm`` is part of the skip test, not just ``action``: an
+    # unconfirmed delete changes nothing, and capturing for it would run a
+    # component file read and — with no component — an outbound re-fetch of
+    # the blueprint's third-party ``source_url`` before the tool refuses.
+    # Auto-backup is on by default, so that would fire on every unconfirmed
+    # call.
     @with_auto_backup(
         domain_fn=lambda kw: f"blueprint_{kw.get('domain') or 'automation'}",
         id_param="path",
-        skip_fn=lambda kw: kw.get("action") != "delete",
+        skip_fn=lambda kw: kw.get("action") != "delete" or not kw.get("confirm"),
     )
     @log_tool_usage
     async def ha_manage_blueprints(
@@ -133,7 +146,10 @@ class BlueprintTools:
         domain: Annotated[
             str,
             Field(
-                description="Blueprint domain: 'automation' or 'script'",
+                description=(
+                    "Blueprint domain: 'automation' or 'script'. Ignored by "
+                    "action='import' — the blueprint file declares its own domain."
+                ),
                 default="automation",
             ),
         ] = "automation",
@@ -485,6 +501,12 @@ class BlueprintTools:
     ) -> tuple[list[str], bool]:
         """Ask HA's reference graph which entities use ``path``.
 
+        Only the bucket named by the blueprint's own domain is read. Core's
+        ``_async_search_automation_blueprint`` / ``_async_search_script_blueprint``
+        fill just that one today, but the result is an open dict: were core to
+        start returning related entities, devices or areas, unioning every
+        bucket would list unrelated ids as blueprint consumers.
+
         Returns ``(entity_ids, resolved)``. ``resolved`` is False when the
         ``search/related`` lookup itself could not be consulted, so the caller
         can say "unknown consumers" instead of "no consumers".
@@ -495,6 +517,7 @@ class BlueprintTools:
                     "type": "search/related",
                     "item_type": f"{domain}_blueprint",
                     "item_id": path,
+                    "_wait_timeout": _RELATED_TIMEOUT_S,
                 }
             )
         except Exception as exc:
@@ -506,15 +529,10 @@ class BlueprintTools:
         result = response.get("result") or {}
         if not isinstance(result, dict):
             return [], False
-        return sorted(
-            {
-                item
-                for values in result.values()
-                if isinstance(values, list)
-                for item in values
-                if isinstance(item, str)
-            }
-        ), True
+        consumers = result.get(domain)
+        if not isinstance(consumers, list):
+            return [], True
+        return sorted({item for item in consumers if isinstance(item, str)}), True
 
     async def _substitute_blueprint(
         self, domain: str, path: str, blueprint_input: dict[str, Any]
@@ -796,12 +814,21 @@ class BlueprintTools:
 
     @staticmethod
     def _raise_import_failure(url: str, response: dict[str, Any]) -> NoReturn:
-        """Raise SERVICE_CALL_FAILED for a rejected blueprint/import."""
+        """Raise SERVICE_CALL_FAILED for a rejected blueprint/import.
+
+        The last two suggestions are the network-side remedies the old
+        ``ha_import_blueprint`` carried on its exception handler: importing is
+        the one action that makes Home Assistant reach the internet, so they
+        belong here rather than on the consolidated tool's generic handler,
+        where they would be offered for a failed list or delete too.
+        """
         error_msg = _error_text(response, "Failed to import blueprint")
         suggestions = [
             "Verify the URL is accessible",
             "Ensure the URL points to a valid blueprint YAML file",
             "Check if the blueprint format is compatible with your Home Assistant version",
+            "Ensure Home Assistant has internet access",
+            "Try importing from a different source (GitHub, Community, direct URL)",
         ]
         if "already exists" in error_msg.lower():
             suggestions.insert(

@@ -2309,7 +2309,15 @@ async def _fetch_blueprint_file(client: Any, path: str, domain: str) -> str | No
             err,
         )
         return None
-    return content if isinstance(content, str) and content else None
+    if isinstance(content, str) and content:
+        return content
+    logger.debug(
+        "Auto-backup: component read of blueprint %r returned no content (%r); "
+        "trying the source URL",
+        path,
+        type(content).__name__,
+    )
+    return None
 
 
 async def _refetch_blueprint_from_source(

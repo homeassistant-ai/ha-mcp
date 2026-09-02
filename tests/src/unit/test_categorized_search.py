@@ -970,3 +970,39 @@ class TestApplySearchKeywordEnrichment:
             "get",
         ):
             assert term in enriched.description.lower(), f"{term!r} missing"
+
+    @pytest.mark.anyio
+    async def test_blueprint_keywords_route_the_retired_tool_names(self):
+        """Blueprint queries and the pre-#2329 names must reach ha_manage_blueprints.
+
+        The consolidation removed ha_get_blueprint and ha_import_blueprint, so
+        an agent working from the older catalog searches names that no longer
+        exist. The boost carries both, plus the verbs the merged tool gained
+        ("delete", "substitute") that its own description does not lead with.
+        """
+        from ha_mcp.server import HomeAssistantSmartMCPServer
+
+        keywords = HomeAssistantSmartMCPServer._SEARCH_KEYWORDS
+        assert "ha_manage_blueprints" in keywords
+
+        transform = SearchKeywordsTransform(keywords=keywords)
+        tool = _make_tool(
+            "ha_manage_blueprints",
+            destructive=True,
+            description="Manage Home Assistant blueprints.",
+        )
+        enriched = (await transform.list_tools([tool]))[0]
+
+        assert enriched.description.startswith("Manage Home Assistant blueprints.")
+        for term in (
+            "blueprint",
+            "blueprints",
+            "import",
+            "delete",
+            "substitute",
+            "take-control",
+            "list",
+            "ha_get_blueprint",
+            "ha_import_blueprint",
+        ):
+            assert term in enriched.description.lower(), f"{term!r} missing"

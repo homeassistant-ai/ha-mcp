@@ -178,6 +178,43 @@ async def test_delete_requires_confirm() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unconfirmed_delete_captures_no_backup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With auto-backup ON, an unconfirmed delete must still capture nothing.
+
+    The refusal changes nothing, so a snapshot for it is pure cost — a
+    component file read, and with no component an outbound re-fetch of the
+    blueprint's third-party source_url — paid before the tool says no.
+    """
+    captured: list[tuple[str, str]] = []
+
+    class _FakeMgr:
+        async def maybe_snapshot(
+            self, domain: str, entity_id: str, **_kwargs: Any
+        ) -> None:
+            captured.append((domain, entity_id))
+
+    class _Settings:
+        enable_auto_backup = True
+
+    monkeypatch.setattr("ha_mcp.tools.auto_backup.get_global_settings", _Settings)
+    monkeypatch.setattr(
+        "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
+    )
+
+    client = SpyClient({})
+    tool = _build_tool(client)
+
+    with pytest.raises(ToolError) as exc:
+        await tool(action="delete", path=_PATH)
+
+    assert _error_payload(exc.value)["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert captured == []
+    assert client.sent == []
+
+
+@pytest.mark.asyncio
 async def test_delete_not_found() -> None:
     """The existence pre-check reuses ``get``'s not-found error."""
     client = SpyClient({"blueprint/list": _listing("other/thing.yaml")})
@@ -265,7 +302,13 @@ async def test_delete_generic_failure_is_service_call_failed() -> None:
 
 @pytest.mark.asyncio
 async def test_delete_in_use_names_consumers() -> None:
-    """``Blueprint in use`` → RESOURCE_LOCKED carrying the reference graph's answer."""
+    """``Blueprint in use`` → RESOURCE_LOCKED carrying the reference graph's answer.
+
+    Only the bucket named by the blueprint domain counts. ``search/related``
+    returns an open dict, so the extra buckets here stand in for related items
+    core could start returning — unioning them would report ``light.hall`` as a
+    blueprint consumer.
+    """
     client = SpyClient(
         {
             "blueprint/list": _listing(_PATH),
@@ -277,6 +320,7 @@ async def test_delete_in_use_names_consumers() -> None:
                 "success": True,
                 "result": {
                     "automation": ["automation.hall_light", "automation.porch_light"],
+                    "light": ["light.hall"],
                     "config_entry": [],
                 },
             },
@@ -294,18 +338,53 @@ async def test_delete_in_use_names_consumers() -> None:
         "automation.hall_light",
         "automation.porch_light",
     ]
+    assert "light.hall" not in str(payload), (
+        "a non-automation bucket leaked into the blueprint's consumer list"
+    )
     assert "automation.hall_light" in error["message"]
+    # The lookup only enriches an error already being raised, so it carries a
+    # short leash rather than send_command's 30s default.
     assert client.frames("search/related") == [
         {
             "type": "search/related",
             "item_type": "automation_blueprint",
             "item_id": _PATH,
+            "_wait_timeout": 5.0,
         }
     ]
     joined = " ".join(error["suggestions"])
     assert "ha_config_remove_automation" in joined
     assert 'action="substitute"' in joined
     assert 'action="delete"' in joined
+
+
+@pytest.mark.asyncio
+async def test_delete_in_use_with_no_matching_bucket() -> None:
+    """The graph answered but named no consumer of this domain.
+
+    Home Assistant still refused the delete, so the lock stands; the message
+    just cannot name anyone.
+    """
+    client = SpyClient(
+        {
+            "blueprint/list": _listing(_PATH),
+            "blueprint/delete": {
+                "success": False,
+                "error": "Command failed: Blueprint in use",
+            },
+            "search/related": {"success": True, "result": {"config_entry": []}},
+        }
+    )
+    tool = _build_tool(client)
+
+    with pytest.raises(ToolError) as exc:
+        await tool(action="delete", path=_PATH, confirm=True)
+
+    payload = _error_payload(exc.value)
+    assert payload["error"]["code"] == "RESOURCE_LOCKED"
+    assert payload["in_use_by"] == []
+    # The lookup DID answer, so no "use ha_search instead" suggestion is added.
+    assert not any("ha_search" in s for s in payload["error"]["suggestions"])
 
 
 @pytest.mark.asyncio
@@ -594,6 +673,30 @@ async def test_import_existing_without_overwrite_is_rejected() -> None:
     error = payload["error"]
     assert error["code"] == "RESOURCE_ALREADY_EXISTS"
     assert client.frames("blueprint/save") == []
+
+
+@pytest.mark.asyncio
+async def test_import_failure_keeps_the_network_suggestions() -> None:
+    """Importing is the only action that makes HA reach the internet, so the
+    connectivity remedies belong on this path."""
+    client = SpyClient(
+        {
+            "blueprint/import": {
+                "success": False,
+                "error": "Command failed: Cannot connect to host example.com",
+            }
+        }
+    )
+    tool = _build_tool(client)
+
+    with pytest.raises(ToolError) as exc:
+        await tool(action="import", url="https://example.com/bp.yaml")
+
+    payload = _error_payload(exc.value)
+    assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+    joined = " ".join(payload["error"]["suggestions"])
+    assert "internet access" in joined
+    assert "different source" in joined
 
 
 @pytest.mark.asyncio
