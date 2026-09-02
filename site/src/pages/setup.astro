@@ -110,7 +110,7 @@ const clientsData = [
     "configLocation": "~/.copilot/mcp-config.json",
     "accuracy": 5,
     "order": 8,
-    "httpNote": "Remote setup requires the HA-MCP Server integration's legacy OAuth mode — ha_auth doesn't support the Client ID Copilot CLI requires. See the FAQ.",
+    "httpNote": "Remote setup requires the HA-MCP Server integration's built-in webhook — ha_auth works as of component 2.0.0 (legacy mode for older versions). See the FAQ.",
   },
   {"id": "chatgpt", "name": "ChatGPT", "company": "OpenAI", "logo": "/logos/openai.svg", "transports": ["sse", "streamable-http"], "configFormat": "ui", "accuracy": 4, "order": 9, "beta": true},
   {
@@ -1805,12 +1805,12 @@ ingress:
           </div>
           <div class="bg-purple-900/20 border border-purple-700/50 rounded-lg p-3 mt-3">
             <p class="text-purple-300 text-sm font-medium">🔒 Optional: OAuth (Beta)</p>
-            <p class="text-purple-200/80 text-xs mt-1 mb-2">For a real auth layer on top of the URL secret, enable <strong>OAuth (Beta)</strong> in the app configuration. Toggle <em>Show unused optional configuration options</em>, set <strong>Enable OAuth</strong> to on, leave Client ID and Client Secret blank, and restart the app. The app auto-generates a strong Client ID and Client Secret on first start and prints them in the log; copy them into your MCP client's <strong>Advanced settings</strong> OAuth fields (in Claude.ai). Generated values persist at <code class="bg-slate-800 px-1 rounded">/data/oauth_creds.json</code> across restarts. When the toggle is off, the webhook behaves exactly as before with no auth.</p>
-            <p class="text-purple-300 text-xs font-medium mt-2 mb-1">Flow when Claude.ai connects</p>
+            <p class="text-purple-200/80 text-xs mt-1 mb-2">For a real auth layer on top of the URL secret, enable <strong>OAuth (Beta)</strong> in the app configuration: toggle <em>Show unused optional configuration options</em>, set <strong>Enable OAuth</strong> to on, and restart the app. A first-time enable defaults to <strong>OAuth Mode</strong> <code class="bg-slate-800 px-1 rounded">ha_auth</code>: you sign in with your Home Assistant account and there is no Client ID or Secret — in Claude.ai keep the detected <strong>Always required</strong> + <strong>Use Anthropic's hosted client metadata</strong>. To use the older <code class="bg-slate-800 px-1 rounded">legacy</code> flow instead, set <strong>OAuth Mode</strong> to <code class="bg-slate-800 px-1 rounded">legacy</code> (leave Client ID and Client Secret blank) <em>before</em> restarting, and then also <strong>restart Home Assistant</strong> when the Repair prompts you — legacy mode's OAuth views load with Home Assistant, so restarting only the app is not enough; the app then generates a strong Client ID and Client Secret, prints them in the log, and persists them at <code class="bg-slate-800 px-1 rounded">/data/oauth_creds.json</code> — in Claude.ai choose <strong>Use your own OAuth client</strong>, paste them in, click <strong>Add</strong>, then <strong>Connect</strong>. When the toggle is off, the webhook behaves exactly as before with no auth.</p>
+            <p class="text-purple-300 text-xs font-medium mt-2 mb-1">Flow when Claude.ai connects (legacy mode)</p>
             <p class="text-purple-200/80 text-xs mt-1 mb-2">Claude.ai redirects to <code class="bg-slate-800 px-1 rounded">/authorize</code> → you click <strong>Allow</strong> on the consent page → Claude.ai exchanges the auth code at <code class="bg-slate-800 px-1 rounded">/token</code> using your Client ID + Client Secret + PKCE → it gets a 1-hour bearer token (auto-refreshed via a 30-day refresh token). Every MCP request after that carries <code class="bg-slate-800 px-1 rounded">Authorization: Bearer ...</code>.</p>
-            <p class="text-purple-300 text-xs font-medium mt-2 mb-1">Keep the Client Secret safe</p>
+            <p class="text-purple-300 text-xs font-medium mt-2 mb-1">Keep the Client Secret safe (legacy mode)</p>
             <p class="text-purple-200/80 text-xs mt-1 mb-2">The <code class="bg-slate-800 px-1 rounded">/authorize</code> consent page is reachable without being logged into Home Assistant — that's how OAuth works. The <strong>Client Secret</strong> at the token endpoint is what actually gates access; an attacker can't redeem a code without it. Don't paste it into screenshots/logs/chats. If you suspect it has leaked, rotate immediately.</p>
-            <p class="text-purple-300 text-xs font-medium mt-2 mb-1">Rotating credentials</p>
+            <p class="text-purple-300 text-xs font-medium mt-2 mb-1">Rotating credentials (legacy mode)</p>
             <p class="text-purple-200/80 text-xs mt-1">Either set new values in the config fields, or flip <strong>Regenerate OAuth Credentials on Next Start</strong> on and restart — the app auto-clears the toggle after generating fresh values, then update Claude.ai with the new pair. Beta — works with Claude.ai today; other clients may vary.</p>
           </div>
         </div>`;
@@ -2541,22 +2541,35 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
           <p class="text-slate-400 text-sm mt-3"><strong class="text-slate-300">Behind a firewall?</strong> ChatGPT connects from OpenAI's servers, so the URL above must be publicly reachable. If you can't (or don't want to) expose one, the community <a href="https://github.com/norpol/hass-codex-tunnel-mcp" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">OpenAI Tunnel for HA-MCP</a> integration connects your local ha-mcp URL to an OpenAI-hosted tunnel over an outbound-only connection. In that case the connector is set up with your tunnel ID instead of the URL in the steps above — follow the integration's README for the ChatGPT-side steps. See the <a href="${base}/faq#openai-tunnel" class="text-blue-400 hover:underline">FAQ</a>.</p>
         </div>`;
       } else if (state.client.id === 'claude-ai') {
+        // Which sign-in the connector wizard should land on depends on the
+        // deployment: only the component's built-in webhook and the Webhook
+        // Proxy app can run OAuth (ha_auth / legacy); every other remote path
+        // is secret-URL only, which the wizard detects as "None".
+        const oauthCapable = (isComponent && state.remotePath === 'builtin-webhook') || state.remotePath === 'webhook-proxy';
+        const modeOption = isComponent
+          ? `the integration's <strong>Authentication mode</strong> option`
+          : `the Webhook Proxy app's <strong>OAuth Mode</strong> option`;
+        const modeChoices = oauthCapable ? `
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                <li><strong>Secret URL</strong> (${isComponent ? '<code class="bg-slate-800 px-1 rounded">none</code>, the default' : 'OAuth off, the default'}): Authentication <strong>None</strong> (Detected). The URL is the credential and no OAuth client section appears. Picking <strong>Always required</strong> instead also works — the server approves the sign-in automatically with no login page.</li>
+                <li><strong>Home Assistant sign-in</strong> (<code class="bg-slate-800 px-1 rounded">ha_auth</code>): Authentication <strong>Always required</strong>, OAuth client <strong>Use Anthropic's hosted client metadata</strong> (both Detected). No Client ID or Secret.</li>
+                <li><strong>Legacy</strong> (<code class="bg-slate-800 px-1 rounded">legacy</code>): Authentication <strong>Always required</strong>, OAuth client <strong>Use your own OAuth client</strong>, then paste the Client ID and Client Secret from ${isComponent ? "the integration's Options page" : 'the app log'}.</li>
+              </ul>` : `
+              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
+                <li>Authentication <strong>None</strong> (Detected). The secret path in the URL is the credential; this deployment has no OAuth client section.</li>
+              </ul>`;
         uiSteps = `<div class="instruction-block">
           <h3 class="instruction-title">Claude.ai Configuration</h3>
           <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
-            <li>Open Claude.ai → <strong>Settings</strong> → <strong>Connectors</strong></li>
-            <li>Click <strong>Add Connector</strong></li>
-            <li>Enter:
-              <ul class="ml-6 mt-1 text-slate-400 list-disc list-inside space-y-1">
-                <li>Name: <code class="bg-slate-800 px-1 rounded">Home Assistant</code></li>
-                <li>URL: <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code></li>
-              </ul>
+            <li>Open Claude.ai → <strong>Customize</strong> (left sidebar) → <strong>Connectors</strong> → <strong>Add</strong></li>
+            <li>Enter a name (e.g. <code class="bg-slate-800 px-1 rounded">Home Assistant</code>) and the URL <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code>, then click <strong>Continue</strong>. Claude checks the server and pre-fills the next step; choices it worked out are tagged <em>Detected</em> — keep them.</li>
+            <li>On the second step, confirm <strong>Authentication</strong> and <strong>OAuth client</strong> match your setup:${modeChoices}
             </li>
-            <li><strong>Click the connector's <em>Connect</em> button.</strong> Adding it does not connect it — this step starts the connection. If you enabled OAuth on the webhook proxy you'll be sent to a consent page; click <strong>Allow</strong> to finish.</li>
-            <li>You may see <em>"Couldn't reach the MCP server"</em> — <strong>this is normal</strong> and can be safely ignored</li>
-            <li>If it won't connect at all: Claude.ai connects from Anthropic's servers, so the URL must be reachable from the public internet. Open it on your <strong>phone with Wi-Fi off</strong> — if it doesn't load there, it isn't publicly reachable (DNS / port-forward / TLS / proxy) and Claude.ai can't reach it either.</li>
-            <li>If you see a <strong>"Configure"</strong> button on the connector, click it — if tools are listed, you're connected</li>
-            <li>You can also start a new conversation and ask Claude if it can see your Home Assistant via the MCP connection to confirm</li>
+            <li>Click <strong>Add</strong>. With no sign-in the connector is live immediately; otherwise click its <strong>Connect</strong> button.${oauthCapable ? ` With <code class="bg-slate-800 px-1 rounded">ha_auth</code> you sign in with ${isComponent ? 'a Home Assistant <strong>administrator</strong> account (non-admin logins are refused)' : 'your Home Assistant account (any account that can sign in gets the same admin-equivalent tool access)'}; with <code class="bg-slate-800 px-1 rounded">legacy</code> you click <strong>Allow</strong> on the consent page.` : ''}</li>
+            <li>If <em>Checking server</em> reports it couldn't determine the settings, first re-check the URL for typos. Claude.ai connects from Anthropic's servers, so the URL must also be reachable from the public internet: open it on your <strong>phone with Wi-Fi off</strong> — if it doesn't load there, it isn't publicly reachable (DNS / port-forward / TLS / proxy). Otherwise click <strong>Next</strong> and pick the settings above by hand.</li>
+            <li>Once connected, the connector page lists every tool with a per-tool permission (allow / needs approval / block). If it says <em>no tools available</em>, use the <strong>⋮</strong> menu → <strong>Refresh tools list</strong>.</li>
+            <li>You can also start a new conversation and ask Claude if it can see your Home Assistant via the MCP connection to confirm</li>${oauthCapable ? `
+            <li>Claude binds the sign-in choice to the connector: after changing ${modeOption}, <strong>remove and re-add</strong> the connector.</li>` : ''}
           </ol>
         </div>`;
       } else if (state.client.id === 'gemini-spark') {
@@ -2697,9 +2710,9 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
               </ul>
             </div>
             <div class="bg-purple-900/20 border border-purple-700/50 rounded-lg p-3 mt-3">
-              <p class="text-purple-300 text-sm font-medium">Client ID required: use legacy OAuth mode</p>
-              <p class="text-purple-200/80 text-xs mt-1">Copilot CLI's remote MCP setup requires a Client ID and performs dynamic client registration — but Home Assistant's default <code class="bg-slate-800 px-1 rounded">ha_auth</code> mode doesn't advertise a registration endpoint, so that registration fails and <code class="bg-slate-800 px-1 rounded">ha_auth</code> does not work with Copilot CLI.</p>
-              <p class="text-purple-200/80 text-xs mt-2">In the HA-MCP Server integration's <strong>Options</strong>, set <strong>Authentication mode</strong> to <code class="bg-slate-800 px-1 rounded">legacy</code> and restart Home Assistant when the repair prompts you. Then copy the generated <strong>Client ID</strong> and <strong>Client Secret</strong> from the Options page (also printed in the Home Assistant log) into Copilot CLI's Client ID and secret fields. Use your <strong>built-in webhook URL</strong> (<code class="bg-slate-800 px-1 rounded">https://&lt;your-ha-domain&gt;/api/webhook/&lt;webhook-id&gt;</code>) as the server URL — legacy OAuth is served on your Home Assistant host, so a direct-port or tunnel URL won't complete the OAuth flow. See the <a href="${base}/faq#copilot-cli-oauth-legacy" class="text-purple-300 hover:underline">FAQ</a> for details.</p>
+              <p class="text-purple-300 text-sm font-medium">Client ID required: ha_auth registers one automatically (2.0.0+); legacy as fallback</p>
+              <p class="text-purple-200/80 text-xs mt-1">Copilot CLI's remote MCP setup requires a Client ID and performs dynamic client registration. As of component 2.0.0 the <code class="bg-slate-800 px-1 rounded">ha_auth</code> mode serves a registration endpoint, so keep <strong>Authentication mode</strong> on <code class="bg-slate-800 px-1 rounded">ha_auth</code> — Copilot CLI registers a client automatically and signs in with your Home Assistant account.</p>
+              <p class="text-purple-200/80 text-xs mt-2">On older component versions (or if registration fails): in the HA-MCP Server integration's <strong>Options</strong>, set <strong>Authentication mode</strong> to <code class="bg-slate-800 px-1 rounded">legacy</code> and restart Home Assistant when the repair prompts you. Then copy the generated <strong>Client ID</strong> and <strong>Client Secret</strong> from the Options page (also printed in the Home Assistant log) into Copilot CLI's Client ID and secret fields. Use your <strong>built-in webhook URL</strong> (<code class="bg-slate-800 px-1 rounded">https://&lt;your-ha-domain&gt;/api/webhook/&lt;webhook-id&gt;</code>) as the server URL — legacy OAuth is served on your Home Assistant host, so a direct-port or tunnel URL won't complete the OAuth flow. See the <a href="${base}/faq#copilot-cli-oauth-legacy" class="text-purple-300 hover:underline">FAQ</a> for details.</p>
             </div>
           </div>` : legacyMethodNotice('Copilot CLI');
         }

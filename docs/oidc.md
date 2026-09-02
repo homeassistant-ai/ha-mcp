@@ -146,9 +146,9 @@ token as a JWT:
 
 Once OIDC is configured:
 
-1. In Claude.ai, go to **Settings > Connectors > Add custom connector**
-2. Enter the MCP endpoint URL: `https://mcp.example.com/mcp`
-3. Claude.ai discovers the OIDC endpoints automatically
+1. In Claude.ai, go to **Customize** (left sidebar) **> Connectors > Add**
+2. Enter a name and the MCP endpoint URL `https://mcp.example.com/mcp`, then click **Continue**
+3. Claude.ai discovers the OIDC endpoints and pre-fills the sign-in settings (**Always required**); keep them, click **Add**, then **Connect**
 4. You're redirected to your OIDC provider to authenticate
 5. After authentication, Claude.ai can access your Home Assistant
 

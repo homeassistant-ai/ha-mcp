@@ -4,10 +4,11 @@ Ported from the webhook-proxy add-on's ``mcp_proxy/oauth.py`` ``OAuthProvider``
 + ``AuthorizeView`` + ``TokenView`` (the proven ``legacy`` mode). Self-hosted,
 single-tenant authorization server with a static client_id/client_secret pair,
 for MCP clients that need a credential to paste rather than HA core's native
-OAuth (``ha_auth``) — currently just Google Gemini Spark, whose custom
-connected apps use the Client ID Metadata Document pattern that HA core's
-``/auth/authorize`` does not yet support for cross-origin redirect_uris
-(home-assistant/core#176282).
+OAuth (``ha_auth``). Written for Google Gemini Spark, whose custom connected
+apps use the Client ID Metadata Document pattern that HA core's
+``/auth/authorize`` did not support for cross-origin redirect_uris before
+2026.9 (home-assistant/core#176282, fixed by #176286); ``ha_auth`` validates
+CIMD itself since 2.0.0, so this is now the pasted-credential fallback.
 
 Unlike the add-on, this module holds no reference to ``hass``, the webhook id,
 or a public base URL: the discovery-document layer (RFC 8414 / RFC 9728) and

@@ -471,10 +471,11 @@ DATA_LLM_API_UNSUB = "llm_api_unsub"
 WEBHOOK_AUTH_NONE = "none"  # secret webhook URL is the shared secret (default)
 WEBHOOK_AUTH_HA = "ha_auth"  # HA-native bearer (HA core is the OAuth AS)
 # Self-hosted OAuth 2.1 authorization server with a static client_id/secret,
-# ported from the webhook-proxy add-on's "legacy" mode. Needed because HA
-# core's /auth/authorize does not yet fetch Client ID Metadata Documents for
-# cross-origin redirect_uris (home-assistant/core#176282), which is what
-# Google Gemini Spark's custom connected apps require.
+# ported from the webhook-proxy add-on's "legacy" mode. Originally needed
+# because HA core's /auth/authorize did not fetch Client ID Metadata Documents
+# for cross-origin redirect_uris before 2026.9 (home-assistant/core#176282,
+# fixed by #176286), which Google Gemini Spark's custom connected apps require;
+# kept as the pasted-credential fallback for clients that want one.
 WEBHOOK_AUTH_LEGACY = "legacy"
 
 # Default bind host + port. 9584 (not the add-on's 9583) so this in-process
