@@ -11,9 +11,10 @@ server-side. Two problems this kills:
   because those routes dispatch per request — it can no longer end up wedged
   on core's ``/auth/*`` (the un-retractable cache this replaces). A switch to a
   mode with different credentials can still require the client to re-authorize.
-* **Cross-origin CIMD clients.** Core advertises CIMD but never fetches the
-  document (core issue #176282), so clients whose redirect is not same-origin
-  with their URL client_id die with "Invalid redirect URI". We validate the
+* **Cross-origin CIMD clients.** Core advertises CIMD but, before 2026.9
+  (core issue #176282, fixed by #176286), never fetched the document, so
+  clients whose redirect is not same-origin with their URL client_id died
+  with "Invalid redirect URI". We validate the
   document HERE — the AS-side MUSTs from MCP 2026-07-28 client-registration —
   and hand core a translated client_id shaped to pass its long-stable
   same-origin IndieAuth rule.

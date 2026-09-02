@@ -134,7 +134,7 @@ If you want a real auth layer on top of the URL secret, turn on **Enable OAuth (
 The proxy has three live OAuth behaviors. When OAuth protection is enabled, choose one of the two protected modes with **OAuth Mode (Beta)**:
 
 - **None mode (OAuth protection off)** — the secret webhook URL remains the only credential. OAuth discovery, stateless registration, and an invisible public-PKCE exchange are available for client compatibility, but the resulting token is not checked by the webhook.
-- **`ha_auth` (recommended, the default for a first-time enable)** — Home Assistant itself is the authorization server. You sign in with your Home Assistant account and **leave the connector's OAuth fields blank**. No Client ID or Client Secret, works with any hostname/URL, and no Home Assistant restart is needed to enable or disable it.
+- **`ha_auth` (recommended, the default for a first-time enable)** — Home Assistant itself is the authorization server. You sign in with your Home Assistant account and **leave the connector's OAuth fields blank** (Claude.ai auto-detects **Always required** + **Use Anthropic's hosted client metadata** — keep both). No Client ID or Client Secret, works with any hostname/URL, and no Home Assistant restart is needed to enable or disable it.
 - **`legacy` (deprecated)** — the previous flow, where the app generates a Client ID + Secret you paste into the connector.
 
 > **Upgrading? Your OAuth setup is not changed.** If you already used the legacy flow (you set a Client ID/Secret, or the app stored one), leaving **OAuth Mode** unset keeps you on **legacy** — nothing breaks. New/first-time enables default to **ha_auth**. Switching modes is an explicit action (set **OAuth Mode**) and, because Claude.ai binds the auth mode per connector, requires **deleting and re-adding your MCP connector**.
@@ -163,10 +163,10 @@ Set **OAuth Mode** to `legacy` (or leave it unset if you are upgrading an existi
      OAuth Client ID:     hamcp-1a2b3c4d5e6f7890abcdef1234567890
      OAuth Client Secret: kX9pQ4mZ2vL8nR3sT6uW1yA5cB7dF0gH...
      Paste both into the OAuth fields of your MCP client's
-     connector setup (Claude.ai: connector → Advanced settings).
+     connector setup (Claude.ai: OAuth client → Use your own OAuth client).
    ```
 5. In your MCP client, configure the OAuth fields:
-   - **Claude.ai:** when adding the connector, expand **Advanced settings** and paste the Client ID and Client Secret into the OAuth fields. Claude.ai completes the rest automatically (consent screen → token exchange → bearer token).
+   - **Claude.ai:** when adding the connector, on the second wizard step keep **Authentication: Always required**, pick **OAuth client: Use your own OAuth client**, and paste the Client ID and Client Secret. Claude.ai completes the rest automatically (consent screen → token exchange → bearer token).
    - **Other clients:** configure the same Client ID + Client Secret in the client's OAuth settings if it supports OAuth 2.1 with manual client registration.
 
 The generated values are persisted at `/data/oauth_creds.json` inside the app, so they stay the same across restarts.

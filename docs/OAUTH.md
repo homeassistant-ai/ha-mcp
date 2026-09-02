@@ -97,10 +97,10 @@ uvx --from=ha-mcp@latest ha-mcp-oauth
 
 ### 4. Connect in Claude.ai
 
-1. Go to **Settings** → **Connectors** → **Add custom connector**
-2. Enter URL: `https://your-tunnel.com/mcp`
-3. Click **Add**
-4. In the consent form that opens:
+1. Go to **Customize** (left sidebar) → **Connectors** → **Add**
+2. Enter a name and the URL `https://your-tunnel.com/mcp`, then click **Continue**
+3. Keep the detected settings — **Authentication: Always required**, **OAuth client: No client ID — register one automatically (DCR)** — and click **Add**
+4. Click the connector's **Connect** button. In the consent form that opens:
    - Enter your Long-Lived Access Token ([how to generate](https://www.home-assistant.io/docs/authentication/#your-account-profile))
 5. Click **Authorize**
 
