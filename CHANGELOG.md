@@ -3,6 +3,86 @@
 <!-- version list -->
 
 
+## v8.4.1 (2026-09-02)
+
+### Changed
+
+- **tools**: Document ha_call_service parameter descriptions
+  ([#2327](https://github.com/homeassistant-ai/ha-mcp/pull/2327))
+- Slim and modularize AGENTS.md
+  ([#2323](https://github.com/homeassistant-ai/ha-mcp/pull/2323))
+
+### Fixed
+
+- Extract parameter descriptions for bare Annotated tool signatures
+  ([#2328](https://github.com/homeassistant-ai/ha-mcp/pull/2328))
+- **oauth**: Serve the protected-resource document only at its path-scoped URL
+  ([#2321](https://github.com/homeassistant-ai/ha-mcp/pull/2321))
+- Fail fast on a nonexistent or unavailable ha_call_service/ha_bulk_control target
+  ([#2319](https://github.com/homeassistant-ai/ha-mcp/pull/2319))
+- **search**: Boost ha_manage_energy_prefs for tariff/price queries
+  ([#2326](https://github.com/homeassistant-ai/ha-mcp/pull/2326))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Chores
+
+- **addon**: Publish dev addon version 8.4.0.dev2510 [skip ci]
+  ([`cb2f0a8`](https://github.com/homeassistant-ai/ha-mcp/commit/cb2f0a858bcee629da0c560f38e0ed3f756da638))
+- Sync tool docs after merge [skip ci]
+  ([`4971449`](https://github.com/homeassistant-ai/ha-mcp/commit/4971449d5df532ea9a88436455c506e5bd2e4162))
+- **coderabbit**: Disable docstring coverage check
+  ([#2348](https://github.com/homeassistant-ai/ha-mcp/pull/2348))
+- **addon**: Publish dev addon version 8.4.0.dev2505 [skip ci]
+  ([`4e073b4`](https://github.com/homeassistant-ai/ha-mcp/commit/4e073b4f1284028408a8c610cf670026559e128d))
+- **deps**: Update python:3.13-slim docker digest to 881d807
+  ([#2343](https://github.com/homeassistant-ai/ha-mcp/pull/2343))
+- **deps**: Bump browserslist from 4.28.1 to 4.28.8 in /site
+  ([#2347](https://github.com/homeassistant-ai/ha-mcp/pull/2347))
+- **deps**: Bump postcss-selector-parser from 6.1.2 to 6.1.4 in /site
+  ([#2346](https://github.com/homeassistant-ai/ha-mcp/pull/2346))
+- **addon**: Publish dev addon version 8.4.0.dev2501 [skip ci]
+  ([`36942be`](https://github.com/homeassistant-ai/ha-mcp/commit/36942be0cd948d94b543c414df8f1fc34c9c7c80))
+- **deps**: Update ghcr.io/astral-sh/uv docker tag to v0.12.8
+  ([#2344](https://github.com/homeassistant-ai/ha-mcp/pull/2344))
+- Sync tool docs after merge [skip ci]
+  ([`0d26409`](https://github.com/homeassistant-ai/ha-mcp/commit/0d26409ec216f961524560df846be4cad30b363d))
+- **addon**: Publish dev addon version 8.4.0.dev2497 [skip ci]
+  ([`af9ea4a`](https://github.com/homeassistant-ai/ha-mcp/commit/af9ea4a36ead49a36de6f8911a726e07bb0c3dac))
+- **addon**: Publish dev addon version 8.4.0.dev2485 [skip ci]
+  ([`9f332fd`](https://github.com/homeassistant-ai/ha-mcp/commit/9f332fd14a0e27262a80689e4834cd00a428bd1f))
+- **addon**: Publish dev addon version 8.4.0.dev2483 [skip ci]
+  ([`35429ca`](https://github.com/homeassistant-ai/ha-mcp/commit/35429ca125b786434d31b1d5bc8abdd6732b8a0d))
+- **addon**: Publish dev addon version 8.4.0.dev2480 [skip ci]
+  ([`4ea5819`](https://github.com/homeassistant-ai/ha-mcp/commit/4ea581906327e920d0bb25fc5cfdeb5ca70c8576))
+- Machine-translate locale updates
+  ([`b202880`](https://github.com/homeassistant-ai/ha-mcp/commit/b20288095981754b1216a2a1c146d84804c03f54))
+- **addon**: Publish version 8.4.0 [skip ci]
+  ([`ad122e4`](https://github.com/homeassistant-ai/ha-mcp/commit/ad122e4787ab2a184e8140fb2fe30a70b1e38306))
+
+### Continuous Integration
+
+- Fold the CodeQL matrix and its gate into one job
+  ([#2340](https://github.com/homeassistant-ai/ha-mcp/pull/2340))
+- Run beta HAOS E2E on user-originated master pushes and nightly
+  ([#2338](https://github.com/homeassistant-ai/ha-mcp/pull/2338))
+- **deps**: Bump renovatebot/github-action in the github-actions group
+  ([#2337](https://github.com/homeassistant-ai/ha-mcp/pull/2337))
+- Cancel superseded PR runs instead of letting them finish
+  ([#2325](https://github.com/homeassistant-ai/ha-mcp/pull/2325))
+- Fold the seven fast checks into one Fast Checks lane
+  ([#2314](https://github.com/homeassistant-ai/ha-mcp/pull/2314))
+
+### Testing
+
+- Key the non-topology e2e exclusion by job rather than by workflow
+  ([#2342](https://github.com/homeassistant-ai/ha-mcp/pull/2342))
+</details>
+
+
 ## v8.4.0 (2026-08-29)
 
 ### Added
