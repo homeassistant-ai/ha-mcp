@@ -593,6 +593,30 @@ def test_destructive_tools_carry_auto_backup_decorator() -> None:
             assert "mandatory=True" in head, f"{func} lost mandatory=True"
 
 
+def test_ha_manage_blueprints_carries_auto_backup_decorator() -> None:
+    """Source guard for the computed-key wiring (#2329).
+
+    Deleting a blueprint unlinks a file core will not rebuild, so the
+    pre-delete snapshot is the only way back. The behavioral tests below drive
+    a stand-in callable, so only this guard notices the decorator (or its
+    domain/skip lambdas) disappearing from the real tool.
+    """
+    from pathlib import Path
+
+    tools_dir = Path(__file__).resolve().parents[3] / "src" / "ha_mcp" / "tools"
+    src = (tools_dir / "tools_blueprints.py").read_text(encoding="utf-8")
+    idx = src.index("async def ha_manage_blueprints(")
+    head = src[max(0, idx - 1200) : idx]  # the decorator block above the def
+    assert "with_auto_backup(" in head, "ha_manage_blueprints lost @with_auto_backup"
+    assert "domain_fn=" in head, "ha_manage_blueprints lost its blueprint domain_fn"
+    assert "blueprint_{kw.get(" in head, "the backup domain no longer follows `domain`"
+    assert 'id_param="path"' in head, "ha_manage_blueprints wrong/missing id_param"
+    assert 'kw.get("action") != "delete"' in head, (
+        "ha_manage_blueprints lost the delete-only skip_fn — every action would "
+        "now attempt a snapshot"
+    )
+
+
 # ---------------------------------------------------------------- filenames
 
 
@@ -2283,6 +2307,265 @@ class TestYamlFileHandler:
         )
         with pytest.raises(HomeAssistantError):
             await bm._restore_yaml_file(_StubClient(), "configuration.yaml", "a: 1\n")
+
+
+async def _bp_noop_tool(**_kwargs: Any) -> str:
+    """Stand-in for ``ha_manage_blueprints``: the decorator is what is tested."""
+    return "ok"
+
+
+class _BlueprintWsClient:
+    """Dispatch-on-``type`` WebSocket spy for the blueprint handler's tier 2."""
+
+    def __init__(self, responses: dict[str, Any]) -> None:
+        self.responses = responses
+        self.sent: list[dict[str, Any]] = []
+
+    async def send_websocket_message(self, msg: dict[str, Any]) -> Any:
+        self.sent.append(msg)
+        frame_type = msg.get("type")
+        if frame_type not in self.responses:
+            raise AssertionError(f"unexpected WebSocket frame: {frame_type}")
+        return self.responses[frame_type]
+
+    def frames(self, frame_type: str) -> list[dict[str, Any]]:
+        return [m for m in self.sent if m.get("type") == frame_type]
+
+
+_BP_PATH = "user/motion.yaml"
+_BP_YAML = "blueprint:\n  name: Motion Light\n  domain: automation\n"
+_BP_SOURCE_URL = "https://example.com/motion.yaml"
+
+
+def _bp_listing(*, source_url: str | None) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"name": "Motion Light"}
+    if source_url is not None:
+        metadata["source_url"] = source_url
+    return {"success": True, "result": {_BP_PATH: {"metadata": metadata}}}
+
+
+def _bp_import(suggested: str, raw: str = _BP_YAML) -> dict[str, Any]:
+    return {
+        "success": True,
+        "result": {"suggested_filename": suggested, "raw_data": raw},
+    }
+
+
+class TestBlueprintHandler:
+    """blueprint_automation / blueprint_script: the pre-delete snapshot (#2329)."""
+
+    def test_both_domains_are_text_domains(self) -> None:
+        assert "blueprint_automation" in bm._TEXT_DOMAINS
+        assert "blueprint_script" in bm._TEXT_DOMAINS
+
+    async def test_both_domains_registered_in_defaults(self, tmp_path: Path) -> None:
+        mgr = _mk_manager(tmp_path)
+        bm.register_default_handlers(mgr, _StubClient())
+        for domain in ("blueprint_automation", "blueprint_script"):
+            assert mgr.handler_for(domain) is not None, domain
+            assert domain in mgr.supported_domains()
+
+    async def test_tier1_reads_the_installed_file(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The component read is the faithful copy — no source re-fetch needed."""
+        calls: list[Any] = []
+        _patch_services(
+            monkeypatch, {"read_file": {"success": True, "content": _BP_YAML}}, calls
+        )
+        client = _BlueprintWsClient({})
+
+        assert await bm._fetch_blueprint(client, _BP_PATH, "automation") == _BP_YAML
+        assert calls[0][1]["path"] == f"blueprints/automation/{_BP_PATH}"
+        # Tier 2 never ran: no WS frame was sent.
+        assert client.sent == []
+
+    async def test_tier1_uses_the_blueprint_domain_directory(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[Any] = []
+        _patch_services(
+            monkeypatch, {"read_file": {"success": True, "content": _BP_YAML}}, calls
+        )
+        await bm._fetch_blueprint(_BlueprintWsClient({}), _BP_PATH, "script")
+        assert calls[0][1]["path"] == f"blueprints/script/{_BP_PATH}"
+
+    async def test_tier2_refetches_from_source_url_when_component_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No File & YAML Tools entry (ToolError) -> fall back to the source URL."""
+
+        async def refuse(_c: Any, _s: str, _d: dict[str, Any]) -> Any:
+            raise ToolError(
+                json.dumps(
+                    create_error_response(
+                        ErrorCode.COMPONENT_NOT_INSTALLED, "entry not set up"
+                    )
+                )
+            )
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_filesystem.call_mcp_tools_service", refuse
+        )
+        client = _BlueprintWsClient(
+            {
+                "blueprint/list": _bp_listing(source_url=_BP_SOURCE_URL),
+                "blueprint/import": _bp_import("user/motion"),
+            }
+        )
+
+        assert await bm._fetch_blueprint(client, _BP_PATH, "automation") == _BP_YAML
+        assert client.frames("blueprint/import")[0]["url"] == _BP_SOURCE_URL
+
+    async def test_tier2_runs_after_a_failed_component_read(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A read error (not just an absent entry) also falls through to tier 2."""
+        _patch_services(
+            monkeypatch,
+            {"read_file": {"success": False, "error": "Permission denied"}},
+            [],
+        )
+        client = _BlueprintWsClient(
+            {
+                "blueprint/list": _bp_listing(source_url=_BP_SOURCE_URL),
+                "blueprint/import": _bp_import("user/motion"),
+            }
+        )
+        assert await bm._fetch_blueprint(client, _BP_PATH, "automation") == _BP_YAML
+
+    async def test_no_component_and_no_source_url_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_services(
+            monkeypatch,
+            {"read_file": {"success": False, "error": "File does not exist"}},
+            [],
+        )
+        client = _BlueprintWsClient({"blueprint/list": _bp_listing(source_url=None)})
+
+        assert await bm._fetch_blueprint(client, _BP_PATH, "automation") is None
+        assert client.frames("blueprint/import") == []
+
+    async def test_suggested_filename_mismatch_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The URL now serves a DIFFERENT blueprint - snapshotting it would
+        make the restore write the wrong content."""
+        _patch_services(
+            monkeypatch,
+            {"read_file": {"success": False, "error": "File does not exist"}},
+            [],
+        )
+        client = _BlueprintWsClient(
+            {
+                "blueprint/list": _bp_listing(source_url=_BP_SOURCE_URL),
+                "blueprint/import": _bp_import("someone_else/other"),
+            }
+        )
+        assert await bm._fetch_blueprint(client, _BP_PATH, "automation") is None
+
+    async def test_restore_sends_blueprint_save(self) -> None:
+        client = _BlueprintWsClient({"blueprint/save": {"success": True, "result": {}}})
+        await bm._restore_blueprint(client, _BP_PATH, _BP_YAML, "automation")
+        assert client.frames("blueprint/save") == [
+            {
+                "type": "blueprint/save",
+                "domain": "automation",
+                "path": _BP_PATH,
+                "yaml": _BP_YAML,
+                "allow_override": True,
+            }
+        ]
+
+    async def test_restore_raises_on_failure(self) -> None:
+        client = _BlueprintWsClient(
+            {"blueprint/save": {"success": False, "error": "Invalid blueprint"}}
+        )
+        with pytest.raises(HomeAssistantError):
+            await bm._restore_blueprint(client, _BP_PATH, _BP_YAML, "automation")
+
+    async def test_registered_handler_round_trips_through_the_manager(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The registered handler pair - not the module functions - is what the
+        decorator reaches, so drive it through ``handler_for``."""
+        _patch_services(
+            monkeypatch, {"read_file": {"success": True, "content": _BP_YAML}}, []
+        )
+        mgr = _mk_manager(tmp_path)
+        bm.register_default_handlers(mgr, _StubClient())
+        handler = mgr.handler_for("blueprint_script")
+        assert handler is not None
+
+        client = _BlueprintWsClient({"blueprint/save": {"success": True}})
+        assert await handler.fetch(client, _BP_PATH) == _BP_YAML
+        await handler.restore(client, _BP_PATH, _BP_YAML)
+        assert client.frames("blueprint/save")[0]["domain"] == "script"
+
+
+class TestBlueprintDecoratorWiring:
+    """``ha_manage_blueprints`` captures only on delete, keyed by blueprint domain."""
+
+    @staticmethod
+    def _decorate() -> Any:
+        return with_auto_backup(
+            domain_fn=lambda kw: f"blueprint_{kw.get('domain') or 'automation'}",
+            id_param="path",
+            skip_fn=lambda kw: kw.get("action") != "delete",
+            client=object(),
+        )(_bp_noop_tool)
+
+    async def _run(
+        self, monkeypatch: pytest.MonkeyPatch, **kwargs: Any
+    ) -> list[tuple[str, str, str | None]]:
+        calls: list[tuple[str, str, str | None]] = []
+
+        class _FakeMgr:
+            async def maybe_snapshot(
+                self,
+                domain: str,
+                entity_id: str,
+                *,
+                tool_name: str | None = None,
+                mandatory: bool = False,
+            ) -> None:
+                calls.append((domain, entity_id, tool_name))
+
+        class _Settings:
+            enable_auto_backup = True
+
+        monkeypatch.setattr("ha_mcp.tools.auto_backup.get_global_settings", _Settings)
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
+        )
+        assert await self._decorate()(**kwargs) == "ok"
+        return calls
+
+    async def test_list_captures_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert await self._run(monkeypatch, action="list", domain="automation") == []
+
+    async def test_get_captures_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = await self._run(
+            monkeypatch, action="get", domain="automation", path=_BP_PATH
+        )
+        assert calls == []
+
+    async def test_delete_resolves_the_blueprint_domain_target(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = await self._run(
+            monkeypatch, action="delete", domain="automation", path=_BP_PATH
+        )
+        assert calls == [("blueprint_automation", _BP_PATH, "_bp_noop_tool")]
+
+    async def test_delete_follows_the_script_domain(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = await self._run(
+            monkeypatch, action="delete", domain="script", path=_BP_PATH
+        )
+        assert calls[0][0] == "blueprint_script"
 
 
 class TestLegacyList:

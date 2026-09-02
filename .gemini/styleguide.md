@@ -81,7 +81,7 @@ Verify that safety annotations match actual tool behavior:
   carries externally-authored content back to the client, even when a local
   integration makes the network call. `ha_get_overview` and
   `ha_get_system_health` embed an external update-check field;
-  `ha_get_blueprint` and `ha_config_list_dashboard_resources` return
+  `ha_manage_blueprints` and `ha_config_list_dashboard_resources` return
   externally authored content from otherwise local reads.
 
 FastMCP defaults are `readOnlyHint=False`, `destructiveHint=True`,
@@ -118,7 +118,7 @@ Developer section of the web settings UI's Server Settings tab.
 Accepted natural-name exceptions are:
 
 - `ha_restart`, `ha_reload_core`, `ha_eval_template`
-- `ha_report_issue`, `ha_import_blueprint`
+- `ha_report_issue`
 - `ha_read_file`, `ha_write_file`, `ha_bulk_control`, `ha_search`
 
 When no verb fits, update this list rather than forcing an inaccurate name.

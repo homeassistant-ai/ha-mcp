@@ -668,6 +668,14 @@ class HomeAssistantSmartMCPServer:
             "grid solar battery gas water consumption "
             "number_energy_price entity_energy_price stat_energy_from"
         ),
+        # Old tool names from before the #2329 consolidation, plus the verbs
+        # the merged tool gained. An agent that still knows ha_get_blueprint /
+        # ha_import_blueprint routes to the replacement instead of failing
+        # tool lookup.
+        "ha_manage_blueprints": (
+            "blueprint blueprints import delete remove unused substitute "
+            "take-control list ha_get_blueprint ha_import_blueprint"
+        ),
         # Old tool names from before #1134 consolidation. BM25 retrieval
         # on agents that still know the previous catalog ("call
         # ha_list_resources", "use ha_get_skill_home_assistant_best_practices")

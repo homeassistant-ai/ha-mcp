@@ -121,7 +121,19 @@ _FILENAME_RE = re.compile(
 # (read_file), but restored via edit_yaml_config(action="replace_file") because
 # write_file rejects config files. It backs the pre-restore safety snapshot and
 # the legacy-store restore (#1579).
-_TEXT_DOMAINS = frozenset({"file", "yaml", "yaml_file"})
+#
+# ``blueprint_automation`` / ``blueprint_script`` snapshot the blueprint's raw
+# YAML text (#2329): core stores blueprints as files, and ``blueprint/save``
+# takes the same YAML string back, so the round trip is text on both ends.
+_TEXT_DOMAINS = frozenset(
+    {
+        "file",
+        "yaml",
+        "yaml_file",
+        "blueprint_automation",
+        "blueprint_script",
+    }
+)
 
 # Pre-#1579 backups (``.ha_mcp_tools_backups/*.bak``) are surfaced through the
 # same scope="edits" actions under a synthetic name ``legacy:<filename>``. The
@@ -2272,6 +2284,123 @@ async def _read_legacy_backup(client: Any, filename: str) -> dict[str, Any]:
     return unwrap_service_response(result)
 
 
+# Blueprints (#2329) — ``ha_manage_blueprints(action="delete")`` unlinks a
+# blueprint file that core will not rebuild, so the pre-delete snapshot is the
+# only way back. ``entity_id`` is the blueprint path inside
+# ``blueprints/<domain>/`` (e.g. ``user/motion.yaml``) and the snapshot
+# ``config`` is the raw YAML text, restored through ``blueprint/save``.
+
+
+async def _fetch_blueprint_file(client: Any, path: str, domain: str) -> str | None:
+    """Read the blueprint's on-disk YAML through the File & YAML Tools services.
+
+    ``blueprints`` is a read-allowed directory for the component, so this is
+    the faithful copy. Returns ``None`` when the component cannot serve it —
+    the config entry is absent (``ToolError``), or the read failed
+    (``HomeAssistantError``) — so the caller can fall back to the source URL.
+    """
+    try:
+        content = await _fetch_file(client, f"blueprints/{domain}/{path}")
+    except (HomeAssistantError, ToolError) as err:
+        logger.debug(
+            "Auto-backup: component read of blueprint %r unavailable (%s); "
+            "trying the source URL",
+            path,
+            err,
+        )
+        return None
+    return content if isinstance(content, str) and content else None
+
+
+async def _refetch_blueprint_from_source(
+    client: Any, path: str, domain: str
+) -> str | None:
+    """Re-download the blueprint from the ``source_url`` core recorded for it.
+
+    Second-best copy: it is what the author publishes NOW, which can differ
+    from the installed file (a local edit, or an upstream update since the
+    import). Only used when the on-disk read is unavailable, and only when the
+    re-fetched blueprint's own suggested filename still resolves to ``path`` —
+    otherwise the URL now serves a different blueprint and restoring it would
+    write the wrong content.
+    """
+    listing = await client.send_websocket_message(
+        {"type": "blueprint/list", "domain": domain}
+    )
+    if not isinstance(listing, dict) or not listing.get("success"):
+        return None
+    entry = (listing.get("result") or {}).get(path) or {}
+    source_url = (entry.get("metadata") or {}).get("source_url")
+    if not source_url:
+        return None
+
+    imported = await client.send_websocket_message(
+        {"type": "blueprint/import", "url": source_url}
+    )
+    if not isinstance(imported, dict) or not imported.get("success"):
+        return None
+    result = imported.get("result") or {}
+    if f"{result.get('suggested_filename')}.yaml" != path:
+        logger.debug(
+            "Auto-backup: %s no longer serves blueprint %r (suggests %r) — "
+            "not snapshotting a different blueprint",
+            source_url,
+            path,
+            result.get("suggested_filename"),
+        )
+        return None
+    raw_data = result.get("raw_data")
+    if not isinstance(raw_data, str) or not raw_data:
+        return None
+    logger.warning(
+        "Auto-backup: blueprint %r was snapshotted by re-fetching %s, not from "
+        "the installed file — the two can differ if the blueprint was edited "
+        "locally or updated upstream",
+        path,
+        source_url,
+    )
+    return raw_data
+
+
+async def _fetch_blueprint(client: Any, path: str, domain: str) -> Any:
+    """Fetch a blueprint's YAML for snapshotting, best copy first.
+
+    ``None`` means there is nothing to snapshot (no component read and no
+    usable ``source_url``); the decorator logs that skip and the delete
+    proceeds un-backed-up, which is the best-effort contract.
+    """
+    return await _fetch_blueprint_file(
+        client, path, domain
+    ) or await _refetch_blueprint_from_source(client, path, domain)
+
+
+async def _restore_blueprint(client: Any, path: str, config: Any, domain: str) -> Any:
+    """Re-install a captured blueprint via ``blueprint/save``."""
+    response = await client.send_websocket_message(
+        {
+            "type": "blueprint/save",
+            "domain": domain,
+            "path": path,
+            "yaml": str(config),
+            "allow_override": True,
+        }
+    )
+    if not isinstance(response, dict) or not response.get("success"):
+        error = response.get("error") if isinstance(response, dict) else response
+        raise HomeAssistantError(f"blueprint/save restore failed for {path!r}: {error}")
+    return response.get("result") or {}
+
+
+def _make_blueprint_handler(domain: str) -> DomainHandler:
+    async def fetch(client: Any, entity_id: str) -> Any:
+        return await _fetch_blueprint(client, entity_id, domain)
+
+    async def restore(client: Any, entity_id: str, config: Any) -> Any:
+        return await _restore_blueprint(client, entity_id, config, domain)
+
+    return DomainHandler(domain=f"blueprint_{domain}", fetch=fetch, restore=restore)
+
+
 def _make_helper_handler(helper_type: str) -> DomainHandler:
     async def fetch(client: Any, entity_id: str) -> Any:
         return await _fetch_helper(client, entity_id, helper_type)
@@ -2325,5 +2454,9 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     # edit_yaml_config(replace_file) since write_file rejects config files.
     # Backs the legacy-restore write path and its pre-restore safety snapshot.
     mgr.register(DomainHandler("yaml_file", _fetch_file, _restore_yaml_file))
+    # Blueprint files (#2329): the pre-delete snapshot for
+    # ha_manage_blueprints(action="delete").
+    for blueprint_domain in ("automation", "script"):
+        mgr.register(_make_blueprint_handler(blueprint_domain))
     for helper_type in _KNOWN_HELPER_TYPES:
         mgr.register(_make_helper_handler(helper_type))

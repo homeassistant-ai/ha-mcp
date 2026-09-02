@@ -704,7 +704,8 @@ class FilesystemTools:
         """Read a file from the Home Assistant config directory.
 
         General-purpose escape hatch — prefer a dedicated tool when one exists:
-        ha_get_blueprint for a blueprint body, ha_config_get_yaml for a config
+        ha_manage_blueprints(action="get") for a blueprint body, ha_config_get_yaml
+        for a config
         key, ha_config_get_automation/script/scene for storage-mode items. Reach
         for ha_read_file only for raw on-disk text those tools don't expose.
 

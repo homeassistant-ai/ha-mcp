@@ -792,7 +792,7 @@ class ConfigScriptTools:
         except Exception as e:
             suggestions = [
                 "Ensure config includes either 'sequence' field (regular scripts) or 'use_blueprint' field (blueprint-based scripts)",
-                "For blueprint scripts, use ha_get_blueprint(domain='script') to list available blueprints",
+                "For blueprint scripts, use ha_manage_blueprints(action='list', domain='script') to list available blueprints",
                 "Validate sequence actions syntax for regular scripts",
                 "Check entity_ids exist if using service calls",
                 "Use ha_search(domain_filter='script') to find scripts",

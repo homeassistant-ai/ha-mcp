@@ -1,7 +1,8 @@
-"""Routing tests for ``ha_get_blueprint`` over the ``ha_mcp_tools`` component gate.
+"""Routing tests for ``ha_manage_blueprints(action="get")`` over the ``ha_mcp_tools``
+component gate.
 
 core's ``blueprint/list`` returns metadata only — never the body — so
-``ha_get_blueprint`` can serve triggers/conditions/actions/sequence only when the
+``action="get"`` can serve triggers/conditions/actions/sequence only when the
 component advertises the ``blueprint_get`` capability, which reads the on-disk
 blueprint file and returns the full parsed body merged additively under
 ``config``. These tests pin that merge, the metadata-only fallback when the
@@ -94,7 +95,8 @@ class RoutingClient:
         return {"success": False, "error": "unexpected"}
 
 
-def _build_get_blueprint(client: Any) -> Any:
+def _build_manage_blueprints(client: Any) -> Any:
+    """Return the registered ``ha_manage_blueprints`` bound method."""
     registered: dict[str, Any] = {}
 
     def capture_add_tool(method: Any) -> None:
@@ -108,7 +110,21 @@ def _build_get_blueprint(client: Any) -> Any:
     mcp = MagicMock()
     mcp.add_tool = capture_add_tool
     register_blueprint_tools(mcp, client)
-    return registered["ha_get_blueprint"]
+    return registered["ha_manage_blueprints"]
+
+
+def _build_get_blueprint(client: Any) -> Any:
+    """Bind the tool to ``action="get"`` so the routing cases stay one call.
+
+    Imported by ``test_component_readapi_contract.py``, which drives the same
+    seam against the real component implementation.
+    """
+    tool = _build_manage_blueprints(client)
+
+    async def get_blueprint(**kwargs: Any) -> Any:
+        return await tool(action="get", **kwargs)
+
+    return get_blueprint
 
 
 @pytest.fixture(autouse=True)
@@ -276,17 +292,17 @@ async def test_ws_establish_failure_metadata_only_silent() -> None:
 
 @pytest.mark.asyncio
 async def test_list_mode_never_touches_component() -> None:
-    """Listing (no path) is unchanged: the component is never probed or called."""
+    """Listing is unchanged: the component is never probed or called."""
     ws = make_ws(
         "ha_mcp_tools/blueprint_get",
         info_result=_CAPS_BLUEPRINT,
         cmd_result=_component_blueprint_result(_FULL_BODY),
     )
     client = RoutingClient()
-    get_blueprint = _build_get_blueprint(client)
+    manage_blueprints = _build_manage_blueprints(client)
 
     with patch_ws(ws, tools_blueprints):
-        resp = await get_blueprint(domain="automation")
+        resp = await manage_blueprints(action="list", domain="automation")
 
     assert resp["success"] is True
     assert resp["count"] == 1

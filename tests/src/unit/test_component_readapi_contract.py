@@ -63,12 +63,6 @@ from .test_ha_config_list_helpers_component_routing import (
 from .test_ha_config_list_helpers_component_routing import (
     _build_list_helpers,
 )
-from .test_ha_get_blueprint_component_routing import (
-    RoutingClient as BlueprintRoutingClient,
-)
-from .test_ha_get_blueprint_component_routing import (
-    _build_get_blueprint,
-)
 from .test_ha_get_device_component_routing import (
     RoutingClient as GetDeviceRoutingClient,
 )
@@ -93,6 +87,12 @@ from .test_ha_get_state_component_routing import (
 )
 from .test_ha_get_state_component_routing import (
     _build_get_state,
+)
+from .test_ha_manage_blueprints_component_routing import (
+    RoutingClient as BlueprintRoutingClient,
+)
+from .test_ha_manage_blueprints_component_routing import (
+    _build_get_blueprint,
 )
 from .test_ha_overview_component_routing import (
     OverviewRoutingClient,
@@ -578,7 +578,8 @@ class TestBlueprintGetSeam:
 
     @pytest.mark.asyncio
     async def test_full_body_merged_from_real_file_read(self, tmp_path) -> None:
-        """ha_get_blueprint merges the REAL executor-read, jailed file body under
+        """ha_manage_blueprints(action="get") merges the REAL executor-read, jailed
+        file body under
         ``config`` (``!input`` preserved as a marker) over the list metadata."""
         target = tmp_path / "blueprints" / "automation" / "user" / "motion.yaml"
         target.parent.mkdir(parents=True, exist_ok=True)
