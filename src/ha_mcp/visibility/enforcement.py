@@ -21,8 +21,10 @@ escape hatch — "refuse on contact":
   may still be the hidden entity's data and mutation could corrupt an arbitrary
   schema. The bounded exception is a JSON ``ha_get_state`` result for a visible
   entity: fields, mapping keys, list items, or related records that name hidden
-  entities are omitted, a warning is added, and the result is scanned again.
-  Non-JSON, un-warnable, or still-matching state output is refused.
+  entities are omitted (a whole ``attributes`` mapping when any of its content
+  does, since attribute values derive from the related entity), a warning naming
+  the omitted paths is added, and the result is scanned again. Non-JSON,
+  un-warnable, or still-matching state output is refused.
 - **Unscannable surfaces are refused wholesale** while enforce is active — sandbox
   code execution and screenshot/pixel output can read arbitrary state that no text
   scan can attribute to an entity.
@@ -53,6 +55,7 @@ import re
 import time
 from collections.abc import Callable
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn
 
 from fastmcp.exceptions import ToolError
@@ -109,11 +112,30 @@ _FAIL_CLOSED_REASON = (
     "The entity visibility data could not be loaded, so enforce mode fails closed "
     "rather than risk leaking a restricted entity."
 )
-_STATE_CONTENT_WARNING = (
-    "Some content was omitted because it referenced entities hidden by Entity "
-    "Visibility enforce mode. Review Entity Visibility settings if this result "
-    "seems incomplete."
-)
+_STATE_CONTENT_WARNING_PREFIX = "Entity Visibility enforce mode omitted "
+_STATE_CONTENT_WARNING_MAX_PATHS = 10
+
+
+def _state_content_warning(paths: list[str]) -> str:
+    """The ha_get_state omission warning, naming the omitted JSON paths.
+
+    Paths never contain a hidden entity_id: a whole ``attributes`` mapping is
+    reported as one path, and a hidden mapping key is reported as
+    ``<parent>.<hidden key>``.
+    """
+    shown = ", ".join(paths[:_STATE_CONTENT_WARNING_MAX_PATHS])
+    extra = len(paths) - _STATE_CONTENT_WARNING_MAX_PATHS
+    if extra > 0:
+        shown += f" and {extra} more"
+    return (
+        f"{_STATE_CONTENT_WARNING_PREFIX}{shown} because it referenced entities "
+        "hidden by the entity visibility filter. If something you expected is "
+        "missing, review the Entity Visibility section of the ha-mcp settings UI "
+        "(the rules are described under 'Entity visibility enforce mode' in "
+        "SECURITY.md)."
+    )
+
+
 _CONFIG_LOAD_FAILED_REASON = (
     "The entity visibility config (entity_visibility.json) could not be loaded and "
     "no previously loaded config is available, so the server cannot determine "
@@ -189,9 +211,7 @@ def _iter_strings(value: Any) -> Any:
             yield from _iter_strings(item)
 
 
-def _scan_value(
-    value: Any, hidden: set[str], regex: re.Pattern[str] | None
-) -> tuple[str | None, bool]:
+def _scan_value(value: Any, matcher: _HiddenMatcher) -> tuple[str | None, bool]:
     """Return ``(first_exact_hidden_id, any_embedded_hidden_id)`` over nested strings.
 
     A string that equals a hidden id exactly drives concealment; a string that
@@ -201,10 +221,10 @@ def _scan_value(
     exact: str | None = None
     embedded = False
     for text in _iter_strings(value):
-        if text in hidden:
+        if matcher.exact(text):
             if exact is None:
                 exact = text
-        elif regex is not None and regex.search(text):
+        elif matcher.embeds(text):
             embedded = True
     return exact, embedded
 
@@ -220,6 +240,30 @@ def _build_hidden_regex(hidden: set[str]) -> re.Pattern[str] | None:
         return None
     alternation = "|".join(re.escape(eid) for eid in sorted(hidden))
     return re.compile(rf"(?<![a-z0-9_])(?:{alternation})(?![a-z0-9_])", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class _HiddenMatcher:
+    """The enforced hidden set together with the boundary regex compiled from it.
+
+    Built only through :meth:`from_hidden`, so ``regex`` is ``None`` exactly when
+    ``hidden`` is empty and every scan sees a consistent pair.
+    """
+
+    hidden: frozenset[str]
+    regex: re.Pattern[str] | None
+
+    @classmethod
+    def from_hidden(cls, hidden: set[str]) -> _HiddenMatcher:
+        return cls(frozenset(hidden), _build_hidden_regex(hidden))
+
+    def exact(self, text: str) -> bool:
+        """Whether ``text`` is a hidden entity_id."""
+        return text in self.hidden
+
+    def embeds(self, text: str) -> bool:
+        """Whether ``text`` is, or embeds, a hidden entity_id (exact included)."""
+        return self.regex is not None and self.regex.search(text) is not None
 
 
 def _serialize_result(result: ToolResult) -> str:
@@ -239,85 +283,89 @@ def _serialize_result(result: ToolResult) -> str:
 
 
 # Sentinel returned for a hidden-naming string value or a mapping whose
-# ``entity_id`` is hidden; its enclosing mapping/sequence omits that value.
+# ``entity_id`` is hidden; its enclosing mapping/sequence omits that value. At the
+# top level it reaches ``_scrub_state_representation``, which treats the
+# representation as un-warnable.
 _DROP_HIDDEN_REFERENCE = object()
-
-
-def _names_hidden(text: str, regex: re.Pattern[str] | None) -> bool:
-    """Whether a string is, or embeds, a hidden entity_id.
-
-    ``regex`` is the boundary-aware alternation over the whole hidden set
-    (``_build_hidden_regex``), ``None`` only when that set is empty, so an exact
-    id match is already covered.
-    """
-    return regex is not None and regex.search(text) is not None
+# A visible entity's ``attributes`` mapping carries values derived from related
+# entities (a person's coordinates come from its device trackers), so any hidden
+# reference inside it drops the whole mapping rather than the naming field.
+_ATTRIBUTES_KEY = "attributes"
 
 
 def _scrub_hidden_references(
-    value: Any, regex: re.Pattern[str] | None
-) -> tuple[Any, int]:
-    """Return a scrubbed JSON-shaped value and the number of omitted references."""
+    value: Any, matcher: _HiddenMatcher, path: str
+) -> tuple[Any, list[str]]:
+    """Return a scrubbed JSON-shaped value and the JSON paths it omitted."""
     if isinstance(value, str):
-        if _names_hidden(value, regex):
-            return _DROP_HIDDEN_REFERENCE, 1
-        return value, 0
+        if matcher.embeds(value):
+            return _DROP_HIDDEN_REFERENCE, [path]
+        return value, []
 
     if isinstance(value, dict):
-        return _scrub_hidden_mapping(value, regex)
+        return _scrub_hidden_mapping(value, matcher, path)
 
     if isinstance(value, (list, tuple)):
-        return _scrub_hidden_sequence(value, regex)
+        return _scrub_hidden_sequence(value, matcher, path)
 
-    return value, 0
+    return value, []
 
 
 def _scrub_hidden_mapping(
-    value: dict[Any, Any], regex: re.Pattern[str] | None
-) -> tuple[Any, int]:
+    value: dict[Any, Any], matcher: _HiddenMatcher, path: str
+) -> tuple[Any, list[str]]:
     entity_id = value.get("entity_id")
-    if isinstance(entity_id, str) and _names_hidden(entity_id, regex):
-        return _DROP_HIDDEN_REFERENCE, 1
+    if isinstance(entity_id, str) and matcher.embeds(entity_id):
+        return _DROP_HIDDEN_REFERENCE, [path]
 
     scrubbed_dict: dict[Any, Any] = {}
-    removed = 0
+    omitted: list[str] = []
     for key, item in value.items():
-        if isinstance(key, str) and _names_hidden(key, regex):
-            removed += 1
+        child_path = f"{path}.{key}" if path else str(key)
+        if isinstance(key, str) and matcher.embeds(key):
+            omitted.append(f"{path}.<hidden key>" if path else "<hidden key>")
             continue
-        scrubbed_item, item_removed = _scrub_hidden_references(item, regex)
-        removed += item_removed
+        scrubbed_item, item_omitted = _scrub_hidden_references(
+            item, matcher, child_path
+        )
+        if key == _ATTRIBUTES_KEY and isinstance(item, dict) and item_omitted:
+            omitted.append(child_path)
+            continue
+        omitted.extend(item_omitted)
         if scrubbed_item is _DROP_HIDDEN_REFERENCE:
             continue
         scrubbed_dict[key] = scrubbed_item
-    return scrubbed_dict, removed
+    return scrubbed_dict, omitted
 
 
 def _scrub_hidden_sequence(
-    value: list[Any] | tuple[Any, ...], regex: re.Pattern[str] | None
-) -> tuple[list[Any], int]:
+    value: list[Any] | tuple[Any, ...], matcher: _HiddenMatcher, path: str
+) -> tuple[list[Any], list[str]]:
     scrubbed_list: list[Any] = []
-    removed = 0
-    for item in value:
-        scrubbed_item, item_removed = _scrub_hidden_references(item, regex)
-        removed += item_removed
+    omitted: list[str] = []
+    for index, item in enumerate(value):
+        scrubbed_item, item_omitted = _scrub_hidden_references(
+            item, matcher, f"{path}[{index}]"
+        )
+        omitted.extend(item_omitted)
         if scrubbed_item is _DROP_HIDDEN_REFERENCE:
             continue
         scrubbed_list.append(scrubbed_item)
-    return scrubbed_list, removed
+    return scrubbed_list, omitted
 
 
-def _add_state_content_warning(value: Any) -> bool:
+def _add_state_content_warning(value: Any, warning: str) -> bool:
     """Attach the omission warning, or return False when the shape cannot carry it."""
     if not isinstance(value, dict):
         return False
     warnings = value.get("warnings")
     if warnings is None:
-        value["warnings"] = [_STATE_CONTENT_WARNING]
+        value["warnings"] = [warning]
         return True
     if not isinstance(warnings, list):
         return False
-    if _STATE_CONTENT_WARNING not in warnings:
-        warnings.append(_STATE_CONTENT_WARNING)
+    if warning not in warnings:
+        warnings.append(warning)
     return True
 
 
@@ -343,21 +391,19 @@ class _ScrubTally(NamedTuple):
     unwarnable_representations: int
 
 
-def _scrub_state_representation(
-    value: Any, regex: re.Pattern[str] | None
-) -> _ScrubAttempt:
+def _scrub_state_representation(value: Any, matcher: _HiddenMatcher) -> _ScrubAttempt:
     """Scrub one JSON value, retaining its original unless a warning can attach."""
-    scrubbed, omissions = _scrub_hidden_references(value, regex)
-    if not omissions:
+    scrubbed, omitted = _scrub_hidden_references(value, matcher, "")
+    if not omitted:
         return _ScrubAttempt(value, 0, True)
-    if scrubbed is _DROP_HIDDEN_REFERENCE or not _add_state_content_warning(scrubbed):
-        return _ScrubAttempt(value, omissions, False)
-    return _ScrubAttempt(scrubbed, omissions, True)
+    if scrubbed is _DROP_HIDDEN_REFERENCE or not _add_state_content_warning(
+        scrubbed, _state_content_warning(omitted)
+    ):
+        return _ScrubAttempt(value, len(omitted), False)
+    return _ScrubAttempt(scrubbed, len(omitted), True)
 
 
-def _scrub_state_result(
-    result: ToolResult, regex: re.Pattern[str] | None
-) -> _ScrubTally:
+def _scrub_state_result(result: ToolResult, matcher: _HiddenMatcher) -> _ScrubTally:
     """Scrub ha_get_state JSON representations while preserving a warning.
 
     A representation is replaced only when its top-level shape can carry the
@@ -370,7 +416,7 @@ def _scrub_state_result(
     unwarnable_representations = 0
     structured = getattr(result, "structured_content", None)
     if structured is not None:
-        attempt = _scrub_state_representation(structured, regex)
+        attempt = _scrub_state_representation(structured, matcher)
         if attempt.omissions and attempt.warnable:
             result.structured_content = attempt.value
             omissions_total += attempt.omissions
@@ -386,7 +432,7 @@ def _scrub_state_result(
             parsed = json.loads(text_value)
         except json.JSONDecodeError:
             continue
-        attempt = _scrub_state_representation(parsed, regex)
+        attempt = _scrub_state_representation(parsed, matcher)
         if attempt.omissions and attempt.warnable:
             block.text = json.dumps(attempt.value)
             omissions_total += attempt.omissions
@@ -589,9 +635,7 @@ class _VisibilityEnforcementBase(Middleware):
             return None
         return config
 
-    async def _hidden_and_regex(
-        self, config: VisibilityConfig
-    ) -> tuple[set[str], re.Pattern[str] | None]:
+    async def _hidden_matcher(self, config: VisibilityConfig) -> _HiddenMatcher:
         """Resolve the hidden set + regex through the module-shared cache."""
         return await _hidden_cache.get(config, self._get_client())
 
@@ -635,11 +679,11 @@ class VisibilityInboundEnforcement(_VisibilityEnforcementBase):
             _raise_enforced(effective_name, reason)
 
         try:
-            hidden, regex = await self._hidden_and_regex(config)
+            matcher = await self._hidden_matcher(config)
         except VisibilityDataUnavailable:
             _raise_enforced(effective_name, _FAIL_CLOSED_REASON)
 
-        self._scan_inbound(effective_name, name, args, hidden, regex)
+        self._scan_inbound(effective_name, name, args, matcher)
         return await call_next(context)
 
     def _scan_inbound(
@@ -647,8 +691,7 @@ class VisibilityInboundEnforcement(_VisibilityEnforcementBase):
         name: str,
         outer_name: str,
         args: dict[str, Any],
-        hidden: set[str],
-        regex: re.Pattern[str] | None,
+        matcher: _HiddenMatcher,
     ) -> None:
         """Conceal on an exact hidden-id argument; refuse on an embedded one."""
         exact: str | None = None
@@ -656,8 +699,8 @@ class VisibilityInboundEnforcement(_VisibilityEnforcementBase):
         if current_tool_name(outer_name) in CALL_PROXY_META_TOOLS:
             inner = _unwrap_proxy_call(args)
             if inner is not None:
-                exact, embedded = _scan_value(inner[1], hidden, regex)
-        raw_exact, raw_embedded = _scan_value(args, hidden, regex)
+                exact, embedded = _scan_value(inner[1], matcher)
+        raw_exact, raw_embedded = _scan_value(args, matcher)
         exact = exact or raw_exact
         embedded = embedded or raw_embedded
         if exact is not None:
@@ -685,11 +728,11 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
         if config is None:
             return await call_next(context)
         try:
-            _hidden, regex = await self._hidden_and_regex(config)
+            matcher = await self._hidden_matcher(config)
         except VisibilityDataUnavailable:
             _raise_enforced(effective_name, _FAIL_CLOSED_REASON)
         return await self._call_and_scan_outbound(
-            effective_name, context, call_next, regex
+            effective_name, context, call_next, matcher
         )
 
     async def _call_and_scan_outbound(
@@ -697,19 +740,19 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
         name: str,
         context: MiddlewareContext,
         call_next: CallNext,
-        regex: re.Pattern[str] | None,
+        matcher: _HiddenMatcher,
     ) -> Any:
         """Run the tool; refuse if its output (or a tool error) names a hidden id."""
         try:
             result = await call_next(context)
         except ToolError as exc:
-            if regex is not None and regex.search(_tool_error_text(exc)):
+            if matcher.embeds(_tool_error_text(exc)):
                 logger.info("visibility enforce: refused tool error from %s", name)
                 _raise_enforced(name, _outbound_reason(name))
             raise
         scrub_tally = _ScrubTally(0, 0, 0)
         if name == _STATE_TOOL:
-            scrub_tally = _scrub_state_result(result, regex)
+            scrub_tally = _scrub_state_result(result, matcher)
             if scrub_tally.unwarnable_representations:
                 # A retained original still names a hidden id; refuse here rather
                 # than rely on the scan below catching it.
@@ -719,7 +762,7 @@ class VisibilityOutboundEnforcement(_VisibilityEnforcementBase):
                     scrub_tally.unwarnable_representations,
                 )
                 _raise_enforced(name, _outbound_reason(name))
-        if regex is not None and regex.search(_serialize_result(result)):
+        if matcher.embeds(_serialize_result(result)):
             logger.info("visibility enforce: refused result from %s", name)
             _raise_enforced(name, _outbound_reason(name))
         if scrub_tally.mutated_representations:
@@ -793,41 +836,37 @@ class _HiddenSetCache:
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._hidden: set[str] | None = None
-        self._regex: re.Pattern[str] | None = None
+        self._matcher: _HiddenMatcher | None = None
         self._key: str | None = None
         self._expiry = 0.0
 
-    async def get(
-        self, config: VisibilityConfig, client: Any
-    ) -> tuple[set[str], re.Pattern[str] | None]:
+    async def get(self, config: VisibilityConfig, client: Any) -> _HiddenMatcher:
         key = _config_cache_key(config)
         now = time.monotonic()
         async with self._lock:
-            if self._hidden is not None and self._key == key and now < self._expiry:
-                return self._hidden, self._regex
+            if self._matcher is not None and self._key == key and now < self._expiry:
+                return self._matcher
             try:
                 hidden = await _refresh_hidden_set(config, client)
             except Exception:
-                if self._hidden is not None and self._key == key:
+                if self._matcher is not None and self._key == key:
                     logger.warning(
                         "visibility enforce: hidden-set refresh failed; using "
                         "last-known-good set",
                         exc_info=True,
                     )
-                    return self._hidden, self._regex
+                    return self._matcher
                 logger.warning(
                     "visibility enforce: hidden-set refresh failed with no "
                     "last-known-good for this config; failing closed",
                     exc_info=True,
                 )
                 raise VisibilityDataUnavailable("hidden set unavailable") from None
-            regex = _build_hidden_regex(hidden)
-            self._hidden = hidden
-            self._regex = regex
+            matcher = _HiddenMatcher.from_hidden(hidden)
+            self._matcher = matcher
             self._key = key
             self._expiry = now + _CACHE_TTL_SECONDS
-            return hidden, regex
+            return matcher
 
 
 _hidden_cache = _HiddenSetCache()
@@ -856,10 +895,10 @@ async def active_hidden_regex(client: Any) -> re.Pattern[str] | None:
             and config_has_active_hide_dimensions(config)
         ):
             return None
-        _hidden, regex = await _hidden_cache.get(config, client)
+        matcher = await _hidden_cache.get(config, client)
     except Exception:
         return None
-    return regex
+    return matcher.regex
 
 
 def scrub_records(

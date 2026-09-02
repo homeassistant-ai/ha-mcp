@@ -462,9 +462,13 @@ dimension. What it covers:
   a visible entity may contain fields, mapping keys, list items, or related
   records that name hidden entities (for example, a person's diagnostic device
   trackers). That content is omitted while the visible entity's own state is
-  returned, and the response receives a generic warning. Non-JSON output, a
-  shape that cannot carry the warning, or any hidden reference left after
-  filtering is refused by the normal outbound scan.
+  returned. Because attribute values derive from related entities (the person's
+  coordinates come from its trackers), the whole `attributes` mapping is omitted
+  when any of its content names a hidden entity. The response receives a
+  warning listing the omitted JSON paths and pointing to the Entity Visibility
+  settings, so an agent can tell a filtered field from a missing one. Non-JSON
+  output, a shape that cannot carry the warning, or any hidden reference left
+  after filtering is refused by the normal outbound scan.
 - **Other content reads are refused on contact.** An ordinary dashboard config,
   template result, automation/script body, trace, log, or file read whose output
   would surface a hidden entity_id is refused with a generic

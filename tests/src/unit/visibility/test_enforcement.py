@@ -780,19 +780,22 @@ class TestOutboundScan:
         structured = result.structured_content
         text = json.loads(result.content[0].text)
         for rendered in (structured, text):
-            attrs = rendered["data"]["attributes"]
-            assert "source" not in attrs
-            assert "device_tracker.hidden_b" not in attrs
-            assert attrs["device_trackers"] == []
-            assert attrs["friendly_name"] == "Allowed person"
-            assert rendered["warnings"] == [enforcement._STATE_CONTENT_WARNING]
+            # Attribute values derive from the hidden trackers (coordinates would
+            # be theirs), so the whole mapping goes, not just the naming fields.
+            assert "attributes" not in rendered["data"]
+            assert rendered["data"]["state"] == "home"
+            assert rendered["warnings"] == [
+                enforcement._state_content_warning(["data.attributes"])
+            ]
             assert "device_tracker.hidden" not in json.dumps(rendered)
+            assert "Entity Visibility section" in rendered["warnings"][0]
         scrub_logs = [
             record
             for record in caplog.records
             if record.msg.startswith("visibility enforce: scrubbed")
         ]
-        assert [record.args for record in scrub_logs] == [(8, 2)]
+        # One omitted path per representation, both representations mutated.
+        assert [record.args for record in scrub_logs] == [(2, 2)]
 
     async def test_get_state_drops_whole_record_naming_hidden_entity(self, set_config):
         """A nested record that NAMES a hidden id is dropped whole, not field-wise.
@@ -810,16 +813,14 @@ class TestOutboundScan:
             "data": {
                 "entity_id": "person.allowed",
                 "state": "home",
-                "attributes": {
-                    "related": [
-                        {
-                            "entity_id": "device_tracker.hidden_a",
-                            "state": "home",
-                            "friendly_name": "Secret",
-                        }
-                    ],
-                    "friendly_name": "Allowed person",
-                },
+                "attributes": {"friendly_name": "Allowed person"},
+                "related": [
+                    {
+                        "entity_id": "device_tracker.hidden_a",
+                        "state": "home",
+                        "friendly_name": "Secret",
+                    }
+                ],
             }
         }
         mw = make_mw(get_client=_hidden_tracker_client)
@@ -837,10 +838,50 @@ class TestOutboundScan:
             result.structured_content,
             json.loads(result.content[0].text),
         ):
-            attrs = rendered["data"]["attributes"]
-            assert attrs["related"] == []
-            assert attrs["friendly_name"] == "Allowed person"
+            assert rendered["data"]["related"] == []
+            assert rendered["data"]["attributes"] == {"friendly_name": "Allowed person"}
             assert "Secret" not in json.dumps(rendered)
+            assert rendered["warnings"] == [
+                enforcement._state_content_warning(["data.related[0]"])
+            ]
+
+    async def test_get_state_hidden_mapping_key_is_not_named_in_warning(
+        self, set_config
+    ):
+        """A hidden id used as a mapping key is reported as a placeholder path."""
+        set_config(
+            enabled=True,
+            enforce=True,
+            exclude_categories=["diagnostic"],
+            allow_entity_ids=["person.allowed"],
+        )
+        payload = {
+            "data": {
+                "entity_id": "person.allowed",
+                "state": "home",
+                "device_tracker.hidden_a": "seen",
+            }
+        }
+        mw = make_mw(get_client=_hidden_tracker_client)
+        tool_result = ToolResult(
+            content=[TextContent(type="text", text=json.dumps(payload))],
+            structured_content=payload,
+        )
+
+        result = await mw.on_call_tool(
+            make_context("ha_get_state", {"entity_id": "person.allowed"}),
+            _returns(tool_result),
+        )
+
+        for rendered in (
+            result.structured_content,
+            json.loads(result.content[0].text),
+        ):
+            assert rendered["data"] == {"entity_id": "person.allowed", "state": "home"}
+            assert rendered["warnings"] == [
+                enforcement._state_content_warning(["data.<hidden key>"])
+            ]
+            assert "device_tracker.hidden" not in json.dumps(rendered)
 
     async def test_get_state_refuses_when_only_one_representation_can_carry_warning(
         self, set_config
@@ -918,10 +959,10 @@ class TestOutboundScan:
             result.structured_content,
             json.loads(result.content[0].text),
         ):
-            assert rendered["data"]["attributes"] == {"friendly_name": "Allowed person"}
+            assert "attributes" not in rendered["data"]
             assert rendered["warnings"] == [
                 "existing",
-                enforcement._STATE_CONTENT_WARNING,
+                enforcement._state_content_warning(["data.attributes"]),
             ]
 
     async def test_get_state_bulk_omits_hidden_content(self, set_config):
@@ -953,9 +994,10 @@ class TestOutboundScan:
             result.structured_content,
             json.loads(result.content[0].text),
         ):
-            attrs = rendered["states"]["person.allowed"]["attributes"]
-            assert attrs == {"friendly_name": "Allowed person"}
-            assert rendered["warnings"] == [enforcement._STATE_CONTENT_WARNING]
+            assert "attributes" not in rendered["states"]["person.allowed"]
+            assert rendered["warnings"] == [
+                enforcement._state_content_warning(["states.person.allowed.attributes"])
+            ]
 
     async def test_get_state_refuses_when_scrub_warning_cannot_be_attached(
         self, set_config

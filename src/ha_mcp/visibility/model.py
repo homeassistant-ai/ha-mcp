@@ -92,11 +92,10 @@ class VisibilityConfig(BaseModel):
     restrict_report_issue: bool = False
 
     @property
-    def enabled_allowlist_active(self) -> bool:
-        """Whether this enabled config activates allowlist restrict mode."""
-        return self.enabled and bool(
-            self.allow_entity_ids or self.allow_areas or self.allow_labels
-        )
+    def allowlist_active(self) -> bool:
+        """Whether any allow_* dimension is set (restrict mode); same rule as
+        :func:`wire_has_allowlist_dimensions` over the emitted wire."""
+        return bool(self.allow_entity_ids or self.allow_areas or self.allow_labels)
 
     def to_wire(self) -> VisibilityWire:
         """Serialize the hide dimensions for the component ``search`` fast path.

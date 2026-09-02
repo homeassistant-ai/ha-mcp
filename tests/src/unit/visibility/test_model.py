@@ -45,14 +45,16 @@ def test_enforce_is_not_an_active_hide_dimension():
     assert config_has_active_hide_dimensions(cfg) is False
 
 
-def test_config_gate_and_wire_allowlist_predicates_have_explicit_scopes():
-    disabled = VisibilityConfig(enabled=False, allow_labels=["voice"])
-    active = VisibilityConfig(enabled=True, allow_labels=["voice"])
-
-    assert disabled.enabled_allowlist_active is False
-    assert active.enabled_allowlist_active is True
-    # The wire intentionally omits ``enabled`` and is sent only after the active
-    # config gate. Its predicate answers whether allow dimensions are present.
-    assert wire_has_allowlist_dimensions(disabled.to_wire()) is True
-    assert wire_has_allowlist_dimensions(active.to_wire()) is True
-    assert wire_has_allowlist_dimensions(VisibilityConfig().to_wire()) is False
+def test_config_and_wire_allowlist_predicates_agree():
+    """Both predicates answer "are any allow dimensions set", enabled or not."""
+    for config in (
+        VisibilityConfig(enabled=False, allow_labels=["voice"]),
+        VisibilityConfig(enabled=True, allow_labels=["voice"]),
+        VisibilityConfig(allow_entity_ids=["light.a"]),
+        VisibilityConfig(allow_areas=["kitchen"]),
+        VisibilityConfig(),
+    ):
+        assert config.allowlist_active is wire_has_allowlist_dimensions(
+            config.to_wire()
+        )
+    assert VisibilityConfig().allowlist_active is False

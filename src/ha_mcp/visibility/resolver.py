@@ -809,7 +809,7 @@ async def load_hidden_set(
     try:
         assist_overrides: dict[str, bool] | None = None
         expose_new = False
-        allowlist_active = config.enabled_allowlist_active
+        allowlist_active = config.allowlist_active
         assist_needed = not allowlist_active or _allowlist_degrades_without_registry(
             registry_result, states_result, config
         )
