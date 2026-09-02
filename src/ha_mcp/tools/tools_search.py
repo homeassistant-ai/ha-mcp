@@ -27,6 +27,7 @@ from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
 from ..utils.entity_membership import normalize_member_entity_ids
 from ..utils.fuzzy_search import apply_hidden_penalty
+from ..visibility.model import VisibilityWire, wire_has_allowlist_dimensions
 from ..visibility.resolver import (
     device_registry_needed_for_visibility,
     load_hidden_set,
@@ -1321,6 +1322,11 @@ def _merge_component_visibility_warnings(
             response,
             [w for w in component_visibility_warnings if isinstance(w, str)],
         )
+    elif component_visibility_warnings is not None:
+        logger.warning(
+            "component visibility_warnings ignored: expected a list, got %s",
+            type(component_visibility_warnings).__name__,
+        )
 
 
 async def _scrub_component_config_buckets(
@@ -2396,13 +2402,15 @@ class SearchTools:
         # hidden entities through the fast path. The ``search_visibility``
         # capability closes that: a component that advertises it accepts the raw
         # hide config (``VisibilityConfig.to_wire``) as the ``visibility`` param
-        # and excludes hidden entities before its own counts/pagination, exactly
-        # as the legacy path does — so a visibility-active install can still take
-        # the fast path. Without the capability an active filter stays on the
-        # legacy path; with no active filter the plain ``search`` route runs with
-        # no ``visibility`` param (old components keep working). ``ha_get_overview``
-        # needs no analogous gate — it re-applies the filter server-side over the
-        # component's raw slices. Checked only when the component would otherwise
+        # and excludes hidden entities before its own counts/pagination. The
+        # ``search_visibility_allowlist_authorization`` capability adds the
+        # ``allowlist_authorization`` wire key, which opts the component into the
+        # revised allowlist precedence; without it an active allowlist falls back
+        # to legacy (see ``_resolve_component_search_visibility``). With no active
+        # filter, the plain ``search`` route runs without a ``visibility`` param,
+        # so old components
+        # keep working. ``ha_get_overview`` needs no analogous gate — it reapplies
+        # the filter over the component's raw slices. Checked only when it would
         # serve, so the common (no-component / filter-off) install pays nothing.
         if (
             req.query_text
@@ -2429,7 +2437,7 @@ class SearchTools:
 
     async def _resolve_component_search_visibility(
         self, caps: Any
-    ) -> tuple[bool, dict[str, Any] | None]:
+    ) -> tuple[bool, VisibilityWire | None]:
         """Decide the ha_search route under the entity-visibility gate.
 
         Returns ``(route_component, visibility_param)`` for a caller that has
@@ -2437,13 +2445,21 @@ class SearchTools:
 
         - filter inactive → ``(True, None)``: the plain component search, no
           ``visibility`` param (parity with a pre-``search_visibility`` component).
-        - filter active + ``search_visibility`` capability + config serialized →
-          ``(True, <wire dict>)``: the component applies the hide dimensions
-          in-process.
-        - filter active without the capability, or the config could not be loaded
-          → ``(False, None)``: the legacy path applies the filter server-side
-          before the counts/pagination (fail-closed to legacy on a bad config,
-          matching ``visibility_state_and_wire``'s fail-closed pairing).
+        - filter active + ``search_visibility`` + config serialized:
+          - component also advertises ``search_visibility_allowlist_authorization``
+            → ``(True, <wire dict + allowlist_authorization: True>)``. The key opts
+            the component into the revised rule (an allow match authorizes past
+            category, HA-hidden, and Assist filters). It is never sent to a
+            component lacking the capability: that component's strict schema would
+            reject it, and the key's absence is what keeps a newer component on the
+            legacy precedence the released server still applies in its own
+            outbound scan.
+          - no allowlist dimensions → ``(True, <wire dict>)``: the nine-key wire;
+            with no allow dimensions the two precedences agree.
+          - allowlist active without the capability → ``(False, None)``.
+        - config could not be loaded → ``(False, None)``: the legacy path applies
+          the filter server-side before the counts/pagination (fail-closed to
+          legacy, matching ``visibility_state_and_wire``'s fail-closed pairing).
 
         ``visibility_state_and_wire`` loads the config once for both the active
         gate and its wire form, instead of the active check and the wire fetch
@@ -2452,16 +2468,21 @@ class SearchTools:
         active, visibility = await visibility_state_and_wire()
         if not active:
             return True, None
-        if component_supports(caps, "search_visibility") and visibility is not None:
-            return True, visibility
-        return False, None
+        if not component_supports(caps, "search_visibility") or visibility is None:
+            return False, None
+        if component_supports(caps, "search_visibility_allowlist_authorization"):
+            authorized: VisibilityWire = {**visibility, "allowlist_authorization": True}
+            return True, authorized
+        if wire_has_allowlist_dimensions(visibility):
+            return False, None
+        return True, visibility
 
     async def _ha_search_via_component(
         self,
         req: _ResolvedSearch,
         ctx: Context | None,
         *,
-        visibility: dict[str, Any] | None = None,
+        visibility: VisibilityWire | None = None,
         caps: Any = None,
     ) -> dict[str, Any] | None:
         """Serve ha_search from the component; ``None`` ⇒ run the legacy path.
@@ -2540,7 +2561,7 @@ class SearchTools:
         req: _ResolvedSearch,
         ctx: Context | None,
         *,
-        visibility: dict[str, Any] | None,
+        visibility: VisibilityWire | None,
     ) -> dict[str, Any] | None:
         """Serve a ``dashboard``-including request from both legs (issue #2289).
 
@@ -2636,7 +2657,7 @@ class SearchTools:
     async def _send_component_search(
         self,
         req: _ResolvedSearch,
-        visibility: dict[str, Any] | None = None,
+        visibility: VisibilityWire | None = None,
         *,
         dashboard_split: bool = False,
     ) -> dict[str, Any]:

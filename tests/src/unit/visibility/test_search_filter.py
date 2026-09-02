@@ -243,10 +243,10 @@ def test_targeted_get_state_ignores_visibility_filter(tmp_path, monkeypatch):
 
 
 def test_search_seam_allow_and_exclude_both_active(tmp_path, monkeypatch):
-    """Seam-level composition: allow_areas + exclude_categories active together
-    through the real _exact_match_search path. The diagnostic-in-allowed-area
-    entity must be hidden (exclude wins over the allow), the plain allowed entity
-    survives, and the non-allowed entity is hidden by the restriction."""
+    """An allow-area match authorizes past the broad diagnostic category filter.
+
+    The non-allowed entity remains hidden by restrict mode.
+    """
     states = [
         {"entity_id": "sensor.foo_diag", "state": "1", "attributes": {}},
         {"entity_id": "light.foo_keep", "state": "on", "attributes": {}},
@@ -289,7 +289,10 @@ def test_search_seam_allow_and_exclude_both_active(tmp_path, monkeypatch):
             limit=10,
         )
     )
-    assert {r["entity_id"] for r in res["results"]} == {"light.foo_keep"}
+    assert {r["entity_id"] for r in res["results"]} == {
+        "sensor.foo_diag",
+        "light.foo_keep",
+    }
 
 
 class _AreaTzClient:

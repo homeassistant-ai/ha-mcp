@@ -393,52 +393,56 @@ directory (the same directory as `tool_policy.json`; `/data` in the app) with
 }
 ```
 
-The filter is a conjunction of independent dimensions: an entity is shown only if
-it passes every active one.
+The filter uses a precedence ladder:
 
-- **Excludes / denylist.** An entity is hidden when its `entity_category` is in
-  `exclude_categories`, its `entity_id` is in `deny_entity_ids`, or its area/label
-  is in `exclude_areas` / `exclude_labels`. `exclude_categories` accepts only Home
-  Assistant's two entity categories (`diagnostic`, `config`); an unknown value is
-  ignored and surfaced as a `warnings` entry on the next read rather than silently
-  doing nothing. Set `exclude_hidden: true` to also fold in entities already
-  marked hidden in Home Assistant.
+- **Hard excludes.** `deny_entity_ids` and concrete `exclude_areas` /
+  `exclude_labels` entries always hide a matching entity, even if an allowlist
+  also matches it. These settings represent an explicit conflict resolution:
+  deny/exclude wins.
+- **Broad filters.** `exclude_categories` hides Home Assistant's `diagnostic` and
+  `config` categories; unknown values are ignored and surfaced as a `warnings`
+  entry on the next read. Set `exclude_hidden: true` to also hide entities marked
+  hidden in Home Assistant. These broad filters apply normally when no allowlist
+  is active.
 - **Allowlist.** The moment any of `allow_entity_ids` / `allow_areas` /
-  `allow_labels` is non-empty, the filter inverts to *restrict* mode: only
-  entities matching an allowlist stay visible and everything else – including
-  entities added later – is hidden. Leave all three empty to keep the allowlist
-  off. `deny_entity_ids` still wins over an allow match — and so does any
-  `exclude_*` match: an entity an allowlist would admit but an
-  `exclude_categories` / `exclude_areas` / `exclude_labels` also hides stays
-  hidden (every dimension can only hide, so any one hide is enough — the allow
-  dimensions cannot un-hide what another dimension excluded).
+  `allow_labels` is non-empty, the filter enters *restrict* mode: nonmatching
+  entities are hidden, including entities added later. A matching entity is
+  authorized past the broad category, Home Assistant hidden-state, and Assist
+  exposure filters. Hard `deny_entity_ids`, `exclude_areas`, and `exclude_labels`
+  conflicts still win. Leave all three allowlist fields empty to disable restrict
+  mode.
 - **Respect Assist exposure.** With `respect_assist_exposure: true` the filter
   hides entities not effectively exposed to Home Assistant's Assist
   (`conversation`) assistant, mirroring `async_should_expose` (an explicit
   per-entity exposure override wins; otherwise, if the instance exposes new
-  entities, the entity's domain and device-class defaults decide). Because HA
-  offers no single "effective exposure" API, the decision is reconstructed
-  client-side from two extra websocket reads per search — the set of entities
-  explicitly exposed to the assistant (`expose_entity/list`, which reports only
-  the *exposed* ones) and the "expose new entities" flag that drives the default
-  branch; if either read fails the dimension is skipped with a `warnings` note
-  rather than hiding everything. A registry entity's explicit override — exposed
-  *or* un-exposed — is read directly from the entity-registry `options` the
-  registry list already carries, so an explicit un-expose is honored. One residual
-  limit: for an entity that lives only in the state machine (a YAML/template entity
-  with no entity-registry entry), HA surfaces it through `expose_entity/list` only
-  when it is *exposed*; an explicit un-expose cannot be observed there, so such an
-  entity falls to its domain/device-class default and stays visible (fail-open).
+  entities, the entity's domain and device-class defaults decide). This broad
+  filter is not fetched or applied while an effective allowlist remains active.
+  If an area/label allowlist degrades open because the entity registry is empty
+  and no `allow_entity_ids` are configured, no allow match remains to authorize
+  past Assist, so this filter applies again.
+  Because HA offers no single "effective exposure" API, the decision is
+  reconstructed client-side from two extra websocket reads per search — the set
+  of entities explicitly exposed to the assistant (`expose_entity/list`, which
+  reports only the *exposed* ones) and the "expose new entities" flag that drives
+  the default branch; if either read fails the dimension is skipped with a
+  `warnings` note rather than hiding everything. A registry entity's explicit
+  override — exposed *or* un-exposed — is read directly from the entity-registry
+  `options` the registry list already carries, so an explicit un-expose is honored.
+  One residual limit: for an entity that lives only in the state machine (a
+  YAML/template entity with no entity-registry entry), HA surfaces it through
+  `expose_entity/list` only when it is *exposed*; an explicit un-expose cannot be
+  observed there, so such an entity falls to its domain/device-class default and
+  stays visible (fail-open).
 
 #### Enforce mode
 
 Set `"enforce": true` (or the **Enforce mode** toggle in the Entity Visibility
 tab) to turn the same hidden set into a genuine read barrier applied across tool
 reads, not just `ha_search` / `ha_get_overview`. The default exception is
-`ha_report_issue`, described below. `enforce` is not a hide
-dimension — it does not change *which* entities are hidden, only how strongly the
-hiding is applied — so it is inert unless the filter is also `enabled` with at
-least one active hide dimension. What it covers:
+`ha_report_issue`, described below. `enforce` is not a hide dimension — it does
+not change *which* entities are hidden, only how strongly the hiding is applied —
+so it is inert unless the filter is also `enabled` with at least one active hide
+dimension. What it covers:
 
 - **Direct reads are concealed.** A call whose arguments name a hidden entity_id
   exactly (`ha_get_state`, `ha_get_history`, …) is refused *before the tool
@@ -454,7 +458,18 @@ least one active hide dimension. What it covers:
   automation, script, scene, helper, or dashboard record that references a
   hidden entity is omitted from the config results (in the default soft mode
   such records still appear — that is the documented soft-filter behavior).
-- **Content reads are refused on contact.** An ordinary dashboard config,
+- **Allowed state reads filter hidden content.** A JSON `ha_get_state` result for
+  a visible entity may contain fields, mapping keys, list items, or related
+  records that name hidden entities (for example, a person's diagnostic device
+  trackers). That content is omitted while the visible entity's own state is
+  returned. Because attribute values derive from related entities (the person's
+  coordinates come from its trackers), the whole `attributes` mapping is omitted
+  when any of its content names a hidden entity. The response receives a
+  warning listing the omitted JSON paths and pointing to the Entity Visibility
+  settings, so an agent can tell a filtered field from a missing one. Non-JSON
+  output, a shape that cannot carry the warning, or any hidden reference left
+  after filtering is refused by the normal outbound scan.
+- **Other content reads are refused on contact.** An ordinary dashboard config,
   template result, automation/script body, trace, log, or file read whose output
   would surface a hidden entity_id is refused with a generic
   `ENTITY_VISIBILITY_ENFORCED` error that never names the matched id.
@@ -491,10 +506,9 @@ falls back to the last good read from this session — and with none available,
 tool calls are refused rather than risk leaking a restricted entity. If no
 config can be read, `ha_report_issue` follows its safe unrestricted default;
 if a last-good config opted it in, it fails closed too. The hidden set is cached
-for ~30s, so an area/label
-membership change in Home Assistant can take up to that long to take effect for
-the area/label dimensions (a config edit in the settings UI applies on the next
-call).
+for ~30s, so an area/label membership change in Home Assistant can take up to
+that long to take effect for the area/label dimensions (a config edit in the
+settings UI applies on the next call).
 
 Because refuse-on-contact applies to the *whole* hidden set, broad hide
 dimensions make refusals frequent: with the default `diagnostic`/`config`
@@ -518,8 +532,9 @@ call. A missing file leaves the filter off; an *invalid* one leaves the filter
 off for search/overview (with a `warnings` note) while enforce-mode safety falls
 back to the session's last good config — with none, tool calls are refused until
 the file is fixed (see *Enforce mode* above). When the filter is enabled but the
-registry read degrades, search results are unfiltered with a `warnings` note
-rather than silently wrong.
+registry read degrades, registry-derived dimensions (categories, hidden-state,
+areas, labels, Assist) are skipped with a `warnings` note; `deny_entity_ids` and
+`allow_entity_ids`, which need no registry data, still apply.
 
 ---
 

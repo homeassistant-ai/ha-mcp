@@ -13,6 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 from fastmcp.exceptions import ToolError
+from fastmcp.tools.tool import ToolResult
+from mcp.types import TextContent
 
 from ha_mcp.errors import create_entity_not_found_error
 from ha_mcp.visibility import enforcement, resolver
@@ -686,7 +688,372 @@ class TestProxyUnwrap:
 # ---------------------------------------------------------------------------
 
 
+def _hidden_tracker_client() -> FakeClient:
+    """A client whose registry marks the ``device_tracker.hidden_*`` ids diagnostic.
+
+    Paired with an ``exclude_categories=["diagnostic"]`` +
+    ``allow_entity_ids=["person.allowed"]`` config, this is the shared fixture the
+    outbound-scan scrub tests below render payloads against.
+    """
+    return FakeClient(
+        registry={
+            "success": True,
+            "result": [
+                {"entity_id": "person.allowed", "entity_category": None},
+                {
+                    "entity_id": "device_tracker.hidden_a",
+                    "entity_category": "diagnostic",
+                },
+                {
+                    "entity_id": "device_tracker.hidden_b",
+                    "entity_category": "diagnostic",
+                },
+            ],
+        },
+        states=[
+            {"entity_id": "person.allowed", "attributes": {}},
+            {"entity_id": "device_tracker.hidden_a", "attributes": {}},
+            {"entity_id": "device_tracker.hidden_b", "attributes": {}},
+        ],
+    )
+
+
 class TestOutboundScan:
+    async def test_get_state_omits_hidden_content_with_warning_and_log(
+        self, set_config, caplog
+    ):
+        set_config(
+            enabled=True,
+            enforce=True,
+            exclude_categories=["diagnostic"],
+            allow_entity_ids=["person.allowed"],
+        )
+        client = FakeClient(
+            registry={
+                "success": True,
+                "result": [
+                    {"entity_id": "person.allowed", "entity_category": None},
+                    {
+                        "entity_id": "device_tracker.hidden_a",
+                        "entity_category": "diagnostic",
+                    },
+                    {
+                        "entity_id": "device_tracker.hidden_b",
+                        "entity_category": "diagnostic",
+                    },
+                ],
+            },
+            states=[
+                {"entity_id": "person.allowed", "attributes": {}},
+                {"entity_id": "device_tracker.hidden_a", "attributes": {}},
+                {"entity_id": "device_tracker.hidden_b", "attributes": {}},
+            ],
+        )
+        payload = {
+            "data": {
+                "entity_id": "person.allowed",
+                "state": "home",
+                "attributes": {
+                    "source": "device_tracker.hidden_a",
+                    "device_tracker.hidden_b": "mapping key is hidden too",
+                    "device_trackers": [
+                        "device_tracker.hidden_a",
+                        "device_tracker.hidden_b",
+                    ],
+                    "friendly_name": "Allowed person",
+                },
+            },
+            "metadata": {"time_zone": "UTC"},
+        }
+        mw = make_mw(get_client=lambda: client)
+        caplog.set_level("INFO", logger=enforcement.__name__)
+        tool_result = ToolResult(
+            content=[TextContent(type="text", text=json.dumps(payload))],
+            structured_content=payload,
+        )
+
+        result = await mw.on_call_tool(
+            make_context("ha_get_state", {"entity_id": "person.allowed"}),
+            _returns(tool_result),
+        )
+
+        structured = result.structured_content
+        text = json.loads(result.content[0].text)
+        for rendered in (structured, text):
+            # Attribute values derive from the hidden trackers (coordinates would
+            # be theirs), so the whole mapping goes, not just the naming fields.
+            assert "attributes" not in rendered["data"]
+            assert rendered["data"]["state"] == "home"
+            assert rendered["warnings"] == [
+                enforcement._state_content_warning(["data.attributes"])
+            ]
+            assert "device_tracker.hidden" not in json.dumps(rendered)
+            assert "Entity Visibility section" in rendered["warnings"][0]
+        scrub_logs = [
+            record
+            for record in caplog.records
+            if record.msg.startswith("visibility enforce: scrubbed")
+        ]
+        # One omitted path per representation, both representations mutated.
+        assert [record.args for record in scrub_logs] == [(2, 2)]
+
+    async def test_get_state_drops_whole_record_naming_hidden_entity(self, set_config):
+        """A nested record that NAMES a hidden id is dropped whole, not field-wise.
+
+        Its sibling fields (a friendly_name here) would otherwise leak the hidden
+        entity's identity even after the ``entity_id`` itself was removed.
+        """
+        set_config(
+            enabled=True,
+            enforce=True,
+            exclude_categories=["diagnostic"],
+            allow_entity_ids=["person.allowed"],
+        )
+        payload = {
+            "data": {
+                "entity_id": "person.allowed",
+                "state": "home",
+                "attributes": {"friendly_name": "Allowed person"},
+                "related": [
+                    {
+                        "entity_id": "device_tracker.hidden_a",
+                        "state": "home",
+                        "friendly_name": "Secret",
+                    }
+                ],
+            }
+        }
+        mw = make_mw(get_client=_hidden_tracker_client)
+        tool_result = ToolResult(
+            content=[TextContent(type="text", text=json.dumps(payload))],
+            structured_content=payload,
+        )
+
+        result = await mw.on_call_tool(
+            make_context("ha_get_state", {"entity_id": "person.allowed"}),
+            _returns(tool_result),
+        )
+
+        for rendered in (
+            result.structured_content,
+            json.loads(result.content[0].text),
+        ):
+            assert rendered["data"]["related"] == []
+            assert rendered["data"]["attributes"] == {"friendly_name": "Allowed person"}
+            assert "Secret" not in json.dumps(rendered)
+            assert rendered["warnings"] == [
+                enforcement._state_content_warning(["data.related[0]"])
+            ]
+
+    async def test_get_state_hidden_mapping_key_is_not_named_in_warning(
+        self, set_config
+    ):
+        """A hidden id used as a mapping key is reported as a placeholder path."""
+        set_config(
+            enabled=True,
+            enforce=True,
+            exclude_categories=["diagnostic"],
+            allow_entity_ids=["person.allowed"],
+        )
+        payload = {
+            "data": {
+                "entity_id": "person.allowed",
+                "state": "home",
+                "device_tracker.hidden_a": "seen",
+            }
+        }
+        mw = make_mw(get_client=_hidden_tracker_client)
+        tool_result = ToolResult(
+            content=[TextContent(type="text", text=json.dumps(payload))],
+            structured_content=payload,
+        )
+
+        result = await mw.on_call_tool(
+            make_context("ha_get_state", {"entity_id": "person.allowed"}),
+            _returns(tool_result),
+        )
+
+        for rendered in (
+            result.structured_content,
+            json.loads(result.content[0].text),
+        ):
+            assert rendered["data"] == {"entity_id": "person.allowed", "state": "home"}
+            assert rendered["warnings"] == [
+                enforcement._state_content_warning(["data.<hidden key>"])
+            ]
+            assert "device_tracker.hidden" not in json.dumps(rendered)
+
+    async def test_get_state_refuses_when_only_one_representation_can_carry_warning(
+        self, set_config
+    ):
+        """A list-root text block beside a dict-root structured payload refuses.
+
+        The scrub must land identically on BOTH representations. A JSON list root
+        cannot carry the warning key, so scrubbing only the dict half would ship a
+        cleaned structured payload next to an unscrubbed text block.
+        """
+        set_config(
+            enabled=True,
+            enforce=True,
+            exclude_categories=["diagnostic"],
+            allow_entity_ids=["person.allowed"],
+        )
+        list_payload = [
+            {
+                "entity_id": "person.allowed",
+                "attributes": {"source": "device_tracker.hidden_a"},
+            }
+        ]
+        dict_payload = {
+            "data": {
+                "entity_id": "person.allowed",
+                "attributes": {"source": "device_tracker.hidden_a"},
+            }
+        }
+        mw = make_mw(get_client=_hidden_tracker_client)
+        tool_result = ToolResult(
+            content=[TextContent(type="text", text=json.dumps(list_payload))],
+            structured_content=dict_payload,
+        )
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_get_state", {"entity_id": "person.allowed"}),
+                _returns(tool_result),
+            )
+
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+    async def test_get_state_scrub_warning_appends_to_existing_warnings(
+        self, set_config
+    ):
+        """The scrub warning is APPENDED — a tool's own warnings must survive."""
+        set_config(
+            enabled=True,
+            enforce=True,
+            exclude_categories=["diagnostic"],
+            allow_entity_ids=["person.allowed"],
+        )
+        payload = {
+            "data": {
+                "entity_id": "person.allowed",
+                "attributes": {
+                    "source": "device_tracker.hidden_a",
+                    "friendly_name": "Allowed person",
+                },
+            },
+            "warnings": ["existing"],
+        }
+        mw = make_mw(get_client=_hidden_tracker_client)
+        tool_result = ToolResult(
+            content=[TextContent(type="text", text=json.dumps(payload))],
+            structured_content=payload,
+        )
+
+        result = await mw.on_call_tool(
+            make_context("ha_get_state", {"entity_id": "person.allowed"}),
+            _returns(tool_result),
+        )
+
+        for rendered in (
+            result.structured_content,
+            json.loads(result.content[0].text),
+        ):
+            assert "attributes" not in rendered["data"]
+            assert rendered["warnings"] == [
+                "existing",
+                enforcement._state_content_warning(["data.attributes"]),
+            ]
+
+    async def test_get_state_bulk_omits_hidden_content(self, set_config):
+        set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
+        payload = {
+            "success": True,
+            "states": {
+                "person.allowed": {
+                    "entity_id": "person.allowed",
+                    "attributes": {
+                        "source": "sensor.hidden",
+                        "friendly_name": "Allowed person",
+                    },
+                }
+            },
+        }
+        mw = make_mw(get_client=FakeClient)
+        tool_result = ToolResult(
+            content=[TextContent(type="text", text=json.dumps(payload))],
+            structured_content=payload,
+        )
+
+        result = await mw.on_call_tool(
+            make_context("ha_get_state", {"entity_id": ["person.allowed"]}),
+            _returns(tool_result),
+        )
+
+        for rendered in (
+            result.structured_content,
+            json.loads(result.content[0].text),
+        ):
+            assert "attributes" not in rendered["states"]["person.allowed"]
+            assert rendered["warnings"] == [
+                enforcement._state_content_warning(["states.person.allowed.attributes"])
+            ]
+
+    async def test_get_state_refuses_when_scrub_warning_cannot_be_attached(
+        self, set_config
+    ):
+        set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
+        payload = {
+            "data": {"attributes": {"source": "sensor.hidden"}},
+            "warnings": "unexpected non-list warning payload",
+        }
+        mw = make_mw(get_client=FakeClient)
+        tool_result = ToolResult(
+            content=[TextContent(type="text", text=json.dumps(payload))],
+            structured_content=payload,
+        )
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_get_state", {"entity_id": "person.allowed"}),
+                _returns(tool_result),
+            )
+
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+    async def test_get_state_refuses_list_root_that_cannot_carry_warning(
+        self, set_config
+    ):
+        set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.hidden"])
+        payload = [
+            {
+                "entity_id": "person.allowed",
+                "attributes": {"source": "sensor.hidden"},
+            }
+        ]
+        mw = make_mw(get_client=FakeClient)
+        tool_result = ToolResult(
+            content=[TextContent(type="text", text=json.dumps(payload))],
+        )
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_get_state", {"entity_id": "person.allowed"}),
+                _returns(tool_result),
+            )
+
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
+    async def test_get_state_non_json_hidden_reference_still_refused(self, set_config):
+        set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
+        mw = make_mw(get_client=FakeClient)
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_get_state", {"entity_id": "light.allowed"}),
+                _returns(text_result("relationship: sensor.foo")),
+            )
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
     async def test_text_content_hit_refused_without_naming_entity(self, set_config):
         set_config(enabled=True, enforce=True, deny_entity_ids=["sensor.foo"])
         mw = make_mw(get_client=FakeClient)

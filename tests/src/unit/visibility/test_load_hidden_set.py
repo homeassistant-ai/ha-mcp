@@ -1,8 +1,11 @@
 import asyncio
 
+import pytest
+
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
+from ha_mcp.visibility.resolver import VisibilityDataUnavailable
 
 
 def test_load_hidden_set_reads_config(tmp_path, monkeypatch):
@@ -37,8 +40,10 @@ class _FakeAssistClient:
         self._expose_new = expose_new
         self._fail = fail
         self._new_fails = new_fails
+        self.calls = []
 
     async def send_websocket_message(self, msg):
+        self.calls.append(msg["type"])
         if self._fail:
             raise ConnectionError("ws down")
         if msg["type"] == "homeassistant/expose_entity/list":
@@ -82,6 +87,88 @@ def test_load_hidden_set_fetches_assist_and_hides_unexposed(tmp_path, monkeypatc
     assert hidden == {"light.b"}
 
 
+def test_load_hidden_set_allowlist_skips_assist_fetch(tmp_path, monkeypatch):
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(
+            enabled=True,
+            exclude_categories=["diagnostic"],
+            allow_entity_ids=["light.a"],
+            respect_assist_exposure=True,
+        ),
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    reg = {
+        "success": True,
+        "result": [
+            {"entity_id": "light.a", "entity_category": "diagnostic"},
+            {"entity_id": "light.b"},
+        ],
+    }
+    client = _FakeAssistClient(fail=True)
+    hidden, warnings = asyncio.run(resolver.load_hidden_set(reg, None, client))
+    assert hidden == {"light.b"}
+    assert warnings == []
+    assert client.calls == []
+
+
+def test_degraded_area_allowlist_fetches_assist(tmp_path, monkeypatch):
+    """An empty-registry area allowlist re-enables and fetches the Assist filter."""
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(
+            enabled=True,
+            exclude_categories=[],
+            allow_areas=["kitchen"],
+            respect_assist_exposure=True,
+        ),
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    reg = {"success": True, "result": []}
+    states = [
+        {"entity_id": "sensor.exposed", "attributes": {}},
+        {"entity_id": "sensor.hidden", "attributes": {}},
+    ]
+    client = _FakeExposeSeamClient(
+        exposed={"sensor.exposed": {"conversation": True}}, expose_new=True
+    )
+
+    hidden, warnings = asyncio.run(resolver.load_hidden_set(reg, states, client))
+
+    assert hidden == {"sensor.hidden"}
+    assert resolver._ALLOWLIST_REGISTRY_EMPTY_WARNING in warnings
+
+
+def test_missing_registry_result_degrades_allowlist_and_fetches_assist(
+    tmp_path, monkeypatch
+):
+    """A missing result key has the same semantics as an empty result list."""
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(
+            enabled=True,
+            exclude_categories=[],
+            allow_areas=["kitchen"],
+            respect_assist_exposure=True,
+        ),
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    states = [
+        {"entity_id": "sensor.exposed", "attributes": {}},
+        {"entity_id": "sensor.hidden", "attributes": {}},
+    ]
+    client = _FakeExposeSeamClient(
+        exposed={"sensor.exposed": {"conversation": True}}, expose_new=True
+    )
+
+    hidden, warnings = asyncio.run(
+        resolver.load_hidden_set({"success": True}, states, client)
+    )
+
+    assert hidden == {"sensor.hidden"}
+    assert resolver._ALLOWLIST_REGISTRY_EMPTY_WARNING in warnings
+
+
 def test_load_hidden_set_assist_fetch_fails_soft(tmp_path, monkeypatch):
     save_visibility_config(
         tmp_path,
@@ -98,7 +185,55 @@ def test_load_hidden_set_assist_fetch_fails_soft(tmp_path, monkeypatch):
     hidden, warnings = asyncio.run(resolver.load_hidden_set(reg, None, client))
     # Assist dimension degrades (skipped) but deny still applies; not fail-closed.
     assert hidden == {"light.denied"}
-    assert any("Assist exposure data was unavailable" in w for w in warnings)
+    assert resolver._ASSIST_UNAVAILABLE_WARNING in warnings
+
+
+def test_load_hidden_set_assist_unavailable_fails_closed_in_strict_mode(
+    tmp_path, monkeypatch
+):
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(
+            enabled=True, exclude_categories=[], respect_assist_exposure=True
+        ),
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+    with pytest.raises(VisibilityDataUnavailable, match="Assist exposure data"):
+        asyncio.run(
+            resolver.load_hidden_set(
+                {"success": True, "result": [{"entity_id": "light.a"}]},
+                None,
+                _FakeAssistClient(fail=True),
+                strict=True,
+            )
+        )
+
+
+def test_strict_allowlist_makes_unavailable_assist_irrelevant(tmp_path, monkeypatch):
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(
+            enabled=True,
+            exclude_categories=[],
+            allow_entity_ids=["light.a"],
+            respect_assist_exposure=True,
+        ),
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    registry = {
+        "success": True,
+        "result": [{"entity_id": "light.a"}, {"entity_id": "light.b"}],
+    }
+
+    client = _FakeAssistClient(fail=True)
+    hidden, warnings = asyncio.run(
+        resolver.load_hidden_set(registry, None, client, strict=True)
+    )
+
+    assert hidden == {"light.b"}
+    assert warnings == []
+    assert client.calls == []
 
 
 def test_load_hidden_set_assist_partial_failure_degrades_dimension(
@@ -119,7 +254,7 @@ def test_load_hidden_set_assist_partial_failure_degrades_dimension(
     client = _FakeAssistClient(expose_new=True, new_fails=True)
     hidden, warnings = asyncio.run(resolver.load_hidden_set(reg, None, client))
     assert hidden == set()  # dimension skipped, light.a not wrongly hidden
-    assert any("Assist exposure data was unavailable" in w for w in warnings)
+    assert resolver._ASSIST_UNAVAILABLE_WARNING in warnings
 
 
 class _FakeExposeSeamClient:

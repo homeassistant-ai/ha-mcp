@@ -8,6 +8,12 @@ param and excludes hidden entities itself, so a visibility-active install can
 still take the fast path. These tests pin the four-way gate:
 
 - filter active + ``search_visibility`` → component WITH the ``visibility`` param
+  (the nine hide dimensions and NOTHING else — an old component's strict schema
+  rejects an unknown key)
+- filter active + ``search_visibility_allowlist_authorization`` → the wire also
+  carries ``allowlist_authorization: True``, the key that opts the component into
+  the revised allowlist precedence. It rides on the CAPABILITY, not on whether an
+  allowlist happens to be configured
 - filter active + only ``search`` → legacy (the pre-capability behaviour)
 - filter inactive → component WITHOUT the param (old components keep working)
 - component error on the visibility path → legacy fallback (filter still applied)
@@ -78,6 +84,16 @@ _CAPS_SEARCH_VIS = {
     "capabilities": ["search", "search_visibility"],
     "limits": {},
 }
+_CAPS_SEARCH_VIS_ALLOW_AUTH = {
+    "schema_version": 1,
+    "component_version": "2.1.1",
+    "capabilities": [
+        "search",
+        "search_visibility",
+        "search_visibility_allowlist_authorization",
+    ],
+    "limits": {},
+}
 
 
 def _write_active_deny(tmp_path, monkeypatch) -> None:
@@ -88,6 +104,19 @@ def _write_active_deny(tmp_path, monkeypatch) -> None:
             enabled=True,
             exclude_categories=[],
             deny_entity_ids=["light.kitchen"],
+        ),
+    )
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+
+def _write_active_allow(tmp_path, monkeypatch) -> None:
+    """An enabled config that authorizes only ``sensor.kitchen_temp``."""
+    save_visibility_config(
+        tmp_path,
+        VisibilityConfig(
+            enabled=True,
+            exclude_categories=["diagnostic"],
+            allow_entity_ids=["sensor.kitchen_temp"],
         ),
     )
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
@@ -130,8 +159,11 @@ async def test_active_filter_with_capability_routes_component_with_param(
     assert len(calls) == 1
     visibility = calls[0].kwargs.get("visibility")
     assert visibility is not None, "visibility param must ride the component request"
-    # Exactly the nine hide dimensions — no ``enabled`` / ``version`` leakage.
+    # Exactly the nine hide dimensions — no ``enabled`` / ``version`` leakage, and
+    # no ``allowlist_authorization``: this component does not advertise the
+    # capability, so its strict ten-key-unaware schema must never see that key.
     assert set(visibility) == _WIRE_KEYS
+    assert "allowlist_authorization" not in visibility
     assert visibility["deny_entity_ids"] == ["light.kitchen"]
     assert visibility["exclude_categories"] == []
 
@@ -160,6 +192,89 @@ async def test_active_filter_without_capability_uses_legacy(
     entity_ids = {e["entity_id"] for e in resp["entities"]}
     assert "light.kitchen" not in entity_ids
     assert "sensor.kitchen_temp" in entity_ids
+
+
+@pytest.mark.asyncio
+async def test_active_allowlist_without_authorization_capability_uses_legacy(
+    tmp_path, monkeypatch
+) -> None:
+    """An old visibility component cannot serve the revised allowlist contract."""
+    _write_active_allow(tmp_path, monkeypatch)
+    ws = make_ws(
+        "ha_mcp_tools/search",
+        info_result=_CAPS_SEARCH_VIS,
+        cmd_result=_entity_search_result(),
+    )
+    client = RoutingClient()
+    ha_search = _build_ha_search(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await ha_search(query="kitchen")
+
+    assert not _search_calls(ws)
+    assert client.get_states_calls == 1
+    entity_ids = {e["entity_id"] for e in resp["entities"]}
+    assert entity_ids == {"sensor.kitchen_temp"}
+
+
+@pytest.mark.asyncio
+async def test_active_allowlist_with_authorization_capability_routes_component(
+    tmp_path, monkeypatch
+) -> None:
+    """The revised capability opts the component into allowlist authorization."""
+    _write_active_allow(tmp_path, monkeypatch)
+    ws = make_ws(
+        "ha_mcp_tools/search",
+        info_result=_CAPS_SEARCH_VIS_ALLOW_AUTH,
+        cmd_result=_entity_search_result(),
+    )
+    client = RoutingClient()
+    ha_search = _build_ha_search(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await ha_search(query="kitchen")
+
+    assert resp["success"] is True
+    assert client.get_states_calls == 0
+    calls = _search_calls(ws)
+    assert len(calls) == 1
+    assert calls[0].kwargs["visibility"]["allow_entity_ids"] == ["sensor.kitchen_temp"]
+    # The wire flag — not the capability alone — is what tells the component to
+    # apply the revised precedence.
+    assert calls[0].kwargs["visibility"]["allowlist_authorization"] is True
+
+
+@pytest.mark.asyncio
+async def test_deny_only_config_with_authorization_capability_still_sends_flag(
+    tmp_path, monkeypatch
+) -> None:
+    """The wire flag rides on the CAPABILITY, not on an active allowlist.
+
+    A deny-only config has no allow dimensions, so both precedences agree on the
+    outcome; the server still stamps the key for a capable component so the
+    component's own resolution is unambiguous and the wire shape does not vary
+    with the config.
+    """
+    _write_active_deny(tmp_path, monkeypatch)
+    ws = make_ws(
+        "ha_mcp_tools/search",
+        info_result=_CAPS_SEARCH_VIS_ALLOW_AUTH,
+        cmd_result=_entity_search_result(),
+    )
+    client = RoutingClient()
+    ha_search = _build_ha_search(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await ha_search(query="kitchen")
+
+    assert resp["success"] is True
+    assert client.get_states_calls == 0
+    calls = _search_calls(ws)
+    assert len(calls) == 1
+    visibility = calls[0].kwargs["visibility"]
+    assert set(visibility) == _WIRE_KEYS | {"allowlist_authorization"}
+    assert visibility["allowlist_authorization"] is True
+    assert visibility["deny_entity_ids"] == ["light.kitchen"]
 
 
 @pytest.mark.asyncio
@@ -302,8 +417,7 @@ async def test_ws_establish_failure_on_visibility_path_falls_back_to_legacy(
 async def test_unloadable_config_fails_closed_to_legacy(tmp_path, monkeypatch) -> None:
     """A malformed config file → fail-closed to legacy, never an unfiltered component.
 
-    ``visibility_filter_active`` fails closed to True on a load error and
-    ``load_visibility_wire`` returns None (no config to serialize), so the
+    ``visibility_state_and_wire`` returns ``(True, None)`` on a load error, so the
     capability branch cannot route — the request stays on the legacy path.
     """
     (tmp_path / VISIBILITY_FILENAME).write_text("{ not valid json", encoding="utf-8")

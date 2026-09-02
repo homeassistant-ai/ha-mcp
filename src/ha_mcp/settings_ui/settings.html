@@ -518,7 +518,7 @@
 
   <section class="a11y-section">
     <h2 class="a11y-section-title" data-i18n="visibility.allowlist.title">Restrict to an allowlist</h2>
-    <p class="a11y-section-help" data-i18n="visibility.allowlist.help">Advanced: when any allowlist field is set the filter inverts – only entities matching an allowlist stay visible, everything else is hidden (including entities added later). Leave all three empty to disable.</p>
+    <p class="a11y-section-help" data-i18n="visibility.allowlist.help">Advanced: when any allowlist field is set, nonmatching entities are hidden (including entities added later). A match overrides category, Home Assistant hidden-state, and Assist filters; denied entity IDs and excluded areas or labels still win. Leave all three empty to disable.</p>
     <label class="visibility-field"><span data-i18n="visibility.allowlist.areas">Allowed areas</span> <input type="text" id="visibility-allow-areas" placeholder="living_room, kitchen"></label>
     <label class="visibility-field"><span data-i18n="visibility.allowlist.labels">Allowed labels</span> <input type="text" id="visibility-allow-labels" placeholder="voice, main_floor"></label>
     <p class="a11y-section-help" data-i18n="visibility.allowlist.entities_help">Allowed entity IDs, one per line.</p>
@@ -528,7 +528,7 @@
 
   <section class="a11y-section">
     <h2 class="a11y-section-title" data-i18n="visibility.assist.title">Respect Assist exposure</h2>
-    <p class="a11y-section-help" data-i18n="visibility.assist.help">Hide entities not exposed to Home Assistant's Assist (&ldquo;conversation&rdquo;) voice assistant, mirroring the Settings &gt; Voice assistants &gt; Expose list. Adds two websocket reads per search while enabled.</p>
+    <p class="a11y-section-help" data-i18n="visibility.assist.help">Hide entities not exposed to Home Assistant's Assist (&ldquo;conversation&rdquo;) voice assistant, mirroring the Settings &gt; Voice assistants &gt; Expose list. Not applied while an allowlist is active; otherwise adds two websocket reads per search.</p>
     <label class="a11y-option"><input type="checkbox" id="visibility-respect-assist"> <span data-i18n="visibility.assist.only_exposed">Only show entities exposed to Assist</span></label>
   </section>
 

@@ -2,9 +2,10 @@
 
 This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
 ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
-capability gate. It registers twenty-three commands. It advertises twenty-five
-capabilities: twenty-two command capabilities plus three additive flags
-(dashboards_doc_search, search_visibility, and search_entity_membership);
+capability gate. It registers twenty-three commands. It advertises twenty-six
+capabilities: twenty-two command capabilities plus four additive flags
+(dashboards_doc_search, search_visibility, search_entity_membership, and
+search_visibility_allowlist_authorization);
 the info handshake carries no capability entry:
 
 * ``ha_mcp_tools/info`` — the handshake: ``schema_version`` + ``capabilities[]``
@@ -111,10 +112,17 @@ the info handshake carries no capability entry:
   :func:`_visibility_hidden_set` mirrors the server's ``hidden_entity_ids``, with
   the Assist dimension delegated to core's ``async_should_expose``), so
   ``ha_search`` can route through the component even with an active filter. A
-  degraded dimension (unknown ``exclude_category`` / empty-registry allowlist /
-  unavailable Assist) fails open, and :func:`_visibility_warnings` returns the
-  resolver-parity ``visibility_warnings`` the response carries so the filtering is
-  not silently incomplete.
+  second ``search_visibility_allowlist_authorization`` capability declares that
+  this component understands the ``allowlist_authorization`` wire key, which the
+  server sends only to a component advertising it and which selects the revised
+  precedence (an allowlist match authorizes past category, HA-hidden, and Assist
+  filters). Without the key the component keeps the legacy conjunctive
+  precedence, so it stays correct against an older released server that still
+  resolves the old way in its own outbound scan. A degraded dimension (unknown
+  ``exclude_category`` / empty-registry allowlist / unavailable Assist) fails
+  open, and :func:`_visibility_warnings` returns the resolver-parity
+  ``visibility_warnings`` carried by the response so filtering is not silently
+  incomplete.
 * ``ha_mcp_tools/server_entry`` — the component locates its OWN server config
   entry (``entry.data[CONF_ENTRY_TYPE] == server``, the one marker key it reads
   from ``entry.data``) and returns ``{entry_id, channel, pip_spec}`` (channel /
@@ -268,7 +276,7 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import voluptuous as vol
 import yaml  # type: ignore[import-untyped]
@@ -376,6 +384,11 @@ CAPABILITIES: list[str] = [
     # would ignore the param is never sent it (param-sniffing is banned for
     # routing; the CAPABILITIES flag is what the server gates on).
     "search_visibility",
+    # A semantic flag on search_visibility: this component understands the
+    # ``allowlist_authorization`` wire key (revised allowlist precedence). The
+    # server sends that key only to a component advertising this flag, and with
+    # an active allowlist requires the flag or falls back to its legacy resolver.
+    "search_visibility_allowlist_authorization",
     "server_entry",
     # The WRITE counterpart of ``server_entry`` (Phase 3). The server gates its
     # ``ha_dev_manage_server(update_source)`` embedded-mode direct-write on this; an
@@ -644,10 +657,13 @@ def _info_schema() -> dict[Any, Any]:
 
 
 # The nine hide dimensions ``VisibilityConfig.to_wire`` emits, split by wire type
-# (seven id/name lists, two bool flags). Kept in lockstep with the server's
-# ``to_wire`` and :func:`_visibility_hidden_set`; a new dimension is a new component
-# capability, added on BOTH sides (see :func:`_visibility_param_schema`). The union
-# is pinned equal to the server resolver's key set by the cross-seam contract test.
+# (seven id/name lists, two bool flags), plus the optional
+# ``allowlist_authorization`` precedence flag the server adds for a component that
+# advertises ``search_visibility_allowlist_authorization``. Kept in lockstep with
+# the server's ``to_wire`` / ``VisibilityWire`` and :func:`_visibility_hidden_set`;
+# a new dimension is a new component capability, added on BOTH sides (see
+# :func:`_visibility_param_schema`). The union is pinned equal to the server
+# resolver's key set by the cross-seam contract test.
 _VISIBILITY_LIST_KEYS = (
     "exclude_categories",
     "deny_entity_ids",
@@ -657,18 +673,25 @@ _VISIBILITY_LIST_KEYS = (
     "allow_areas",
     "allow_labels",
 )
-_VISIBILITY_BOOL_KEYS = ("exclude_hidden", "respect_assist_exposure")
+_VISIBILITY_BOOL_KEYS = (
+    "exclude_hidden",
+    "respect_assist_exposure",
+    "allowlist_authorization",
+)
 
 
 def _visibility_param_schema() -> Any:
-    """Voluptuous schema for the ``search`` ``visibility`` dict — exactly the nine keys.
+    """Voluptuous schema for the ``search`` ``visibility`` dict — exactly the ten keys.
 
-    Enumerating the known dimensions (PREVENT_EXTRA is voluptuous' default for a
-    nested ``Schema``) makes an unknown key a loud ``invalid_format`` command error
-    rather than a silent drop. If a newer server emits a tenth dimension to this
-    1.2.0 component, the server's error taxonomy converts that into a legacy fallback
-    with the filter STILL correctly applied — structural fail-closed for free —
-    instead of partial, unwarned filtering. Built at call time so it honors the
+    The nine hide dimensions plus the ``allowlist_authorization`` precedence flag
+    (sent only when this component advertises
+    ``search_visibility_allowlist_authorization``; absent means legacy
+    precedence). Enumerating the known keys (PREVENT_EXTRA is voluptuous' default
+    for a nested ``Schema``) makes an unknown key a loud ``invalid_format`` command
+    error rather than a silent drop. If a newer server emits an eleventh key to
+    this component, the server's error taxonomy converts that into a legacy
+    fallback with the filter STILL correctly applied — structural fail-closed for
+    free — instead of partial, unwarned filtering. Built at call time so it honors the
     monkeypatched ``vol`` in the unit suite.
     """
     schema: dict[Any, Any] = {vol.Optional(key): [str] for key in _VISIBILITY_LIST_KEYS}
@@ -693,15 +716,13 @@ def _search_schema() -> dict[Any, Any]:
             int, vol.Range(min=1, max=MAX_RESULTS)
         ),
         vol.Optional("offset", default=0): vol.All(int, vol.Range(min=0)),
-        # Opt-in entity-visibility filter (``search_visibility`` capability): the
-        # server's raw VisibilityConfig hide dimensions. When present and
-        # non-empty, hidden entities are excluded from the entity results before
-        # counts/pagination, mirroring the legacy ``load_hidden_set`` hard-exclude
-        # so ``ha_search`` can drop its "filter active -> legacy only" gate. Gated
-        # by the CAPABILITIES flag, so an old component never receives it. The nine
-        # known keys are enumerated so an unknown dimension fails loudly (the server
-        # then falls back to legacy with the filter applied) — see
-        # :func:`_visibility_param_schema`.
+        # Opt-in entity visibility for component search. The component advertises
+        # ``search_visibility`` and ``search_visibility_allowlist_authorization``;
+        # the server reads those flags before sending these raw VisibilityConfig
+        # dimensions, and adds ``allowlist_authorization`` only for the second flag.
+        # The ten known keys are enumerated so an unknown one fails loudly and the
+        # server falls back to its own filtered legacy path.
+        # See ``_visibility_param_schema``.
         vol.Optional("visibility"): _visibility_param_schema(),
     }
 
@@ -1110,23 +1131,30 @@ def _do_search(
         # :func:`_visibility_hidden_set`.
         if isinstance(visibility, Mapping) and visibility:
             states_list = _iter_states(hass)
-            # Probe Assist availability once (only when the config asks for it) so a
-            # requested-but-unavailable Assist dimension both skips its hiding and
-            # surfaces the resolver-parity degradation warning.
-            assist_available = (
-                _assist_exposure_available(hass)
-                if visibility.get("respect_assist_exposure")
-                else True
+            inventory = _visibility_inventory(view, states_list, visibility)
+            assist_applies = (
+                bool(visibility.get("respect_assist_exposure"))
+                and not inventory.allowlist.authorized
             )
+            # Short-circuit the probe unless Assist applies. True on the skipped
+            # path means there is no Assist degradation to report; the hidden-set
+            # helper does not consult Assist while an authorizing allowlist is
+            # active (a legacy wire keeps Assist in play, so the probe still runs).
+            assist_available = not assist_applies or _assist_exposure_available(hass)
             hidden = _visibility_hidden_set(
                 view,
                 states_list,
                 visibility,
                 lambda eid: _assist_should_expose(hass, eid),
                 assist_available=assist_available,
+                inventory=inventory,
             )
             visibility_warnings = _visibility_warnings(
-                view, states_list, visibility, assist_available=assist_available
+                view,
+                states_list,
+                visibility,
+                assist_available=assist_available,
+                inventory=inventory,
             )
             if hidden:
                 scored_entities = [
@@ -2614,6 +2642,7 @@ def _all_entity_entries(view: _RegistryView) -> list[Any]:
     try:
         return list(entities.values())
     except Exception:  # pragma: no cover - defensive
+        _LOGGER.warning("entity registry enumeration failed", exc_info=True)
         return []
 
 
@@ -5001,6 +5030,67 @@ _ALLOWLIST_REGISTRY_EMPTY_WARNING = (
 )
 
 
+class _AllowlistState(NamedTuple):
+    """Effective restrict-mode activity, registry degradation, and precedence.
+
+    ``authorized`` is ``active`` plus the ``allowlist_authorization`` wire flag:
+    an allow match then authorizes the entity past the category, HA-hidden, and
+    Assist filters. Without the flag the legacy conjunctive semantics apply even
+    while ``active`` is True (an older server resolves that way itself).
+    """
+
+    active: bool
+    degraded: bool
+    authorized: bool
+
+
+class _VisibilityInventory(NamedTuple):
+    """Registry/state indexes and allowlist state shared by one search."""
+
+    registry_by_id: dict[str, Any]
+    state_ids: set[str]
+    allowlist: _AllowlistState
+
+
+def _visibility_allowlist_state(
+    registry_by_id: Mapping[str, Any],
+    state_ids: set[str],
+    visibility: Mapping[str, Any],
+) -> _AllowlistState:
+    """Resolve allowlist activity from one precomputed search inventory.
+
+    ``degraded`` deliberately remains true when an explicit ``allow_entity_ids``
+    list keeps restrict mode active: only the registry-derived allow dimensions
+    degraded, so callers still warn while the explicit ID allowlist remains in
+    force. This differs from the resolver's pre-fetch predicate, which asks only
+    whether degradation would make Assist relevant again.
+
+    ``authorized`` additionally requires the ``allowlist_authorization`` wire flag:
+    an active allowlist alone keeps the legacy conjunctive precedence.
+    """
+    entity_ids_active = bool(visibility.get("allow_entity_ids"))
+    registry_dimensions_active = bool(
+        visibility.get("allow_areas") or visibility.get("allow_labels")
+    )
+    degraded = registry_dimensions_active and not registry_by_id and bool(state_ids)
+    active = entity_ids_active or (registry_dimensions_active and not degraded)
+    authorized = active and bool(visibility.get("allowlist_authorization"))
+    return _AllowlistState(active, degraded, authorized)
+
+
+def _visibility_inventory(
+    view: _RegistryView, states: Any, visibility: Mapping[str, Any]
+) -> _VisibilityInventory:
+    """Build the registry/state inventory once for one visibility computation."""
+    registry_by_id = _registry_index_by_id(view)
+    state_ids = _state_entity_ids(states)
+    return _VisibilityInventory(
+        registry_by_id,
+        state_ids,
+        _visibility_allowlist_state(registry_by_id, state_ids, visibility),
+    )
+
+
 def _unknown_categories_warning(unknown_categories: set[str]) -> str:
     """The resolver's unknown-``exclude_categories`` warning text (byte-identical)."""
     return (
@@ -5016,14 +5106,17 @@ def _visibility_hidden_set(
     should_expose_fn: Any,
     *,
     assist_available: bool = True,
+    inventory: _VisibilityInventory | None = None,
 ) -> set[str]:
     """Compute the opt-in hidden entity_id set, mirroring the server's resolver.
 
     A pure replication of ``visibility.resolver.hidden_entity_ids`` over the live
     ``_RegistryView`` + ``states`` (rather than the WS ``{success, result}``
-    payloads the server passes): a conjunction of independent hide dimensions —
-    the deny list, the category / hidden / area / label excludes (area/labels are
-    device-inherited), the allow-list restrict mode, and the Assist dimension. The
+    payloads the server passes), including its precedence: concrete deny and
+    area/label excludes win; an allowlist match authorizes past the broad category,
+    Home Assistant hidden-state, and Assist filters when the wire opted into that
+    revised precedence with ``allowlist_authorization`` (without the flag those
+    filters still apply to a matched entity, matching the older server). The
     Assist dimension delegates to the injectable ``should_expose_fn(entity_id) ->
     bool`` (:func:`_assist_should_expose` in production — a READ-ONLY reconstruction
     of core's ``async_should_expose`` from the explicit exposure map + expose_new +
@@ -5033,11 +5126,11 @@ def _visibility_hidden_set(
     computed defaults back, which this fast path must not do (see
     :func:`_assist_should_expose`).
 
-    ``should_expose_fn`` is consulted only when ``respect_assist_exposure`` is set
-    AND ``assist_available`` is True. When the config requests the Assist dimension
-    but the exposure machinery is unavailable (``assist_available=False``), the
-    dimension is SKIPPED — hiding nothing by Assist — mirroring the resolver's
-    "skip the dimension when its data is unavailable" fail-open (the paired
+    ``should_expose_fn`` is consulted only when ``respect_assist_exposure`` is set,
+    no AUTHORIZING allowlist is active, and ``assist_available`` is True. When the config
+    requests the Assist dimension but the exposure machinery is unavailable
+    (``assist_available=False``), the dimension is SKIPPED — hiding nothing by
+    Assist — mirroring the resolver's fail-open behavior (the paired
     degradation warning is surfaced by :func:`_visibility_warnings`). Kept a
     standalone pure function so it is unit-testable without the full search
     pipeline.
@@ -5052,29 +5145,25 @@ def _visibility_hidden_set(
     allow_areas = set(visibility.get("allow_areas") or [])
     allow_labels = set(visibility.get("allow_labels") or [])
     respect_assist = bool(visibility.get("respect_assist_exposure"))
-    # ``assist_active`` gates the per-entity Assist should_expose sub-check (skipped
-    # when the config asks for Assist but its data is unavailable). The allow/assist
-    # loop below is guarded by ``allow_active or respect_assist`` — a structural
-    # mirror of the resolver's guard, not a functional requirement: when Assist is
-    # requested-but-unavailable and no allowlist is set, the loop runs but hides
-    # nothing (both sub-checks are inert). Kept identical so the two paths match.
-    assist_active = respect_assist and assist_available
-    allow_active = bool(allow_areas or allow_labels or allow_entity_ids)
 
-    registry_by_id = _registry_index_by_id(view)
+    if inventory is None:
+        inventory = _visibility_inventory(view, states, visibility)
+    registry_by_id = inventory.registry_by_id
     # states-only entity universe (YAML/template entities absent from the registry
     # that the allow / Assist dimensions must still be able to hide).
-    state_ids = {
-        eid for eid in (getattr(s, "entity_id", None) for s in states or []) if eid
-    }
-
-    # Fail-open guard (mirrors the resolver): an area/label allowlist needs registry
-    # data to match; if the registry is empty but there are states-only candidates,
-    # restrict mode would blank everything, so drop those allow dimensions.
-    if (allow_areas or allow_labels) and not registry_by_id and state_ids:
+    state_ids = inventory.state_ids
+    allow_active = inventory.allowlist.active
+    authorized = inventory.allowlist.authorized
+    # Fail-open guard: registry-derived allow dimensions cannot match when the
+    # registry is empty but states-only candidates exist.
+    if inventory.allowlist.degraded:
         allow_areas = set()
         allow_labels = set()
-        allow_active = bool(allow_entity_ids)
+
+    # An authorizing allowlist skips the broad Assist filter; a legacy wire keeps
+    # it. Only a full degradation (registry-derived dimensions dropped and no
+    # allow_entity_ids left) makes ``active`` False and re-enables Assist.
+    assist_active = respect_assist and assist_available and not authorized
 
     hidden: set[str] = set(denied)
     _apply_visibility_excludes(
@@ -5086,8 +5175,9 @@ def _visibility_hidden_set(
         exclude_areas,
         exclude_labels,
         hidden,
+        automatic_excludes_active=not authorized,
     )
-    if allow_active or respect_assist:
+    if allow_active or assist_active:
         _apply_visibility_allow_assist(
             view,
             registry_by_id,
@@ -5099,6 +5189,7 @@ def _visibility_hidden_set(
             assist_active,
             should_expose_fn,
             hidden,
+            allow_authorizes=authorized,
         )
     return hidden
 
@@ -5109,6 +5200,7 @@ def _visibility_warnings(
     visibility: Mapping[str, Any],
     *,
     assist_available: bool = True,
+    inventory: _VisibilityInventory | None = None,
 ) -> list[str]:
     """Degradation warnings for a visibility computation, mirroring the resolver.
 
@@ -5133,19 +5225,16 @@ def _visibility_warnings(
     if unknown:
         warnings.append(_unknown_categories_warning(unknown))
 
-    allow_areas = set(visibility.get("allow_areas") or [])
-    allow_labels = set(visibility.get("allow_labels") or [])
-    registry_by_id = _registry_index_by_id(view)
-    state_ids = {
-        eid for eid in (getattr(s, "entity_id", None) for s in states or []) if eid
-    }
-    # Empty-registry allowlist fail-open: same guard as _visibility_hidden_set —
-    # only fires when there are states-only candidates the restrict mode would
-    # otherwise blank.
-    if (allow_areas or allow_labels) and not registry_by_id and state_ids:
+    if inventory is None:
+        inventory = _visibility_inventory(view, states, visibility)
+    if inventory.allowlist.degraded:
         warnings.append(_ALLOWLIST_REGISTRY_EMPTY_WARNING)
 
-    if bool(visibility.get("respect_assist_exposure")) and not assist_available:
+    if (
+        visibility.get("respect_assist_exposure")
+        and not inventory.allowlist.authorized
+        and not assist_available
+    ):
         warnings.append(_ASSIST_UNAVAILABLE_WARNING)
 
     return warnings
@@ -5161,6 +5250,15 @@ def _registry_index_by_id(view: _RegistryView) -> dict[str, Any]:
     return index
 
 
+def _state_entity_ids(states: Any) -> set[str]:
+    """Entity IDs present in the live state-machine snapshot."""
+    return {
+        eid
+        for eid in (getattr(state, "entity_id", None) for state in states or [])
+        if eid
+    }
+
+
 def _apply_visibility_excludes(
     view: _RegistryView,
     registry_by_id: dict[str, Any],
@@ -5170,22 +5268,27 @@ def _apply_visibility_excludes(
     exclude_areas: set[str],
     exclude_labels: set[str],
     hidden: set[str],
+    *,
+    automatic_excludes_active: bool,
 ) -> None:
-    """Add the exclude-dimension hits to ``hidden`` (registry-derived, deny-first).
+    """Add automatic and hard exclude hits to ``hidden``.
 
-    Mirrors the resolver's exclude loop. The empty-set dimensions are inert (``x in
-    set()`` / ``set() & x`` are falsy), so an inactive dimension hides nothing
-    without a guard; only ``exclude_hidden`` is a bool flag and keeps its guard.
+    Category/HA-hidden filters are skipped for an AUTHORIZING allowlist; concrete
+    area/label exclusions remain hard conflicts and always apply. The empty-set
+    dimensions are inert (``x in set()`` / ``set() & x`` are falsy), so an inactive
+    dimension hides nothing without a guard; only ``exclude_hidden`` is a bool flag
+    and keeps its guard.
     """
     for eid, entry in registry_by_id.items():
         if eid in denied:
             continue
-        if _enum_value(getattr(entry, "entity_category", None)) in categories:
-            hidden.add(eid)
-            continue
-        if exclude_hidden and getattr(entry, "hidden_by", None) is not None:
-            hidden.add(eid)
-            continue
+        if automatic_excludes_active:
+            if _enum_value(getattr(entry, "entity_category", None)) in categories:
+                hidden.add(eid)
+                continue
+            if exclude_hidden and getattr(entry, "hidden_by", None) is not None:
+                hidden.add(eid)
+                continue
         if _effective_area_for_entry(view, entry) in exclude_areas:
             hidden.add(eid)
             continue
@@ -5204,24 +5307,28 @@ def _apply_visibility_allow_assist(
     assist_active: bool,
     should_expose_fn: Any,
     hidden: set[str],
+    *,
+    allow_authorizes: bool,
 ) -> None:
     """Add allow-restrict + Assist hits to ``hidden`` over registry + states.
 
-    These conjunctive filters must reach states-only entities, so they iterate the
-    full candidate universe. Mirrors the resolver's allow/assist loop. ``should_expose_fn``
-    is consulted only when ``assist_active`` (Assist requested AND its data
-    available); an unavailable-Assist request degrades to no Assist hiding here,
-    with the warning surfaced separately.
+    Both filters reach states-only entities. A nonmatching entity is always hidden
+    while the allowlist is active. With ``allow_authorizes`` a match skips the
+    Assist check; on a legacy wire a matched entity still faces it, so
+    ``should_expose_fn`` is consulted whenever Assist is requested and available.
     """
     for eid in registry_by_id.keys() | state_ids:
         if eid in hidden:
             continue
         entry = registry_by_id.get(eid)
-        if allow_active and not _entity_allowed(
-            view, eid, entry, allow_entity_ids, allow_areas, allow_labels
-        ):
-            hidden.add(eid)
-            continue
+        if allow_active:
+            if not _entity_allowed(
+                view, eid, entry, allow_entity_ids, allow_areas, allow_labels
+            ):
+                hidden.add(eid)
+                continue
+            if allow_authorizes:
+                continue
         if assist_active and not should_expose_fn(eid):
             hidden.add(eid)
 
@@ -5391,6 +5498,7 @@ def _assist_exposure_available(hass: HomeAssistant) -> bool:
             DATA_EXPOSED_ENTITIES,
         )
     except Exception:
+        _LOGGER.warning("Assist exposure support import failed", exc_info=True)
         return False
     data = getattr(hass, "data", None)
     return isinstance(data, Mapping) and DATA_EXPOSED_ENTITIES in data

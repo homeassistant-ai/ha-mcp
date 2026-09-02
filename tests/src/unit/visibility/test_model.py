@@ -1,4 +1,7 @@
-from ha_mcp.visibility.model import VisibilityConfig
+from ha_mcp.visibility.model import (
+    VisibilityConfig,
+    wire_has_allowlist_dimensions,
+)
 from ha_mcp.visibility.resolver import config_has_active_hide_dimensions
 
 
@@ -40,3 +43,18 @@ def test_enforce_is_not_an_active_hide_dimension():
     config count as active, or every search would drop off the component fast path."""
     cfg = VisibilityConfig(enabled=True, enforce=True, exclude_categories=[])
     assert config_has_active_hide_dimensions(cfg) is False
+
+
+def test_config_and_wire_allowlist_predicates_agree():
+    """Both predicates answer "are any allow dimensions set", enabled or not."""
+    for config in (
+        VisibilityConfig(enabled=False, allow_labels=["voice"]),
+        VisibilityConfig(enabled=True, allow_labels=["voice"]),
+        VisibilityConfig(allow_entity_ids=["light.a"]),
+        VisibilityConfig(allow_areas=["kitchen"]),
+        VisibilityConfig(),
+    ):
+        assert config.allowlist_active is wire_has_allowlist_dimensions(
+            config.to_wire()
+        )
+    assert VisibilityConfig().allowlist_active is False

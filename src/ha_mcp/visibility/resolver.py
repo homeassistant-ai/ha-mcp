@@ -1,10 +1,10 @@
 """Pure resolver: compute the hidden entity_id set from a registry list + config.
 
-The filter is a conjunction of independent hide dimensions: an entity is shown
-only if it passes *all* active dimensions (deny, allowlist, Assist exposure,
-excludes). Because every dimension can only *hide*, never un-hide, the order in
-which they are applied does not affect the final set - there is no priority
-ladder to reason about, only a union of hide reasons.
+The filter has an explicit precedence ladder. Concrete deny IDs and area/label
+exclusions always win. When an allowlist is active, a matching entity is
+authorized past the broad automatic category, Home Assistant hidden-state, and
+Assist-exposure filters; nonmatching entities are hidden. Without an allowlist,
+all configured filters apply normally.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import logging
 from typing import Any
 
 from ..utils.data_paths import get_data_dir
-from .model import VisibilityConfig
+from .model import VisibilityConfig, VisibilityWire
 from .persistence import load_visibility_config
 
 logger = logging.getLogger(__name__)
@@ -64,7 +64,8 @@ DEFAULT_EXPOSED_SENSOR_DEVICE_CLASSES = frozenset(
 
 _REGISTRY_UNAVAILABLE_WARNING = (
     "Entity visibility filter is enabled but the entity registry was "
-    "unavailable; results are unfiltered (the denylist still applies)."
+    "unavailable; registry-derived filters are skipped (the denylist and "
+    "explicit allow_entity_ids still apply)."
 )
 _ASSIST_UNAVAILABLE_WARNING = (
     "Entity visibility filter is enabled with respect_assist_exposure but the "
@@ -225,23 +226,26 @@ def _excluded_by_dimensions(
     labels: set[str],
     device_area: dict[str, str],
     device_labels: dict[str, list[str]],
+    *,
+    automatic_excludes_active: bool,
 ) -> set[str]:
-    """Return registry entities hidden by a category/hidden/area/label exclude.
+    """Return registry entities hidden by automatic or hard excludes.
 
-    Exclude dimensions are registry-derived: they hide an entity that *has* a
-    matching category/hidden flag/area/label. A states-only entity has none of
-    these, so (correctly) is never excluded - the loop stays registry-based.
+    Category and HA-hidden filters are broad automatic exclusions and are skipped
+    for an active allowlist. Concrete area/label exclusions remain hard conflicts
+    and always win. All are registry-derived, so states-only entities cannot match.
     """
     excluded: set[str] = set()
     for eid, entry in registry_by_id.items():
         if eid in denied:
             continue  # already hidden via the seed
-        if categories and entry.get("entity_category") in categories:
-            excluded.add(eid)
-            continue
-        if config.exclude_hidden and entry.get("hidden_by") is not None:
-            excluded.add(eid)
-            continue
+        if automatic_excludes_active:
+            if categories and entry.get("entity_category") in categories:
+                excluded.add(eid)
+                continue
+            if config.exclude_hidden and entry.get("hidden_by") is not None:
+                excluded.add(eid)
+                continue
         if areas and _effective_area(entry, device_area) in areas:
             excluded.add(eid)
             continue
@@ -293,17 +297,23 @@ def _candidate_hidden(
         if eid in hidden:
             continue
         entry = registry_by_id.get(eid)
-        if allow_active and not (
-            eid in allow_entity_ids
-            or (
-                entry is not None and _effective_area(entry, device_area) in allow_areas
-            )
-            or (
-                entry is not None
-                and allow_labels.intersection(_effective_labels(entry, device_labels))
-            )
-        ):
-            newly_hidden.add(eid)
+        if allow_active:
+            if not (
+                eid in allow_entity_ids
+                or (
+                    entry is not None
+                    and _effective_area(entry, device_area) in allow_areas
+                )
+                or (
+                    entry is not None
+                    and allow_labels.intersection(
+                        _effective_labels(entry, device_labels)
+                    )
+                )
+            ):
+                newly_hidden.add(eid)
+            # A match authorizes the entity past the broad Assist filter; a miss
+            # is already hidden by restrict mode.
             continue
         if assist_active:
             # Effective device_class: a registry override wins, else the live
@@ -319,11 +329,13 @@ def _candidate_hidden(
 def _usable_registry_entries(
     registry_result: object, strict: bool, warnings: list[str]
 ) -> list[Any] | None:
-    """Return the registry entries list, or None to degrade to denylist-only.
+    """Return the registry entries list, or None to degrade to registry-independent
+    dimensions only.
 
     A degraded registry (not a success dict, or a non-list ``result``) fails OPEN
     for search callers — logs, appends ``_REGISTRY_UNAVAILABLE_WARNING``, and
-    returns None so the caller honors just the denylist. Under ``strict`` it raises
+    returns None so the caller honors just the denylist and an explicit
+    ``allow_entity_ids`` list. Under ``strict`` it raises
     :class:`VisibilityDataUnavailable` instead (enforcement fails closed).
     """
     if not isinstance(registry_result, dict) or not registry_result.get("success"):
@@ -331,7 +343,7 @@ def _usable_registry_entries(
             raise VisibilityDataUnavailable(_REGISTRY_UNAVAILABLE_WARNING)
         logger.warning(
             "entity visibility filter enabled but the registry payload was "
-            "unusable; degrading to unfiltered for this request"
+            "unusable; only registry-independent dimensions apply for this request"
         )
         warnings.append(_REGISTRY_UNAVAILABLE_WARNING)
         return None
@@ -341,7 +353,7 @@ def _usable_registry_entries(
             raise VisibilityDataUnavailable(_REGISTRY_UNAVAILABLE_WARNING)
         logger.warning(
             "entity visibility filter enabled but the registry 'result' was not "
-            "a list; degrading to unfiltered for this request"
+            "a list; only registry-independent dimensions apply for this request"
         )
         warnings.append(_REGISTRY_UNAVAILABLE_WARNING)
         return None
@@ -366,9 +378,10 @@ def hidden_entity_ids(
     silently leaks the entities an enforced area/label/allow deny should conceal.
     Benign notes (unknown ``exclude_categories``) still warn, never raise.
 
-    ``hidden`` is empty when disabled or the registry payload is unusable
-    (fail-open — never hide on bad input), except the denylist which needs no
-    registry data and is honored regardless. ``warnings`` carries operator-facing
+    ``hidden`` is empty when disabled. When the registry payload is unusable the
+    registry-derived dimensions fail open (never hide on bad input); the denylist
+    and an explicit ``allow_entity_ids`` list need no registry data and are
+    honored regardless. ``warnings`` carries operator-facing
     notes (degraded registry, dropped unknown categories, an empty-registry
     allowlist degradation, missing Assist data) for the caller to surface at the
     response level.
@@ -396,8 +409,9 @@ def hidden_entity_ids(
     ``load_hidden_set`` reads from ``homeassistant/expose_entity/list`` — the only
     exposure source for states-only entities with no registry entry — and
     ``expose_new`` is HA's "expose new entities" flag. Note the ha-mcp visibility
-    precedence (a conjunction of hide dimensions) is separate from HA's own
-    async_should_expose precedence, which only the Assist dimension mirrors.
+    precedence is separate from HA's own ``async_should_expose`` precedence:
+    hard ID/area/label exclusions win, then an allow match authorizes past the
+    broad category/hidden/Assist filters.
     """
     if not config.enabled:
         return set(), []
@@ -416,14 +430,23 @@ def hidden_entity_ids(
         )
 
     denied = set(config.deny_entity_ids)
+    allow_entity_ids = set(config.allow_entity_ids)
 
     # Enabled past this point, so an unusable registry is a real degradation the
-    # operator should see as a warning. Honor the denylist regardless (it needs no
-    # registry data); only the registry-derived dimensions degrade to open (or, in
-    # strict mode, _usable_registry_entries raises instead of degrading).
+    # operator should see as a warning. The registry-independent dimensions still
+    # apply: the denylist, and an explicit allow_entity_ids list restricting the
+    # states-only universe. Only the registry-derived dimensions degrade to open
+    # (or, in strict mode, _usable_registry_entries raises instead of degrading).
     entries = _usable_registry_entries(registry_result, strict, warnings)
     if entries is None:
-        return denied, warnings
+        hidden_without_registry = set(denied)
+        if allow_entity_ids:
+            hidden_without_registry |= {
+                eid
+                for eid in _index_state_device_class(states_result)
+                if eid not in allow_entity_ids
+            }
+        return hidden_without_registry, warnings
 
     # Index the registry by entity_id and index the live states for device_class
     # lookups (Assist reads the effective device_class from the entity, not the
@@ -442,10 +465,11 @@ def hidden_entity_ids(
     labels = set(config.exclude_labels)
     allow_areas = set(config.allow_areas)
     allow_labels = set(config.allow_labels)
-    allow_entity_ids = set(config.allow_entity_ids)
     # An allowlist is active only when at least one allow_* dimension is set. When
     # active it inverts the default: an entity is hidden unless it matches one of
-    # the allow dimensions. Empty allow_* => inactive => nothing hidden by allow.
+    # the allow dimensions, and a match authorizes it past the broad
+    # category/HA-hidden/Assist filters (never past deny or area/label excludes).
+    # Empty allow_* => inactive => nothing hidden by allow.
     allow_active = bool(allow_areas or allow_labels or allow_entity_ids)
 
     # Fail-open guard: an area/label allowlist needs registry data to match. If
@@ -454,7 +478,9 @@ def hidden_entity_ids(
     # the fail-closed blank the design forbids. Drop the registry-derived allow
     # dimensions and warn; a registry-independent allow_entity_ids list still
     # applies. Only fires when there are states-only candidates to protect.
-    if (allow_areas or allow_labels) and not registry_by_id and state_device_class:
+    if _registry_allowlist_degrades(
+        allow_areas, allow_labels, registry_by_id, state_device_class
+    ):
         if strict:
             raise VisibilityDataUnavailable(_ALLOWLIST_REGISTRY_EMPTY_WARNING)
         warnings.append(_ALLOWLIST_REGISTRY_EMPTY_WARNING)
@@ -478,17 +504,18 @@ def hidden_entity_ids(
         labels,
         device_area,
         device_labels,
+        automatic_excludes_active=not allow_active,
     )
 
-    # Allowlist + Assist are conjunctive filters that must also reach states-only
-    # entities, so they iterate the full candidate universe (registry ∪ states)
-    # rather than just the registry. Without a states list they degrade to the
-    # registry set.
-    if allow_active or config.respect_assist_exposure:
+    # Allowlist and Assist both reach states-only entities. An effective allowlist
+    # authorizes past Assist. Only a full degradation re-enables Assist: when the
+    # guard above fired and no allow_entity_ids remain, allow_active is False.
+    assist_applies = config.respect_assist_exposure and not allow_active
+    if allow_active or assist_applies:
         candidate_ids = set(registry_by_id)
         candidate_ids |= set(state_device_class)
-        assist_active = config.respect_assist_exposure and assist_overrides is not None
-        if config.respect_assist_exposure and assist_overrides is None:
+        assist_active = assist_applies and assist_overrides is not None
+        if assist_applies and assist_overrides is None:
             # The seam could not supply Assist data; skip that dimension rather
             # than hide everything, and tell the operator. Under strict mode a
             # skipped Assist dimension could leak an un-exposed entity, so raise.
@@ -566,8 +593,18 @@ async def _fetch_assist_exposure(
             ),
         )
         if not (isinstance(exposed_res, dict) and exposed_res.get("success")):
+            logger.warning(
+                "assist exposure fetch: expose_entity/list unsuccessful (%s); "
+                "dimension skipped",
+                exposed_res,
+            )
             return None, False
         if not (isinstance(new_res, dict) and new_res.get("success")):
+            logger.warning(
+                "assist exposure fetch: expose_new_entities/get unsuccessful (%s); "
+                "dimension skipped",
+                new_res,
+            )
             # Without the expose_new flag the default-exposure branch can't be
             # computed; degrade the whole dimension (skip + warn) rather than
             # assume a value - assuming False would wrongly hide default-domain
@@ -596,6 +633,50 @@ async def _fetch_assist_exposure(
         # so recording a second one would double-warn on one root cause.
         logger.warning("assist exposure fetch failed; dimension skipped", exc_info=True)
         return None, False
+
+
+def _registry_allowlist_degrades(
+    allow_areas: set[str],
+    allow_labels: set[str],
+    registry_by_id: dict[str, Any],
+    state_device_class: dict[str, str | None],
+) -> bool:
+    """The empty-registry fail-open guard: area/label allow dimensions cannot match.
+
+    Shared by ``hidden_entity_ids`` (which then drops those dimensions) and the
+    Assist prefetch predicate below, so the two cannot drift apart.
+    """
+    return bool(
+        (allow_areas or allow_labels) and not registry_by_id and state_device_class
+    )
+
+
+def _allowlist_degrades_without_registry(
+    registry_result: object,
+    states_result: object | None,
+    config: VisibilityConfig,
+) -> bool:
+    """Whether the empty-registry guard drops every configured allow dimension.
+
+    ``load_hidden_set`` uses it to decide whether Assist exposure data must still
+    be fetched: a surviving ``allow_entity_ids`` list keeps the allowlist active,
+    so Assist stays irrelevant.
+    """
+    if config.allow_entity_ids or not (config.allow_areas or config.allow_labels):
+        return False
+    if not isinstance(registry_result, dict) or not registry_result.get("success"):
+        return False
+    entries = registry_result.get("result", [])
+    # A successful response with no ``result`` key is an empty registry, not a
+    # malformed payload; keep this in sync with ``_usable_registry_entries``.
+    if not isinstance(entries, list):
+        return False
+    return _registry_allowlist_degrades(
+        set(config.allow_areas),
+        set(config.allow_labels),
+        _index_registry_by_id(entries),
+        _index_state_device_class(states_result),
+    )
 
 
 def config_needs_device_registry(config: VisibilityConfig) -> bool:
@@ -666,37 +747,13 @@ async def visibility_filter_active() -> bool:
     return config_has_active_hide_dimensions(config)
 
 
-async def load_visibility_wire() -> dict[str, Any] | None:
-    """Serialize the visibility config for the component ``search`` fast path.
-
-    Loads the same memoized config ``visibility_filter_active`` reads and returns
-    its hide dimensions via ``VisibilityConfig.to_wire`` — the ``visibility``
-    param the ha_search consumer hands the ha_mcp_tools component when it
-    advertises the ``search_visibility`` capability, letting the component apply
-    the hide dimensions in-process instead of the server dropping to the legacy
-    path. Returns ``None`` on a load error so the caller keeps the legacy path
-    (there is no config to push into the component), matching the fail-closed-to-
-    legacy policy ``visibility_filter_active`` uses for the same gate. Reuses
-    ``get_data_dir`` so a test redirecting ``resolver.get_data_dir`` steers this
-    too.
-    """
-    try:
-        config = await asyncio.to_thread(load_visibility_config, get_data_dir())
-    except Exception:
-        return None
-    return config.to_wire()
-
-
-async def visibility_state_and_wire() -> tuple[bool, dict[str, Any] | None]:
+async def visibility_state_and_wire() -> tuple[bool, VisibilityWire | None]:
     """Load the visibility config once and report both ``(active, wire)``.
 
-    Single-load counterpart to calling ``visibility_filter_active`` and
-    ``load_visibility_wire`` back to back for the same gate — the config is
-    memoized, so the pair only costs an extra ``os.stat``, but the component
-    ``search_visibility`` gate is the one caller that always needs both, so
-    this collapses it to one load. Fails **closed** to ``(True, None)`` on a
-    load error, mirroring ``visibility_filter_active``'s fail-closed-to-legacy
-    policy: keep the legacy path, and there is no config to serialize.
+    The component ``search_visibility`` gate needs both values from one config
+    snapshot. Fails **closed** to ``(True, None)`` on a load error, mirroring
+    ``visibility_filter_active``'s fail-closed-to-legacy policy: keep the legacy
+    path, and there is no config to serialize.
     """
     try:
         config = await asyncio.to_thread(load_visibility_config, get_data_dir())
@@ -764,7 +821,16 @@ async def load_hidden_set(
     try:
         assist_overrides: dict[str, bool] | None = None
         expose_new = False
-        if config.enabled and config.respect_assist_exposure and client is not None:
+        allowlist_active = config.allowlist_active
+        assist_needed = not allowlist_active or _allowlist_degrades_without_registry(
+            registry_result, states_result, config
+        )
+        if (
+            config.enabled
+            and config.respect_assist_exposure
+            and assist_needed
+            and client is not None
+        ):
             assist_overrides, expose_new = await _fetch_assist_exposure(client)
         return hidden_entity_ids(
             registry_result,

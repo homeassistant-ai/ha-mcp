@@ -747,6 +747,7 @@ class TestInfo:
             "services_list",
             "reference_data",
             "search_visibility",
+            "search_visibility_allowlist_authorization",
             "server_entry",
             "server_entry_update",
             "call_service",
@@ -806,7 +807,7 @@ class TestInfo:
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
             ).read_text(encoding="utf-8")
         )
-        assert manifest["version"] == COMPONENT_VERSION == "2.1.1"
+        assert manifest["version"] == COMPONENT_VERSION == "2.1.2"
 
 
 # =============================================================================

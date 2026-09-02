@@ -38,7 +38,7 @@ import pytest
 from ha_mcp.client.rest_client import HomeAssistantCommandError
 from ha_mcp.tools import tools_search
 from ha_mcp.visibility import resolver
-from ha_mcp.visibility.model import VisibilityConfig
+from ha_mcp.visibility.model import VisibilityConfig, VisibilityWire
 from ha_mcp.visibility.persistence import save_visibility_config
 
 from ._component_routing_helpers import make_ws, patch_ws
@@ -151,6 +151,16 @@ _SCENARIOS = [
         expected=frozenset({"light.vismark_keep"}),
     ),
     _Scenario(
+        id="allow_entity_ids_states_only_skips_unavailable_assist",
+        ents=(),
+        states_only=("light.vismark_keep", "light.vismark_drop"),
+        config=_cfg(
+            allow_entity_ids=["light.vismark_keep"], respect_assist_exposure=True
+        ),
+        assist_available=False,
+        expected=frozenset({"light.vismark_keep"}),
+    ),
+    _Scenario(
         id="allow_entity_ids_restrict",
         ents=(_Ent("light.vismark_keep"), _Ent("light.vismark_drop")),
         states_only=("light.vismark_ghost",),
@@ -192,6 +202,34 @@ _SCENARIOS = [
         devices={"d1": ("office", ())},
         config=_cfg(allow_areas=["office"]),
         expected=frozenset({"light.vismark_viadev"}),
+    ),
+    _Scenario(
+        id="allow_match_overrides_category_and_assist",
+        ents=(
+            _Ent("light.vismark_allowed", category="diagnostic", hidden_by="user"),
+            _Ent("light.vismark_drop"),
+        ),
+        exposed=frozenset(),
+        config=VisibilityConfig(
+            enabled=True,
+            exclude_categories=["diagnostic"],
+            exclude_hidden=True,
+            allow_entity_ids=["light.vismark_allowed"],
+            respect_assist_exposure=True,
+        ),
+        expected=frozenset({"light.vismark_allowed"}),
+    ),
+    _Scenario(
+        id="explicit_exclude_area_wins_over_allow",
+        ents=(
+            _Ent("light.vismark_conflict", area_id="office"),
+            _Ent("light.vismark_allowed", area_id="kitchen"),
+        ),
+        config=_cfg(
+            exclude_areas=["office"],
+            allow_entity_ids=["light.vismark_conflict", "light.vismark_allowed"],
+        ),
+        expected=frozenset({"light.vismark_allowed"}),
     ),
     _Scenario(
         id="assist_via_injected_fake",
@@ -431,6 +469,20 @@ async def test_component_visibility_matches_legacy(
     # server never re-fetched the state machine or re-applied the filter on top.
     assert comp_client.get_states_calls == 0
     assert comp_client.ws_types == Counter()
+    # The entity-only search intentionally carries an unrelated config-body intent
+    # warning. Pin only this contract's Entity Visibility warnings.
+    comp_visibility_warnings = {
+        warning
+        for warning in comp_resp.get("warnings", [])
+        if warning.startswith("Entity visibility")
+    }
+    legacy_visibility_warnings = {
+        warning
+        for warning in legacy_resp.get("warnings", [])
+        if warning.startswith("Entity visibility")
+    }
+    assert comp_visibility_warnings == set(scenario.expected_warnings)
+    assert legacy_visibility_warnings == set(scenario.expected_warnings)
 
 
 # --- degradation-warning parity ----------------------------------------------
@@ -458,8 +510,9 @@ _WARNING_SCENARIOS = [
         id="empty_registry_allowlist_warns",
         ents=(),
         states_only=("light.vismark_g1", "light.vismark_g2"),
-        config=_cfg(allow_areas=["office"]),
-        expected=frozenset({"light.vismark_g1", "light.vismark_g2"}),
+        exposed=frozenset({"light.vismark_g1"}),
+        config=_cfg(allow_areas=["office"], respect_assist_exposure=True),
+        expected=frozenset({"light.vismark_g1"}),
         expected_warnings=frozenset({resolver._ALLOWLIST_REGISTRY_EMPTY_WARNING}),
     ),
     _Scenario(
@@ -469,6 +522,19 @@ _WARNING_SCENARIOS = [
         assist_available=False,
         expected=frozenset({"light.vismark_a", "light.vismark_b"}),
         expected_warnings=frozenset({resolver._ASSIST_UNAVAILABLE_WARNING}),
+    ),
+    _Scenario(
+        id="explicit_allow_survives_empty_registry_area_degradation",
+        ents=(),
+        states_only=("light.vismark_keep", "light.vismark_drop"),
+        config=_cfg(
+            allow_entity_ids=["light.vismark_keep"],
+            allow_areas=["office"],
+            respect_assist_exposure=True,
+        ),
+        assist_available=False,
+        expected=frozenset({"light.vismark_keep"}),
+        expected_warnings=frozenset({resolver._ALLOWLIST_REGISTRY_EMPTY_WARNING}),
     ),
 ]
 
@@ -501,13 +567,9 @@ async def test_component_warnings_match_legacy(
     assert comp_warnings == legacy_warnings, (
         f"warning drift for {scenario.id}: {comp_warnings} != {legacy_warnings}"
     )
-    # Where the registry is non-empty the surviving sets must still match (the
-    # empty-registry allowlist scenario only pins warning parity — the point of
-    # its degradation is that filtering was skipped).
-    if scenario.ents:
-        comp_ids = {e["entity_id"] for e in comp_resp["entities"]}
-        legacy_ids = {e["entity_id"] for e in legacy_resp["entities"]}
-        assert comp_ids == legacy_ids == set(scenario.expected)
+    comp_ids = {e["entity_id"] for e in comp_resp["entities"]}
+    legacy_ids = {e["entity_id"] for e in legacy_resp["entities"]}
+    assert comp_ids == legacy_ids == set(scenario.expected)
 
 
 def test_component_warning_constants_match_resolver() -> None:
@@ -531,11 +593,16 @@ def test_component_warning_constants_match_resolver() -> None:
 def test_component_visibility_schema_keys_match_server_to_wire() -> None:
     """The component's enumerated ``visibility`` schema keys equal the server's wire set.
 
-    The component now rejects unknown ``visibility`` keys (enumerated schema), so its
-    known-key set must stay in lockstep with ``VisibilityConfig.to_wire`` — otherwise
-    a dimension the server sends would be rejected, or a dropped dimension would be
-    silently accepted. Pins both sides of the "new dimension ⇒ new capability" rule.
+    The component rejects unknown ``visibility`` keys (enumerated schema), so its
+    known-key set must stay in lockstep with ``VisibilityWire`` — otherwise a key the
+    server sends would be rejected, or a dropped one would be silently accepted. Two
+    halves are pinned: ``to_wire`` emits exactly the REQUIRED keys (the hide
+    dimensions), and the component knows exactly the required keys plus the optional
+    ones (today just ``allowlist_authorization``, the precedence flag the server adds
+    per receiver capability). Pins both sides of the "new dimension ⇒ new capability"
+    rule.
     """
-    assert set(VisibilityConfig().to_wire()) == set(wsapi._VISIBILITY_LIST_KEYS) | set(
-        wsapi._VISIBILITY_BOOL_KEYS
-    )
+    assert set(VisibilityConfig().to_wire()) == set(VisibilityWire.__required_keys__)
+    assert set(VisibilityWire.__required_keys__) | set(
+        VisibilityWire.__optional_keys__
+    ) == set(wsapi._VISIBILITY_LIST_KEYS) | set(wsapi._VISIBILITY_BOOL_KEYS)
