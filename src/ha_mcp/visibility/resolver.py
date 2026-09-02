@@ -64,7 +64,8 @@ DEFAULT_EXPOSED_SENSOR_DEVICE_CLASSES = frozenset(
 
 _REGISTRY_UNAVAILABLE_WARNING = (
     "Entity visibility filter is enabled but the entity registry was "
-    "unavailable; results are unfiltered (the denylist still applies)."
+    "unavailable; registry-derived filters are skipped (the denylist and "
+    "explicit allow_entity_ids still apply)."
 )
 _ASSIST_UNAVAILABLE_WARNING = (
     "Entity visibility filter is enabled with respect_assist_exposure but the "
@@ -340,7 +341,7 @@ def _usable_registry_entries(
             raise VisibilityDataUnavailable(_REGISTRY_UNAVAILABLE_WARNING)
         logger.warning(
             "entity visibility filter enabled but the registry payload was "
-            "unusable; degrading to unfiltered for this request"
+            "unusable; only registry-independent dimensions apply for this request"
         )
         warnings.append(_REGISTRY_UNAVAILABLE_WARNING)
         return None
@@ -350,7 +351,7 @@ def _usable_registry_entries(
             raise VisibilityDataUnavailable(_REGISTRY_UNAVAILABLE_WARNING)
         logger.warning(
             "entity visibility filter enabled but the registry 'result' was not "
-            "a list; degrading to unfiltered for this request"
+            "a list; only registry-independent dimensions apply for this request"
         )
         warnings.append(_REGISTRY_UNAVAILABLE_WARNING)
         return None
