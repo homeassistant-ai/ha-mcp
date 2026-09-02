@@ -426,14 +426,23 @@ def hidden_entity_ids(
         )
 
     denied = set(config.deny_entity_ids)
+    allow_entity_ids = set(config.allow_entity_ids)
 
     # Enabled past this point, so an unusable registry is a real degradation the
-    # operator should see as a warning. Honor the denylist regardless (it needs no
-    # registry data); only the registry-derived dimensions degrade to open (or, in
-    # strict mode, _usable_registry_entries raises instead of degrading).
+    # operator should see as a warning. The registry-independent dimensions still
+    # apply: the denylist, and an explicit allow_entity_ids list restricting the
+    # states-only universe. Only the registry-derived dimensions degrade to open
+    # (or, in strict mode, _usable_registry_entries raises instead of degrading).
     entries = _usable_registry_entries(registry_result, strict, warnings)
     if entries is None:
-        return denied, warnings
+        hidden_without_registry = set(denied)
+        if allow_entity_ids:
+            hidden_without_registry |= {
+                eid
+                for eid in _index_state_device_class(states_result)
+                if eid not in allow_entity_ids
+            }
+        return hidden_without_registry, warnings
 
     # Index the registry by entity_id and index the live states for device_class
     # lookups (Assist reads the effective device_class from the entity, not the
@@ -452,7 +461,6 @@ def hidden_entity_ids(
     labels = set(config.exclude_labels)
     allow_areas = set(config.allow_areas)
     allow_labels = set(config.allow_labels)
-    allow_entity_ids = set(config.allow_entity_ids)
     # An allowlist is active only when at least one allow_* dimension is set. When
     # active it inverts the default: an entity is hidden unless it matches one of
     # the allow dimensions, and a match authorizes it past the broad

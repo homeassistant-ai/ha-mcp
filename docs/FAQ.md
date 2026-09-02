@@ -532,8 +532,9 @@ call. A missing file leaves the filter off; an *invalid* one leaves the filter
 off for search/overview (with a `warnings` note) while enforce-mode safety falls
 back to the session's last good config — with none, tool calls are refused until
 the file is fixed (see *Enforce mode* above). When the filter is enabled but the
-registry read degrades, registry-derived dimensions are skipped with a `warnings`
-note while dimensions that still have usable data continue to apply.
+registry read degrades, registry-derived dimensions (categories, hidden-state,
+areas, labels, Assist) are skipped with a `warnings` note; `deny_entity_ids` and
+`allow_entity_ids`, which need no registry data, still apply.
 
 ---
 

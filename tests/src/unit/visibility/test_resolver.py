@@ -346,6 +346,39 @@ def test_degraded_registry_surfaces_warning():
     assert any("unavailable" in w for w in warnings)
 
 
+def test_unusable_registry_keeps_allow_entity_ids_restriction():
+    # allow_entity_ids needs no registry data, so a degraded registry read must
+    # not fail restrict mode open: states-only candidates outside the explicit
+    # list stay hidden, the listed one stays visible, and deny still wins.
+    cfg = VisibilityConfig(
+        enabled=True,
+        exclude_categories=[],
+        deny_entity_ids=["light.allowed_but_denied"],
+        allow_entity_ids=["light.allowed", "light.allowed_but_denied"],
+        allow_areas=["kitchen"],
+    )
+    states = [
+        {"entity_id": "light.allowed", "attributes": {}},
+        {"entity_id": "light.allowed_but_denied", "attributes": {}},
+        {"entity_id": "light.other", "attributes": {}},
+    ]
+    hidden, warnings = hidden_entity_ids({"success": False}, cfg, states)
+    assert hidden == {"light.allowed_but_denied", "light.other"}
+    assert any("unavailable" in w for w in warnings)
+
+
+def test_unusable_registry_without_allow_entity_ids_hides_only_denied():
+    cfg = VisibilityConfig(
+        enabled=True,
+        exclude_categories=[],
+        deny_entity_ids=["light.denied"],
+        allow_areas=["kitchen"],
+    )
+    states = [{"entity_id": "light.denied"}, {"entity_id": "light.other"}]
+    hidden, _warnings = hidden_entity_ids({"success": False}, cfg, states)
+    assert hidden == {"light.denied"}
+
+
 def test_unknown_category_dropped_with_warning():
     # A typo'd / unknown category is dropped (not hard-rejected) and surfaced as a
     # warning; the valid sibling category still hides.
