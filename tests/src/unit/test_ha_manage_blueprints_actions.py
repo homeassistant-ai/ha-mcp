@@ -914,6 +914,89 @@ async def test_save_overwrite_stamps_source_url_and_reports_the_reload() -> None
 
 
 @pytest.mark.asyncio
+async def test_save_appends_the_extension_core_would() -> None:
+    """Core's ``ws_save_blueprint`` writes ``<path>.yaml`` when the path lacks
+    the suffix, so the tool sends and reports the path core actually writes
+    rather than one that will never exist in the store."""
+    client = SpyClient(
+        {"blueprint/save": {"success": True, "result": {"overrides_existing": False}}}
+    )
+    tool = _build_tool(client)
+
+    resp = await tool(action="save", path="user/motion", yaml=_SAVE_YAML)
+
+    assert resp["data"]["path"] == _PATH
+    assert client.frames("blueprint/save")[0]["path"] == _PATH
+
+
+@pytest.mark.asyncio
+async def test_overwriting_save_snapshots_the_path_core_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``save`` with ``overwrite=True`` on ``user/motion`` replaces the installed
+    ``user/motion.yaml``; the pre-write capture has to look there, not at a
+    path that does not exist on any tier (Patch76, PR #2356)."""
+    captured: list[tuple[str, str]] = []
+
+    class _FakeMgr:
+        async def maybe_snapshot(
+            self, domain: str, entity_id: str, **_kwargs: Any
+        ) -> None:
+            captured.append((domain, entity_id))
+
+    class _Settings:
+        enable_auto_backup = True
+
+    monkeypatch.setattr("ha_mcp.tools.auto_backup.get_global_settings", _Settings)
+    monkeypatch.setattr(
+        "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
+    )
+    client = SpyClient(
+        {"blueprint/save": {"success": True, "result": {"overrides_existing": True}}}
+    )
+    tool = _build_tool(client)
+
+    resp = await tool(
+        action="save", path="user/motion", yaml=_SAVE_YAML, overwrite=True
+    )
+
+    assert captured == [("blueprint_automation", _PATH)]
+    assert resp["data"]["path"] == _PATH
+
+
+@pytest.mark.asyncio
+async def test_confirmed_delete_snapshots_the_path_as_given(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only ``save`` normalises: core's ``blueprint/delete`` takes the store
+    key verbatim, and the tool refuses a path that is not one, so the delete
+    capture keys on exactly what the caller passed."""
+    captured: list[tuple[str, str]] = []
+
+    class _FakeMgr:
+        async def maybe_snapshot(
+            self, domain: str, entity_id: str, **_kwargs: Any
+        ) -> None:
+            captured.append((domain, entity_id))
+
+    class _Settings:
+        enable_auto_backup = True
+
+    monkeypatch.setattr("ha_mcp.tools.auto_backup.get_global_settings", _Settings)
+    monkeypatch.setattr(
+        "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
+    )
+    client = SpyClient({"blueprint/list": _listing(_PATH)})
+    tool = _build_tool(client)
+
+    with pytest.raises(ToolError) as exc:
+        await tool(action="delete", path="user/motion", confirm=True)
+
+    assert _error_payload(exc.value)["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert captured == [("blueprint_automation", "user/motion")]
+
+
+@pytest.mark.asyncio
 async def test_save_existing_without_overwrite_is_already_exists() -> None:
     client = SpyClient(
         {
@@ -1314,6 +1397,53 @@ async def test_import_without_overwrite_captures_nothing(
     await tool(action="import", url="https://example.com/bp.yaml")
 
     assert captured == []
+
+
+@pytest.mark.asyncio
+async def test_import_normalises_a_yml_suggestion_the_way_core_does(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Core's importer only strips ``.yaml`` from a GitHub filename, and its
+    save only recognises ``.yaml`` — so a ``foo.yml`` suggestion is written as
+    ``foo.yml.yaml``. The tool has to save, snapshot and report that path,
+    not the ``.yml`` one it previously left alone."""
+    captured: list[tuple[str, str]] = []
+
+    class _FakeMgr:
+        async def maybe_snapshot(
+            self, domain: str, entity_id: str, **_kwargs: Any
+        ) -> None:
+            captured.append((domain, entity_id))
+
+    class _Settings:
+        enable_auto_backup = True
+
+    monkeypatch.setattr("ha_mcp.tools.blueprint_write.get_global_settings", _Settings)
+    monkeypatch.setattr(
+        "ha_mcp.tools.blueprint_write.get_backup_manager", lambda _c, _s: _FakeMgr()
+    )
+    client = SpyClient(
+        {
+            "blueprint/import": {
+                "success": True,
+                "result": {
+                    "suggested_filename": "user/motion.yml",
+                    "raw_data": _SAVE_YAML,
+                    "blueprint": {"metadata": {"domain": "automation", "name": "M"}},
+                    "validation_errors": None,
+                    "exists": True,
+                },
+            },
+            "blueprint/save": {"success": True, "result": {"overrides_existing": True}},
+        }
+    )
+    tool = _build_tool(client)
+
+    resp = await tool(action="import", url="https://example.com/bp.yml", overwrite=True)
+
+    assert client.frames("blueprint/save")[0]["path"] == "user/motion.yml.yaml"
+    assert resp["data"]["imported_blueprint"]["path"] == "user/motion.yml.yaml"
+    assert captured == [("blueprint_automation", "user/motion.yml.yaml")]
 
 
 _FUTURE_YAML = (

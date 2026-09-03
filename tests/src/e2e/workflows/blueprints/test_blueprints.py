@@ -766,6 +766,86 @@ class TestBlueprintManagement:
             served.cleanup()
 
     @pytest.mark.slow
+    async def test_save_without_extension_overwrites_the_installed_file(
+        self, mcp_client, local_blueprint_server
+    ):
+        """Home Assistant appends ``.yaml`` to a save path that lacks it, so
+        ``save(path="x/y", overwrite=True)`` replaces the installed ``x/y.yaml``.
+        The tool must report that path and snapshot THAT file first, rather
+        than key the capture on a path no tier can read and report a path the
+        store never had (PR #2356 review)."""
+        served = _ServedBlueprint(local_blueprint_server, "noext")
+        edited_marker = f"noext-edited-{served.run_id}"
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                path = await served.import_into(mcp)
+                assert path.endswith(".yaml"), path
+                detail = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                faithful_copy_available = detail["data"].get("yaml_source") in (
+                    "file",
+                    "component",
+                    "tools_entry",
+                )
+                edited = detail["data"]["yaml"].replace(served.marker, edited_marker)
+                saved = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {
+                        "action": "save",
+                        "domain": "automation",
+                        "path": path.removesuffix(".yaml"),
+                        "yaml": edited,
+                        "overwrite": True,
+                    },
+                )
+                assert saved["data"]["path"] == path, saved
+                assert saved["data"]["overrides_existing"] is True, saved
+                after = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                description = (after["data"].get("metadata") or {}).get(
+                    "description"
+                ) or ""
+                assert edited_marker in description, after
+                backups = await mcp.call_tool_success(
+                    "ha_manage_backup",
+                    {
+                        "scope": "edits",
+                        "action": "list",
+                        "domain": "blueprint_automation",
+                        "entity_id": path,
+                    },
+                )
+                data = backups["data"]
+                assert data["enabled"] is True, (
+                    "auto-backup is off in this lane; the pre-save snapshot "
+                    f"cannot be verified: {data}"
+                )
+                safe_path = re.sub(r"[^A-Za-z0-9._-]", "_", path)
+                matching = [
+                    b
+                    for b in data["backups"]
+                    if str(b.get("entity_id", "")).startswith(safe_path)
+                    and b.get("domain") == "blueprint_automation"
+                ]
+                if faithful_copy_available:
+                    assert matching, (
+                        f"no pre-save snapshot under the path core wrote ({path}): "
+                        f"{data}"
+                    )
+                else:
+                    assert not matching, (
+                        "a source_url re-fetch must never be stored as the "
+                        f"installed file: {data}"
+                    )
+                await served.delete(mcp, path)
+        finally:
+            served.cleanup()
+
+    @pytest.mark.slow
     async def test_save_without_overwrite_rejects_existing(
         self, mcp_client, local_blueprint_server
     ):

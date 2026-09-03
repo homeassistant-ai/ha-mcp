@@ -611,7 +611,12 @@ def test_ha_manage_blueprints_carries_auto_backup_decorator() -> None:
     assert "with_auto_backup(" in head, "ha_manage_blueprints lost @with_auto_backup"
     assert "domain_fn=" in head, "ha_manage_blueprints lost its blueprint domain_fn"
     assert "blueprint_{kw.get(" in head, "the backup domain no longer follows `domain`"
-    assert 'id_param="path"' in head, "ha_manage_blueprints wrong/missing id_param"
+    assert "id_fn=" in head, "ha_manage_blueprints wrong/missing id_fn"
+    assert "blueprint_snapshot_target" in head, (
+        "the snapshot key no longer normalises the path the way blueprint/save "
+        "does - an overwriting save of 'user/motion' would replace "
+        "user/motion.yaml with nothing captured"
+    )
     assert 'kw.get("action") not in ("delete", "save")' in head, (
         "ha_manage_blueprints lost the delete/save-only skip_fn - either every "
         "action would attempt a snapshot, or an overwriting save would destroy "
@@ -842,6 +847,99 @@ class TestListReadDelete:
         only_alpha = mgr.list_snapshots(entity_id="alpha")
         assert len(only_alpha) == 1
         assert only_alpha[0]["entity_id"] == "alpha"
+
+    @staticmethod
+    def _write_named(tmp_path: Path, name: str, entity_id: str) -> Path:
+        """Drop a snapshot file under an explicit filename.
+
+        Lets a test place the legacy (pre-digest) stem and two colliding
+        ids without racing the second-resolution timestamp.
+        """
+        target = tmp_path / name
+        target.write_text(
+            "# ha_mcp_backup\n"
+            + yaml.safe_dump(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "domain": "blueprint_automation",
+                    "entity_id": entity_id,
+                    "captured": "2026-09-03T00:00:00+00:00",
+                    "tool": "t",
+                    "config": "blueprint: {}\n",
+                    "kind": "text",
+                },
+                sort_keys=False,
+            )
+        )
+        return target
+
+    def _colliding_blueprint_snapshots(self, tmp_path: Path) -> dict[str, Path]:
+        """Three files whose stems collide the way blueprint paths do (#2329).
+
+        ``user/motion.yaml`` sanitises to ``user_motion.yaml``, which is the
+        CURRENT stem of the distinct blueprint ``user_motion.yaml``. A snapshot
+        of the path written before the digest suffix existed sits under that
+        bare stem too, so the name alone cannot tell the two histories apart.
+        """
+        digest_stem = _safe_entity_id("user/motion.yaml")
+        return {
+            "digest": self._write_named(
+                tmp_path,
+                f"blueprint_automation.{digest_stem}.20260903_120000.yaml",
+                "user/motion.yaml",
+            ),
+            "legacy": self._write_named(
+                tmp_path,
+                "blueprint_automation.user_motion.yaml.20260903_110000.yaml",
+                "user/motion.yaml",
+            ),
+            "other": self._write_named(
+                tmp_path,
+                "blueprint_automation.user_motion.yaml.20260903_100000.yaml",
+                "user_motion.yaml",
+            ),
+        }
+
+    def test_entity_filter_reads_the_payload_across_the_stem_collision(
+        self, tmp_path: Path
+    ) -> None:
+        """An entity-filtered listing is that entity's history, not its stem's.
+
+        Rotation already asks the payload before trusting a filename; the
+        listing has to as well, or ``user/motion.yaml`` reports the distinct
+        blueprint ``user_motion.yaml``'s snapshots as its own — and the bulk
+        delete built on it unlinks them (Patch76, PR #2356).
+        """
+        files = self._colliding_blueprint_snapshots(tmp_path)
+        mgr = _mk_manager(tmp_path)
+
+        for_path = {m["name"] for m in mgr.list_snapshots(entity_id="user/motion.yaml")}
+        for_other = {
+            m["name"] for m in mgr.list_snapshots(entity_id="user_motion.yaml")
+        }
+
+        assert for_path == {files["digest"].name, files["legacy"].name}
+        assert for_other == {files["other"].name}
+
+    def test_delete_bulk_by_entity_leaves_the_colliding_blueprint_alone(
+        self, tmp_path: Path
+    ) -> None:
+        """The caller asked to delete ONE blueprint's history.
+
+        Both spellings of that blueprint's stem go, including the pre-digest
+        one; the other blueprint that happens to share the bare stem keeps its
+        only restore point.
+        """
+        files = self._colliding_blueprint_snapshots(tmp_path)
+        mgr = _mk_manager(tmp_path)
+
+        bulk = mgr.delete_bulk(entity_id="user/motion.yaml")
+
+        assert set(bulk["deleted"]) == {files["digest"].name, files["legacy"].name}
+        assert bulk["failed"] == []
+        assert not files["digest"].exists()
+        assert not files["legacy"].exists()
+        assert files["other"].exists()
 
     async def test_read_snapshot_returns_full_payload(self, tmp_path: Path) -> None:
         mgr = _mk_manager(tmp_path)

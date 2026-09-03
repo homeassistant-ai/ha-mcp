@@ -19,7 +19,12 @@ from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .blueprint_sources import resolve_blueprint_source
 from .blueprint_substitute import substitute_blueprint
-from .blueprint_write import error_text, import_blueprint, write_blueprint
+from .blueprint_write import (
+    error_text,
+    import_blueprint,
+    normalize_blueprint_path,
+    write_blueprint,
+)
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -29,6 +34,20 @@ from .helpers import (
 from .util_helpers import JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
+
+
+def blueprint_snapshot_target(kw: dict[str, Any]) -> str:
+    """The blueprint path a ``save`` or ``delete`` call will act on.
+
+    ``blueprint/save`` appends ``.yaml`` to a path without it, so the pre-write
+    snapshot of a ``save`` keys on that normalised path — the file the write
+    replaces. ``blueprint/delete`` takes the store key verbatim and the tool
+    refuses any path that is not one, so a delete keys on the argument as given.
+    """
+    path = kw.get("path") or ""
+    if kw.get("action") == "save" and path:
+        return normalize_blueprint_path(path)
+    return path
 
 
 class BlueprintConsumers(NamedTuple):
@@ -120,20 +139,23 @@ class BlueprintTools:
         },
     )
     # ``delete`` and ``save`` are the two actions that can destroy an installed
-    # blueprint's contents, so both capture first. The skip test reads more
-    # than ``action``, because two shapes provably cannot destroy anything: an
-    # unconfirmed delete changes nothing, and a ``save`` without ``overwrite``
-    # either lands on a free path (nothing to snapshot) or is refused by Home
-    # Assistant for already existing. Capturing for either would still run an
-    # installed-file read (the component command, or the File & YAML Tools
-    # service) first, and auto-backup is on by default, so that would fire on
-    # every such call. The snapshot never re-fetches ``source_url``:
-    # ``_fetch_blueprint``
-    # passes ``source_url=None`` precisely so a restore cannot write different
-    # YAML than the write destroyed.
+    # blueprint's contents, so both capture first. The snapshot is keyed on the
+    # path the write lands on: ``save`` follows core in appending ``.yaml``
+    # (``blueprint_snapshot_target``), so an overwriting save of ``user/motion``
+    # captures the ``user/motion.yaml`` it replaces instead of a path no tier
+    # can read; ``delete`` takes the store key verbatim, as core does. The skip
+    # test reads more than ``action``, because two shapes provably cannot
+    # destroy anything: an unconfirmed delete changes nothing, and a ``save``
+    # without ``overwrite`` either lands on a free path (nothing to snapshot)
+    # or is refused by Home Assistant for already existing. Capturing for
+    # either would still run an installed-file read (the component command, or
+    # the File & YAML Tools service) first, and auto-backup is on by default,
+    # so that would fire on every such call. The snapshot never re-fetches
+    # ``source_url``: ``_fetch_blueprint`` passes ``source_url=None`` precisely
+    # so a restore cannot write different YAML than the write destroyed.
     @with_auto_backup(
         domain_fn=lambda kw: f"blueprint_{kw.get('domain') or 'automation'}",
-        id_param="path",
+        id_fn=blueprint_snapshot_target,
         skip_fn=lambda kw: (
             kw.get("action") not in ("delete", "save")
             or (kw.get("action") == "delete" and not kw.get("confirm"))
@@ -169,7 +191,8 @@ class BlueprintTools:
             Field(
                 description=(
                     "Installed blueprint path, e.g. 'homeassistant/motion_light.yaml' "
-                    "(action='get' / 'save' / 'delete' / 'substitute')"
+                    "(action='get' / 'save' / 'delete' / 'substitute'). 'save' "
+                    "appends '.yaml' when it is missing, as Home Assistant does."
                 ),
                 default=None,
             ),

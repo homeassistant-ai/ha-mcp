@@ -92,6 +92,19 @@ async def _save_blueprint(
 # --- save ---------------------------------------------------------------------
 
 
+def normalize_blueprint_path(path: str) -> str:
+    """Return the path ``blueprint/save`` will actually write.
+
+    Core's ``ws_save_blueprint`` appends ``.yaml`` when the path does not end
+    with it — ``.yaml`` exactly, so ``foo.yml`` becomes ``foo.yml.yaml``. Every
+    write derives its snapshot key and its reported path from this, so a save
+    to ``user/motion`` captures and reports ``user/motion.yaml``: the file it
+    replaces and the key the store will list, rather than a path no tier can
+    read and the store never had.
+    """
+    return path if path.endswith(".yaml") else f"{path}.yaml"
+
+
 async def write_blueprint(
     client: Any,
     domain: str,
@@ -101,6 +114,7 @@ async def write_blueprint(
     overwrite: bool,
 ) -> dict[str, Any]:
     """Write caller-supplied YAML to a blueprint path via blueprint/save."""
+    path = normalize_blueprint_path(path)
     await _assert_save_compatible(client, domain, path, yaml_text)
     response = await _save_blueprint(
         client, domain, path, yaml_text, overwrite, source_url=source_url
@@ -315,10 +329,10 @@ async def import_blueprint(client: Any, url: str, overwrite: bool) -> dict[str, 
             )
         )
 
-    # Ensure the path has a .yaml extension — HA's blueprint/import returns
-    # suggested_filename without the extension (e.g. "user/blueprint_name")
-    if not suggested_filename.endswith((".yaml", ".yml")):
-        suggested_filename = suggested_filename + ".yaml"
+    # HA's blueprint/import returns suggested_filename without the extension
+    # (e.g. "user/blueprint_name"); resolve it to the path blueprint/save
+    # writes before the snapshot and the store checks key on it.
+    suggested_filename = normalize_blueprint_path(suggested_filename)
 
     _assert_importable(url, result_data, suggested_filename, domain, overwrite)
 

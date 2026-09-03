@@ -585,10 +585,11 @@ class BackupManager:
         Filename stems are ambiguous in both directions: the legacy stem for
         ``user/motion.yaml`` is ``user_motion.yaml``, which is also the
         CURRENT stem of a differently-named blueprint. The payload keeps the
-        original id, so rotation asks it rather than trusting the name. A file
-        that cannot be read is treated as not ours: skipping it wastes a
-        rotation slot, deleting it could destroy another entity's only
-        restore point.
+        original id, so rotation and the entity filter behind ``list_snapshots``
+        / ``delete_bulk`` ask it rather than trusting the name. A file that
+        cannot be read is treated as not ours: skipping it wastes a rotation
+        slot or hides it from one entity's listing, deleting it could destroy
+        another entity's only restore point.
         """
         try:
             with path.open(encoding="utf-8") as handle:
@@ -631,7 +632,12 @@ class BackupManager:
         # would otherwise never match a filter passed in original form.
         # Sanitize the filter once up front so the per-file comparison is
         # symmetric: filter and ``meta["entity_id"]`` both come from the
-        # same sanitization function.
+        # same sanitization function. The stem only narrows the candidates:
+        # sanitising is lossy in both directions (``user/motion.yaml``'s
+        # pre-digest stem IS ``user_motion.yaml``'s current stem), so each
+        # stem match is confirmed against the id the payload stores before it
+        # counts as this entity's — ``delete_bulk`` unlinks whatever is
+        # returned here, and the caller named one entity.
         safe_filter = set(_entity_id_aliases(entity_id)) if entity_id else None
         out: list[dict[str, Any]] = []
         # Reverse-sorted glob — newest filenames sort last lexicographically,
@@ -643,6 +649,8 @@ class BackupManager:
             if domain and meta["domain"] != domain:
                 continue
             if safe_filter and meta["entity_id"] not in safe_filter:
+                continue
+            if entity_id and not self._snapshot_is_for(path, entity_id):
                 continue
             try:
                 stat = path.stat()
