@@ -160,8 +160,8 @@ def _blueprint_write(args: dict[str, Any]) -> str | None:
     # touching neither the blueprint store nor any automation/script; writing
     # the rendered config anywhere still needs ha_config_set_automation /
     # ha_config_set_script, which read-only mode blocks. ``import`` (writes a
-    # blueprint file) and ``delete`` stay blocked, and a missing/unknown
-    # action fails closed.
+    # blueprint file), ``save`` (overwrites one with caller-supplied YAML) and
+    # ``delete`` stay blocked, and a missing/unknown action fails closed.
     action = args.get("action")
     if action in ("list", "get", "substitute"):
         return None

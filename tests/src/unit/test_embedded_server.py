@@ -1874,7 +1874,12 @@ class TestThreadEnvStaging:
 
         mgr._thread_main("tok-xyz")
 
-        set_conn.assert_called_once_with("http://ha.local:8123", "tok-xyz")
+        # config_dir rides along (#2329) so the in-process server can read
+        # blueprint files directly; it is HA's own config dir, captured on the
+        # event loop at construction, never a caller-supplied path.
+        set_conn.assert_called_once_with(
+            "http://ha.local:8123", "tok-xyz", config_dir=mgr._hass_config_dir
+        )
         # _serve raised on the ha_mcp.server import → captured, thread didn't hang.
         assert mgr._thread_exc is not None
 
@@ -1899,8 +1904,37 @@ class TestThreadEnvStaging:
         mgr._thread_main("tok-xyz")
 
         set_conn.assert_called_once_with(
-            "https://127.0.0.1:8123", "tok-xyz", verify_ssl=False
+            "https://127.0.0.1:8123",
+            "tok-xyz",
+            config_dir=mgr._hass_config_dir,
+            verify_ssl=False,
         )
+
+    def test_serve_drops_only_config_dir_on_a_server_without_it(
+        self, tmp_path, monkeypatch
+    ):
+        # A server that knows verify_ssl (#1890) but predates config_dir
+        # (#2329) must lose ONLY config_dir: falling all the way back to the
+        # two-arg call would re-open the loopback certificate failure just
+        # because an unrelated newer keyword is missing.
+        hass = _make_hass(tmp_path)
+        hass.config.api = SimpleNamespace(port=8123, use_ssl=True)
+        mgr = es.EmbeddedServerManager(hass, _make_entry())
+        calls: list[tuple[str, str, bool | None]] = []
+
+        def mid_set_conn(url, token, verify_ssl=None):  # no config_dir kwarg
+            calls.append((url, token, verify_ssl))
+
+        ha_mcp_mod = ModuleType("ha_mcp")
+        ha_mcp_config = ModuleType("ha_mcp.config")
+        ha_mcp_config.set_embedded_connection = mid_set_conn
+        monkeypatch.setitem(sys.modules, "ha_mcp", ha_mcp_mod)
+        monkeypatch.setitem(sys.modules, "ha_mcp.config", ha_mcp_config)
+        monkeypatch.delitem(sys.modules, "ha_mcp.server", raising=False)
+
+        mgr._thread_main("tok-xyz")
+
+        assert calls == [("https://127.0.0.1:8123", "tok-xyz", False)]
 
     def test_serve_falls_back_to_two_arg_registration_on_old_server(
         self, tmp_path, monkeypatch

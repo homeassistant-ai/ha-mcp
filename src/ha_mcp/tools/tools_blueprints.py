@@ -2,7 +2,7 @@
 Blueprint management tools for Home Assistant.
 
 This module provides a single tool for the blueprint lifecycle: listing,
-reading, importing, deleting, and rendering a standalone config from an
+reading, importing, saving, deleting, and rendering a standalone config from an
 installed automation or script blueprint.
 """
 
@@ -13,19 +13,9 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
-from ..client.rest_client import (
-    HomeAssistantCommandError,
-    HomeAssistantCommandTimeout,
-)
-from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
-from .component_api import (
-    component_supports,
-    get_component_caps,
-    invalidate_caps,
-    is_unknown_command,
-)
+from .blueprint_sources import resolve_blueprint_source
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -55,6 +45,18 @@ def _error_text(response: dict[str, Any], fallback: str) -> str:
     if isinstance(error, dict):
         return str(error.get("message", error) or fallback)
     return str(error or fallback)
+
+
+def _error_code(response: dict[str, Any]) -> str:
+    """Home Assistant's WebSocket error ``code``, or ``""`` when it sent none.
+
+    Only the ``{"code": ..., "message": ...}`` envelope carries one; a plain
+    string error leaves the caller to match on the message text.
+    """
+    error = response.get("error")
+    if isinstance(error, dict):
+        return str(error.get("code") or "")
+    return ""
 
 
 class BlueprintTools:
@@ -119,27 +121,33 @@ class BlueprintTools:
             "title": "Manage Blueprints",
         },
     )
-    # ``confirm`` is part of the skip test, not just ``action``: an
-    # unconfirmed delete changes nothing, and capturing for it would run a
-    # component file read and — with no component — an outbound re-fetch of
-    # the blueprint's third-party ``source_url`` before the tool refuses.
-    # Auto-backup is on by default, so that would fire on every unconfirmed
-    # call.
+    # ``delete`` and ``save`` are the two actions that can destroy an installed
+    # blueprint's contents, so both capture first; a ``save`` to a brand-new path
+    # finds nothing to snapshot and proceeds. ``confirm`` is part of the skip
+    # test too, not just ``action``: an unconfirmed delete changes nothing, and
+    # capturing for it would run a component file read and — with no component —
+    # an outbound re-fetch of the blueprint's third-party ``source_url`` before
+    # the tool refuses. Auto-backup is on by default, so that would fire on
+    # every unconfirmed call.
     @with_auto_backup(
         domain_fn=lambda kw: f"blueprint_{kw.get('domain') or 'automation'}",
         id_param="path",
-        skip_fn=lambda kw: kw.get("action") != "delete" or not kw.get("confirm"),
+        skip_fn=lambda kw: (
+            kw.get("action") not in ("delete", "save")
+            or (kw.get("action") == "delete" and not kw.get("confirm"))
+        ),
     )
     @log_tool_usage
     async def ha_manage_blueprints(
         self,
         action: Annotated[
-            Literal["list", "get", "import", "delete", "substitute"],
+            Literal["list", "get", "import", "save", "delete", "substitute"],
             Field(
                 description=(
                     "'list' installed blueprints, 'get' one blueprint's "
-                    "metadata/inputs, 'import' one from a URL, 'delete' an "
-                    "installed one, or 'substitute' to render a standalone config"
+                    "metadata/inputs/YAML, 'import' one from a URL, 'save' YAML "
+                    "text to a blueprint path, 'delete' an installed one, or "
+                    "'substitute' to render a standalone config"
                 )
             ),
         ],
@@ -158,7 +166,7 @@ class BlueprintTools:
             Field(
                 description=(
                     "Installed blueprint path, e.g. 'homeassistant/motion_light.yaml' "
-                    "(action='get' / 'delete' / 'substitute')"
+                    "(action='get' / 'save' / 'delete' / 'substitute')"
                 ),
                 default=None,
             ),
@@ -173,12 +181,29 @@ class BlueprintTools:
                 default=None,
             ),
         ] = None,
+        yaml: Annotated[
+            str | None,
+            Field(
+                description="Blueprint YAML text to write (action='save')",
+                default=None,
+            ),
+        ] = None,
+        source_url: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Origin URL to stamp into the saved blueprint's metadata "
+                    "(action='save'); omit for a hand-authored blueprint"
+                ),
+                default=None,
+            ),
+        ] = None,
         overwrite: Annotated[
             bool,
             Field(
                 description=(
-                    "Re-import over an already-installed blueprint "
-                    "(action='import'). Home Assistant reloads every "
+                    "Write over an already-installed blueprint "
+                    "(action='import' / 'save'). Home Assistant reloads every "
                     "automation/script using it."
                 ),
                 default=False,
@@ -202,29 +227,37 @@ class BlueprintTools:
             ),
         ] = False,
     ) -> dict[str, Any]:
-        """Manage Home Assistant blueprints — list, read, import, delete, or render a standalone config.
+        """Manage Home Assistant blueprints — list, read, import, save, delete, or render a standalone config.
 
         One interface for the whole blueprint lifecycle in the ``automation``
         and ``script`` domains.
 
         DO NOT use this to create an automation or script FROM a blueprint —
         that is ``ha_config_set_automation`` / ``ha_config_set_script`` with a
-        ``use_blueprint`` config. Use ``ha_read_file`` only when the exact raw
-        on-disk YAML text is needed rather than the parsed body.
+        ``use_blueprint`` config.
 
         Use ``action="list"`` to discover installed blueprints, ``action="get"``
-        for one blueprint's metadata and input definitions, ``action="import"``
-        to install one from a URL, ``action="delete"`` to remove an installed
-        one, and ``action="substitute"`` to render a blueprint plus inputs into
-        a standalone config (the UI's "Take control").
+        for one blueprint's metadata, inputs and YAML, ``action="import"`` to
+        install one from a URL, ``action="save"`` to write YAML text to a
+        blueprint path, ``action="delete"`` to remove an installed one, and
+        ``action="substitute"`` to render a blueprint plus inputs into a
+        standalone config (the UI's "Take control"). To duplicate a blueprint,
+        ``get`` it and ``save`` its ``yaml`` under a new ``path``; to edit one in
+        place, ``get`` it, change the text, and ``save`` it back to the same
+        ``path`` with ``overwrite=True``.
 
-        CAVEATS: ``delete`` requires ``confirm=True``, and Home Assistant
-        refuses it while any automation or script still uses the blueprint —
-        the error lists the consumers. When a copy of the blueprint can be
-        read, auto-backup snapshots it before the delete so
-        ``ha_manage_backup(scope="edits")`` can restore it. ``get`` returns the
-        full body under ``config`` only when the ha_mcp_tools custom component
-        is installed; core's blueprint API exposes metadata alone.
+        CAVEATS: ``get`` returns the on-disk YAML only when something can read
+        it — an in-process server, the ha_mcp_tools component, the File & YAML
+        Tools entry, or the blueprint's ``source_url``; ``yaml_source`` names
+        which one answered, and ``source_url`` text is a fresh download that can
+        differ from the installed file. Core's blueprint API alone exposes
+        metadata only, so a locally authored blueprint on a bare install has no
+        readable text. ``save`` needs ``overwrite=True`` to replace an existing
+        path and reloads every automation/script using it. ``delete`` requires
+        ``confirm=True``, and Home Assistant refuses it while any automation or
+        script still uses the blueprint — the error lists the consumers. Both
+        writes are snapshotted first when a copy can be read, so
+        ``ha_manage_backup(scope="edits")`` can restore the previous file.
         ``substitute`` only renders — it writes nothing, so pass the returned
         config to ``ha_config_set_automation`` / ``ha_config_set_script`` to
         persist it.
@@ -233,7 +266,8 @@ class BlueprintTools:
         - List: ha_manage_blueprints(action="list", domain="automation")
         - Get one: ha_manage_blueprints(action="get", path="homeassistant/motion_light.yaml")
         - Import: ha_manage_blueprints(action="import", url="https://example.com/bp.yaml")
-        - Re-import: ha_manage_blueprints(action="import", url="https://example.com/bp.yaml", overwrite=True)
+        - Duplicate: ha_manage_blueprints(action="save", path="user/my_copy.yaml", yaml=<text from get>)
+        - Edit in place: ha_manage_blueprints(action="save", path="user/motion.yaml", yaml=<edited text>, overwrite=True)
         - Delete: ha_manage_blueprints(action="delete", path="user/motion.yaml", confirm=True)
         - Detach: ha_manage_blueprints(action="substitute", path="user/motion.yaml", input={"motion_sensor": "binary_sensor.hall"})
 
@@ -255,6 +289,14 @@ class BlueprintTools:
             if action == "import":
                 return await self._import_blueprint(
                     self._require(url, "url", action), overwrite
+                )
+            if action == "save":
+                return await self._write_blueprint(
+                    domain,
+                    self._require(path, "path", action),
+                    self._require(yaml, "yaml", action),
+                    source_url,
+                    overwrite,
                 )
             if action == "delete":
                 return await self._delete_blueprint(
@@ -353,7 +395,7 @@ class BlueprintTools:
         return self._format_blueprint_list(await self._fetch_blueprints(domain), domain)
 
     async def _get_blueprint(self, domain: str, path: str) -> dict[str, Any]:
-        """Return one blueprint's metadata, inputs, and (component-only) body."""
+        """Return one blueprint's metadata, inputs, parsed body and raw YAML."""
         blueprints_data = await self._fetch_blueprints(domain)
         if path not in blueprints_data:
             self._raise_not_found(domain, path, blueprints_data)
@@ -368,6 +410,7 @@ class BlueprintTools:
             ),
         }
 
+        source_url: str | None = None
         if "metadata" in blueprint_data:
             meta = blueprint_data["metadata"]
             result["metadata"] = {
@@ -380,12 +423,14 @@ class BlueprintTools:
             }
             if "input" in meta:
                 result["inputs"] = meta["input"]
+            raw_source_url = meta.get("source_url")
+            source_url = raw_source_url if isinstance(raw_source_url, str) else None
 
-        # Core's blueprint/list returns metadata only (never a body), so the
-        # full triggers/conditions/actions/sequence come from the ha_mcp_tools
-        # component when installed. Merge it additively under `config`; without
-        # the component the response stays metadata + inputs.
-        await self._merge_blueprint_config(result, domain, path)
+        # Core's blueprint/list returns metadata only (never a body or the file
+        # text), so both come from the tier ladder in ``blueprint_sources``.
+        # Merged additively; on an install where no tier can serve the file the
+        # response stays metadata + inputs.
+        await self._merge_blueprint_body(result, domain, path, source_url)
         return result
 
     async def _delete_blueprint(
@@ -608,142 +653,189 @@ class BlueprintTools:
             )
         )
 
-    async def _merge_blueprint_config(
-        self, result: dict[str, Any], domain: str, path: str
+    async def _merge_blueprint_body(
+        self,
+        result: dict[str, Any],
+        domain: str,
+        path: str,
+        source_url: str | None,
     ) -> None:
-        """Fetch the component-served blueprint body and merge it into ``result``.
+        """Merge the blueprint's body and raw YAML into ``result``.
 
-        Adds ``config`` when the body was read, or a top-level ``warnings`` entry
-        when a present component returned an unreadable body; a metadata-only
-        outcome (no component / capability) leaves ``result`` untouched.
+        Adds ``config`` (the parsed body) whenever any tier produced one, and
+        ``yaml`` + ``yaml_source`` whenever one produced the text — never a null
+        key for a tier that found nothing. A ``source_url`` answer earns its own
+        warning: that text is a fresh download from the author, not the file on
+        disk, so anything changed upstream since the import is in it. The
+        component's own "present but could not read the body" warning is
+        preserved.
         """
-        config, config_warning = await self._blueprint_config_via_component(
-            domain, path
+        found = await resolve_blueprint_source(
+            self._client, domain, path, source_url=source_url
         )
-        if config is not None:
-            result["config"] = config
-        elif config_warning is not None:
-            result.setdefault("warnings", []).append(config_warning)
+        if found.config is not None:
+            result["config"] = found.config
+        if found.text is not None and found.source is not None:
+            result["yaml"] = found.text
+            result["yaml_source"] = found.source
+        warnings = [w for w in (found.warning,) if w]
+        if found.source == "source_url":
+            warnings.append(
+                f"The YAML was re-fetched from {source_url}, not read from the "
+                "installed file — it includes any upstream change made since "
+                "the blueprint was imported."
+            )
+        if warnings:
+            result.setdefault("warnings", []).extend(warnings)
 
-    async def _blueprint_config_via_component(
-        self, domain: str, path: str
-    ) -> tuple[dict[str, Any] | None, str | None]:
-        """Fetch a blueprint's full parsed body via the component.
+    async def _write_blueprint(
+        self,
+        domain: str,
+        path: str,
+        yaml_text: str,
+        source_url: str | None,
+        overwrite: bool,
+    ) -> dict[str, Any]:
+        """Write caller-supplied YAML to a blueprint path via blueprint/save."""
+        response = await self._save_blueprint(
+            domain, path, yaml_text, overwrite, source_url=source_url
+        )
+        if not response.get("success"):
+            self._raise_save_failure(domain, path, response)
 
-        core's ``blueprint/list`` returns only ``{metadata}`` (no body), so
-        without the component ``action="get"`` can serve metadata + inputs
-        only. When the component advertises ``blueprint_get`` it reads the on-disk
-        blueprint file (path-jailed, executor-offloaded) and returns the full
-        parsed body, merged additively under ``config``. Returns
-        ``(config, warning)``:
+        overrides_existing = bool(
+            (response.get("result") or {}).get("overrides_existing", False)
+        )
+        return {
+            "success": True,
+            "domain": domain,
+            "path": path,
+            "overrides_existing": overrides_existing,
+            "message": (
+                "Blueprint saved over the existing file. Automations and "
+                "scripts using it were reloaded."
+                if overrides_existing
+                else "Blueprint saved."
+            ),
+        }
 
-        - ``(dict, None)`` — the parsed body was read.
-        - ``(None, None)`` — metadata-only is the expected outcome: the component
-          is absent / lacks the capability, was downgraded (``unknown_command`` →
-          invalidate the cached caps), errored (logged), or the WS transport failed
-          to connect (logged). There is no full-body legacy fetch — core's
-          ``blueprint/list`` carries no body — so a transport failure simply serves
-          the already-fetched metadata rather than escaping into the tool.
-        - ``(None, warning)`` — the component is present and the server has already
-          confirmed the path is a real installed blueprint, yet it returned a null
-          ``config`` (corrupt / unparseable file, read error). Metadata-only would
-          otherwise be indistinguishable from component-not-installed, so a
-          top-level warning is surfaced instead.
+    @staticmethod
+    def _raise_save_failure(
+        domain: str, path: str, response: dict[str, Any]
+    ) -> NoReturn:
+        """Map a failed blueprint/save onto a structured error.
+
+        Core answers with three codes: ``already_exists`` when the path is taken
+        and ``allow_override`` was not sent, ``invalid_format`` when the YAML is
+        not a valid blueprint for the domain, and ``unknown_error`` for a
+        filesystem failure. The message text is matched as well, so a core that
+        sends a bare string still classifies.
         """
-        caps = await get_component_caps(self._client)
-        if not component_supports(caps, "blueprint_get"):
-            return None, None
-        try:
-            ws = await get_websocket_client(
-                url=self._client.base_url,
-                token=self._client.token,
-                verify_ssl=getattr(self._client, "verify_ssl", None),
+        message = _error_text(response, "Failed to save blueprint")
+        code = _error_code(response)
+        lowered = message.lower()
+        if code == "already_exists" or "already exists" in lowered:
+            error_code = ErrorCode.RESOURCE_ALREADY_EXISTS
+            suggestions = [
+                f'Pass overwrite=True to replace it: ha_manage_blueprints(action="save", '
+                f'domain="{domain}", path="{path}", yaml=..., overwrite=True)',
+                "Or save under a different path to keep both",
+            ]
+        elif code == "invalid_format" or "invalid" in lowered:
+            error_code = ErrorCode.VALIDATION_FAILED
+            suggestions = [
+                f"The YAML must be a complete {domain} blueprint with a "
+                "'blueprint:' section declaring its domain and inputs",
+                'Start from an installed one: ha_manage_blueprints(action="get", '
+                f'domain="{domain}", path=...)',
+            ]
+        else:
+            error_code = ErrorCode.SERVICE_CALL_FAILED
+            suggestions = [
+                "Check the Home Assistant logs for the underlying error",
+                "Verify the blueprints directory is writable",
+            ]
+        raise_tool_error(
+            create_error_response(
+                error_code,
+                message,
+                context={"domain": domain, "path": path},
+                suggestions=suggestions,
             )
-            raw = await ws.send_command(
-                "ha_mcp_tools/blueprint_get", domain=domain, path=path
-            )
-        except (HomeAssistantCommandError, HomeAssistantCommandTimeout) as exc:
-            if is_unknown_command(exc):
-                invalidate_caps(self._client)
-            else:
-                logger.warning(
-                    "ha_mcp_tools/blueprint_get failed; served metadata-only: %r",
-                    exc,
-                )
-            return None, None
-        except Exception as exc:
-            # HomeAssistantConnectionError / plain establish Exception → metadata-only
-            # (no full-body legacy fetch exists; the base metadata is already served).
-            logger.warning(
-                "ha_mcp_tools/blueprint_get connection error; served metadata-only: %r",
-                exc,
-            )
-            return None, None
-        result = raw.get("result") or {}
-        config = result.get("config")
-        if isinstance(config, dict):
-            return config, None
-        return None, (
-            "Blueprint body could not be read or parsed by the ha_mcp_tools "
-            "component; returning metadata only"
         )
 
     async def _save_blueprint(
         self,
-        url: str,
         domain: str,
         path: str,
         yaml_data: str,
         overwrite: bool,
+        *,
+        source_url: str | None,
     ) -> dict[str, Any]:
-        """Persist a validated blueprint via blueprint/save, raising on failure.
+        """Send ``blueprint/save`` and return Home Assistant's raw response.
 
-        Returns the blueprint/save result payload (contains overrides_existing).
+        ``source_url`` is sent only when given: core marks the key
+        ``vol.Optional`` and stamps it into the saved blueprint's metadata, so
+        forwarding ``None`` would attribute a hand-authored blueprint to a
+        source it never came from. Failure mapping belongs to the caller — an
+        import and a direct save fail for different reasons and offer different
+        remedies.
         """
         save_message: dict[str, Any] = {
             "type": "blueprint/save",
             "domain": domain,
             "path": path,
             "yaml": yaml_data,
-            "source_url": url,
         }
+        if source_url is not None:
+            save_message["source_url"] = source_url
         # allow_override only exists on HA >= 2023.12 and the WS schema
         # rejects unknown keys - only send it when actually overwriting
         if overwrite:
             save_message["allow_override"] = True
 
-        save_response = await self._client.send_websocket_message(save_message)
+        response: dict[str, Any] = await self._client.send_websocket_message(
+            save_message
+        )
+        return response
 
-        if not save_response.get("success"):
-            save_error = _error_text(save_response, "Failed to save blueprint")
+    @staticmethod
+    def _raise_import_save_failure(
+        url: str, path: str, response: dict[str, Any]
+    ) -> NoReturn:
+        """Map a blueprint/save failure on the import path onto a structured error.
 
-            suggestions = [
-                "The blueprint was validated but could not be saved to disk",
-                'Use ha_manage_blueprints(action="list") to check if it already exists',
-            ]
+        Import validated the blueprint through core before writing it, so the
+        remaining failure is about the destination, not the content.
+        """
+        save_error = _error_text(response, "Failed to save blueprint")
 
-            # Reachable despite the early exists check: a race between
-            # import and save, or an installed file that failed to load
-            # (core reports exists=false for those)
-            already_exists = "already exists" in save_error.lower()
-            if already_exists:
-                suggestions.insert(
-                    0,
-                    "A blueprint with this path already exists - pass overwrite=true to re-import it",
-                )
+        suggestions = [
+            "The blueprint was validated but could not be saved to disk",
+            'Use ha_manage_blueprints(action="list") to check if it already exists',
+        ]
 
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.RESOURCE_ALREADY_EXISTS
-                    if already_exists
-                    else ErrorCode.SERVICE_CALL_FAILED,
-                    save_error,
-                    context={"url": url, "path": path},
-                    suggestions=suggestions,
-                )
+        # Reachable despite the early exists check: a race between
+        # import and save, or an installed file that failed to load
+        # (core reports exists=false for those)
+        already_exists = "already exists" in save_error.lower()
+        if already_exists:
+            suggestions.insert(
+                0,
+                "A blueprint with this path already exists - pass overwrite=true to re-import it",
             )
 
-        return save_response.get("result") or {}
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.RESOURCE_ALREADY_EXISTS
+                if already_exists
+                else ErrorCode.SERVICE_CALL_FAILED,
+                save_error,
+                context={"url": url, "path": path},
+                suggestions=suggestions,
+            )
+        )
 
     async def _import_blueprint(self, url: str, overwrite: bool) -> dict[str, Any]:
         """Validate a blueprint URL through core, then persist it to disk."""
@@ -789,10 +881,14 @@ class BlueprintTools:
         self._assert_importable(url, result_data, suggested_filename, domain, overwrite)
 
         # Save the blueprint to disk (blueprint/import only validates)
-        save_result = await self._save_blueprint(
-            url, domain, suggested_filename, raw_data, overwrite
+        save_response = await self._save_blueprint(
+            domain, suggested_filename, raw_data, overwrite, source_url=url
         )
-        overrides_existing = save_result.get("overrides_existing", False)
+        if not save_response.get("success"):
+            self._raise_import_save_failure(url, suggested_filename, save_response)
+        overrides_existing = (save_response.get("result") or {}).get(
+            "overrides_existing", False
+        )
 
         return {
             "success": True,

@@ -596,10 +596,10 @@ def test_destructive_tools_carry_auto_backup_decorator() -> None:
 def test_ha_manage_blueprints_carries_auto_backup_decorator() -> None:
     """Source guard for the computed-key wiring (#2329).
 
-    Deleting a blueprint unlinks a file core will not rebuild, so the
-    pre-delete snapshot is the only way back. The behavioral tests below drive
-    a stand-in callable, so only this guard notices the decorator (or its
-    domain/skip lambdas) disappearing from the real tool.
+    Deleting a blueprint unlinks a file core will not rebuild and saving over
+    one replaces it, so the pre-write snapshot is the only way back. The
+    behavioral tests below drive a stand-in callable, so only this guard notices
+    the decorator (or its domain/skip lambdas) disappearing from the real tool.
     """
     from pathlib import Path
 
@@ -611,9 +611,10 @@ def test_ha_manage_blueprints_carries_auto_backup_decorator() -> None:
     assert "domain_fn=" in head, "ha_manage_blueprints lost its blueprint domain_fn"
     assert "blueprint_{kw.get(" in head, "the backup domain no longer follows `domain`"
     assert 'id_param="path"' in head, "ha_manage_blueprints wrong/missing id_param"
-    assert 'kw.get("action") != "delete"' in head, (
-        "ha_manage_blueprints lost the delete-only skip_fn - every action would "
-        "now attempt a snapshot"
+    assert 'kw.get("action") not in ("delete", "save")' in head, (
+        "ha_manage_blueprints lost the delete/save-only skip_fn - either every "
+        "action would attempt a snapshot, or an overwriting save would destroy "
+        "the previous file with nothing captured"
     )
     assert 'not kw.get("confirm")' in head, (
         "ha_manage_blueprints lost the confirm half of its skip_fn - an "
@@ -2370,32 +2371,50 @@ class TestBlueprintHandler:
             assert mgr.handler_for(domain) is not None, domain
             assert domain in mgr.supported_domains()
 
-    async def test_tier1_reads_the_installed_file(
+    async def test_reads_the_installed_file_through_the_tools_entry(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The component read is the faithful copy — no source re-fetch needed."""
+        """The installed-file read is the faithful copy — no re-fetch needed."""
         calls: list[Any] = []
         _patch_services(
             monkeypatch, {"read_file": {"success": True, "content": _BP_YAML}}, calls
         )
-        client = _BlueprintWsClient({})
+        client = _BlueprintWsClient(
+            {"blueprint/list": _bp_listing(source_url=_BP_SOURCE_URL)}
+        )
 
         assert await bm._fetch_blueprint(client, _BP_PATH, "automation") == _BP_YAML
         assert calls[0][1]["path"] == f"blueprints/automation/{_BP_PATH}"
-        # Tier 2 never ran: no WS frame was sent.
-        assert client.sent == []
+        # The source_url lookup ran, but the re-fetch itself never did: the
+        # file read won, so no third-party URL was contacted.
+        assert client.frames("blueprint/import") == []
 
-    async def test_tier1_uses_the_blueprint_domain_directory(
+    async def test_read_uses_the_blueprint_domain_directory(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls: list[Any] = []
         _patch_services(
             monkeypatch, {"read_file": {"success": True, "content": _BP_YAML}}, calls
         )
-        await bm._fetch_blueprint(_BlueprintWsClient({}), _BP_PATH, "script")
+        client = _BlueprintWsClient({"blueprint/list": _bp_listing(source_url=None)})
+        await bm._fetch_blueprint(client, _BP_PATH, "script")
         assert calls[0][1]["path"] == f"blueprints/script/{_BP_PATH}"
 
-    async def test_tier2_refetches_from_source_url_when_component_absent(
+    async def test_a_failed_listing_still_reads_the_file(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The source_url lookup is best-effort: losing it must not lose the file.
+
+        ``blueprint/list`` is only consulted to learn the URL for the LAST tier,
+        so a listing that fails leaves the earlier tiers untouched.
+        """
+        _patch_services(
+            monkeypatch, {"read_file": {"success": True, "content": _BP_YAML}}, []
+        )
+        client = _BlueprintWsClient({"blueprint/list": {"success": False}})
+        assert await bm._fetch_blueprint(client, _BP_PATH, "automation") == _BP_YAML
+
+    async def test_refetches_from_source_url_when_component_absent(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """No File & YAML Tools entry (ToolError) -> fall back to the source URL."""
@@ -2422,10 +2441,10 @@ class TestBlueprintHandler:
         assert await bm._fetch_blueprint(client, _BP_PATH, "automation") == _BP_YAML
         assert client.frames("blueprint/import")[0]["url"] == _BP_SOURCE_URL
 
-    async def test_tier2_runs_after_a_failed_component_read(
+    async def test_source_url_runs_after_a_failed_component_read(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A read error (not just an absent entry) also falls through to tier 2."""
+        """A read error (not just an absent entry) also falls through."""
         _patch_services(
             monkeypatch,
             {"read_file": {"success": False, "error": "Permission denied"}},
@@ -2503,10 +2522,44 @@ class TestBlueprintHandler:
         handler = mgr.handler_for("blueprint_script")
         assert handler is not None
 
-        client = _BlueprintWsClient({"blueprint/save": {"success": True}})
+        client = _BlueprintWsClient(
+            {
+                "blueprint/list": _bp_listing(source_url=None),
+                "blueprint/save": {"success": True},
+            }
+        )
         assert await handler.fetch(client, _BP_PATH) == _BP_YAML
         await handler.restore(client, _BP_PATH, _BP_YAML)
         assert client.frames("blueprint/save")[0]["domain"] == "script"
+
+    async def test_fetch_delegates_to_the_shared_tier_ladder(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The snapshot walks the SAME ladder ``action="get"`` walks.
+
+        Two ladders would eventually disagree about which copy of a blueprint is
+        authoritative, so this pins the delegation rather than re-testing the
+        tiers (``test_blueprint_sources.py`` owns those).
+        """
+        seen: list[tuple[str, str, str | None]] = []
+
+        async def fake_resolve(
+            _client: Any, domain: str, path: str, *, source_url: str | None
+        ) -> Any:
+            seen.append((domain, path, source_url))
+            from ha_mcp.tools.blueprint_sources import BlueprintSource
+
+            return BlueprintSource(_BP_YAML, None, "tools_entry", None)
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.blueprint_sources.resolve_blueprint_source", fake_resolve
+        )
+        client = _BlueprintWsClient(
+            {"blueprint/list": _bp_listing(source_url=_BP_SOURCE_URL)}
+        )
+
+        assert await bm._fetch_blueprint(client, _BP_PATH, "automation") == _BP_YAML
+        assert seen == [("automation", _BP_PATH, _BP_SOURCE_URL)]
 
 
 class TestBlueprintDecoratorWiring:
@@ -2517,7 +2570,10 @@ class TestBlueprintDecoratorWiring:
         return with_auto_backup(
             domain_fn=lambda kw: f"blueprint_{kw.get('domain') or 'automation'}",
             id_param="path",
-            skip_fn=lambda kw: kw.get("action") != "delete" or not kw.get("confirm"),
+            skip_fn=lambda kw: (
+                kw.get("action") not in ("delete", "save")
+                or (kw.get("action") == "delete" and not kw.get("confirm"))
+            ),
             client=object(),
         )(_bp_noop_tool)
 
@@ -2590,6 +2646,29 @@ class TestBlueprintDecoratorWiring:
             monkeypatch, action="delete", domain="script", path=_BP_PATH, confirm=True
         )
         assert calls[0][0] == "blueprint_script"
+
+    async def test_save_captures_without_a_confirm_flag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An overwriting save destroys the previous file, so it captures too.
+
+        ``save`` carries no ``confirm`` parameter — the confirm half of the skip
+        test belongs to ``delete`` alone and must not suppress this capture.
+        """
+        calls = await self._run(
+            monkeypatch, action="save", domain="automation", path=_BP_PATH
+        )
+        assert calls == [("blueprint_automation", _BP_PATH, "_bp_noop_tool")]
+
+    async def test_import_captures_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Import addresses a path core chooses, not the ``path`` argument, so
+        the decorator's ``id_param`` would name the wrong file."""
+        calls = await self._run(
+            monkeypatch, action="import", url="https://example.com/bp.yaml"
+        )
+        assert calls == []
 
 
 class TestLegacyList:

@@ -25,6 +25,8 @@ from unittest.mock import MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.tools import tools_blueprints
+from ha_mcp.tools.blueprint_sources import BlueprintSource
 from ha_mcp.tools.tools_blueprints import register_blueprint_tools
 
 _PATH = "user/motion.yaml"
@@ -140,7 +142,13 @@ async def test_invalid_domain_rejected() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("action", "missing"),
-    [("get", "path"), ("import", "url"), ("delete", "path"), ("substitute", "path")],
+    [
+        ("get", "path"),
+        ("import", "url"),
+        ("save", "path"),
+        ("delete", "path"),
+        ("substitute", "path"),
+    ],
 )
 async def test_required_parameter_missing(action: str, missing: str) -> None:
     client = SpyClient({})
@@ -711,3 +719,253 @@ async def test_import_rejects_non_http_url() -> None:
     error = payload["error"]
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     assert client.sent == []
+
+
+# ------------------------------------------------------------------------ save
+
+_SAVE_YAML = "blueprint:\n  name: Motion Light\n  domain: automation\n"
+
+
+@pytest.mark.asyncio
+async def test_save_requires_yaml() -> None:
+    client = SpyClient({})
+    tool = _build_tool(client)
+
+    with pytest.raises(ToolError) as exc:
+        await tool(action="save", path=_PATH)
+
+    error = _error_payload(exc.value)["error"]
+    assert error["code"] == "VALIDATION_MISSING_PARAMETER"
+    assert "'yaml' is required for action='save'" in error["message"]
+    assert client.sent == []
+
+
+@pytest.mark.asyncio
+async def test_save_new_path_sends_neither_source_url_nor_override() -> None:
+    """A hand-authored blueprint carries no source_url: the key must be absent
+    (core's ``vol.Optional``), not ``None``, and allow_override is not sent."""
+    client = SpyClient(
+        {"blueprint/save": {"success": True, "result": {"overrides_existing": False}}}
+    )
+    tool = _build_tool(client)
+
+    resp = await tool(action="save", path=_PATH, yaml=_SAVE_YAML)
+
+    assert resp == {
+        "success": True,
+        "domain": "automation",
+        "path": _PATH,
+        "overrides_existing": False,
+        "message": "Blueprint saved.",
+    }
+    assert client.frames("blueprint/save") == [
+        {
+            "type": "blueprint/save",
+            "domain": "automation",
+            "path": _PATH,
+            "yaml": _SAVE_YAML,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_save_overwrite_stamps_source_url_and_reports_the_reload() -> None:
+    client = SpyClient(
+        {"blueprint/save": {"success": True, "result": {"overrides_existing": True}}}
+    )
+    tool = _build_tool(client)
+
+    resp = await tool(
+        action="save",
+        domain="script",
+        path=_PATH,
+        yaml=_SAVE_YAML,
+        overwrite=True,
+        source_url="https://example.com/bp.yaml",
+    )
+
+    assert resp["overrides_existing"] is True
+    assert "reloaded" in resp["message"]
+    assert client.frames("blueprint/save") == [
+        {
+            "type": "blueprint/save",
+            "domain": "script",
+            "path": _PATH,
+            "yaml": _SAVE_YAML,
+            "source_url": "https://example.com/bp.yaml",
+            "allow_override": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_save_existing_without_overwrite_is_already_exists() -> None:
+    client = SpyClient(
+        {
+            "blueprint/save": {
+                "success": False,
+                "error": {"code": "already_exists", "message": "File already exists"},
+            }
+        }
+    )
+    tool = _build_tool(client)
+
+    with pytest.raises(ToolError) as exc:
+        await tool(action="save", path=_PATH, yaml=_SAVE_YAML)
+
+    error = _error_payload(exc.value)["error"]
+    assert error["code"] == "RESOURCE_ALREADY_EXISTS"
+    assert error["message"] == "File already exists"
+    assert "overwrite=True" in " ".join(error["suggestions"])
+
+
+@pytest.mark.asyncio
+async def test_save_invalid_blueprint_is_validation_failed() -> None:
+    client = SpyClient(
+        {
+            "blueprint/save": {
+                "success": False,
+                "error": {
+                    "code": "invalid_format",
+                    "message": (
+                        "Invalid blueprint: required key not provided "
+                        "@ data['blueprint']"
+                    ),
+                },
+            }
+        }
+    )
+    tool = _build_tool(client)
+
+    with pytest.raises(ToolError) as exc:
+        await tool(action="save", path=_PATH, yaml="not: [a blueprint")
+
+    error = _error_payload(exc.value)["error"]
+    assert error["code"] == "VALIDATION_FAILED"
+    assert "required key not provided" in error["message"]
+
+
+@pytest.mark.asyncio
+async def test_save_other_failure_is_service_call_failed() -> None:
+    client = SpyClient(
+        {
+            "blueprint/save": {
+                "success": False,
+                "error": "Command failed: [Errno 13] Permission denied",
+            }
+        }
+    )
+    tool = _build_tool(client)
+
+    with pytest.raises(ToolError) as exc:
+        await tool(action="save", path=_PATH, yaml=_SAVE_YAML)
+
+    error = _error_payload(exc.value)["error"]
+    assert error["code"] == "SERVICE_CALL_FAILED"
+    assert "Permission denied" in error["message"]
+
+
+# --------------------------------------------------------------- get + ladder
+
+
+class _LadderSpy:
+    """Stand-in for ``resolve_blueprint_source`` recording what ``get`` asks."""
+
+    def __init__(self, found: BlueprintSource) -> None:
+        self.found = found
+        self.calls: list[tuple[str, str, Any]] = []
+
+    async def __call__(
+        self, client: Any, domain: str, path: str, *, source_url: Any
+    ) -> BlueprintSource:
+        self.calls.append((domain, path, source_url))
+        return self.found
+
+
+def _patch_ladder(
+    monkeypatch: pytest.MonkeyPatch, found: BlueprintSource
+) -> _LadderSpy:
+    spy = _LadderSpy(found)
+    monkeypatch.setattr(tools_blueprints, "resolve_blueprint_source", spy)
+    return spy
+
+
+@pytest.mark.asyncio
+async def test_get_surfaces_yaml_and_its_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    listing = _listing(_PATH)
+    listing["result"][_PATH]["metadata"]["source_url"] = "https://example.com/bp.yaml"
+    client = SpyClient({"blueprint/list": listing})
+    spy = _patch_ladder(
+        monkeypatch,
+        BlueprintSource(
+            text=_SAVE_YAML,
+            config={"blueprint": {"name": "Motion Light"}},
+            source="component",
+            warning=None,
+        ),
+    )
+    tool = _build_tool(client)
+
+    resp = await tool(action="get", path=_PATH)
+
+    assert resp["yaml"] == _SAVE_YAML
+    assert resp["yaml_source"] == "component"
+    assert resp["config"] == {"blueprint": {"name": "Motion Light"}}
+    assert "warnings" not in resp
+    # The ladder is handed the recorded source_url so its last tier can run.
+    assert spy.calls == [("automation", _PATH, "https://example.com/bp.yaml")]
+
+
+@pytest.mark.asyncio
+async def test_get_warns_when_the_yaml_is_a_source_url_refetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    listing = _listing(_PATH)
+    listing["result"][_PATH]["metadata"]["source_url"] = "https://example.com/bp.yaml"
+    client = SpyClient({"blueprint/list": listing})
+    _patch_ladder(
+        monkeypatch,
+        BlueprintSource(text=_SAVE_YAML, config={}, source="source_url", warning=None),
+    )
+    tool = _build_tool(client)
+
+    resp = await tool(action="get", path=_PATH)
+
+    assert resp["yaml_source"] == "source_url"
+    assert len(resp["warnings"]) == 1
+    assert "https://example.com/bp.yaml" in resp["warnings"][0]
+    assert "not read from the installed file" in resp["warnings"][0]
+
+
+@pytest.mark.asyncio
+async def test_get_omits_yaml_keys_when_no_tier_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = SpyClient({"blueprint/list": _listing(_PATH)})
+    _patch_ladder(monkeypatch, BlueprintSource(None, None, None, None))
+    tool = _build_tool(client)
+
+    resp = await tool(action="get", path=_PATH)
+
+    assert resp["success"] is True
+    assert resp["metadata"]["name"] == "Motion Light"
+    for key in ("yaml", "yaml_source", "config", "warnings"):
+        assert key not in resp, key
+
+
+@pytest.mark.asyncio
+async def test_get_keeps_the_component_warning_when_nothing_else_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = SpyClient({"blueprint/list": _listing(_PATH)})
+    _patch_ladder(
+        monkeypatch, BlueprintSource(None, None, None, "component could not read it")
+    )
+    tool = _build_tool(client)
+
+    resp = await tool(action="get", path=_PATH)
+
+    assert resp["warnings"] == ["component could not read it"]
+    assert "yaml" not in resp

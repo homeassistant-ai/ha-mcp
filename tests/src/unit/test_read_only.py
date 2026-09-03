@@ -301,9 +301,13 @@ class TestExemptionRules:
             # sends it back without touching the blueprint store or any
             # automation/script.
             ({"action": "substitute", "path": "user/motion.yaml", "input": {}}, True),
-            # Writes stay blocked: import writes a blueprint file, delete
-            # unlinks one.
+            # Writes stay blocked: import writes a blueprint file, save
+            # overwrites one, delete unlinks one.
             ({"action": "import", "url": "https://example.com/bp.yaml"}, False),
+            (
+                {"action": "save", "path": "user/motion.yaml", "yaml": "blueprint:\n"},
+                False,
+            ),
             ({"action": "delete", "path": "user/motion.yaml", "confirm": True}, False),
             # ``action`` is required with no schema default, so an absent key
             # is a malformed call — fail closed, never a silent read.
@@ -898,10 +902,16 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         # carries no mutation capability of its own.
         "domain",
         "path",
-        # Import-only: the source URL and its overwrite flag. action='import'
-        # is blocked outright, so neither is independently write-capable.
+        # Import-only: the source URL. action='import' is blocked outright, so
+        # it is not independently write-capable.
         "url",
+        # Shared by the two blocked writes (import / save), which the inspected
+        # ``action`` refuses before either is read.
         "overwrite",
+        # The save payload and the origin URL stamped into its metadata.
+        # action='save' is blocked outright, so neither can write on its own.
+        "yaml",
+        "source_url",
         # Rendering inputs for action='substitute', a pure in-memory render
         # that writes nothing.
         "input",

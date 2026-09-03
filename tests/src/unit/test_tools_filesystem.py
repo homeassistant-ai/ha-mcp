@@ -998,3 +998,98 @@ class TestHaDeleteFileTool:
                 return_response=True,
             )
             assert result["success"] is True
+
+
+class TestEmbeddedDirectBlueprintReadStaysOffTheFilesystemTools:
+    """The embedded direct blueprint read (#2329) is not a filesystem foothold.
+
+    ``set_embedded_connection(..., config_dir=...)`` lets the in-process server
+    read ``<config>/blueprints/<domain>/<path>`` itself. That must be a
+    blueprint-only read: it neither registers the privileged filesystem tools
+    nor changes the File & YAML Tools gate's verdict on an install without the
+    tools entry.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _embedded_config_dir(self, tmp_path):
+        from ha_mcp import config as ha_config
+
+        ha_config.set_embedded_connection(
+            "http://127.0.0.1:8123", "tok", config_dir=str(tmp_path)
+        )
+        yield tmp_path
+        ha_config._reset_embedded_connection()
+
+    @pytest.mark.asyncio
+    async def test_direct_read_serves_a_blueprint_without_registering_tools(
+        self, tmp_path
+    ):
+        from ha_mcp.tools.blueprint_sources import resolve_blueprint_source
+        from ha_mcp.tools.tools_filesystem import register_filesystem_tools
+
+        target = tmp_path / "blueprints" / "automation" / "user" / "motion.yaml"
+        target.parent.mkdir(parents=True)
+        target.write_text("blueprint:\n  name: Motion\n  domain: automation\n")
+
+        # A client with no component and no services at all: the direct tier
+        # answers before any of them is consulted.
+        client = MagicMock()
+        client.base_url = "http://127.0.0.1:8123"
+        client.token = "tok"
+        found = await resolve_blueprint_source(
+            client, "automation", "user/motion.yaml", source_url=None
+        )
+        assert found.source == "file"
+        assert found.text == target.read_text()
+
+        mcp = MagicMock()
+        with patch.dict(os.environ, {FEATURE_FLAG: "false"}):
+            register_filesystem_tools(mcp, client)
+        mcp.add_tool.assert_not_called()
+        mcp.tool.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_gate_still_refuses_a_server_entry_only_install(self):
+        """caps present with tools_services=False + no services → the same
+        'add the File & YAML Tools entry' refusal as without config_dir."""
+        from ha_mcp.tools.component_api import _parse_caps
+        from ha_mcp.tools.tools_filesystem import _assert_mcp_tools_available
+
+        caps = _parse_caps(
+            {
+                "result": {
+                    "schema_version": 1,
+                    "component_version": "2.1.2",
+                    "capabilities": ["blueprint_get", "blueprint_text"],
+                    "limits": {},
+                    "tools_services": False,
+                }
+            }
+        )
+        client = AsyncMock()
+        client.get_services.return_value = [{"domain": "homeassistant", "services": {}}]
+        with (
+            patch(
+                "ha_mcp.tools.tools_filesystem.get_component_caps",
+                AsyncMock(return_value=caps),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await _assert_mcp_tools_available(client)
+
+        assert "HA-MCP File & YAML Tools" in str(exc_info.value)
+
+    def test_direct_reader_never_consults_the_read_allowlist(self, tmp_path):
+        """The jail is ``<config>/blueprints/<domain>/`` and nothing else — a
+        file that the filesystem tools' allowlist WOULD permit is still refused
+        here, because the reader takes only a blueprint path."""
+        from ha_mcp.tools.blueprint_sources import _read_jailed_blueprint
+
+        www = tmp_path / "www" / "theme.css"
+        www.parent.mkdir(parents=True)
+        www.write_text("body{}")
+        assert (
+            _read_jailed_blueprint(str(tmp_path), "automation", "../../www/theme.css")
+            is None
+        )
+        assert _read_jailed_blueprint(str(tmp_path), "automation", str(www)) is None

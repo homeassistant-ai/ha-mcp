@@ -24,9 +24,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ha_mcp.tools import (
+    blueprint_sources,
     component_api,
     component_devices,
-    tools_blueprints,
     tools_config_helpers,
     tools_entities,
     tools_search,
@@ -588,7 +588,7 @@ class TestBlueprintGetSeam:
         client = BlueprintRoutingClient()  # its blueprint/list serves user/motion.yaml
         ws = _real_component_ws(self._hass(tmp_path))
         tool = _build_get_blueprint(client)
-        with patch_ws(ws, tools_blueprints):
+        with patch_ws(ws, blueprint_sources):
             resp = await tool(path="user/motion.yaml", domain="automation")
 
         assert resp["success"] is True
@@ -597,6 +597,10 @@ class TestBlueprintGetSeam:
             "__input__": "motion_sensor"
         }
         assert resp["config"]["action"] == [{"service": "light.turn_on"}]
+        # The raw text round-trips the file byte for byte, tagged with the tier
+        # that produced it — this is what a caller edits and saves back.
+        assert resp["yaml"] == _MOTION_BLUEPRINT
+        assert resp["yaml_source"] == "component"
 
     @pytest.mark.asyncio
     async def test_path_traversal_rejected_by_real_jail(self, tmp_path) -> None:
@@ -618,12 +622,15 @@ class TestBlueprintGetSeam:
         client = _EvilListClient()
         ws = _real_component_ws(self._hass(tmp_path))
         tool = _build_get_blueprint(client)
-        with patch_ws(ws, tools_blueprints):
+        with patch_ws(ws, blueprint_sources):
             resp = await tool(path=evil, domain="automation")
 
         assert resp["success"] is True
-        # The real jail blocked the read — no body, and the secret never leaked.
+        # The real jail blocked the read — no body, no text, and the secret
+        # never leaked.
         assert "config" not in resp
+        assert "yaml" not in resp
+        assert "yaml_source" not in resp
         assert "hunter2" not in json.dumps(resp)
 
 
