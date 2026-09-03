@@ -29,6 +29,13 @@ AVG_LOG_ENTRIES_PER_TOOL = 3
 # Startup log collection duration in seconds
 STARTUP_LOG_DURATION_SECONDS = 60
 
+# Hard cap on collected startup entries. The collector sits on the root logger
+# at DEBUG with no filter, so an instance with `logger:` debug overrides on a
+# chatty integration can emit tens of thousands of records inside the window.
+# Keep the earliest ones — ha_report_issue's startup diagnostics care about the
+# boot sequence, and the tail of a debug flood is noise.
+MAX_STARTUP_LOG_ENTRIES = 5000
+
 
 class StartupLogCollector(logging.Handler):
     """Collects log messages during the first minute of server startup."""
@@ -40,10 +47,31 @@ class StartupLogCollector(logging.Handler):
         self._logs: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         self._active = True
+        self._formatting = threading.local()
 
     def emit(self, record: logging.LogRecord) -> None:
-        """Capture log record if within startup window."""
+        """Capture log record if within startup window.
+
+        ``record.getMessage()`` is deliberately called OUTSIDE ``self._lock``
+        and under a per-thread reentrancy guard. Formatting a record runs
+        arbitrary third-party code: ``%s`` of an entity invokes
+        ``Entity.__repr__`` -> ``_stringify_state`` -> the entity's ``state``
+        property, and an integration whose property logs at debug re-enters
+        this handler on the same thread. This handler runs in-process with
+        Home Assistant in embedded mode, so that thread is the event loop.
+
+        Formatting inside the lock made that re-entry a hard self-deadlock on a
+        non-reentrant ``threading.Lock``, freezing the whole HA process — no
+        port 8123, no recorder writes, and no log line explaining it, because
+        the freeze happens inside logging itself (#2357).
+        """
         if not self._active:
+            return
+
+        # Nested emit from within our own formatting: drop the record rather
+        # than recurse. The outer record still gets collected, and the chain
+        # (repr -> log -> repr -> log) cannot run away.
+        if getattr(self._formatting, "active", False):
             return
 
         elapsed = time.time() - self._start_time
@@ -51,13 +79,25 @@ class StartupLogCollector(logging.Handler):
             self._active = False
             return
 
+        self._formatting.active = True
+        try:
+            message = record.getMessage()
+        except Exception as exc:
+            # Mirrors logging's own contract: a handler never propagates.
+            message = f"<unformattable {record.name} record: {type(exc).__name__}>"
+        finally:
+            self._formatting.active = False
+
         with self._lock:
+            if len(self._logs) >= MAX_STARTUP_LOG_ENTRIES:
+                self._active = False
+                return
             self._logs.append(
                 {
                     "timestamp": datetime.now(UTC).isoformat(),
                     "level": record.levelname,
                     "logger": record.name,
-                    "message": record.getMessage(),
+                    "message": message,
                     "elapsed_seconds": round(elapsed, 2),
                 }
             )
