@@ -674,7 +674,9 @@ class TestBlueprintManagement:
                     {"action": "get", "domain": "automation", "path": path},
                 )
                 assert served.marker in detail["data"].get("yaml", ""), detail
-                assert detail.get("yaml_source") in (
+                # Never "tools_entry": that tier is the File & YAML Tools
+                # service, which these lanes deliberately do not have.
+                assert detail["data"].get("yaml_source") in (
                     "file",
                     "component",
                     "source_url",
