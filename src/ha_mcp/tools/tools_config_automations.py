@@ -38,6 +38,7 @@ from .best_practice_checker import (
 from .best_practice_checker import (
     check_automation_config as _check_best_practices,
 )
+from .blueprint_substitute import blueprint_reference, take_control_config
 from .component_config_reads import fetch_entity_lookup_via_component
 from .helpers import (
     exception_to_structured_error,
@@ -565,6 +566,21 @@ class AutomationConfigTools:
                 "Optional for config updates (validates before full replacement if provided).",
             ),
         ] = None,
+        take_control_of_blueprint: Annotated[
+            bool,
+            Field(
+                description="Convert a blueprint-backed automation into an editable "
+                'standalone one -- the UI\'s "Take control". Renders the blueprint '
+                "with its current inputs and saves the result over the same "
+                "automation, which then has its own triggers/conditions/actions and "
+                "no 'use_blueprint'. Requires identifier; mutually exclusive with "
+                "config and python_transform. Irreversible: the link to the "
+                "blueprint is gone afterwards, so edit inputs instead if you only "
+                "want to change a value. To preview the rendering without writing "
+                'anything, use ha_manage_blueprints(action="substitute").',
+                default=False,
+            ),
+        ] = False,
         category: Annotated[
             str | None,
             Field(
@@ -749,6 +765,29 @@ class AutomationConfigTools:
             }
         )
 
+        TAKE CONTROL OF A BLUEPRINT AUTOMATION:
+
+        take_control_of_blueprint=True converts a blueprint-backed automation
+        into a standalone one — the UI's "Take control". The blueprint is
+        rendered with the automation's CURRENT inputs and the result is saved
+        over the same automation, which keeps its entity_id, alias and
+        description but gains its own triggers/conditions/actions and loses
+        'use_blueprint'.
+
+        ha_config_set_automation(
+            identifier="automation.motion_light_kitchen",
+            take_control_of_blueprint=True,
+        )
+
+        This is one-way: the automation is no longer linked to the blueprint,
+        so later blueprint edits stop reaching it. To change an input value,
+        update 'use_blueprint.input' instead (see the example above) — that
+        keeps the link. To see what the rendering looks like WITHOUT writing
+        anything, call ha_manage_blueprints(action="substitute", path=...,
+        input=...), which returns the config and leaves the automation alone.
+        ha_manage_blueprints also lists, imports, saves and deletes blueprints,
+        and action="get" reports which automations use one.
+
         TRIGGER TYPES: time, time_pattern, sun, state, numeric_state, event, device, zone, template, and more
         CONDITION TYPES: state, numeric_state, time, sun, template, device, zone, and more
         ACTION TYPES: action calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel
@@ -784,20 +823,19 @@ class AutomationConfigTools:
                     ],
                     context={"action": "set"},
                 )
-            # Validate mutual exclusivity of config and python_transform
-            if config is not None and python_transform is not None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "Cannot use both config and python_transform simultaneously",
-                        suggestions=[
-                            "Use only ONE of: config or python_transform",
-                            "config: Full replacement",
-                            "python_transform: Python-based edits (recommended for existing automations)",
-                        ],
-                        context={"action": "set", "identifier": identifier},
-                    )
+            self._validate_set_automation_modes(
+                config, python_transform, take_control_of_blueprint, identifier
+            )
+
+            if take_control_of_blueprint:
+                response, bp_warnings = await self._run_take_control(
+                    identifier,
+                    config_hash,
+                    category,
+                    wait,
+                    MandatoryBPS,
                 )
+                return response
 
             if python_transform is not None:
                 response, bp_warnings = await self._run_python_transform(
@@ -897,6 +935,47 @@ class AutomationConfigTools:
             raise_tool_error(error)
 
     @staticmethod
+    def _validate_set_automation_modes(
+        config: dict[str, Any] | None,
+        python_transform: str | None,
+        take_control_of_blueprint: bool,
+        identifier: str | None,
+    ) -> None:
+        """Reject combinations of the three mutually exclusive write modes."""
+        if config is not None and python_transform is not None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Cannot use both config and python_transform simultaneously",
+                    suggestions=[
+                        "Use only ONE of: config or python_transform",
+                        "config: Full replacement",
+                        "python_transform: Python-based edits (recommended for existing automations)",
+                    ],
+                    context={"action": "set", "identifier": identifier},
+                )
+            )
+
+        if take_control_of_blueprint and (
+            config is not None or python_transform is not None
+        ):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "take_control_of_blueprint replaces the automation with its "
+                    "own rendered config, so it cannot be combined with config "
+                    "or python_transform.",
+                    suggestions=[
+                        "Take control first, then edit the standalone config in "
+                        "a second call",
+                        "Preview the rendering with ha_manage_blueprints("
+                        'action="substitute") if you only want to see it',
+                    ],
+                    context={"action": "take_control", "identifier": identifier},
+                )
+            )
+
+    @staticmethod
     def _build_set_automation_suggestions(
         e: Exception, bp_warnings: BestPracticeCheckResult
     ) -> list[str]:
@@ -964,6 +1043,86 @@ class AutomationConfigTools:
         else:
             result = await self._client.upsert_automation_config(config, identifier)
         return result
+
+    async def _run_take_control(
+        self,
+        identifier: str | None,
+        config_hash: str | None,
+        category: str | None,
+        wait: bool,
+        MandatoryBPS: bool,
+    ) -> tuple[dict[str, Any], BestPracticeCheckResult]:
+        """Execute take-control mode and return (response, bp_warnings).
+
+        The UI splits this into a preview the user confirms; a tool call has no
+        such step, so the whole conversion is one write. The rendered config
+        goes through the same validation and best-practice checks as any other
+        replacement -- a blueprint's output is not exempt from them.
+        """
+        if not identifier:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "identifier is required for take_control_of_blueprint",
+                    suggestions=[
+                        "Provide the automation entity_id or unique_id to convert",
+                        "Use ha_search(domain_filter='automation') to find automations",
+                    ],
+                    context={"action": "take_control", "identifier": identifier},
+                )
+            )
+
+        # A hash is optional here (unlike python_transform, whose expression is
+        # written against a config the caller has already read). When given it
+        # is honoured, and it pre-resolves the storage key for the upsert.
+        resolved_id: str | None = None
+        if config_hash:
+            current_config, resolved_id = await self._fetch_and_verify_hash(
+                identifier, config_hash, "take_control"
+            )
+        else:
+            current_config, _ = await self._get_automation_config_internal(identifier)
+
+        reference = blueprint_reference(current_config)
+        blueprint_path = reference[0] if reference else None
+
+        taken_config = await take_control_config(
+            self._client, "automation", identifier, current_config
+        )
+
+        taken_category = taken_config.pop("category", None)
+        effective_category = category if category is not None else taken_category
+
+        taken_config = _normalize_automation_config(taken_config)
+        self._validate_required_fields(taken_config, identifier)
+        bp_warnings = _check_best_practices(taken_config)
+        validation_meta = await validate_config_references(self._client, taken_config)
+
+        await validate_registry_ids(
+            self._client,
+            None,
+            None,
+            {"automation": effective_category},
+            fail_closed=True,
+        )
+
+        response = await self._run_config_update(
+            taken_config,
+            identifier,
+            effective_category,
+            wait,
+            bp_warnings,
+            validation_meta,
+            MandatoryBPS,
+            None,
+            resolved_id,
+        )
+        response["took_control_of_blueprint"] = blueprint_path
+        response["message"] = (
+            f"Automation {identifier} now owns its config; it is no longer linked "
+            f"to blueprint '{blueprint_path}'."
+        )
+        return response, bp_warnings
 
     async def _run_python_transform(
         self,

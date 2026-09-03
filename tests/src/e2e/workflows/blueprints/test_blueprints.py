@@ -1010,6 +1010,86 @@ class TestBlueprintManagement:
             served.cleanup()
 
     @pytest.mark.slow
+    async def test_take_control_detaches_an_automation_from_its_blueprint(
+        self, mcp_client, local_blueprint_server, cleanup_tracker
+    ):
+        """``take_control_of_blueprint`` converts a consumer in place.
+
+        The end-to-end proof is the delete at the end: a blueprint that was
+        refused deletion while the automation used it becomes deletable once
+        the automation owns its own config, without the automation being
+        removed or recreated.
+        """
+        served = _ServedBlueprint(local_blueprint_server, "take_control")
+        automation_id = None
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                path = await served.import_into(mcp)
+                alias = f"E2E take control {served.run_id}"
+                created = await mcp.call_tool_success(
+                    "ha_config_set_automation",
+                    {
+                        "config": {
+                            "alias": alias,
+                            "description": "must survive the conversion",
+                            "use_blueprint": {
+                                "path": path,
+                                "input": {"target_entity": _STABLE_ENTITY},
+                            },
+                        }
+                    },
+                )
+                automation_id = created["automation_id"]
+                cleanup_tracker.track("automation", automation_id)
+                assert await wait_for_automation(mcp_client, automation_id), (
+                    f"{automation_id} never became retrievable"
+                )
+
+                took = await mcp.call_tool_success(
+                    "ha_config_set_automation",
+                    {
+                        "identifier": automation_id,
+                        "take_control_of_blueprint": True,
+                    },
+                )
+                assert took["took_control_of_blueprint"] == path, took
+
+                fetched = await mcp.call_tool_success(
+                    "ha_config_get_automation", {"identifier": automation_id}
+                )
+                config = fetched["config"]
+                assert "use_blueprint" not in config, (
+                    f"the automation must no longer reference the blueprint: {config}"
+                )
+                assert config["alias"] == alias, config
+                assert config["description"] == "must survive the conversion", config
+                actions = config.get("actions") or config.get("action")
+                assert actions, config
+                assert actions[0]["target"]["entity_id"] == _STABLE_ENTITY, config
+
+                # Nothing uses the blueprint any more, so the delete that was
+                # refused while it was in use now succeeds.
+                detail = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                assert automation_id not in detail["data"].get("used_by", []), detail
+                await served.delete(mcp, path)
+
+                await mcp.call_tool_success(
+                    "ha_config_remove_automation", {"identifier": automation_id}
+                )
+                automation_id = None
+        finally:
+            if automation_id:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_config_remove_automation",
+                    {"identifier": automation_id},
+                )
+            served.cleanup()
+
+    @pytest.mark.slow
     async def test_delete_blueprint_writes_auto_backup(
         self, mcp_client, local_blueprint_server
     ):

@@ -368,7 +368,10 @@ async def test_delete_in_use_names_consumers() -> None:
     ]
     joined = " ".join(error["suggestions"])
     assert "ha_config_remove_automation" in joined
-    assert 'action="substitute"' in joined
+    # The refusal has to say how to free the blueprint, and the one-shot
+    # conversion is the shortest route -- ``substitute`` alone would leave the
+    # caller to write the rendered config back themselves (#2329).
+    assert "take_control_of_blueprint=True" in joined
     assert 'action="delete"' in joined
 
 

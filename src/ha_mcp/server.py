@@ -637,7 +637,8 @@ class HomeAssistantSmartMCPServer:
         ),
         "ha_config_set_automation": (
             "create update modify edit automation triggers conditions actions "
-            "new automation write save"
+            "new automation write save take control blueprint detach "
+            "unlink standalone convert"
         ),
         "ha_config_set_script": (
             "create update modify edit script sequence actions new script write save"
@@ -710,11 +711,13 @@ class HomeAssistantSmartMCPServer:
         ),
         "ha_config_set_automation": (
             "Create or update a Home Assistant automation.\n\n"
-            "Supports two modes: full `config` replacement, or surgical "
+            "Supports three modes: full `config` replacement, surgical "
             "`python_transform` on an existing automation (requires "
             "`identifier` and `config_hash` from "
-            "ha_config_get_automation). Omit `identifier` to create a "
-            "new automation.\n\n"
+            "ha_config_get_automation), or `take_control_of_blueprint` "
+            "to convert a blueprint-backed automation into an editable "
+            "standalone one (the UI's Take control action). Omit "
+            "`identifier` to create a new automation.\n\n"
             "For schema details, examples, and native-vs-template "
             "guidance, see ha_get_skill_guide or your locally "
             "installed skills."

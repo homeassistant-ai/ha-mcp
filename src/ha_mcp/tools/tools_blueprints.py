@@ -18,6 +18,7 @@ from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .blueprint_sources import resolve_blueprint_source
+from .blueprint_substitute import substitute_blueprint
 from .blueprint_write import error_text, import_blueprint, write_blueprint
 from .helpers import (
     exception_to_structured_error,
@@ -250,7 +251,11 @@ class BlueprintTools:
         ``ha_manage_backup(scope="edits")`` can restore the previous file.
         ``substitute`` only renders — it writes nothing, so pass the returned
         config to ``ha_config_set_automation`` / ``ha_config_set_script`` to
-        persist it.
+        persist it. To convert an automation that ALREADY exists, prefer
+        ``ha_config_set_automation(identifier=..., take_control_of_blueprint=True)``:
+        it renders with the automation's own current inputs and saves the result
+        over itself in one call, where ``substitute`` would need those inputs
+        restated and the config written back by hand.
 
         EXAMPLES:
         - List: ha_manage_blueprints(action="list", domain="automation")
@@ -260,6 +265,7 @@ class BlueprintTools:
         - Edit in place: ha_manage_blueprints(action="save", path="user/motion.yaml", yaml=<edited text>, overwrite=True)
         - Delete: ha_manage_blueprints(action="delete", path="user/motion.yaml", confirm=True)
         - Detach: ha_manage_blueprints(action="substitute", path="user/motion.yaml", input={"motion_sensor": "binary_sensor.hall"})
+        - Detach an existing automation instead: ha_config_set_automation(identifier="automation.hall", take_control_of_blueprint=True)
 
         RELATED TOOLS: ``ha_config_set_automation`` / ``ha_config_set_script``
         to build on a blueprint or persist a substituted config,
@@ -531,8 +537,9 @@ class BlueprintTools:
                 f"them at another blueprint with {set_tool}"
             ),
             (
-                f'Or detach them: ha_manage_blueprints(action="substitute", domain="{domain}", '
-                f'path="{path}", input=...) and write the rendered config back with {set_tool}'
+                f"Or detach each one in place: {set_tool}(identifier=..., "
+                "take_control_of_blueprint=True) rewrites it as a standalone "
+                f"{domain} that no longer uses the blueprint"
             ),
             (
                 f'Then retry: ha_manage_blueprints(action="delete", domain="{domain}", '
@@ -607,78 +614,17 @@ class BlueprintTools:
     async def _substitute_blueprint(
         self, domain: str, path: str, blueprint_input: dict[str, Any]
     ) -> dict[str, Any]:
-        """Render a blueprint plus inputs into a standalone config."""
-        response = await self._client.send_websocket_message(
-            {
-                "type": "blueprint/substitute",
-                "domain": domain,
-                "path": path,
-                "input": blueprint_input,
-            }
-        )
-        if not response.get("success"):
-            self._raise_substitute_failure(domain, path, response)
+        """Render a blueprint plus inputs into a standalone config.
 
-        result = response.get("result") or {}
-        config = result.get("substituted_config")
-        if config is None:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Home Assistant returned no substituted config for blueprint "
-                    f"'{path}'.",
-                    context={"domain": domain, "path": path},
-                )
-            )
+        The same rendering ``ha_config_set_automation(
+        take_control_of_blueprint=True)`` performs, minus the write: this
+        returns the config for inspection and leaves the automation alone.
+        """
+        config = await substitute_blueprint(self._client, domain, path, blueprint_input)
         return {
             "success": True,
             "data": {"domain": domain, "path": path, "config": config},
         }
-
-    @staticmethod
-    def _raise_substitute_failure(
-        domain: str, path: str, response: dict[str, Any]
-    ) -> NoReturn:
-        """Map a failed blueprint/substitute onto a structured error.
-
-        Core answers every substitute failure with the same generic
-        ``unknown_error`` code, so the message text is the only discriminator:
-        ``MissingInput`` and ``FailedToLoad`` carry their own prefixes.
-        """
-        message = error_text(response, "Failed to render the blueprint")
-        lowered = message.lower()
-        if "missing input" in lowered:
-            code = ErrorCode.VALIDATION_FAILED
-            suggestions = [
-                (
-                    f'Read the required inputs: ha_manage_blueprints(action="get", '
-                    f'domain="{domain}", path="{path}")'
-                ),
-                "Pass every required input in the input dict",
-            ]
-        elif "failed to load" in lowered or "not found" in lowered:
-            code = ErrorCode.RESOURCE_NOT_FOUND
-            suggestions = [
-                (
-                    f'Use ha_manage_blueprints(action="list", domain="{domain}") to see '
-                    "installed blueprints"
-                ),
-                "Check the path format (e.g., 'homeassistant/motion_light.yaml')",
-            ]
-        else:
-            code = ErrorCode.SERVICE_CALL_FAILED
-            suggestions = [
-                "Check the Home Assistant logs for the underlying error",
-                "Verify the input values match the blueprint's selectors",
-            ]
-        raise_tool_error(
-            create_error_response(
-                code,
-                message,
-                context={"domain": domain, "path": path},
-                suggestions=suggestions,
-            )
-        )
 
     async def _merge_blueprint_body(
         self,
