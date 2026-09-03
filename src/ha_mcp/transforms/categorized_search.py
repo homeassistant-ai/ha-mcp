@@ -192,6 +192,29 @@ def categorize_capability(
     return "write"
 
 
+def _is_read_call_on_write_tool(name: str, arguments: dict[str, Any] | None) -> bool:
+    """Whether this call on a non-read-category tool is one of its read actions.
+
+    A mixed read/write tool (``ha_manage_backup``, ``ha_manage_updates``,
+    ``ha_manage_blueprints``, ...) is categorised ``write`` by its annotations,
+    which is where it stays: it is advertised under the write proxy and appears
+    in no other category set. But refusing its list/get actions on the read
+    proxy would strip real read surface from a client that only holds that
+    proxy — for blueprints, folding the old read tool into the merged one would
+    otherwise have removed listing entirely (#2329).
+
+    So membership decides advertisement, and this decides admission: read-only
+    mode already enumerates, per call, which invocations of such a tool are
+    reads (``READ_ONLY_EXEMPT_TOOLS``), and the read proxy reuses that verdict
+    so the two surfaces cannot disagree about what counts as a read. A call
+    that changes state is still refused here.
+    """
+    from ..read_only import READ_ONLY_EXEMPT_TOOLS
+
+    exemption = READ_ONLY_EXEMPT_TOOLS.get(name)
+    return exemption is not None and exemption.blocked_write(arguments or {}) is None
+
+
 def _categorize_tool(tool: Tool) -> Capability:
     """Categorize a Tool as read, write, or delete based on annotations and name."""
     annotations = tool.annotations
@@ -506,7 +529,11 @@ class CategorizedSearchTransform(BM25SearchTransform):
                         requested_inner, arguments.get("arguments") or {}
                     )
 
-            if name not in allowed:
+            # Membership is the advertised category; a mixed tool's read
+            # actions are additionally admitted here (see the helper).
+            if name not in allowed and not (
+                category == "read" and _is_read_call_on_write_tool(name, arguments)
+            ):
                 _raise_wrong_category_error(name, transform, proxy_name)
 
             return await ctx.fastmcp.call_tool(name, arguments)

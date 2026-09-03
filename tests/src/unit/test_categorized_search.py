@@ -411,7 +411,72 @@ class TestCategorizedCallDispatch:
         )
 
     @pytest.mark.anyio
-    async def test_proxy_adapts_a_retired_blueprint_call(self, transform):
+    async def test_read_proxy_admits_a_mixed_tools_read_action(
+        self, transform: CategorizedSearchTransform
+    ) -> None:
+        """A write-categorised tool's read actions stay reachable on the read
+        proxy (#2329). The tool is advertised under the write proxy only —
+        membership is unchanged — but a read-approved client that calls it
+        anyway, for a read, is admitted."""
+        _prepopulate_cache(
+            transform,
+            [
+                _make_tool("ha_manage_blueprints", destructive=True),
+                _make_tool("ha_get_state", read_only=True),
+            ],
+        )
+        assert "ha_manage_blueprints" not in transform._read_tools
+        ctx = _make_ctx(call_tool_return={"success": True})
+        fn = self._get_proxy_fn(transform, "read")
+
+        result = await fn("ha_manage_blueprints", {"action": "list"}, ctx)
+
+        assert result == {"success": True}
+        ctx.fastmcp.call_tool.assert_called_once_with(
+            "ha_manage_blueprints", {"action": "list"}
+        )
+
+    @pytest.mark.anyio
+    async def test_read_proxy_refuses_a_mixed_tools_write_action(
+        self, transform: CategorizedSearchTransform
+    ) -> None:
+        """Admission is per call, not per tool: a state-changing action on the
+        same tool is still refused on the read proxy."""
+        _prepopulate_cache(
+            transform,
+            [
+                _make_tool("ha_manage_blueprints", destructive=True),
+                _make_tool("ha_get_state", read_only=True),
+            ],
+        )
+        ctx = _make_ctx()
+        fn = self._get_proxy_fn(transform, "read")
+
+        with pytest.raises(ToolError):
+            await fn(
+                "ha_manage_blueprints",
+                {"action": "delete", "path": "user/motion.yaml", "confirm": True},
+                ctx,
+            )
+        ctx.fastmcp.call_tool.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_read_proxy_refuses_a_plain_write_tool(
+        self, transform: CategorizedSearchTransform
+    ) -> None:
+        """The admission covers mixed tools only — a tool with no read surface
+        is refused as before."""
+        ctx = _make_ctx()
+        fn = self._get_proxy_fn(transform, "read")
+
+        with pytest.raises(ToolError):
+            await fn("ha_config_set_automation", {"config": {}}, ctx)
+        ctx.fastmcp.call_tool.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_proxy_adapts_a_retired_blueprint_call(
+        self, transform: CategorizedSearchTransform
+    ) -> None:
         """A stale catalog calling ha_get_blueprint reaches the consolidated
         tool with the action its old signature never carried."""
         _prepopulate_cache(
@@ -617,7 +682,9 @@ class TestDoubleUnwrap:
         )
 
     @pytest.mark.anyio
-    async def test_double_wrapped_consolidated_tool_gets_its_action(self, transform):
+    async def test_double_wrapped_consolidated_tool_gets_its_action(
+        self, transform: CategorizedSearchTransform
+    ) -> None:
         """The envelope carries the retired signature too (#2329).
 
         A nested `ha_get_blueprint` resolves to `ha_manage_blueprints`, which
