@@ -39,6 +39,10 @@ class StartupLogCollector(logging.Handler):
         self._duration = duration_seconds
         self._logs: list[dict[str, Any]] = []
         self._lock = threading.Lock()
+        # Reentrancy guard (per-thread): a record's getMessage() can execute
+        # arbitrary code — entity __repr__, property getters — that logs again
+        # and re-enters this handler. emit() must never recurse; see below.
+        self._in_emit = threading.local()
         self._active = True
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -51,16 +55,36 @@ class StartupLogCollector(logging.Handler):
             self._active = False
             return
 
-        with self._lock:
-            self._logs.append(
-                {
-                    "timestamp": datetime.now(UTC).isoformat(),
-                    "level": record.levelname,
-                    "logger": record.name,
-                    "message": record.getMessage(),
-                    "elapsed_seconds": round(elapsed, 2),
-                }
-            )
+        # Drop records emitted while we are already inside emit() on this
+        # thread. This handler sits on the root logger, so any logging done by
+        # code triggered from getMessage() (entity repr / property getters,
+        # e.g. an update entity's latest_version) would re-enter here. Re-entry
+        # used to deadlock: getMessage() was called while holding the
+        # non-reentrant self._lock, and the nested emit() blocked forever on
+        # the same lock — freezing the calling thread (on Home Assistant's
+        # main event loop, the whole instance) with no output at all.
+        if getattr(self._in_emit, "inside", False):
+            return
+        self._in_emit.inside = True
+        try:
+            # Format outside the lock: getMessage() may run arbitrary code.
+            try:
+                message = record.getMessage()
+            except Exception as e:
+                message = f"<message formatting failed: {e!r}>"
+
+            with self._lock:
+                self._logs.append(
+                    {
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "level": record.levelname,
+                        "logger": record.name,
+                        "message": message,
+                        "elapsed_seconds": round(elapsed, 2),
+                    }
+                )
+        finally:
+            self._in_emit.inside = False
 
     def get_logs(self) -> list[dict[str, Any]]:
         """Get collected startup logs."""
