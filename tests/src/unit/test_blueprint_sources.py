@@ -21,7 +21,11 @@ from typing import Any
 
 import pytest
 
-from ha_mcp.client.rest_client import HomeAssistantCommandError
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+)
 from ha_mcp.tools import blueprint_sources, component_api
 from ha_mcp.tools.blueprint_sources import (
     parse_blueprint_body,
@@ -412,6 +416,63 @@ class TestComponentTier:
 
         assert found.text is None
         assert client not in component_api._CAPS_CACHE
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_command_failure_keeps_the_cached_caps(self) -> None:
+        """Only a downgrade invalidates. A transient failure must not.
+
+        Dropping the caps on any error would make the next read re-probe a
+        component that never stopped advertising the command -- the sibling
+        of the unknown_command case above, and the reason that branch exists.
+        """
+        ws = make_ws(
+            "ha_mcp_tools/blueprint_get",
+            info_result=_CAPS_TEXT,
+            cmd_exc=HomeAssistantCommandError("boom", "unknown_error"),
+        )
+        client = Client()
+        with patch_ws(ws, blueprint_sources):
+            found = await resolve_blueprint_source(
+                client, "automation", _PATH, source_url=None
+            )
+
+        assert found.text is None
+        assert client in component_api._CAPS_CACHE
+
+    @pytest.mark.asyncio
+    async def test_a_command_timeout_keeps_the_cached_caps(self) -> None:
+        """A timeout says nothing about whether the command still exists."""
+        ws = make_ws(
+            "ha_mcp_tools/blueprint_get",
+            info_result=_CAPS_TEXT,
+            cmd_exc=HomeAssistantCommandTimeout("timed out"),
+        )
+        client = Client()
+        with patch_ws(ws, blueprint_sources):
+            found = await resolve_blueprint_source(
+                client, "automation", _PATH, source_url=None
+            )
+
+        assert found.text is None
+        assert client in component_api._CAPS_CACHE
+
+    @pytest.mark.asyncio
+    async def test_a_transport_failure_serves_metadata_only(self) -> None:
+        """The connection itself failing degrades, it does not raise."""
+        ws = make_ws(
+            "ha_mcp_tools/blueprint_get",
+            info_result=_CAPS_TEXT,
+            cmd_exc=HomeAssistantConnectionError("socket gone"),
+        )
+        client = Client()
+        with patch_ws(ws, blueprint_sources):
+            found = await resolve_blueprint_source(
+                client, "automation", _PATH, source_url=None
+            )
+
+        assert found.text is None
+        assert found.config is None
+        assert client in component_api._CAPS_CACHE
 
     @pytest.mark.asyncio
     async def test_null_body_from_a_present_component_warns(self) -> None:

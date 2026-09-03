@@ -33,7 +33,7 @@ from .best_practice_checker import (
 from .best_practice_checker import (
     check_script_config as _check_best_practices,
 )
-from .blueprint_substitute import blueprint_reference, take_control_config
+from .blueprint_substitute import take_control_config, validate_write_modes
 from .component_config_reads import fetch_entity_lookup_via_component
 from .helpers import (
     exception_to_structured_error,
@@ -738,8 +738,13 @@ class ConfigScriptTools:
                 ],
                 context={"action": "set"},
             )
-            self._validate_set_script_modes(
-                config, python_transform, take_control_of_blueprint, script_id
+            validate_write_modes(
+                "script",
+                "script_id",
+                script_id,
+                config,
+                python_transform,
+                take_control_of_blueprint,
             )
 
             detached_blueprint: str | None = None
@@ -1043,52 +1048,6 @@ class ConfigScriptTools:
         )
         return response
 
-    @staticmethod
-    def _validate_set_script_modes(
-        config: dict[str, Any] | None,
-        python_transform: str | None,
-        take_control_of_blueprint: bool,
-        script_id: str,
-    ) -> None:
-        """Reject combinations of the three mutually exclusive write modes."""
-        if config is not None and python_transform is not None:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Cannot use both config and python_transform simultaneously",
-                    suggestions=[
-                        "Use only ONE of: config or python_transform",
-                        "config: Full replacement",
-                        "python_transform: Python-based edits (recommended for existing scripts)",
-                    ],
-                    context={"action": "set", "script_id": script_id},
-                )
-            )
-
-        if take_control_of_blueprint and (
-            config is not None or python_transform is not None
-        ):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "take_control_of_blueprint replaces the script with its own "
-                    "rendered config, so it cannot be combined with config or "
-                    "python_transform.",
-                    suggestions=[
-                        (
-                            "Take control first, then edit the standalone "
-                            "config in a second call"
-                        ),
-                        (
-                            "Preview the rendering with ha_manage_blueprints"
-                            '(action="substitute", domain="script") if you only '
-                            "want to see it"
-                        ),
-                    ],
-                    context={"action": "take_control", "script_id": script_id},
-                )
-            )
-
     async def _take_control_config(
         self, script_id: str
     ) -> tuple[dict[str, Any], str | None, str]:
@@ -1104,9 +1063,7 @@ class ConfigScriptTools:
         current_config, fetched_hash, _ = await self._get_script_config_internal(
             script_id
         )
-        reference = blueprint_reference(current_config)
-        blueprint_path = reference[0] if reference else None
-        taken = await take_control_config(
+        taken, blueprint_path = await take_control_config(
             self._client, "script", script_id, current_config
         )
         return taken, blueprint_path, fetched_hash

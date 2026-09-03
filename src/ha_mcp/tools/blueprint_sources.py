@@ -67,8 +67,10 @@ class BlueprintSource:
     ``text`` is the raw YAML, ``config`` its parsed body (``!input`` kept as an
     ``{"__input__": name}`` marker), ``source`` names the rung that answered, and
     ``warning`` carries a caller-facing note — currently only "the component is
-    installed but could not read this blueprint's body". All four are ``None``
-    when nothing could serve the blueprint.
+    installed but could not read this blueprint's body". When no rung could
+    serve the blueprint, ``text``, ``config`` and ``source`` are all ``None``;
+    ``warning`` may still be set, and is exactly how "the component has it but
+    cannot read it" is told apart from "nothing knows about it".
     """
 
     text: str | None

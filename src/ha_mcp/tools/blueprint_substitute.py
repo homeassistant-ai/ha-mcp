@@ -102,7 +102,7 @@ async def substitute_blueprint(
     return config
 
 
-def blueprint_reference(config: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+def _blueprint_reference(config: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     """Return ``(path, input)`` when ``config`` is built on a blueprint.
 
     ``None`` for an already-standalone config, which is what distinguishes
@@ -120,8 +120,12 @@ def blueprint_reference(config: dict[str, Any]) -> tuple[str, dict[str, Any]] | 
 
 async def take_control_config(
     client: Any, domain: str, identifier: str, current_config: dict[str, Any]
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], str]:
     """Render a blueprint-backed config into the standalone config that replaces it.
+
+    Returns ``(config, blueprint_path)`` -- the caller reports the path as what
+    the config no longer references, so it is read here rather than by each
+    tool re-deriving it.
 
     Mirrors the frontend's "Take control" (``ha-automation-editor``'s
     ``_takeControl``): the substituted config wins every key except ``id``,
@@ -129,7 +133,7 @@ async def take_control_config(
     entity keeps its identity and name. ``mode`` deliberately does NOT carry
     over -- it belongs to the blueprint's own rendered output.
     """
-    reference = blueprint_reference(current_config)
+    reference = _blueprint_reference(current_config)
     if reference is None:
         raise_tool_error(
             create_error_response(
@@ -160,4 +164,63 @@ async def take_control_config(
         if value is not None:
             taken[key] = value
     logger.debug("took control of %s %s from blueprint %s", domain, identifier, path)
-    return taken
+    return taken, path
+
+
+def validate_write_modes(
+    domain: str,
+    id_param: str,
+    id_value: str | None,
+    config: dict[str, Any] | None,
+    python_transform: str | None,
+    take_control_of_blueprint: bool,
+) -> None:
+    """Reject combinations of the three mutually exclusive write modes.
+
+    Lives here because take control is what made the automation and script
+    tools' validation identical: both gained the same third mode, with the
+    same reason it cannot be paired with either of the other two. ``id_param``
+    is the caller-facing name of the target ("identifier" for automations,
+    "script_id" for scripts) so the error names the argument the caller
+    actually passed.
+    """
+    if config is not None and python_transform is not None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Cannot use both config and python_transform simultaneously",
+                suggestions=[
+                    "Use only ONE of: config or python_transform",
+                    "config: Full replacement",
+                    (
+                        "python_transform: Python-based edits (recommended for "
+                        f"existing {domain}s)"
+                    ),
+                ],
+                context={"action": "set", id_param: id_value},
+            )
+        )
+
+    if take_control_of_blueprint and (
+        config is not None or python_transform is not None
+    ):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"take_control_of_blueprint replaces the {domain} with its own "
+                "rendered config, so it cannot be combined with config or "
+                "python_transform.",
+                suggestions=[
+                    (
+                        "Take control first, then edit the standalone config in "
+                        "a second call"
+                    ),
+                    (
+                        "Preview the rendering with ha_manage_blueprints"
+                        f'(action="substitute", domain="{domain}") if you only '
+                        "want to see it"
+                    ),
+                ],
+                context={"action": "take_control", id_param: id_value},
+            )
+        )

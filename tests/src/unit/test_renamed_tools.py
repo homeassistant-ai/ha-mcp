@@ -283,6 +283,21 @@ class TestBlueprintConsolidation:
             "ha_import_blueprint", {"url": "https://example.com/bp.yaml"}
         ) == {"action": "import", "url": "https://example.com/bp.yaml"}
 
+    def test_an_explicit_action_survives_the_adapter(self) -> None:
+        """The docstring promises it, and the dict spread is what delivers it.
+
+        A caller reaching the consolidated tool through a retired name can
+        still ask for any action; the adapter only supplies the default the
+        old signature implied.
+        """
+        assert adapt_retired_arguments(
+            "ha_get_blueprint",
+            {"action": "delete", "path": "user/motion.yaml", "confirm": True},
+        ) == {"action": "delete", "path": "user/motion.yaml", "confirm": True}
+        assert adapt_retired_arguments(
+            "ha_import_blueprint", {"action": "list", "domain": "script"}
+        ) == {"action": "list", "domain": "script"}
+
     def test_names_without_an_adapter_pass_arguments_through(self) -> None:
         assert adapt_retired_arguments("ha_manage_addon", {"slug": "x"}) == {
             "slug": "x"

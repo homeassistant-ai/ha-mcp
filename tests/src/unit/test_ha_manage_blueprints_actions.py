@@ -700,6 +700,77 @@ async def test_import_saves_and_reports_the_installed_path() -> None:
 
 
 @pytest.mark.asyncio
+async def test_import_that_validates_but_cannot_be_saved_is_a_service_failure() -> None:
+    """The save can still fail after import validated the blueprint.
+
+    ``exists`` was false, so the early already-exists gate let this through
+    and the failure came from the write itself -- a different situation from
+    a rejected ``save`` action, and it carries its own error mapping.
+    """
+    client = SpyClient(
+        {
+            "blueprint/import": {
+                "success": True,
+                "result": {
+                    "suggested_filename": "user/motion",
+                    "raw_data": "blueprint:\n  name: Motion Light\n",
+                    "blueprint": {"metadata": {"domain": "automation"}},
+                    "validation_errors": None,
+                    "exists": False,
+                },
+            },
+            "blueprint/save": {
+                "success": False,
+                "error": "Command failed: disk is read-only",
+            },
+        }
+    )
+    tool = _build_tool(client)
+
+    with pytest.raises(ToolError) as exc:
+        await tool(action="import", url="https://example.com/bp.yaml")
+
+    error = _error_payload(exc.value)["error"]
+    assert error["code"] == "SERVICE_CALL_FAILED", error
+    assert "read-only" in error["message"]
+    joined = " ".join(error["suggestions"])
+    assert "validated but could not be saved" in joined
+
+
+@pytest.mark.asyncio
+async def test_a_save_race_on_import_is_reported_as_already_exists() -> None:
+    """Core reports exists=false for a file that failed to load, and the path
+    can be taken between the import and the save, so the save's own
+    already-exists answer is the authoritative one."""
+    client = SpyClient(
+        {
+            "blueprint/import": {
+                "success": True,
+                "result": {
+                    "suggested_filename": "user/motion",
+                    "raw_data": "blueprint:\n  name: Motion Light\n",
+                    "blueprint": {"metadata": {"domain": "automation"}},
+                    "validation_errors": None,
+                    "exists": False,
+                },
+            },
+            "blueprint/save": {
+                "success": False,
+                "error": "Blueprint already exists",
+            },
+        }
+    )
+    tool = _build_tool(client)
+
+    with pytest.raises(ToolError) as exc:
+        await tool(action="import", url="https://example.com/bp.yaml")
+
+    error = _error_payload(exc.value)["error"]
+    assert error["code"] == "RESOURCE_ALREADY_EXISTS", error
+    assert "overwrite=true" in " ".join(error["suggestions"])
+
+
+@pytest.mark.asyncio
 async def test_import_existing_without_overwrite_is_rejected() -> None:
     client = SpyClient(
         {

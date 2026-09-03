@@ -38,7 +38,7 @@ from .best_practice_checker import (
 from .best_practice_checker import (
     check_automation_config as _check_best_practices,
 )
-from .blueprint_substitute import blueprint_reference, take_control_config
+from .blueprint_substitute import take_control_config, validate_write_modes
 from .component_config_reads import fetch_entity_lookup_via_component
 from .helpers import (
     exception_to_structured_error,
@@ -834,8 +834,13 @@ class AutomationConfigTools:
                     ],
                     context={"action": "set"},
                 )
-            self._validate_set_automation_modes(
-                config, python_transform, take_control_of_blueprint, identifier
+            validate_write_modes(
+                "automation",
+                "identifier",
+                identifier,
+                config,
+                python_transform,
+                take_control_of_blueprint,
             )
 
             detached_blueprint: str | None = None
@@ -951,51 +956,6 @@ class AutomationConfigTools:
             raise_tool_error(error)
 
     @staticmethod
-    def _validate_set_automation_modes(
-        config: dict[str, Any] | None,
-        python_transform: str | None,
-        take_control_of_blueprint: bool,
-        identifier: str | None,
-    ) -> None:
-        """Reject combinations of the three mutually exclusive write modes."""
-        if config is not None and python_transform is not None:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "Cannot use both config and python_transform simultaneously",
-                    suggestions=[
-                        "Use only ONE of: config or python_transform",
-                        "config: Full replacement",
-                        "python_transform: Python-based edits (recommended for existing automations)",
-                    ],
-                    context={"action": "set", "identifier": identifier},
-                )
-            )
-
-        if take_control_of_blueprint and (
-            config is not None or python_transform is not None
-        ):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "take_control_of_blueprint replaces the automation with its "
-                    "own rendered config, so it cannot be combined with config "
-                    "or python_transform.",
-                    suggestions=[
-                        (
-                            "Take control first, then edit the standalone "
-                            "config in a second call"
-                        ),
-                        (
-                            "Preview the rendering with ha_manage_blueprints"
-                            '(action="substitute") if you only want to see it'
-                        ),
-                    ],
-                    context={"action": "take_control", "identifier": identifier},
-                )
-            )
-
-    @staticmethod
     def _build_set_automation_suggestions(
         e: Exception, bp_warnings: BestPracticeCheckResult
     ) -> list[str]:
@@ -1098,9 +1058,7 @@ class AutomationConfigTools:
             identifier
         )
 
-        reference = blueprint_reference(current_config)
-        blueprint_path = reference[0] if reference else None
-        taken = await take_control_config(
+        taken, blueprint_path = await take_control_config(
             self._client, "automation", identifier, current_config
         )
         return taken, blueprint_path, fetched_hash
@@ -1239,10 +1197,10 @@ class AutomationConfigTools:
         """Execute config-replacement mode and return the tool response.
 
         ``detached_blueprint`` is set by take-control mode and names the
-        blueprint the automation no longer uses. It is reported on the
-        response and, when ``wait``, held for until Home Assistant's usage
-        index agrees -- the delete this unblocks is the whole point of the
-        conversion, and it would fail for as long as the index lagged.
+        blueprint the automation's config no longer references. It is
+        reported on the response as ``took_control_of_blueprint`` and nothing
+        more: Home Assistant goes on counting the automation as a user of that
+        blueprint until it is removed, so there is no release to wait for.
 
         ``resolved_id`` (set only when the optional hash check pre-resolved
         ``identifier``) is threaded to the upsert so it skips the redundant

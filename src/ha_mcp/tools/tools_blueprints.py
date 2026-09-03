@@ -110,10 +110,12 @@ class BlueprintTools:
     # blueprint's contents, so both capture first; a ``save`` to a brand-new path
     # finds nothing to snapshot and proceeds. ``confirm`` is part of the skip
     # test too, not just ``action``: an unconfirmed delete changes nothing, and
-    # capturing for it would run a component file read and — with no component —
-    # an outbound re-fetch of the blueprint's third-party ``source_url`` before
-    # the tool refuses. Auto-backup is on by default, so that would fire on
-    # every unconfirmed call.
+    # capturing for it would still run an installed-file read (the component
+    # command, or the File & YAML Tools service) before the tool refuses.
+    # Auto-backup is on by default, so that would fire on every unconfirmed
+    # call. The snapshot never re-fetches ``source_url``: ``_fetch_blueprint``
+    # passes ``source_url=None`` precisely so a restore cannot write different
+    # YAML than the write destroyed.
     @with_auto_backup(
         domain_fn=lambda kw: f"blueprint_{kw.get('domain') or 'automation'}",
         id_param="path",
@@ -401,6 +403,18 @@ class BlueprintTools:
         """List every installed blueprint in ``domain``."""
         return self._format_blueprint_list(await self._fetch_blueprints(domain), domain)
 
+    async def _require_installed(self, domain: str, path: str) -> dict[str, Any]:
+        """Return the store, having established that ``path`` is in it.
+
+        ``get`` and ``delete`` both have to answer "no such blueprint" before
+        doing anything else; the listing is returned for ``get``, which goes on
+        to read the entry out of it.
+        """
+        blueprints_data = await self._fetch_blueprints(domain)
+        if path not in blueprints_data:
+            self._raise_not_found(domain, path, blueprints_data)
+        return blueprints_data
+
     async def _get_blueprint(self, domain: str, path: str) -> dict[str, Any]:
         """Return one blueprint's metadata, inputs, parsed body, YAML and consumers.
 
@@ -411,9 +425,7 @@ class BlueprintTools:
         and a warning says so rather than letting an absent key read as "no
         automation uses this".
         """
-        blueprints_data = await self._fetch_blueprints(domain)
-        if path not in blueprints_data:
-            self._raise_not_found(domain, path, blueprints_data)
+        blueprints_data = await self._require_installed(domain, path)
 
         blueprint_data = blueprints_data[path]
         data: dict[str, Any] = {
@@ -478,9 +490,7 @@ class BlueprintTools:
                 )
             )
 
-        blueprints_data = await self._fetch_blueprints(domain)
-        if path not in blueprints_data:
-            self._raise_not_found(domain, path, blueprints_data)
+        await self._require_installed(domain, path)
 
         response = await self._client.send_websocket_message(
             {"type": "blueprint/delete", "domain": domain, "path": path}
