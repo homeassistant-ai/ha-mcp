@@ -33,7 +33,11 @@ from .best_practice_checker import (
 from .best_practice_checker import (
     check_script_config as _check_best_practices,
 )
-from .blueprint_substitute import take_control_config, validate_write_modes
+from .blueprint_substitute import (
+    TakenControl,
+    take_control_config,
+    validate_write_modes,
+)
 from .component_config_reads import fetch_entity_lookup_via_component
 from .helpers import (
     exception_to_structured_error,
@@ -749,16 +753,14 @@ class ConfigScriptTools:
 
             detached_blueprint: str | None = None
             if take_control_of_blueprint:
-                (
-                    config,
-                    detached_blueprint,
-                    fetched_hash,
-                ) = await self._take_control_config(script_id)
+                taken = await self._take_control_config(script_id)
+                config = taken.config
+                detached_blueprint = taken.blueprint_path
                 # Take control is a read-modify-write the TOOL performs, so it
                 # owns the consistency guarantee the caller could not supply:
                 # without this, an edit landing between that read and this
                 # write is silently overwritten. An explicit caller hash wins.
-                config_hash = config_hash or fetched_hash
+                config_hash = config_hash or taken.config_hash
 
             # Handle python_transform mode
             if python_transform is not None:
@@ -1048,13 +1050,10 @@ class ConfigScriptTools:
         )
         return response
 
-    async def _take_control_config(
-        self, script_id: str
-    ) -> tuple[dict[str, Any], str | None, str]:
+    async def _take_control_config(self, script_id: str) -> TakenControl:
         """Render a blueprint script into the config that replaces it.
 
-        Returns ``(config, blueprint_path, config_hash)``. The hash is of the
-        config this read saw, so the write can lock against it. Produces a
+        The hash is of the config this read saw, so the write locks against it. Produces a
         config for the ordinary replacement path rather than
         writing it here, so the rendering goes through the same validation,
         best-practice checks and skill-content attachment as every other
@@ -1066,7 +1065,7 @@ class ConfigScriptTools:
         taken, blueprint_path = await take_control_config(
             self._client, "script", script_id, current_config
         )
-        return taken, blueprint_path, fetched_hash
+        return TakenControl(taken, blueprint_path, fetched_hash)
 
     async def _commit_script_config(
         self,

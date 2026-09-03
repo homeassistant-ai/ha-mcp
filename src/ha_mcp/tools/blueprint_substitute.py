@@ -11,13 +11,26 @@ frame and the failure classification stay identical.
 from __future__ import annotations
 
 import logging
-from typing import Any, NoReturn
+from typing import Any, NamedTuple, NoReturn
 
 from ..errors import ErrorCode, create_error_response
 from .blueprint_write import error_text
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
+
+
+class TakenControl(NamedTuple):
+    """A rendered standalone config, and what it was rendered from.
+
+    ``config_hash`` is of the config the tool READ, not the one it is about to
+    write: the write locks against it so an edit landing in between surfaces
+    as a conflict rather than a lost update.
+    """
+
+    config: dict[str, Any]
+    blueprint_path: str
+    config_hash: str
 
 
 def raise_substitute_failure(

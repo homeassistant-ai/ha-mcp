@@ -38,7 +38,11 @@ from .best_practice_checker import (
 from .best_practice_checker import (
     check_automation_config as _check_best_practices,
 )
-from .blueprint_substitute import take_control_config, validate_write_modes
+from .blueprint_substitute import (
+    TakenControl,
+    take_control_config,
+    validate_write_modes,
+)
 from .component_config_reads import fetch_entity_lookup_via_component
 from .helpers import (
     exception_to_structured_error,
@@ -845,17 +849,15 @@ class AutomationConfigTools:
 
             detached_blueprint: str | None = None
             if take_control_of_blueprint:
-                (
-                    config,
-                    detached_blueprint,
-                    fetched_hash,
-                ) = await self._take_control_config(identifier)
+                taken = await self._take_control_config(identifier)
+                config = taken.config
+                detached_blueprint = taken.blueprint_path
                 # Take control is a read-modify-write the TOOL performs, so it
                 # owns the consistency guarantee the caller could not supply:
                 # without this, an edit landing between that read and this
                 # write is silently overwritten. An explicit caller hash still
                 # wins, so it can still lock against a config it read itself.
-                config_hash = config_hash or fetched_hash
+                config_hash = config_hash or taken.config_hash
 
             if python_transform is not None:
                 response, bp_warnings = await self._run_python_transform(
@@ -1024,9 +1026,7 @@ class AutomationConfigTools:
             result = await self._client.upsert_automation_config(config, identifier)
         return result
 
-    async def _take_control_config(
-        self, identifier: str | None
-    ) -> tuple[dict[str, Any], str | None, str]:
+    async def _take_control_config(self, identifier: str | None) -> TakenControl:
         """Render a blueprint automation into the config that replaces it.
 
         Returns ``(config, blueprint_path, config_hash)``. The hash is of the
@@ -1061,7 +1061,7 @@ class AutomationConfigTools:
         taken, blueprint_path = await take_control_config(
             self._client, "automation", identifier, current_config
         )
-        return taken, blueprint_path, fetched_hash
+        return TakenControl(taken, blueprint_path, fetched_hash)
 
     async def _run_python_transform(
         self,

@@ -8,7 +8,7 @@ live in ``blueprint_write``; the YAML-text tier ladder in ``blueprint_sources``.
 """
 
 import logging
-from typing import Annotated, Any, Literal, NoReturn
+from typing import Annotated, Any, Literal, NamedTuple, NoReturn
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
@@ -29,6 +29,19 @@ from .helpers import (
 from .util_helpers import JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
+
+
+class BlueprintConsumers(NamedTuple):
+    """Who uses a blueprint, and whether Home Assistant actually said.
+
+    ``answered`` false means the lookup could not be consulted, NOT that
+    nothing uses the blueprint -- the whole point of returning it is that
+    an empty ``entity_ids`` must never be reported as "nothing uses this".
+    """
+
+    entity_ids: list[str]
+    answered: bool
+
 
 _VALID_DOMAINS = ("automation", "script")
 
@@ -459,9 +472,9 @@ class BlueprintTools:
         # response stays metadata + inputs.
         await self._merge_blueprint_body(result, data, domain, path, source_url)
 
-        consumers, resolved = await self._blueprint_consumers(domain, path)
-        if resolved:
-            data["used_by"] = consumers
+        consumers = await self._blueprint_consumers(domain, path)
+        if consumers.answered:
+            data["used_by"] = consumers.entity_ids
         else:
             result.setdefault("warnings", []).append(
                 "Home Assistant did not answer the reference lookup, so the "
@@ -543,7 +556,7 @@ class BlueprintTools:
                 )
             )
 
-        in_use_by, resolved = await self._blueprint_consumers(domain, path)
+        consumers = await self._blueprint_consumers(domain, path)
         remove_tool = f"ha_config_remove_{domain}"
         set_tool = f"ha_config_set_{domain}"
         suggestions = [
@@ -563,10 +576,10 @@ class BlueprintTools:
                 f'path="{path}", confirm=True)'
             ),
         ]
-        if resolved:
+        if consumers.answered:
             detail = (
-                f"in use by {', '.join(in_use_by)}"
-                if in_use_by
+                f"in use by {', '.join(consumers.entity_ids)}"
+                if consumers.entity_ids
                 else "reported as in use by Home Assistant"
             )
         else:
@@ -580,14 +593,16 @@ class BlueprintTools:
             create_error_response(
                 ErrorCode.RESOURCE_LOCKED,
                 f"Blueprint '{path}' cannot be deleted: {detail}.",
-                context={"domain": domain, "path": path, "in_use_by": in_use_by},
+                context={
+                    "domain": domain,
+                    "path": path,
+                    "in_use_by": consumers.entity_ids,
+                },
                 suggestions=suggestions,
             )
         )
 
-    async def _blueprint_consumers(
-        self, domain: str, path: str
-    ) -> tuple[list[str], bool]:
+    async def _blueprint_consumers(self, domain: str, path: str) -> BlueprintConsumers:
         """Ask HA's reference graph which entities use ``path``.
 
         Only the bucket named by the blueprint's own domain is read. Core's
@@ -596,9 +611,9 @@ class BlueprintTools:
         start returning related entities, devices or areas, unioning every
         bucket would list unrelated ids as blueprint consumers.
 
-        Returns ``(entity_ids, resolved)``. ``resolved`` is False when the
-        ``search/related`` lookup itself could not be consulted, so the caller
-        can say "unknown consumers" instead of "no consumers".
+        ``answered`` is False when the ``search/related`` lookup itself could
+        not be consulted, so the caller can say "unknown consumers" instead of
+        "no consumers".
         """
         try:
             response = await self._client.send_websocket_message(
@@ -616,17 +631,19 @@ class BlueprintTools:
             # wider catch here could only swallow a bug in this module and
             # report it as "consumers unknown".
             logger.debug("search/related failed for blueprint %s: %r", path, exc)
-            return [], False
+            return BlueprintConsumers([], False)
         if not isinstance(response, dict) or not response.get("success"):
             logger.debug("search/related rejected for blueprint %s: %r", path, response)
-            return [], False
+            return BlueprintConsumers([], False)
         result = response.get("result") or {}
         if not isinstance(result, dict):
-            return [], False
+            return BlueprintConsumers([], False)
         consumers = result.get(domain)
         if not isinstance(consumers, list):
-            return [], True
-        return sorted({item for item in consumers if isinstance(item, str)}), True
+            return BlueprintConsumers([], True)
+        return BlueprintConsumers(
+            sorted({item for item in consumers if isinstance(item, str)}), True
+        )
 
     async def _substitute_blueprint(
         self, domain: str, path: str, blueprint_input: dict[str, Any]
