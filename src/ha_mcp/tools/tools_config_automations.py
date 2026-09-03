@@ -1500,8 +1500,10 @@ class AutomationConfigTools:
                             "Conditions use 'condition', not 'platform'."
                         ),
                         suggestions=[
-                            f"Replace 'platform' with 'condition': "
-                            f"{{'condition': '{cond['platform']}', ...}}",
+                            (
+                                f"Replace 'platform' with 'condition': "
+                                f"{{'condition': '{cond['platform']}', ...}}"
+                            ),
                             "Triggers use 'trigger'; conditions use 'condition'.",
                         ],
                         context={"condition_index": idx, "found_key": "platform"},
