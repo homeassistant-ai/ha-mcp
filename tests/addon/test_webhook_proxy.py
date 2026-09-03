@@ -6552,7 +6552,15 @@ class TestProxyConfigFilePersistence:
         real_open = os.open
 
         def _fail_under_tmp(path, *args, **kwargs):
-            if str(path).startswith(str(tmp_path)):
+            # Path containment, not a string prefix: a sibling tmp dir whose
+            # name merely starts with this one's would otherwise be caught too,
+            # which under xdist is the same cross-test breakage. os.open also
+            # accepts an int fd, which fsdecode rejects — those pass through.
+            try:
+                candidate = Path(os.fsdecode(path))
+            except (TypeError, ValueError):
+                return real_open(path, *args, **kwargs)
+            if candidate == tmp_path or candidate.is_relative_to(tmp_path):
                 raise OSError("no mode bits")
             return real_open(path, *args, **kwargs)
 
