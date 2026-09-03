@@ -24,6 +24,7 @@ from .helpers import (
     raise_tool_error,
     register_tool_methods,
 )
+from .util_helpers import JSON_STRING_COERCION
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +190,7 @@ class BlueprintTools:
         ] = False,
         input: Annotated[  # noqa: A002 — mirrors core's blueprint/substitute key
             dict[str, Any] | None,
+            JSON_STRING_COERCION,
             Field(
                 description=(
                     "Blueprint input values keyed by input name "

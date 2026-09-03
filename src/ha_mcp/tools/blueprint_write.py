@@ -31,9 +31,14 @@ def error_text(response: dict[str, Any], fallback: str) -> str:
 def error_code(response: dict[str, Any]) -> str:
     """Home Assistant's WebSocket error ``code``, or ``""`` when it sent none.
 
-    Only the ``{"code": ..., "message": ...}`` envelope carries one; a plain
-    string error leaves the caller to match on the message text.
+    ``send_websocket_message`` flattens the error to a string and carries
+    core's structured code in a sibling ``error_code`` key; a raw
+    ``{"code": ..., "message": ...}`` envelope is honoured too. With neither,
+    the caller matches on the message text.
     """
+    code = response.get("error_code")
+    if isinstance(code, str) and code:
+        return code
     error = response.get("error")
     if isinstance(error, dict):
         return str(error.get("code") or "")

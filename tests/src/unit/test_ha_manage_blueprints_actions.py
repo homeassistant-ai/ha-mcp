@@ -846,6 +846,57 @@ async def test_save_invalid_blueprint_is_validation_failed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_save_invalid_yaml_classifies_by_the_clients_error_code() -> None:
+    """The REST client flattens core's error to a string and carries the
+    structured code in a sibling ``error_code`` key — that key, not the
+    message text, must drive the mapping (a YAML parse error mentions no
+    "invalid")."""
+    client = SpyClient(
+        {
+            "blueprint/save": {
+                "success": False,
+                "error": (
+                    "Command failed: while parsing a flow sequence in "
+                    "<unicode string>, line 1, column 6: expected a comma or a "
+                    "closing bracket"
+                ),
+                "error_code": "invalid_format",
+            }
+        }
+    )
+    tool = _build_tool(client)
+
+    with pytest.raises(ToolError) as exc:
+        await tool(action="save", path=_PATH, yaml="not: [a blueprint")
+
+    error = _error_payload(exc.value)["error"]
+    assert error["code"] == "VALIDATION_FAILED"
+    assert "while parsing a flow sequence" in error["message"]
+
+
+@pytest.mark.asyncio
+async def test_substitute_input_accepts_a_json_string() -> None:
+    """MCP clients that stringify objects still reach core with a dict."""
+    client = SpyClient(
+        {
+            "blueprint/substitute": {
+                "success": True,
+                "result": {"substituted_config": {"trigger": []}},
+            }
+        }
+    )
+    tool = _build_tool(client)
+
+    await tool(
+        action="substitute", path=_PATH, input='{"motion_sensor": "binary_sensor.hall"}'
+    )
+
+    assert client.frames("blueprint/substitute")[0]["input"] == {
+        "motion_sensor": "binary_sensor.hall"
+    }
+
+
+@pytest.mark.asyncio
 async def test_save_other_failure_is_service_call_failed() -> None:
     client = SpyClient(
         {

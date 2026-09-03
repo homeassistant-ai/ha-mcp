@@ -10,6 +10,7 @@ and production environments. Blueprint availability may vary.
 """
 
 import logging
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -996,10 +997,14 @@ class TestBlueprintManagement:
                     "auto-backup is off in this lane; the pre-delete snapshot "
                     f"cannot be verified: {data}"
                 )
+                # Snapshot names sanitise the id the way the backup manager
+                # does (``_safe_entity_id``): every character outside
+                # ``[A-Za-z0-9._-]`` — the ``/`` in a blueprint path — is ``_``.
+                safe_path = re.sub(r"[^A-Za-z0-9._-]", "_", path)
                 matching = [
                     b
                     for b in data["backups"]
-                    if b.get("entity_id") == path
+                    if b.get("entity_id") == safe_path
                     and b.get("domain") == "blueprint_automation"
                 ]
                 assert matching, f"no pre-delete snapshot for {path}: {data}"

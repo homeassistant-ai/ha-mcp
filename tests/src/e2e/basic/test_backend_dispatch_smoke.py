@@ -128,8 +128,18 @@ _SKIP_CEILING_PER_LANE = {
     # gains a collection-time skip for every one of the two it does not run —
     # two on every lane except embedded and haos_embedded (and their no-tools
     # variants), which run one and skip the other.
-    "container": 90,  # was 79; +8 #2292 no_tools_only; +1 #2357 haos_embedded_only; +2 #2361 in-HA LLM-API probe
-    "haos": 69,  # was 58; +8 #2292 no_tools_only; +1 #2357 haos_embedded_only; +2 #2361 in-HA LLM-API probe
+    # #2329 adds two marker-gated blueprint tests
+    # (tests/src/e2e/workflows/blueprints/test_blueprints.py): one
+    # ``embedded_only`` (the direct blueprint file read) and one
+    # ``no_tools_only`` (text still arrives without the tools entry). Every
+    # lane gains one collection-time skip per marker it does not satisfy.
+    # ``embedded_only`` runs on the container-embedded lane alone — NOT on
+    # haos_embedded, which is a HAOS lane — so that lane takes both: +2 on
+    # container / haos / haos_stdio / haos_inaddon / haos_embedded, +1 on
+    # embedded (no_tools_only), +1 on the no-tools lanes except
+    # embedded_no_tools (embedded_only).
+    "container": 92,  # was 90; +2 #2329 embedded_only + no_tools_only
+    "haos": 71,  # was 69; +2 #2329 embedded_only + no_tools_only
     # HAOS stdio is the external HAOS set plus ``external_only`` tests, whose
     # test-process monkeypatches cannot reach the subprocess server. The first
     # full lane run on 2026-08-18 observed 103 collection-time marker skips
@@ -141,8 +151,8 @@ _SKIP_CEILING_PER_LANE = {
     # This entry moved 117 -> 119 rather than by that 8: the 117 was a ceiling
     # carrying headroom above its own observed count, so part of the +8 landed
     # inside that headroom and 119 is what round-1 CI actually observed.
-    "haos_stdio": 122,  # +1 #2357 haos_embedded_only; +2 #2361 in-HA LLM-API probe
-    "haos_inaddon": 97,  # was 86; +8 #2292 no_tools_only; +1 #2357 haos_embedded_only; +2 #2361 in-HA LLM-API probe
+    "haos_stdio": 124,  # was 122; +2 #2329 embedded_only + no_tools_only
+    "haos_inaddon": 99,  # was 97; +2 #2329 embedded_only + no_tools_only
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
     # lane's marker-skips PLUS two embedded-specific additions:
     #   - haos_only + inaddon_only tests skip on embedded just like on container
@@ -158,7 +168,7 @@ _SKIP_CEILING_PER_LANE = {
     # +1 visibility e2e (haos_stdio_only) and +1 #2241 haos_tls scenario
     # (haos_only) bridge 133 -> 135.
     # Read future changes from CI instead of deriving them.
-    "embedded": 147,  # was 137; +8 #2292 no_tools_only; +1 #2357 haos_embedded_only; +1 #2361 (its haos_embedded_only half)
+    "embedded": 148,  # was 147; +1 #2329 no_tools_only
     # HAOS embedded backend (#1527, HAOS_TEST_MODE=embedded). A HAOS lane, so it
     # skips the SAME set as the external HAOS lane (container_only + inaddon_only)
     # PLUS two haos_embedded-specific additions:
@@ -176,7 +186,7 @@ _SKIP_CEILING_PER_LANE = {
     # 107 in the 2026-08-18 CI run (106 before the self-restart e2e).
     # Read future changes from CI instead of deriving them.
     # #2270 stable observed 118 marker skips; beta observed 117.
-    "haos_embedded": 127,  # was 118; +8 #2292 no_tools_only; +1 #2361 (its embedded_only half)
+    "haos_embedded": 129,  # was 127; +2 #2329 embedded_only + no_tools_only
     # No-tools topology keys (#2292). On the ``E2E_NO_TOOLS_ENTRY=1`` lanes the
     # lookup key gains a ``_no_tools`` suffix, because those lanes skip a
     # completely different — and much larger — set: every ``requires_tools_entry``
@@ -187,10 +197,10 @@ _SKIP_CEILING_PER_LANE = {
     # The haos (external) and haos_stdio backends have no no-tools lane today,
     # so they deliberately have no key here — an unknown backend fails loudly in
     # the test below rather than silently skipping the ceiling check.
-    "container_no_tools": 195,  # observed 187; +1 #2357 haos_embedded_only; +2 #2361 in-HA LLM-API probe
+    "container_no_tools": 196,  # was 195; +1 #2329 embedded_only
     "embedded_no_tools": 251,  # observed 244; +1 #2357 haos_embedded_only; +1 #2361 (its haos_embedded_only half)
-    "haos_embedded_no_tools": 231,  # observed 225; +1 #2361 (its embedded_only half)
-    "haos_inaddon_no_tools": 201,  # observed 193; +1 #2357 haos_embedded_only; +2 #2361 in-HA LLM-API probe
+    "haos_embedded_no_tools": 232,  # was 231; +1 #2329 embedded_only
+    "haos_inaddon_no_tools": 202,  # was 201; +1 #2329 embedded_only
 }
 
 
