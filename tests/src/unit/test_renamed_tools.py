@@ -20,6 +20,7 @@ from ha_mcp.policy.evaluator import find_matching_rule
 from ha_mcp.policy.persistence import load_policy
 from ha_mcp.renamed_tools import (
     RENAMED_TOOLS,
+    adapt_retired_arguments,
     current_tool_name,
     rename_retired_keys,
 )
@@ -215,3 +216,75 @@ class TestStoredPolicy:
 
         assert [rule.tool_name for rule in policy.rules] == ["ha_call_service"]
         assert not set(RENAMED_TOOLS) & {rule.tool_name for rule in policy.rules}
+
+
+class TestBlueprintConsolidation:
+    """#2329 folded two tools into one: both retired names must still resolve,
+    their stored states must merge restrictively, and a call on either old
+    signature must gain the ``action`` the merged tool dispatches on."""
+
+    def test_both_retired_blueprint_names_resolve(self) -> None:
+        assert current_tool_name("ha_get_blueprint") == "ha_manage_blueprints"
+        assert current_tool_name("ha_import_blueprint") == "ha_manage_blueprints"
+
+    def test_disagreeing_retired_states_take_the_restrictive_one(self) -> None:
+        def restrictive(first: str, second: str) -> str:
+            return "disabled" if "disabled" in (first, second) else first
+
+        states = rename_retired_keys(
+            {"ha_get_blueprint": "pinned", "ha_import_blueprint": "disabled"},
+            prefer=restrictive,
+        )
+        assert states == {"ha_manage_blueprints": "disabled"}
+
+        states = rename_retired_keys(
+            {"ha_import_blueprint": "disabled", "ha_get_blueprint": "pinned"},
+            prefer=restrictive,
+        )
+        assert states == {"ha_manage_blueprints": "disabled"}
+
+    def test_a_disabled_retired_blueprint_tool_disables_the_merged_one(
+        self, tmp_path: Path
+    ) -> None:
+        config_path = tmp_path / "tool_config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "tools": {
+                        "ha_get_blueprint": "pinned",
+                        "ha_import_blueprint": "disabled",
+                    },
+                    "llm_api": {"ha_get_blueprint": True, "ha_import_blueprint": False},
+                }
+            ),
+            encoding="utf-8",
+        )
+        with patch(
+            "ha_mcp.settings_ui._persistence._get_config_path", return_value=config_path
+        ):
+            config = load_tool_config(
+                SimpleNamespace(disabled_tools="", pinned_tools="")
+            )
+
+        assert config["tools"] == {"ha_manage_blueprints": "disabled"}
+        assert config["llm_api"] == {"ha_manage_blueprints": False}
+
+    def test_get_blueprint_arguments_gain_list_or_get(self) -> None:
+        assert adapt_retired_arguments("ha_get_blueprint", {"domain": "script"}) == {
+            "action": "list",
+            "domain": "script",
+        }
+        assert adapt_retired_arguments(
+            "ha_get_blueprint", {"path": "user/motion.yaml", "domain": "automation"}
+        ) == {"action": "get", "path": "user/motion.yaml", "domain": "automation"}
+
+    def test_import_blueprint_arguments_gain_import(self) -> None:
+        assert adapt_retired_arguments(
+            "ha_import_blueprint", {"url": "https://example.com/bp.yaml"}
+        ) == {"action": "import", "url": "https://example.com/bp.yaml"}
+
+    def test_names_without_an_adapter_pass_arguments_through(self) -> None:
+        assert adapt_retired_arguments("ha_manage_addon", {"slug": "x"}) == {
+            "slug": "x"
+        }
+        assert adapt_retired_arguments("ha_get_state", None) is None

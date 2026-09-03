@@ -2292,38 +2292,24 @@ async def _read_legacy_backup(client: Any, filename: str) -> dict[str, Any]:
 # restored through ``blueprint/save``.
 
 
-async def _blueprint_source_url(client: Any, path: str, domain: str) -> str | None:
-    """Read the ``source_url`` core recorded for ``path``, or ``None``.
-
-    Only ``blueprint/list`` carries it, so the capture path fetches it here and
-    hands it to the tier ladder; a listing that fails or omits the key simply
-    leaves the last tier unavailable rather than failing the snapshot.
-    """
-    listing = await client.send_websocket_message(
-        {"type": "blueprint/list", "domain": domain}
-    )
-    if not isinstance(listing, dict) or not listing.get("success"):
-        return None
-    entry = (listing.get("result") or {}).get(path) or {}
-    source_url = (entry.get("metadata") or {}).get("source_url")
-    return source_url if isinstance(source_url, str) and source_url else None
-
-
 async def _fetch_blueprint(client: Any, path: str, domain: str) -> Any:
     """Fetch a blueprint's YAML for snapshotting, best copy first.
 
     Delegates to the shared tier ladder in ``tools.blueprint_sources`` — the
-    same one ``ha_manage_blueprints(action="get")`` walks — so a snapshot and a
-    read never disagree about which copy of a blueprint is authoritative.
+    same one ``ha_manage_blueprints(action="get")`` walks — but only its
+    installed-file tiers: the embedded read, the component's ``blueprint_get``
+    text, and the tools entry's ``read_file``. The ``source_url`` re-fetch
+    ``get`` may fall back to is deliberately NOT a snapshot source: it is what
+    the author publishes now, so a restore from it could silently write
+    different YAML than the delete or overwrite destroyed.
 
-    ``None`` means there is nothing to snapshot (no tier could serve the file);
-    the decorator logs that skip and the write proceeds un-backed-up, which is
-    the best-effort contract.
+    ``None`` means there is nothing to snapshot (no installed-file tier could
+    serve it); the decorator logs that skip and the write proceeds
+    un-backed-up, which is the best-effort contract.
     """
     from .tools.blueprint_sources import resolve_blueprint_source
 
-    source_url = await _blueprint_source_url(client, path, domain)
-    found = await resolve_blueprint_source(client, domain, path, source_url=source_url)
+    found = await resolve_blueprint_source(client, domain, path, source_url=None)
     return found.text
 
 

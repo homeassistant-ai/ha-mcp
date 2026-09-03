@@ -10,10 +10,18 @@ YAML. Kept out of ``tools_blueprints`` so that module stays the tool surface
 
 from __future__ import annotations
 
+import logging
 from typing import Any, NoReturn
 
+from packaging.version import InvalidVersion, Version
+
+from ..backup_manager import _CAPTURE_TRANSIENT_ERRORS, get_backup_manager
+from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
+from .blueprint_sources import parse_blueprint_body
 from .helpers import raise_tool_error
+
+logger = logging.getLogger(__name__)
 
 
 def error_text(response: dict[str, Any], fallback: str) -> str:
@@ -92,6 +100,7 @@ async def write_blueprint(
     overwrite: bool,
 ) -> dict[str, Any]:
     """Write caller-supplied YAML to a blueprint path via blueprint/save."""
+    await _assert_save_compatible(client, domain, path, yaml_text)
     response = await _save_blueprint(
         client, domain, path, yaml_text, overwrite, source_url=source_url
     )
@@ -103,16 +112,105 @@ async def write_blueprint(
     )
     return {
         "success": True,
-        "domain": domain,
-        "path": path,
-        "overrides_existing": overrides_existing,
-        "message": (
-            "Blueprint saved over the existing file. Automations and "
-            "scripts using it were reloaded."
-            if overrides_existing
-            else "Blueprint saved."
-        ),
+        "data": {
+            "domain": domain,
+            "path": path,
+            "overrides_existing": overrides_existing,
+            "message": (
+                "Blueprint saved over the existing file. Automations and "
+                "scripts using it were reloaded."
+                if overrides_existing
+                else "Blueprint saved."
+            ),
+        },
     }
+
+
+async def _assert_save_compatible(
+    client: Any, domain: str, path: str, yaml_text: str
+) -> None:
+    """Run the compatibility check ``blueprint/import`` runs and ``blueprint/save`` skips.
+
+    Core validates an imported blueprint's ``homeassistant.min_version``
+    against the running version but does not repeat it on save, so caller
+    YAML that ``import`` would refuse could still be written over a working
+    blueprint and reloaded. Mirrors core's wording. Text that does not parse
+    is left to ``blueprint/save``, whose own parser reports the error; an
+    unreadable running version is logged and skipped, as core's save would.
+    """
+    body = parse_blueprint_body(yaml_text)
+    metadata = body.get("blueprint") if body else None
+    if not isinstance(metadata, dict):
+        return
+    requirement = metadata.get("homeassistant")
+    min_version = (
+        requirement.get("min_version") if isinstance(requirement, dict) else None
+    )
+    if not min_version:
+        return
+    running = await _running_version(client)
+    if running is None:
+        return
+    try:
+        too_old = running < Version(str(min_version))
+    except InvalidVersion:
+        logger.debug(
+            "Blueprint %r min_version %r is not a version; not checked",
+            path,
+            min_version,
+        )
+        return
+    if too_old:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_FAILED,
+                f"Blueprint failed validation: Requires at least Home Assistant {min_version}",
+                context={
+                    "domain": domain,
+                    "path": path,
+                    "min_version": str(min_version),
+                },
+                suggestions=[
+                    "The blueprint is not compatible with this Home Assistant installation",
+                    "Update Home Assistant to satisfy the blueprint's minimum version requirement",
+                ],
+            )
+        )
+
+
+async def _running_version(client: Any) -> Version | None:
+    """Home Assistant's running version from ``/api/config``, or ``None``."""
+    try:
+        config = await client.get_config()
+        return Version(str(config.get("version")))
+    except (InvalidVersion, AttributeError, TypeError, ValueError) as exc:
+        logger.debug("Home Assistant version unavailable for the save check: %r", exc)
+        return None
+
+
+async def snapshot_before_overwrite(client: Any, domain: str, path: str) -> None:
+    """Best-effort pre-write auto-backup of an installed blueprint.
+
+    ``@with_auto_backup`` on the tool covers ``save`` and ``delete``, whose
+    target path is a call argument. An overwriting ``import`` only learns the
+    destination from ``blueprint/import``, so it captures here — after the
+    validation gates and before ``blueprint/save`` — under the same
+    ``blueprint_<domain>`` handler and the same best-effort contract.
+    """
+    settings = get_global_settings()
+    if not getattr(settings, "enable_auto_backup", False):
+        return
+    try:
+        await get_backup_manager(client, settings).maybe_snapshot(
+            f"blueprint_{domain}", path, tool_name="ha_manage_blueprints"
+        )
+    except _CAPTURE_TRANSIENT_ERRORS as err:
+        logger.warning(
+            "Auto-backup: pre-import snapshot of blueprint %r failed (%s) — "
+            "import proceeding",
+            path,
+            err,
+        )
 
 
 def _raise_save_failure(domain: str, path: str, response: dict[str, Any]) -> NoReturn:
@@ -187,7 +285,7 @@ async def import_blueprint(client: Any, url: str, overwrite: bool) -> dict[str, 
     result_data = response.get("result", {}) or {}
     suggested_filename = result_data.get("suggested_filename", "")
     raw_data = result_data.get("raw_data", "")
-    blueprint_meta = result_data.get("blueprint", {}).get("metadata", {})
+    blueprint_meta = (result_data.get("blueprint") or {}).get("metadata") or {}
     domain = blueprint_meta.get("domain", "automation")
 
     if not suggested_filename or not raw_data:
@@ -209,6 +307,9 @@ async def import_blueprint(client: Any, url: str, overwrite: bool) -> dict[str, 
         suggested_filename = suggested_filename + ".yaml"
 
     _assert_importable(url, result_data, suggested_filename, domain, overwrite)
+
+    if overwrite and result_data.get("exists"):
+        await snapshot_before_overwrite(client, domain, suggested_filename)
 
     # Save the blueprint to disk (blueprint/import only validates)
     save_response = await _save_blueprint(

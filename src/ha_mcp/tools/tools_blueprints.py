@@ -258,7 +258,10 @@ class BlueprintTools:
         ``ha_manage_backup(scope="edits")`` to restore a deleted blueprint.
         """
         try:
-            self._validate_domain(domain)
+            # import takes its domain from the blueprint file, so a stray
+            # value must not refuse an otherwise valid call.
+            if action != "import":
+                self._validate_domain(domain)
 
             if action == "list":
                 return await self._list_blueprints(domain)
@@ -464,9 +467,7 @@ class BlueprintTools:
 
         return {
             "success": True,
-            "domain": domain,
-            "path": path,
-            "message": "Blueprint deleted.",
+            "data": {"domain": domain, "path": path, "message": "Blueprint deleted."},
         }
 
     async def _raise_delete_failure(
@@ -598,9 +599,7 @@ class BlueprintTools:
             )
         return {
             "success": True,
-            "domain": domain,
-            "path": path,
-            "config": config,
+            "data": {"domain": domain, "path": path, "config": config},
         }
 
     @staticmethod

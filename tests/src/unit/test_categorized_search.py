@@ -411,6 +411,67 @@ class TestCategorizedCallDispatch:
         )
 
     @pytest.mark.anyio
+    async def test_read_proxy_accepts_a_mixed_tools_read_action(self, transform):
+        """A write-category tool's read actions stay reachable through the
+        read proxy (#2329): read-only mode's per-call verdict decides."""
+        _prepopulate_cache(
+            transform,
+            [
+                _make_tool("ha_manage_blueprints", destructive=True),
+                _make_tool("ha_get_state", read_only=True),
+            ],
+        )
+        ctx = _make_ctx(call_tool_return={"success": True})
+        fn = self._get_proxy_fn(transform, "read")
+
+        result = await fn("ha_manage_blueprints", {"action": "list"}, ctx)
+
+        assert result == {"success": True}
+        ctx.fastmcp.call_tool.assert_called_once_with(
+            "ha_manage_blueprints", {"action": "list"}
+        )
+
+    @pytest.mark.anyio
+    async def test_read_proxy_still_refuses_a_mixed_tools_write_action(self, transform):
+        _prepopulate_cache(
+            transform,
+            [
+                _make_tool("ha_manage_blueprints", destructive=True),
+                _make_tool("ha_get_state", read_only=True),
+            ],
+        )
+        ctx = _make_ctx()
+        fn = self._get_proxy_fn(transform, "read")
+
+        with pytest.raises(ToolError):
+            await fn(
+                "ha_manage_blueprints",
+                {"action": "delete", "path": "user/motion.yaml", "confirm": True},
+                ctx,
+            )
+        ctx.fastmcp.call_tool.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_read_proxy_adapts_a_retired_blueprint_call(self, transform):
+        """A stale catalog calling ha_get_blueprint through the read proxy
+        reaches the consolidated tool with the action it needs."""
+        _prepopulate_cache(
+            transform,
+            [
+                _make_tool("ha_manage_blueprints", destructive=True),
+                _make_tool("ha_get_state", read_only=True),
+            ],
+        )
+        ctx = _make_ctx(call_tool_return={"success": True})
+        fn = self._get_proxy_fn(transform, "read")
+
+        await fn("ha_get_blueprint", {"domain": "script"}, ctx)
+
+        ctx.fastmcp.call_tool.assert_called_once_with(
+            "ha_manage_blueprints", {"action": "list", "domain": "script"}
+        )
+
+    @pytest.mark.anyio
     async def test_proxy_dispatches_a_renamed_tool_under_its_current_name(
         self, transform
     ):

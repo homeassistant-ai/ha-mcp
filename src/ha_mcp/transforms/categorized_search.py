@@ -28,7 +28,7 @@ from fastmcp.tools import Tool
 from mcp.types import ToolAnnotations
 
 from ..errors import ErrorCode, create_error_response
-from ..renamed_tools import current_tool_name
+from ..renamed_tools import adapt_retired_arguments, current_tool_name
 
 if TYPE_CHECKING:
     from fastmcp.server.transforms import GetToolNext
@@ -190,6 +190,23 @@ def categorize_capability(
     if destructive and any(pattern in name for pattern in _DELETE_PATTERNS):
         return "delete"
     return "write"
+
+
+def _is_read_call_on_write_tool(name: str, arguments: dict[str, Any] | None) -> bool:
+    """Whether this call on a ``write``-category tool is one of its reads.
+
+    A mixed read/write tool (``ha_manage_backup``, ``ha_manage_blueprints``,
+    ...) is categorised by its annotations as ``write``, which would refuse
+    its list/get actions through the read proxy — a client approved for
+    reads only could no longer list blueprints once the read tool was folded
+    in (#2329). Read-only mode already decides, per call, which invocations
+    of such a tool are reads (``READ_ONLY_EXEMPT_TOOLS``); the read proxy
+    reuses that verdict so the two surfaces cannot disagree.
+    """
+    from ..read_only import READ_ONLY_EXEMPT_TOOLS
+
+    exemption = READ_ONLY_EXEMPT_TOOLS.get(name)
+    return exemption is not None and exemption.blocked_write(arguments or {}) is None
 
 
 def _categorize_tool(tool: Tool) -> Capability:
@@ -447,12 +464,16 @@ class CategorizedSearchTransform(BM25SearchTransform):
             # catalog, so it would reject that call before the re-dispatch
             # reaches RenamedToolAliasMiddleware — resolve the name here too,
             # and the alias covers both call shapes.
+            requested = name
             name = current_tool_name(name)
 
             # Tolerate `arguments` passed as a JSON string — small models
             # sometimes serialize it before sending. Parse once up front so
             # downstream logic can assume a dict (or None).
             arguments = _coerce_proxy_arguments(arguments, proxy_name, name)
+            # A retired name folded into an action-dispatched tool (#2329)
+            # needs the action its old signature never carried.
+            arguments = adapt_retired_arguments(requested, arguments)
 
             # Determine which category set to check
             if category == "read":
@@ -496,7 +517,9 @@ class CategorizedSearchTransform(BM25SearchTransform):
                     name = inner_name
                     arguments = arguments.get("arguments") or {}
 
-            if name not in allowed:
+            if name not in allowed and not (
+                category == "read" and _is_read_call_on_write_tool(name, arguments)
+            ):
                 _raise_wrong_category_error(name, transform, proxy_name)
 
             return await ctx.fastmcp.call_tool(name, arguments)

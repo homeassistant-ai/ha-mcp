@@ -2385,9 +2385,9 @@ class TestBlueprintHandler:
 
         assert await bm._fetch_blueprint(client, _BP_PATH, "automation") == _BP_YAML
         assert calls[0][1]["path"] == f"blueprints/automation/{_BP_PATH}"
-        # The source_url lookup ran, but the re-fetch itself never did: the
-        # file read won, so no third-party URL was contacted.
-        assert client.frames("blueprint/import") == []
+        # No listing and no re-fetch: a snapshot only ever reads the
+        # installed file, so no third-party URL is contacted.
+        assert client.sent == []
 
     async def test_read_uses_the_blueprint_domain_directory(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2400,24 +2400,26 @@ class TestBlueprintHandler:
         await bm._fetch_blueprint(client, _BP_PATH, "script")
         assert calls[0][1]["path"] == f"blueprints/script/{_BP_PATH}"
 
-    async def test_a_failed_listing_still_reads_the_file(
+    async def test_no_installed_file_tier_returns_none(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The source_url lookup is best-effort: losing it must not lose the file.
-
-        ``blueprint/list`` is only consulted to learn the URL for the LAST tier,
-        so a listing that fails leaves the earlier tiers untouched.
-        """
         _patch_services(
-            monkeypatch, {"read_file": {"success": True, "content": _BP_YAML}}, []
+            monkeypatch,
+            {"read_file": {"success": False, "error": "File does not exist"}},
+            [],
         )
-        client = _BlueprintWsClient({"blueprint/list": {"success": False}})
-        assert await bm._fetch_blueprint(client, _BP_PATH, "automation") == _BP_YAML
+        client = _BlueprintWsClient({})
 
-    async def test_refetches_from_source_url_when_component_absent(
+        assert await bm._fetch_blueprint(client, _BP_PATH, "automation") is None
+        assert client.sent == []
+
+    async def test_source_url_is_never_a_snapshot_source(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """No File & YAML Tools entry (ToolError) -> fall back to the source URL."""
+        """``get`` may fall back to re-downloading ``source_url``; a snapshot
+        must not, because a restore from it could write what the author
+        publishes now rather than what the delete destroyed (Codex P1 on
+        #2356). With no installed-file tier the capture skips outright."""
 
         async def refuse(_c: Any, _s: str, _d: dict[str, Any]) -> Any:
             raise ToolError(
@@ -2438,56 +2440,9 @@ class TestBlueprintHandler:
             }
         )
 
-        assert await bm._fetch_blueprint(client, _BP_PATH, "automation") == _BP_YAML
-        assert client.frames("blueprint/import")[0]["url"] == _BP_SOURCE_URL
-
-    async def test_source_url_runs_after_a_failed_component_read(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A read error (not just an absent entry) also falls through."""
-        _patch_services(
-            monkeypatch,
-            {"read_file": {"success": False, "error": "Permission denied"}},
-            [],
-        )
-        client = _BlueprintWsClient(
-            {
-                "blueprint/list": _bp_listing(source_url=_BP_SOURCE_URL),
-                "blueprint/import": _bp_import("user/motion"),
-            }
-        )
-        assert await bm._fetch_blueprint(client, _BP_PATH, "automation") == _BP_YAML
-
-    async def test_no_component_and_no_source_url_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _patch_services(
-            monkeypatch,
-            {"read_file": {"success": False, "error": "File does not exist"}},
-            [],
-        )
-        client = _BlueprintWsClient({"blueprint/list": _bp_listing(source_url=None)})
-
         assert await bm._fetch_blueprint(client, _BP_PATH, "automation") is None
         assert client.frames("blueprint/import") == []
-
-    async def test_suggested_filename_mismatch_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The URL now serves a DIFFERENT blueprint - snapshotting it would
-        make the restore write the wrong content."""
-        _patch_services(
-            monkeypatch,
-            {"read_file": {"success": False, "error": "File does not exist"}},
-            [],
-        )
-        client = _BlueprintWsClient(
-            {
-                "blueprint/list": _bp_listing(source_url=_BP_SOURCE_URL),
-                "blueprint/import": _bp_import("someone_else/other"),
-            }
-        )
-        assert await bm._fetch_blueprint(client, _BP_PATH, "automation") is None
+        assert client.frames("blueprint/list") == []
 
     async def test_restore_sends_blueprint_save(self) -> None:
         client = _BlueprintWsClient({"blueprint/save": {"success": True, "result": {}}})
@@ -2559,7 +2514,9 @@ class TestBlueprintHandler:
         )
 
         assert await bm._fetch_blueprint(client, _BP_PATH, "automation") == _BP_YAML
-        assert seen == [("automation", _BP_PATH, _BP_SOURCE_URL)]
+        # source_url=None: the ladder's re-download tier is withheld from
+        # snapshots on purpose.
+        assert seen == [("automation", _BP_PATH, None)]
 
 
 class TestBlueprintDecoratorWiring:

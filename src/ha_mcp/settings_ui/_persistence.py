@@ -142,6 +142,24 @@ def _seed_tool_config_from_env(settings: Settings) -> dict[str, str]:
     return tools
 
 
+# Stored ``tools`` states, most restrictive first: a disabled tool stays
+# disabled whatever its consolidated sibling said.
+_TOOL_STATE_RANK = {"disabled": 0, "pinned": 1}
+
+
+def _more_restrictive_tool_state(first: Any, second: Any) -> Any:
+    rank_first = _TOOL_STATE_RANK.get(first, len(_TOOL_STATE_RANK))
+    rank_second = _TOOL_STATE_RANK.get(second, len(_TOOL_STATE_RANK))
+    return second if rank_second < rank_first else first
+
+
+def _more_restrictive_exposure(first: Any, second: Any) -> Any:
+    # ``llm_api`` stores {tool: exposed}; not exposed is the restrictive side.
+    if isinstance(first, bool) and isinstance(second, bool):
+        return first and second
+    return first
+
+
 def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
     """Load persisted tool config, seeding from env vars if no file exists."""
     path = _get_config_path()
@@ -171,10 +189,18 @@ def load_tool_config(settings: Settings | None = None) -> dict[str, Any]:
             # stays in the file, keyed on a name nothing looks up, while the
             # tool falls through to its default, which for the app tools
             # means exposed to every conversation agent.
-            for key in ("tools", LLM_API_CONFIG_KEY):
-                states = result.get(key)
-                if isinstance(states, dict):
-                    result[key] = rename_retired_keys(states)
+            # Two retired names folded into one tool (#2329) can disagree;
+            # the more restrictive stored state wins.
+            tools_states = result.get("tools")
+            if isinstance(tools_states, dict):
+                result["tools"] = rename_retired_keys(
+                    tools_states, prefer=_more_restrictive_tool_state
+                )
+            exposure_states = result.get(LLM_API_CONFIG_KEY)
+            if isinstance(exposure_states, dict):
+                result[LLM_API_CONFIG_KEY] = rename_retired_keys(
+                    exposure_states, prefer=_more_restrictive_exposure
+                )
             return result
 
     if settings is None:

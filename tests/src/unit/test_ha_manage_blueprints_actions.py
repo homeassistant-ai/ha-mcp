@@ -254,9 +254,11 @@ async def test_delete_success_verifies_removal() -> None:
 
     assert resp == {
         "success": True,
-        "domain": "automation",
-        "path": _PATH,
-        "message": "Blueprint deleted.",
+        "data": {
+            "domain": "automation",
+            "path": _PATH,
+            "message": "Blueprint deleted.",
+        },
     }
     assert client.frames("blueprint/delete") == [
         {"type": "blueprint/delete", "domain": "automation", "path": _PATH}
@@ -497,9 +499,7 @@ async def test_substitute_returns_standalone_config() -> None:
 
     assert resp == {
         "success": True,
-        "domain": "automation",
-        "path": _PATH,
-        "config": rendered,
+        "data": {"domain": "automation", "path": _PATH, "config": rendered},
     }
     assert client.frames("blueprint/substitute") == [
         {
@@ -753,10 +753,12 @@ async def test_save_new_path_sends_neither_source_url_nor_override() -> None:
 
     assert resp == {
         "success": True,
-        "domain": "automation",
-        "path": _PATH,
-        "overrides_existing": False,
-        "message": "Blueprint saved.",
+        "data": {
+            "domain": "automation",
+            "path": _PATH,
+            "overrides_existing": False,
+            "message": "Blueprint saved.",
+        },
     }
     assert client.frames("blueprint/save") == [
         {
@@ -784,8 +786,8 @@ async def test_save_overwrite_stamps_source_url_and_reports_the_reload() -> None
         source_url="https://example.com/bp.yaml",
     )
 
-    assert resp["overrides_existing"] is True
-    assert "reloaded" in resp["message"]
+    assert resp["data"]["overrides_existing"] is True
+    assert "reloaded" in resp["data"]["message"]
     assert client.frames("blueprint/save") == [
         {
             "type": "blueprint/save",
@@ -998,3 +1000,205 @@ async def test_get_keeps_the_component_warning_when_nothing_else_answers(
 
     assert resp["warnings"] == ["component could not read it"]
     assert "yaml" not in resp
+
+
+# ------------------------------------------------- review round 1 (#2356)
+
+
+@pytest.mark.asyncio
+async def test_import_ignores_the_domain_parameter() -> None:
+    """The blueprint file declares its own domain, so a stray value must not
+    refuse an otherwise valid import (Codex P3)."""
+    client = SpyClient(
+        {
+            "blueprint/import": {
+                "success": True,
+                "result": {
+                    "suggested_filename": "user/motion",
+                    "raw_data": "blueprint:\n  name: Motion Light\n",
+                    "blueprint": {"metadata": {"domain": "automation", "name": "M"}},
+                    "validation_errors": None,
+                    "exists": False,
+                },
+            },
+            "blueprint/save": {
+                "success": True,
+                "result": {"overrides_existing": False},
+            },
+        }
+    )
+    tool = _build_tool(client)
+
+    resp = await tool(
+        action="import", url="https://example.com/bp.yaml", domain="light"
+    )
+
+    assert resp["success"] is True
+    assert client.frames("blueprint/save")[0]["domain"] == "automation"
+
+
+@pytest.mark.asyncio
+async def test_import_tolerates_a_null_blueprint_field() -> None:
+    """``"blueprint": None`` in a successful import result is handled by the
+    missing-filename gate, not an AttributeError (CodeRabbit)."""
+    client = SpyClient(
+        {
+            "blueprint/import": {
+                "success": True,
+                "result": {"suggested_filename": "", "raw_data": "", "blueprint": None},
+            }
+        }
+    )
+    tool = _build_tool(client)
+
+    with pytest.raises(ToolError) as exc:
+        await tool(action="import", url="https://example.com/bp.yaml")
+
+    error = _error_payload(exc.value)["error"]
+    assert error["code"] == "SERVICE_CALL_FAILED"
+    assert "no filename or YAML data" in error["message"]
+
+
+@pytest.mark.asyncio
+async def test_overwriting_import_snapshots_the_installed_blueprint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A re-import over an installed file is a write the decorator cannot see
+    (the path is only known after blueprint/import), so it captures inline
+    (Codex P2)."""
+    captured: list[tuple[str, str, str | None]] = []
+
+    class _FakeMgr:
+        async def maybe_snapshot(
+            self, domain: str, entity_id: str, *, tool_name: str | None = None, **_: Any
+        ) -> None:
+            captured.append((domain, entity_id, tool_name))
+
+    class _Settings:
+        enable_auto_backup = True
+
+    monkeypatch.setattr("ha_mcp.tools.blueprint_write.get_global_settings", _Settings)
+    monkeypatch.setattr(
+        "ha_mcp.tools.blueprint_write.get_backup_manager", lambda _c, _s: _FakeMgr()
+    )
+    client = SpyClient(
+        {
+            "blueprint/import": {
+                "success": True,
+                "result": {
+                    "suggested_filename": "user/motion",
+                    "raw_data": "blueprint:\n  name: Motion Light\n",
+                    "blueprint": {"metadata": {"domain": "script", "name": "M"}},
+                    "validation_errors": None,
+                    "exists": True,
+                },
+            },
+            "blueprint/save": {"success": True, "result": {"overrides_existing": True}},
+        }
+    )
+    tool = _build_tool(client)
+
+    await tool(action="import", url="https://example.com/bp.yaml", overwrite=True)
+
+    assert captured == [
+        ("blueprint_script", "user/motion.yaml", "ha_manage_blueprints")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fresh_import_captures_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[Any] = []
+
+    class _FakeMgr:
+        async def maybe_snapshot(self, *args: Any, **kwargs: Any) -> None:
+            captured.append(args)
+
+    class _Settings:
+        enable_auto_backup = True
+
+    monkeypatch.setattr("ha_mcp.tools.blueprint_write.get_global_settings", _Settings)
+    monkeypatch.setattr(
+        "ha_mcp.tools.blueprint_write.get_backup_manager", lambda _c, _s: _FakeMgr()
+    )
+    client = SpyClient(
+        {
+            "blueprint/import": {
+                "success": True,
+                "result": {
+                    "suggested_filename": "user/motion",
+                    "raw_data": "blueprint:\n  name: Motion Light\n",
+                    "blueprint": {"metadata": {"domain": "automation", "name": "M"}},
+                    "validation_errors": None,
+                    "exists": False,
+                },
+            },
+            "blueprint/save": {
+                "success": True,
+                "result": {"overrides_existing": False},
+            },
+        }
+    )
+    tool = _build_tool(client)
+
+    await tool(action="import", url="https://example.com/bp.yaml", overwrite=True)
+
+    assert captured == []
+
+
+_FUTURE_YAML = (
+    "blueprint:\n  name: Future\n  domain: automation\n"
+    "  homeassistant:\n    min_version: 9999.1.0\n"
+)
+
+
+def _client_with_version(version: str, responses: dict[str, Any]) -> SpyClient:
+    client = SpyClient(responses)
+
+    async def get_config() -> dict[str, Any]:
+        return {"version": version}
+
+    client.get_config = get_config  # type: ignore[attr-defined]
+    return client
+
+
+@pytest.mark.asyncio
+async def test_save_refuses_a_blueprint_this_home_assistant_cannot_run() -> None:
+    """blueprint/save skips the min_version gate import applies, so the tool
+    applies it itself (Codex P1). Wording mirrors core's validate()."""
+    client = _client_with_version("2026.8.2", {})
+    tool = _build_tool(client)
+
+    with pytest.raises(ToolError) as exc:
+        await tool(action="save", path=_PATH, yaml=_FUTURE_YAML)
+
+    error = _error_payload(exc.value)["error"]
+    assert error["code"] == "VALIDATION_FAILED"
+    assert "Requires at least Home Assistant 9999.1.0" in error["message"]
+    assert client.frames("blueprint/save") == []
+
+
+@pytest.mark.asyncio
+async def test_save_proceeds_when_min_version_is_satisfied() -> None:
+    client = _client_with_version(
+        "9999.2.0",
+        {"blueprint/save": {"success": True, "result": {"overrides_existing": False}}},
+    )
+    tool = _build_tool(client)
+
+    resp = await tool(action="save", path=_PATH, yaml=_FUTURE_YAML)
+
+    assert resp["success"] is True
+    assert len(client.frames("blueprint/save")) == 1
+
+
+@pytest.mark.asyncio
+async def test_save_without_min_version_never_asks_for_the_version() -> None:
+    client = SpyClient(
+        {"blueprint/save": {"success": True, "result": {"overrides_existing": False}}}
+    )
+    # No get_config on the spy: reaching for it would raise AttributeError.
+    tool = _build_tool(client)
+
+    resp = await tool(action="save", path=_PATH, yaml=_SAVE_YAML)
+
+    assert resp["success"] is True

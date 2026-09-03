@@ -702,7 +702,7 @@ class TestBlueprintManagement:
                         "yaml": detail["yaml"],
                     },
                 )
-                assert saved["overrides_existing"] is False, saved
+                assert saved["data"]["overrides_existing"] is False, saved
                 listing = await mcp.call_tool_success(
                     "ha_manage_blueprints",
                     {"action": "list", "domain": "automation"},
@@ -743,8 +743,8 @@ class TestBlueprintManagement:
                         "overwrite": True,
                     },
                 )
-                assert saved["overrides_existing"] is True, saved
-                assert "reloaded" in saved["message"].lower()
+                assert saved["data"]["overrides_existing"] is True, saved
+                assert "reloaded" in saved["data"]["message"].lower()
                 after = await mcp.call_tool_success(
                     "ha_manage_blueprints",
                     {"action": "get", "domain": "automation", "path": path},
@@ -816,7 +816,7 @@ class TestBlueprintManagement:
                         "confirm": True,
                     },
                 )
-                assert deleted["path"] == path, deleted
+                assert deleted["data"]["path"] == path, deleted
                 listing = await mcp.call_tool_success(
                     "ha_manage_blueprints", {"action": "list", "domain": "automation"}
                 )
@@ -954,7 +954,7 @@ class TestBlueprintManagement:
                         "input": {"target_entity": _STABLE_ENTITY},
                     },
                 )
-                config = rendered["config"]
+                config = rendered["data"]["config"]
                 assert "blueprint" not in config and "use_blueprint" not in config, (
                     config
                 )
@@ -975,13 +975,24 @@ class TestBlueprintManagement:
         self, mcp_client, local_blueprint_server
     ):
         """A confirmed delete is snapshotted first so ha_manage_backup can
-        restore the file (#2329). The blueprint was imported from a URL the
-        test HA can reach, so at least the source_url tier can serve a copy on
-        every lane."""
+        restore the file (#2329) — but only from an installed-file tier.
+        The source_url re-download ``get`` may fall back to is never a
+        snapshot source (a restore from it could write what the author
+        publishes now, not what was deleted), so on a lane where ``get`` had
+        to re-fetch, the contract is that NO snapshot was written."""
         served = _ServedBlueprint(local_blueprint_server, "backup")
         try:
             async with MCPAssertions(mcp_client) as mcp:
                 path = await served.import_into(mcp)
+                detail = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                faithful_copy_available = detail.get("yaml_source") in (
+                    "file",
+                    "component",
+                    "tools_entry",
+                )
                 await served.delete(mcp, path)
                 backups = await mcp.call_tool_success(
                     "ha_manage_backup",
@@ -1007,7 +1018,13 @@ class TestBlueprintManagement:
                     if b.get("entity_id") == safe_path
                     and b.get("domain") == "blueprint_automation"
                 ]
-                assert matching, f"no pre-delete snapshot for {path}: {data}"
+                if faithful_copy_available:
+                    assert matching, f"no pre-delete snapshot for {path}: {data}"
+                else:
+                    assert not matching, (
+                        "a source_url re-fetch must never be stored as the "
+                        f"installed file: {data}"
+                    )
         finally:
             served.cleanup()
 
