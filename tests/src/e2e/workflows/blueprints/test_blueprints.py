@@ -1132,12 +1132,14 @@ class TestBlueprintManagement:
                 )
                 # Snapshot names sanitise the id the way the backup manager
                 # does (``_safe_entity_id``): every character outside
-                # ``[A-Za-z0-9._-]`` — the ``/`` in a blueprint path — is ``_``.
+                # ``[A-Za-z0-9._-]`` — the ``/`` in a blueprint path — is ``_``,
+                # plus a digest of the original, because sanitising alone would
+                # let two different paths share one snapshot namespace.
                 safe_path = re.sub(r"[^A-Za-z0-9._-]", "_", path)
                 matching = [
                     b
                     for b in data["backups"]
-                    if b.get("entity_id") == safe_path
+                    if str(b.get("entity_id", "")).startswith(safe_path)
                     and b.get("domain") == "blueprint_automation"
                 ]
                 if faithful_copy_available:
