@@ -713,6 +713,58 @@ class TestDoubleUnwrap:
         )
 
     @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        ("nested", "code"),
+        [
+            # A bare string is first tried as JSON, exactly as the outer
+            # payload is, so it classifies as invalid JSON rather than as a
+            # non-object.
+            ("x", "VALIDATION_INVALID_JSON"),
+            ([1, 2], "VALIDATION_INVALID_PARAMETER"),
+            (7, "VALIDATION_INVALID_PARAMETER"),
+        ],
+    )
+    async def test_double_wrapped_non_object_arguments_refused(
+        self, transform: CategorizedSearchTransform, nested: Any, code: str
+    ) -> None:
+        """A scalar or list nested payload is refused with the same structured
+        error the outer payload gets — never a bare ValueError out of the
+        retired-name adapter's dict()."""
+        ctx = _make_ctx()
+        fn = self._get_proxy_fn(transform, "read")
+
+        with pytest.raises(ToolError) as exc:
+            await fn(
+                "ha_call_read_tool",
+                {"name": "ha_get_state", "arguments": nested},
+                ctx,
+            )
+
+        payload = json.loads(str(exc.value))
+        assert payload["error"]["code"] == code
+        ctx.fastmcp.call_tool.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_double_wrapped_json_string_arguments_are_parsed(
+        self, transform: CategorizedSearchTransform
+    ) -> None:
+        """The nested payload gets the same JSON-string tolerance as the outer
+        one, so a model that serialized it twice still dispatches."""
+        ctx = _make_ctx(call_tool_return={"state": "on"})
+        fn = self._get_proxy_fn(transform, "read")
+
+        result = await fn(
+            "ha_call_read_tool",
+            {"name": "ha_get_state", "arguments": '{"entity_id": "light.kitchen"}'},
+            ctx,
+        )
+
+        assert result == {"state": "on"}
+        ctx.fastmcp.call_tool.assert_called_once_with(
+            "ha_get_state", {"entity_id": "light.kitchen"}
+        )
+
+    @pytest.mark.anyio
     async def test_double_wrapped_wrong_category_still_rejected(self, transform):
         """Double-wrapped write tool via read proxy is rejected after unwrapping."""
         ctx = _make_ctx()

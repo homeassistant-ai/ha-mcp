@@ -6541,7 +6541,22 @@ class TestProxyConfigFilePersistence:
         # os.open is only reached via _atomic_write_0600 on this path (OAuth
         # off, creds resolution skipped), so failing it exercises exactly the
         # proxy-config fallback branch.
-        with patch.object(os, "open", side_effect=OSError("no mode bits")):
+        #
+        # Fail only the writes under tmp_path. ``os.open`` is process-wide, and
+        # an unconditional side_effect also breaks whatever else happens to
+        # call it inside this block — including a weakref finalizer running on
+        # a garbage collection, whose exception the interpreter swallows as
+        # "Exception ignored in:" and pytest re-raises as an unraisable-
+        # exception warning against whichever test the worker was on. That made
+        # the suite fail nondeterministically in a file this test does not own.
+        real_open = os.open
+
+        def _fail_under_tmp(path, *args, **kwargs):
+            if str(path).startswith(str(tmp_path)):
+                raise OSError("no mode bits")
+            return real_open(path, *args, **kwargs)
+
+        with patch.object(os, "open", side_effect=_fail_under_tmp):
             rc, _api_calls, _start = self._run(tmp_path)
         assert rc == 0
         config_path = tmp_path / "proxy_config.json"

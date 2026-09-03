@@ -225,6 +225,24 @@ def _categorize_tool(tool: Tool) -> Capability:
     )
 
 
+def _raise_non_object_arguments(value: Any, proxy_name: str, name: str) -> NoReturn:
+    """Refuse a proxy ``arguments`` payload that is not an object."""
+    raise ToolError(
+        json.dumps(
+            create_error_response(
+                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                message=(
+                    f"'arguments' must be a JSON object (got {type(value).__name__})."
+                ),
+                suggestions=[
+                    "Pass 'arguments' as an object (dict), not a list or scalar.",
+                ],
+                context={"proxy_used": proxy_name, "tool_name": name},
+            )
+        )
+    )
+
+
 def _coerce_proxy_arguments(
     arguments: dict[str, Any] | str | None,
     proxy_name: str,
@@ -253,21 +271,7 @@ def _coerce_proxy_arguments(
             )
         ) from e
     if not isinstance(parsed, dict):
-        raise ToolError(
-            json.dumps(
-                create_error_response(
-                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    message=(
-                        "'arguments' must be a JSON object "
-                        f"(got {type(parsed).__name__})."
-                    ),
-                    suggestions=[
-                        "Pass 'arguments' as an object (dict), not a list or scalar.",
-                    ],
-                    context={"proxy_used": proxy_name, "tool_name": name},
-                )
-            )
-        )
+        _raise_non_object_arguments(parsed, proxy_name, name)
     logger.warning(
         "Proxy %s received 'arguments' as a JSON string for tool %s — parsed as fallback",
         proxy_name,
@@ -522,12 +526,17 @@ class CategorizedSearchTransform(BM25SearchTransform):
                         name,
                     )
                     name = inner_name
-                    # The inner call needs the same retired-name adaptation
-                    # the outer one got: the envelope carries the old
-                    # signature too.
-                    arguments = adapt_retired_arguments(
-                        requested_inner, arguments.get("arguments") or {}
+                    # The nested payload gets the same treatment as the outer
+                    # one: a JSON string is parsed, a scalar or list is
+                    # refused with the same structured error rather than
+                    # reaching the adapter, whose dict() would raise a bare
+                    # ValueError, and a retired inner name gets its action.
+                    nested = _coerce_proxy_arguments(
+                        arguments.get("arguments"), proxy_name, inner_name
                     )
+                    if nested is not None and not isinstance(nested, dict):
+                        _raise_non_object_arguments(nested, proxy_name, inner_name)
+                    arguments = adapt_retired_arguments(requested_inner, nested or {})
 
             # Membership is the advertised category; a mixed tool's read
             # actions are additionally admitted here (see the helper).
