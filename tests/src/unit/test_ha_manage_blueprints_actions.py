@@ -25,6 +25,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools import tools_blueprints
 from ha_mcp.tools.blueprint_sources import BlueprintSource
 from ha_mcp.tools.tools_blueprints import register_blueprint_tools
@@ -1109,7 +1110,59 @@ async def test_overwriting_import_snapshots_the_installed_blueprint(
 
 
 @pytest.mark.asyncio
-async def test_fresh_import_captures_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_every_overwriting_import_attempts_the_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Core reports ``exists=false`` for an installed file that failed to load,
+    and ``allow_override`` replaces that file just the same — so the capture is
+    attempted whenever overwrite is set, not only when core says the path
+    exists. A destination that truly is absent has nothing to read, and the
+    backup manager skips it on its own."""
+    captured: list[tuple[str, str]] = []
+
+    class _FakeMgr:
+        async def maybe_snapshot(
+            self, domain: str, entity_id: str, **_kwargs: Any
+        ) -> None:
+            captured.append((domain, entity_id))
+
+    class _Settings:
+        enable_auto_backup = True
+
+    monkeypatch.setattr("ha_mcp.tools.blueprint_write.get_global_settings", _Settings)
+    monkeypatch.setattr(
+        "ha_mcp.tools.blueprint_write.get_backup_manager", lambda _c, _s: _FakeMgr()
+    )
+    client = SpyClient(
+        {
+            "blueprint/import": {
+                "success": True,
+                "result": {
+                    "suggested_filename": "user/motion",
+                    "raw_data": _SAVE_YAML,
+                    "blueprint": {"metadata": {"domain": "automation", "name": "M"}},
+                    "validation_errors": None,
+                    # The load-failure shape: core cannot read it, so it reports
+                    # the path as absent even though the file is on disk.
+                    "exists": False,
+                },
+            },
+            "blueprint/save": {"success": True, "result": {"overrides_existing": True}},
+        }
+    )
+    tool = _build_tool(client)
+
+    await tool(action="import", url="https://example.com/bp.yaml", overwrite=True)
+
+    assert captured == [("blueprint_automation", "user/motion.yaml")]
+
+
+@pytest.mark.asyncio
+async def test_import_without_overwrite_captures_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plain import cannot replace anything — core refuses the save without
+    ``allow_override`` — so there is nothing to snapshot."""
     captured: list[Any] = []
 
     class _FakeMgr:
@@ -1129,7 +1182,7 @@ async def test_fresh_import_captures_nothing(monkeypatch: pytest.MonkeyPatch) ->
                 "success": True,
                 "result": {
                     "suggested_filename": "user/motion",
-                    "raw_data": "blueprint:\n  name: Motion Light\n",
+                    "raw_data": _SAVE_YAML,
                     "blueprint": {"metadata": {"domain": "automation", "name": "M"}},
                     "validation_errors": None,
                     "exists": False,
@@ -1143,7 +1196,7 @@ async def test_fresh_import_captures_nothing(monkeypatch: pytest.MonkeyPatch) ->
     )
     tool = _build_tool(client)
 
-    await tool(action="import", url="https://example.com/bp.yaml", overwrite=True)
+    await tool(action="import", url="https://example.com/bp.yaml")
 
     assert captured == []
 
@@ -1205,3 +1258,24 @@ async def test_save_without_min_version_never_asks_for_the_version() -> None:
     resp = await tool(action="save", path=_PATH, yaml=_SAVE_YAML)
 
     assert resp["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_save_proceeds_when_the_version_lookup_fails() -> None:
+    """The min_version check exists to refuse a blueprint this Home Assistant
+    cannot run; a transport failure while asking for the version must not block
+    a save core itself would accept."""
+    client = SpyClient(
+        {"blueprint/save": {"success": True, "result": {"overrides_existing": False}}}
+    )
+
+    async def get_config() -> dict[str, Any]:
+        raise HomeAssistantConnectionError("socket gone")
+
+    client.get_config = get_config  # type: ignore[attr-defined]
+    tool = _build_tool(client)
+
+    resp = await tool(action="save", path=_PATH, yaml=_FUTURE_YAML)
+
+    assert resp["success"] is True
+    assert len(client.frames("blueprint/save")) == 1

@@ -16,6 +16,7 @@ from typing import Any, NoReturn
 from packaging.version import InvalidVersion, Version
 
 from ..backup_manager import _CAPTURE_TRANSIENT_ERRORS, get_backup_manager
+from ..client.rest_client import HomeAssistantError
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .blueprint_sources import parse_blueprint_body
@@ -179,11 +180,24 @@ async def _assert_save_compatible(
 
 
 async def _running_version(client: Any) -> Version | None:
-    """Home Assistant's running version from ``/api/config``, or ``None``."""
+    """Home Assistant's running version from ``/api/config``, or ``None``.
+
+    Best-effort by design: this check exists to refuse a blueprint the
+    running Home Assistant cannot use, so a transport failure while asking
+    for the version must not block a save core itself would accept.
+    ``HomeAssistantError`` covers the connection and command failures
+    ``get_config`` raises.
+    """
     try:
         config = await client.get_config()
         return Version(str(config.get("version")))
-    except (InvalidVersion, AttributeError, TypeError, ValueError) as exc:
+    except (
+        HomeAssistantError,
+        InvalidVersion,
+        AttributeError,
+        TypeError,
+        ValueError,
+    ) as exc:
         logger.debug("Home Assistant version unavailable for the save check: %r", exc)
         return None
 
@@ -308,7 +322,12 @@ async def import_blueprint(client: Any, url: str, overwrite: bool) -> dict[str, 
 
     _assert_importable(url, result_data, suggested_filename, domain, overwrite)
 
-    if overwrite and result_data.get("exists"):
+    # Every overwriting import captures, not only one core reported as
+    # existing: core answers ``exists=false`` for an installed file that
+    # failed to load, and ``allow_override`` replaces that file just the
+    # same. A destination that truly is absent has nothing to read, so the
+    # capture skips on its own.
+    if overwrite:
         await snapshot_before_overwrite(client, domain, suggested_filename)
 
     # Save the blueprint to disk (blueprint/import only validates)

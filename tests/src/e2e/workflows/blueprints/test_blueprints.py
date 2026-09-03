@@ -464,7 +464,7 @@ class TestBlueprintManagement:
                 "ha_manage_blueprints",
                 {"action": "import", "url": test_url, "overwrite": True},
             )
-            assert result.get("overrides_existing") is True, (
+            assert result.get("data", {}).get("overrides_existing") is True, (
                 f"Expected overrides_existing=True, got: {result}"
             )
             imported = result.get("data", {}).get("imported_blueprint", {})
