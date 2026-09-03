@@ -628,10 +628,12 @@ class TestBlueprintGetSeam:
 
         assert resp["success"] is True
         # The real jail blocked the read — no body, no text, and the secret
-        # never leaked.
-        assert "config" not in resp
-        assert "yaml" not in resp
-        assert "yaml_source" not in resp
+        # never leaked. Asserted against ``data``, where the body keys live:
+        # checking the top level would pass no matter what the jail did.
+        data = resp["data"]
+        assert "config" not in data
+        assert "yaml" not in data
+        assert "yaml_source" not in data
         assert "hunter2" not in json.dumps(resp)
 
 

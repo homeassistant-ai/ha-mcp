@@ -210,7 +210,7 @@ async def test_capability_miss_serves_metadata_only() -> None:
 
     assert resp["success"] is True
     assert resp["data"]["metadata"]["name"] == "Motion Light"
-    assert "config" not in resp
+    assert "config" not in resp["data"]
     assert not _bp_calls(ws)
 
 
@@ -231,7 +231,7 @@ async def test_null_config_from_component_warns_metadata_only() -> None:
         resp = await get_blueprint(path=_PATH, domain="automation")
 
     assert resp["success"] is True
-    assert "config" not in resp
+    assert "config" not in resp["data"]
     assert len(_bp_calls(ws)) == 1
     # The null-body outcome is surfaced, not silent.
     assert any("could not be read or parsed" in w for w in resp.get("warnings", [])), (
@@ -255,7 +255,7 @@ async def test_capability_miss_serves_metadata_only_no_warning() -> None:
         resp = await get_blueprint(path=_PATH, domain="automation")
 
     assert resp["success"] is True
-    assert "config" not in resp
+    assert "config" not in resp["data"]
     assert not any("could not be read or parsed" in w for w in resp.get("warnings", []))
 
 
@@ -274,7 +274,7 @@ async def test_unknown_command_invalidates_and_metadata_only() -> None:
         resp = await get_blueprint(path=_PATH, domain="automation")
 
     assert resp["success"] is True
-    assert "config" not in resp
+    assert "config" not in resp["data"]
 
 
 @pytest.mark.asyncio
@@ -292,7 +292,7 @@ async def test_command_error_metadata_only_silent() -> None:
         resp = await get_blueprint(path=_PATH, domain="automation")
 
     assert resp["success"] is True
-    assert "config" not in resp
+    assert "config" not in resp["data"]
 
 
 @pytest.mark.asyncio
@@ -313,7 +313,7 @@ async def test_ws_establish_failure_metadata_only_silent() -> None:
         resp = await get_blueprint(path=_PATH, domain="automation")
 
     assert resp["success"] is True
-    assert "config" not in resp
+    assert "config" not in resp["data"]
 
 
 @pytest.mark.asyncio
@@ -377,8 +377,8 @@ async def test_text_ignored_without_the_capability_flag() -> None:
         resp = await get_blueprint(path=_PATH, domain="automation")
 
     assert resp["data"]["config"]["action"] == [{"service": "light.turn_on"}]
-    assert "yaml" not in resp
-    assert "yaml_source" not in resp
+    assert "yaml" not in resp["data"]
+    assert "yaml_source" not in resp["data"]
 
 
 @pytest.mark.asyncio
@@ -401,4 +401,4 @@ async def test_unparseable_text_still_returned_with_no_config() -> None:
 
     assert resp["data"]["yaml"] == "blueprint: [unclosed\n"
     assert resp["data"]["yaml_source"] == "component"
-    assert "config" not in resp
+    assert "config" not in resp["data"]
