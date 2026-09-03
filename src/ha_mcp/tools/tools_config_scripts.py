@@ -744,7 +744,16 @@ class ConfigScriptTools:
 
             detached_blueprint: str | None = None
             if take_control_of_blueprint:
-                config, detached_blueprint = await self._take_control_config(script_id)
+                (
+                    config,
+                    detached_blueprint,
+                    fetched_hash,
+                ) = await self._take_control_config(script_id)
+                # Take control is a read-modify-write the TOOL performs, so it
+                # owns the consistency guarantee the caller could not supply:
+                # without this, an edit landing between that read and this
+                # write is silently overwritten. An explicit caller hash wins.
+                config_hash = config_hash or fetched_hash
 
             # Handle python_transform mode
             if python_transform is not None:
@@ -1082,21 +1091,25 @@ class ConfigScriptTools:
 
     async def _take_control_config(
         self, script_id: str
-    ) -> tuple[dict[str, Any], str | None]:
+    ) -> tuple[dict[str, Any], str | None, str]:
         """Render a blueprint script into the config that replaces it.
 
-        Produces a config for the ordinary replacement path rather than
+        Returns ``(config, blueprint_path, config_hash)``. The hash is of the
+        config this read saw, so the write can lock against it. Produces a
+        config for the ordinary replacement path rather than
         writing it here, so the rendering goes through the same validation,
         best-practice checks and skill-content attachment as every other
         script write.
         """
-        current_config, _, _ = await self._get_script_config_internal(script_id)
+        current_config, fetched_hash, _ = await self._get_script_config_internal(
+            script_id
+        )
         reference = blueprint_reference(current_config)
         blueprint_path = reference[0] if reference else None
         taken = await take_control_config(
             self._client, "script", script_id, current_config
         )
-        return taken, blueprint_path
+        return taken, blueprint_path, fetched_hash
 
     async def _commit_script_config(
         self,

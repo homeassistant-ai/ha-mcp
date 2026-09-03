@@ -840,7 +840,17 @@ class AutomationConfigTools:
 
             detached_blueprint: str | None = None
             if take_control_of_blueprint:
-                config, detached_blueprint = await self._take_control_config(identifier)
+                (
+                    config,
+                    detached_blueprint,
+                    fetched_hash,
+                ) = await self._take_control_config(identifier)
+                # Take control is a read-modify-write the TOOL performs, so it
+                # owns the consistency guarantee the caller could not supply:
+                # without this, an edit landing between that read and this
+                # write is silently overwritten. An explicit caller hash still
+                # wins, so it can still lock against a config it read itself.
+                config_hash = config_hash or fetched_hash
 
             if python_transform is not None:
                 response, bp_warnings = await self._run_python_transform(
@@ -1056,10 +1066,12 @@ class AutomationConfigTools:
 
     async def _take_control_config(
         self, identifier: str | None
-    ) -> tuple[dict[str, Any], str | None]:
+    ) -> tuple[dict[str, Any], str | None, str]:
         """Render a blueprint automation into the config that replaces it.
 
-        Returns ``(config, response_extras)``. Deliberately produces a config
+        Returns ``(config, blueprint_path, config_hash)``. The hash is of the
+        config this read saw, so the caller can lock the write against it.
+        Deliberately produces a config
         for the ordinary replacement path rather than writing it here: the
         rendering is not exempt from the validation, best-practice checks or
         skill-content attachment every other automation write goes through,
@@ -1079,17 +1091,19 @@ class AutomationConfigTools:
                 )
             )
 
-        # A hash is optional here (unlike python_transform, whose expression is
-        # written against a config the caller has already read). The shared
-        # path re-checks it before the write; this read only needs the body.
-        current_config, _ = await self._get_automation_config_internal(identifier)
+        # The caller need not supply a hash (unlike python_transform, whose
+        # expression is written against a config the caller already read), so
+        # this read's own hash is returned for the write to lock against.
+        current_config, fetched_hash = await self._get_automation_config_internal(
+            identifier
+        )
 
         reference = blueprint_reference(current_config)
         blueprint_path = reference[0] if reference else None
         taken = await take_control_config(
             self._client, "automation", identifier, current_config
         )
-        return taken, blueprint_path
+        return taken, blueprint_path, fetched_hash
 
     async def _run_python_transform(
         self,

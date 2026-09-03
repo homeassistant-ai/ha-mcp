@@ -155,3 +155,36 @@ async def test_refuses_to_combine_with_another_write_mode(tools, mock_client, ex
 
     assert _error(exc.value)["code"] == "VALIDATION_INVALID_PARAMETER"
     mock_client.upsert_script_config.assert_not_called()
+
+
+async def test_a_concurrent_edit_between_read_and_write_is_caught(tools, mock_client):
+    """Take control locks the write against the config it actually read.
+
+    Same guarantee as the automation path: the tool does the read, so the
+    tool supplies the hash the caller could not.
+    """
+    reads = {"n": 0}
+    changed = dict(_BLUEPRINT_CONFIG) | {"alias": "renamed by someone else"}
+
+    async def shifting(_script_id: str) -> dict[str, Any]:
+        reads["n"] += 1
+        body = dict(_BLUEPRINT_CONFIG) if reads["n"] == 1 else changed
+        return {"script_id": _SID, "config": body}
+
+    mock_client.get_script_config = AsyncMock(side_effect=shifting)
+
+    with pytest.raises(ToolError):
+        await tools.ha_config_set_script(
+            script_id=_SID, take_control_of_blueprint=True, wait=False
+        )
+
+    mock_client.upsert_script_config.assert_not_called()
+
+
+async def test_an_unchanged_script_still_converts(tools, mock_client):
+    result = await tools.ha_config_set_script(
+        script_id=_SID, take_control_of_blueprint=True, wait=False
+    )
+
+    assert result["success"] is True
+    mock_client.upsert_script_config.assert_called_once()

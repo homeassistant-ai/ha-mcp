@@ -260,3 +260,53 @@ async def test_take_control_does_not_pretend_to_free_the_blueprint(
         for c in mock_client.send_websocket_message.call_args_list
         if c.args[0].get("type") == "search/related"
     ]
+
+
+# --------------------------------------------- optimistic locking on its own read
+
+
+async def test_a_concurrent_edit_between_read_and_write_is_caught(tools, mock_client):
+    """Take control locks the write against the config it actually read.
+
+    It is a read-modify-write the TOOL performs, so the caller has no config
+    to lock against and cannot supply a hash. Without the tool supplying its
+    own, an edit landing in that window would be silently overwritten.
+    """
+    reads = {"n": 0}
+    changed = dict(_BLUEPRINT_CONFIG) | {"alias": "renamed by someone else"}
+
+    async def shifting(_identifier: str) -> dict[str, Any]:
+        reads["n"] += 1
+        return dict(_BLUEPRINT_CONFIG) if reads["n"] == 1 else changed
+
+    mock_client.get_automation_config = AsyncMock(side_effect=shifting)
+
+    with pytest.raises(ToolError):
+        await tools.ha_config_set_automation(
+            identifier=_ID, take_control_of_blueprint=True, wait=False
+        )
+
+    mock_client.upsert_automation_config.assert_not_called()
+
+
+async def test_an_unchanged_automation_still_converts(tools, mock_client):
+    """The lock must not block the ordinary case where nothing moved."""
+    result = await tools.ha_config_set_automation(
+        identifier=_ID, take_control_of_blueprint=True, wait=False
+    )
+
+    assert result["success"] is True
+    mock_client.upsert_automation_config.assert_called_once()
+
+
+async def test_an_explicit_caller_hash_still_wins(tools, mock_client):
+    """A caller locking against a config THEY read keeps that guarantee."""
+    with pytest.raises(ToolError):
+        await tools.ha_config_set_automation(
+            identifier=_ID,
+            take_control_of_blueprint=True,
+            config_hash="a-hash-that-does-not-match",
+            wait=False,
+        )
+
+    mock_client.upsert_automation_config.assert_not_called()
