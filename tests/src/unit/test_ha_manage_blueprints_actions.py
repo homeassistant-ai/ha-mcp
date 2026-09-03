@@ -436,7 +436,7 @@ async def test_delete_in_use_when_reference_lookup_raises() -> None:
                 "success": False,
                 "error": "Command failed: Blueprint in use",
             },
-            "search/related": ConnectionError("socket gone"),
+            "search/related": HomeAssistantConnectionError("socket gone"),
         }
     )
     tool = _build_tool(client)
@@ -1356,6 +1356,31 @@ async def test_get_omits_used_by_when_the_lookup_cannot_be_consulted(
 
     assert "used_by" not in resp["data"]
     assert any("reference lookup" in w for w in resp["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_get_lets_a_lookup_bug_surface_instead_of_reporting_it_as_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only transport failure degrades to "unknown" — a defect must be seen.
+
+    ``send_websocket_message`` funnels every no-answer case into
+    ``HomeAssistantConnectionError`` and hands HA's own rejections back as a
+    ``success: False`` envelope, so anything else escaping it is a bug in this
+    module. Reporting that as "consumers unknown" would hide it behind a
+    successful response for as long as the lookup stayed broken.
+    """
+    client = SpyClient(
+        {
+            "blueprint/list": _listing(_PATH),
+            "search/related": TypeError("item_type built wrong"),
+        }
+    )
+    _patch_ladder(monkeypatch, BlueprintSource(None, None, None, None))
+    tool = _build_tool(client)
+
+    with pytest.raises(ToolError):
+        await tool(action="get", path=_PATH)
 
 
 @pytest.mark.asyncio

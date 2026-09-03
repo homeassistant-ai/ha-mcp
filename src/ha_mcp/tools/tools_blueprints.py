@@ -14,6 +14,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .blueprint_sources import resolve_blueprint_source
@@ -30,11 +31,12 @@ logger = logging.getLogger(__name__)
 
 _VALID_DOMAINS = ("automation", "script")
 
-# The reference lookup runs only to enrich an error that is already being
-# raised, so inheriting send_command's 30s default would make a rejected
-# delete hang far longer than the delete itself. Same reasoning and same
-# leash as ``smart_search/_graph.py``'s ``_GRAPH_TIMEOUT_S``. Popped by the
-# client; never reaches Home Assistant.
+# The reference lookup is always secondary to the action the caller asked
+# for -- it enriches a refused delete, or adds ``used_by`` to a get -- so
+# inheriting send_command's 30s default would make either hang far longer
+# than the operation itself. Same reasoning and same leash as
+# ``smart_search/_graph.py``'s ``_GRAPH_TIMEOUT_S``. Popped by the client;
+# never reaches Home Assistant.
 _RELATED_TIMEOUT_S = 5.0
 
 
@@ -583,7 +585,12 @@ class BlueprintTools:
                     "_wait_timeout": _RELATED_TIMEOUT_S,
                 }
             )
-        except Exception as exc:
+        except HomeAssistantConnectionError as exc:
+            # The only class that escapes ``send_websocket_message``: it turns
+            # every no-answer failure into this one and returns HA's own
+            # rejections as a ``success: False`` envelope, handled below. A
+            # wider catch here could only swallow a bug in this module and
+            # report it as "consumers unknown".
             logger.debug("search/related failed for blueprint %s: %r", path, exc)
             return [], False
         if not isinstance(response, dict) or not response.get("success"):
