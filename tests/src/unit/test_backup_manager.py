@@ -792,6 +792,60 @@ class TestCapture:
         assert p1 is not None
         assert p2 is not None
 
+    async def test_two_captures_in_one_second_keep_both_states(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The throttle defaults to 0 and the filename timestamp is a second.
+
+        A save then a delete of one blueprint, or two rapid edits of one
+        automation, land inside a second; with one name for both the atomic
+        replace discarded the earlier pre-write state (CodeRabbit, PR #2356).
+        The second capture takes a suffixed name that still sorts newest-last
+        and parses to the same timestamp.
+        """
+        monkeypatch.setattr(bm, "_now_ts", lambda: "20260903_120000")
+        versions = iter([{"v": 1}, {"v": 2}, {"v": 3}])
+
+        async def fetch(_client: Any, _entity_id: str) -> Any:
+            return next(versions)
+
+        async def restore(_client: Any, _entity_id: str, _config: Any) -> Any:
+            return "ok"
+
+        mgr = _mk_manager(tmp_path)
+        mgr.register(DomainHandler(domain="automation", fetch=fetch, restore=restore))
+
+        first = await mgr.maybe_snapshot("automation", "x")
+        second = await mgr.maybe_snapshot("automation", "x")
+        third = await mgr.maybe_snapshot("automation", "x")
+
+        assert first is not None and second is not None and third is not None
+        assert len({first.name, second.name, third.name}) == 3
+        assert mgr.read_snapshot(first.name)["config"] == {"v": 1}
+        assert mgr.read_snapshot(second.name)["config"] == {"v": 2}
+        assert mgr.read_snapshot(third.name)["config"] == {"v": 3}
+        # Newest first, and every name reports the second it was taken in.
+        listed = mgr.list_snapshots(entity_id="x")
+        assert [m["name"] for m in listed] == [third.name, second.name, first.name]
+        assert {m["timestamp"] for m in listed} == {"20260903_120000"}
+
+    async def test_same_second_suffix_counts_toward_rotation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Suffixed names are ordinary snapshots: rotation prunes the oldest of
+        them and the entity's own retention cap still holds."""
+        monkeypatch.setattr(bm, "_now_ts", lambda: "20260903_120000")
+        mgr = _mk_manager(tmp_path, auto_backup_retain_per_entity=2)
+        mgr.register(_mk_handler(fetched={"v": 1}))
+
+        first = await mgr.maybe_snapshot("automation", "x")
+        await mgr.maybe_snapshot("automation", "x")
+        await mgr.maybe_snapshot("automation", "x")
+
+        assert first is not None
+        assert not first.exists()
+        assert len(list(tmp_path.glob("automation.x.*.yaml"))) == 2
+
 
 # ---------------------------------------------------------------- retention
 

@@ -104,14 +104,23 @@ class MandatoryBackupError(Exception):
 _TRACKER_SOFT_CAP = 10_000
 _TRACKER_PRUNE_BATCH = 1_000
 
-# Filename pattern: <domain>.<safe_entity_id>.<YYYYMMDD_HHMMSS>.yaml
+# Filename pattern: <domain>.<safe_entity_id>.<YYYYMMDD_HHMMSS>[_NN].yaml
 # The middle ``.`` separators make the timestamp rsplit reliable even
-# when entity_id contains dots (after sanitization, dots are kept).
+# when entity_id contains dots (after sanitization, dots are kept). ``_NN``
+# is the same-second sequence (see ``_unclaimed_target``): the timestamp is
+# a second and the throttle defaults to 0, so a second capture of one entity
+# inside that second takes the next free suffix rather than replacing the
+# first. ``_`` sorts after ``.``, so a suffixed name stays newest-last.
 _FILENAME_RE = re.compile(
     r"^(?P<domain>[A-Za-z0-9_]+)\."
     r"(?P<entity_id>[A-Za-z0-9._-]+)\."
-    r"(?P<ts>\d{8}_\d{6})\.yaml$"
+    r"(?P<ts>\d{8}_\d{6})(?:_\d{2})?\.yaml$"
 )
+
+# Captures of one entity inside one second before the manager gives up on a
+# free name. Two is the realistic case (a save then a delete of the same
+# blueprint); the cap only bounds the ``exists()`` probe.
+_MAX_SAME_SECOND = 100
 
 # Domains whose snapshot ``config`` is raw text (file/YAML content) rather
 # than a structured dict. They carry a ``kind: "text"`` marker in the
@@ -558,9 +567,7 @@ class BackupManager:
         self, domain: str, entity_id: str, config: Any, tool_name: str | None
     ) -> Path:
         safe = _safe_entity_id(entity_id)
-        ts = _now_ts()
-        filename = f"{domain}.{safe}.{ts}.yaml"
-        target = self._dir / filename
+        target = self._unclaimed_target(domain, safe, _now_ts())
         payload: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "domain": domain,
@@ -578,6 +585,26 @@ class BackupManager:
         os.replace(str(tmp), str(target))
         logger.info("Auto-backup: wrote %s", target.name)
         return target
+
+    def _unclaimed_target(self, domain: str, safe: str, ts: str) -> Path:
+        """First filename for ``ts`` that no snapshot of this entity holds yet.
+
+        The bare name is taken when it is free; each later capture inside the
+        same second appends ``_01``, ``_02``, ... so the atomic replace in
+        ``_write_snapshot`` can never discard an earlier pre-write state.
+        ``maybe_snapshot`` serialises captures per key, so the ``exists()``
+        probe is not racing another capture of the same entity.
+        """
+        target = self._dir / f"{domain}.{safe}.{ts}.yaml"
+        for seq in range(1, _MAX_SAME_SECOND):
+            if not target.exists():
+                return target
+            target = self._dir / f"{domain}.{safe}.{ts}_{seq:02d}.yaml"
+        if not target.exists():
+            return target
+        raise OSError(
+            f"{_MAX_SAME_SECOND} snapshots of {domain}:{safe} inside one second"
+        )
 
     def _snapshot_is_for(self, path: Path, entity_id: str) -> bool:
         """Whether ``path`` actually holds a snapshot of ``entity_id``.
