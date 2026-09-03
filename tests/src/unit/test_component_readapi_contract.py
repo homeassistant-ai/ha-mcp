@@ -592,15 +592,16 @@ class TestBlueprintGetSeam:
             resp = await tool(path="user/motion.yaml", domain="automation")
 
         assert resp["success"] is True
-        assert resp["metadata"]["name"] == "Motion Light"
-        assert resp["config"]["trigger"][0]["entity_id"] == {
+        data = resp["data"]
+        assert data["metadata"]["name"] == "Motion Light"
+        assert data["config"]["trigger"][0]["entity_id"] == {
             "__input__": "motion_sensor"
         }
-        assert resp["config"]["action"] == [{"service": "light.turn_on"}]
+        assert data["config"]["action"] == [{"service": "light.turn_on"}]
         # The raw text round-trips the file byte for byte, tagged with the tier
         # that produced it — this is what a caller edits and saves back.
-        assert resp["yaml"] == _MOTION_BLUEPRINT
-        assert resp["yaml_source"] == "component"
+        assert data["yaml"] == _MOTION_BLUEPRINT
+        assert data["yaml_source"] == "component"
 
     @pytest.mark.asyncio
     async def test_path_traversal_rejected_by_real_jail(self, tmp_path) -> None:

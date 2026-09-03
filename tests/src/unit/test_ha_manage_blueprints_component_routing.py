@@ -183,11 +183,13 @@ async def test_component_merges_full_body_under_config() -> None:
         resp = await get_blueprint(path=_PATH, domain="automation")
 
     assert resp["success"] is True
-    assert resp["metadata"]["name"] == "Motion Light"
-    assert resp["inputs"] == {"motion_sensor": {"name": "Motion Sensor"}}
+    assert resp["data"]["metadata"]["name"] == "Motion Light"
+    assert resp["data"]["inputs"] == {"motion_sensor": {"name": "Motion Sensor"}}
     # The additive body core's blueprint/list never returns.
-    assert resp["config"]["trigger"][0]["entity_id"] == {"__input__": "motion_sensor"}
-    assert resp["config"]["action"] == [{"service": "light.turn_on"}]
+    assert resp["data"]["config"]["trigger"][0]["entity_id"] == {
+        "__input__": "motion_sensor"
+    }
+    assert resp["data"]["config"]["action"] == [{"service": "light.turn_on"}]
     call = _bp_calls(ws)[0]
     assert call.kwargs == {"domain": "automation", "path": _PATH}
 
@@ -207,7 +209,7 @@ async def test_capability_miss_serves_metadata_only() -> None:
         resp = await get_blueprint(path=_PATH, domain="automation")
 
     assert resp["success"] is True
-    assert resp["metadata"]["name"] == "Motion Light"
+    assert resp["data"]["metadata"]["name"] == "Motion Light"
     assert "config" not in resp
     assert not _bp_calls(ws)
 
@@ -329,7 +331,7 @@ async def test_list_mode_never_touches_component() -> None:
         resp = await manage_blueprints(action="list", domain="automation")
 
     assert resp["success"] is True
-    assert resp["count"] == 1
+    assert resp["data"]["count"] == 1
     assert not _bp_calls(ws)
     assert not [
         c for c in ws.send_command.call_args_list if c.args[0] == "ha_mcp_tools/info"
@@ -350,9 +352,9 @@ async def test_component_text_capability_surfaces_yaml() -> None:
     with patch_ws(ws, blueprint_sources):
         resp = await get_blueprint(path=_PATH, domain="automation")
 
-    assert resp["yaml"] == _MOTION_YAML
-    assert resp["yaml_source"] == "component"
-    assert resp["config"]["action"] == [{"service": "light.turn_on"}]
+    assert resp["data"]["yaml"] == _MOTION_YAML
+    assert resp["data"]["yaml_source"] == "component"
+    assert resp["data"]["config"]["action"] == [{"service": "light.turn_on"}]
 
 
 @pytest.mark.asyncio
@@ -374,7 +376,7 @@ async def test_text_ignored_without_the_capability_flag() -> None:
     with patch_ws(ws, blueprint_sources):
         resp = await get_blueprint(path=_PATH, domain="automation")
 
-    assert resp["config"]["action"] == [{"service": "light.turn_on"}]
+    assert resp["data"]["config"]["action"] == [{"service": "light.turn_on"}]
     assert "yaml" not in resp
     assert "yaml_source" not in resp
 
@@ -397,6 +399,6 @@ async def test_unparseable_text_still_returned_with_no_config() -> None:
     with patch_ws(ws, blueprint_sources):
         resp = await get_blueprint(path=_PATH, domain="automation")
 
-    assert resp["yaml"] == "blueprint: [unclosed\n"
-    assert resp["yaml_source"] == "component"
+    assert resp["data"]["yaml"] == "blueprint: [unclosed\n"
+    assert resp["data"]["yaml_source"] == "component"
     assert "config" not in resp

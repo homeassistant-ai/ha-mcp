@@ -323,20 +323,24 @@ async def import_blueprint(client: Any, url: str, overwrite: bool) -> dict[str, 
 
     return {
         "success": True,
-        "url": url,
-        "imported_blueprint": {
-            "path": suggested_filename,
-            "domain": domain,
-            "name": blueprint_meta.get("name"),
-            "description": blueprint_meta.get("description"),
+        "data": {
+            "url": url,
+            "imported_blueprint": {
+                "path": suggested_filename,
+                "domain": domain,
+                "name": blueprint_meta.get("name"),
+                "description": blueprint_meta.get("description"),
+            },
+            "overrides_existing": overrides_existing,
+            "message": (
+                "Blueprint re-imported successfully. Automations/scripts using "
+                "it were reloaded."
+                if overrides_existing
+                else "Blueprint imported successfully. Use "
+                'ha_manage_blueprints(action="list") to see all installed '
+                "blueprints."
+            ),
         },
-        "overrides_existing": overrides_existing,
-        "message": (
-            "Blueprint re-imported successfully. Automations/scripts using it were reloaded."
-            if overrides_existing
-            else 'Blueprint imported successfully. Use ha_manage_blueprints(action="list") '
-            "to see all installed blueprints."
-        ),
     }
 
 

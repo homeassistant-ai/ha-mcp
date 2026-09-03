@@ -55,7 +55,8 @@ class BlueprintTools:
             domain: Blueprint domain (automation or script)
 
         Returns:
-            Formatted response with blueprints list, count, and domain
+            The canonical ``{"success": True, "data": {...}}`` envelope
+            carrying the blueprints list, count, and domain.
         """
         blueprints = []
         for bp_path, metadata in blueprints_data.items():
@@ -82,9 +83,11 @@ class BlueprintTools:
 
         return {
             "success": True,
-            "domain": domain,
-            "count": len(blueprints),
-            "blueprints": blueprints,
+            "data": {
+                "domain": domain,
+                "count": len(blueprints),
+                "blueprints": blueprints,
+            },
         }
 
     @tool(
@@ -387,19 +390,19 @@ class BlueprintTools:
             self._raise_not_found(domain, path, blueprints_data)
 
         blueprint_data = blueprints_data[path]
-        result: dict[str, Any] = {
-            "success": True,
+        data: dict[str, Any] = {
             "path": path,
             "domain": domain,
             "name": blueprint_data.get(
                 "name", path.rsplit("/", maxsplit=1)[-1].replace(".yaml", "")
             ),
         }
+        result: dict[str, Any] = {"success": True, "data": data}
 
         source_url: str | None = None
         if "metadata" in blueprint_data:
             meta = blueprint_data["metadata"]
-            result["metadata"] = {
+            data["metadata"] = {
                 "name": meta.get("name"),
                 "description": meta.get("description"),
                 "source_url": meta.get("source_url"),
@@ -408,7 +411,7 @@ class BlueprintTools:
                 "homeassistant": meta.get("homeassistant"),
             }
             if "input" in meta:
-                result["inputs"] = meta["input"]
+                data["inputs"] = meta["input"]
             raw_source_url = meta.get("source_url")
             source_url = raw_source_url if isinstance(raw_source_url, str) else None
 
@@ -416,7 +419,7 @@ class BlueprintTools:
         # text), so both come from the tier ladder in ``blueprint_sources``.
         # Merged additively; on an install where no tier can serve the file the
         # response stays metadata + inputs.
-        await self._merge_blueprint_body(result, domain, path, source_url)
+        await self._merge_blueprint_body(result, data, domain, path, source_url)
         return result
 
     async def _delete_blueprint(
@@ -650,16 +653,19 @@ class BlueprintTools:
     async def _merge_blueprint_body(
         self,
         result: dict[str, Any],
+        data: dict[str, Any],
         domain: str,
         path: str,
         source_url: str | None,
     ) -> None:
-        """Merge the blueprint's body and raw YAML into ``result``.
+        """Merge the blueprint's body and raw YAML into the response.
 
-        Adds ``config`` (the parsed body) whenever any tier produced one, and
-        ``yaml`` + ``yaml_source`` whenever one produced the text — never a null
-        key for a tier that found nothing. A ``source_url`` answer earns its own
-        warning: that text is a fresh download from the author, not the file on
+        Adds ``config`` (the parsed body) to ``data`` whenever any tier produced
+        one, and ``yaml`` + ``yaml_source`` whenever one produced the text —
+        never a null key for a tier that found nothing. Warnings go on
+        ``result`` instead: the style guide keeps ``warnings`` a top-level
+        ``list[str]``, never nested in ``data``. A ``source_url`` answer earns
+        its own: that text is a fresh download from the author, not the file on
         disk, so anything changed upstream since the import is in it. The
         component's own "present but could not read the body" warning is
         preserved.
@@ -668,10 +674,10 @@ class BlueprintTools:
             self._client, domain, path, source_url=source_url
         )
         if found.config is not None:
-            result["config"] = found.config
+            data["config"] = found.config
         if found.text is not None and found.source is not None:
-            result["yaml"] = found.text
-            result["yaml_source"] = found.source
+            data["yaml"] = found.text
+            data["yaml_source"] = found.source
         warnings = [w for w in (found.warning,) if w]
         if found.source == "source_url":
             warnings.append(

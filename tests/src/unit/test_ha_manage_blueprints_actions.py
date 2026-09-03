@@ -605,10 +605,11 @@ async def test_list_response_shape_unchanged() -> None:
     resp = await tool(action="list", domain="automation")
 
     assert resp["success"] is True
-    assert resp["domain"] == "automation"
-    assert resp["count"] == 1
-    assert resp["blueprints"][0]["path"] == _PATH
-    assert resp["blueprints"][0]["description"] == "Turn on a light on motion."
+    data = resp["data"]
+    assert data["domain"] == "automation"
+    assert data["count"] == 1
+    assert data["blueprints"][0]["path"] == _PATH
+    assert data["blueprints"][0]["description"] == "Turn on a light on motion."
 
 
 @pytest.mark.asyncio
@@ -642,13 +643,13 @@ async def test_import_saves_and_reports_the_installed_path() -> None:
     resp = await tool(action="import", url="https://example.com/bp.yaml")
 
     assert resp["success"] is True
-    assert resp["imported_blueprint"] == {
+    assert resp["data"]["imported_blueprint"] == {
         "path": "user/motion.yaml",
         "domain": "automation",
         "name": "Motion Light",
         "description": "Turn on a light on motion.",
     }
-    assert resp["overrides_existing"] is False
+    assert resp["data"]["overrides_existing"] is False
     save = client.frames("blueprint/save")[0]
     assert save["path"] == "user/motion.yaml"
     assert save["source_url"] == "https://example.com/bp.yaml"
@@ -941,9 +942,10 @@ async def test_get_surfaces_yaml_and_its_source(
 
     resp = await tool(action="get", path=_PATH)
 
-    assert resp["yaml"] == _SAVE_YAML
-    assert resp["yaml_source"] == "component"
-    assert resp["config"] == {"blueprint": {"name": "Motion Light"}}
+    assert resp["data"]["yaml"] == _SAVE_YAML
+    assert resp["data"]["yaml_source"] == "component"
+    assert resp["data"]["config"] == {"blueprint": {"name": "Motion Light"}}
+    # warnings stay top-level, never nested in data (style guide).
     assert "warnings" not in resp
     # The ladder is handed the recorded source_url so its last tier can run.
     assert spy.calls == [("automation", _PATH, "https://example.com/bp.yaml")]
@@ -964,7 +966,7 @@ async def test_get_warns_when_the_yaml_is_a_source_url_refetch(
 
     resp = await tool(action="get", path=_PATH)
 
-    assert resp["yaml_source"] == "source_url"
+    assert resp["data"]["yaml_source"] == "source_url"
     assert len(resp["warnings"]) == 1
     assert "https://example.com/bp.yaml" in resp["warnings"][0]
     assert "not read from the installed file" in resp["warnings"][0]
@@ -981,9 +983,10 @@ async def test_get_omits_yaml_keys_when_no_tier_answers(
     resp = await tool(action="get", path=_PATH)
 
     assert resp["success"] is True
-    assert resp["metadata"]["name"] == "Motion Light"
-    for key in ("yaml", "yaml_source", "config", "warnings"):
-        assert key not in resp, key
+    assert resp["data"]["metadata"]["name"] == "Motion Light"
+    for key in ("yaml", "yaml_source", "config"):
+        assert key not in resp["data"], key
+    assert "warnings" not in resp
 
 
 @pytest.mark.asyncio

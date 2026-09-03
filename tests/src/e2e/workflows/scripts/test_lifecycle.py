@@ -1156,7 +1156,7 @@ async def script_blueprint_path(mcp_client):
             "ha_manage_blueprints",
             {"action": "list", "domain": "script"},
         )
-        blueprints = list_result.get("blueprints", [])
+        blueprints = list_result["data"].get("blueprints", [])
         if not blueprints:
             pytest.skip("No script blueprints available for testing")
         return blueprints[0]["path"]
@@ -1186,7 +1186,7 @@ async def test_blueprint_script_lifecycle(
             {"action": "get", "path": blueprint_path, "domain": "script"},
         )
 
-        inputs = detail_result.get("inputs", {})
+        inputs = detail_result["data"].get("inputs", {})
         logger.info(f"Blueprint has {len(inputs)} inputs")
 
         # Step 3: Create script from blueprint (no sequence field)

@@ -87,7 +87,7 @@ class _ServedBlueprint:
         imported = await mcp.call_tool_success(
             "ha_manage_blueprints", {"action": "import", "url": self.url}
         )
-        return imported["imported_blueprint"]["path"]
+        return imported["data"]["imported_blueprint"]["path"]
 
     async def delete(self, mcp: MCPAssertions, path: str) -> None:
         await mcp.call_tool_success(
@@ -119,12 +119,13 @@ class TestBlueprintManagement:
             )
 
             # Verify response structure
-            assert "blueprints" in result, "Response should contain 'blueprints' key"
-            assert "count" in result, "Response should contain 'count' key"
-            assert "domain" in result, "Response should contain 'domain' key"
-            assert result["domain"] == "automation", "Domain should be 'automation'"
+            data = result["data"]
+            assert "blueprints" in data, "Response should contain 'blueprints' key"
+            assert "count" in data, "Response should contain 'count' key"
+            assert "domain" in data, "Response should contain 'domain' key"
+            assert data["domain"] == "automation", "Domain should be 'automation'"
 
-            blueprints = result.get("blueprints", [])
+            blueprints = data.get("blueprints", [])
             logger.info(f"Found {len(blueprints)} automation blueprints")
 
             # If blueprints exist, verify their structure
@@ -155,11 +156,12 @@ class TestBlueprintManagement:
             )
 
             # Verify response structure
-            assert "blueprints" in result, "Response should contain 'blueprints' key"
-            assert "count" in result, "Response should contain 'count' key"
-            assert result["domain"] == "script", "Domain should be 'script'"
+            data = result["data"]
+            assert "blueprints" in data, "Response should contain 'blueprints' key"
+            assert "count" in data, "Response should contain 'count' key"
+            assert data["domain"] == "script", "Domain should be 'script'"
 
-            blueprints = result.get("blueprints", [])
+            blueprints = data.get("blueprints", [])
             logger.info(f"Found {len(blueprints)} script blueprints")
 
             logger.info("ha_manage_blueprints (list) for script domain succeeded")
@@ -202,7 +204,7 @@ class TestBlueprintManagement:
                 {"action": "list", "domain": "automation"},
             )
 
-            blueprints = list_result.get("blueprints", [])
+            blueprints = list_result["data"].get("blueprints", [])
 
             if not blueprints:
                 logger.info("No automation blueprints available, skipping detail test")
@@ -218,26 +220,27 @@ class TestBlueprintManagement:
             )
 
             # Verify response structure
-            assert "path" in detail_result, "Response should contain 'path'"
-            assert "domain" in detail_result, "Response should contain 'domain'"
-            assert "name" in detail_result, "Response should contain 'name'"
-            assert detail_result["path"] == first_blueprint_path, (
+            detail = detail_result["data"]
+            assert "path" in detail, "Response should contain 'path'"
+            assert "domain" in detail, "Response should contain 'domain'"
+            assert "name" in detail, "Response should contain 'name'"
+            assert detail["path"] == first_blueprint_path, (
                 "Path should match requested path"
             )
 
-            logger.info(f"Blueprint details retrieved: {detail_result.get('name')}")
+            logger.info(f"Blueprint details retrieved: {detail.get('name')}")
 
             # Check for metadata if available
-            if "metadata" in detail_result:
-                meta = detail_result["metadata"]
+            if "metadata" in detail:
+                meta = detail["metadata"]
                 logger.info(
                     f"  Description: {(meta.get('description') or 'N/A')[:100]}..."
                 )
                 logger.info(f"  Author: {meta.get('author') or 'N/A'}")
 
             # Check for inputs if available
-            if "inputs" in detail_result:
-                inputs = detail_result["inputs"]
+            if "inputs" in detail:
+                inputs = detail["inputs"]
                 logger.info(f"  Inputs: {len(inputs)} defined")
 
             logger.info("ha_manage_blueprints succeeded")
@@ -367,7 +370,7 @@ class TestBlueprintManagement:
                 "ha_manage_blueprints",
                 {"action": "list", "domain": "automation"},
             )
-            before_paths = [bp["path"] for bp in before.get("blueprints", [])]
+            before_paths = [bp["path"] for bp in before["data"].get("blueprints", [])]
 
             # Try to import
             result = await safe_call_tool(
@@ -378,7 +381,7 @@ class TestBlueprintManagement:
 
             if result.get("success"):
                 # Import succeeded - verify metadata is populated
-                imported = result.get("imported_blueprint", {})
+                imported = result.get("data", {}).get("imported_blueprint", {})
                 assert imported.get("path", "").endswith(".yaml"), (
                     f"Blueprint path should end with .yaml, got: {imported.get('path')}"
                 )
@@ -398,7 +401,7 @@ class TestBlueprintManagement:
                     "ha_manage_blueprints",
                     {"action": "list", "domain": imported.get("domain", "automation")},
                 )
-                after_paths = [bp["path"] for bp in after.get("blueprints", [])]
+                after_paths = [bp["path"] for bp in after["data"].get("blueprints", [])]
                 assert imported["path"] in after_paths, (
                     f"Imported blueprint {imported['path']} should appear in blueprint list"
                 )
@@ -464,7 +467,7 @@ class TestBlueprintManagement:
             assert result.get("overrides_existing") is True, (
                 f"Expected overrides_existing=True, got: {result}"
             )
-            imported = result.get("imported_blueprint", {})
+            imported = result.get("data", {}).get("imported_blueprint", {})
             assert imported.get("path", "").endswith(".yaml"), (
                 f"Blueprint path should end with .yaml, got: {imported.get('path')}"
             )
@@ -506,10 +509,10 @@ class TestBlueprintManagement:
                     "ha_manage_blueprints",
                     {"action": "import", "url": test_url, "overwrite": True},
                 )
-                assert first.get("overrides_existing") is False, (
+                assert first["data"].get("overrides_existing") is False, (
                     f"Fresh import must not report an override, got: {first}"
                 )
-                blueprint_path = first["imported_blueprint"]["path"]
+                blueprint_path = first["data"]["imported_blueprint"]["path"]
 
                 # Serve changed content and re-import
                 served_file.write_text(
@@ -520,10 +523,10 @@ class TestBlueprintManagement:
                     "ha_manage_blueprints",
                     {"action": "import", "url": test_url, "overwrite": True},
                 )
-                assert second.get("overrides_existing") is True, (
+                assert second["data"].get("overrides_existing") is True, (
                     f"Re-import must report the override, got: {second}"
                 )
-                assert "reload" in second.get("message", "").lower(), (
+                assert "reload" in second["data"].get("message", "").lower(), (
                     f"Override response should mention the consumer reload, got: {second}"
                 )
 
@@ -532,7 +535,9 @@ class TestBlueprintManagement:
                     "ha_manage_blueprints",
                     {"action": "get", "path": blueprint_path, "domain": "automation"},
                 )
-                description = (detail.get("metadata") or {}).get("description") or ""
+                description = (detail["data"].get("metadata") or {}).get(
+                    "description"
+                ) or ""
                 assert marker_v2 in description, (
                     f"Re-imported blueprint should carry '{marker_v2}', got: {description}"
                 )
@@ -613,13 +618,13 @@ class TestBlueprintManagement:
                     "ha_manage_blueprints",
                     {"action": "get", "domain": "automation", "path": path},
                 )
-                assert served.marker in detail.get("yaml", ""), (
+                assert served.marker in detail["data"].get("yaml", ""), (
                     f"get should return the served YAML text, got: {detail}"
                 )
-                assert detail.get("yaml_source") in _YAML_SOURCES, detail
+                assert detail["data"].get("yaml_source") in _YAML_SOURCES, detail
                 # The parsed body arrives too, from whichever tier read the text.
-                assert detail["config"]["blueprint"]["domain"] == "automation"
-                if detail["yaml_source"] == "source_url":
+                assert detail["data"]["config"]["blueprint"]["domain"] == "automation"
+                if detail["data"]["yaml_source"] == "source_url":
                     assert any("re-fetched" in w for w in detail.get("warnings", [])), (
                         f"a source_url re-fetch must be flagged: {detail}"
                     )
@@ -646,8 +651,8 @@ class TestBlueprintManagement:
                     "ha_manage_blueprints",
                     {"action": "get", "domain": "automation", "path": path},
                 )
-                assert detail.get("yaml_source") == "file", detail
-                assert served.marker in detail["yaml"]
+                assert detail["data"].get("yaml_source") == "file", detail
+                assert served.marker in detail["data"]["yaml"]
                 await served.delete(mcp, path)
         finally:
             served.cleanup()
@@ -668,7 +673,7 @@ class TestBlueprintManagement:
                     "ha_manage_blueprints",
                     {"action": "get", "domain": "automation", "path": path},
                 )
-                assert served.marker in detail.get("yaml", ""), detail
+                assert served.marker in detail["data"].get("yaml", ""), detail
                 assert detail.get("yaml_source") in (
                     "file",
                     "component",
@@ -699,7 +704,7 @@ class TestBlueprintManagement:
                         "action": "save",
                         "domain": "automation",
                         "path": copy_path,
-                        "yaml": detail["yaml"],
+                        "yaml": detail["data"]["yaml"],
                     },
                 )
                 assert saved["data"]["overrides_existing"] is False, saved
@@ -707,7 +712,7 @@ class TestBlueprintManagement:
                     "ha_manage_blueprints",
                     {"action": "list", "domain": "automation"},
                 )
-                paths = {bp["path"] for bp in listing["blueprints"]}
+                paths = {bp["path"] for bp in listing["data"]["blueprints"]}
                 assert {path, copy_path} <= paths, (
                     f"expected both installed, got {paths}"
                 )
@@ -731,8 +736,8 @@ class TestBlueprintManagement:
                     "ha_manage_blueprints",
                     {"action": "get", "domain": "automation", "path": path},
                 )
-                edited = detail["yaml"].replace(served.marker, edited_marker)
-                assert edited != detail["yaml"]
+                edited = detail["data"]["yaml"].replace(served.marker, edited_marker)
+                assert edited != detail["data"]["yaml"]
                 saved = await mcp.call_tool_success(
                     "ha_manage_blueprints",
                     {
@@ -749,7 +754,9 @@ class TestBlueprintManagement:
                     "ha_manage_blueprints",
                     {"action": "get", "domain": "automation", "path": path},
                 )
-                description = (after.get("metadata") or {}).get("description") or ""
+                description = (after["data"].get("metadata") or {}).get(
+                    "description"
+                ) or ""
                 assert edited_marker in description, after
                 assert served.marker not in description, after
                 await served.delete(mcp, path)
@@ -795,7 +802,8 @@ class TestBlueprintManagement:
                 "ha_manage_blueprints", {"action": "list", "domain": "automation"}
             )
             assert not any(
-                bp["path"].startswith("e2e_invalid_") for bp in listing["blueprints"]
+                bp["path"].startswith("e2e_invalid_")
+                for bp in listing["data"]["blueprints"]
             ), "an invalid blueprint must never be written"
 
     @pytest.mark.slow
@@ -820,7 +828,7 @@ class TestBlueprintManagement:
                 listing = await mcp.call_tool_success(
                     "ha_manage_blueprints", {"action": "list", "domain": "automation"}
                 )
-                assert path not in {bp["path"] for bp in listing["blueprints"]}
+                assert path not in {bp["path"] for bp in listing["data"]["blueprints"]}
                 missing = await mcp.call_tool_failure(
                     "ha_manage_blueprints",
                     {"action": "get", "domain": "automation", "path": path},
@@ -847,7 +855,7 @@ class TestBlueprintManagement:
                 listing = await mcp.call_tool_success(
                     "ha_manage_blueprints", {"action": "list", "domain": "automation"}
                 )
-                assert path in {bp["path"] for bp in listing["blueprints"]}, (
+                assert path in {bp["path"] for bp in listing["data"]["blueprints"]}, (
                     "an unconfirmed delete must change nothing"
                 )
                 await served.delete(mcp, path)
@@ -918,7 +926,7 @@ class TestBlueprintManagement:
                             "ha_manage_blueprints",
                             {"action": "list", "domain": "automation"},
                         )
-                    )["blueprints"]
+                    )["data"]["blueprints"]
                 }, "a refused delete must leave the blueprint installed"
 
                 await mcp.call_tool_success(
@@ -965,7 +973,7 @@ class TestBlueprintManagement:
                 listing = await mcp.call_tool_success(
                     "ha_manage_blueprints", {"action": "list", "domain": "automation"}
                 )
-                assert path in {bp["path"] for bp in listing["blueprints"]}
+                assert path in {bp["path"] for bp in listing["data"]["blueprints"]}
                 await served.delete(mcp, path)
         finally:
             served.cleanup()
@@ -988,7 +996,7 @@ class TestBlueprintManagement:
                     "ha_manage_blueprints",
                     {"action": "get", "domain": "automation", "path": path},
                 )
-                faithful_copy_available = detail.get("yaml_source") in (
+                faithful_copy_available = detail["data"].get("yaml_source") in (
                     "file",
                     "component",
                     "tools_entry",
@@ -1049,7 +1057,7 @@ async def test_blueprint_discovery_workflow(mcp_client):
             {"action": "list", "domain": "automation"},
         )
 
-        automation_count = list_result.get("count", 0)
+        automation_count = list_result["data"].get("count", 0)
         logger.info(f"Found {automation_count} automation blueprints")
 
         # Step 2: List script blueprints
@@ -1059,11 +1067,11 @@ async def test_blueprint_discovery_workflow(mcp_client):
             {"action": "list", "domain": "script"},
         )
 
-        script_count = script_result.get("count", 0)
+        script_count = script_result["data"].get("count", 0)
         logger.info(f"Found {script_count} script blueprints")
 
         # Step 3: If blueprints exist, explore one
-        blueprints = list_result.get("blueprints", [])
+        blueprints = list_result["data"].get("blueprints", [])
         if blueprints:
             logger.info("Step 3: Exploring first blueprint...")
             first_blueprint = blueprints[0]
@@ -1077,11 +1085,12 @@ async def test_blueprint_discovery_workflow(mcp_client):
                 },
             )
 
-            logger.info(f"Explored blueprint: {detail_result.get('name')}")
+            explored = detail_result["data"]
+            logger.info(f"Explored blueprint: {explored.get('name')}")
 
             # Log input requirements if available
-            if "inputs" in detail_result:
-                inputs = detail_result["inputs"]
+            if "inputs" in explored:
+                inputs = explored["inputs"]
                 logger.info(f"Blueprint requires {len(inputs)} inputs:")
                 for input_name, input_config in list(inputs.items())[:3]:
                     logger.info(
@@ -1110,7 +1119,7 @@ async def test_blueprint_search_integration(mcp_client):
             {"action": "list", "domain": "automation"},
         )
 
-        blueprints = result.get("blueprints", [])
+        blueprints = result["data"].get("blueprints", [])
         logger.info(f"Blueprint search found {len(blueprints)} results")
 
         # Verify blueprint metadata is searchable/useful
@@ -1138,7 +1147,7 @@ async def test_blueprint_automation_lifecycle(mcp_client):
             {"action": "list", "domain": "automation"},
         )
 
-        blueprints = list_result.get("blueprints", [])
+        blueprints = list_result["data"].get("blueprints", [])
         if not blueprints:
             logger.info("No automation blueprints available, skipping test")
             pytest.skip("No automation blueprints available for testing")
@@ -1153,7 +1162,7 @@ async def test_blueprint_automation_lifecycle(mcp_client):
             {"action": "get", "path": blueprint_path, "domain": "automation"},
         )
 
-        inputs = detail_result.get("inputs", {})
+        inputs = detail_result["data"].get("inputs", {})
         logger.info(f"Blueprint has {len(inputs)} inputs")
 
         # Step 3: Create automation from blueprint (no trigger/action fields)
@@ -1238,7 +1247,7 @@ async def test_blueprint_automation_with_empty_arrays(mcp_client):
             {"action": "list", "domain": "automation"},
         )
 
-        blueprints = list_result.get("blueprints", [])
+        blueprints = list_result["data"].get("blueprints", [])
         if not blueprints:
             pytest.skip("No automation blueprints available for testing")
 
