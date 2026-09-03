@@ -632,7 +632,11 @@ class TestFilenameSafety:
         assert "\\" not in _safe_entity_id("a\\b")
 
     def test_unicode_replaced(self) -> None:
-        assert _safe_entity_id("foo🎉bar") == "foo_bar"
+        # Sanitising is lossy, so the result also carries a digest of the
+        # original; what this pins is that no unsafe character survives.
+        safe = _safe_entity_id("foo🎉bar")
+        assert safe.startswith("foo_bar")
+        assert "🎉" not in safe
 
     def test_leading_dot_stripped(self) -> None:
         assert not _safe_entity_id("...env").startswith(".")
@@ -643,6 +647,32 @@ class TestFilenameSafety:
 
     def test_keeps_safe_chars(self) -> None:
         assert _safe_entity_id("entity.foo_bar-1") == "entity.foo_bar-1"
+
+    def test_sanitised_ids_do_not_collide(self) -> None:
+        """Blueprint domains key on paths, where sanitising is lossy (#2329).
+
+        ``user/motion.yaml`` and ``user_motion.yaml`` both clean to
+        ``user_motion.yaml``. Sharing one snapshot namespace means captures in
+        the same second overwrite each other and rotation counts both
+        histories as one, so it can delete the only restore point for a
+        blueprint that was never written.
+        """
+        assert _safe_entity_id("user/motion.yaml") != _safe_entity_id(
+            "user_motion.yaml"
+        )
+        assert _safe_entity_id("a/b") != _safe_entity_id("a_b")
+
+    def test_the_same_id_always_sanitises_the_same_way(self) -> None:
+        """Rotation and listing glob on this, so it has to be stable."""
+        assert _safe_entity_id("user/motion.yaml") == _safe_entity_id(
+            "user/motion.yaml"
+        )
+
+    def test_already_safe_ids_are_returned_unchanged(self) -> None:
+        """Entity ids must keep their existing filenames, so snapshots taken
+        before this change stay discoverable."""
+        for entity_id in ("automation.morning", "script.bedtime", "light.hall-1"):
+            assert _safe_entity_id(entity_id) == entity_id
 
 
 # ---------------------------------------------------------------- capture

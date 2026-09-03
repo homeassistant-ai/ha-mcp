@@ -656,11 +656,14 @@ class AutomationConfigTools:
         - Stateful counter / timer / schedule / boolean / etc.
           -> ha_config_set_helper(helper_type='counter' | 'timer' | ...)
 
-        Supports two modes: full config replacement OR Python transformation.
+        Supports three modes: full config replacement, Python transformation,
+        or take_control_of_blueprint (see below).
 
         WHEN TO USE WHICH MODE:
         - python_transform: RECOMMENDED for edits to existing automations. Surgical updates.
         - config: Use for creating new automations or full restructures.
+        - take_control_of_blueprint: converts a blueprint-backed automation
+          into a standalone one. Takes no config of its own.
 
         IMPORTANT: python_transform requires 'identifier' and 'config_hash' from ha_config_get_automation().
 

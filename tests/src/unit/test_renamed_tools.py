@@ -117,13 +117,35 @@ class TestStoredToolConfig:
 
         assert config["tools"] == {"ha_manage_app": "disabled"}
 
-    def test_the_env_overlays_tie_rule_survives_the_rename(self) -> None:
-        """``env_pinned_tools`` documents the opposite tie: pinned wins."""
+    def test_the_env_tie_rule_still_applies_to_one_name_in_both_vars(self) -> None:
+        """PINNED_TOOLS wins when the SAME tool is named in both vars."""
+        settings = SimpleNamespace(
+            disabled_tools="ha_manage_app", pinned_tools="ha_manage_app"
+        )
+
+        assert env_pinned_tools(settings) == {"ha_manage_app": "pinned"}
+
+    def test_two_retired_names_colliding_keep_the_restriction(self) -> None:
+        """A disabled half must not come back enabled via its pinned sibling.
+
+        ``rename_retired_keys`` states that principle for the STORED config;
+        the env overlay always wins over stored state, so letting "pinned" win
+        a consolidation collision here would hand the operator back an enabled
+        write-capable tool they had explicitly disabled.
+        """
         settings = SimpleNamespace(
             disabled_tools="ha_manage_addon", pinned_tools="ha_manage_app"
         )
 
-        assert env_pinned_tools(settings) == {"ha_manage_app": "pinned"}
+        assert env_pinned_tools(settings) == {"ha_manage_app": "disabled"}
+
+    def test_a_disabled_blueprint_alias_survives_a_pinned_sibling(self) -> None:
+        """The pair this PR consolidates, through the same path."""
+        settings = SimpleNamespace(
+            disabled_tools="ha_get_blueprint", pinned_tools="ha_import_blueprint"
+        )
+
+        assert env_pinned_tools(settings) == {"ha_manage_blueprints": "disabled"}
 
 
 class TestStoredPolicy:

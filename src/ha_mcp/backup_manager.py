@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import hashlib
 import logging
 import os
 import re
@@ -181,11 +182,26 @@ def _safe_entity_id(entity_id: str) -> str:
     Replaces any character outside ``[A-Za-z0-9._-]`` with ``_``. Path
     separators get caught by this (the regex excludes both ``/`` and ``\\``).
     Strips leading dots to prevent dotfile collisions.
+
+    Sanitizing is lossy, so ids that needed it get a short digest of the
+    ORIGINAL appended. Blueprint domains (#2329) key on paths, where
+    ``user/motion.yaml`` and ``user_motion.yaml`` both clean to
+    ``user_motion.yaml`` -- without the digest they share one snapshot
+    namespace, so captures in the same second overwrite each other and
+    rotation counts both histories as one, able to delete the only restore
+    point for a blueprint that was never written. Entity ids are already
+    within the safe set, so their filenames are unchanged and existing
+    snapshots stay discoverable.
     """
     if not entity_id:
         return "_"
     cleaned = _SAFE_ID_RE.sub("_", entity_id).lstrip(".")
-    return cleaned or "_"
+    if not cleaned:
+        return "_"
+    if cleaned == entity_id:
+        return cleaned
+    digest = hashlib.sha256(entity_id.encode("utf-8")).hexdigest()[:8]
+    return f"{cleaned}-{digest}"
 
 
 def _now_ts() -> str:

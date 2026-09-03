@@ -120,13 +120,15 @@ class BlueprintTools:
         },
     )
     # ``delete`` and ``save`` are the two actions that can destroy an installed
-    # blueprint's contents, so both capture first; a ``save`` to a brand-new path
-    # finds nothing to snapshot and proceeds. ``confirm`` is part of the skip
-    # test too, not just ``action``: an unconfirmed delete changes nothing, and
-    # capturing for it would still run an installed-file read (the component
-    # command, or the File & YAML Tools service) before the tool refuses.
-    # Auto-backup is on by default, so that would fire on every unconfirmed
-    # call. The snapshot never re-fetches ``source_url``: ``_fetch_blueprint``
+    # blueprint's contents, so both capture first. The skip test reads more
+    # than ``action``, because two shapes provably cannot destroy anything: an
+    # unconfirmed delete changes nothing, and a ``save`` without ``overwrite``
+    # either lands on a free path (nothing to snapshot) or is refused by Home
+    # Assistant for already existing. Capturing for either would still run an
+    # installed-file read (the component command, or the File & YAML Tools
+    # service) first, and auto-backup is on by default, so that would fire on
+    # every such call. The snapshot never re-fetches ``source_url``:
+    # ``_fetch_blueprint``
     # passes ``source_url=None`` precisely so a restore cannot write different
     # YAML than the write destroyed.
     @with_auto_backup(
@@ -135,6 +137,7 @@ class BlueprintTools:
         skip_fn=lambda kw: (
             kw.get("action") not in ("delete", "save")
             or (kw.get("action") == "delete" and not kw.get("confirm"))
+            or (kw.get("action") == "save" and not kw.get("overwrite"))
         ),
     )
     @log_tool_usage

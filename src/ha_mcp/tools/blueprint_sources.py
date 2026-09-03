@@ -262,14 +262,17 @@ async def _via_tools_entry(client: Any, domain: str, path: str) -> str | None:
 # --- tier 4: re-download from the recorded source_url -------------------------
 
 
-async def _via_source_url(client: Any, path: str, source_url: str) -> str | None:
+async def _via_source_url(
+    client: Any, domain: str, path: str, source_url: str
+) -> str | None:
     """Tier 4: re-download ``source_url``, accepted only if it still serves ``path``.
 
     Second-best copy by construction: it is what the author publishes NOW, which
     can differ from the installed file (a local edit, or an upstream update since
-    the import). Accepted only while the re-fetched blueprint's own suggested
-    filename still resolves to ``path`` — otherwise the URL now serves a
-    different blueprint and using it would hand back the wrong content.
+    the import). Accepted only while the re-fetched blueprint still reports
+    ``domain`` AND its own suggested filename still resolves to ``path`` —
+    otherwise the URL now serves a different blueprint and using it would hand
+    back the wrong content.
     """
     try:
         imported = await client.send_websocket_message(
@@ -283,6 +286,22 @@ async def _via_source_url(client: Any, path: str, source_url: str) -> str | None
     if not isinstance(imported, dict) or not imported.get("success"):
         return None
     result = imported.get("result") or {}
+    # The filename says nothing about the domain, and blueprint paths are
+    # scoped by it: an author who replaces an automation blueprint with a
+    # script one at the same URL and filename would otherwise be served back
+    # as this automation's body.
+    refetched_domain = ((result.get("blueprint") or {}).get("metadata") or {}).get(
+        "domain"
+    )
+    if refetched_domain != domain:
+        logger.debug(
+            "%s now serves a %r blueprint, not %r -- not using it for %r",
+            source_url,
+            refetched_domain,
+            domain,
+            path,
+        )
+        return None
     if f"{result.get('suggested_filename')}.yaml" != path:
         logger.debug(
             "%s no longer serves blueprint %r (suggests %r) — not using a "
@@ -353,7 +372,7 @@ async def resolve_blueprint_source(
         return _resolved(text, body.config, "tools_entry", body.warning)
 
     if source_url:
-        text = await _via_source_url(client, path, source_url)
+        text = await _via_source_url(client, domain, path, source_url)
         if text is not None:
             return _resolved(text, body.config, "source_url", body.warning)
 

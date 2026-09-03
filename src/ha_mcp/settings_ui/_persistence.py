@@ -221,8 +221,10 @@ def env_pinned_tools(settings: Settings | None = None) -> dict[str, str]:
     in the DISABLED_TOOLS or PINNED_TOOLS env vars.
 
     Used by the UI to render env-pinned rows as read-only and by the
-    save handler to reject flips. PINNED_TOOLS wins ties (matches the
-    existing seed semantics in load_tool_config).
+    save handler to reject flips. PINNED_TOOLS wins when the SAME name
+    appears in both vars (matches the existing seed semantics in
+    load_tool_config); when two different retired names now resolve to one
+    consolidated tool, the more restrictive state wins instead.
 
     Names resolve to the current tool as they are read, for the reason
     given in ``_seed_tool_config_from_env``: the tie rule has to see one
@@ -231,14 +233,31 @@ def env_pinned_tools(settings: Settings | None = None) -> dict[str, str]:
     if settings is None:
         settings = get_global_settings()
     pinned: dict[str, str] = {}
+    # Which spelling set each entry, so a genuine tie can be told apart from a
+    # consolidation collision below.
+    spelled: dict[str, str] = {}
     for raw_name in (settings.disabled_tools or "").split(","):
-        name = current_tool_name(raw_name.strip())
+        raw = raw_name.strip()
+        name = current_tool_name(raw)
         if name:
             pinned[name] = "disabled"
+            spelled[name] = raw
     for raw_name in (settings.pinned_tools or "").split(","):
-        name = current_tool_name(raw_name.strip())
-        if name:
+        raw = raw_name.strip()
+        name = current_tool_name(raw)
+        if not name:
+            continue
+        existing = pinned.get(name)
+        if existing is None or spelled.get(name) == raw:
+            # Fresh, or the documented tie: ONE tool named in both vars.
             pinned[name] = "pinned"
+        else:
+            # Two different retired spellings that now resolve to one tool.
+            # Letting "pinned" win here would hand the consolidated
+            # write-capable tool back enabled despite the operator having
+            # disabled one of its halves, so the restriction wins -- the same
+            # rule the stored config uses when re-keying those two names.
+            pinned[name] = _more_restrictive_tool_state(existing, "pinned")
     return pinned
 
 

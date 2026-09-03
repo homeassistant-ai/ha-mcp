@@ -577,11 +577,14 @@ class ConfigScriptTools:
         ship under `skill_content` proactively by default. For comprehensive
         guidance beyond that, call `ha_get_skill_guide`.
 
-        Supports two modes: full config replacement OR Python transformation.
+        Supports three modes: full config replacement, Python transformation,
+        or take_control_of_blueprint (see below).
 
         WHEN TO USE WHICH MODE:
         - python_transform: RECOMMENDED for edits to existing scripts. Surgical updates.
         - config: Use for creating new scripts or full restructures.
+        - take_control_of_blueprint: converts a blueprint-backed script
+          into a standalone one. Takes no config of its own.
 
         IMPORTANT: python_transform requires 'config_hash' from ha_config_get_script().
 

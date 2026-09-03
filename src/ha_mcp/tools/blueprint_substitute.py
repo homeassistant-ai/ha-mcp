@@ -146,6 +146,10 @@ async def take_control_config(
     entity keeps its identity and name. ``mode`` deliberately does NOT carry
     over -- it belongs to the blueprint's own rendered output.
     """
+    # The two set tools name their target differently; a suggestion naming the
+    # wrong one cannot be run as written, which is exactly when the caller
+    # needs it.
+    id_param = "identifier" if domain == "automation" else f"{domain}_id"
     reference = _blueprint_reference(current_config)
     if reference is None:
         raise_tool_error(
@@ -153,11 +157,11 @@ async def take_control_config(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"'{identifier}' is not built from a blueprint, so there is "
                 "nothing to take control of.",
-                context={"identifier": identifier, "domain": domain},
+                context={id_param: identifier, "domain": domain},
                 suggestions=[
                     (
                         f"Inspect it with ha_config_get_{domain}"
-                        f'(identifier="{identifier}") -- a blueprint-backed '
+                        f'({id_param}="{identifier}") -- a blueprint-backed '
                         "config has a 'use_blueprint' key"
                     ),
                     "Edit a standalone config directly with config or python_transform",

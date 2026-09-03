@@ -147,8 +147,19 @@ def _patch_tools_entry(
     return calls
 
 
-def _import_result(suggested: str, raw: str) -> dict[str, Any]:
-    return {"suggested_filename": suggested, "raw_data": raw}
+def _import_result(
+    suggested: str, raw: str, domain: str = "automation"
+) -> dict[str, Any]:
+    """What ``blueprint/import`` answers, including the metadata the tier reads.
+
+    ``domain`` is part of the acceptance check: the filename alone does not
+    say which domain the URL now serves.
+    """
+    return {
+        "suggested_filename": suggested,
+        "raw_data": raw,
+        "blueprint": {"metadata": {"domain": domain}},
+    }
 
 
 def _component_result(
@@ -531,6 +542,28 @@ class TestSourceUrlTier:
         assert found.text == _URL_YAML
         assert found.source == "source_url"
         assert client.frames("blueprint/import")[0]["url"] == _SOURCE_URL
+
+    @pytest.mark.asyncio
+    async def test_a_domain_switch_at_the_same_filename_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Blueprint paths are scoped by domain, filenames are not.
+
+        An author who replaces an automation blueprint with a script one at
+        the same URL keeps the same author/filename, so the filename check
+        alone would hand the script's YAML back as this automation's body.
+        """
+        _patch_tools_entry(monkeypatch, {"success": False, "error": "does not exist"})
+        client = NoCredsClient(
+            _import_result("user/motion", _URL_YAML, domain="script")
+        )
+
+        found = await resolve_blueprint_source(
+            client, "automation", _PATH, source_url=_SOURCE_URL
+        )
+
+        assert found.text is None
+        assert found.source is None
 
     @pytest.mark.asyncio
     async def test_filename_mismatch_is_refused(
