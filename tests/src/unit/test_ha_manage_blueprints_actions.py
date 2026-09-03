@@ -41,6 +41,9 @@ _METADATA = {
 }
 
 
+_RELATED_EMPTY: dict[str, Any] = {"success": True, "result": {}}
+
+
 def _error_payload(exc: ToolError) -> dict[str, Any]:
     """Unwrap the structured error ``raise_tool_error`` serialises into the message.
 
@@ -929,7 +932,7 @@ async def test_get_surfaces_yaml_and_its_source(
 ) -> None:
     listing = _listing(_PATH)
     listing["result"][_PATH]["metadata"]["source_url"] = "https://example.com/bp.yaml"
-    client = SpyClient({"blueprint/list": listing})
+    client = SpyClient({"blueprint/list": listing, "search/related": _RELATED_EMPTY})
     spy = _patch_ladder(
         monkeypatch,
         BlueprintSource(
@@ -958,7 +961,7 @@ async def test_get_warns_when_the_yaml_is_a_source_url_refetch(
 ) -> None:
     listing = _listing(_PATH)
     listing["result"][_PATH]["metadata"]["source_url"] = "https://example.com/bp.yaml"
-    client = SpyClient({"blueprint/list": listing})
+    client = SpyClient({"blueprint/list": listing, "search/related": _RELATED_EMPTY})
     _patch_ladder(
         monkeypatch,
         BlueprintSource(text=_SAVE_YAML, config={}, source="source_url", warning=None),
@@ -977,7 +980,9 @@ async def test_get_warns_when_the_yaml_is_a_source_url_refetch(
 async def test_get_omits_yaml_keys_when_no_tier_answers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client = SpyClient({"blueprint/list": _listing(_PATH)})
+    client = SpyClient(
+        {"blueprint/list": _listing(_PATH), "search/related": _RELATED_EMPTY}
+    )
     _patch_ladder(monkeypatch, BlueprintSource(None, None, None, None))
     tool = _build_tool(client)
 
@@ -994,7 +999,9 @@ async def test_get_omits_yaml_keys_when_no_tier_answers(
 async def test_get_keeps_the_component_warning_when_nothing_else_answers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client = SpyClient({"blueprint/list": _listing(_PATH)})
+    client = SpyClient(
+        {"blueprint/list": _listing(_PATH), "search/related": _RELATED_EMPTY}
+    )
     _patch_ladder(
         monkeypatch, BlueprintSource(None, None, None, "component could not read it")
     )
@@ -1279,3 +1286,95 @@ async def test_save_proceeds_when_the_version_lookup_fails() -> None:
 
     assert resp["success"] is True
     assert len(client.frames("blueprint/save")) == 1
+
+
+# ------------------------------------------------------- get: used_by (#2356)
+
+
+_RELATED_OK = {
+    "success": True,
+    "result": {
+        "automation": ["automation.hall", "automation.porch"],
+        "config_entry": [],
+    },
+}
+
+
+@pytest.mark.asyncio
+async def test_get_reports_the_automations_using_the_blueprint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The UI's "Show automations using this blueprint", answerable without
+    attempting a delete first."""
+    client = SpyClient(
+        {"blueprint/list": _listing(_PATH), "search/related": _RELATED_OK}
+    )
+    _patch_ladder(monkeypatch, BlueprintSource(None, None, None, None))
+    tool = _build_tool(client)
+
+    resp = await tool(action="get", path=_PATH)
+
+    assert resp["data"]["used_by"] == ["automation.hall", "automation.porch"]
+    assert client.frames("search/related")[0]["item_type"] == "automation_blueprint"
+    assert "warnings" not in resp
+
+
+@pytest.mark.asyncio
+async def test_get_reports_an_unused_blueprint_as_an_empty_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = SpyClient(
+        {
+            "blueprint/list": _listing(_PATH),
+            "search/related": {"success": True, "result": {"config_entry": ["x"]}},
+        }
+    )
+    _patch_ladder(monkeypatch, BlueprintSource(None, None, None, None))
+    tool = _build_tool(client)
+
+    resp = await tool(action="get", path=_PATH)
+
+    assert resp["data"]["used_by"] == []
+    assert "warnings" not in resp
+
+
+@pytest.mark.asyncio
+async def test_get_omits_used_by_when_the_lookup_cannot_be_consulted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An absent key must never read as "nothing uses this" — say so instead."""
+    client = SpyClient(
+        {
+            "blueprint/list": _listing(_PATH),
+            "search/related": {"success": False, "error": "Unknown command."},
+        }
+    )
+    _patch_ladder(monkeypatch, BlueprintSource(None, None, None, None))
+    tool = _build_tool(client)
+
+    resp = await tool(action="get", path=_PATH)
+
+    assert "used_by" not in resp["data"]
+    assert any("reference lookup" in w for w in resp["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_get_used_by_follows_the_script_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = SpyClient(
+        {
+            "blueprint/list": _listing(_PATH),
+            "search/related": {
+                "success": True,
+                "result": {"script": ["script.bedtime"]},
+            },
+        }
+    )
+    _patch_ladder(monkeypatch, BlueprintSource(None, None, None, None))
+    tool = _build_tool(client)
+
+    resp = await tool(action="get", domain="script", path=_PATH)
+
+    assert resp["data"]["used_by"] == ["script.bedtime"]
+    assert client.frames("search/related")[0]["item_type"] == "script_blueprint"

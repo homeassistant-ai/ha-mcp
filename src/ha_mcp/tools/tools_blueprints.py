@@ -229,6 +229,11 @@ class BlueprintTools:
         place, ``get`` it, change the text, and ``save`` it back to the same
         ``path`` with ``overwrite=True``.
 
+        ``get`` also reports ``used_by``: the automations or scripts built on
+        the blueprint, which is the UI's "Show automations using this
+        blueprint". Check it before deleting — Home Assistant refuses to delete
+        a blueprint anything still uses.
+
         CAVEATS: ``get`` returns the on-disk YAML only when something can read
         it — an in-process server, the ha_mcp_tools component, the File & YAML
         Tools entry, or the blueprint's ``source_url``; ``yaml_source`` names
@@ -247,7 +252,7 @@ class BlueprintTools:
 
         EXAMPLES:
         - List: ha_manage_blueprints(action="list", domain="automation")
-        - Get one: ha_manage_blueprints(action="get", path="homeassistant/motion_light.yaml")
+        - Get one (with its consumers in ``used_by``): ha_manage_blueprints(action="get", path="homeassistant/motion_light.yaml")
         - Import: ha_manage_blueprints(action="import", url="https://example.com/bp.yaml")
         - Duplicate: ha_manage_blueprints(action="save", path="user/my_copy.yaml", yaml=<text from get>)
         - Edit in place: ha_manage_blueprints(action="save", path="user/motion.yaml", yaml=<edited text>, overwrite=True)
@@ -384,7 +389,15 @@ class BlueprintTools:
         return self._format_blueprint_list(await self._fetch_blueprints(domain), domain)
 
     async def _get_blueprint(self, domain: str, path: str) -> dict[str, Any]:
-        """Return one blueprint's metadata, inputs, parsed body and raw YAML."""
+        """Return one blueprint's metadata, inputs, parsed body, YAML and consumers.
+
+        ``used_by`` answers the UI's "Show automations using this blueprint"
+        without having to attempt a delete and read the refusal. It comes from
+        the same ``search/related`` lookup that refusal uses, so the two cannot
+        disagree; when Home Assistant does not answer it, the key is omitted
+        and a warning says so rather than letting an absent key read as "no
+        automation uses this".
+        """
         blueprints_data = await self._fetch_blueprints(domain)
         if path not in blueprints_data:
             self._raise_not_found(domain, path, blueprints_data)
@@ -420,6 +433,16 @@ class BlueprintTools:
         # Merged additively; on an install where no tier can serve the file the
         # response stays metadata + inputs.
         await self._merge_blueprint_body(result, data, domain, path, source_url)
+
+        consumers, resolved = await self._blueprint_consumers(domain, path)
+        if resolved:
+            data["used_by"] = consumers
+        else:
+            result.setdefault("warnings", []).append(
+                "Home Assistant did not answer the reference lookup, so the "
+                f"{domain}s using this blueprint are unknown — 'used_by' is "
+                "omitted rather than reported as empty."
+            )
         return result
 
     async def _delete_blueprint(

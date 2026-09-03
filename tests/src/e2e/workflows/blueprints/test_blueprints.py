@@ -864,6 +864,25 @@ class TestBlueprintManagement:
         finally:
             served.cleanup()
 
+    @pytest.mark.slow
+    async def test_get_reports_no_consumers_for_an_unused_blueprint(
+        self, mcp_client, local_blueprint_server
+    ):
+        """``used_by`` is an empty list for a freshly imported blueprint, not a
+        missing key — absence would be indistinguishable from "unknown"."""
+        served = _ServedBlueprint(local_blueprint_server, "unused")
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                path = await served.import_into(mcp)
+                detail = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                assert detail["data"].get("used_by") == [], detail
+                await served.delete(mcp, path)
+        finally:
+            served.cleanup()
+
     async def test_delete_blueprint_not_found(self, mcp_client):
         async with MCPAssertions(mcp_client) as mcp:
             result = await mcp.call_tool_failure(
@@ -905,6 +924,16 @@ class TestBlueprintManagement:
                 cleanup_tracker.track("automation", automation_id)
                 assert await wait_for_automation(mcp_client, automation_id), (
                     f"{automation_id} never became retrievable"
+                )
+
+                # The UI's "Show automations using this blueprint", answerable
+                # without attempting the delete first.
+                detail = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                assert automation_id in detail["data"].get("used_by", []), (
+                    f"get should report the consumer in used_by: {detail}"
                 )
 
                 refused = await mcp.call_tool_failure(
