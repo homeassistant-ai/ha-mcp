@@ -41,6 +41,12 @@ PROBE_DOMAIN = "reentrant_log_probe"
 # the wait that turns a freeze into a failure rather than an infinite hang.
 HA_RETURN_TIMEOUT_S = 300.0
 
+# How long to keep the probe firing after HA answers again, and how long HA then
+# gets to prove it is still alive. The freeze does not have to happen during
+# startup: the reported instance served requests first and locked up later.
+SOAK_SECONDS = 120.0
+SOAK_RECHECK_TIMEOUT_S = 60.0
+
 # Candidate mounts for HA's config dir inside the Advanced SSH addon container.
 CONFIG_DIR_CANDIDATES = (
     "/homeassistant",
@@ -204,6 +210,23 @@ def _py_spy_dump() -> str:
         return f"(py-spy dump unavailable: {type(exc).__name__}: {exc})"
 
 
+def _require_ha_responsive(ready_url: str, timeout: float, what: str) -> None:
+    """Poll HA, and on timeout fail with an in-VM stack dump of the freeze.
+
+    Both readiness checks in this test go through here: the pre-fix handler can
+    freeze the loop either during startup or a few records into normal running,
+    and either way the useful evidence is the stack of the blocked thread.
+    """
+    try:
+        _wait_http_ok(ready_url, timeout=timeout)
+    except TimeoutError as exc:
+        raise AssertionError(
+            f"{what} ({timeout:.0f}s) — the event loop is frozen inside "
+            f"logging (#2357).\n\n{exc}\n\n"
+            f"py-spy dump of the frozen process:\n{_py_spy_dump()}"
+        ) from exc
+
+
 @pytest.mark.timeout(1800)
 def test_reentrant_debug_log_does_not_freeze_home_assistant(
     ha_container_with_fresh_config,
@@ -244,22 +267,24 @@ def test_reentrant_debug_log_does_not_freeze_home_assistant(
         restarted_at = time.monotonic()
         _restart_core()
 
-        try:
-            _wait_http_ok(ready_url, timeout=HA_RETURN_TIMEOUT_S)
-        except TimeoutError as exc:
-            raise AssertionError(
-                "Home Assistant never came back after a re-entrant debug log "
-                f"record ({HA_RETURN_TIMEOUT_S:.0f}s) — the event loop is "
-                f"frozen inside logging (#2357).\n\n{exc}\n\n"
-                f"py-spy dump of the frozen process:\n{_py_spy_dump()}"
-            ) from exc
+        _require_ha_responsive(
+            ready_url,
+            HA_RETURN_TIMEOUT_S,
+            "Home Assistant never came back after the probe restart",
+        )
 
         # Stay past the collector's 60s window so the probe (firing every 2s
         # from setup) is guaranteed to have been formatted by it while it was
-        # active, and confirm HA is still answering afterwards.
-        while time.monotonic() - restarted_at < 120.0:
+        # active, then confirm HA is STILL answering. Both checks matter: the
+        # pre-fix handler can let the boot complete and freeze the loop a few
+        # records later, which is what the reported instance did.
+        while time.monotonic() - restarted_at < SOAK_SECONDS:
             time.sleep(5.0)
-        _wait_http_ok(ready_url, timeout=60.0)
+        _require_ha_responsive(
+            ready_url,
+            SOAK_RECHECK_TIMEOUT_S,
+            "Home Assistant stopped answering during the probe soak",
+        )
 
         # Guard against a vacuous pass: if the probe never logged, the test
         # proved nothing about re-entrant records.
