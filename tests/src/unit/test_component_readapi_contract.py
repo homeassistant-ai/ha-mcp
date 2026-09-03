@@ -191,10 +191,11 @@ class TestConfigGetSeam:
 
     @pytest.mark.asyncio
     async def test_script_get_stays_legacy_with_full_caps(self) -> None:
-        """Script analog: the legacy REST envelope is returned under ``config``
-        (storage key + category injected). Scripts run NO root-key
-        canonicalization (unlike automations' action->actions), so the storage
-        ``sequence`` body passes through byte-exact."""
+        """Script analog: the legacy path returns the script BODY under
+        ``config`` (category injected), the storage key staying top-level.
+        Scripts run NO root-key canonicalization (unlike automations'
+        action->actions), so the storage ``sequence`` body passes through
+        byte-exact."""
         client = GetRoutingClient(
             script_envelope={
                 "success": True,
@@ -213,13 +214,11 @@ class TestConfigGetSeam:
             resp = await ConfigScriptTools(client).ha_config_get_script("morning")
         assert resp["success"] is True
         assert resp["script_id"] == "morning"
-        assert resp["config"]["script_id"] == "morning"
         assert resp["config"]["category"] == "cat-s"
+        assert "script_id" not in resp["config"]
         # raw_config served byte-exact — the sequence body is untouched.
-        assert resp["config"]["config"] == {
-            "alias": "Morning Script",
-            "sequence": [{"delay": {"seconds": 5}}],
-        }
+        assert resp["config"]["alias"] == "Morning Script"
+        assert resp["config"]["sequence"] == [{"delay": {"seconds": 5}}]
         assert ws.send_command.await_count == 0
         assert client.get_script_config.await_count == 1
 
