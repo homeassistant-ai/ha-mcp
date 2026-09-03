@@ -5,7 +5,9 @@ This module provides tools for retrieving, creating, updating, and removing
 Home Assistant automation configurations.
 """
 
+import asyncio
 import logging
+import time
 from typing import Annotated, Any, cast
 
 from fastmcp.exceptions import ToolError
@@ -576,8 +578,11 @@ class AutomationConfigTools:
                 "no 'use_blueprint'. Requires identifier; mutually exclusive with "
                 "config and python_transform. Irreversible: the link to the "
                 "blueprint is gone afterwards, so edit inputs instead if you only "
-                "want to change a value. To preview the rendering without writing "
-                'anything, use ha_manage_blueprints(action="substitute").',
+                "want to change a value. With wait=True (default) the call also "
+                "settles until Home Assistant stops listing the automation as a "
+                "user of the blueprint, so a following delete of that blueprint "
+                "succeeds. To preview the rendering without writing anything, use "
+                'ha_manage_blueprints(action="substitute").',
                 default=False,
             ),
         ] = False,
@@ -782,7 +787,15 @@ class AutomationConfigTools:
         This is one-way: the automation is no longer linked to the blueprint,
         so later blueprint edits stop reaching it. To change an input value,
         update 'use_blueprint.input' instead (see the example above) — that
-        keeps the link. To see what the rendering looks like WITHOUT writing
+        keeps the link.
+
+        A config write only schedules the automation reload that rebuilds Home
+        Assistant's blueprint usage index, so with wait=True (default) the call
+        settles until the blueprint no longer counts this automation as a user.
+        That is what makes "take control of every consumer, then delete the
+        blueprint" work as a sequence. The response names the blueprint in
+        `took_control_of_blueprint`, and carries a warning instead if the index
+        was still stale when the wait ran out. To see what the rendering looks like WITHOUT writing
         anything, call ha_manage_blueprints(action="substitute", path=...,
         input=...), which returns the config and leaves the automation alone.
         ha_manage_blueprints also lists, imports, saves and deletes blueprints,
@@ -827,15 +840,9 @@ class AutomationConfigTools:
                 config, python_transform, take_control_of_blueprint, identifier
             )
 
+            detached_blueprint: str | None = None
             if take_control_of_blueprint:
-                response, bp_warnings = await self._run_take_control(
-                    identifier,
-                    config_hash,
-                    category,
-                    wait,
-                    MandatoryBPS,
-                )
-                return response
+                config, detached_blueprint = await self._take_control_config(identifier)
 
             if python_transform is not None:
                 response, bp_warnings = await self._run_python_transform(
@@ -912,6 +919,7 @@ class AutomationConfigTools:
                 MandatoryBPS,
                 conflict_warnings,
                 resolved_id,
+                detached_blueprint,
             )
 
         except ToolError as te:
@@ -966,10 +974,14 @@ class AutomationConfigTools:
                     "own rendered config, so it cannot be combined with config "
                     "or python_transform.",
                     suggestions=[
-                        "Take control first, then edit the standalone config in "
-                        "a second call",
-                        "Preview the rendering with ha_manage_blueprints("
-                        'action="substitute") if you only want to see it',
+                        (
+                            "Take control first, then edit the standalone "
+                            "config in a second call"
+                        ),
+                        (
+                            "Preview the rendering with ha_manage_blueprints"
+                            '(action="substitute") if you only want to see it'
+                        ),
                     ],
                     context={"action": "take_control", "identifier": identifier},
                 )
@@ -1044,20 +1056,17 @@ class AutomationConfigTools:
             result = await self._client.upsert_automation_config(config, identifier)
         return result
 
-    async def _run_take_control(
-        self,
-        identifier: str | None,
-        config_hash: str | None,
-        category: str | None,
-        wait: bool,
-        MandatoryBPS: bool,
-    ) -> tuple[dict[str, Any], BestPracticeCheckResult]:
-        """Execute take-control mode and return (response, bp_warnings).
+    async def _take_control_config(
+        self, identifier: str | None
+    ) -> tuple[dict[str, Any], str | None]:
+        """Render a blueprint automation into the config that replaces it.
 
-        The UI splits this into a preview the user confirms; a tool call has no
-        such step, so the whole conversion is one write. The rendered config
-        goes through the same validation and best-practice checks as any other
-        replacement -- a blueprint's output is not exempt from them.
+        Returns ``(config, response_extras)``. Deliberately produces a config
+        for the ordinary replacement path rather than writing it here: the
+        rendering is not exempt from the validation, best-practice checks or
+        skill-content attachment every other automation write goes through,
+        and routing it through one write tail is what keeps those guarantees
+        from drifting apart.
         """
         if not identifier:
             raise_tool_error(
@@ -1073,56 +1082,16 @@ class AutomationConfigTools:
             )
 
         # A hash is optional here (unlike python_transform, whose expression is
-        # written against a config the caller has already read). When given it
-        # is honoured, and it pre-resolves the storage key for the upsert.
-        resolved_id: str | None = None
-        if config_hash:
-            current_config, resolved_id = await self._fetch_and_verify_hash(
-                identifier, config_hash, "take_control"
-            )
-        else:
-            current_config, _ = await self._get_automation_config_internal(identifier)
+        # written against a config the caller has already read). The shared
+        # path re-checks it before the write; this read only needs the body.
+        current_config, _ = await self._get_automation_config_internal(identifier)
 
         reference = blueprint_reference(current_config)
         blueprint_path = reference[0] if reference else None
-
-        taken_config = await take_control_config(
+        taken = await take_control_config(
             self._client, "automation", identifier, current_config
         )
-
-        taken_category = taken_config.pop("category", None)
-        effective_category = category if category is not None else taken_category
-
-        taken_config = _normalize_automation_config(taken_config)
-        self._validate_required_fields(taken_config, identifier)
-        bp_warnings = _check_best_practices(taken_config)
-        validation_meta = await validate_config_references(self._client, taken_config)
-
-        await validate_registry_ids(
-            self._client,
-            None,
-            None,
-            {"automation": effective_category},
-            fail_closed=True,
-        )
-
-        response = await self._run_config_update(
-            taken_config,
-            identifier,
-            effective_category,
-            wait,
-            bp_warnings,
-            validation_meta,
-            MandatoryBPS,
-            None,
-            resolved_id,
-        )
-        response["took_control_of_blueprint"] = blueprint_path
-        response["message"] = (
-            f"Automation {identifier} now owns its config; it is no longer linked "
-            f"to blueprint '{blueprint_path}'."
-        )
-        return response, bp_warnings
+        return taken, blueprint_path
 
     async def _run_python_transform(
         self,
@@ -1253,8 +1222,15 @@ class AutomationConfigTools:
         MandatoryBPS: bool,
         conflict_warnings: list[str] | None = None,
         resolved_id: str | None = None,
+        detached_blueprint: str | None = None,
     ) -> dict[str, Any]:
         """Execute config-replacement mode and return the tool response.
+
+        ``detached_blueprint`` is set by take-control mode and names the
+        blueprint the automation no longer uses. It is reported on the
+        response and, when ``wait``, held for until Home Assistant's usage
+        index agrees -- the delete this unblocks is the whole point of the
+        conversion, and it would fail for as long as the index lagged.
 
         ``resolved_id`` (set only when the optional hash check pre-resolved
         ``identifier``) is threaded to the upsert so it skips the redundant
@@ -1318,6 +1294,9 @@ class AutomationConfigTools:
             **({"automation_id": automation_id} if automation_id else {}),
             **_strip_redundant_identifier_echo(result),
         }
+        await self._note_detached_blueprint(
+            detached_blueprint, wait, automation_id, response
+        )
         # attach AFTER the outer dict is built so attach_skill_content's
         # reorder puts skill_content_hint at position 0 of the FINAL
         # response — building the outer dict via spread otherwise pushes
@@ -1330,6 +1309,71 @@ class AutomationConfigTools:
             referenced_files=bp_warnings.referenced_files,
         )
         return response
+
+    async def _note_detached_blueprint(
+        self,
+        path: str | None,
+        wait: bool,
+        automation_id: str | None,
+        response: dict[str, Any],
+    ) -> None:
+        """Report the blueprint take-control detached from, and settle for it."""
+        if not path:
+            return
+        response["took_control_of_blueprint"] = path
+        if wait:
+            await self._wait_for_blueprint_release(path, automation_id, response)
+
+    async def _wait_for_blueprint_release(
+        self,
+        path: str,
+        automation_id: str | None,
+        response: dict[str, Any],
+        timeout: float = 30.0,
+        poll_interval: float = 1.0,
+    ) -> None:
+        """Wait until Home Assistant stops listing ``automation_id`` as a user
+        of ``path``.
+
+        A config write only SCHEDULES the automation reload that rebuilds the
+        blueprint usage index, so immediately after taking control the
+        blueprint still reads as in use -- and deleting it, the step this
+        conversion exists to unblock, is refused. Waiting here is what makes
+        "take control, then delete the blueprint" work as a sequence instead
+        of an intermittent failure. Never fatal: the conversion itself is
+        already committed, so a lookup that stays stale becomes a warning.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                related = await self._client.send_websocket_message(
+                    {
+                        "type": "search/related",
+                        "item_type": "automation_blueprint",
+                        "item_id": path,
+                        "_wait_timeout": 5.0,
+                    }
+                )
+            except HomeAssistantConnectionError as exc:
+                logger.debug("blueprint release lookup failed for %s: %r", path, exc)
+                return
+            users = (
+                ((related.get("result") or {}).get("automation") or [])
+                if isinstance(related, dict)
+                else []
+            )
+            if not isinstance(users, list) or automation_id not in users:
+                return
+            if time.monotonic() >= deadline:
+                response.setdefault("warnings", []).append(
+                    f"Home Assistant still lists {automation_id} as using "
+                    f"blueprint '{path}' after {timeout:.0f}s. The automation "
+                    "has been converted; the usage index clears when the "
+                    "automation reload finishes, so a delete of that blueprint "
+                    "may need a retry."
+                )
+                return
+            await asyncio.sleep(poll_interval)
 
     async def _list_automation_entity_ids(self) -> list[str]:
         """Best-effort list of automation entity_ids (up to 10) from the entity registry.

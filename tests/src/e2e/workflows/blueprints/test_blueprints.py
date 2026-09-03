@@ -1067,8 +1067,10 @@ class TestBlueprintManagement:
                 assert actions, config
                 assert actions[0]["target"]["entity_id"] == _STABLE_ENTITY, config
 
-                # Nothing uses the blueprint any more, so the delete that was
-                # refused while it was in use now succeeds.
+                # No polling here on purpose: take control settles for the
+                # blueprint usage index before returning, so the delete it
+                # exists to unblock must work on the next call. A retry loop
+                # would hide a regression in exactly that guarantee.
                 detail = await mcp.call_tool_success(
                     "ha_manage_blueprints",
                     {"action": "get", "domain": "automation", "path": path},
