@@ -1153,8 +1153,8 @@ async def script_blueprint_path(mcp_client):
     """Fixture to get the path of the first available script blueprint."""
     async with MCPAssertions(mcp_client) as mcp:
         list_result = await mcp.call_tool_success(
-            "ha_get_blueprint",
-            {"domain": "script"},
+            "ha_manage_blueprints",
+            {"action": "list", "domain": "script"},
         )
         blueprints = list_result.get("blueprints", [])
         if not blueprints:
@@ -1182,8 +1182,8 @@ async def test_blueprint_script_lifecycle(
 
         # Step 2: Get blueprint details to understand required inputs
         detail_result = await mcp.call_tool_success(
-            "ha_get_blueprint",
-            {"path": blueprint_path, "domain": "script"},
+            "ha_manage_blueprints",
+            {"action": "get", "path": blueprint_path, "domain": "script"},
         )
 
         inputs = detail_result.get("inputs", {})
