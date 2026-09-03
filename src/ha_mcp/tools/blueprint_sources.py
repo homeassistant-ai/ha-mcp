@@ -337,15 +337,17 @@ def _resolved(
 
     A parse failure never masks text that was read: ``config`` simply stays
     ``None``. The component's warning is dropped once a body was obtained by any
-    route, because the caller is no longer serving metadata only.
+    route -- TEXT counts, not just parsed config, because the warning says
+    "returning metadata only" and a response carrying ``yaml`` is not that.
     """
     if config is None and text is not None:
         config = parse_blueprint_body(text)
+    served_a_body = config is not None or text is not None
     return BlueprintSource(
         text=text,
         config=config,
         source=source,
-        warning=None if config is not None else warning,
+        warning=None if served_a_body else warning,
     )
 
 

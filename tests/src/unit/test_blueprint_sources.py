@@ -523,6 +523,30 @@ class TestComponentTier:
         assert found.text == _TOOLS_YAML
         assert found.warning is None
 
+    @pytest.mark.asyncio
+    async def test_the_warning_goes_even_when_the_body_will_not_parse(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Text alone is a body: the response carries ``yaml``.
+
+        Keeping the warning here would tell the caller they were served
+        metadata only while handing them the file's contents.
+        """
+        _patch_tools_entry(monkeypatch, {"success": True, "content": "key: [unclosed"})
+        ws = make_ws(
+            "ha_mcp_tools/blueprint_get",
+            info_result=_CAPS_TEXT,
+            cmd_result=_component_result(None, None),
+        )
+        with patch_ws(ws, blueprint_sources):
+            found = await resolve_blueprint_source(
+                Client(), "automation", _PATH, source_url=None
+            )
+
+        assert found.text == "key: [unclosed"
+        assert found.config is None
+        assert found.warning is None
+
 
 # ------------------------------------------------------------- the source URL
 

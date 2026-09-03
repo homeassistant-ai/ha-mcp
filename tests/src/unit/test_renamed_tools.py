@@ -139,6 +139,32 @@ class TestStoredToolConfig:
 
         assert env_pinned_tools(settings) == {"ha_manage_app": "disabled"}
 
+    def test_a_repeated_pinned_alias_cannot_undo_the_restriction(self) -> None:
+        """Naming the disabled spelling in PINNED_TOOLS too must not free the
+        OTHER spelling's restriction.
+
+        Resolving alias by alias let the same-name tie fire first and leave
+        "pinned" in place, so the second alias then merged against "pinned"
+        instead of "disabled" and the restriction vanished.
+        """
+        settings = SimpleNamespace(
+            disabled_tools="ha_get_blueprint",
+            pinned_tools="ha_get_blueprint,ha_import_blueprint",
+        )
+
+        assert env_pinned_tools(settings) == {"ha_manage_blueprints": "pinned"}
+
+    def test_a_disabled_alias_never_named_in_pinned_keeps_the_restriction(
+        self,
+    ) -> None:
+        """Order must not matter either: the disabled spelling is not pinned."""
+        settings = SimpleNamespace(
+            disabled_tools="ha_import_blueprint",
+            pinned_tools="ha_get_blueprint",
+        )
+
+        assert env_pinned_tools(settings) == {"ha_manage_blueprints": "disabled"}
+
     def test_a_disabled_blueprint_alias_survives_a_pinned_sibling(self) -> None:
         """The pair this PR consolidates, through the same path."""
         settings = SimpleNamespace(

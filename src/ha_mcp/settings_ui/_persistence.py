@@ -232,32 +232,39 @@ def env_pinned_tools(settings: Settings | None = None) -> dict[str, str]:
     """
     if settings is None:
         settings = get_global_settings()
-    pinned: dict[str, str] = {}
-    # Which spelling set each entry, so a genuine tie can be told apart from a
-    # consolidation collision below.
-    spelled: dict[str, str] = {}
+    # Collect every spelling per resolved tool first: deciding as we go let a
+    # second pinned alias overwrite a restriction that a FIRST alias had
+    # already resolved in favour of "disabled".
+    disabled_by: dict[str, set[str]] = {}
+    pinned_by: dict[str, set[str]] = {}
     for raw_name in (settings.disabled_tools or "").split(","):
         raw = raw_name.strip()
         name = current_tool_name(raw)
         if name:
-            pinned[name] = "disabled"
-            spelled[name] = raw
+            disabled_by.setdefault(name, set()).add(raw)
     for raw_name in (settings.pinned_tools or "").split(","):
         raw = raw_name.strip()
         name = current_tool_name(raw)
-        if not name:
-            continue
-        existing = pinned.get(name)
-        if existing is None or spelled.get(name) == raw:
-            # Fresh, or the documented tie: ONE tool named in both vars.
+        if name:
+            pinned_by.setdefault(name, set()).add(raw)
+
+    pinned: dict[str, str] = {}
+    for name in disabled_by.keys() | pinned_by.keys():
+        disabled_spellings = disabled_by.get(name, set())
+        pinned_spellings = pinned_by.get(name, set())
+        if not disabled_spellings:
             pinned[name] = "pinned"
+        elif not pinned_spellings:
+            pinned[name] = "disabled"
+        elif disabled_spellings - pinned_spellings:
+            # A spelling asked for "disabled" and was never named in
+            # PINNED_TOOLS itself, so this is a consolidation collision, not
+            # one tool named in both vars: the restriction wins, or the
+            # consolidated write-capable tool comes back enabled.
+            pinned[name] = "disabled"
         else:
-            # Two different retired spellings that now resolve to one tool.
-            # Letting "pinned" win here would hand the consolidated
-            # write-capable tool back enabled despite the operator having
-            # disabled one of its halves, so the restriction wins -- the same
-            # rule the stored config uses when re-keying those two names.
-            pinned[name] = _more_restrictive_tool_state(existing, "pinned")
+            # Every disabled spelling is also pinned: the documented tie.
+            pinned[name] = "pinned"
     return pinned
 
 

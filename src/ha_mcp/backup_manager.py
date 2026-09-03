@@ -579,11 +579,34 @@ class BackupManager:
         logger.info("Auto-backup: wrote %s", target.name)
         return target
 
+    def _snapshot_is_for(self, path: Path, entity_id: str) -> bool:
+        """Whether ``path`` actually holds a snapshot of ``entity_id``.
+
+        Filename stems are ambiguous in both directions: the legacy stem for
+        ``user/motion.yaml`` is ``user_motion.yaml``, which is also the
+        CURRENT stem of a differently-named blueprint. The payload keeps the
+        original id, so rotation asks it rather than trusting the name. A file
+        that cannot be read is treated as not ours: skipping it wastes a
+        rotation slot, deleting it could destroy another entity's only
+        restore point.
+        """
+        try:
+            with path.open(encoding="utf-8") as handle:
+                loaded = yaml.safe_load(handle)
+        except (OSError, yaml.YAMLError) as err:
+            logger.warning(
+                "Auto-backup: cannot identify %s, leaving it in place: %s",
+                path.name,
+                err,
+            )
+            return False
+        return isinstance(loaded, dict) and loaded.get("entity_id") == entity_id
+
     def _rotate(self, domain: str, entity_id: str) -> None:
-        files: list[Path] = []
+        candidates: set[Path] = set()
         for safe in _entity_id_aliases(entity_id):
-            files.extend(self._dir.glob(f"{domain}.{safe}.*.yaml"))
-        files = sorted(set(files))
+            candidates.update(self._dir.glob(f"{domain}.{safe}.*.yaml"))
+        files = [p for p in sorted(candidates) if self._snapshot_is_for(p, entity_id)]
         excess = len(files) - self.retain_per_entity
         for old in files[: max(0, excess)]:
             try:
