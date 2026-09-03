@@ -234,8 +234,10 @@ class BlueprintTools:
 
         ``get`` also reports ``used_by``: the automations or scripts built on
         the blueprint, which is the UI's "Show automations using this
-        blueprint". Check it before deleting — Home Assistant refuses to delete
-        a blueprint anything still uses.
+        blueprint". Check it before deleting — Home Assistant refuses to delete a
+        blueprint anything still uses, and it goes on counting a consumer that
+        has since taken control of its own config until that consumer is
+        removed.
 
         CAVEATS: ``get`` returns the on-disk YAML only when something can read
         it — an in-process server, the ha_mcp_tools component, the File & YAML
@@ -251,11 +253,14 @@ class BlueprintTools:
         ``ha_manage_backup(scope="edits")`` can restore the previous file.
         ``substitute`` only renders — it writes nothing, so pass the returned
         config to ``ha_config_set_automation`` / ``ha_config_set_script`` to
-        persist it. To convert an automation that ALREADY exists, prefer
-        ``ha_config_set_automation(identifier=..., take_control_of_blueprint=True)``:
-        it renders with the automation's own current inputs and saves the result
-        over itself in one call, where ``substitute`` would need those inputs
-        restated and the config written back by hand.
+        persist it. To convert an automation or script that ALREADY exists,
+        prefer ``ha_config_set_automation`` / ``ha_config_set_script`` with
+        ``take_control_of_blueprint=True``: it renders with that item's own
+        current inputs and saves the result over itself in one call, where
+        ``substitute`` would need those inputs restated and the config written
+        back by hand. Taking control does NOT free the blueprint — Home
+        Assistant goes on counting a converted automation or script as a user
+        of it, so ``delete`` stays refused until the consumers are removed.
 
         EXAMPLES:
         - List: ha_manage_blueprints(action="list", domain="automation")
@@ -265,7 +270,7 @@ class BlueprintTools:
         - Edit in place: ha_manage_blueprints(action="save", path="user/motion.yaml", yaml=<edited text>, overwrite=True)
         - Delete: ha_manage_blueprints(action="delete", path="user/motion.yaml", confirm=True)
         - Detach: ha_manage_blueprints(action="substitute", path="user/motion.yaml", input={"motion_sensor": "binary_sensor.hall"})
-        - Detach an existing automation instead: ha_config_set_automation(identifier="automation.hall", take_control_of_blueprint=True)
+        - Convert an existing consumer to a standalone config: ha_config_set_automation(identifier="automation.hall", take_control_of_blueprint=True)
 
         RELATED TOOLS: ``ha_config_set_automation`` / ``ha_config_set_script``
         to build on a blueprint or persist a substituted config,
@@ -537,9 +542,11 @@ class BlueprintTools:
                 f"them at another blueprint with {set_tool}"
             ),
             (
-                f"Or detach each one in place: {set_tool}(identifier=..., "
-                "take_control_of_blueprint=True) rewrites it as a standalone "
-                f"{domain} that no longer uses the blueprint"
+                f"Removing the {domain}s is what frees the blueprint. Taking "
+                f"control of them ({set_tool}(take_control_of_blueprint=True)) "
+                "converts them to standalone configs but does NOT release the "
+                f"blueprint: Home Assistant keeps counting a converted {domain} "
+                "as a user until it is removed"
             ),
             (
                 f'Then retry: ha_manage_blueprints(action="delete", domain="{domain}", '

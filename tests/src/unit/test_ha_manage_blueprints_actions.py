@@ -367,12 +367,46 @@ async def test_delete_in_use_names_consumers() -> None:
         }
     ]
     joined = " ".join(error["suggestions"])
+    # Removal is what actually frees a blueprint. Taking control converts a
+    # consumer but does NOT release it -- verified live on 2026.9 -- so the
+    # refusal must not send the caller down that path as a fix (#2329).
     assert "ha_config_remove_automation" in joined
-    # The refusal has to say how to free the blueprint, and the one-shot
-    # conversion is the shortest route -- ``substitute`` alone would leave the
-    # caller to write the rendered config back themselves (#2329).
-    assert "take_control_of_blueprint=True" in joined
+    assert "does NOT release the blueprint" in joined
     assert 'action="delete"' in joined
+
+
+@pytest.mark.asyncio
+async def test_delete_in_use_names_the_script_tool_for_a_script_blueprint() -> None:
+    """A script blueprint's refusal must name script tools, not automation ones.
+
+    ``ha_config_set_script`` takes ``script_id``; a suggestion built from the
+    automation shape cannot be run as written against a script consumer.
+    """
+    client = SpyClient(
+        {
+            "blueprint/list": _listing(_PATH),
+            "blueprint/delete": {
+                "success": False,
+                "error": "Command failed: Blueprint in use",
+            },
+            "search/related": {
+                "success": True,
+                "result": {"script": ["script.bedtime"]},
+            },
+        }
+    )
+    tool = _build_tool(client)
+
+    with pytest.raises(ToolError) as exc:
+        await tool(action="delete", domain="script", path=_PATH, confirm=True)
+
+    payload = _error_payload(exc.value)
+    joined = " ".join(payload["error"]["suggestions"])
+    assert "ha_config_remove_script" in joined
+    assert "ha_config_set_script" in joined
+    assert "ha_config_remove_automation" not in joined
+    assert "ha_config_set_automation" not in joined
+    assert payload["in_use_by"] == ["script.bedtime"]
 
 
 @pytest.mark.asyncio

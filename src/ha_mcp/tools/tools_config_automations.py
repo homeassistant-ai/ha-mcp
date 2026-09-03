@@ -5,9 +5,7 @@ This module provides tools for retrieving, creating, updating, and removing
 Home Assistant automation configurations.
 """
 
-import asyncio
 import logging
-import time
 from typing import Annotated, Any, cast
 
 from fastmcp.exceptions import ToolError
@@ -578,10 +576,10 @@ class AutomationConfigTools:
                 "no 'use_blueprint'. Requires identifier; mutually exclusive with "
                 "config and python_transform. Irreversible: the link to the "
                 "blueprint is gone afterwards, so edit inputs instead if you only "
-                "want to change a value. With wait=True (default) the call also "
-                "settles until Home Assistant stops listing the automation as a "
-                "user of the blueprint, so a following delete of that blueprint "
-                "succeeds. To preview the rendering without writing anything, use "
+                "want to change a value. Does NOT free the blueprint: Home "
+                "Assistant keeps counting the converted automation as a user, so "
+                "deleting that blueprint stays refused until the automation is "
+                "removed. To preview the rendering without writing anything, use "
                 'ha_manage_blueprints(action="substitute").',
                 default=False,
             ),
@@ -789,13 +787,13 @@ class AutomationConfigTools:
         update 'use_blueprint.input' instead (see the example above) — that
         keeps the link.
 
-        A config write only schedules the automation reload that rebuilds Home
-        Assistant's blueprint usage index, so with wait=True (default) the call
-        settles until the blueprint no longer counts this automation as a user.
-        That is what makes "take control of every consumer, then delete the
-        blueprint" work as a sequence. The response names the blueprint in
-        `took_control_of_blueprint`, and carries a warning instead if the index
-        was still stale when the wait ran out. To see what the rendering looks like WITHOUT writing
+        Taking control does NOT free the blueprint. Home Assistant goes on
+        counting a converted automation as a user of it, so deleting that
+        blueprint stays refused until the automation itself is removed
+        (verified against Home Assistant 2026.9; an automation reload does not
+        clear it either).
+
+        The response names the blueprint in `took_control_of_blueprint`. To see what the rendering looks like WITHOUT writing
         anything, call ha_manage_blueprints(action="substitute", path=...,
         input=...), which returns the config and leaves the automation alone.
         ha_manage_blueprints also lists, imports, saves and deletes blueprints,
@@ -1294,9 +1292,8 @@ class AutomationConfigTools:
             **({"automation_id": automation_id} if automation_id else {}),
             **_strip_redundant_identifier_echo(result),
         }
-        await self._note_detached_blueprint(
-            detached_blueprint, wait, automation_id, response
-        )
+        if detached_blueprint:
+            response["took_control_of_blueprint"] = detached_blueprint
         # attach AFTER the outer dict is built so attach_skill_content's
         # reorder puts skill_content_hint at position 0 of the FINAL
         # response — building the outer dict via spread otherwise pushes
@@ -1309,71 +1306,6 @@ class AutomationConfigTools:
             referenced_files=bp_warnings.referenced_files,
         )
         return response
-
-    async def _note_detached_blueprint(
-        self,
-        path: str | None,
-        wait: bool,
-        automation_id: str | None,
-        response: dict[str, Any],
-    ) -> None:
-        """Report the blueprint take-control detached from, and settle for it."""
-        if not path:
-            return
-        response["took_control_of_blueprint"] = path
-        if wait:
-            await self._wait_for_blueprint_release(path, automation_id, response)
-
-    async def _wait_for_blueprint_release(
-        self,
-        path: str,
-        automation_id: str | None,
-        response: dict[str, Any],
-        timeout: float = 30.0,
-        poll_interval: float = 1.0,
-    ) -> None:
-        """Wait until Home Assistant stops listing ``automation_id`` as a user
-        of ``path``.
-
-        A config write only SCHEDULES the automation reload that rebuilds the
-        blueprint usage index, so immediately after taking control the
-        blueprint still reads as in use -- and deleting it, the step this
-        conversion exists to unblock, is refused. Waiting here is what makes
-        "take control, then delete the blueprint" work as a sequence instead
-        of an intermittent failure. Never fatal: the conversion itself is
-        already committed, so a lookup that stays stale becomes a warning.
-        """
-        deadline = time.monotonic() + timeout
-        while True:
-            try:
-                related = await self._client.send_websocket_message(
-                    {
-                        "type": "search/related",
-                        "item_type": "automation_blueprint",
-                        "item_id": path,
-                        "_wait_timeout": 5.0,
-                    }
-                )
-            except HomeAssistantConnectionError as exc:
-                logger.debug("blueprint release lookup failed for %s: %r", path, exc)
-                return
-            users = (
-                ((related.get("result") or {}).get("automation") or [])
-                if isinstance(related, dict)
-                else []
-            )
-            if not isinstance(users, list) or automation_id not in users:
-                return
-            if time.monotonic() >= deadline:
-                response.setdefault("warnings", []).append(
-                    f"Home Assistant still lists {automation_id} as using "
-                    f"blueprint '{path}' after {timeout:.0f}s. The automation "
-                    "has been converted; the usage index clears when the "
-                    "automation reload finishes, so a delete of that blueprint "
-                    "may need a retry."
-                )
-                return
-            await asyncio.sleep(poll_interval)
 
     async def _list_automation_entity_ids(self) -> list[str]:
         """Best-effort list of automation entity_ids (up to 10) from the entity registry.

@@ -641,7 +641,8 @@ class HomeAssistantSmartMCPServer:
             "unlink standalone convert"
         ),
         "ha_config_set_script": (
-            "create update modify edit script sequence actions new script write save"
+            "create update modify edit script sequence actions new script write "
+            "save take control blueprint detach unlink standalone convert"
         ),
         "ha_config_set_yaml": (
             "edit yaml configuration.yaml packages template sensor "
@@ -732,10 +733,12 @@ class HomeAssistantSmartMCPServer:
         ),
         "ha_config_set_script": (
             "Create or update a Home Assistant script.\n\n"
-            "Supports two modes: full `config` replacement, or surgical "
+            "Supports three modes: full `config` replacement, surgical "
             "`python_transform` on an existing script (requires "
-            "`config_hash` from ha_config_get_script). `script_id` names "
-            "the script in both modes.\n\n"
+            "`config_hash` from ha_config_get_script), or "
+            "`take_control_of_blueprint` to convert a blueprint-backed "
+            "script into an editable standalone one. `script_id` names "
+            "the script in every mode.\n\n"
             "For schema details and examples, see "
             "ha_get_skill_guide or your locally installed skills."
         ),

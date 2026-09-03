@@ -1015,10 +1015,10 @@ class TestBlueprintManagement:
     ):
         """``take_control_of_blueprint`` converts a consumer in place.
 
-        The end-to-end proof is the delete at the end: a blueprint that was
-        refused deletion while the automation used it becomes deletable once
-        the automation owns its own config, without the automation being
-        removed or recreated.
+        The automation keeps its identity and gains the blueprint's rendered
+        config as its own. It does NOT stop counting as a consumer: Home
+        Assistant frees the blueprint only when the automation is removed, so
+        the delete here happens after that removal, not after the conversion.
         """
         served = _ServedBlueprint(local_blueprint_server, "take_control")
         automation_id = None
@@ -1067,21 +1067,22 @@ class TestBlueprintManagement:
                 assert actions, config
                 assert actions[0]["target"]["entity_id"] == _STABLE_ENTITY, config
 
-                # No polling here on purpose: take control settles for the
-                # blueprint usage index before returning, so the delete it
-                # exists to unblock must work on the next call. A retry loop
-                # would hide a regression in exactly that guarantee.
-                detail = await mcp.call_tool_success(
+                # Home Assistant goes on counting a converted automation as a
+                # user of the blueprint (verified live on 2026.9 -- an
+                # automation reload does not clear it either), so the delete
+                # stays refused until the automation is actually removed. This
+                # pins that boundary: converting is not detaching.
+                still = await mcp.call_tool_success(
                     "ha_manage_blueprints",
                     {"action": "get", "domain": "automation", "path": path},
                 )
-                assert automation_id not in detail["data"].get("used_by", []), detail
-                await served.delete(mcp, path)
+                assert automation_id in still["data"].get("used_by", []), still
 
                 await mcp.call_tool_success(
                     "ha_config_remove_automation", {"identifier": automation_id}
                 )
                 automation_id = None
+                await served.delete(mcp, path)
         finally:
             if automation_id:
                 await safe_call_tool(

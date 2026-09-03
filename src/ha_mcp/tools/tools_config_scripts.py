@@ -33,6 +33,7 @@ from .best_practice_checker import (
 from .best_practice_checker import (
     check_script_config as _check_best_practices,
 )
+from .blueprint_substitute import blueprint_reference, take_control_config
 from .component_config_reads import fetch_entity_lookup_via_component
 from .helpers import (
     exception_to_structured_error,
@@ -502,6 +503,23 @@ class ConfigScriptTools:
                 "Optional for config updates (validates before full replacement if provided).",
             ),
         ] = None,
+        take_control_of_blueprint: Annotated[
+            bool,
+            Field(
+                description="Convert a blueprint-backed script into an editable "
+                'standalone one -- the UI\'s "Take control". Renders the blueprint '
+                "with its current inputs and saves the result over the same script, "
+                "which then has its own sequence and no 'use_blueprint'. Mutually "
+                "exclusive with config and python_transform. Irreversible: the link "
+                "to the blueprint is gone afterwards, so edit inputs instead if you "
+                "only want to change a value. Does NOT free the blueprint: Home "
+                "Assistant keeps counting the converted script as a user, so "
+                "deleting that blueprint stays refused until the script is removed. "
+                "To preview the rendering without writing anything, use "
+                'ha_manage_blueprints(action="substitute", domain="script").',
+                default=False,
+            ),
+        ] = False,
         category: Annotated[
             str | None,
             Field(
@@ -656,6 +674,31 @@ class ConfigScriptTools:
             }
         })
 
+        TAKE CONTROL OF A BLUEPRINT SCRIPT:
+
+        take_control_of_blueprint=True converts a blueprint-backed script into
+        a standalone one — the UI's "Take control". The blueprint is rendered
+        with the script's CURRENT inputs and the result is saved over the same
+        script, which keeps its script_id, alias and description but gains its
+        own sequence and loses 'use_blueprint'.
+
+        ha_config_set_script(
+            script_id="notification_script",
+            take_control_of_blueprint=True,
+        )
+
+        This is one-way: the script is no longer linked to the blueprint, so
+        later blueprint edits stop reaching it. To change an input value,
+        update 'use_blueprint.input' instead (see the example above) — that
+        keeps the link. Taking control does NOT free the blueprint: Home
+        Assistant goes on counting a converted script as a user of it, so
+        deleting that blueprint stays refused until the script itself is
+        removed. To see the rendering WITHOUT writing
+        anything, call ha_manage_blueprints(action="substitute",
+        domain="script", path=..., input=...). ha_manage_blueprints also lists,
+        imports, saves and deletes blueprints, and action="get" reports which
+        scripts use one.
+
         Note: Scripts use Home Assistant's action syntax. Check the documentation for advanced
         features like conditions, variables, parallel execution, and service call options.
         """
@@ -688,20 +731,13 @@ class ConfigScriptTools:
                 ],
                 context={"action": "set"},
             )
-            # Validate mutual exclusivity of config and python_transform
-            if config is not None and python_transform is not None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "Cannot use both config and python_transform simultaneously",
-                        suggestions=[
-                            "Use only ONE of: config or python_transform",
-                            "config: Full replacement",
-                            "python_transform: Python-based edits (recommended for existing scripts)",
-                        ],
-                        context={"action": "set", "script_id": script_id},
-                    )
-                )
+            self._validate_set_script_modes(
+                config, python_transform, take_control_of_blueprint, script_id
+            )
+
+            detached_blueprint: str | None = None
+            if take_control_of_blueprint:
+                config, detached_blueprint = await self._take_control_config(script_id)
 
             # Handle python_transform mode
             if python_transform is not None:
@@ -785,6 +821,7 @@ class ConfigScriptTools:
                 wait,
                 bp_warnings,
                 MandatoryBPS,
+                detached_blueprint,
             )
 
         except ToolError as te:
@@ -990,6 +1027,70 @@ class ConfigScriptTools:
         )
         return response
 
+    @staticmethod
+    def _validate_set_script_modes(
+        config: dict[str, Any] | None,
+        python_transform: str | None,
+        take_control_of_blueprint: bool,
+        script_id: str,
+    ) -> None:
+        """Reject combinations of the three mutually exclusive write modes."""
+        if config is not None and python_transform is not None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "Cannot use both config and python_transform simultaneously",
+                    suggestions=[
+                        "Use only ONE of: config or python_transform",
+                        "config: Full replacement",
+                        "python_transform: Python-based edits (recommended for existing scripts)",
+                    ],
+                    context={"action": "set", "script_id": script_id},
+                )
+            )
+
+        if take_control_of_blueprint and (
+            config is not None or python_transform is not None
+        ):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "take_control_of_blueprint replaces the script with its own "
+                    "rendered config, so it cannot be combined with config or "
+                    "python_transform.",
+                    suggestions=[
+                        (
+                            "Take control first, then edit the standalone "
+                            "config in a second call"
+                        ),
+                        (
+                            "Preview the rendering with ha_manage_blueprints"
+                            '(action="substitute", domain="script") if you only '
+                            "want to see it"
+                        ),
+                    ],
+                    context={"action": "take_control", "script_id": script_id},
+                )
+            )
+
+    async def _take_control_config(
+        self, script_id: str
+    ) -> tuple[dict[str, Any], str | None]:
+        """Render a blueprint script into the config that replaces it.
+
+        Produces a config for the ordinary replacement path rather than
+        writing it here, so the rendering goes through the same validation,
+        best-practice checks and skill-content attachment as every other
+        script write.
+        """
+        current_config, _, _ = await self._get_script_config_internal(script_id)
+        reference = blueprint_reference(current_config)
+        blueprint_path = reference[0] if reference else None
+        taken = await take_control_config(
+            self._client, "script", script_id, current_config
+        )
+        return taken, blueprint_path
+
     async def _commit_script_config(
         self,
         config_dict: dict[str, Any],
@@ -999,6 +1100,7 @@ class ConfigScriptTools:
         wait: bool,
         bp_warnings: BestPracticeCheckResult,
         MandatoryBPS: bool,
+        detached_blueprint: str | None = None,
     ) -> dict[str, Any]:
         """Validate references, upsert, wait, and build the tool response.
 
@@ -1054,6 +1156,8 @@ class ConfigScriptTools:
             "success": True,
             **result,
         }
+        if detached_blueprint:
+            response["took_control_of_blueprint"] = detached_blueprint
         # attach AFTER the outer dict is built so hint lands at
         # position 0 of the FINAL response (see BAT history in
         # util_helpers._SKILL_CONTENT_OPTOUT_HINT).

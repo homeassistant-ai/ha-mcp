@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
-from ha_mcp.client.rest_client import HomeAssistantConnectionError
+from ha_mcp.tools import tools_config_automations
 from ha_mcp.tools.auto_backup import automation_backup_target
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 
@@ -235,82 +235,25 @@ def test_the_pre_conversion_config_is_what_gets_snapshotted():
     assert target == _ID
 
 
-# ------------------------------------------------ waiting for the usage index
-
-
-async def test_wait_returns_once_home_assistant_stops_listing_the_automation(
-    tools, mock_client
+async def test_take_control_does_not_pretend_to_free_the_blueprint(
+    tools, mock_client, monkeypatch: pytest.MonkeyPatch
 ):
-    """The conversion settles before returning, so the delete it unblocks works.
+    """No usage-index lookup is made, because the conversion cannot clear it.
 
-    A config write only schedules the automation reload that rebuilds the
-    blueprint usage index, so without this the sequence the delete refusal
-    recommends -- take control, then delete the blueprint -- fails on the
-    delete for as long as the index lags.
+    Verified live against Home Assistant 2026.9: after taking control the
+    blueprint still counts the automation as a user and deleting it is still
+    refused -- an automation reload does not change that. A wait here would
+    always time out, charging every caller for a guarantee that cannot hold.
     """
-    calls = {"n": 0}
 
-    async def ws(message: dict[str, Any]) -> dict[str, Any]:
-        if message.get("type") == "search/related":
-            calls["n"] += 1
-            users = [_ID] if calls["n"] == 1 else []
-            return {"success": True, "result": {"automation": users}}
-        return {"success": True, "result": {"categories": {}}}
+    async def _ok(*_args: Any, **_kw: Any) -> Any:
+        return True
 
-    mock_client.send_websocket_message = AsyncMock(side_effect=ws)
-    response: dict[str, Any] = {}
+    # Exercise the DEFAULT wait=True path -- that is where a usage-index wait
+    # would have lived.
+    monkeypatch.setattr(tools_config_automations, "wait_for_entity_registered", _ok)
 
-    await tools._wait_for_blueprint_release(
-        _PATH, _ID, response, timeout=5.0, poll_interval=0.01
-    )
-
-    assert calls["n"] == 2, "should have polled until the index cleared"
-    assert "warnings" not in response
-
-
-async def test_a_stale_index_warns_rather_than_failing_the_conversion(
-    tools, mock_client
-):
-    """The automation is already converted, so a lagging index is not an error."""
-
-    async def ws(message: dict[str, Any]) -> dict[str, Any]:
-        if message.get("type") == "search/related":
-            return {"success": True, "result": {"automation": [_ID]}}
-        return {"success": True, "result": {"categories": {}}}
-
-    mock_client.send_websocket_message = AsyncMock(side_effect=ws)
-    response: dict[str, Any] = {}
-
-    await tools._wait_for_blueprint_release(
-        _PATH, _ID, response, timeout=0.0, poll_interval=0.01
-    )
-
-    assert any("still lists" in w for w in response["warnings"]), response
-
-
-async def test_a_transport_failure_during_the_wait_is_not_fatal(tools, mock_client):
-    """The write is committed; a lookup that cannot run must not undo that."""
-
-    async def ws(message: dict[str, Any]) -> dict[str, Any]:
-        if message.get("type") == "search/related":
-            raise HomeAssistantConnectionError("socket gone")
-        return {"success": True, "result": {"categories": {}}}
-
-    mock_client.send_websocket_message = AsyncMock(side_effect=ws)
-    response: dict[str, Any] = {}
-
-    await tools._wait_for_blueprint_release(
-        _PATH, _ID, response, timeout=5.0, poll_interval=0.01
-    )
-
-    assert "warnings" not in response
-
-
-async def test_no_wait_skips_the_index_check_entirely(tools, mock_client):
-    """wait=False keeps the call cheap for bulk work."""
-    await tools.ha_config_set_automation(
-        identifier=_ID, take_control_of_blueprint=True, wait=False
-    )
+    await tools.ha_config_set_automation(identifier=_ID, take_control_of_blueprint=True)
 
     assert not [
         c
