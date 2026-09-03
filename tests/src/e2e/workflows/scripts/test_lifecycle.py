@@ -73,12 +73,14 @@ def enhanced_parse_mcp_result(result) -> dict[str, Any]:
 
 
 def extract_script_config(get_data: dict[str, Any]) -> dict[str, Any]:
-    """Extract script configuration from a ha_config_get_script response."""
-    # Handle nested config structure: get_data["config"]["config"]
-    config_wrapper = get_data.get("config", {})
-    if isinstance(config_wrapper, dict) and "config" in config_wrapper:
-        return config_wrapper.get("config", {})
-    return config_wrapper
+    """Extract script configuration from a ha_config_get_script response.
+
+    ``config`` is the script body. It used to be the REST envelope, so this
+    helper unwrapped a second ``config`` key; doing that now would corrupt a
+    script whose body legitimately carries one.
+    """
+    config = get_data.get("config", {})
+    return config if isinstance(config, dict) else {}
 
 
 def wait_for_script_registration(script_count: int = 1) -> int:

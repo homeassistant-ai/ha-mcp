@@ -210,7 +210,7 @@ class ConfigScriptTools:
             self._client, entity_id, "script", cat_warnings
         )
         if cat_id:
-            config_result["category"] = cat_id
+            actual_config["category"] = cat_id
 
         # Issue #1334: return the canonical storage key from the
         # rest_client envelope so callers can thread the result into
@@ -232,11 +232,18 @@ class ConfigScriptTools:
             "success": True,
             "action": "get",
             "script_id": canonical_id,
-            "config": config_result,
+            # The script BODY, not the REST envelope. Returning the envelope
+            # here put ``{success, script_id, config}`` under ``config``, so
+            # ``response["config"]["sequence"]`` did not exist and every caller
+            # had to unwrap twice -- the e2e carried a helper to do exactly
+            # that. ``ha_config_get_automation`` returns the body, this
+            # docstring promises the body, and the hash is already computed
+            # over the body.
+            "config": actual_config,
             "config_hash": config_hash_value,
         }
-        # Top level, not inside ``config``: ``config_result`` becomes the
-        # nested payload, and warnings are a top-level list[str] by contract.
+        # Top level, not inside ``config``: warnings are a top-level list[str]
+        # by contract.
         if cat_warnings:
             response.setdefault("warnings", []).extend(cat_warnings)
         return response
