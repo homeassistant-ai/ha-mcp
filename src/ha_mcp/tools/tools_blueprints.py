@@ -362,8 +362,10 @@ class BlueprintTools:
                     "available_blueprints": list(blueprints_data.keys())[:10],
                 },
                 suggestions=[
-                    f'Use ha_manage_blueprints(action="list", domain="{domain}") '
-                    "to see all available blueprints",
+                    (
+                        f'Use ha_manage_blueprints(action="list", domain="{domain}") '
+                        "to see all available blueprints"
+                    ),
                     "Check the path format (e.g., 'homeassistant/motion_light.yaml')",
                 ],
             )
@@ -425,8 +427,10 @@ class BlueprintTools:
                     f"Deletion not confirmed. Set confirm=True to delete blueprint '{path}'.",
                     context={"domain": domain, "path": path},
                     suggestions=[
-                        f'Re-run with confirm=True: ha_manage_blueprints(action="delete", '
-                        f'domain="{domain}", path="{path}", confirm=True)',
+                        (
+                            f'Re-run with confirm=True: ha_manage_blueprints(action="delete", '
+                            f'domain="{domain}", path="{path}", confirm=True)'
+                        ),
                         f'Inspect it first: ha_manage_blueprints(action="get", domain="{domain}", path="{path}")',
                     ],
                 )
@@ -493,12 +497,18 @@ class BlueprintTools:
         remove_tool = f"ha_config_remove_{domain}"
         set_tool = f"ha_config_set_{domain}"
         suggestions = [
-            f"Delete the {domain}s that use it with {remove_tool}, or re-point "
-            f"them at another blueprint with {set_tool}",
-            f'Or detach them: ha_manage_blueprints(action="substitute", domain="{domain}", '
-            f'path="{path}", input=...) and write the rendered config back with {set_tool}',
-            f'Then retry: ha_manage_blueprints(action="delete", domain="{domain}", '
-            f'path="{path}", confirm=True)',
+            (
+                f"Delete the {domain}s that use it with {remove_tool}, or re-point "
+                f"them at another blueprint with {set_tool}"
+            ),
+            (
+                f'Or detach them: ha_manage_blueprints(action="substitute", domain="{domain}", '
+                f'path="{path}", input=...) and write the rendered config back with {set_tool}'
+            ),
+            (
+                f'Then retry: ha_manage_blueprints(action="delete", domain="{domain}", '
+                f'path="{path}", confirm=True)'
+            ),
         ]
         if resolved:
             detail = (
@@ -608,15 +618,19 @@ class BlueprintTools:
         if "missing input" in lowered:
             code = ErrorCode.VALIDATION_FAILED
             suggestions = [
-                f'Read the required inputs: ha_manage_blueprints(action="get", '
-                f'domain="{domain}", path="{path}")',
+                (
+                    f'Read the required inputs: ha_manage_blueprints(action="get", '
+                    f'domain="{domain}", path="{path}")'
+                ),
                 "Pass every required input in the input dict",
             ]
         elif "failed to load" in lowered or "not found" in lowered:
             code = ErrorCode.RESOURCE_NOT_FOUND
             suggestions = [
-                f'Use ha_manage_blueprints(action="list", domain="{domain}") to see '
-                "installed blueprints",
+                (
+                    f'Use ha_manage_blueprints(action="list", domain="{domain}") to see '
+                    "installed blueprints"
+                ),
                 "Check the path format (e.g., 'homeassistant/motion_light.yaml')",
             ]
         else:

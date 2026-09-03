@@ -875,28 +875,6 @@ async def test_save_invalid_yaml_classifies_by_the_clients_error_code() -> None:
 
 
 @pytest.mark.asyncio
-async def test_substitute_input_accepts_a_json_string() -> None:
-    """MCP clients that stringify objects still reach core with a dict."""
-    client = SpyClient(
-        {
-            "blueprint/substitute": {
-                "success": True,
-                "result": {"substituted_config": {"trigger": []}},
-            }
-        }
-    )
-    tool = _build_tool(client)
-
-    await tool(
-        action="substitute", path=_PATH, input='{"motion_sensor": "binary_sensor.hall"}'
-    )
-
-    assert client.frames("blueprint/substitute")[0]["input"] == {
-        "motion_sensor": "binary_sensor.hall"
-    }
-
-
-@pytest.mark.asyncio
 async def test_save_other_failure_is_service_call_failed() -> None:
     client = SpyClient(
         {

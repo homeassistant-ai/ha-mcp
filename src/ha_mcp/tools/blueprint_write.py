@@ -130,17 +130,23 @@ def _raise_save_failure(domain: str, path: str, response: dict[str, Any]) -> NoR
     if code == "already_exists" or "already exists" in lowered:
         mapped = ErrorCode.RESOURCE_ALREADY_EXISTS
         suggestions = [
-            f'Pass overwrite=True to replace it: ha_manage_blueprints(action="save", '
-            f'domain="{domain}", path="{path}", yaml=..., overwrite=True)',
+            (
+                f'Pass overwrite=True to replace it: ha_manage_blueprints(action="save", '
+                f'domain="{domain}", path="{path}", yaml=..., overwrite=True)'
+            ),
             "Or save under a different path to keep both",
         ]
     elif code == "invalid_format" or "invalid" in lowered:
         mapped = ErrorCode.VALIDATION_FAILED
         suggestions = [
-            f"The YAML must be a complete {domain} blueprint with a "
-            "'blueprint:' section declaring its domain and inputs",
-            'Start from an installed one: ha_manage_blueprints(action="get", '
-            f'domain="{domain}", path=...)',
+            (
+                f"The YAML must be a complete {domain} blueprint with a "
+                "'blueprint:' section declaring its domain and inputs"
+            ),
+            (
+                'Start from an installed one: ha_manage_blueprints(action="get", '
+                f'domain="{domain}", path=...)'
+            ),
         ]
     else:
         mapped = ErrorCode.SERVICE_CALL_FAILED
@@ -344,10 +350,14 @@ def _assert_importable(
                     "domain": domain,
                 },
                 suggestions=[
-                    'Call ha_manage_blueprints(action="import", overwrite=True) to update '
-                    "the installed blueprint",
-                    'Use ha_manage_blueprints(action="get") to inspect the currently '
-                    "installed version",
+                    (
+                        'Call ha_manage_blueprints(action="import", overwrite=True) to update '
+                        "the installed blueprint"
+                    ),
+                    (
+                        'Use ha_manage_blueprints(action="get") to inspect the currently '
+                        "installed version"
+                    ),
                 ],
             )
         )
