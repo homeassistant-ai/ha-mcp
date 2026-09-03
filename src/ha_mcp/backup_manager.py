@@ -176,6 +176,19 @@ class DomainHandler:
 # ----------------------------- backup manager -------------------------------
 
 
+def _entity_id_aliases(entity_id: str) -> list[str]:
+    """Every filename stem a snapshot of ``entity_id`` may carry.
+
+    Sanitised ids gained a digest suffix, so snapshots written before that
+    sit under the bare sanitised name. Rotation and entity filtering match
+    both, otherwise those older files would never be counted again: they
+    would never be pruned, and would drop out of an entity-filtered listing.
+    """
+    current = _safe_entity_id(entity_id)
+    legacy = _SAFE_ID_RE.sub("_", entity_id).lstrip(".") or "_"
+    return [current] if legacy == current else [current, legacy]
+
+
 def _safe_entity_id(entity_id: str) -> str:
     """Sanitize an entity id for use in a filename.
 
@@ -567,9 +580,10 @@ class BackupManager:
         return target
 
     def _rotate(self, domain: str, entity_id: str) -> None:
-        safe = _safe_entity_id(entity_id)
-        pattern = f"{domain}.{safe}.*.yaml"
-        files = sorted(self._dir.glob(pattern))
+        files: list[Path] = []
+        for safe in _entity_id_aliases(entity_id):
+            files.extend(self._dir.glob(f"{domain}.{safe}.*.yaml"))
+        files = sorted(set(files))
         excess = len(files) - self.retain_per_entity
         for old in files[: max(0, excess)]:
             try:
@@ -595,7 +609,7 @@ class BackupManager:
         # Sanitize the filter once up front so the per-file comparison is
         # symmetric: filter and ``meta["entity_id"]`` both come from the
         # same sanitization function.
-        safe_filter = _safe_entity_id(entity_id) if entity_id else None
+        safe_filter = set(_entity_id_aliases(entity_id)) if entity_id else None
         out: list[dict[str, Any]] = []
         # Reverse-sorted glob — newest filenames sort last lexicographically,
         # so reverse=True yields newest-first.
@@ -605,7 +619,7 @@ class BackupManager:
                 continue
             if domain and meta["domain"] != domain:
                 continue
-            if safe_filter and meta["entity_id"] != safe_filter:
+            if safe_filter and meta["entity_id"] not in safe_filter:
                 continue
             try:
                 stat = path.stat()

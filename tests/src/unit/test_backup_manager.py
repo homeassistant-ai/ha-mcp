@@ -36,6 +36,7 @@ from ha_mcp.backup_manager import (
     _pointer_segment,
     _require_dict,
     _require_list,
+    _entity_id_aliases,
     _safe_entity_id,
     _summarize_patch_counts,
     get_backup_manager,
@@ -667,6 +668,22 @@ class TestFilenameSafety:
         assert _safe_entity_id("user/motion.yaml") == _safe_entity_id(
             "user/motion.yaml"
         )
+
+    def test_snapshots_written_before_the_digest_stay_discoverable(self) -> None:
+        """Rotation and entity filtering must still find the older names.
+
+        Adding the digest changed the filename for path-shaped ids, so files
+        captured under the bare sanitised name would otherwise stop being
+        counted: never pruned, and absent from an entity-filtered listing.
+        """
+        aliases = _entity_id_aliases("user/motion.yaml")
+
+        assert _safe_entity_id("user/motion.yaml") in aliases
+        assert "user_motion.yaml" in aliases
+
+    def test_an_already_safe_id_has_exactly_one_alias(self) -> None:
+        """Entity ids never had a second spelling, so nothing is widened."""
+        assert _entity_id_aliases("automation.morning") == ["automation.morning"]
 
     def test_already_safe_ids_are_returned_unchanged(self) -> None:
         """Entity ids must keep their existing filenames, so snapshots taken
