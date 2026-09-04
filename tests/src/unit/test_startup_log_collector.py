@@ -85,10 +85,33 @@ class TestStartupLogCollectorReentrancy:
 
         assert _emit_in_thread(lambda: log.debug("outer %s", _LogsOnRepr(log)))
 
-        messages = [entry["message"] for entry in collector.get_logs()]
+        entries = collector.get_logs()
         # The nested record is dropped by the reentrancy guard; the outer one,
-        # which is the record that was actually logged, is still collected.
-        assert messages == ["outer <entity>"]
+        # which is the record that was actually logged, is still collected —
+        # and the drop is accounted for, not hidden, in the diagnostics.
+        assert [entry["message"] for entry in entries[:-1]] == ["outer <entity>"]
+        assert entries[-1]["level"] == "WARNING"
+        assert "1 nested log record(s)" in entries[-1]["message"]
+
+    def test_no_drop_marker_when_nothing_was_dropped(self):
+        collector = StartupLogCollector()
+        log = _make_logger("test_2357.clean", collector)
+
+        log.debug("plain record")
+
+        assert [entry["message"] for entry in collector.get_logs()] == ["plain record"]
+
+    def test_guard_clears_after_reentrant_record(self):
+        collector = StartupLogCollector()
+        log = _make_logger("test_2357.reset", collector)
+
+        assert _emit_in_thread(lambda: log.debug("outer %s", _LogsOnRepr(log)))
+        log.debug("later record")
+
+        messages = [entry["message"] for entry in collector.get_logs()]
+        # A stuck per-thread flag would silently drop every later record on
+        # that thread for the rest of the startup window.
+        assert "later record" in messages
 
     def test_deeply_nested_formatting_terminates(self):
         collector = StartupLogCollector()
@@ -106,12 +129,19 @@ class TestStartupLogCollectorReentrancy:
         collector = StartupLogCollector()
         log = _make_logger("test_2357.unformattable", collector)
 
+        handled: list[logging.LogRecord] = []
+        collector.handleError = handled.append  # type: ignore[method-assign]
+
         log.debug("bad %s", Explodes())
 
         entries = collector.get_logs()
         assert len(entries) == 1
         assert "unformattable" in entries[0]["message"]
         assert "ValueError" in entries[0]["message"]
+        # Names the call site, not just the logger.
+        assert f"{__file__}:" in entries[0]["message"]
+        # The stdlib error path still runs, so raiseExceptions/stderr apply.
+        assert len(handled) == 1
 
     def test_collection_stops_at_entry_cap(self):
         collector = StartupLogCollector()

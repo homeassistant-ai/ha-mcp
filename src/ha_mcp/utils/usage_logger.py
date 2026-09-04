@@ -47,7 +47,13 @@ class StartupLogCollector(logging.Handler):
         self._logs: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         self._active = True
+        # Per-thread, not an instance flag: emit() runs on every thread that
+        # logs, and a shared flag would drop unrelated records from other
+        # threads while one thread is mid-format.
         self._formatting = threading.local()
+        # Nested records the guard dropped; surfaced by get_logs() so the
+        # startup diagnostics show the hole instead of hiding it.
+        self._dropped_nested = 0
 
     def emit(self, record: logging.LogRecord) -> None:
         """Capture log record if within startup window.
@@ -70,8 +76,11 @@ class StartupLogCollector(logging.Handler):
 
         # Nested emit from within our own formatting: drop the record rather
         # than recurse. The outer record still gets collected, and the chain
-        # (repr -> log -> repr -> log) cannot run away.
+        # (repr -> log -> repr -> log) cannot run away. The lock is free on
+        # this path (formatting happens outside it), so counting is safe.
         if getattr(self._formatting, "active", False):
+            with self._lock:
+                self._dropped_nested += 1
             return
 
         elapsed = time.time() - self._start_time
@@ -83,8 +92,18 @@ class StartupLogCollector(logging.Handler):
         try:
             message = record.getMessage()
         except Exception as exc:
-            # Mirrors logging's own contract: a handler never propagates.
-            message = f"<unformattable {record.name} record: {type(exc).__name__}>"
+            # Mirrors logging's own contract: a handler never propagates. Only
+            # attributes the logging machinery itself set are interpolated —
+            # ``exc``'s repr or ``record.msg`` could run the code that just
+            # failed. pathname:lineno names the broken call site, which the
+            # logger name alone does not.
+            message = (
+                f"<unformattable record from {record.pathname}:{record.lineno}: "
+                f"{type(exc).__name__}>"
+            )
+            # Honour the stdlib path too (logging.raiseExceptions / stderr);
+            # at DEBUG on root this may be the only handler that saw the record.
+            self.handleError(record)
         finally:
             self._formatting.active = False
 
@@ -103,9 +122,29 @@ class StartupLogCollector(logging.Handler):
             )
 
     def get_logs(self) -> list[dict[str, Any]]:
-        """Get collected startup logs."""
+        """Get collected startup logs.
+
+        If the reentrancy guard dropped any nested records, one synthetic
+        trailing entry says how many, so a reader of the diagnostics can tell
+        "the integration logged nothing" from "records were swallowed".
+        """
         with self._lock:
-            return list(self._logs)
+            logs = list(self._logs)
+            dropped = self._dropped_nested
+        if dropped:
+            logs.append(
+                {
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "level": "WARNING",
+                    "logger": __name__,
+                    "message": (
+                        f"<{dropped} nested log record(s) emitted during message "
+                        "formatting were dropped by the reentrancy guard>"
+                    ),
+                    "elapsed_seconds": round(time.time() - self._start_time, 2),
+                }
+            )
+        return logs
 
     def is_active(self) -> bool:
         """Check if still collecting startup logs."""
