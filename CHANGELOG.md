@@ -3,6 +3,42 @@
 <!-- version list -->
 
 
+## v8.4.3 (2026-09-04)
+
+### Fixed
+
+- **devices**: Support Core 2026.9 child devices and effective areas
+  ([#2366](https://github.com/homeassistant-ai/ha-mcp/pull/2366))
+- **component**: Prove the LLM-API schema conversion inside Home Assistant and finish #2361
+  ([#2365](https://github.com/homeassistant-ai/ha-mcp/pull/2365))
+- **component**: Stop an exclusive schema bound breaking every Anthropic turn
+  ([#2363](https://github.com/homeassistant-ai/ha-mcp/pull/2363))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Chores
+
+- **addon**: Publish dev addon version 8.4.2.dev2534 [skip ci]
+  ([`831f612`](https://github.com/homeassistant-ai/ha-mcp/commit/831f612458ba699ff79ec6f73303f325e7961e00))
+- **addon**: Publish dev addon version 8.4.2.dev2530 [skip ci]
+  ([`985c45b`](https://github.com/homeassistant-ai/ha-mcp/commit/985c45ba953811866cc83e1646d1145627bf510b))
+- Sync tool docs after merge [skip ci]
+  ([`aac38ef`](https://github.com/homeassistant-ai/ha-mcp/commit/aac38ef85840f15da81060e24b390b3e6a675489))
+- **addon**: Publish version 8.4.2 [skip ci]
+  ([`67a52f2`](https://github.com/homeassistant-ai/ha-mcp/commit/67a52f27bfaf34a665f3d2a089ea7f7045ab7dcc))
+
+### Continuous Integration
+
+- Move the E2E Home Assistant image to 2026.9.0
+  ([#2364](https://github.com/homeassistant-ai/ha-mcp/pull/2364))
+- Add container beta E2E lane and drop the release-age gate on HA images
+  ([#2362](https://github.com/homeassistant-ai/ha-mcp/pull/2362))
+</details>
+
+
 ## v8.4.2 (2026-09-04)
 
 ### Changed
