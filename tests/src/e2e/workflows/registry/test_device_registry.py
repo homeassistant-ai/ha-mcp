@@ -428,16 +428,16 @@ async def test_core_2026_9_child_devices_inherit_parent_area(mcp_client, ha_clie
         original_parent_area,
     ) = await _core_2026_9_child_fixture(ha_client)
 
-    update = parse_mcp_result(
-        await mcp_client.call_tool(
-            "ha_set_device", {"device_id": parent_id, "area_id": "living_room"}
-        )
-    )
-    assert update.get("success") is True, update
-
     body_error: Exception | None = None
     restore_error: Exception | None = None
     try:
+        update = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_set_device", {"device_id": parent_id, "area_id": "living_room"}
+            )
+        )
+        assert update.get("success") is True, update
+
         baseline_total_lines = await _error_log_total(mcp_client)
 
         search = parse_mcp_result(
