@@ -3,6 +3,44 @@
 <!-- version list -->
 
 
+## v8.4.2 (2026-09-04)
+
+### Changed
+
+- Update Claude.ai connector setup for the new wizard flow
+  ([#2352](https://github.com/homeassistant-ai/ha-mcp/pull/2352))
+
+### Fixed
+
+- **logging**: Stop StartupLogCollector deadlocking Home Assistant
+  ([#2360](https://github.com/homeassistant-ai/ha-mcp/pull/2360))
+- **visibility**: Honor allowlist authorization
+  ([#2345](https://github.com/homeassistant-ai/ha-mcp/pull/2345))
+
+---
+<details>
+<summary>Internal Changes</summary>
+
+
+### Chores
+
+- **addon**: Publish dev addon version 8.4.1.dev2523 [skip ci]
+  ([`5227f34`](https://github.com/homeassistant-ai/ha-mcp/commit/5227f34e993a6e0d8ab48ecb73d5d1888fafb1e0))
+- **addon**: Publish dev addon version 8.4.1.dev2521 [skip ci]
+  ([`7def1b9`](https://github.com/homeassistant-ai/ha-mcp/commit/7def1b935479e5ab77d018826a34bc180d619eeb))
+- Machine-translate locale updates
+  ([`1669d2c`](https://github.com/homeassistant-ai/ha-mcp/commit/1669d2c332acac154f7ee1e6471d3a53c24f1673))
+- **deps-dev**: Bump fast-uri from 3.1.5 to 3.1.7 in /site
+  ([#2355](https://github.com/homeassistant-ai/ha-mcp/pull/2355))
+- **addon**: Publish dev addon version 8.4.1.dev2518 [skip ci]
+  ([`e0a40ab`](https://github.com/homeassistant-ai/ha-mcp/commit/e0a40ab3fa961ba06572d65d75339e47884c093c))
+- **addon**: Publish dev addon version 8.4.1.dev2516 [skip ci]
+  ([`9e4a9e7`](https://github.com/homeassistant-ai/ha-mcp/commit/9e4a9e7e2468b080bdbfa984968a6d27cb925432))
+- **addon**: Publish version 8.4.1 [skip ci]
+  ([`10cd3d1`](https://github.com/homeassistant-ai/ha-mcp/commit/10cd3d1207f8270ae6e35c0c40d7fc6dc411e9e3))
+</details>
+
+
 ## v8.4.1 (2026-09-02)
 
 ### Changed
