@@ -159,6 +159,7 @@ jobs:
       run: |
         echo "🚀 Running full E2E test suite with 3 workers..."
         cd tests
+        # shellcheck disable=SC2086
         uv run pytest $PYTEST_PATHS \
           -n3 \
           --dist loadscope \
@@ -249,6 +250,7 @@ jobs:
         echo "🚀 Running full E2E test suite without the ha_mcp_tools component with 3 workers..."
         # --maxfail=0 overrides pytest.ini's --maxfail=3: this topology audit is only useful if it reports every failure, not the first three.
         cd tests
+        # shellcheck disable=SC2086
         uv run pytest $PYTEST_PATHS \
           -n3 \
           --dist loadscope \
@@ -351,6 +353,7 @@ jobs:
       run: |
         echo "🚀 Running full E2E suite through the in-process MCP server (embedded backend) with ${{ matrix.pytest_workers }} workers..."
         cd tests
+        # shellcheck disable=SC2086
         uv run pytest $PYTEST_PATHS \
           -n${{ matrix.pytest_workers }} \
           --dist loadscope \
@@ -442,6 +445,7 @@ jobs:
         echo "🚀 Running full E2E suite through the in-process MCP server with only the server entry (no tools entry) with 2 workers..."
         # --maxfail=0 overrides pytest.ini's --maxfail=3: this topology audit is only useful if it reports every failure, not the first three.
         cd tests
+        # shellcheck disable=SC2086
         uv run pytest $PYTEST_PATHS \
           -n2 \
           --dist loadscope \
@@ -547,6 +551,11 @@ jobs:
         echo "All registries failed" && exit 1
 
     - name: Run update-path e2e test
+      # The dispatch inputs are deliberately NOT plumbed into this job: it runs
+      # one fixed module with a single test, so a targeted `pytest_args` such as
+      # `-k test_simple_connection` would deselect it and pytest exits 5 (no
+      # tests collected), failing a dispatch whose requested tests passed in
+      # the other jobs. A narrowed dispatch simply runs this lane in full.
       # E2E_BACKEND deliberately UNSET (container backend): the test drives its
       # own dedicated container end to end and never touches the session
       # backend, but conftest's autouse session fixture boots one regardless —
@@ -559,10 +568,9 @@ jobs:
         uv run pytest src/e2e/workflows/embedded/test_embedded_update_path.py \
           -m update_path \
           --tb=short \
-          -v $PYTEST_ARGS
+          -v
         echo "✅ Update-path e2e lane passed"
       env:
-        PYTEST_ARGS: ${{ github.event.inputs.pytest_args }}
         E2E_UPDATE_PATH: "1"
         HAMCP_ENV_FILE: "tests/.env.test"
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

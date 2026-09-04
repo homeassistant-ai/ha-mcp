@@ -134,6 +134,7 @@ _PR = "pr.yml"
 _E2E = "e2e-tests.yml"
 _HAOS = "haos-e2e-tests.yml"
 _BETA = "haos-e2e-beta-tests.yml"
+_CBETA = "e2e-beta-tests.yml"
 
 # (workflow, job) -> the backend selectors that step's env must carry, exactly.
 # An absent selector is as load-bearing as a present one: the two no-component
@@ -146,11 +147,14 @@ _NO_TOOLS_LANES: dict[tuple[str, str], dict[str, str]] = {
     (_E2E, "e2e-tests-embedded-server-only"): {"E2E_BACKEND": "embedded"},
     (_HAOS, "haos-e2e-embedded-no-tools"): {"HAOS_TEST_MODE": "embedded"},
     (_HAOS, "haos-e2e-inaddon-no-tools"): {"HAOS_TEST_MODE": "inaddon"},
+    (_CBETA, "e2e-tests-no-component"): {},
+    (_CBETA, "e2e-tests-embedded-server-only"): {"E2E_BACKEND": "embedded"},
 }
 
 # Every component-present lane: the siblings each no-tools lane is paired
-# against, plus the beta lanes, which have no no-tools counterpart but are
-# component-present all the same. If one of these ever grows
+# against, plus the HAOS beta lanes, which have no no-tools counterpart but
+# are component-present all the same. (The container beta workflow mirrors
+# e2e-tests.yml job for job, so its no-tools lanes are paired the same way.) If one of these ever grows
 # E2E_NO_TOOLS_ENTRY, a pair stops being a comparison and a beta lane stops
 # covering the topology it was built to run on beta images.
 _ORDINARY_LANES: tuple[tuple[str, str], ...] = (
@@ -166,6 +170,9 @@ _ORDINARY_LANES: tuple[tuple[str, str], ...] = (
     (_HAOS, "haos-e2e-stdio"),
     (_BETA, "haos-e2e-inaddon-beta"),
     (_BETA, "haos-e2e-embedded-beta"),
+    (_CBETA, "e2e-tests"),
+    (_CBETA, "e2e-tests-embedded"),
+    (_CBETA, "e2e-tests-update-path"),
 )
 
 # The container no-tools lanes are whole-topology audits: pytest.ini's
@@ -177,6 +184,8 @@ _AUDIT_LANES: tuple[tuple[str, str], ...] = (
     (_PR, "e2e-validation-embedded-server-only"),
     (_E2E, "e2e-tests-no-component"),
     (_E2E, "e2e-tests-embedded-server-only"),
+    (_CBETA, "e2e-tests-no-component"),
+    (_CBETA, "e2e-tests-embedded-server-only"),
 )
 
 _SELECTOR_NAMES = ("E2E_BACKEND", "HAOS_TEST_MODE")
@@ -213,7 +222,7 @@ _E2E_SUITE_TARGET = re.compile(r"(?:tests/)?src/e2e/([^\s\"']*)")
 # Floor on the discovered count, so a predicate that quietly stops matching (a
 # workflow restructure, a renamed input) fails here rather than reporting an
 # empty sweep as full coverage.
-_MIN_DISCOVERED_LANES = 18
+_MIN_DISCOVERED_LANES = 23
 
 
 def _job(workflow: str, job_id: str) -> dict[str, Any]:
