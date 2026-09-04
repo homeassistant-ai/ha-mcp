@@ -756,6 +756,7 @@ dev = [
     { name = "lefthook" },
     { name = "mypy" },
     { name = "openai" },
+    { name = "probatio" },
     { name = "psutil" },
     { name = "pyinstaller" },
     { name = "pynacl" },
@@ -799,6 +800,7 @@ dev = [
     { name = "lefthook", specifier = ">=1.10.0" },
     { name = "mypy", specifier = ">=1.17.0" },
     { name = "openai", specifier = ">=1.0.0" },
+    { name = "probatio", specifier = ">=0.11.4" },
     { name = "psutil", specifier = ">=7.0.0" },
     { name = "pyinstaller", specifier = ">=6.0.0" },
     { name = "pynacl", specifier = ">=1.6.0" },
@@ -1448,6 +1450,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe6ef3fa267035b518369d9511ffab804f839851d2779/pluggy-1.6.0.tar.gz", hash = "sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3", size = 69412, upload-time = "2025-05-15T12:30:07.975Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
+]
+
+[[package]]
+name = "probatio"
+version = "0.11.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ae/69/ba688575e1fb405bb552528b5da73a51061c19b2a8a8adcf29358997ef36/probatio-0.11.4.tar.gz", hash = "sha256:7c407497ff22dd6133321fa3315ed394f564a83d642c1498848993cd87093be3", size = 368768, upload-time = "2026-08-29T16:31:45.341Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0c/1c/728ee57e0ae8d7fce6c7afb5b5d2ca43d38098c2b5e756c251c1a79c0574/probatio-0.11.4-py3-none-any.whl", hash = "sha256:39edf5370c2ebe4b06bc0d78b53c97fe23c05d5266e599cf40660ce90d88b270", size = 222133, upload-time = "2026-08-29T16:31:42.686Z" },
 ]
 
 [[package]]

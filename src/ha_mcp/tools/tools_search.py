@@ -2226,7 +2226,13 @@ class SearchTools:
             float | None,
             Field(
                 default=None,
-                gt=0,
+                # Inclusive floor, not gt=0. Home Assistant re-emits this
+                # schema for a conversation agent through an OpenAPI 3.0
+                # codec, which turns an exclusive bound into a form Anthropic
+                # rejects as an invalid input_schema — failing every turn, not
+                # just calls to this tool. See tests/src/unit/
+                # test_tool_schema_exclusive_bounds.py (issue #2361).
+                ge=0.001,
                 le=300,
                 description=(
                     "Per-call override for the per-id config-fetch wall-clock "
@@ -4551,7 +4557,10 @@ class SearchTools:
             float | None,
             Field(
                 default=None,
-                gt=0,
+                # Keep this identical to the ha_search parameter feeding it.
+                # Undecorated helper, so this Field never reaches an advertised
+                # schema and no guard can see it.
+                ge=0.001,
                 le=300,
                 description=(
                     "Per-call override for the per-id config-fetch wall-clock "

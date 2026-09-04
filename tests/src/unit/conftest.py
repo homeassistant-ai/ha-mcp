@@ -152,3 +152,37 @@ def _ensure_event_state_changed_const():
                 EVENT_STATE_CHANGED="state_changed"
             )
     yield
+
+
+@pytest.fixture
+def real_probatio():
+    """The installed probatio, past the stub this tier installs for it.
+
+    ``_embedded_stubs`` replaces the module unconditionally with a two-line
+    fake, so a plain import in a test would assert against that fake instead
+    of the library Core actually converts with. Shared, because both the
+    component's normalisation tests and the registry-wide schema guard need
+    the real codec.
+    """
+    import importlib
+    import sys
+
+    saved = {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "probatio" or name.startswith("probatio.")
+    }
+    for name in saved:
+        del sys.modules[name]
+    try:
+        module = importlib.import_module("probatio")
+        assert hasattr(module, "to_openapi"), "got the stub, not the library"
+        yield module
+    finally:
+        for name in [
+            name
+            for name in sys.modules
+            if name == "probatio" or name.startswith("probatio.")
+        ]:
+            del sys.modules[name]
+        sys.modules.update(saved)

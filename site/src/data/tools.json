@@ -3492,7 +3492,7 @@
           "type": "float | None",
           "default": null,
           "constraints": {
-            "gt": 0,
+            "ge": 0.001,
             "le": 300
           },
           "description": "Per-call override for the per-id config-fetch wall-clock budget (seconds). Replaces the per-type HAMCP_*_CONFIG_TIME_BUDGET defaults for the automation, script, AND scene branches. Use when a `partial: True` response names time-budget skipping. Stateless per-call: one caller raising the budget doesn't affect others. None = use the per-type env defaults."
