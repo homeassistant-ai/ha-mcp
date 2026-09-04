@@ -123,14 +123,40 @@ PROBE_MANIFEST = """\
 }
 """
 
-PROBE_YAML = """
+PROBE_COMPONENT_YAML = """
 # --- ha-mcp #2357 probe (removed by the test) ---
 reentrant_log_probe:
-logger:
-  logs:
-    custom_components.reentrant_log_probe: debug
 # --- end ha-mcp #2357 probe ---
 """
+PROBE_LOGGER_ENTRY = (
+    "    custom_components.reentrant_log_probe: debug  # ha-mcp #2357 probe\n"
+)
+
+
+def _with_probe_config(existing: str) -> str:
+    """Return ``existing`` with the probe's component key and debug logger.
+
+    The seeded configuration.yaml already carries a ``logger:`` block (it
+    raises the ha_mcp_tools component to INFO for test_llm_api_in_ha.py), and
+    a second top-level ``logger:`` would be a duplicate YAML key, so the
+    probe's entry is merged under that block's ``logs:`` mapping. A seed
+    without the block gets a whole one appended.
+    """
+    lines = existing.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if not line.startswith("logger:"):
+            continue
+        for inner in range(index + 1, len(lines)):
+            if lines[inner].startswith("  logs:"):
+                lines.insert(inner + 1, PROBE_LOGGER_ENTRY)
+                return "".join(lines) + PROBE_COMPONENT_YAML
+            if lines[inner].strip() and not lines[inner].startswith((" ", "#")):
+                break
+        raise AssertionError(
+            "the seeded `logger:` block has no `logs:` mapping to merge the "
+            "probe's debug entry into"
+        )
+    return existing + PROBE_COMPONENT_YAML + "logger:\n  logs:\n" + PROBE_LOGGER_ENTRY
 
 
 def _sh(script: str, *, timeout: float = 60.0) -> str:
@@ -265,19 +291,14 @@ def test_reentrant_debug_log_does_not_freeze_home_assistant(
     config_yaml = f"{config_dir}/configuration.yaml"
     backup_yaml = f"{config_dir}/configuration.yaml.2357.bak"
 
-    existing = _sh(f"grep -c '^logger:' {shlex.quote(config_yaml)} || true").strip()
-    assert existing in ("", "0"), (
-        "the seeded configuration.yaml already declares `logger:` — appending a "
-        "second block would be a duplicate YAML key. Merge the probe's logger "
-        "entry into the existing block instead."
-    )
-
     body_failed = False
     try:
         _sh(f"cp {shlex.quote(config_yaml)} {shlex.quote(backup_yaml)}")
         _write_in_vm(f"{probe_dir}/__init__.py", PROBE_INIT_PY)
         _write_in_vm(f"{probe_dir}/manifest.json", PROBE_MANIFEST)
-        _write_in_vm(config_yaml, _sh(f"cat {shlex.quote(backup_yaml)}") + PROBE_YAML)
+        _write_in_vm(
+            config_yaml, _with_probe_config(_sh(f"cat {shlex.quote(backup_yaml)}"))
+        )
 
         logger.info("Restarting Core with the re-entrant log probe installed")
         assert _restart_core(), "could not restart Core to load the probe"

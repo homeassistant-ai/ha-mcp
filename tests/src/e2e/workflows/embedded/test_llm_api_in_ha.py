@@ -147,9 +147,11 @@ def test_llm_api_schemas_survive_core_reemission_container(
         "the in-HA LLM-API probe exited "
         f"{result.exit_code} instead of completing:\n{output[-4000:]}"
     )
-    _assert_report_clean(parse_probe_report(output))
-
+    # Registration first: it is the cheaper, lane-plumbing half, and it must
+    # keep being exercised while the report assertion is expectedly red on a
+    # Core that carries the #2361 defect.
     _assert_registration_logged_in_container(Path(info["config_path"]))
+    _assert_report_clean(parse_probe_report(output))
 
 
 def _assert_registration_logged_in_container(config_path: Path) -> None:
@@ -213,8 +215,9 @@ def test_llm_api_schemas_survive_core_reemission_haos(
         # as RuntimeError carrying stdout+stderr.
         raise AssertionError(f"the in-HA LLM-API probe failed in HAOS:\n{err}") from err
 
-    _assert_report_clean(parse_probe_report(result.stdout))
+    # Same order as the container test: registration plumbing first.
     _assert_registration_logged_in_haos()
+    _assert_report_clean(parse_probe_report(result.stdout))
 
 
 def _assert_registration_logged_in_haos() -> None:
