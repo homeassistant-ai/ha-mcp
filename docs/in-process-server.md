@@ -47,11 +47,13 @@ The bring-up runs in the background, so it never delays Home Assistant startup.
 
 ## Requirements
 
-The in-process server requires **Home Assistant 2026.6.0 or newer**. Older Core
-releases constrain dependencies to versions that cannot run current `ha-mcp`
-servers. On older releases, the component remains available for its File & YAML
-services entry with an external app or Docker server, but its config flow blocks
-creation of the incompatible in-process server entry.
+The component requires **Home Assistant 2026.8.0 or newer** (the floor HACS
+enforces). Older Core releases constrain dependencies to versions that cannot
+run current `ha-mcp` servers, and from component 2.1.3 the manifest declares
+`voluptuous-openapi`, which Core releases before 2026.7 pin to an older version,
+so the integration does not load there at all. On a Core between that and the
+floor, the config flow still blocks creation of the in-process server entry
+when the running version is older than the floor.
 
 ## Setup
 
