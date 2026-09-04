@@ -86,6 +86,23 @@ def test_the_walk_reaches_the_dev_tools(all_tools: Any) -> None:
     )
 
 
+def test_the_search_budget_floor_is_advertised(all_tools: Any) -> None:
+    """The narrowed contract is pinned, not just described in a comment.
+
+    ``gt=0`` accepted anything above zero; the inclusive floor does not accept
+    ``(0, 0.001)`` any more. The smallest budget the tree exercises is 0.005,
+    so nothing real moves -- but the boundary is a public parameter contract
+    and should fail visibly if someone changes it.
+    """
+    budget = all_tools["ha_search"].parameters["properties"]["config_time_budget"]
+    numeric = next(
+        branch for branch in budget["anyOf"] if branch.get("type") == "number"
+    )
+
+    assert numeric["minimum"] == 0.001
+    assert "exclusiveMinimum" not in numeric
+
+
 def test_no_tool_schema_advertises_an_exclusive_bound(all_tools: Any) -> None:
     """Walk every registered tool schema; none may carry an exclusive bound."""
     tools = all_tools
