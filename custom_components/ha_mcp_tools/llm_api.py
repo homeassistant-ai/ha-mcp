@@ -169,9 +169,11 @@ _SCHEMA_MAPS: frozenset[str] = frozenset(
 _INSTANCE_VALUES: frozenset[str] = frozenset(
     {"default", "const", "enum", "examples", "example"}
 )
-_EXCLUSIVE_BOUNDS: tuple[tuple[str, str], ...] = (
-    ("exclusiveMinimum", "minimum"),
-    ("exclusiveMaximum", "maximum"),
+# Each exclusive keyword, the inclusive twin it folds into, and the picker
+# that keeps the tighter of the two when both are present.
+_EXCLUSIVE_BOUNDS: tuple[tuple[str, str, Callable[[Any, Any], Any]], ...] = (
+    ("exclusiveMinimum", "minimum", max),
+    ("exclusiveMaximum", "maximum", min),
 )
 
 
@@ -214,8 +216,7 @@ def _to_inclusive_bounds(schema: Any) -> Any:
         else:
             result[key] = _to_inclusive_bounds(value)
 
-    for exclusive, inclusive in _EXCLUSIVE_BOUNDS:
-        _fold_bound(result, exclusive, inclusive)
+    _fold_bounds(result)
     return result
 
 
@@ -224,30 +225,24 @@ def _is_number(value: Any) -> bool:
     return not isinstance(value, bool) and isinstance(value, int | float)
 
 
-def _fold_bound(node: dict[str, Any], exclusive: str, inclusive: str) -> None:
-    """Fold one exclusive keyword into its inclusive twin, in place."""
-    if exclusive not in node:
-        return
-    bound = node[exclusive]
-    if not _is_number(bound):
-        # Nothing non-numeric is a readable bound in a subschema slot, and the
-        # slot is all this can be: the name maps and instance-value keywords
-        # above keep foreign data out of reach. Probatio refuses a string, a
-        # list and the Draft-4 boolean outright -- costing the whole tool --
-        # and silently retypes a null number param to a string one. Dropping
-        # the key repairs all four.
-        del node[exclusive]
-        return
-    del node[exclusive]
-    current = node.get(inclusive)
-    if not _is_number(current):
-        node[inclusive] = bound
-        return
-    # Both spellings present: keep the tighter, so a schema that already
-    # carried an inclusive bound is not loosened to the exclusive one.
-    node[inclusive] = (
-        max(current, bound) if inclusive == "minimum" else min(current, bound)
-    )
+def _fold_bounds(node: dict[str, Any]) -> None:
+    """Fold each exclusive keyword into its inclusive twin, in place."""
+    for exclusive, inclusive, tighter in _EXCLUSIVE_BOUNDS:
+        if exclusive not in node:
+            continue
+        bound = node.pop(exclusive)
+        if not _is_number(bound):
+            # Nothing non-numeric is a readable bound in a subschema slot, and
+            # the slot is all this can be: the name maps and instance-value
+            # keywords above keep foreign data out of reach. Probatio refuses a
+            # string, a list and the Draft-4 boolean outright -- costing the
+            # whole tool -- and silently retypes a null number param to a
+            # string one. Dropping the key repairs all four.
+            continue
+        # ``tighter`` when the schema already carried an inclusive bound, so
+        # that bound is never loosened to the exclusive one.
+        current = node.get(inclusive)
+        node[inclusive] = tighter(current, bound) if _is_number(current) else bound
 
 
 # Used when the server's initialize result carries no instructions (it always
@@ -740,10 +735,10 @@ class HaMcpLlmApi(llm.API):
         try:
             schema = _to_inclusive_bounds(tool.inputSchema)
             if schema != tool.inputSchema:
-                # The advertised bound now differs from the server's own. Say
-                # so once per turn: the resulting failure — model passes the
-                # newly-legal edge value, server rejects it — is otherwise
-                # unattributable from any log.
+                # The advertised bound now differs from the server's own.
+                # Say so once per tool per turn: the resulting failure — model
+                # passes the newly-legal edge value, server rejects it — is
+                # otherwise unattributable from any log.
                 _LOGGER.debug(
                     "Widened an exclusive bound in %s's schema so Home "
                     "Assistant does not re-emit it in the Draft-4 form",
