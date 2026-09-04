@@ -459,6 +459,9 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
     checkout = _job_steps(resolver)[0]
     assert str(checkout.get("uses", "")).startswith("actions/checkout@")
     assert checkout["with"]["sparse-checkout"] == "tests/test_constants.py"
+    # A single-file pattern needs non-cone mode; actions/checkout defaults
+    # cone mode to true, which would leave the file out of the checkout.
+    assert checkout["with"]["sparse-checkout-cone-mode"] is False
 
     image_ref = "${{ needs.resolve-beta.outputs.image }}"
     test_jobs = {

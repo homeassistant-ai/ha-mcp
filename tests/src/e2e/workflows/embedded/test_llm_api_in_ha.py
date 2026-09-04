@@ -231,6 +231,7 @@ def _assert_registration_logged_in_haos() -> None:
         remaining = max(5.0, deadline - time.monotonic())
         try:
             count = ssh_exec(["sh", "-c", script], timeout=remaining).stdout.strip()
+            last_error = None
         except RuntimeError as err:
             # A failing ``ha core logs`` (Supervisor still settling, a
             # transient API error) is retried inside the budget; only a
