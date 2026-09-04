@@ -1305,6 +1305,34 @@ class TestVisibilityWarnings:
 
         assert warnings == []
 
+    def test_missing_parent_warns_for_area_dimension(self):
+        view = make_view(
+            entity={"sensor.orphan": FakeRegEntry("sensor.orphan", device_id="child")},
+            child_devices=[FakeChildDevice("child", "missing")],
+        )
+
+        warnings = wsapi._visibility_warnings(
+            view,
+            [FakeState("sensor.orphan")],
+            {"exclude_areas": ["office"]},
+        )
+
+        assert warnings == [wsapi._DEVICE_REGISTRY_INVALID_AREA_WARNING]
+
+    def test_missing_parent_is_irrelevant_to_label_dimension(self):
+        view = make_view(
+            entity={"sensor.orphan": FakeRegEntry("sensor.orphan", device_id="child")},
+            child_devices=[FakeChildDevice("child", "missing")],
+        )
+
+        warnings = wsapi._visibility_warnings(
+            view,
+            [FakeState("sensor.orphan")],
+            {"exclude_labels": ["private"]},
+        )
+
+        assert warnings == []
+
     def test_empty_registry_allowlist_warns(self):
         # Area/label allowlist with an empty registry but states-only candidates
         # would blank everything; the guard fires and warns.
@@ -1568,6 +1596,23 @@ class TestSearchVisibilityPlacement:
             "sensor.ambiguous"
         ]
         assert res["visibility_warnings"] == [wsapi._DEVICE_REGISTRY_CONFLICT_WARNING]
+
+    def test_missing_parent_visibility_is_disclosed_in_search(self, monkeypatch):
+        view = make_view(
+            entity={"sensor.orphan": FakeRegEntry("sensor.orphan", device_id="child")},
+            child_devices=[FakeChildDevice("child", "missing")],
+        )
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
+
+        res = wsapi._do_search(
+            FakeHass(states=[FakeState("sensor.orphan", "on", "Orphan")]),
+            {"query": "", "visibility": {"exclude_areas": ["office"]}},
+        )
+
+        assert [entity["entity_id"] for entity in res["entities"]] == ["sensor.orphan"]
+        assert res["visibility_warnings"] == [
+            wsapi._DEVICE_REGISTRY_INVALID_AREA_WARNING
+        ]
 
 
 class TestSearchVisibilitySchema:

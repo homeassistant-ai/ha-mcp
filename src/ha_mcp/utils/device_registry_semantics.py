@@ -28,12 +28,35 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class DeviceRegistrySnapshot:
-    """Validated unique registry rows and their bounded placement relationships."""
+    """Validated rows plus bounded placement and ambiguity evidence."""
 
     rows: tuple[dict[str, Any], ...]
     by_id: dict[str, dict[str, Any]]
     effective_area_by_id: dict[str, str | None]
     conflicting_ids: frozenset[str]
+    invalid_area_ids: frozenset[str]
+
+
+def _device_area_evidence_is_invalid(
+    device: Mapping[str, Any], devices_by_id: Mapping[str, Mapping[str, Any]]
+) -> bool:
+    """Whether a row's area evidence is malformed or has invalid ancestry."""
+    direct_area = device.get("area_id")
+    if direct_area is not None:
+        return not (isinstance(direct_area, str) and bool(direct_area))
+
+    parent_id = device.get("parent_device_id")
+    if parent_id is None:
+        return False
+    if not isinstance(parent_id, str) or not parent_id:
+        return True
+    parent = devices_by_id.get(parent_id)
+    if parent is None or parent.get("parent_device_id") is not None:
+        return True
+    parent_area = parent.get("area_id")
+    return parent_area is not None and not (
+        isinstance(parent_area, str) and bool(parent_area)
+    )
 
 
 def effective_device_area_id(
@@ -121,14 +144,18 @@ def build_device_registry_snapshot(rows: list[Any]) -> DeviceRegistrySnapshot:
         )
 
     effective_area_by_id: dict[str, str | None] = {}
+    invalid_area_ids: set[str] = set()
     for device_id, device in by_id.items():
         effective_area_by_id[device_id] = effective_device_area_id(device, by_id)
+        if _device_area_evidence_is_invalid(device, by_id):
+            invalid_area_ids.add(device_id)
 
     return DeviceRegistrySnapshot(
         rows=ordered_rows,
         by_id=by_id,
         effective_area_by_id=effective_area_by_id,
         conflicting_ids=frozenset(conflicts),
+        invalid_area_ids=frozenset(invalid_area_ids),
     )
 
 

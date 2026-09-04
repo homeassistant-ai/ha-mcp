@@ -1031,6 +1031,9 @@ class _RegistryView:
     _device_conflicting_ids_cache: frozenset[str] | None = dataclass_field(
         default=None, init=False, repr=False, compare=False
     )
+    _device_invalid_area_ids_cache: frozenset[str] | None = dataclass_field(
+        default=None, init=False, repr=False, compare=False
+    )
 
 
 def _resolve_registries(hass: HomeAssistant) -> _RegistryView:
@@ -2392,6 +2395,7 @@ def _unambiguous_device_entries(view: _RegistryView) -> dict[str, Any]:
     if reg is None:
         view._device_entries_by_id_cache = {}
         view._device_conflicting_ids_cache = frozenset()
+        view._device_invalid_area_ids_cache = frozenset()
         return view._device_entries_by_id_cache
     main_collection = getattr(reg, "devices", None)
     if hasattr(reg, "child_devices"):
@@ -2440,6 +2444,42 @@ def _conflicting_device_ids(view: _RegistryView) -> frozenset[str]:
     """Return device identities excluded from this request as conflicting."""
     _unambiguous_device_entries(view)
     return view._device_conflicting_ids_cache or frozenset()
+
+
+def _invalid_device_area_ids(view: _RegistryView) -> frozenset[str]:
+    """Return device ids whose area evidence is malformed or has invalid ancestry."""
+    devices_by_id = _unambiguous_device_entries(view)
+    if view._device_invalid_area_ids_cache is not None:
+        return view._device_invalid_area_ids_cache
+    invalid: set[str] = set()
+    for device_id, device in devices_by_id.items():
+        row = _device_dict_repr(device)
+        if row is None:
+            invalid.add(device_id)
+            continue
+        direct_area = row.get("area_id")
+        if direct_area is not None:
+            if not isinstance(direct_area, str) or not direct_area:
+                invalid.add(device_id)
+            continue
+        parent_id = row.get("parent_device_id")
+        if parent_id is None:
+            continue
+        if not isinstance(parent_id, str) or not parent_id:
+            invalid.add(device_id)
+            continue
+        parent = devices_by_id.get(parent_id)
+        parent_row = _device_dict_repr(parent) if parent is not None else None
+        if parent_row is None or parent_row.get("parent_device_id") is not None:
+            invalid.add(device_id)
+            continue
+        parent_area = parent_row.get("area_id")
+        if parent_area is not None and (
+            not isinstance(parent_area, str) or not parent_area
+        ):
+            invalid.add(device_id)
+    view._device_invalid_area_ids_cache = frozenset(invalid)
+    return view._device_invalid_area_ids_cache
 
 
 def _effective_device_area_id(view: _RegistryView, device: Any) -> str | None:
@@ -5190,6 +5230,11 @@ _DEVICE_REGISTRY_CONFLICT_WARNING = (
     "device registry contained conflicting identities; ambiguous device-derived "
     "placement and labels were excluded."
 )
+_DEVICE_REGISTRY_INVALID_AREA_WARNING = (
+    "Entity visibility filter is enabled with an area dimension but the device "
+    "registry contained invalid area relationships; affected device-derived "
+    "placement was excluded."
+)
 
 
 class _AllowlistState(NamedTuple):
@@ -5368,9 +5413,10 @@ def _visibility_warnings(
 
     Companion to :func:`_visibility_hidden_set`: the hidden-set function silently
     fails open on a degraded dimension (an unknown ``exclude_category``, an
-    area/label dimension against conflicting device identities, an area/label
-    allowlist against an empty registry, or a requested-but-unavailable Assist
-    dimension), so this returns the operator-facing warnings the server's
+    area/label dimension against conflicting device identities, an area dimension
+    against invalid device ancestry, an area/label allowlist against an empty
+    registry, or a requested-but-unavailable Assist dimension), so this returns
+    the operator-facing warnings the server's
     ``load_hidden_set`` would emit for the same config. The ha_search consumer
     merges them into the response so the component fast path is no longer silent
     about incomplete filtering. Byte-identical to ``visibility.resolver``'s warning
@@ -5396,6 +5442,10 @@ def _visibility_warnings(
     )
     if area_or_label_dimension_active and _conflicting_device_ids(view):
         warnings.append(_DEVICE_REGISTRY_CONFLICT_WARNING)
+    if (
+        visibility.get("exclude_areas") or visibility.get("allow_areas")
+    ) and _invalid_device_area_ids(view):
+        warnings.append(_DEVICE_REGISTRY_INVALID_AREA_WARNING)
 
     if inventory is None:
         inventory = _visibility_inventory(view, states, visibility)

@@ -62,6 +62,7 @@ def test_child_inherits_parent_area_and_direct_area_takes_precedence() -> None:
         "inherited": "office",
         "direct": "garage",
     }
+    assert snapshot.invalid_area_ids == frozenset()
 
 
 @pytest.mark.parametrize("invalid_area", ["", 0, False])
@@ -91,6 +92,7 @@ def test_empty_device_area_is_invalid_and_does_not_inherit_parent_area() -> None
     snapshot = build_device_registry_snapshot(rows)
 
     assert snapshot.effective_area_by_id["child"] is None
+    assert "child" in snapshot.invalid_area_ids
 
 
 @pytest.mark.parametrize(
@@ -120,6 +122,15 @@ def test_invalid_parent_relationships_do_not_invent_an_area(
     snapshot = build_device_registry_snapshot(rows)
 
     assert snapshot.effective_area_by_id["child"] is None
+
+
+def test_missing_parent_is_retained_as_invalid_area_evidence() -> None:
+    snapshot = build_device_registry_snapshot(
+        [_child("child", "missing"), _child("direct", "missing", area_id="garage")]
+    )
+
+    assert snapshot.invalid_area_ids == frozenset({"child"})
+    assert snapshot.effective_area_by_id["direct"] == "garage"
 
 
 def test_identical_duplicates_collapse_without_reordering() -> None:

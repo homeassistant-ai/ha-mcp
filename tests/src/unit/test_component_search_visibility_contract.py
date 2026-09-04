@@ -589,6 +589,10 @@ def test_component_warning_constants_match_resolver() -> None:
         wsapi._DEVICE_REGISTRY_CONFLICT_WARNING
         == resolver._DEVICE_REGISTRY_CONFLICT_WARNING
     )
+    assert (
+        wsapi._DEVICE_REGISTRY_INVALID_AREA_WARNING
+        == resolver._DEVICE_REGISTRY_INVALID_AREA_WARNING
+    )
     # The known-entity-category set is duplicated for the same HACS reason; pin it
     # equal to the resolver's so an unknown-category divergence can't creep in.
     assert wsapi._KNOWN_ENTITY_CATEGORIES == resolver.KNOWN_ENTITY_CATEGORIES

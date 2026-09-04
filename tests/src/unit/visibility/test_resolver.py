@@ -215,6 +215,34 @@ def test_strict_area_filter_rejects_conflicting_device_identity():
         hidden_entity_ids(reg, cfg, device_registry_result=dev, strict=True)
 
 
+def test_strict_area_filter_rejects_child_with_missing_parent():
+    reg = _reg({"entity_id": "sensor.orphan", "area_id": None, "device_id": "child"})
+    dev = _dev({"id": "child", "area_id": None, "parent_device_id": "missing"})
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_areas=["office"]
+    )
+
+    with pytest.raises(
+        resolver.VisibilityDataUnavailable, match="invalid area relationships"
+    ):
+        hidden_entity_ids(reg, cfg, device_registry_result=dev, strict=True)
+
+
+def test_non_strict_area_filter_warns_for_child_with_missing_parent():
+    reg = _reg({"entity_id": "sensor.orphan", "area_id": None, "device_id": "child"})
+    dev = _dev({"id": "child", "area_id": None, "parent_device_id": "missing"})
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_areas=["office"]
+    )
+
+    hidden, warnings = hidden_entity_ids(
+        reg, cfg, device_registry_result=dev, strict=False
+    )
+
+    assert hidden == set()
+    assert warnings == [resolver._DEVICE_REGISTRY_INVALID_AREA_WARNING]
+
+
 def test_present_invalid_entity_area_blocks_child_device_area_fallback():
     reg = _reg({"entity_id": "sensor.child", "area_id": "", "device_id": "child"})
     dev = _dev(
