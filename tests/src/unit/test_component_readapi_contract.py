@@ -40,6 +40,7 @@ from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 from ._component_routing_helpers import patch_ws
 from .test_component_ws_search import (
     FakeArea,
+    FakeChildDevice,
     FakeConfig,
     FakeConfigEntry,
     FakeDevice,
@@ -104,6 +105,7 @@ from .test_ha_remove_device_component_routing import (
 from .test_ha_remove_device_component_routing import (
     _build_remove_device,
 )
+from .test_ha_search_component_routing import _build_ha_search
 from .test_radio_zigbee_component_routing import (
     RoutingClient as ZigbeeRoutingClient,
 )
@@ -262,9 +264,11 @@ class TestConfigGetSeam:
 
 # --- overview -------------------------------------------------------------------
 class TestOverviewSeam:
-    def _hass(self) -> FakeHass:
+    def _hass(self, states: list[FakeState] | None = None) -> FakeHass:
         return FakeHass(
-            states=[
+            states=states
+            if states is not None
+            else [
                 FakeState("light.lamp", "on", friendly_name="Lamp"),
                 FakeState("sensor.temp", "21", friendly_name="Temp"),
             ],
@@ -320,6 +324,82 @@ class TestOverviewSeam:
         assert client.total_legacy_fetches() == 0, (
             "overview must be fully component-served"
         )
+
+    @pytest.mark.asyncio
+    async def test_child_device_counts_in_parent_effective_area(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        hass = self._hass(
+            [FakeState("sensor.child", "21", friendly_name="Child Sensor")]
+        )
+        monkeypatch.setattr(
+            wsapi,
+            "_resolve_registries",
+            lambda h: make_view(
+                entity={
+                    "sensor.child": FakeRegEntry("sensor.child", device_id="child")
+                },
+                areas=[FakeArea("office", "Office", floor_id="upstairs")],
+                floors=[FakeFloor("upstairs", "Upstairs")],
+                devices=[FakeDevice("parent", area_id="office")],
+                child_devices=[FakeChildDevice("child", "parent")],
+            ),
+        )
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        client = OverviewRoutingClient()
+        tool = _build_overview_tool(client)
+        with patch_ws(_real_component_ws(hass), tools_search):
+            resp = await tool()
+
+        assert resp["success"] is True
+        assert resp["area_analysis"]["office"]["count"] == 1
+        assert client.total_legacy_fetches() == 0
+
+
+# --- search ---------------------------------------------------------------------
+class TestSearchSeam:
+    @pytest.mark.asyncio
+    async def test_child_device_effective_area_and_floor_reach_public_tool(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        view = make_view(
+            entity={"sensor.child": FakeRegEntry("sensor.child", device_id="child")},
+            areas=[FakeArea("office", "Office", floor_id="upstairs")],
+            floors=[FakeFloor("upstairs", "Upstairs")],
+            devices=[FakeDevice("parent", area_id="office")],
+            child_devices=[FakeChildDevice("child", "parent")],
+        )
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
+        _setup_visibility_disabled(tmp_path, monkeypatch)
+        client = OverviewRoutingClient()
+        hass = FakeHass(
+            states=[FakeState("sensor.child", "21", friendly_name="Child Sensor")]
+        )
+        tool = _build_ha_search(client)
+        ws = AsyncMock()
+
+        async def _send(command_type: str, **kwargs: Any) -> dict[str, Any]:
+            if command_type == "ha_mcp_tools/info":
+                return {"success": True, "result": wsapi._do_info()}
+            if command_type == "ha_mcp_tools/search":
+                return {
+                    "success": True,
+                    "result": wsapi._do_search(hass, kwargs),
+                }
+            raise AssertionError(f"unexpected component command {command_type!r}")
+
+        ws.send_command = AsyncMock(side_effect=_send)
+        with patch_ws(ws, tools_search):
+            resp = await tool(
+                query="child sensor",
+                result_fields=["entity_id", "area", "floor"],
+            )
+
+        assert resp["success"] is True
+        assert resp["entities"] == [
+            {"entity_id": "sensor.child", "area": "Office", "floor": "Upstairs"}
+        ]
+        assert client.total_legacy_fetches() == 0
 
 
 # --- helpers_list ----------------------------------------------------------------
@@ -643,6 +723,39 @@ class TestDeviceSeam:
         assert raw_row["name"] == "Kitchen Temp"
 
     @pytest.mark.asyncio
+    async def test_core_2026_9_child_device_is_retained_with_effective_area(
+        self, monkeypatch
+    ) -> None:
+        """The public device list retains Core's reduced child row.
+
+        Its direct ``area_id`` is absent, so the existing public ``area_id`` field
+        must carry Core's effective parent-derived area without mutating the raw
+        component record. The raw record keeps ``parent_device_id`` internally.
+        """
+        parent = FakeDevice("parent-1", name="Bridge", area_id="office")
+        child = FakeChildDevice(
+            "child-1", "parent-1", name="Channel 1", identifiers=(("demo", "1"),)
+        )
+        monkeypatch.setattr(
+            wsapi,
+            "_resolve_registries",
+            lambda h: make_view(devices=[parent], child_devices=[child]),
+        )
+        client = GetDeviceRoutingClient()
+        ws = _real_component_ws(FakeHass())
+        get_device = _build_get_device(client)
+        with patch_ws(ws, component_devices):
+            resp = await get_device()
+
+        by_id = {row["device_id"]: row for row in resp["devices"]}
+        assert set(by_id) == {"parent-1", "child-1"}
+        assert by_id["child-1"]["area_id"] == "office"
+        raw = wsapi._do_device_list(FakeHass(), {})["devices"]
+        raw_child = next(row for row in raw if row["id"] == "child-1")
+        assert raw_child["parent_device_id"] == "parent-1"
+        assert raw_child["area_id"] is None
+
+    @pytest.mark.asyncio
     async def test_remove_device_config_entries_from_real_component(
         self, monkeypatch
     ) -> None:
@@ -745,6 +858,35 @@ class TestEntityEnrichSeam:
         assert by_id["light.plain"]["area"] is None
         assert by_id["light.plain"]["label_names"] == []
 
+    @pytest.mark.asyncio
+    async def test_core_2026_9_child_device_inherits_parent_area_and_floor(
+        self, monkeypatch
+    ) -> None:
+        parent = FakeDevice("parent-1", area_id="a1")
+        child = FakeChildDevice("child-1", "parent-1")
+        view = make_view(
+            entity={"sensor.child": FakeRegEntry("sensor.child", device_id="child-1")},
+            areas=[FakeArea("a1", "Office", floor_id="f1")],
+            floors=[FakeFloor("f1", "Upstairs")],
+            devices=[parent],
+            child_devices=[child],
+        )
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
+        client = EntityRoutingClient(
+            {
+                "sensor.child": _raw_entry("sensor.child", area_id=None, labels=[])
+                | {"device_id": "child-1"}
+            }
+        )
+        ws = _real_component_ws(FakeHass())
+        tool = _build_get_entity(client)
+        with patch_ws(ws, tools_entities):
+            resp = await tool("sensor.child")
+
+        entry = resp["entity_entry"]
+        assert entry["area"] == "Office"
+        assert entry["floor"] == "Upstairs"
+
 
 # --- exposure -------------------------------------------------------------------
 class TestExposureSeam:
@@ -827,4 +969,34 @@ class TestExposureSeam:
         assert resp["exposed_entities"] == {"light.lamp": {"conversation": True}}
         assert set(resp["entity_info"]) == {"light.lamp"}
         assert resp["entity_info"]["light.lamp"]["area"] == "Office"
+        assert client.legacy_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_child_device_effective_area_and_floor_enrich_exposure(
+        self, monkeypatch
+    ) -> None:
+        view = make_view(
+            entity={"sensor.child": FakeRegEntry("sensor.child", device_id="child")},
+            areas=[FakeArea("office", "Office", floor_id="upstairs")],
+            floors=[FakeFloor("upstairs", "Upstairs")],
+            devices=[FakeDevice("parent", area_id="office")],
+            child_devices=[FakeChildDevice("child", "parent")],
+        )
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
+        monkeypatch.setattr(
+            wsapi,
+            "_async_get_entity_settings",
+            lambda h, entity_id: {"conversation": {"should_expose": True}},
+        )
+        monkeypatch.setattr(wsapi, "_legacy_exposed_entity_ids", lambda h: [])
+        client = ExposureRoutingClient({"sensor.child": {"conversation": True}})
+        hass = FakeHass(
+            states=[FakeState("sensor.child", "21", friendly_name="Child Sensor")]
+        )
+        tool = _build_exposure(client)
+        with patch_ws(_real_component_ws(hass), tools_voice_assistant):
+            resp = await tool(entity_id="sensor.child")
+
+        assert resp["area"] == "Office"
+        assert resp["floor"] == "Upstairs"
         assert client.legacy_calls == 0

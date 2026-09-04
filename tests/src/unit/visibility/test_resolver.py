@@ -184,6 +184,19 @@ def test_exclude_area_hides_device_inherited_entity():
     assert _hidden_dev(reg, cfg, dev) == {"light.spot"}
 
 
+def test_exclude_area_hides_child_device_entity_via_parent_area():
+    reg = _reg({"entity_id": "sensor.child", "area_id": None, "device_id": "child"})
+    dev = _dev(
+        {"id": "parent", "area_id": "office"},
+        {"id": "child", "area_id": None, "parent_device_id": "parent"},
+    )
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_areas=["office"]
+    )
+
+    assert _hidden_dev(reg, cfg, dev) == {"sensor.child"}
+
+
 def test_allow_area_keeps_device_inherited_entity():
     # The dangerous direction: allow_areas must NOT hide a device-bound entity in
     # the allowed area (the round-4 over-hide that collapsed the overview). A

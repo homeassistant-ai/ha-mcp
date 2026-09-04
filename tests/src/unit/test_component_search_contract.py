@@ -42,7 +42,9 @@ from ha_mcp.utils.entity_membership import normalize_member_entity_ids
 
 from .test_component_ws_search import (
     FakeArea,
+    FakeChildDevice,
     FakeConfigEntries,
+    FakeDevice,
     FakeFloor,
     FakeHass,
     FakeLabel,
@@ -461,6 +463,55 @@ def test_result_fields_enrichment_additive(monkeypatch) -> None:
         "labels": ["Favorites"],
         "aliases": ["desk"],
     }
+
+
+def test_child_device_effective_area_and_floor_reach_public_search(
+    monkeypatch,
+) -> None:
+    """The public ``ha_search`` projection uses Core's child placement rules."""
+    view = make_view(
+        entity={
+            "sensor.enrichmarker": FakeRegEntry(
+                "sensor.enrichmarker", device_id="child"
+            )
+        },
+        areas=[
+            FakeArea("office", "Office", floor_id="upstairs"),
+            FakeArea("garage", "Garage", floor_id="ground"),
+        ],
+        floors=[
+            FakeFloor("upstairs", "Upstairs"),
+            FakeFloor("ground", "Ground"),
+        ],
+        devices=[FakeDevice("parent", area_id="office")],
+        child_devices=[FakeChildDevice("child", "parent", area_id="garage")],
+    )
+    monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
+    result = wsapi._do_search(
+        FakeHass(
+            states=[
+                FakeState("sensor.enrichmarker", "on", friendly_name="Enrichmarker")
+            ]
+        ),
+        {
+            "query": "enrichmarker",
+            "search_types": ["entity"],
+            "result_fields": ["area", "floor"],
+        },
+    )
+
+    shaped = _shape_component_search_response(
+        _resolved_result_fields(["entity_id", "area", "floor"]), result
+    )
+
+    # The child's direct area wins over its parent's area, exactly as Core does.
+    assert shaped["entities"] == [
+        {
+            "entity_id": "sensor.enrichmarker",
+            "area": "Garage",
+            "floor": "Ground",
+        }
+    ]
 
 
 def test_result_fields_membership_additive(monkeypatch) -> None:
