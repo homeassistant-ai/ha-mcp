@@ -104,7 +104,12 @@ def test_the_search_budget_floor_is_advertised(all_tools: Any) -> None:
 
 
 def test_no_tool_schema_advertises_an_exclusive_bound(all_tools: Any) -> None:
-    """Walk every registered tool schema; none may carry an exclusive bound."""
+    """Walk every tool the registry registers; none may carry an exclusive bound.
+
+    Not quite every tool the running server lists: the categorized-search
+    transform adds a search tool and three call proxies on top, and those are
+    synthesized rather than registered. They take no numeric parameters.
+    """
     tools = all_tools
     assert tools, "no tools registered -- guardrail cannot run"
 
