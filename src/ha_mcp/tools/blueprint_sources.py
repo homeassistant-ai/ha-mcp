@@ -34,6 +34,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Any, Literal
+from urllib.parse import urlsplit, urlunsplit
 
 import yaml  # type: ignore[import-untyped]
 
@@ -262,6 +263,21 @@ async def _via_tools_entry(client: Any, domain: str, path: str) -> str | None:
 # --- tier 4: re-download from the recorded source_url -------------------------
 
 
+def _loggable_url(url: str) -> str:
+    """``url`` with userinfo, query and fragment removed, for log lines.
+
+    A recorded ``source_url`` can carry credentials in either place (a private
+    raw-file URL with a token query, a userinfo prefix). The re-fetch sends the
+    URL as recorded; a warning or debug line must not persist those parts.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "<unparseable url>"
+    host = parts.netloc.rsplit("@", 1)[-1]
+    return urlunsplit((parts.scheme, host, parts.path, "", ""))
+
+
 async def _via_source_url(
     client: Any, domain: str, path: str, source_url: str
 ) -> str | None:
@@ -280,7 +296,10 @@ async def _via_source_url(
         )
     except Exception as exc:
         logger.debug(
-            "Re-fetch of blueprint %r from %s failed: %r", path, source_url, exc
+            "Re-fetch of blueprint %r from %s failed: %r",
+            path,
+            _loggable_url(source_url),
+            exc,
         )
         return None
     if not isinstance(imported, dict) or not imported.get("success"):
@@ -296,7 +315,7 @@ async def _via_source_url(
     if refetched_domain != domain:
         logger.debug(
             "%s now serves a %r blueprint, not %r -- not using it for %r",
-            source_url,
+            _loggable_url(source_url),
             refetched_domain,
             domain,
             path,
@@ -306,7 +325,7 @@ async def _via_source_url(
         logger.debug(
             "%s no longer serves blueprint %r (suggests %r) — not using a "
             "different blueprint",
-            source_url,
+            _loggable_url(source_url),
             path,
             result.get("suggested_filename"),
         )
@@ -319,7 +338,7 @@ async def _via_source_url(
         "— the two can differ if the blueprint was edited locally or updated "
         "upstream",
         path,
-        source_url,
+        _loggable_url(source_url),
     )
     return raw_data
 

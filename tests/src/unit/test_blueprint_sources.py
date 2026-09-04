@@ -15,6 +15,7 @@ mocked path check would prove nothing about traversal.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -604,6 +605,39 @@ class TestSourceUrlTier:
 
         assert found.text is None
         assert found.source is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "suggested",
+        ["user/motion", "someone_else/other"],
+        ids=["accepted-warning", "refused-debug"],
+    )
+    async def test_log_lines_never_carry_the_urls_credentials(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        suggested: str,
+    ) -> None:
+        """A recorded source_url can carry userinfo or a query-string token.
+
+        The re-fetch sends the URL as recorded, but the warning a successful
+        fallback writes — and the debug lines a refusal writes — must not
+        persist those credentials in the Home Assistant log (CodeRabbit).
+        """
+        _patch_tools_entry(monkeypatch, {"success": False, "error": "does not exist"})
+        secret_url = "https://bob:s3cret@example.com:8443/motion.yaml?token=abc123#x"
+        client = NoCredsClient(_import_result(suggested, _URL_YAML))
+
+        with caplog.at_level(logging.DEBUG, logger="ha_mcp.tools.blueprint_sources"):
+            await resolve_blueprint_source(
+                client, "automation", _PATH, source_url=secret_url
+            )
+
+        assert client.frames("blueprint/import")[0]["url"] == secret_url
+        logged = "\n".join(record.getMessage() for record in caplog.records)
+        assert "https://example.com:8443/motion.yaml" in logged
+        for secret in ("bob", "s3cret", "token=abc123", "#x"):
+            assert secret not in logged, secret
 
     @pytest.mark.asyncio
     async def test_no_source_url_sends_no_import_frame(
