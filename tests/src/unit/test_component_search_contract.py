@@ -514,6 +514,58 @@ def test_child_device_effective_area_and_floor_reach_public_search(
     ]
 
 
+def test_conflicting_device_identity_does_not_enrich_public_search(
+    monkeypatch,
+) -> None:
+    """Ambiguous device rows cannot assign an arbitrary area or floor."""
+    office = FakeDevice("duplicate", area_id="office")
+    garage = FakeDevice("duplicate", area_id="garage")
+
+    class _ConflictingRegistry:
+        devices = (office, garage)
+        child_devices = ()
+
+        def async_get(self, device_id):
+            return office if device_id == "duplicate" else None
+
+    view = make_view(
+        entity={
+            "sensor.enrichmarker": FakeRegEntry(
+                "sensor.enrichmarker", device_id="duplicate"
+            )
+        },
+        areas=[FakeArea("office", "Office", floor_id="upstairs")],
+        floors=[FakeFloor("upstairs", "Upstairs")],
+    )
+    view.device = _ConflictingRegistry()
+    monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
+
+    result = wsapi._do_search(
+        FakeHass(
+            states=[
+                FakeState("sensor.enrichmarker", "on", friendly_name="Enrichmarker")
+            ]
+        ),
+        {
+            "query": "enrichmarker",
+            "search_types": ["entity"],
+            "result_fields": ["area", "floor"],
+        },
+    )
+
+    shaped = _shape_component_search_response(
+        _resolved_result_fields(["entity_id", "area", "floor"]), result
+    )
+
+    assert shaped["entities"] == [
+        {
+            "entity_id": "sensor.enrichmarker",
+            "area": None,
+            "floor": None,
+        }
+    ]
+
+
 def test_result_fields_membership_additive(monkeypatch) -> None:
     """Explicit HA membership is generic, deterministic, and opt-in."""
     result = _enrichment_component_result(monkeypatch, membership=True)

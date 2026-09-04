@@ -3210,6 +3210,51 @@ class TestDeviceList:
 
         assert wsapi._do_device_list(FakeHass(), {}) == {"devices": []}
 
+    def test_conflicting_device_cannot_supply_effective_area(self):
+        office = FakeDevice("duplicate", area_id="office")
+        garage = FakeDevice("duplicate", area_id="garage")
+
+        class _ConflictingRegistry:
+            devices = (office, garage)
+            child_devices = ()
+
+            def async_get(self, device_id):
+                return office if device_id == "duplicate" else None
+
+        view = make_view(
+            entity={
+                "sensor.ambiguous": FakeRegEntry(
+                    "sensor.ambiguous", device_id="duplicate"
+                )
+            }
+        )
+        view.device = _ConflictingRegistry()
+
+        assert wsapi._effective_device_area_id(view, office) is None
+        assert (
+            wsapi._effective_area_for_entry(
+                view, view.entity.async_get("sensor.ambiguous")
+            )
+            is None
+        )
+
+    def test_conflicting_parent_cannot_supply_child_effective_area(self):
+        office = FakeDevice("parent", area_id="office")
+        garage = FakeDevice("parent", area_id="garage")
+        child = FakeChildDevice("child", "parent")
+
+        class _ConflictingRegistry:
+            devices = (office, garage)
+            child_devices = (child,)
+
+            def async_get(self, device_id):
+                return {"parent": office, "child": child}.get(device_id)
+
+        view = make_view()
+        view.device = _ConflictingRegistry()
+
+        assert wsapi._effective_device_area_id(view, child) is None
+
     def test_skips_unserializable_entry(self, monkeypatch, caplog):
         class _BadDevice:
             id = "bad"

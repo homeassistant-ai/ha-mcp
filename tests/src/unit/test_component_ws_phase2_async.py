@@ -877,6 +877,35 @@ class TestVisibilityHiddenSet:
         )
         assert hidden == set()
 
+    def test_conflicting_device_area_is_not_used_for_visibility(self):
+        office = FakeDevice("duplicate", area_id="office")
+        garage = FakeDevice("duplicate", area_id="garage")
+
+        class _ConflictingRegistry:
+            devices = (office, garage)
+            child_devices = ()
+
+            def async_get(self, device_id):
+                return office if device_id == "duplicate" else None
+
+        view = make_view(
+            entity={
+                "sensor.ambiguous": FakeRegEntry(
+                    "sensor.ambiguous", device_id="duplicate"
+                )
+            }
+        )
+        view.device = _ConflictingRegistry()
+
+        hidden = wsapi._visibility_hidden_set(
+            view,
+            [FakeState("sensor.ambiguous")],
+            {"exclude_areas": ["office"]},
+            _always_expose,
+        )
+
+        assert hidden == set()
+
     def test_exclude_label_direct_and_device_inherited(self):
         view = make_view(
             entity={

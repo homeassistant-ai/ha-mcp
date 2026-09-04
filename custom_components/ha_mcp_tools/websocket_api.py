@@ -274,6 +274,7 @@ import logging
 import re
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -1015,6 +1016,11 @@ class _RegistryView:
     label: Any = None
     device: Any = None
 
+    # One request-local, conflict-filtered semantic snapshot.
+    _device_entries_by_id_cache: dict[str, Any] | None = dataclass_field(
+        default=None, init=False, repr=False, compare=False
+    )
+
 
 def _resolve_registries(hass: HomeAssistant) -> _RegistryView:
     """Snapshot the five registries. Test seam — monkeypatched in unit tests."""
@@ -1521,7 +1527,11 @@ def _registry_enrichment(view: _RegistryView, entity_id: str) -> dict[str, Any]:
     labels = set(getattr(reg, "labels", None) or []) if reg else set()
     hidden = bool(getattr(reg, "hidden_by", None)) if reg else False
 
-    dev = _device(view, device_id) if device_id else None
+    dev = (
+        _unambiguous_device_entries(view).get(device_id)
+        if isinstance(device_id, str) and device_id
+        else None
+    )
     dev_texts: list[str] = []
     if dev is not None:
         labels |= set(getattr(dev, "labels", None) or [])
@@ -2345,17 +2355,20 @@ def _device_collection_values(collection: Any) -> list[Any]:
         return []
 
 
-def _all_device_entries(view: _RegistryView) -> list[Any]:
-    """Return every unambiguous main and child device entry once.
+def _unambiguous_device_entries(view: _RegistryView) -> dict[str, Any]:
+    """Return one request-local map of unambiguous main and child devices.
 
     Core 2026.9 stores child devices in a separate collection. Older releases
     have only the mapping-like ``devices`` container. Duplicate ids cannot occur
     in a valid Core registry; if a drifted/corrupt view supplies conflicting
     entries, remove that identity rather than choosing one arbitrarily.
     """
+    if view._device_entries_by_id_cache is not None:
+        return view._device_entries_by_id_cache
     reg = view.device
     if reg is None:
-        return []
+        view._device_entries_by_id_cache = {}
+        return view._device_entries_by_id_cache
     main_collection = getattr(reg, "devices", None)
     if hasattr(reg, "child_devices"):
         candidates = _device_collection_values(main_collection)
@@ -2366,7 +2379,6 @@ def _all_device_entries(view: _RegistryView) -> list[Any]:
         # The pre-2026.9 container is mapping-like and iterates ids, not entries.
         candidates = _mapping_values(main_collection)
 
-    order: list[str] = []
     by_id: dict[str, Any] = {}
     conflicts: set[str] = set()
     for entry in candidates:
@@ -2374,7 +2386,6 @@ def _all_device_entries(view: _RegistryView) -> list[Any]:
         if not isinstance(device_id, str) or not device_id or device_id in conflicts:
             continue
         if device_id not in by_id:
-            order.append(device_id)
             by_id[device_id] = entry
             continue
         prior = _device_dict_repr(by_id[device_id])
@@ -2382,18 +2393,32 @@ def _all_device_entries(view: _RegistryView) -> list[Any]:
         if prior != current or prior is None:
             conflicts.add(device_id)
             del by_id[device_id]
-    return [by_id[device_id] for device_id in order if device_id in by_id]
+    view._device_entries_by_id_cache = by_id
+    return view._device_entries_by_id_cache
+
+
+def _all_device_entries(view: _RegistryView) -> list[Any]:
+    """Return every unambiguous main and child device entry once."""
+    return list(_unambiguous_device_entries(view).values())
 
 
 def _effective_device_area_id(view: _RegistryView, device: Any) -> str | None:
     """Return Core 2026.9's direct-or-parent effective device area."""
+    devices_by_id = _unambiguous_device_entries(view)
+    device_id = getattr(device, "id", None)
+    if not isinstance(device_id, str) or not device_id:
+        return None
+    device = devices_by_id.get(device_id)
+    if device is None:
+        # Conflicting identities never contribute semantic placement.
+        return None
     direct_area = getattr(device, "area_id", None)
     if direct_area is not None:
         return direct_area if isinstance(direct_area, str) else None
     parent_id = getattr(device, "parent_device_id", None)
     if not isinstance(parent_id, str) or not parent_id:
         return None
-    parent = _device(view, parent_id)
+    parent = devices_by_id.get(parent_id)
     if parent is None or getattr(parent, "parent_device_id", None) is not None:
         # Core requires a main-device parent. This also bounds malformed cycles.
         return None
@@ -5434,7 +5459,7 @@ def _effective_area_for_entry(view: _RegistryView, entry: Any) -> str | None:
         return area_id if isinstance(area_id, str) and area_id else None
     device_id = getattr(entry, "device_id", None)
     if isinstance(device_id, str) and device_id:
-        dev = _device(view, device_id)
+        dev = _unambiguous_device_entries(view).get(device_id)
         dev_area = _effective_device_area_id(view, dev) if dev is not None else None
         return dev_area if isinstance(dev_area, str) and dev_area else None
     return None
@@ -5445,7 +5470,7 @@ def _effective_labels_for_entry(view: _RegistryView, entry: Any) -> set[str]:
     labels = set(getattr(entry, "labels", None) or [])
     device_id = getattr(entry, "device_id", None)
     if isinstance(device_id, str) and device_id:
-        dev = _device(view, device_id)
+        dev = _unambiguous_device_entries(view).get(device_id)
         if dev is not None:
             labels |= set(getattr(dev, "labels", None) or [])
     return labels
