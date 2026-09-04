@@ -27,7 +27,7 @@ from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
 from ..utils.device_registry_semantics import (
     build_device_registry_snapshot,
-    effective_device_area_id,
+    effective_entity_area_id,
 )
 from ..utils.entity_membership import normalize_member_entity_ids
 from ..utils.fuzzy_search import apply_hidden_penalty
@@ -914,6 +914,7 @@ def _entity_enrichment_fields(
     floors: dict[str, dict[str, Any]],
     labels: dict[str, dict[str, Any]],
     devices: dict[str, dict[str, Any]],
+    device_areas: dict[str, str | None],
     requested: tuple[str, ...],
 ) -> dict[str, Any]:
     """Compute the requested enrichment fields for one entity from registry data.
@@ -931,13 +932,11 @@ def _entity_enrichment_fields(
     the sentinel stands for is already matched via the friendly name).
     """
     aliases = sorted(a for a in (entry.get("aliases") or []) if isinstance(a, str))
-    area_id = entry.get("area_id")
+    area_id = effective_entity_area_id(entry, device_areas)
     label_ids = set(entry.get("labels") or [])
     device_id = entry.get("device_id")
     device = devices.get(device_id) if device_id else None
     if device:
-        if area_id is None:
-            area_id = effective_device_area_id(device, devices)
         label_ids |= set(device.get("labels") or [])
     area = areas.get(area_id) if area_id else None
     area_name = area.get("name") if area else None
@@ -3166,10 +3165,18 @@ class SearchTools:
         floors = _ws_registry_index(names[1], "floor_id") if need_names else {}
         labels = _ws_registry_index(names[2], "label_id") if need_names else {}
         device_rows = _ws_registry_rows(names[3]) if need_names else []
-        devices = build_device_registry_snapshot(device_rows).by_id
+        device_snapshot = build_device_registry_snapshot(device_rows)
+        devices = device_snapshot.by_id
+        device_areas = device_snapshot.effective_area_by_id
         enrichment = {
             eid: _entity_enrichment_fields(
-                entries.get(eid) or {}, areas, floors, labels, devices, requested
+                entries.get(eid) or {},
+                areas,
+                floors,
+                labels,
+                devices,
+                device_areas,
+                requested,
             )
             for eid in entity_ids
         }

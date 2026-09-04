@@ -5,7 +5,10 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-from ...utils.device_registry_semantics import build_device_registry_snapshot
+from ...utils.device_registry_semantics import (
+    build_device_registry_snapshot,
+    effective_entity_area_id,
+)
 from ...utils.entity_membership import normalize_member_entity_ids
 from ...utils.fuzzy_search import calculate_partial_ratio, calculate_ratio
 from ...visibility.resolver import (
@@ -889,10 +892,7 @@ class EntitySearchMixin(_SearchBase):
                 continue
             if is_hidden:
                 hidden_entity_ids.add(entity_id)
-            area_id = reg_info.get("area_id")
-            device_id = reg_info.get("device_id")
-            if not area_id and device_id:
-                area_id = device_area_map.get(device_id)
+            area_id = effective_entity_area_id(reg_info, device_area_map)
             if area_id:
                 entity_area_resolved[entity_id] = area_id
         return entity_area_resolved, hidden_entity_ids

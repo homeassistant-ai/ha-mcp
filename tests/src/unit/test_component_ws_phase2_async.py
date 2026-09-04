@@ -42,6 +42,7 @@ from ha_mcp.tools.reference_validator import build_entity_set, build_service_ind
 # Mirrors test_component_search_contract.py's ``wsapi`` re-import.
 from . import test_component_ws_search as _base
 from .test_component_ws_search import (
+    FakeChildDevice,
     FakeConfigEntry,
     FakeDevice,
     FakeHass,
@@ -857,6 +858,24 @@ class TestVisibilityHiddenSet:
             view, states, {"exclude_areas": ["garage"]}, _always_expose
         )
         assert hidden == {"light.direct", "light.viadev"}
+
+    def test_present_invalid_entity_area_blocks_child_device_area_fallback(self):
+        view = make_view(
+            entity={
+                "sensor.child": FakeRegEntry(
+                    "sensor.child", area_id="", device_id="child"
+                )
+            },
+            devices=[FakeDevice("parent", area_id="office")],
+            child_devices=[FakeChildDevice("child", "parent")],
+        )
+        hidden = wsapi._visibility_hidden_set(
+            view,
+            [FakeState("sensor.child")],
+            {"exclude_areas": ["office"]},
+            _always_expose,
+        )
+        assert hidden == set()
 
     def test_exclude_label_direct_and_device_inherited(self):
         view = make_view(

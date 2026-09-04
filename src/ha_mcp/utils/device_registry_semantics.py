@@ -60,6 +60,28 @@ def effective_device_area_id(
     return parent_area if isinstance(parent_area, str) else None
 
 
+def effective_entity_area_id(
+    entity: Mapping[str, Any],
+    effective_device_areas: Mapping[str, str | None],
+) -> str | None:
+    """Return an entity's direct area or its device's effective area.
+
+    Core gives a present entity ``area_id`` precedence over device placement.
+    Preserve that presence distinction for malformed external payloads: an
+    empty or non-string direct value is invalid and must not silently fall back
+    to a device area.
+    """
+    direct_area = entity.get("area_id")
+    if direct_area is not None:
+        return direct_area if isinstance(direct_area, str) and direct_area else None
+
+    device_id = entity.get("device_id")
+    if not isinstance(device_id, str) or not device_id:
+        return None
+    device_area = effective_device_areas.get(device_id)
+    return device_area if isinstance(device_area, str) and device_area else None
+
+
 def build_device_registry_snapshot(rows: list[Any]) -> DeviceRegistrySnapshot:
     """Build one deterministic semantic snapshot from a registry list response.
 

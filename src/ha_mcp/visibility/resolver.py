@@ -14,7 +14,10 @@ import logging
 from typing import Any
 
 from ..utils.data_paths import get_data_dir
-from ..utils.device_registry_semantics import build_device_registry_snapshot
+from ..utils.device_registry_semantics import (
+    build_device_registry_snapshot,
+    effective_entity_area_id,
+)
 from .model import VisibilityConfig, VisibilityWire
 from .persistence import load_visibility_config
 
@@ -138,13 +141,7 @@ def _parse_device_registry(
 
 def _effective_area(entry: dict[str, Any], device_area: dict[str, str]) -> str | None:
     """Entity ``area_id`` falling back to its device's area (HA's inheritance)."""
-    area_id = entry.get("area_id")
-    if isinstance(area_id, str) and area_id:
-        return area_id
-    device_id = entry.get("device_id")
-    if isinstance(device_id, str) and device_id:
-        return device_area.get(device_id)
-    return None
+    return effective_entity_area_id(entry, device_area)
 
 
 def _effective_labels(

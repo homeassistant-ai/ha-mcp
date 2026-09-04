@@ -1516,7 +1516,7 @@ def _registry_enrichment(view: _RegistryView, entity_id: str) -> dict[str, Any]:
         if reg
         else []
     )
-    area_id = getattr(reg, "area_id", None) if reg else None
+    area_id = _effective_area_for_entry(view, reg) if reg else None
     device_id = getattr(reg, "device_id", None) if reg else None
     labels = set(getattr(reg, "labels", None) or []) if reg else set()
     hidden = bool(getattr(reg, "hidden_by", None)) if reg else False
@@ -1524,8 +1524,6 @@ def _registry_enrichment(view: _RegistryView, entity_id: str) -> dict[str, Any]:
     dev = _device(view, device_id) if device_id else None
     dev_texts: list[str] = []
     if dev is not None:
-        if area_id is None:
-            area_id = _effective_device_area_id(view, dev)
         labels |= set(getattr(dev, "labels", None) or [])
         for attr in ("name_by_user", "name", "manufacturer", "model"):
             val = getattr(dev, attr, None)
@@ -5432,8 +5430,8 @@ def _entity_allowed(
 def _effective_area_for_entry(view: _RegistryView, entry: Any) -> str | None:
     """An entity's ``area_id`` falling back to its device's (HA area inheritance)."""
     area_id = getattr(entry, "area_id", None)
-    if isinstance(area_id, str) and area_id:
-        return area_id
+    if area_id is not None:
+        return area_id if isinstance(area_id, str) and area_id else None
     device_id = getattr(entry, "device_id", None)
     if isinstance(device_id, str) and device_id:
         dev = _device(view, device_id)

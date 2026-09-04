@@ -11,6 +11,7 @@ from ha_mcp.utils.device_registry_semantics import (
     annotate_device_rows_with_effective_area,
     build_device_registry_snapshot,
     effective_device_area_id,
+    effective_entity_area_id,
 )
 
 
@@ -65,6 +66,24 @@ def test_child_inherits_parent_area_and_direct_area_takes_precedence() -> None:
         "inherited": "office",
         "direct": "garage",
     }
+
+
+@pytest.mark.parametrize("invalid_area", ["", 0, False])
+def test_present_invalid_entity_area_does_not_inherit_device_area(
+    invalid_area: Any,
+) -> None:
+    device_areas = {"child": "office"}
+
+    assert (
+        effective_entity_area_id(
+            {"area_id": invalid_area, "device_id": "child"}, device_areas
+        )
+        is None
+    )
+    assert (
+        effective_entity_area_id({"area_id": None, "device_id": "child"}, device_areas)
+        == "office"
+    )
 
 
 @pytest.mark.parametrize(
