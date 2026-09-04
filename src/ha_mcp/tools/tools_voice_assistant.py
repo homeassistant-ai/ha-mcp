@@ -24,6 +24,7 @@ from ..client.rest_client import (
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from .component_api import (
+    DEVICE_REGISTRY_CHILD_SEMANTICS,
     component_supports,
     get_component_caps,
     invalidate_caps,
@@ -89,7 +90,10 @@ class VoiceAssistantTools:
         ``component_devices.fetch_device_via_component``.
         """
         caps = await get_component_caps(self._client)
-        if not component_supports(caps, "exposure"):
+        if not (
+            component_supports(caps, "exposure")
+            and component_supports(caps, DEVICE_REGISTRY_CHILD_SEMANTICS)
+        ):
             return None
         kwargs: dict[str, Any] = {}
         if entity_id is not None:

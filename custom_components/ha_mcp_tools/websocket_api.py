@@ -2,10 +2,10 @@
 
 This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
 ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
-capability gate. It registers twenty-three commands. It advertises twenty-six
-capabilities: twenty-two command capabilities plus four additive flags
-(dashboards_doc_search, search_visibility, search_entity_membership, and
-search_visibility_allowlist_authorization);
+capability gate. It registers twenty-three commands. It advertises twenty-seven
+capabilities: twenty-two command capabilities plus five additive flags
+(dashboards_doc_search, device_registry_child_semantics, search_visibility,
+search_entity_membership, and search_visibility_allowlist_authorization);
 the info handshake carries no capability entry:
 
 * ``ha_mcp_tools/info`` — the handshake: ``schema_version`` + ``capabilities[]``
@@ -274,6 +274,7 @@ import logging
 import re
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -361,6 +362,12 @@ CAPABILITIES: list[str] = [
     "blueprint_get",
     "device_get",
     "device_list",
+    # A semantic flag shared by every device-registry-backed read. Components
+    # predating this flag enumerate only Core's main ``devices`` collection and
+    # cannot provide authoritative Core 2026.9 child-device/effective-area data.
+    # A newer server therefore falls back to Core's native registry endpoints
+    # unless this flag accompanies the individual command capability.
+    "device_registry_child_semantics",
     "entity_enrich",
     "exposure",
     "config_entries",
@@ -1015,6 +1022,19 @@ class _RegistryView:
     label: Any = None
     device: Any = None
 
+    # One request-local, conflict-filtered semantic snapshot plus the identities
+    # removed from it. Visibility filtering consumes the former and its warning
+    # projection consumes the latter, so both paths observe the same evidence.
+    _device_entries_by_id_cache: dict[str, Any] | None = dataclass_field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _device_conflicting_ids_cache: frozenset[str] | None = dataclass_field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _device_invalid_area_ids_cache: frozenset[str] | None = dataclass_field(
+        default=None, init=False, repr=False, compare=False
+    )
+
 
 def _resolve_registries(hass: HomeAssistant) -> _RegistryView:
     """Snapshot the five registries. Test seam — monkeypatched in unit tests."""
@@ -1094,10 +1114,11 @@ def _do_search(
     view = _resolve_registries(hass)
     diagnostics: dict[str, int] = {}
     partial_reasons: list[str] = []
-    # Visibility degradation warnings (unknown category / empty-registry allowlist /
-    # Assist unavailable), collected in the entity block below when a visibility
-    # filter is applied. Surfaced additively so the fast path isn't silent about
-    # incomplete filtering (parity with the server's load_hidden_set warnings).
+    # Visibility degradation warnings (unknown category / conflicting device /
+    # empty-registry allowlist / Assist unavailable), collected in the entity block
+    # below when a visibility filter is applied. Surfaced additively so the fast
+    # path isn't silent about incomplete filtering (parity with the server's
+    # load_hidden_set warnings).
     visibility_warnings: list[str] = []
     hidden: set[str] = set()
 
@@ -1516,19 +1537,22 @@ def _registry_enrichment(view: _RegistryView, entity_id: str) -> dict[str, Any]:
         if reg
         else []
     )
-    area_id = getattr(reg, "area_id", None) if reg else None
+    area_id = _effective_area_for_entry(view, reg) if reg else None
     device_id = getattr(reg, "device_id", None) if reg else None
     labels = set(getattr(reg, "labels", None) or []) if reg else set()
     hidden = bool(getattr(reg, "hidden_by", None)) if reg else False
 
-    dev = _device(view, device_id) if device_id else None
+    dev = (
+        _unambiguous_device_entries(view).get(device_id)
+        if isinstance(device_id, str) and device_id
+        else None
+    )
     dev_texts: list[str] = []
     if dev is not None:
-        if area_id is None:
-            area_id = getattr(dev, "area_id", None)
-        labels |= set(getattr(dev, "labels", None) or [])
+        dev_row = _device_dict_repr(dev) or {}
+        labels |= set(dev_row.get("labels") or [])
         for attr in ("name_by_user", "name", "manufacturer", "model"):
-            val = getattr(dev, attr, None)
+            val = dev_row.get(attr)
             if val:
                 dev_texts.append(str(val))
 
@@ -2325,6 +2349,170 @@ def _device(view: _RegistryView, device_id: str | None) -> Any:
     return _call_lookup(view.device, "async_get", device_id)
 
 
+def _device_collection_values(collection: Any, *, collection_name: str) -> list[Any]:
+    """Enumerate a Core device collection across old and 2026.9 shapes.
+
+    Before Core 2026.9 ``registry.devices`` was a mapping-like container. Core
+    2026.9 exposes supported iterable collections for both ``devices`` and
+    ``child_devices``. Mapping fakes and older containers still use ``values``;
+    modern collections are consumed by iteration so the deprecated mapping API
+    on ``registry.devices`` is not invoked.
+    """
+    if collection is None:
+        return []
+    if isinstance(collection, Mapping):
+        try:
+            return list(collection.values())
+        except Exception:  # pragma: no cover - defensive
+            _LOGGER.warning(
+                "failed to enumerate device registry collection %s",
+                collection_name,
+                exc_info=True,
+            )
+            return []
+    try:
+        return list(collection)
+    except Exception:  # pragma: no cover - defensive
+        _LOGGER.warning(
+            "failed to enumerate device registry collection %s",
+            collection_name,
+            exc_info=True,
+        )
+        return []
+
+
+def _unambiguous_device_entries(view: _RegistryView) -> dict[str, Any]:
+    """Return one request-local map of unambiguous main and child devices.
+
+    Core 2026.9 stores child devices in a separate collection. Older releases
+    have only the mapping-like ``devices`` container. Duplicate ids cannot occur
+    in a valid Core registry; if a drifted/corrupt view supplies conflicting
+    entries, remove that identity rather than choosing one arbitrarily.
+    """
+    if view._device_entries_by_id_cache is not None:
+        return view._device_entries_by_id_cache
+    reg = view.device
+    if reg is None:
+        view._device_entries_by_id_cache = {}
+        view._device_conflicting_ids_cache = frozenset()
+        view._device_invalid_area_ids_cache = frozenset()
+        return view._device_entries_by_id_cache
+    main_collection = getattr(reg, "devices", None)
+    if hasattr(reg, "child_devices"):
+        candidates = _device_collection_values(
+            main_collection, collection_name="devices"
+        )
+        candidates.extend(
+            _device_collection_values(
+                getattr(reg, "child_devices", None), collection_name="child_devices"
+            )
+        )
+    else:
+        # The pre-2026.9 container is mapping-like and iterates ids, not entries.
+        candidates = _mapping_values(main_collection)
+
+    by_id: dict[str, Any] = {}
+    conflicts: set[str] = set()
+    for entry in candidates:
+        device_id = getattr(entry, "id", None)
+        if not isinstance(device_id, str) or not device_id or device_id in conflicts:
+            continue
+        if device_id not in by_id:
+            by_id[device_id] = entry
+            continue
+        prior = _device_dict_repr(by_id[device_id])
+        current = _device_dict_repr(entry)
+        if prior != current or prior is None:
+            conflicts.add(device_id)
+            del by_id[device_id]
+            _LOGGER.warning(
+                "device registry contained conflicting device identity %r; "
+                "excluding it from this request",
+                device_id,
+            )
+    view._device_entries_by_id_cache = by_id
+    view._device_conflicting_ids_cache = frozenset(conflicts)
+    return view._device_entries_by_id_cache
+
+
+def _all_device_entries(view: _RegistryView) -> list[Any]:
+    """Return every unambiguous main and child device entry once."""
+    return list(_unambiguous_device_entries(view).values())
+
+
+def _conflicting_device_ids(view: _RegistryView) -> frozenset[str]:
+    """Return device identities excluded from this request as conflicting."""
+    _unambiguous_device_entries(view)
+    return view._device_conflicting_ids_cache or frozenset()
+
+
+def _invalid_device_area_ids(view: _RegistryView) -> frozenset[str]:
+    """Return device ids whose area evidence is malformed or has invalid ancestry."""
+    devices_by_id = _unambiguous_device_entries(view)
+    if view._device_invalid_area_ids_cache is not None:
+        return view._device_invalid_area_ids_cache
+    invalid: set[str] = set()
+    for device_id, device in devices_by_id.items():
+        row = _device_dict_repr(device)
+        if row is None:
+            invalid.add(device_id)
+            continue
+        direct_area = row.get("area_id")
+        if direct_area is not None:
+            if not isinstance(direct_area, str) or not direct_area:
+                invalid.add(device_id)
+            continue
+        parent_id = row.get("parent_device_id")
+        if parent_id is None:
+            continue
+        if not isinstance(parent_id, str) or not parent_id:
+            invalid.add(device_id)
+            continue
+        parent = devices_by_id.get(parent_id)
+        parent_row = _device_dict_repr(parent) if parent is not None else None
+        if parent_row is None or parent_row.get("parent_device_id") is not None:
+            invalid.add(device_id)
+            continue
+        parent_area = parent_row.get("area_id")
+        if parent_area is not None and (
+            not isinstance(parent_area, str) or not parent_area
+        ):
+            invalid.add(device_id)
+    view._device_invalid_area_ids_cache = frozenset(invalid)
+    return view._device_invalid_area_ids_cache
+
+
+def _effective_device_area_id(view: _RegistryView, device: Any) -> str | None:
+    """Return Core 2026.9's direct-or-parent effective device area."""
+    devices_by_id = _unambiguous_device_entries(view)
+    device_row = _device_dict_repr(device)
+    if device_row is None:
+        return None
+    device_id = device_row.get("id")
+    if not isinstance(device_id, str) or not device_id:
+        return None
+    device = devices_by_id.get(device_id)
+    if device is None:
+        # Conflicting identities never contribute semantic placement.
+        return None
+    device_row = _device_dict_repr(device)
+    if device_row is None:
+        return None
+    direct_area = device_row.get("area_id")
+    if direct_area is not None:
+        return direct_area if isinstance(direct_area, str) and direct_area else None
+    parent_id = device_row.get("parent_device_id")
+    if not isinstance(parent_id, str) or not parent_id:
+        return None
+    parent = devices_by_id.get(parent_id)
+    parent_row = _device_dict_repr(parent) if parent is not None else None
+    if parent_row is None or parent_row.get("parent_device_id") is not None:
+        # Core requires a main-device parent. This also bounds malformed cycles.
+        return None
+    parent_area = parent_row.get("area_id")
+    return parent_area if isinstance(parent_area, str) and parent_area else None
+
+
 def _area_name(view: _RegistryView, area_id: str | None) -> str | None:
     if not area_id:
         return None
@@ -2780,22 +2968,22 @@ def _overview_entity_registry(view: _RegistryView) -> list[dict[str, Any]]:
 def _overview_device_registry(view: _RegistryView) -> list[dict[str, Any]]:
     """Device registry as a bare list (id + area + labels + name/manufacturer/model)."""
     out: list[dict[str, Any]] = []
-    reg = view.device
-    devices = getattr(reg, "devices", None) if reg is not None else None
-    values = _mapping_values(devices)
-    for dev in values:
-        dev_id = getattr(dev, "id", None)
+    for dev in _all_device_entries(view):
+        dev_row = _device_dict_repr(dev)
+        if dev_row is None:
+            continue
+        dev_id = dev_row.get("id")
         if not dev_id:
             continue
         out.append(
             {
                 "id": dev_id,
-                "area_id": getattr(dev, "area_id", None),
-                "labels": sorted(str(x) for x in (getattr(dev, "labels", None) or [])),
-                "name": getattr(dev, "name", None),
-                "name_by_user": getattr(dev, "name_by_user", None),
-                "manufacturer": getattr(dev, "manufacturer", None),
-                "model": getattr(dev, "model", None),
+                "area_id": _effective_device_area_id(view, dev),
+                "labels": sorted(str(x) for x in (dev_row.get("labels") or [])),
+                "name": dev_row.get("name"),
+                "name_by_user": dev_row.get("name_by_user"),
+                "manufacturer": dev_row.get("manufacturer"),
+                "model": dev_row.get("model"),
             }
         )
     return out
@@ -3138,9 +3326,10 @@ _BlueprintLoader.add_multi_constructor("!", _drop_blueprint_tag)
 def _do_device_get(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
     """Return one device registry entry by id, optionally with its entities.
 
-    ``{device: <DeviceEntry.dict_repr> | None}`` — ``registry.async_get(device_id)``
-    is a pure O(1) in-memory dict read, and the emitted body is core's
-    ``DeviceEntry.dict_repr`` returned UNMODIFIED — exactly the shape
+    ``{device: <DeviceEntry.dict_repr> | None}`` — a request-local snapshot over
+    Core's supported main and child collections rejects conflicting identities,
+    and the emitted body is core's ``DeviceEntry.dict_repr`` returned UNMODIFIED —
+    exactly the shape
     ``config/device_registry/list`` serializes (it sends
     ``json_bytes(entry.dict_repr)``), so a component-served record is byte-identical
     to one legacy list element by construction (the WS transport JSON-encodes the
@@ -3157,15 +3346,25 @@ def _do_device_get(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any
     to match what ``config/entity_registry/list`` returns (it lists disabled entities
     too). The DeviceEntry dict itself stays exactly the raw shape — the join is a
     sibling, so consumers keep their own transforms. The ``entities`` key is present
-    only when requested.
+    only when requested. A child-device result may also carry a sibling
+    ``effective_area_id`` computed from its direct-or-parent placement; that
+    transport-only field is absent from the raw ``device`` mapping.
     """
     device_id = params.get("device_id")
     include_entities = params.get("include_entities", False)
     view = _resolve_registries(hass)
-    entry = _device(view, device_id) if device_id else None
-    result: dict[str, Any] = {
-        "device": _device_dict_repr(entry) if entry is not None else None
-    }
+    entry = _unambiguous_device_entries(view).get(device_id) if device_id else None
+    entry_row = _device_dict_repr(entry) if entry is not None else None
+    result: dict[str, Any] = {"device": entry_row}
+    if (
+        entry is not None
+        and isinstance(entry_row, dict)
+        and isinstance(entry_row.get("parent_device_id"), str)
+    ):
+        # Additive internal transport metadata. The raw child ``dict_repr`` stays
+        # byte-identical to Core while the server can expose its existing area_id
+        # field using Core's effective placement without a whole-registry read.
+        result["effective_area_id"] = _effective_device_area_id(view, entry)
     if include_entities:
         result["entities"] = _device_entities(view, device_id) if device_id else []
     return result
@@ -3181,10 +3380,8 @@ def _do_device_list(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, An
     than emitted as a partial record.
     """
     view = _resolve_registries(hass)
-    reg = view.device
-    devices = getattr(reg, "devices", None) if reg is not None else None
     out: list[dict[str, Any]] = []
-    for dev in _mapping_values(devices):
+    for dev in _all_device_entries(view):
         repr_dict = _device_dict_repr(dev)
         if repr_dict is not None:
             out.append(repr_dict)
@@ -5028,6 +5225,16 @@ _ALLOWLIST_REGISTRY_EMPTY_WARNING = (
     "this request (an allow_entity_ids list, if set, still applies) so the filter "
     "does not blank every entity."
 )
+_DEVICE_REGISTRY_CONFLICT_WARNING = (
+    "Entity visibility filter is enabled with an area/label dimension but the "
+    "device registry contained conflicting identities; ambiguous device-derived "
+    "placement and labels were excluded."
+)
+_DEVICE_REGISTRY_INVALID_AREA_WARNING = (
+    "Entity visibility filter is enabled with an area dimension but the device "
+    "registry contained invalid area relationships; affected device-derived "
+    "placement was excluded."
+)
 
 
 class _AllowlistState(NamedTuple):
@@ -5206,8 +5413,10 @@ def _visibility_warnings(
 
     Companion to :func:`_visibility_hidden_set`: the hidden-set function silently
     fails open on a degraded dimension (an unknown ``exclude_category``, an
-    area/label allowlist against an empty registry, or a requested-but-unavailable
-    Assist dimension), so this returns the operator-facing warnings the server's
+    area/label dimension against conflicting device identities, an area dimension
+    against invalid device ancestry, an area/label allowlist against an empty
+    registry, or a requested-but-unavailable Assist dimension), so this returns
+    the operator-facing warnings the server's
     ``load_hidden_set`` would emit for the same config. The ha_search consumer
     merges them into the response so the component fast path is no longer silent
     about incomplete filtering. Byte-identical to ``visibility.resolver``'s warning
@@ -5224,6 +5433,19 @@ def _visibility_warnings(
     unknown = exclude_categories - _KNOWN_ENTITY_CATEGORIES
     if unknown:
         warnings.append(_unknown_categories_warning(unknown))
+
+    area_or_label_dimension_active = bool(
+        visibility.get("exclude_areas")
+        or visibility.get("exclude_labels")
+        or visibility.get("allow_areas")
+        or visibility.get("allow_labels")
+    )
+    if area_or_label_dimension_active and _conflicting_device_ids(view):
+        warnings.append(_DEVICE_REGISTRY_CONFLICT_WARNING)
+    if (
+        visibility.get("exclude_areas") or visibility.get("allow_areas")
+    ) and _invalid_device_area_ids(view):
+        warnings.append(_DEVICE_REGISTRY_INVALID_AREA_WARNING)
 
     if inventory is None:
         inventory = _visibility_inventory(view, states, visibility)
@@ -5352,14 +5574,14 @@ def _entity_allowed(
 
 
 def _effective_area_for_entry(view: _RegistryView, entry: Any) -> str | None:
-    """An entity's ``area_id`` falling back to its device's (HA area inheritance)."""
+    """Resolve entity direct area, then its device's direct-or-parent effective area."""
     area_id = getattr(entry, "area_id", None)
-    if isinstance(area_id, str) and area_id:
-        return area_id
+    if area_id is not None:
+        return area_id if isinstance(area_id, str) and area_id else None
     device_id = getattr(entry, "device_id", None)
     if isinstance(device_id, str) and device_id:
-        dev = _device(view, device_id)
-        dev_area = getattr(dev, "area_id", None) if dev is not None else None
+        dev = _unambiguous_device_entries(view).get(device_id)
+        dev_area = _effective_device_area_id(view, dev) if dev is not None else None
         return dev_area if isinstance(dev_area, str) and dev_area else None
     return None
 
@@ -5369,9 +5591,11 @@ def _effective_labels_for_entry(view: _RegistryView, entry: Any) -> set[str]:
     labels = set(getattr(entry, "labels", None) or [])
     device_id = getattr(entry, "device_id", None)
     if isinstance(device_id, str) and device_id:
-        dev = _device(view, device_id)
+        dev = _unambiguous_device_entries(view).get(device_id)
         if dev is not None:
-            labels |= set(getattr(dev, "labels", None) or [])
+            dev_row = _device_dict_repr(dev)
+            if dev_row is not None:
+                labels |= set(dev_row.get("labels") or [])
     return labels
 
 

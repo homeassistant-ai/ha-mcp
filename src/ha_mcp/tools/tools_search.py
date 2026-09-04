@@ -25,6 +25,10 @@ from ..client.websocket_client import get_websocket_client
 from ..config import get_global_settings
 from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
+from ..utils.device_registry_semantics import (
+    build_device_registry_snapshot,
+    effective_entity_area_id,
+)
 from ..utils.entity_membership import normalize_member_entity_ids
 from ..utils.fuzzy_search import apply_hidden_penalty
 from ..visibility.model import VisibilityWire, wire_has_allowlist_dimensions
@@ -34,6 +38,7 @@ from ..visibility.resolver import (
     visibility_state_and_wire,
 )
 from .component_api import (
+    DEVICE_REGISTRY_CHILD_SEMANTICS,
     component_supports,
     get_component_caps,
     invalidate_caps,
@@ -869,6 +874,15 @@ def _ws_result_map(resp: Any) -> dict[str, dict[str, Any]]:
     return {}
 
 
+def _ws_registry_rows(resp: Any) -> list[Any]:
+    """Return rows from a successful registry-list response, else an empty list."""
+    if isinstance(resp, dict) and resp.get("success"):
+        result = resp.get("result")
+        if isinstance(result, list):
+            return result
+    return []
+
+
 def _ws_registry_index(resp: Any, key: str) -> dict[str, dict[str, Any]]:
     """Index a ``config/*_registry/list`` reply by its id field (area_id/floor_id/…).
 
@@ -877,10 +891,9 @@ def _ws_registry_index(resp: Any, key: str) -> dict[str, dict[str, Any]]:
     empty rather than raising.
     """
     out: dict[str, dict[str, Any]] = {}
-    if isinstance(resp, dict) and resp.get("success"):
-        for item in resp.get("result") or []:
-            if isinstance(item, dict) and item.get(key):
-                out[item[key]] = item
+    for item in _ws_registry_rows(resp):
+        if isinstance(item, dict) and item.get(key):
+            out[item[key]] = item
     return out
 
 
@@ -902,13 +915,15 @@ def _entity_enrichment_fields(
     floors: dict[str, dict[str, Any]],
     labels: dict[str, dict[str, Any]],
     devices: dict[str, dict[str, Any]],
+    device_areas: dict[str, str | None],
     requested: tuple[str, ...],
 ) -> dict[str, Any]:
     """Compute the requested enrichment fields for one entity from registry data.
 
     Mirrors the component's ``_registry_enrichment`` so the legacy and
     component-served ``result_fields`` values agree: device-inherited area/labels
-    (the entity's own value wins, else the device's), area→floor resolution, and
+    (the entity's own value wins, else the device's direct-or-parent effective
+    area), area→floor resolution, and
     label id→name (falling back to the id when a label has no name). ``aliases``
     pass through from the registry entry. Only the requested keys are returned.
 
@@ -919,13 +934,11 @@ def _entity_enrichment_fields(
     the sentinel stands for is already matched via the friendly name).
     """
     aliases = sorted(a for a in (entry.get("aliases") or []) if isinstance(a, str))
-    area_id = entry.get("area_id")
+    area_id = effective_entity_area_id(entry, device_areas)
     label_ids = set(entry.get("labels") or [])
     device_id = entry.get("device_id")
     device = devices.get(device_id) if device_id else None
     if device:
-        if area_id is None:
-            area_id = device.get("area_id")
         label_ids |= set(device.get("labels") or [])
     area = areas.get(area_id) if area_id else None
     area_name = area.get("name") if area else None
@@ -2424,9 +2437,13 @@ class SearchTools:
             and _component_serves_search_types(req)
         ):
             caps = await get_component_caps(self._client)
-            if component_supports(caps, "search") and (
-                not _requested_membership(parsed_result_fields)
-                or component_supports(caps, "search_entity_membership")
+            if (
+                component_supports(caps, "search")
+                and component_supports(caps, DEVICE_REGISTRY_CHILD_SEMANTICS)
+                and (
+                    not _requested_membership(parsed_result_fields)
+                    or component_supports(caps, "search_entity_membership")
+                )
             ):
                 (
                     route_component,
@@ -3153,10 +3170,19 @@ class SearchTools:
         areas = _ws_registry_index(names[0], "area_id") if need_names else {}
         floors = _ws_registry_index(names[1], "floor_id") if need_names else {}
         labels = _ws_registry_index(names[2], "label_id") if need_names else {}
-        devices = _ws_registry_index(names[3], "id") if need_names else {}
+        device_rows = _ws_registry_rows(names[3]) if need_names else []
+        device_snapshot = build_device_registry_snapshot(device_rows)
+        devices = device_snapshot.by_id
+        device_areas = device_snapshot.effective_area_by_id
         enrichment = {
             eid: _entity_enrichment_fields(
-                entries.get(eid) or {}, areas, floors, labels, devices, requested
+                entries.get(eid) or {},
+                areas,
+                floors,
+                labels,
+                devices,
+                device_areas,
+                requested,
             )
             for eid in entity_ids
         }
@@ -4379,7 +4405,9 @@ class SearchTools:
         applied by ``ha_get_overview`` after this, identically on both paths.
         """
         caps = await get_component_caps(self._client)
-        if component_supports(caps, "overview"):
+        if component_supports(caps, "overview") and component_supports(
+            caps, DEVICE_REGISTRY_CHILD_SEMANTICS
+        ):
             component_result = await self._overview_via_component(inputs)
             if component_result is not None:
                 return component_result

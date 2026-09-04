@@ -78,11 +78,15 @@ _CONFIG = {
     "state": "RUNNING",
 }
 
-_CAPS_OVERVIEW = {
+_CAPS_PRE_CHILD_SEMANTICS = {
     "schema_version": 1,
     "component_version": "1.1.0",
     "capabilities": ["overview"],
     "limits": {},
+}
+_CAPS_OVERVIEW = {
+    **_CAPS_PRE_CHILD_SEMANTICS,
+    "capabilities": ["overview", "device_registry_child_semantics"],
 }
 
 
@@ -216,6 +220,32 @@ async def test_component_fast_path_skips_legacy_fetches(tmp_path, monkeypatch) -
         if c.args[0] == "ha_mcp_tools/overview"
     ]
     assert len(overview_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_pre_child_semantics_overview_capability_uses_legacy(
+    tmp_path, monkeypatch
+) -> None:
+    """A pre-fix component's overview cannot authorize device-registry slices."""
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    _quiet_tail(monkeypatch)
+    ws = make_ws(
+        "ha_mcp_tools/overview",
+        info_result=_CAPS_PRE_CHILD_SEMANTICS,
+        cmd_result=_overview_slices(),
+    )
+    client = OverviewRoutingClient()
+    overview = _build_overview_tool(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await overview(detail_level="standard")
+
+    assert resp["success"] is True
+    assert client.total_legacy_fetches() > 0
+    assert not any(
+        call.args[0] == "ha_mcp_tools/overview"
+        for call in ws.send_command.call_args_list
+    )
 
 
 @pytest.mark.asyncio

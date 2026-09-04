@@ -22,6 +22,7 @@ from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .component_api import (
+    DEVICE_REGISTRY_CHILD_SEMANTICS,
     component_supports,
     get_component_caps,
     invalidate_caps,
@@ -118,7 +119,10 @@ async def fetch_entity_enrichment_via_component(
     if not entity_ids:
         return None
     caps = await get_component_caps(client)
-    if not component_supports(caps, "entity_enrich"):
+    if not (
+        component_supports(caps, "entity_enrich")
+        and component_supports(caps, DEVICE_REGISTRY_CHILD_SEMANTICS)
+    ):
         return None
     ids = list(entity_ids)
     chunks = [

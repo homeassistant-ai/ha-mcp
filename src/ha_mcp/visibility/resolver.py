@@ -14,6 +14,10 @@ import logging
 from typing import Any
 
 from ..utils.data_paths import get_data_dir
+from ..utils.device_registry_semantics import (
+    build_device_registry_snapshot,
+    effective_entity_area_id,
+)
 from .model import VisibilityConfig, VisibilityWire
 from .persistence import load_visibility_config
 
@@ -78,6 +82,16 @@ _ALLOWLIST_REGISTRY_EMPTY_WARNING = (
     "this request (an allow_entity_ids list, if set, still applies) so the filter "
     "does not blank every entity."
 )
+_DEVICE_REGISTRY_CONFLICT_WARNING = (
+    "Entity visibility filter is enabled with an area/label dimension but the "
+    "device registry contained conflicting identities; ambiguous device-derived "
+    "placement and labels were excluded."
+)
+_DEVICE_REGISTRY_INVALID_AREA_WARNING = (
+    "Entity visibility filter is enabled with an area dimension but the device "
+    "registry contained invalid area relationships; affected device-derived "
+    "placement was excluded."
+)
 
 
 class VisibilityDataUnavailable(Exception):
@@ -90,8 +104,9 @@ class VisibilityDataUnavailable(Exception):
     it must conceal — so it calls the resolver with ``strict=True``, turning every
     degradation that would otherwise surface a degraded-dimension warning
     (``_REGISTRY_UNAVAILABLE_WARNING``, ``_ALLOWLIST_REGISTRY_EMPTY_WARNING``,
-    ``_ASSIST_UNAVAILABLE_WARNING``, or a config-load failure) into this exception
-    (fail closed). Benign notes (unknown ``exclude_categories``) never raise.
+    ``_ASSIST_UNAVAILABLE_WARNING``, invalid device-area evidence, or a config-load
+    failure) into this exception (fail closed). Benign notes (unknown
+    ``exclude_categories``) never raise.
     """
 
 
@@ -111,7 +126,7 @@ def _normalize_labels(raw: object) -> list[str]:
 
 def _parse_device_registry(
     device_registry_result: object,
-) -> tuple[dict[str, str], dict[str, list[str]]]:
+) -> tuple[dict[str, str], dict[str, list[str]], frozenset[str], frozenset[str]]:
     """Parse ``config/device_registry/list`` into device_id -> area_id / labels.
 
     Tolerates a missing/degraded payload (returns empty maps) so the area/label
@@ -120,34 +135,29 @@ def _parse_device_registry(
     device_area: dict[str, str] = {}
     device_labels: dict[str, list[str]] = {}
     if not isinstance(device_registry_result, dict):
-        return device_area, device_labels
-    devices = device_registry_result.get("result", [])
-    if not isinstance(devices, list):
-        return device_area, device_labels
-    for device in devices:
-        if not isinstance(device, dict):
-            continue
-        device_id = device.get("id")
-        if not device_id:
-            continue
-        area_id = device.get("area_id")
+        return device_area, device_labels, frozenset(), frozenset()
+    raw_devices = device_registry_result.get("result", [])
+    if not isinstance(raw_devices, list):
+        return device_area, device_labels, frozenset(), frozenset()
+    snapshot = build_device_registry_snapshot(raw_devices)
+    for device_id, device in snapshot.by_id.items():
+        area_id = snapshot.effective_area_by_id.get(device_id)
         if area_id:
             device_area[device_id] = area_id
         labels = _normalize_labels(device.get("labels"))
         if labels:
             device_labels[device_id] = labels
-    return device_area, device_labels
+    return (
+        device_area,
+        device_labels,
+        snapshot.conflicting_ids,
+        snapshot.invalid_area_ids,
+    )
 
 
 def _effective_area(entry: dict[str, Any], device_area: dict[str, str]) -> str | None:
-    """Entity ``area_id`` falling back to its device's area (HA's inheritance)."""
-    area_id = entry.get("area_id")
-    if isinstance(area_id, str) and area_id:
-        return area_id
-    device_id = entry.get("device_id")
-    if isinstance(device_id, str) and device_id:
-        return device_area.get(device_id)
-    return None
+    """Resolve entity direct area, then its device's direct-or-parent effective area."""
+    return effective_entity_area_id(entry, device_area)
 
 
 def _effective_labels(
@@ -159,6 +169,36 @@ def _effective_labels(
     if isinstance(device_id, str) and device_id in device_labels:
         result = result + device_labels[device_id]
     return result
+
+
+def _handle_device_registry_conflicts(
+    conflicting_device_ids: frozenset[str],
+    *,
+    area_or_label_dimension_active: bool,
+    strict: bool,
+    warnings: list[str],
+) -> None:
+    """Surface ambiguous device-derived visibility evidence at its authority seam."""
+    if not conflicting_device_ids or not area_or_label_dimension_active:
+        return
+    if strict:
+        raise VisibilityDataUnavailable(_DEVICE_REGISTRY_CONFLICT_WARNING)
+    warnings.append(_DEVICE_REGISTRY_CONFLICT_WARNING)
+
+
+def _handle_invalid_device_area_evidence(
+    invalid_area_ids: frozenset[str],
+    *,
+    area_dimension_active: bool,
+    strict: bool,
+    warnings: list[str],
+) -> None:
+    """Surface invalid device ancestry wherever area filtering relies on it."""
+    if not invalid_area_ids or not area_dimension_active:
+        return
+    if strict:
+        raise VisibilityDataUnavailable(_DEVICE_REGISTRY_INVALID_AREA_WARNING)
+    warnings.append(_DEVICE_REGISTRY_INVALID_AREA_WARNING)
 
 
 def _is_assist_exposed(
@@ -395,7 +435,8 @@ def hidden_entity_ids(
 
     ``device_registry_result`` (``config/device_registry/list``) supplies the
     device area/labels an entity inherits: HA resolves an entity's effective area
-    as its own ``area_id`` falling back to its device's, and a device's labels
+    as its own ``area_id`` falling back to its device's direct-or-parent effective
+    area, and a device's labels
     apply to its entities. The area/label exclude and allow dimensions match on
     that effective area/labels, so a device-bound entity (registry ``area_id``
     None + a ``device_id``) is filtered by its device's area/labels. Without the
@@ -459,12 +500,30 @@ def hidden_entity_ids(
     # own area_id else its device's, and device labels apply to its entities. A
     # missing/degraded device payload leaves both maps empty, so the area/label
     # dimensions fall back to entity-level matching.
-    device_area, device_labels = _parse_device_registry(device_registry_result)
-
     areas = set(config.exclude_areas)
     labels = set(config.exclude_labels)
     allow_areas = set(config.allow_areas)
     allow_labels = set(config.allow_labels)
+    (
+        device_area,
+        device_labels,
+        conflicting_device_ids,
+        invalid_device_area_ids,
+    ) = _parse_device_registry(device_registry_result)
+    _handle_device_registry_conflicts(
+        conflicting_device_ids,
+        area_or_label_dimension_active=bool(
+            areas or labels or allow_areas or allow_labels
+        ),
+        strict=strict,
+        warnings=warnings,
+    )
+    _handle_invalid_device_area_evidence(
+        invalid_device_area_ids,
+        area_dimension_active=bool(areas or allow_areas),
+        strict=strict,
+        warnings=warnings,
+    )
     # An allowlist is active only when at least one allow_* dimension is set. When
     # active it inverts the default: an entity is hidden unless it matches one of
     # the allow dimensions, and a match authorizes it past the broad

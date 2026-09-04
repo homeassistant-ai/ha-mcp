@@ -38,11 +38,15 @@ from ._component_routing_helpers import (
     patch_ws_establish_failure,
 )
 
-_CAPS_ENRICH = {
+_CAPS_PRE_CHILD_SEMANTICS = {
     "schema_version": 1,
     "component_version": "1.1.0",
     "capabilities": ["entity_enrich"],
     "limits": {},
+}
+_CAPS_ENRICH = {
+    **_CAPS_PRE_CHILD_SEMANTICS,
+    "capabilities": ["entity_enrich", "device_registry_child_semantics"],
 }
 _CAPS_NONE = {
     "schema_version": 1,
@@ -210,6 +214,27 @@ async def test_no_capability_leaves_base_shape() -> None:
     client = RoutingClient(
         {"light.a": _raw_entry("light.a", area_id="ar1", labels=["lb1"])}
     )
+    get_entity = _build_get_entity(client)
+
+    with patch_ws(ws, tools_entities):
+        resp = await get_entity("light.a")
+
+    entry = resp["entity_entry"]
+    assert "area" not in entry
+    assert "floor" not in entry
+    assert "label_names" not in entry
+    assert not _enrich_calls(ws)
+
+
+@pytest.mark.asyncio
+async def test_pre_child_semantics_enrichment_capability_leaves_base_shape() -> None:
+    """An old component cannot add potentially stale device-derived placement."""
+    ws = make_ws(
+        "ha_mcp_tools/entity_enrich",
+        info_result=_CAPS_PRE_CHILD_SEMANTICS,
+        cmd_result={"entities": {"light.a": _enrichment("light.a")}},
+    )
+    client = RoutingClient({"light.a": _raw_entry("light.a", area_id=None, labels=[])})
     get_entity = _build_get_entity(client)
 
     with patch_ws(ws, tools_entities):

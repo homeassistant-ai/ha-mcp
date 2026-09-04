@@ -193,6 +193,81 @@ class TestAreaFilterAccuracy:
         assert "climate.abc" in all_entity_ids
 
     @pytest.mark.asyncio
+    async def test_child_device_inherits_parent_area_for_filtering(self):
+        """Core 2026.9 child placement participates in exact area filtering."""
+        client = MockClientWithRegistries(
+            entities=[
+                {
+                    "entity_id": "sensor.child",
+                    "attributes": {"friendly_name": "Child Sensor"},
+                    "state": "21",
+                }
+            ],
+            areas=[{"area_id": "office", "name": "Office"}],
+            entity_registry=[
+                {
+                    "entity_id": "sensor.child",
+                    "area_id": None,
+                    "device_id": "child",
+                }
+            ],
+            device_registry=[
+                {"id": "parent", "area_id": "office"},
+                {
+                    "id": "child",
+                    "area_id": None,
+                    "parent_device_id": "parent",
+                },
+            ],
+        )
+        tools = SmartSearchTools(client=client, fuzzy_threshold=60)
+
+        result = await tools.get_entities_by_area("office")
+
+        assert result["total_entities"] == 1
+        office_entities = result["areas"]["office"]["entities"]
+        returned_ids = {
+            entity["entity_id"]
+            for domain_entities in office_entities.values()
+            for entity in domain_entities
+        }
+        assert returned_ids == {"sensor.child"}
+
+    @pytest.mark.asyncio
+    async def test_present_invalid_entity_area_does_not_inherit_child_area(self):
+        """A present invalid direct area blocks device-area fallback."""
+        client = MockClientWithRegistries(
+            entities=[
+                {
+                    "entity_id": "sensor.child",
+                    "attributes": {"friendly_name": "Child Sensor"},
+                    "state": "21",
+                }
+            ],
+            areas=[{"area_id": "office", "name": "Office"}],
+            entity_registry=[
+                {
+                    "entity_id": "sensor.child",
+                    "area_id": "",
+                    "device_id": "child",
+                }
+            ],
+            device_registry=[
+                {"id": "parent", "area_id": "office"},
+                {
+                    "id": "child",
+                    "area_id": None,
+                    "parent_device_id": "parent",
+                },
+            ],
+        )
+        tools = SmartSearchTools(client=client, fuzzy_threshold=60)
+
+        result = await tools.get_entities_by_area("office")
+
+        assert result["total_entities"] == 0
+
+    @pytest.mark.asyncio
     async def test_unassigned_entities_excluded(self, two_area_setup):
         """Entities without any area assignment are not returned."""
         client = MockClientWithRegistries(

@@ -24,6 +24,116 @@ from ...utilities.assertions import parse_mcp_result, safe_call_tool
 logger = logging.getLogger(__name__)
 
 
+async def _core_2026_9_child_fixture(ha_client):
+    """Return one real child fixture and whether the component is available."""
+    info = await ha_client.send_websocket_message({"type": "ha_mcp_tools/info"})
+    component_available = info.get("success") is True
+    if component_available:
+        assert "device_registry_child_semantics" in info["result"]["capabilities"]
+
+    device_reply = await ha_client.send_websocket_message(
+        {"type": "config/device_registry/list"}
+    )
+    entity_reply = await ha_client.send_websocket_message(
+        {"type": "config/entity_registry/list"}
+    )
+    assert device_reply.get("success") is True, device_reply
+    assert entity_reply.get("success") is True, entity_reply
+    device_rows = device_reply.get("result")
+    entity_rows = entity_reply.get("result")
+    assert isinstance(device_rows, list)
+    assert isinstance(entity_rows, list)
+
+    devices_by_id = {
+        row["id"]: row
+        for row in device_rows
+        if isinstance(row, dict) and isinstance(row.get("id"), str)
+    }
+    switch_entities_by_device: dict[str, list[str]] = {}
+    for row in entity_rows:
+        if not isinstance(row, dict):
+            continue
+        device_id = row.get("device_id")
+        entity_id = row.get("entity_id")
+        if (
+            isinstance(device_id, str)
+            and isinstance(entity_id, str)
+            and entity_id.startswith("switch.")
+        ):
+            switch_entities_by_device.setdefault(device_id, []).append(entity_id)
+
+    children_by_parent: dict[str, list[dict]] = {}
+    for row in device_rows:
+        if not isinstance(row, dict):
+            continue
+        parent_id = row.get("parent_device_id")
+        child_id = row.get("id")
+        if (
+            isinstance(parent_id, str)
+            and parent_id
+            and isinstance(child_id, str)
+            and switch_entities_by_device.get(child_id)
+        ):
+            children_by_parent.setdefault(parent_id, []).append(row)
+
+    candidates = [
+        (parent_id, sorted(children, key=lambda row: row["id"]))
+        for parent_id, children in children_by_parent.items()
+        if parent_id in devices_by_id and len(children) >= 2
+    ]
+    assert candidates, (
+        "Core 2026.9 kitchen_sink did not create the expected power-strip "
+        "parent with at least two child switch devices"
+    )
+    parent_id, children = sorted(candidates, key=lambda item: item[0])[0]
+    child_id = children[0]["id"]
+    child_entity_id = sorted(switch_entities_by_device[child_id])[0]
+    return (
+        parent_id,
+        child_id,
+        child_entity_id,
+        devices_by_id[parent_id].get("area_id"),
+        component_available,
+    )
+
+
+async def _error_log_total(mcp_client) -> int:
+    """Return the authoritative current error-log line count."""
+    result = parse_mcp_result(
+        await mcp_client.call_tool("ha_get_logs", {"source": "error_log", "limit": 1})
+    )
+    assert result.get("success") is True, result
+    return result["total_lines"]
+
+
+async def _error_log_lines_since(mcp_client, baseline_total: int) -> list[str]:
+    """Read only the bounded newest window added since a line-count boundary."""
+    current_total = await _error_log_total(mcp_client)
+    assert current_total >= baseline_total, (
+        "Error-log history rotated during the child-device read assertion"
+    )
+    new_line_count = current_total - baseline_total
+    new_log_lines: list[str] = []
+    offset = 0
+    while offset < new_line_count:
+        page = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_get_logs",
+                {
+                    "source": "error_log",
+                    "limit": min(1000, new_line_count - offset),
+                    "offset": offset,
+                },
+            )
+        )
+        assert page.get("success") is True, page
+        assert page["offset"] == offset, page
+        assert page["window_lines"] > 0, page
+        new_log_lines.extend(page["log"].splitlines())
+        offset += page["window_lines"]
+    return new_log_lines
+
+
 @pytest.mark.registry
 class TestDeviceList:
     """Test ha_get_device functionality."""
@@ -301,6 +411,107 @@ class TestDeviceGet:
             f"Error should indicate device not found: {get_data}"
         )
         logger.info("Non-existent device correctly rejected")
+
+
+@pytest.mark.registry
+async def test_core_2026_9_child_devices_inherit_parent_area(mcp_client, ha_client):
+    """Exercise the real Core 2026.9 kitchen-sink child-device topology.
+
+    The fixture creates one power-strip parent with multiple child outlets. The
+    test assigns only the parent to ``living_room`` and proves the same inherited
+    placement through search, single-device lookup, and area-filtered device list.
+    The mutation is always restored, and the component must not touch Core's
+    deprecated mapping methods while serving the reads.
+    """
+    (
+        parent_id,
+        child_id,
+        child_entity_id,
+        original_parent_area,
+        component_available,
+    ) = await _core_2026_9_child_fixture(ha_client)
+
+    body_error: Exception | None = None
+    restore_error: Exception | None = None
+    try:
+        update = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_set_device", {"device_id": parent_id, "area_id": "living_room"}
+            )
+        )
+        assert update.get("success") is True, update
+
+        baseline_total_lines = (
+            await _error_log_total(mcp_client) if component_available else None
+        )
+
+        search = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_search",
+                {
+                    "query": child_entity_id,
+                    "domain_filter": "switch",
+                    "exact_match": True,
+                    "result_fields": ["area"],
+                },
+            )
+        )
+        assert search.get("success") is True, search
+        assert any(row.get("area") == "Living Room" for row in search["entities"]), (
+            search
+        )
+
+        single = parse_mcp_result(
+            await mcp_client.call_tool("ha_get_device", {"device_id": child_id})
+        )
+        assert single.get("success") is True, single
+        assert single["device"]["device_id"] == child_id
+        assert single["device"]["area_id"] == "living_room"
+        assert single["device"]["config_entries"]
+
+        area_list = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_get_device", {"area_id": "living_room", "limit": 200}
+            )
+        )
+        assert area_list.get("success") is True, area_list
+        assert child_id in {row["device_id"] for row in area_list["devices"]}
+
+        if baseline_total_lines is not None:
+            deprecated_component_lines = [
+                line
+                for line in await _error_log_lines_since(
+                    mcp_client, baseline_total_lines
+                )
+                if "helpers.frame" in line and "ha_mcp_tools" in line
+            ]
+            assert deprecated_component_lines == []
+    except Exception as err:
+        body_error = err
+    finally:
+        try:
+            restore = parse_mcp_result(
+                await mcp_client.call_tool(
+                    "ha_set_device",
+                    {
+                        "device_id": parent_id,
+                        "area_id": original_parent_area or "",
+                    },
+                )
+            )
+            assert restore.get("success") is True, restore
+        except Exception as err:
+            restore_error = err
+
+    if body_error is not None and restore_error is not None:
+        raise ExceptionGroup(
+            "Core 2026.9 child-device read assertions and cleanup both failed",
+            [body_error, restore_error],
+        )
+    if body_error is not None:
+        raise body_error
+    if restore_error is not None:
+        raise restore_error
 
 
 @pytest.mark.registry

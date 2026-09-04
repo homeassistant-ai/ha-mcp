@@ -44,6 +44,7 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import get_websocket_client
 from .component_api import (
+    DEVICE_REGISTRY_CHILD_SEMANTICS,
     component_supports,
     get_component_caps,
     invalidate_caps,
@@ -85,7 +86,10 @@ async def fetch_device_via_component(
     only the device (``_resolve_ieee`` / capture / remove) are unchanged.
     """
     caps = await get_component_caps(client)
-    if not component_supports(caps, "device_get"):
+    if not (
+        component_supports(caps, "device_get")
+        and component_supports(caps, DEVICE_REGISTRY_CHILD_SEMANTICS)
+    ):
         return None
     kwargs: dict[str, Any] = {"device_id": device_id}
     if include_entities:
@@ -167,7 +171,10 @@ async def fetch_device_list_via_component(client: Any) -> dict[str, Any] | None:
     fallback as :func:`fetch_device_via_component`.
     """
     caps = await get_component_caps(client)
-    if not component_supports(caps, "device_list"):
+    if not (
+        component_supports(caps, "device_list")
+        and component_supports(caps, DEVICE_REGISTRY_CHILD_SEMANTICS)
+    ):
         return None
     try:
         ws = await get_websocket_client(

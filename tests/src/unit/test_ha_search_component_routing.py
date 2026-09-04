@@ -58,15 +58,23 @@ _ENTITY_REGISTRY = {
     ],
 }
 
-_CAPS_SEARCH = {
+_CAPS_PRE_CHILD_SEMANTICS = {
     "schema_version": 1,
     "component_version": "1.1.0",
     "capabilities": ["search"],
     "limits": {},
 }
+_CAPS_SEARCH = {
+    **_CAPS_PRE_CHILD_SEMANTICS,
+    "capabilities": ["search", "device_registry_child_semantics"],
+}
 _CAPS_SEARCH_MEMBERSHIP = {
     **_CAPS_SEARCH,
-    "capabilities": ["search", "search_entity_membership"],
+    "capabilities": [
+        "search",
+        "search_entity_membership",
+        "device_registry_child_semantics",
+    ],
 }
 
 
@@ -176,6 +184,30 @@ async def test_component_fast_path_skips_legacy_fetches(tmp_path, monkeypatch) -
     ]
     assert len(search_calls) == 1
     assert "result_fields" not in search_calls[0].kwargs
+
+
+@pytest.mark.asyncio
+async def test_pre_child_semantics_search_capability_uses_legacy(
+    tmp_path, monkeypatch
+) -> None:
+    """A pre-fix component's search result cannot omit child-device semantics."""
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    ws = make_ws(
+        "ha_mcp_tools/search",
+        info_result=_CAPS_PRE_CHILD_SEMANTICS,
+        cmd_result=_entity_search_result(),
+    )
+    client = RoutingClient()
+    ha_search = _build_ha_search(client)
+
+    with patch_ws(ws, tools_search):
+        resp = await ha_search(query="kitchen")
+
+    assert resp["success"] is True
+    assert client.get_states_calls == 1
+    assert not any(
+        call.args[0] == "ha_mcp_tools/search" for call in ws.send_command.call_args_list
+    )
 
 
 @pytest.mark.asyncio
@@ -1037,7 +1069,12 @@ class TestDashboardSearchTypesGate:
         caps = {
             "schema_version": 1,
             "component_version": "1.2.4",
-            "capabilities": ["search", "dashboards", "dashboards_doc_search"],
+            "capabilities": [
+                "search",
+                "dashboards",
+                "dashboards_doc_search",
+                "device_registry_child_semantics",
+            ],
             "limits": {},
         }
 

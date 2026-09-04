@@ -42,6 +42,7 @@ from ha_mcp.tools.reference_validator import build_entity_set, build_service_ind
 # Mirrors test_component_search_contract.py's ``wsapi`` re-import.
 from . import test_component_ws_search as _base
 from .test_component_ws_search import (
+    FakeChildDevice,
     FakeConfigEntry,
     FakeDevice,
     FakeHass,
@@ -858,6 +859,53 @@ class TestVisibilityHiddenSet:
         )
         assert hidden == {"light.direct", "light.viadev"}
 
+    def test_present_invalid_entity_area_blocks_child_device_area_fallback(self):
+        view = make_view(
+            entity={
+                "sensor.child": FakeRegEntry(
+                    "sensor.child", area_id="", device_id="child"
+                )
+            },
+            devices=[FakeDevice("parent", area_id="office")],
+            child_devices=[FakeChildDevice("child", "parent")],
+        )
+        hidden = wsapi._visibility_hidden_set(
+            view,
+            [FakeState("sensor.child")],
+            {"exclude_areas": ["office"]},
+            _always_expose,
+        )
+        assert hidden == set()
+
+    def test_conflicting_device_area_is_not_used_for_visibility(self):
+        office = FakeDevice("duplicate", area_id="office")
+        garage = FakeDevice("duplicate", area_id="garage")
+
+        class _ConflictingRegistry:
+            devices = (office, garage)
+            child_devices = ()
+
+            def async_get(self, device_id):
+                return office if device_id == "duplicate" else None
+
+        view = make_view(
+            entity={
+                "sensor.ambiguous": FakeRegEntry(
+                    "sensor.ambiguous", device_id="duplicate"
+                )
+            }
+        )
+        view.device = _ConflictingRegistry()
+
+        hidden = wsapi._visibility_hidden_set(
+            view,
+            [FakeState("sensor.ambiguous")],
+            {"exclude_areas": ["office"]},
+            _always_expose,
+        )
+
+        assert hidden == set()
+
     def test_exclude_label_direct_and_device_inherited(self):
         view = make_view(
             entity={
@@ -1207,6 +1255,84 @@ class TestVisibilityWarnings:
         )
         assert warnings == []
 
+    def test_conflicting_device_registry_warns_for_area_dimension(self):
+        office = FakeDevice("duplicate", area_id="office")
+        garage = FakeDevice("duplicate", area_id="garage")
+
+        class _ConflictingRegistry:
+            devices = (office, garage)
+            child_devices = ()
+
+        view = make_view(
+            entity={
+                "sensor.ambiguous": FakeRegEntry(
+                    "sensor.ambiguous", device_id="duplicate"
+                )
+            }
+        )
+        view.device = _ConflictingRegistry()
+
+        warnings = wsapi._visibility_warnings(
+            view,
+            [FakeState("sensor.ambiguous")],
+            {"exclude_areas": ["office"]},
+        )
+
+        assert warnings == [wsapi._DEVICE_REGISTRY_CONFLICT_WARNING]
+
+    def test_conflicting_device_registry_is_irrelevant_without_area_or_label(self):
+        office = FakeDevice("duplicate", area_id="office")
+        garage = FakeDevice("duplicate", area_id="garage")
+
+        class _ConflictingRegistry:
+            devices = (office, garage)
+            child_devices = ()
+
+        view = make_view(
+            entity={
+                "sensor.ambiguous": FakeRegEntry(
+                    "sensor.ambiguous", device_id="duplicate"
+                )
+            }
+        )
+        view.device = _ConflictingRegistry()
+
+        warnings = wsapi._visibility_warnings(
+            view,
+            [FakeState("sensor.ambiguous")],
+            {"exclude_hidden": True},
+        )
+
+        assert warnings == []
+
+    def test_missing_parent_warns_for_area_dimension(self):
+        view = make_view(
+            entity={"sensor.orphan": FakeRegEntry("sensor.orphan", device_id="child")},
+            child_devices=[FakeChildDevice("child", "missing")],
+        )
+
+        warnings = wsapi._visibility_warnings(
+            view,
+            [FakeState("sensor.orphan")],
+            {"exclude_areas": ["office"]},
+        )
+
+        assert warnings == [wsapi._DEVICE_REGISTRY_INVALID_AREA_WARNING]
+
+    def test_missing_parent_is_irrelevant_to_label_dimension(self):
+        view = make_view(
+            entity={"sensor.orphan": FakeRegEntry("sensor.orphan", device_id="child")},
+            child_devices=[FakeChildDevice("child", "missing")],
+        )
+
+        warnings = wsapi._visibility_warnings(
+            view,
+            [FakeState("sensor.orphan")],
+            {"exclude_labels": ["private"]},
+        )
+
+        assert warnings == []
+
     def test_empty_registry_allowlist_warns(self):
         # Area/label allowlist with an empty registry but states-only candidates
         # would blank everything; the guard fires and warns.
@@ -1442,6 +1568,51 @@ class TestSearchVisibilityPlacement:
         )
         assert {e["entity_id"] for e in res["entities"]} == {"light.a", "light.b"}
         assert res["visibility_warnings"] == [wsapi._ASSIST_UNAVAILABLE_WARNING]
+
+    def test_conflicting_device_visibility_is_disclosed_in_search(self, monkeypatch):
+        office = FakeDevice("duplicate", area_id="office")
+        garage = FakeDevice("duplicate", area_id="garage")
+
+        class _ConflictingRegistry:
+            devices = (office, garage)
+            child_devices = ()
+
+        view = make_view(
+            entity={
+                "sensor.ambiguous": FakeRegEntry(
+                    "sensor.ambiguous", device_id="duplicate"
+                )
+            }
+        )
+        view.device = _ConflictingRegistry()
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
+
+        res = wsapi._do_search(
+            FakeHass(states=[FakeState("sensor.ambiguous", "on", "Ambiguous")]),
+            {"query": "", "visibility": {"exclude_areas": ["office"]}},
+        )
+
+        assert [entity["entity_id"] for entity in res["entities"]] == [
+            "sensor.ambiguous"
+        ]
+        assert res["visibility_warnings"] == [wsapi._DEVICE_REGISTRY_CONFLICT_WARNING]
+
+    def test_missing_parent_visibility_is_disclosed_in_search(self, monkeypatch):
+        view = make_view(
+            entity={"sensor.orphan": FakeRegEntry("sensor.orphan", device_id="child")},
+            child_devices=[FakeChildDevice("child", "missing")],
+        )
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda hass: view)
+
+        res = wsapi._do_search(
+            FakeHass(states=[FakeState("sensor.orphan", "on", "Orphan")]),
+            {"query": "", "visibility": {"exclude_areas": ["office"]}},
+        )
+
+        assert [entity["entity_id"] for entity in res["entities"]] == ["sensor.orphan"]
+        assert res["visibility_warnings"] == [
+            wsapi._DEVICE_REGISTRY_INVALID_AREA_WARNING
+        ]
 
 
 class TestSearchVisibilitySchema:

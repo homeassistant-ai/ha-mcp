@@ -1033,18 +1033,47 @@ class TestEntityEnrichmentAliasSentinel:
 
     def test_null_alias_sentinel_is_dropped_not_stringified(self):
         entry = {"aliases": ["Kitchen", None, "Cocina"]}
-        fields = _entity_enrichment_fields(entry, {}, {}, {}, {}, ("aliases",))
+        fields = _entity_enrichment_fields(entry, {}, {}, {}, {}, {}, ("aliases",))
         assert fields["aliases"] == ["Cocina", "Kitchen"]
         assert "None" not in fields["aliases"]
 
     def test_all_string_aliases_unaffected(self):
         entry = {"aliases": ["b", "a"]}
-        fields = _entity_enrichment_fields(entry, {}, {}, {}, {}, ("aliases",))
+        fields = _entity_enrichment_fields(entry, {}, {}, {}, {}, {}, ("aliases",))
         assert fields["aliases"] == ["a", "b"]
 
     def test_missing_aliases_key_yields_empty(self):
-        fields = _entity_enrichment_fields({}, {}, {}, {}, {}, ("aliases",))
+        fields = _entity_enrichment_fields({}, {}, {}, {}, {}, {}, ("aliases",))
         assert fields["aliases"] == []
+
+
+class TestEntityEnrichmentAreaPrecedence:
+    """Entity placement uses Core's presence-based direct-area precedence."""
+
+    def test_device_effective_area_drives_area_and_floor_projection(self):
+        fields = _entity_enrichment_fields(
+            {"area_id": None, "device_id": "child"},
+            {"office": {"name": "Office", "floor_id": "upstairs"}},
+            {"upstairs": {"name": "Upstairs"}},
+            {},
+            {"child": {"id": "child", "parent_device_id": "parent"}},
+            {"child": "office"},
+            ("area", "floor"),
+        )
+
+        assert fields == {"area": "Office", "floor": "Upstairs"}
+
+    def test_present_invalid_area_does_not_inherit_device_area(self):
+        fields = _entity_enrichment_fields(
+            {"area_id": "", "device_id": "child"},
+            {"office": {"name": "Office", "floor_id": "upstairs"}},
+            {"upstairs": {"name": "Upstairs"}},
+            {},
+            {"child": {"id": "child"}},
+            {"child": "office"},
+            ("area", "floor"),
+        )
+        assert fields == {"area": None, "floor": None}
 
 
 class TestHaSearchAreaQueryPrefetchFailure(_SearchToolFixture):

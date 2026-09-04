@@ -16,6 +16,10 @@ from pydantic import Field
 
 from ..client.rest_client import HomeAssistantAPIError, HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response
+from ..utils.device_registry_semantics import (
+    EFFECTIVE_AREA_MARKER,
+    annotate_device_rows_with_effective_area,
+)
 from .auto_backup import with_auto_backup
 from .component_devices import (
     fetch_device_list_via_component,
@@ -137,7 +141,7 @@ def _get_device_info(device: dict[str, Any]) -> dict[str, Any]:
         "manufacturer": device.get("manufacturer"),
         "model": device.get("model"),
         "sw_version": device.get("sw_version"),
-        "area_id": device.get("area_id"),
+        "area_id": device.get(EFFECTIVE_AREA_MARKER, device.get("area_id")),
         "integration_type": integration_type,
         "integration_sources": integration_sources,
         "via_device_id": device.get("via_device_id"),
@@ -156,6 +160,25 @@ def _get_device_info(device: dict[str, Any]) -> dict[str, Any]:
         device_info["node_id"] = zwave_node_id
 
     return device_info
+
+
+def _device_config_entries(device: dict[str, Any]) -> list[str]:
+    """Return the exact owning config-entry IDs for a main or child row.
+
+    Ordinary ``DeviceEntry`` rows carry ``config_entries`` while Core 2026.9
+    ``ChildDeviceEntry`` rows carry one singular ``config_entry_id``. Never mix,
+    coerce, or repair malformed ownership evidence: an explicitly present plural
+    field is authoritative and must be a list of non-empty strings.
+    """
+    if "config_entries" in device:
+        raw = device.get("config_entries")
+        if not isinstance(raw, list) or not all(
+            isinstance(entry_id, str) and entry_id for entry_id in raw
+        ):
+            return []
+        return list(raw)
+    entry_id = device.get("config_entry_id")
+    return [entry_id] if isinstance(entry_id, str) and entry_id else []
 
 
 def _build_entity_maps(
@@ -251,8 +274,8 @@ async def _fetch_device_rows(client: Any) -> list[dict[str, Any]]:
     """
     result = await fetch_device_list_via_component(client)
     if result is not None:
-        return list(result.get("devices", []))
-    return await _legacy_device_rows(client)
+        return annotate_device_rows_with_effective_area(list(result.get("devices", [])))
+    return annotate_device_rows_with_effective_area(await _legacy_device_rows(client))
 
 
 # HA core replies with this error code (ERR_NOT_FOUND) from
@@ -342,6 +365,9 @@ async def _single_device_and_entities(
         device = result.get("device")
         entities = result.get("entities")
         if isinstance(device, dict) and isinstance(entities, list):
+            device = dict(device)
+            if "effective_area_id" in result:
+                device[EFFECTIVE_AREA_MARKER] = result.get("effective_area_id")
             _, device_to_entities = _build_entity_maps(entities, need_full=True)
             return [device], device_to_entities
         # Either an authoritative not-found (device is None) — fall through so the
@@ -350,7 +376,9 @@ async def _single_device_and_entities(
         # entity registries.
     # Device registry first, then entity registry — the legacy wire order,
     # which the #1297 error-contract test pins with an ordered mock.
-    all_devices = await _legacy_device_rows(client)
+    all_devices = annotate_device_rows_with_effective_area(
+        await _legacy_device_rows(client)
+    )
     all_entities = await _fetch_entity_rows(client)
     _, device_to_entities = _build_entity_maps(all_entities, need_full=True)
     return all_devices, device_to_entities
@@ -547,7 +575,7 @@ async def _get_single_device_result(
     device_info["serial_number"] = device.get("serial_number")
     device_info["disabled_by"] = device.get("disabled_by")
     device_info["labels"] = device.get("labels", [])
-    device_info["config_entries"] = device.get("config_entries", [])
+    device_info["config_entries"] = _device_config_entries(device)
     device_info["connections"] = device.get("connections", [])
     device_info["identifiers"] = device.get("identifiers", [])
 
@@ -597,7 +625,8 @@ def _filter_devices(
     named_types = ["zigbee2mqtt", "zha", "zwave_js"]
     matched: list[dict[str, Any]] = []
     for device in all_devices:
-        if area_id and device.get("area_id") != area_id:
+        effective_area = device.get(EFFECTIVE_AREA_MARKER, device.get("area_id"))
+        if area_id and effective_area != area_id:
             continue
         device_man = (device.get("manufacturer") or "").lower()
         if manufacturer_lower and manufacturer_lower not in device_man:
@@ -1134,7 +1163,7 @@ class RegistryTools:
             )
             device = await _lookup_device_for_remove(self._client, device_id)
 
-            config_entries = device.get("config_entries", [])
+            config_entries = _device_config_entries(device)
             device_name = device.get("name_by_user") or device.get("name")
             if not config_entries:
                 raise_tool_error(

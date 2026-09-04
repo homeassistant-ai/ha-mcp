@@ -13,6 +13,11 @@ from typing import Annotated, Any, NamedTuple, NotRequired, TypedDict
 from pydantic import ConfigDict, Field
 
 from ..client.rest_client import HomeAssistantClient
+from ..utils.device_registry_semantics import (
+    DeviceRegistrySnapshot,
+    build_device_registry_snapshot,
+    effective_entity_area_id,
+)
 from ..utils.domain_handlers import get_domain_handler
 from ..utils.entity_membership import normalize_member_entity_ids
 from ..visibility.resolver import VisibilityDataUnavailable, load_hidden_set
@@ -259,8 +264,10 @@ def _registry_rows(result: Any, label: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _validate_device_registry_rows(device_rows: list[dict[str, Any]]) -> None:
-    """Fail closed on a device row missing ``id``.
+def _validate_device_registry_rows(
+    device_rows: list[dict[str, Any]],
+) -> DeviceRegistrySnapshot:
+    """Return a canonical snapshot or fail closed on ambiguous device evidence.
 
     ``visibility.resolver._parse_device_registry`` silently skips any device
     entry without an ``id`` even when the hidden-set resolver runs
@@ -272,11 +279,18 @@ def _validate_device_registry_rows(device_rows: list[dict[str, Any]]) -> None:
     resolver. Infrastructure-class (HA's own registry data is malformed),
     not the caller's selector to fix.
     """
-    if any(not row.get("id") for row in device_rows):
+    if any(not isinstance(row.get("id"), str) or not row["id"] for row in device_rows):
         raise BulkSelectorInfrastructureError(
             "Home Assistant device registry returned a malformed entry",
             cause=InfrastructureErrorCause.MALFORMED_DEVICE_REGISTRY,
         )
+    snapshot = build_device_registry_snapshot(device_rows)
+    if snapshot.conflicting_ids:
+        raise BulkSelectorInfrastructureError(
+            "Home Assistant device registry returned a conflicting device identity",
+            cause=InfrastructureErrorCause.MALFORMED_DEVICE_REGISTRY,
+        )
+    return snapshot
 
 
 def _string_list(selector: Mapping[str, Any], key: str) -> list[str]:
@@ -305,10 +319,7 @@ def _entity_area_id(
     entry = entity_registry.get(entity_id)
     if not entry:
         return None
-    if area_id := entry.get("area_id"):
-        return str(area_id)
-    device_id = entry.get("device_id")
-    return device_areas.get(str(device_id)) if device_id else None
+    return effective_entity_area_id(entry, device_areas)
 
 
 def _expand_entity(
@@ -686,7 +697,7 @@ async def resolve_bulk_selector(
         )
     entity_rows = _registry_rows(topology.entities, "entity registry")
     device_rows = _registry_rows(topology.devices, "device registry")
-    _validate_device_registry_rows(device_rows)
+    device_snapshot = _validate_device_registry_rows(device_rows)
     selected_areas = _select_area_ids(
         _registry_rows(topology.areas, "area registry"),
         _registry_rows(topology.floors, "floor registry"),
@@ -704,9 +715,7 @@ async def resolve_bulk_selector(
         for row in entity_rows
         if isinstance(row.get("entity_id"), str)
     }
-    device_areas = {
-        str(row["id"]): row.get("area_id") for row in device_rows if row.get("id")
-    }
+    device_areas = device_snapshot.effective_area_by_id
     hidden, visibility_warnings = await _load_hidden_entities(
         client, topology.entities, topology.states, topology.devices, entity_registry
     )

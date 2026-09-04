@@ -504,14 +504,106 @@ class FakeDevice:
         }
 
 
+class FakeChildDevice:
+    """Core 2026.9 ``ChildDeviceEntry`` with its deliberately reduced shape."""
+
+    def __init__(
+        self,
+        device_id,
+        parent_device_id,
+        *,
+        name=None,
+        name_by_user=None,
+        area_id=None,
+        labels=(),
+        identifiers=(),
+        config_entry_id="cfg-1",
+        config_subentry_id=None,
+        disabled_by=None,
+    ):
+        self.id = device_id
+        self.parent_device_id = parent_device_id
+        self.name = name
+        self.name_by_user = name_by_user
+        self.area_id = area_id
+        self.labels = set(labels)
+        self.identifiers = set(identifiers)
+        self.config_entry_id = config_entry_id
+        self.config_subentry_id = config_subentry_id
+        self.disabled_by = disabled_by
+
+    def __getattr__(self, name):
+        raise AttributeError(name)
+
+    @property
+    def manufacturer(self):
+        pytest.fail(
+            "Core 2026.9 ChildDeviceEntry does not expose manufacturer as an attribute"
+        )
+
+    @property
+    def model(self):
+        pytest.fail(
+            "Core 2026.9 ChildDeviceEntry does not expose model as an attribute"
+        )
+
+    @property
+    def connections(self):
+        pytest.fail(
+            "Core 2026.9 ChildDeviceEntry does not expose connections as an attribute"
+        )
+
+    @property
+    def dict_repr(self):
+        # Exact Core 2026.9 child-device wire fields. In particular, child entries
+        # do not grow the ordinary DeviceEntry-only manufacturer/model/connection
+        # fields just to satisfy a consumer written against the older registry.
+        return {
+            "area_id": self.area_id,
+            "config_entry_id": self.config_entry_id,
+            "config_subentry_id": self.config_subentry_id,
+            "created_at": 0.0,
+            "disabled_by": self.disabled_by,
+            "id": self.id,
+            "identifiers": list(self.identifiers),
+            "labels": list(self.labels),
+            "modified_at": 0.0,
+            "name_by_user": self.name_by_user,
+            "name": self.name,
+            "parent_device_id": self.parent_device_id,
+        }
+
+
+class _IterOnlyDeviceCollection:
+    """Core 2026.9 collection: iteration is the only supported read API."""
+
+    def __init__(self, entries):
+        self._entries = tuple(entries)
+
+    def __iter__(self):
+        return iter(self._entries)
+
+    def values(self):
+        raise AssertionError("Core 2026.9 device collections are not mappings")
+
+    def get(self, _device_id):
+        raise AssertionError("Core 2026.9 device collections do not support get")
+
+    def __getitem__(self, _device_id):
+        raise KeyError("Core 2026.9 device collections are not subscriptable")
+
+
 class FakeDeviceReg:
-    def __init__(self, devices):
+    def __init__(self, devices, child_devices=()):
         self._devices = {d.id: d for d in devices}
-        # Real HA exposes ``registry.devices`` as a mapping (overview reads it).
-        self.devices = dict(self._devices)
+        self._child_devices = {d.id: d for d in child_devices}
+        # Core 2026.9's public contract is iteration-only for both collections.
+        # The dedicated pre-2026.9 test below retains a dict-backed registry.
+        self.devices = _IterOnlyDeviceCollection(self._devices.values())
+        self.child_devices = _IterOnlyDeviceCollection(self._child_devices.values())
 
     def async_get(self, device_id):
-        return self._devices.get(device_id)
+        return self._devices.get(device_id) or self._child_devices.get(device_id)
 
 
 class FakeConfigEntity:
@@ -696,13 +788,15 @@ class FakeIssueRegModule:
         return self._registry
 
 
-def make_view(entity=None, areas=(), floors=(), labels=(), devices=()):
+def make_view(
+    entity=None, areas=(), floors=(), labels=(), devices=(), child_devices=()
+):
     return wsapi._RegistryView(
         entity=FakeEntityReg(entity or {}),
         area=FakeAreaReg(areas),
         floor=FakeFloorReg(floors),
         label=FakeLabelReg(labels),
-        device=FakeDeviceReg(devices),
+        device=FakeDeviceReg(devices, child_devices),
     )
 
 
@@ -734,6 +828,7 @@ class TestInfo:
             "blueprint_get",
             "device_get",
             "device_list",
+            "device_registry_child_semantics",
             "entity_enrich",
             "exposure",
             "config_entries",
@@ -3064,6 +3159,60 @@ class TestDeviceGet:
         res = wsapi._do_device_get(FakeHass(), {"device_id": "dev-x"})
         assert res == {"device": None}
 
+    def test_child_get_preserves_reduced_row_and_reports_effective_area(
+        self, monkeypatch
+    ):
+        parent = FakeDevice("parent", area_id="office")
+        child = FakeChildDevice("child", "parent", name="Channel")
+        monkeypatch.setattr(
+            wsapi,
+            "_resolve_registries",
+            lambda h: make_view(devices=[parent], child_devices=[child]),
+        )
+
+        res = wsapi._do_device_get(FakeHass(), {"device_id": "child"})
+
+        assert res["device"] == child.dict_repr
+        assert res["device"]["parent_device_id"] == "parent"
+        assert res["device"]["area_id"] is None
+        assert res["effective_area_id"] == "office"
+
+    def test_child_empty_direct_area_is_invalid_not_parent_fallback(self, monkeypatch):
+        parent = FakeDevice("parent", area_id="office")
+        child = FakeChildDevice("child", "parent", area_id="")
+        monkeypatch.setattr(
+            wsapi,
+            "_resolve_registries",
+            lambda h: make_view(devices=[parent], child_devices=[child]),
+        )
+
+        result = wsapi._do_device_get(FakeHass(), {"device_id": "child"})
+
+        assert result["effective_area_id"] is None
+
+    def test_conflicting_identity_is_not_returned_by_single_lookup(
+        self, monkeypatch, caplog
+    ):
+        office = FakeDevice("duplicate", area_id="office")
+        garage = FakeDevice("duplicate", area_id="garage")
+
+        class _ConflictingRegistry:
+            devices = (office, garage)
+            child_devices = ()
+
+            def async_get(self, device_id):
+                return office if device_id == "duplicate" else None
+
+        view = make_view()
+        view.device = _ConflictingRegistry()
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
+
+        with caplog.at_level(logging.WARNING):
+            result = wsapi._do_device_get(FakeHass(), {"device_id": "duplicate"})
+
+        assert result == {"device": None}
+        assert any("conflicting device identity" in r.message for r in caplog.records)
+
 
 class TestDeviceList:
     def test_lists_all_dict_reprs(self, monkeypatch):
@@ -3081,6 +3230,126 @@ class TestDeviceList:
     def test_empty_registry(self, monkeypatch):
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: make_view())
         assert wsapi._do_device_list(FakeHass(), {}) == {"devices": []}
+
+    def test_core_2026_9_lists_main_and_child_in_stable_collection_order(
+        self, monkeypatch
+    ):
+        parent = FakeDevice("parent", area_id="office")
+        ordinary = FakeDevice("ordinary", area_id="garage")
+        child = FakeChildDevice("child", "parent")
+        monkeypatch.setattr(
+            wsapi,
+            "_resolve_registries",
+            lambda h: make_view(devices=[parent, ordinary], child_devices=[child]),
+        )
+
+        first = wsapi._do_device_list(FakeHass(), {})["devices"]
+        second = wsapi._do_device_list(FakeHass(), {})["devices"]
+
+        assert [row["id"] for row in first] == ["parent", "ordinary", "child"]
+        assert second == first
+        assert first[-1] == child.dict_repr
+
+    def test_pre_2026_9_mapping_container_remains_supported(self, monkeypatch):
+        ordinary = FakeDevice("ordinary", area_id="office")
+
+        class _OldDeviceRegistry:
+            def __init__(self):
+                self.devices = {ordinary.id: ordinary}
+
+            def async_get(self, device_id):
+                return self.devices.get(device_id)
+
+        view = make_view()
+        view.device = _OldDeviceRegistry()
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
+
+        assert wsapi._do_device_list(FakeHass(), {}) == {
+            "devices": [ordinary.dict_repr]
+        }
+
+    def test_conflicting_duplicate_identity_is_not_selected(self, monkeypatch):
+        office = FakeDevice("duplicate", area_id="office")
+        garage = FakeDevice("duplicate", area_id="garage")
+
+        class _ConflictingRegistry:
+            devices = (office, garage)
+            child_devices = ()
+
+            def async_get(self, device_id):
+                return None
+
+        view = make_view()
+        view.device = _ConflictingRegistry()
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
+
+        assert wsapi._do_device_list(FakeHass(), {}) == {"devices": []}
+
+    def test_collection_enumeration_failure_is_logged(self, monkeypatch, caplog):
+        class _BrokenCollection:
+            def __iter__(self):
+                raise RuntimeError("enumeration failed")
+
+        class _BrokenRegistry:
+            devices = _BrokenCollection()
+            child_devices = ()
+
+        view = make_view()
+        view.device = _BrokenRegistry()
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
+
+        with caplog.at_level(logging.WARNING):
+            assert wsapi._do_device_list(FakeHass(), {}) == {"devices": []}
+
+        assert any(
+            "failed to enumerate device registry collection" in r.message
+            for r in caplog.records
+        )
+
+    def test_conflicting_device_cannot_supply_effective_area(self):
+        office = FakeDevice("duplicate", area_id="office")
+        garage = FakeDevice("duplicate", area_id="garage")
+
+        class _ConflictingRegistry:
+            devices = (office, garage)
+            child_devices = ()
+
+            def async_get(self, device_id):
+                return office if device_id == "duplicate" else None
+
+        view = make_view(
+            entity={
+                "sensor.ambiguous": FakeRegEntry(
+                    "sensor.ambiguous", device_id="duplicate"
+                )
+            }
+        )
+        view.device = _ConflictingRegistry()
+
+        assert wsapi._effective_device_area_id(view, office) is None
+        assert (
+            wsapi._effective_area_for_entry(
+                view, view.entity.async_get("sensor.ambiguous")
+            )
+            is None
+        )
+
+    def test_conflicting_parent_cannot_supply_child_effective_area(self):
+        office = FakeDevice("parent", area_id="office")
+        garage = FakeDevice("parent", area_id="garage")
+        child = FakeChildDevice("child", "parent")
+
+        class _ConflictingRegistry:
+            devices = (office, garage)
+            child_devices = (child,)
+
+            def async_get(self, device_id):
+                return {"parent": office, "child": child}.get(device_id)
+
+        view = make_view()
+        view.device = _ConflictingRegistry()
+
+        assert wsapi._effective_device_area_id(view, child) is None
 
     def test_skips_unserializable_entry(self, monkeypatch, caplog):
         class _BadDevice:

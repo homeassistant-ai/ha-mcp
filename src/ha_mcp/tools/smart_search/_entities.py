@@ -5,6 +5,10 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
+from ...utils.device_registry_semantics import (
+    build_device_registry_snapshot,
+    effective_entity_area_id,
+)
 from ...utils.entity_membership import normalize_member_entity_ids
 from ...utils.fuzzy_search import calculate_partial_ratio, calculate_ratio
 from ...visibility.resolver import (
@@ -651,13 +655,9 @@ class EntitySearchMixin(_SearchBase):
     def _parse_device_area_map(
         cls, result: Any, warnings: list[str] | None = None
     ) -> dict[str, str | None]:
-        """Parse the device registry into ``device_id -> area_id``."""
-        device_area_map: dict[str, str | None] = {}
-        for device in cls._extract_registry_list(result, "device registry", warnings):
-            device_id = device.get("id", "")
-            if device_id:
-                device_area_map[device_id] = device.get("area_id")
-        return device_area_map
+        """Parse devices into IDs mapped to direct-or-parent effective areas."""
+        device_rows = cls._extract_registry_list(result, "device registry", warnings)
+        return build_device_registry_snapshot(list(device_rows)).effective_area_by_id
 
     @staticmethod
     def _match_exact_registry_ids(
@@ -875,7 +875,7 @@ class EntitySearchMixin(_SearchBase):
         include_hidden: bool,
         visibility_hidden: set[str],
     ) -> tuple[dict[str, str], set[str]]:
-        """Map entity_id -> resolved area_id (entity area > device area).
+        """Map entity IDs to direct area, then device direct-or-parent effective area.
 
         Hidden entities are filtered only when include_hidden is False;
         otherwise they pass through and downstream applies the score penalty so
@@ -892,10 +892,7 @@ class EntitySearchMixin(_SearchBase):
                 continue
             if is_hidden:
                 hidden_entity_ids.add(entity_id)
-            area_id = reg_info.get("area_id")
-            device_id = reg_info.get("device_id")
-            if not area_id and device_id:
-                area_id = device_area_map.get(device_id)
+            area_id = effective_entity_area_id(reg_info, device_area_map)
             if area_id:
                 entity_area_resolved[entity_id] = area_id
         return entity_area_resolved, hidden_entity_ids

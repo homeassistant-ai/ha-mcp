@@ -137,6 +137,72 @@ async def test_floor_and_device_area_inheritance_resolve_exactly() -> None:
 
 
 @pytest.mark.asyncio
+async def test_child_device_inherits_parent_area_for_action_selection() -> None:
+    """A Core 2026.9 child entity is selected through its parent's area."""
+    client = SelectorClient(
+        states=[_state("switch.child_outlet"), _state("switch.other")],
+        entities=[
+            {
+                "entity_id": "switch.child_outlet",
+                "area_id": None,
+                "device_id": "child",
+            },
+            {"entity_id": "switch.other", "area_id": None, "device_id": "other"},
+        ],
+        devices=[
+            {"id": "parent", "area_id": "salon"},
+            {"id": "child", "area_id": None, "parent_device_id": "parent"},
+            {"id": "other", "area_id": "other"},
+        ],
+        areas=[
+            {"area_id": "salon", "floor_id": None},
+            {"area_id": "other", "floor_id": None},
+        ],
+    )
+
+    result = await resolve_bulk_selector(
+        client,
+        {"domain": "switch", "area_ids": ["salon"]},
+        action="off",
+        parameters=None,
+        timeout_seconds=None,
+        validate_first=True,
+    )
+
+    assert result.resolved_entity_ids == ("switch.child_outlet",)
+
+
+@pytest.mark.asyncio
+async def test_conflicting_device_identity_fails_before_action_selection() -> None:
+    client = SelectorClient(
+        states=[_state("switch.ambiguous")],
+        entities=[
+            {
+                "entity_id": "switch.ambiguous",
+                "area_id": None,
+                "device_id": "duplicate",
+            }
+        ],
+        devices=[
+            {"id": "duplicate", "area_id": "salon"},
+            {"id": "duplicate", "area_id": "other"},
+        ],
+    )
+
+    with pytest.raises(
+        BulkSelectorInfrastructureError, match="conflicting device identity"
+    ):
+        await resolve_bulk_selector(
+            client,
+            {"domain": "switch", "area_ids": ["salon"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+
+
+@pytest.mark.asyncio
 async def test_membership_cycle_fails_before_returning_operations() -> None:
     """A cyclic aggregate graph is an all-or-nothing preflight failure."""
     client = SelectorClient(

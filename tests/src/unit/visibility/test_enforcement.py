@@ -1526,6 +1526,42 @@ class TestFallbackScoping:
             )
         assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
 
+    async def test_missing_device_parent_fails_closed_for_area_dimension(
+        self, set_config
+    ):
+        set_config(enabled=True, enforce=True, exclude_areas=["bedroom"])
+        client = FakeClient(
+            registry={
+                "success": True,
+                "result": [
+                    {
+                        "entity_id": "sensor.orphan",
+                        "area_id": None,
+                        "device_id": "child",
+                    }
+                ],
+            },
+            device={
+                "success": True,
+                "result": [
+                    {
+                        "id": "child",
+                        "area_id": None,
+                        "parent_device_id": "missing",
+                    }
+                ],
+            },
+        )
+        mw = make_mw(get_client=lambda: client)
+
+        with pytest.raises(ToolError) as exc:
+            await mw.on_call_tool(
+                make_context("ha_get_state", {"entity_id": "sensor.orphan"}),
+                _unreached_call_next,
+            )
+
+        assert _error_body(exc)["error"]["code"] == "ENTITY_VISIBILITY_ENFORCED"
+
 
 class TestComponentBucketScrub:
     async def test_component_config_buckets_scrubbed_and_totals_adjusted(

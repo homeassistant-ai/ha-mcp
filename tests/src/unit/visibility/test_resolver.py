@@ -1,6 +1,8 @@
 import asyncio
 import logging
 
+import pytest
+
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
@@ -182,6 +184,80 @@ def test_exclude_area_hides_device_inherited_entity():
         enabled=True, exclude_categories=[], exclude_areas=["garage"]
     )
     assert _hidden_dev(reg, cfg, dev) == {"light.spot"}
+
+
+def test_exclude_area_hides_child_device_entity_via_parent_area():
+    reg = _reg({"entity_id": "sensor.child", "area_id": None, "device_id": "child"})
+    dev = _dev(
+        {"id": "parent", "area_id": "office"},
+        {"id": "child", "area_id": None, "parent_device_id": "parent"},
+    )
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_areas=["office"]
+    )
+
+    assert _hidden_dev(reg, cfg, dev) == {"sensor.child"}
+
+
+def test_strict_area_filter_rejects_conflicting_device_identity():
+    reg = _reg(
+        {"entity_id": "sensor.ambiguous", "area_id": None, "device_id": "duplicate"}
+    )
+    dev = _dev(
+        {"id": "duplicate", "area_id": "office"},
+        {"id": "duplicate", "area_id": "garage"},
+    )
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_areas=["office"]
+    )
+
+    with pytest.raises(resolver.VisibilityDataUnavailable):
+        hidden_entity_ids(reg, cfg, device_registry_result=dev, strict=True)
+
+
+def test_strict_area_filter_rejects_child_with_missing_parent():
+    reg = _reg({"entity_id": "sensor.orphan", "area_id": None, "device_id": "child"})
+    dev = _dev({"id": "child", "area_id": None, "parent_device_id": "missing"})
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_areas=["office"]
+    )
+
+    with pytest.raises(
+        resolver.VisibilityDataUnavailable, match="invalid area relationships"
+    ):
+        hidden_entity_ids(reg, cfg, device_registry_result=dev, strict=True)
+
+
+def test_non_strict_area_filter_warns_for_child_with_missing_parent():
+    reg = _reg({"entity_id": "sensor.orphan", "area_id": None, "device_id": "child"})
+    dev = _dev({"id": "child", "area_id": None, "parent_device_id": "missing"})
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_areas=["office"]
+    )
+
+    hidden, warnings = hidden_entity_ids(
+        reg, cfg, device_registry_result=dev, strict=False
+    )
+
+    assert hidden == set()
+    assert warnings == [resolver._DEVICE_REGISTRY_INVALID_AREA_WARNING]
+
+
+def test_present_invalid_entity_area_blocks_child_device_area_fallback():
+    reg = _reg({"entity_id": "sensor.child", "area_id": "", "device_id": "child"})
+    dev = _dev(
+        {"id": "parent", "area_id": "office"},
+        {"id": "child", "area_id": None, "parent_device_id": "parent"},
+    )
+    exclude = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_areas=["office"]
+    )
+    allow = VisibilityConfig(
+        enabled=True, exclude_categories=[], allow_areas=["office"]
+    )
+
+    assert _hidden_dev(reg, exclude, dev) == set()
+    assert _hidden_dev(reg, allow, dev) == {"sensor.child"}
 
 
 def test_allow_area_keeps_device_inherited_entity():

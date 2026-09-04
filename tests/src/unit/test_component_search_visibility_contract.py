@@ -575,7 +575,7 @@ async def test_component_warnings_match_legacy(
 def test_component_warning_constants_match_resolver() -> None:
     """The component's duplicated warning strings equal the server resolver's.
 
-    The component ships over HACS and cannot import the server package, so the two
+    The component ships over HACS and cannot import the server package, so its
     degradation strings are duplicated in ``websocket_api.py``; this pins them equal
     to ``visibility.resolver`` so a future edit to one side fails here instead of
     silently drifting the cross-path warning text.
@@ -584,6 +584,14 @@ def test_component_warning_constants_match_resolver() -> None:
     assert (
         wsapi._ALLOWLIST_REGISTRY_EMPTY_WARNING
         == resolver._ALLOWLIST_REGISTRY_EMPTY_WARNING
+    )
+    assert (
+        wsapi._DEVICE_REGISTRY_CONFLICT_WARNING
+        == resolver._DEVICE_REGISTRY_CONFLICT_WARNING
+    )
+    assert (
+        wsapi._DEVICE_REGISTRY_INVALID_AREA_WARNING
+        == resolver._DEVICE_REGISTRY_INVALID_AREA_WARNING
     )
     # The known-entity-category set is duplicated for the same HACS reason; pin it
     # equal to the resolver's so an unknown-category divergence can't creep in.

@@ -28,7 +28,11 @@ from ._component_routing_helpers import make_ws, patch_ws
 _CAPS_DEVICES = {
     "schema_version": 1,
     "component_version": "1.1.0",
-    "capabilities": ["device_get", "device_list"],
+    "capabilities": [
+        "device_get",
+        "device_list",
+        "device_registry_child_semantics",
+    ],
     "limits": {},
 }
 
@@ -137,6 +141,31 @@ async def test_body_served_by_component() -> None:
     assert client.remove_calls == ["cfg-1"]
     assert client.device_list_calls == 0
     assert len(_device_get_calls(ws)) == 1
+
+
+@pytest.mark.asyncio
+async def test_child_singular_config_entry_is_used_for_removal() -> None:
+    child = _raw_device(
+        "child-1",
+        parent_device_id="parent-1",
+        config_entry_id="cfg-child",
+    )
+    child.pop("config_entries")
+    ws = make_ws(
+        "ha_mcp_tools/device_get",
+        info_result=_CAPS_DEVICES,
+        cmd_result={"device": child},
+    )
+    client = RoutingClient()
+    remove_device = _build_remove_device(client)
+
+    with patch_ws(ws, component_devices):
+        resp = await remove_device(device_id="child-1")
+
+    assert resp["success"] is True
+    assert resp["config_entries_removed"] == 1
+    assert client.remove_calls == ["cfg-child"]
+    assert client.device_list_calls == 0
 
 
 @pytest.mark.asyncio
