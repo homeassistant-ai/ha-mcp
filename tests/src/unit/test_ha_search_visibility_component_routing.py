@@ -75,13 +75,17 @@ _WIRE_KEYS = {
 _CAPS_SEARCH = {
     "schema_version": 1,
     "component_version": "1.1.0",
-    "capabilities": ["search"],
+    "capabilities": ["search", "device_registry_child_semantics"],
     "limits": {},
 }
 _CAPS_SEARCH_VIS = {
     "schema_version": 1,
     "component_version": "1.2.0",
-    "capabilities": ["search", "search_visibility"],
+    "capabilities": [
+        "search",
+        "search_visibility",
+        "device_registry_child_semantics",
+    ],
     "limits": {},
 }
 _CAPS_SEARCH_VIS_ALLOW_AUTH = {
@@ -91,6 +95,7 @@ _CAPS_SEARCH_VIS_ALLOW_AUTH = {
         "search",
         "search_visibility",
         "search_visibility_allowlist_authorization",
+        "device_registry_child_semantics",
     ],
     "limits": {},
 }

@@ -38,6 +38,7 @@ from ..visibility.resolver import (
     visibility_state_and_wire,
 )
 from .component_api import (
+    DEVICE_REGISTRY_CHILD_SEMANTICS,
     component_supports,
     get_component_caps,
     invalidate_caps,
@@ -2435,9 +2436,13 @@ class SearchTools:
             and _component_serves_search_types(req)
         ):
             caps = await get_component_caps(self._client)
-            if component_supports(caps, "search") and (
-                not _requested_membership(parsed_result_fields)
-                or component_supports(caps, "search_entity_membership")
+            if (
+                component_supports(caps, "search")
+                and component_supports(caps, DEVICE_REGISTRY_CHILD_SEMANTICS)
+                and (
+                    not _requested_membership(parsed_result_fields)
+                    or component_supports(caps, "search_entity_membership")
+                )
             ):
                 (
                     route_component,
@@ -4399,7 +4404,9 @@ class SearchTools:
         applied by ``ha_get_overview`` after this, identically on both paths.
         """
         caps = await get_component_caps(self._client)
-        if component_supports(caps, "overview"):
+        if component_supports(caps, "overview") and component_supports(
+            caps, DEVICE_REGISTRY_CHILD_SEMANTICS
+        ):
             component_result = await self._overview_via_component(inputs)
             if component_result is not None:
                 return component_result

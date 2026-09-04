@@ -790,6 +790,7 @@ class TestInfo:
             "blueprint_get",
             "device_get",
             "device_list",
+            "device_registry_child_semantics",
             "entity_enrich",
             "exposure",
             "config_entries",

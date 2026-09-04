@@ -41,7 +41,12 @@ from .test_ha_search_component_routing import (
 _CAPS_SPLIT = {
     "schema_version": 1,
     "component_version": "2.0.0",
-    "capabilities": ["search", "dashboards", "dashboards_doc_search"],
+    "capabilities": [
+        "search",
+        "dashboards",
+        "dashboards_doc_search",
+        "device_registry_child_semantics",
+    ],
     "limits": {"max_results": 500},
 }
 

@@ -40,11 +40,19 @@ from ._component_routing_helpers import (
     patch_ws_establish_failure,
 )
 
-_CAPS_DEVICES = {
+_CAPS_PRE_CHILD_SEMANTICS = {
     "schema_version": 1,
     "component_version": "1.1.0",
     "capabilities": ["device_get", "device_list"],
     "limits": {},
+}
+_CAPS_DEVICES = {
+    **_CAPS_PRE_CHILD_SEMANTICS,
+    "capabilities": [
+        "device_get",
+        "device_list",
+        "device_registry_child_semantics",
+    ],
 }
 
 
@@ -292,6 +300,42 @@ async def test_summary_list_uses_device_list_and_skips_entities() -> None:
     assert resp["total_devices"] == 2
     assert client.device_list_calls == 0
     assert client.entity_list_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_pre_child_semantics_component_uses_legacy_device_list() -> None:
+    """The old ``device_list`` capability cannot authorize child-aware results.
+
+    The component and server update independently. A pre-fix component can
+    advertise ``device_list`` while omitting Core 2026.9 child devices, so the
+    server must use Core's authoritative legacy registry list until the component
+    advertises the additive child-device semantic capability.
+    """
+    ws = make_ws(
+        "ha_mcp_tools/device_list",
+        info_result=_CAPS_PRE_CHILD_SEMANTICS,
+        cmd_result={"devices": [_raw_device("parent-1")]},
+    )
+    client = RoutingClient(
+        devices=[
+            _raw_device("parent-1", area_id="office"),
+            _raw_device("child-1", parent_device_id="parent-1"),
+        ]
+    )
+    get_device = _build_get_device(client)
+
+    with patch_ws(ws, component_devices):
+        resp = await get_device()
+
+    assert {row["device_id"] for row in resp["devices"]} == {
+        "parent-1",
+        "child-1",
+    }
+    assert client.device_list_calls == 1
+    assert not any(
+        call.args[0] == "ha_mcp_tools/device_list"
+        for call in ws.send_command.call_args_list
+    )
 
 
 @pytest.mark.asyncio

@@ -26,7 +26,11 @@ from ._component_routing_helpers import make_ws, patch_ws
 _CAPS_DEVICES = {
     "schema_version": 1,
     "component_version": "1.1.0",
-    "capabilities": ["device_get", "device_list"],
+    "capabilities": [
+        "device_get",
+        "device_list",
+        "device_registry_child_semantics",
+    ],
     "limits": {},
 }
 

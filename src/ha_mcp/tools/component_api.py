@@ -56,6 +56,13 @@ UNKNOWN_COMMAND_CODE = "unknown_command"
 # routing gate can't trust command payloads shaped for a different generation.
 SUPPORTED_SCHEMA_VERSION = 1
 
+# Additive semantic capability shared by every component path whose result is
+# enriched from the device registry.  The pre-2.1.3 ``device_list``/``device_get``
+# commands (and search/overview/entity enrichment built on the same registry)
+# predate Core 2026.9 child devices.  Because component and server releases update
+# independently, command presence alone cannot authorize the newer semantics.
+DEVICE_REGISTRY_CHILD_SEMANTICS = "device_registry_child_semantics"
+
 # Negative (None) caps entries expire after this many seconds of monotonic
 # time, so a component installed / upgraded mid-session is re-probed and
 # adopted instead of being pinned to "absent" for the whole process lifetime

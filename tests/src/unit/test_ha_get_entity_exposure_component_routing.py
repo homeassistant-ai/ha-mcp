@@ -32,11 +32,15 @@ from ._component_routing_helpers import (
     patch_ws_establish_failure,
 )
 
-_CAPS_EXPOSURE = {
+_CAPS_PRE_CHILD_SEMANTICS = {
     "schema_version": 1,
     "component_version": "1.1.0",
     "capabilities": ["exposure"],
     "limits": {},
+}
+_CAPS_EXPOSURE = {
+    **_CAPS_PRE_CHILD_SEMANTICS,
+    "capabilities": ["exposure", "device_registry_child_semantics"],
 }
 _CAPS_NONE = {
     "schema_version": 1,
@@ -199,6 +203,29 @@ async def test_list_mode_entity_info_follows_assistant_filter() -> None:
 async def test_no_capability_uses_legacy_list() -> None:
     """Component without exposure → legacy expose_entity/list, no entity_info."""
     ws = make_ws("ha_mcp_tools/exposure", info_result=_CAPS_NONE)
+    client = RoutingClient(_LEGACY_MAP)
+    exposure = _build_exposure(client)
+
+    with patch_ws(ws, tools_voice_assistant):
+        resp = await exposure()
+
+    assert resp["exposed_entities"] == _LEGACY_MAP
+    assert "entity_info" not in resp
+    assert client.legacy_calls == 1
+    assert not _exposure_calls(ws)
+
+
+@pytest.mark.asyncio
+async def test_pre_child_semantics_exposure_capability_uses_legacy_list() -> None:
+    """An old component cannot publish stale device-derived entity placement."""
+    ws = make_ws(
+        "ha_mcp_tools/exposure",
+        info_result=_CAPS_PRE_CHILD_SEMANTICS,
+        cmd_result={
+            "exposed_entities": _LEGACY_MAP,
+            "entity_info": {"light.a": _INFO_A},
+        },
+    )
     client = RoutingClient(_LEGACY_MAP)
     exposure = _build_exposure(client)
 

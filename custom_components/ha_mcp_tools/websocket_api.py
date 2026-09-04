@@ -362,6 +362,12 @@ CAPABILITIES: list[str] = [
     "blueprint_get",
     "device_get",
     "device_list",
+    # A semantic flag shared by every device-registry-backed read. Components
+    # predating this flag enumerate only Core's main ``devices`` collection and
+    # cannot provide authoritative Core 2026.9 child-device/effective-area data.
+    # A newer server therefore falls back to Core's native registry endpoints
+    # unless this flag accompanies the individual command capability.
+    "device_registry_child_semantics",
     "entity_enrich",
     "exposure",
     "config_entries",
