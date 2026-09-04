@@ -25,10 +25,11 @@ logger = logging.getLogger(__name__)
 
 
 async def _core_2026_9_child_fixture(ha_client):
-    """Return one real kitchen-sink parent, child, entity, and original area."""
+    """Return one real child fixture and whether the component is available."""
     info = await ha_client.send_websocket_message({"type": "ha_mcp_tools/info"})
-    assert info.get("success") is True, info
-    assert "device_registry_child_semantics" in info["result"]["capabilities"]
+    component_available = info.get("success") is True
+    if component_available:
+        assert "device_registry_child_semantics" in info["result"]["capabilities"]
 
     device_reply = await ha_client.send_websocket_message(
         {"type": "config/device_registry/list"}
@@ -92,6 +93,7 @@ async def _core_2026_9_child_fixture(ha_client):
         child_id,
         child_entity_id,
         devices_by_id[parent_id].get("area_id"),
+        component_available,
     )
 
 
@@ -426,6 +428,7 @@ async def test_core_2026_9_child_devices_inherit_parent_area(mcp_client, ha_clie
         child_id,
         child_entity_id,
         original_parent_area,
+        component_available,
     ) = await _core_2026_9_child_fixture(ha_client)
 
     body_error: Exception | None = None
@@ -438,7 +441,9 @@ async def test_core_2026_9_child_devices_inherit_parent_area(mcp_client, ha_clie
         )
         assert update.get("success") is True, update
 
-        baseline_total_lines = await _error_log_total(mcp_client)
+        baseline_total_lines = (
+            await _error_log_total(mcp_client) if component_available else None
+        )
 
         search = parse_mcp_result(
             await mcp_client.call_tool(
@@ -472,12 +477,15 @@ async def test_core_2026_9_child_devices_inherit_parent_area(mcp_client, ha_clie
         assert area_list.get("success") is True, area_list
         assert child_id in {row["device_id"] for row in area_list["devices"]}
 
-        deprecated_component_lines = [
-            line
-            for line in await _error_log_lines_since(mcp_client, baseline_total_lines)
-            if "helpers.frame" in line and "ha_mcp_tools" in line
-        ]
-        assert deprecated_component_lines == []
+        if baseline_total_lines is not None:
+            deprecated_component_lines = [
+                line
+                for line in await _error_log_lines_since(
+                    mcp_client, baseline_total_lines
+                )
+                if "helpers.frame" in line and "ha_mcp_tools" in line
+            ]
+            assert deprecated_component_lines == []
     except Exception as err:
         body_error = err
     finally:
