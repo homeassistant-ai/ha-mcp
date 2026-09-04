@@ -117,11 +117,6 @@ _FILENAME_RE = re.compile(
     r"(?P<ts>\d{8}_\d{6})(?:_(?P<seq>\d{2}))?\.yaml$"
 )
 
-# A sanitised id's stem ends in the digest ``_safe_entity_id`` appends. Only
-# such stems need the payload opened to learn the id they stand for; a stem
-# without one IS the id (or a pre-digest spelling of one).
-_DIGEST_STEM_RE = re.compile(r"-[0-9a-f]{8}$")
-
 # Captures of one entity inside one second before the manager gives up on a
 # free name. Two is the realistic case (a save then a delete of the same
 # blueprint); the cap only bounds the ``exists()`` probe.
@@ -651,10 +646,21 @@ class BackupManager:
         cannot be read answers ``None`` and is treated as not ours: skipping it
         wastes a rotation slot or hides it from one entity's listing, deleting
         it could destroy another entity's only restore point.
+
+        Only the header is read. ``_write_snapshot`` emits ``entity_id`` before
+        ``config`` (which is the whole automation, dashboard or file), so the
+        read stops at the ``config:`` line and never parses the body: every
+        listing row opens its file, and an unfiltered listing of hundreds of
+        whole-file snapshots has to stay a header read per row.
         """
         try:
             with path.open(encoding="utf-8") as handle:
-                loaded = yaml.safe_load(handle)
+                header: list[str] = []
+                for line in handle:
+                    if line.startswith("config:"):
+                        break
+                    header.append(line)
+                loaded = yaml.safe_load("".join(header))
         except (OSError, yaml.YAMLError) as err:
             logger.warning(
                 "Auto-backup: cannot identify %s, leaving it in place: %s",
@@ -740,14 +746,15 @@ class BackupManager:
             return None
         if safe_filter and meta["entity_id"] not in safe_filter:
             return None
-        # The payload is opened only when the name cannot answer alone: a
-        # filter needs the stored id to settle the stem ambiguity, and a
-        # digest stem is reported as the id it stands for, so what a row
-        # shows is what the settings UI and ha_manage_backup can send
-        # straight back as the filter and get that entity's whole history.
-        payload_id: str | None = None
-        if entity_id or _DIGEST_STEM_RE.search(meta["entity_id"]):
-            payload_id = self._payload_entity_id(path)
+        # Every row reports the id its payload names, not its stem: a filter
+        # needs the stored id to settle the stem ambiguity anyway, and a stem
+        # shown to the caller — digest or pre-digest — is a value the filter
+        # would refuse or misroute, where the stored id is what the settings
+        # UI and ha_manage_backup can send straight back and get that entity's
+        # whole history. The read is header-only (``_payload_entity_id``); a
+        # file that cannot identify itself keeps its stem in an unfiltered
+        # listing and is left out of a filtered one.
+        payload_id = self._payload_entity_id(path)
         if entity_id and not _id_matches(payload_id, entity_id):
             return None
         if payload_id is not None:

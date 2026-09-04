@@ -1040,37 +1040,74 @@ class TestListReadDelete:
 
         assert names == [files["digest"].name, files["legacy"].name, older.name]
 
-    def test_listing_reports_the_id_a_digest_stem_stands_for(
-        self, tmp_path: Path
-    ) -> None:
-        """A digest stem is a filename artefact; the row shows the entity."""
+    def test_every_row_reports_the_id_its_payload_names(self, tmp_path: Path) -> None:
+        """A stem is a filename artefact; the row shows the entity.
+
+        That has to hold for the pre-digest file too: its stem is the bare
+        sanitised name, which the filter refuses as ambiguous, so a row
+        showing it would show a value that selects nothing — or the other
+        entity (Patch76, PR #2356 concern 5).
+        """
         files = _colliding_blueprint_snapshots(tmp_path)
         mgr = _mk_manager(tmp_path)
 
         shown = {m["name"]: m["entity_id"] for m in mgr.list_snapshots()}
 
         assert shown[files["digest"].name] == "user/motion.yaml"
+        assert shown[files["legacy"].name] == "user/motion.yaml"
         assert shown[files["other"].name] == "user_motion.yaml"
 
     def test_listed_entity_id_round_trips_into_the_filter(self, tmp_path: Path) -> None:
         """What a listing shows is what the settings UI and ha_manage_backup
         send back as the filter, so it has to select that entity's whole
-        history — both stems — and nothing else (Patch76, PR #2356 concern 4).
+        history — both stems — and nothing else, whichever row it was read
+        from (Patch76, PR #2356 concerns 4 and 5).
         """
         files = _colliding_blueprint_snapshots(tmp_path)
         mgr = _mk_manager(tmp_path)
-        shown = next(
-            m["entity_id"]
-            for m in mgr.list_snapshots()
-            if m["name"] == files["digest"].name
-        )
+        shown = {m["name"]: m["entity_id"] for m in mgr.list_snapshots()}
 
-        listed = {m["name"] for m in mgr.list_snapshots(entity_id=shown)}
-        deleted = set(mgr.delete_bulk(entity_id=shown)["deleted"])
+        for row in (files["digest"].name, files["legacy"].name):
+            listed = {m["name"] for m in mgr.list_snapshots(entity_id=shown[row])}
+            assert listed == {files["digest"].name, files["legacy"].name}, row
 
-        assert listed == {files["digest"].name, files["legacy"].name}
-        assert deleted == listed
+        deleted = set(mgr.delete_bulk(entity_id=shown[files["legacy"].name])["deleted"])
+
+        assert deleted == {files["digest"].name, files["legacy"].name}
         assert files["other"].exists()
+
+    def test_payload_id_comes_from_the_header_not_the_body(
+        self, tmp_path: Path
+    ) -> None:
+        """Every listing row opens its file, so the read stops at ``config:``.
+
+        A snapshot whose body is not even valid YAML still identifies itself,
+        which is what pins that the body is never parsed: an unfiltered
+        listing of hundreds of whole-file snapshots must stay a header read
+        per row, not a full parse (Patch76, PR #2356 concern 5).
+        """
+        bad = tmp_path / "file.packages_foo.yaml.20260903_110000.yaml"
+        bad.write_text(
+            "# ha_mcp_backup\n"
+            "schema_version: 1\n"
+            "domain: file\n"
+            "entity_id: packages/foo.yaml\n"
+            "captured: '2026-09-03T00:00:00+00:00'\n"
+            "tool: t\n"
+            "config: [this body never closes\n"
+            "kind: text\n",
+            encoding="utf-8",
+        )
+        mgr = _mk_manager(tmp_path)
+
+        with pytest.raises(ValueError):
+            mgr.read_snapshot(bad.name)
+        rows = mgr.list_snapshots()
+
+        assert [m["entity_id"] for m in rows] == ["packages/foo.yaml"]
+        assert [
+            m["name"] for m in mgr.list_snapshots(entity_id="packages/foo.yaml")
+        ] == [bad.name]
 
     def test_digest_stem_filter_selects_only_that_entity(self, tmp_path: Path) -> None:
         """The digest stem names exactly one entity, so a caller holding it
