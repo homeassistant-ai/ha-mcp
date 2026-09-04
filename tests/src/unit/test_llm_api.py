@@ -1003,38 +1003,6 @@ class TestPreRenameSdkFallback:
             await client.aclose()
 
 
-@pytest.fixture
-def real_probatio():
-    """The installed probatio, past the stub this tier installs for it.
-
-    ``_embedded_stubs`` replaces the module unconditionally with a two-line
-    fake, so a plain import here would assert against that fake instead of the
-    library Core actually converts with.
-    """
-    import importlib
-    import sys
-
-    saved = {
-        name: module
-        for name, module in sys.modules.items()
-        if name == "probatio" or name.startswith("probatio.")
-    }
-    for name in saved:
-        del sys.modules[name]
-    try:
-        module = importlib.import_module("probatio")
-        assert hasattr(module, "to_openapi"), "got the stub, not the library"
-        yield module
-    finally:
-        for name in [
-            name
-            for name in sys.modules
-            if name == "probatio" or name.startswith("probatio.")
-        ]:
-            del sys.modules[name]
-        sys.modules.update(saved)
-
-
 class TestExclusiveBoundNormalisation:
     """Issue #2361: an exclusive bound must not reach Core's schema conversion.
 
@@ -1075,8 +1043,55 @@ class TestExclusiveBoundNormalisation:
 
         normalised = llm_api._to_inclusive_bounds(schema)
 
-        assert normalised["$defs"]["Item"] == {"type": "integer", "minimum": 1}
+        # The integer node folds exactly: 1 is excluded, so 2 is the bound.
+        # The untyped one widens, there being no smaller step to take.
+        assert normalised["$defs"]["Item"] == {"type": "integer", "minimum": 2}
         assert normalised["properties"]["rows"]["items"] == {"maximum": 9}
+
+    def test_an_integer_bound_folds_to_the_value_the_server_accepts(self):
+        """An integer excluding 1 accepts 2, and advertising 1 would lie.
+
+        The widening trade the untyped case makes -- advertise an edge the
+        server rejects, and let the server reject it on arrival -- is not a
+        trade that has to be made here: the exact equivalent exists.
+        """
+        assert llm_api._to_inclusive_bounds(
+            {"type": "integer", "exclusiveMinimum": 1}
+        ) == {"type": "integer", "minimum": 2}
+        assert llm_api._to_inclusive_bounds(
+            {"type": "integer", "exclusiveMaximum": 9}
+        ) == {"type": "integer", "maximum": 8}
+        # A fractional bound on an integer node lands on the first integer
+        # inside it, not on the next one out.
+        assert llm_api._to_inclusive_bounds(
+            {"type": "integer", "exclusiveMinimum": 1.5}
+        ) == {"type": "integer", "minimum": 2}
+        # Nullable integers are still integers.
+        assert llm_api._to_inclusive_bounds(
+            {"type": ["integer", "null"], "exclusiveMinimum": 1}
+        ) == {"type": ["integer", "null"], "minimum": 2}
+
+    def test_a_union_that_also_admits_numbers_is_not_tightened(self):
+        """1.0001 is a legal value there, so 2 would reject what the server takes."""
+        assert llm_api._to_inclusive_bounds(
+            {"type": ["integer", "number"], "exclusiveMinimum": 1}
+        ) == {"type": ["integer", "number"], "minimum": 1}
+
+    def test_a_discriminator_mapping_is_a_name_map(self):
+        """Its keys are author-chosen tags and its values are refs, not bounds.
+
+        Descending into it would drop the tag as a non-numeric bound and hand
+        the model a discriminated union with a missing branch.
+        """
+        schema = {
+            "oneOf": [{"$ref": "#/$defs/A"}],
+            "discriminator": {
+                "propertyName": "kind",
+                "mapping": {"exclusiveMinimum": "#/$defs/A"},
+            },
+        }
+
+        assert llm_api._to_inclusive_bounds(schema) == schema
 
     def test_a_property_named_like_the_keyword_is_left_alone(self):
         schema = {
@@ -1258,26 +1273,99 @@ class TestExclusiveBoundNormalisation:
 
         assert "exclusiveMinimum" not in _json.dumps(out)
 
-    def test_convert_parameters_normalises_before_converting(self, monkeypatch):
-        seen: dict[str, Any] = {}
+    def test_the_mirrored_path_converts_a_normalised_schema(self, monkeypatch):
+        """Core's converter must never see the bound, in either exposure mode."""
+        seen: list[Any] = []
 
         def _capture(schema: Any) -> Any:
-            seen["schema"] = schema
+            seen.append(schema)
             return schema
 
         monkeypatch.setattr(llm_api, "convert_to_voluptuous", _capture)
-        api = _make_api(_make_hass())
         tool = SimpleNamespace(
             name="ha_search",
+            description="d",
             inputSchema={
                 "type": "object",
                 "properties": {"budget": {"type": "number", "exclusiveMinimum": 0}},
             },
         )
 
-        api._convert_parameters(tool)
+        _make_api(_make_hass(), mode=EXPOSURE_FULL)._build_full_tools([tool])
+        _make_api(_make_hass(), mode=EXPOSURE_TOOL_SEARCH)._build_tool_search_tools(
+            [tool], {"ha_search"}
+        )
 
-        assert seen["schema"]["properties"]["budget"] == {
-            "type": "number",
-            "minimum": 0,
-        }
+        assert len(seen) == 2
+        for schema in seen:
+            assert schema["properties"]["budget"] == {"type": "number", "minimum": 0}
+
+    def test_a_tool_on_both_surfaces_is_normalised_once(self, monkeypatch):
+        """The catalog entry and the mirrored parameters share one rewrite.
+
+        Two rewrites would also mean two log lines per turn for every pinned
+        tool, which is what makes the report below readable.
+        """
+        # Counted at the entry point, not on the walk: ``_to_inclusive_bounds``
+        # recurses, so counting it would measure the schema's depth instead.
+        calls: list[Any] = []
+        real = llm_api._normalise_schema
+        monkeypatch.setattr(
+            llm_api,
+            "_normalise_schema",
+            lambda schema, tool_name: calls.append(tool_name) or real(schema, tool_name),
+        )
+        tool = SimpleNamespace(
+            name="ha_search",
+            description="d",
+            inputSchema={
+                "type": "object",
+                "properties": {"budget": {"type": "number", "exclusiveMinimum": 0}},
+            },
+        )
+
+        api = _make_api(_make_hass(), mode=EXPOSURE_TOOL_SEARCH)
+        api._build_tool_search_tools([tool], {"ha_search"})
+
+        assert len(calls) == 1
+
+    def test_the_rewrite_is_reported_once_per_tool_with_its_name(self, caplog):
+        """Both branches log, and both name the tool that carried the schema.
+
+        The catalog path publishes without converting anything, so a log line
+        emitted from the converter would say nothing about the tools that
+        reach the model through tool search -- the default mode.
+        """
+        api = _make_api(_make_hass(), mode=EXPOSURE_TOOL_SEARCH)
+        widened = SimpleNamespace(
+            name="ha_widened",
+            description="d",
+            inputSchema={"type": "number", "exclusiveMinimum": 0},
+        )
+        dropped = SimpleNamespace(
+            name="ha_dropped",
+            description="d",
+            inputSchema={"type": "number", "exclusiveMinimum": True},
+        )
+
+        with caplog.at_level(logging.DEBUG, logger=llm_api._LOGGER.name):
+            api._build_tool_search_tools([widened, dropped], set())
+
+        debug = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        warning = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len([r for r in debug if "ha_widened" in r.getMessage()]) == 1
+        assert len([r for r in warning if "ha_dropped" in r.getMessage()]) == 1
+
+    def test_an_untouched_schema_is_not_reported(self, caplog):
+        """Nothing changed, so nothing is worth an operator's attention."""
+        api = _make_api(_make_hass(), mode=EXPOSURE_TOOL_SEARCH)
+        tool = SimpleNamespace(
+            name="ha_clean",
+            description="d",
+            inputSchema={"type": "number", "minimum": 0},
+        )
+
+        with caplog.at_level(logging.DEBUG, logger=llm_api._LOGGER.name):
+            api._build_tool_search_tools([tool], set())
+
+        assert [r for r in caplog.records if "ha_clean" in r.getMessage()] == []

@@ -50,9 +50,10 @@ import asyncio
 import copy
 import importlib
 import logging
+import math
 from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 from typing import TYPE_CHECKING, Any, cast
 
@@ -139,6 +140,15 @@ def _schema_converter() -> Callable[[Any], Any]:
         if err.name != "voluptuous_openapi":
             raise
         probatio = importlib.import_module("probatio")
+        _LOGGER.warning(
+            "voluptuous-openapi is missing; converting tool schemas with "
+            "probatio instead. The component manifest requires it, so this "
+            "means the requirement did not install. Probatio's OpenAPI codec "
+            "cannot express the node it builds for an integer, so a numeric "
+            "parameter can reach the conversation agent as a string, an empty "
+            "schema or a plain number. Reinstall the integration to restore "
+            "the requirement."
+        )
         return cast(Callable[[Any], Any], probatio.from_openapi)
     return cast(Callable[[Any], Any], legacy.convert_to_voluptuous)
 
@@ -169,15 +179,37 @@ _SCHEMA_MAPS: frozenset[str] = frozenset(
 _INSTANCE_VALUES: frozenset[str] = frozenset(
     {"default", "const", "enum", "examples", "example"}
 )
-# Each exclusive keyword, the inclusive twin it folds into, and the picker
-# that keeps the tighter of the two when both are present.
-_EXCLUSIVE_BOUNDS: tuple[tuple[str, str, Callable[[Any, Any], Any]], ...] = (
-    ("exclusiveMinimum", "minimum", max),
-    ("exclusiveMaximum", "maximum", min),
+# Keywords whose value is neither a subschema nor a map of subschemas.
+# OpenAPI's ``discriminator`` holds a ``propertyName`` and a ``mapping`` of
+# author-chosen tags to ``$ref`` strings; a tag spelled like a bound is one of
+# those names, and its ``$ref`` value would read as a non-numeric bound and be
+# dropped, corrupting a valid discriminated union.
+_OPAQUE_KEYWORDS: frozenset[str] = frozenset({"discriminator"})
+# Each exclusive keyword, the inclusive twin it folds into, the picker that
+# keeps the tighter of the two when both are present, and the step to the
+# nearest integer the bound still admits.
+_EXCLUSIVE_BOUNDS: tuple[
+    tuple[str, str, Callable[[Any, Any], Any], Callable[[Any], int]], ...
+] = (
+    ("exclusiveMinimum", "minimum", max, lambda bound: math.floor(bound) + 1),
+    ("exclusiveMaximum", "maximum", min, lambda bound: math.ceil(bound) - 1),
 )
 
 
-def _to_inclusive_bounds(schema: Any) -> Any:
+@dataclass
+class _Rewrite:
+    """What one schema normalisation changed, so a caller can log it once.
+
+    The walk is recursive and knows no tool name; collecting here lets the
+    entry point say what happened to which tool in a single line, rather than
+    once per node or not at all.
+    """
+
+    widened: list[str] = field(default_factory=list)
+    dropped: list[str] = field(default_factory=list)
+
+
+def _to_inclusive_bounds(schema: Any, rewrite: _Rewrite | None = None) -> Any:
     """Return the schema with every exclusive numeric bound made inclusive.
 
     Home Assistant re-emits the converted schema through Probatio's OpenAPI
@@ -188,35 +220,38 @@ def _to_inclusive_bounds(schema: Any) -> Any:
     one such bound anywhere in the mirrored toolset fails every conversation
     turn, not just calls to the tool carrying it.
 
-    A numeric bound moves by one representable point; the server still
-    enforces the real one when the call arrives, so nothing becomes callable
-    that was not callable before, only the advertised edge widens. A boolean
-    is the Draft-4 flag rather than a bound and is dropped outright.
+    On an integer-only node the fold is exact -- ``exclusiveMinimum: 1``
+    becomes ``minimum: 2``, the smallest integer the bound admits. Elsewhere
+    the advertised edge widens by one representable point; the server still
+    enforces the real bound when the call arrives, so nothing becomes callable
+    that was not callable before. A boolean is the Draft-4 flag rather than a
+    bound and is dropped outright.
 
     Normalising here rather than only at the source covers the server versions
     this component does not control: the ha-mcp package installs and updates
     independently of the component, and an explicit pip-spec pins it outright.
     """
     if isinstance(schema, list):
-        return [_to_inclusive_bounds(item) for item in schema]
+        return [_to_inclusive_bounds(item, rewrite) for item in schema]
     if not isinstance(schema, dict):
         return schema
 
     result: dict[str, Any] = {}
     for key, value in schema.items():
-        if key in _INSTANCE_VALUES:
+        if key in _INSTANCE_VALUES or key in _OPAQUE_KEYWORDS:
             # Copied, not aliased: the result is handed to Core and kept in
             # the search catalog, and neither may reach back into the MCP
             # result object this schema came from.
             result[key] = copy.deepcopy(value)
         elif key in _SCHEMA_MAPS and isinstance(value, dict):
             result[key] = {
-                name: _to_inclusive_bounds(sub) for name, sub in value.items()
+                name: _to_inclusive_bounds(sub, rewrite)
+                for name, sub in value.items()
             }
         else:
-            result[key] = _to_inclusive_bounds(value)
+            result[key] = _to_inclusive_bounds(value, rewrite)
 
-    _fold_bounds(result)
+    _fold_bounds(result, rewrite)
     return result
 
 
@@ -225,24 +260,80 @@ def _is_number(value: Any) -> bool:
     return not isinstance(value, bool) and isinstance(value, int | float)
 
 
-def _fold_bounds(node: dict[str, Any]) -> None:
+def _admits_integers_only(node: dict[str, Any]) -> bool:
+    """True when the node's declared type accepts integers and nothing wider.
+
+    A union that also admits ``number`` is not tightened: the excluded edge is
+    still reachable there as a fraction.
+    """
+    declared = node.get("type")
+    if isinstance(declared, str):
+        return declared == "integer"
+    if isinstance(declared, list):
+        return "integer" in declared and "number" not in declared
+    return False
+
+
+def _fold_bounds(node: dict[str, Any], rewrite: _Rewrite | None = None) -> None:
     """Fold each exclusive keyword into its inclusive twin, in place."""
-    for exclusive, inclusive, tighter in _EXCLUSIVE_BOUNDS:
+    for exclusive, inclusive, tighter, to_integer in _EXCLUSIVE_BOUNDS:
         if exclusive not in node:
             continue
         bound = node.pop(exclusive)
         if not _is_number(bound):
             # Nothing non-numeric is a readable bound in a subschema slot, and
-            # the slot is all this can be: the name maps and instance-value
-            # keywords above keep foreign data out of reach. Probatio refuses a
-            # string, a list and the Draft-4 boolean outright -- costing the
-            # whole tool -- and silently retypes a null number param to a
-            # string one. Dropping the key repairs all four.
+            # the slot is all this can be: the name maps, the instance-value
+            # keywords and the opaque ones above keep foreign data out of
+            # reach. Probatio refuses a string, a list and the Draft-4 boolean
+            # outright -- costing the whole tool -- and silently retypes a null
+            # number param to a string one. Dropping the key repairs all four.
+            if rewrite is not None:
+                rewrite.dropped.append(exclusive)
             continue
+        # On an integer-only node the exact inclusive equivalent exists, so
+        # take it: folding ``exclusiveMinimum: 1`` to ``minimum: 1`` would
+        # advertise a value the server rejects.
+        if _admits_integers_only(node):
+            bound = to_integer(bound)
         # ``tighter`` when the schema already carried an inclusive bound, so
         # that bound is never loosened to the exclusive one.
         current = node.get(inclusive)
         node[inclusive] = tighter(current, bound) if _is_number(current) else bound
+        if rewrite is not None:
+            rewrite.widened.append(exclusive)
+
+
+def _normalise_schema(schema: Any, tool_name: str) -> Any:
+    """Normalise one tool's schema and report, once, what that changed.
+
+    Both publication paths reach the model: the mirrored parameters Core
+    converts, and the tool-search catalog, which is returned verbatim and
+    passes no converter at all. Both call this, so a tool is normalised once
+    per turn and logged once per turn whichever path published it.
+    """
+    rewrite = _Rewrite()
+    result = _to_inclusive_bounds(schema, rewrite)
+    if rewrite.dropped:
+        _LOGGER.warning(
+            "Dropped %s from %s's schema: the value is not a number, so it is "
+            "either the Draft-4 boolean flag or malformed, and Home "
+            "Assistant's codec answers such a node by refusing the tool or by "
+            "retyping the parameter. The server should advertise the bound as "
+            "a number, the only form draft 2020-12 permits.",
+            ", ".join(sorted(set(rewrite.dropped))),
+            tool_name,
+        )
+    if rewrite.widened:
+        _LOGGER.debug(
+            "Rewrote %s in %s's schema to the inclusive twin so Home Assistant "
+            "does not re-emit it in the Draft-4 form. On a non-integer bound "
+            "the advertised edge is now one representable point wider than the "
+            "server enforces, so a model passing that edge gets a rejection "
+            "that is otherwise unattributable from any log.",
+            ", ".join(sorted(set(rewrite.widened))),
+            tool_name,
+        )
+    return result
 
 
 # Used when the server's initialize result carries no instructions (it always
@@ -730,20 +821,13 @@ class HaMcpLlmApi(llm.API):
 
         return llm.APIInstance(self, prompt, llm_context, tools)
 
-    def _convert_parameters(self, tool: Any) -> vol.Schema | None:
-        """Convert one tool's JSON schema, or None (logged) when it fails."""
+    def _convert_parameters(self, tool: Any, schema: Any) -> vol.Schema | None:
+        """Convert one tool's normalised schema, or None (logged) when it fails.
+
+        The schema is normalised by the caller rather than here, so that a tool
+        the catalog also lists is rewritten and logged once rather than twice.
+        """
         try:
-            schema = _to_inclusive_bounds(tool.inputSchema)
-            if schema != tool.inputSchema:
-                # The advertised bound now differs from the server's own.
-                # Say so once per tool per turn: the resulting failure — model
-                # passes the newly-legal edge value, server rejects it — is
-                # otherwise unattributable from any log.
-                _LOGGER.debug(
-                    "Widened an exclusive bound in %s's schema so Home "
-                    "Assistant does not re-emit it in the Draft-4 form",
-                    tool.name,
-                )
             return convert_to_voluptuous(schema)
         except Exception:
             # One unconvertible schema must not take down the whole
@@ -759,7 +843,8 @@ class HaMcpLlmApi(llm.API):
         """Mirror every exposed tool directly (full-catalog mode)."""
         tools: list[llm.Tool] = []
         for tool in exposed:
-            parameters = self._convert_parameters(tool)
+            schema = _normalise_schema(tool.inputSchema, tool.name)
+            parameters = self._convert_parameters(tool, schema)
             if parameters is None:
                 continue
             tools.append(
@@ -776,18 +861,20 @@ class HaMcpLlmApi(llm.API):
         catalog: list[dict[str, Any]] = []
         for tool in exposed:
             exposed_names.add(tool.name)
+            # One normalisation feeds both surfaces, so a search result never
+            # shows a bound the mirrored tool does not advertise. Neither
+            # consumer mutates it: the catalog is serialised as-is and the
+            # converter reads it to build a separate voluptuous schema.
+            schema = _normalise_schema(tool.inputSchema, tool.name)
             catalog.append(
                 {
                     "name": tool.name,
                     "description": tool.description or "",
-                    # Same normalisation the mirrored parameters get, so a
-                    # search result never shows a bound the tool does not
-                    # advertise.
-                    "input_schema": _to_inclusive_bounds(tool.inputSchema),
+                    "input_schema": schema,
                 }
             )
             if tool.name in pinned:
-                parameters = self._convert_parameters(tool)
+                parameters = self._convert_parameters(tool, schema)
                 if parameters is not None:
                     tools.append(
                         HaMcpTool(
