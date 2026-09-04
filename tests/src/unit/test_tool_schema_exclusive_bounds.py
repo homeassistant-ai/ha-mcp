@@ -1,0 +1,102 @@
+"""Schema regression test (issue #2361): no tool may advertise an exclusive bound.
+
+Home Assistant re-emits every LLM-API tool schema through Probatio's OpenAPI
+codec, which defaults to OpenAPI 3.0 and spells an exclusive bound the Draft-4
+way -- ``minimum`` beside ``exclusiveMinimum: true``. The Anthropic API
+validates ``input_schema`` as JSON Schema draft 2020-12, where
+``exclusiveMinimum`` must be a number, so it rejects the whole request. One
+tool carrying such a bound therefore fails *every* conversation turn, not just
+calls to that tool. A mandatory tool cannot be disabled or unpinned to work
+around it either; the one escape is turning that tool's separate LLM-API
+exposure switch off, which costs the tool for every conversation agent.
+
+``config_time_budget`` on ``ha_search`` was the first instance: ``gt=0``
+produced ``exclusiveMinimum`` and broke the Anthropic agent outright. Use an
+inclusive bound (``ge=``/``le=``) with a small positive floor instead; the
+value the server enforces is unchanged for every practical input.
+
+Coverage: the shared registry walk forces every bool feature flag on, but
+``enable_dev_mode`` is an advanced setting rather than a feature flag, so the
+``ha_dev_*`` tools would go uninspected. They are deny-by-default for the LLM
+API, not unreachable — ``effective_llm_api_exposed`` honours a user override
+for any name — so this module turns dev mode on and asserts they are present
+rather than reasoning them away.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+
+import pytest
+
+from .test_container_param_coercion_complete import _all_registered_tools
+
+_EXCLUSIVE_KEYWORDS = ("exclusiveMinimum", "exclusiveMaximum")
+
+# Registered only while dev mode is on; the walk must reach them too.
+_DEV_TOOLS = ("ha_dev_manage_server", "ha_dev_manage_settings")
+
+
+@pytest.fixture
+def all_tools() -> Any:
+    """Every registered tool, dev mode included.
+
+    The settings singleton is rebuilt from the restored environment on the way
+    out: leaving a dev-mode-on singleton behind would hand the next test in the
+    session a different tool surface than it asked for.
+    """
+    from ha_mcp.config import _reset_global_settings
+
+    previous = os.environ.get("HAMCP_ENABLE_DEV_MODE")
+    os.environ["HAMCP_ENABLE_DEV_MODE"] = "true"
+    try:
+        return _all_registered_tools()
+    finally:
+        if previous is None:
+            os.environ.pop("HAMCP_ENABLE_DEV_MODE", None)
+        else:
+            os.environ["HAMCP_ENABLE_DEV_MODE"] = previous
+        _reset_global_settings()
+
+
+def _exclusive_bounds(node: Any, path: str) -> list[str]:
+    """Return ``path: keyword`` for every exclusive bound anywhere in a schema."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        found.extend(
+            f"{path}: {keyword}" for keyword in _EXCLUSIVE_KEYWORDS if keyword in node
+        )
+        for key, value in node.items():
+            found.extend(_exclusive_bounds(value, f"{path}.{key}"))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            found.extend(_exclusive_bounds(value, f"{path}[{index}]"))
+    return found
+
+
+def test_the_walk_reaches_the_dev_tools(all_tools: Any) -> None:
+    """Positive control: a silently shrinking walk must not read as clean."""
+    missing = [name for name in _DEV_TOOLS if name not in all_tools]
+
+    assert not missing, (
+        f"dev-mode tools absent from the walk: {missing}. Their schemas go "
+        "uninspected, and the guard below would pass by not looking."
+    )
+
+
+def test_no_tool_schema_advertises_an_exclusive_bound(all_tools: Any) -> None:
+    """Walk every registered tool schema; none may carry an exclusive bound."""
+    tools = all_tools
+    assert tools, "no tools registered -- guardrail cannot run"
+
+    offenders: list[str] = []
+    for tool_name, tool in sorted(tools.items()):
+        offenders.extend(_exclusive_bounds(tool.parameters, tool_name))
+
+    assert not offenders, (
+        "Tool schemas carrying an exclusive numeric bound. Home Assistant "
+        "re-emits these as the Draft-4 boolean form, which Anthropic rejects "
+        "as an invalid input_schema, breaking every conversation turn "
+        "(issue #2361). Use ge=/le= instead:\n  " + "\n  ".join(sorted(offenders))
+    )

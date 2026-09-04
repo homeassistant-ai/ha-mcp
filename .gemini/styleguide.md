@@ -137,6 +137,14 @@ add manual central registration.
 `register_tool_methods()` discovers decorated methods and adds them to the
 server.
 
+Numeric parameter bounds use `ge=`/`le=`, never `gt=`/`lt=`. Home Assistant
+re-emits every LLM-API tool schema through Probatio's OpenAPI 3.0 codec, which
+writes an exclusive bound the Draft-4 way; the Anthropic API validates
+`input_schema` as draft 2020-12 and rejects the whole request, so one exclusive
+bound anywhere in the toolset fails every conversation turn rather than only
+calls to the tool carrying it (#2361). Pick an inclusive floor below any usable
+value. Enforced by `tests/src/unit/test_tool_schema_exclusive_bounds.py`.
+
 ```python
 from typing import Any
 

@@ -2226,7 +2226,11 @@ class SearchTools:
             float | None,
             Field(
                 default=None,
-                gt=0,
+                # Inclusive floor, not gt=0: an exclusive bound reaches an
+                # Anthropic agent as an invalid input_schema and breaks every
+                # conversation turn. See tests/src/unit/
+                # test_tool_schema_exclusive_bounds.py (issue #2361).
+                ge=0.001,
                 le=300,
                 description=(
                     "Per-call override for the per-id config-fetch wall-clock "
@@ -4551,7 +4555,9 @@ class SearchTools:
             float | None,
             Field(
                 default=None,
-                gt=0,
+                # Same inclusive floor as the ha_search parameter feeding this
+                # one — keep the two bounds identical (issue #2361).
+                ge=0.001,
                 le=300,
                 description=(
                     "Per-call override for the per-id config-fetch wall-clock "
