@@ -5,6 +5,8 @@ This module centralizes test configuration values to ensure consistency
 across all test environments.
 """
 
+import os
+
 # Long-lived access token for test Home Assistant instance
 # This token is embedded in tests/initial_test_state/.storage/auth
 # Expires: 2035 (10+ years from token creation)
@@ -19,8 +21,12 @@ NON_ADMIN_TEST_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIzNzkyOTc
 
 # Home Assistant Docker image for E2E/performance/UAT tests.
 # Keep in sync with .github/workflows/e2e-tests.yml and pr.yml.
+# HA_TEST_IMAGE in the environment overrides the pin: the container beta
+# lane (.github/workflows/e2e-beta-tests.yml) points it at the current
+# beta Core image resolved at run time.
 # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-HA_TEST_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.8.3"
+_DEFAULT_HA_TEST_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.8.3"
+HA_TEST_IMAGE = os.environ.get("HA_TEST_IMAGE", _DEFAULT_HA_TEST_IMAGE)
 
 # Test user credentials (for UI access)
 TEST_USER = "mcp"
