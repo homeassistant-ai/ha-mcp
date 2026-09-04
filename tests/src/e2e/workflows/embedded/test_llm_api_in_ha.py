@@ -223,18 +223,24 @@ def test_llm_api_schemas_survive_core_reemission_haos(
 def _assert_registration_logged_in_haos() -> None:
     """The HAOS-side counterpart of the container registration assertion.
 
-    ``ha core logs`` is the established way to read Core's log inside the VM
-    (test_zz_reentrant_log_deadlock.py uses the same ``| grep -c ... || true``
-    shape, which keeps grep's no-match exit status from tripping ssh_exec's
-    ``check=True``).
+    Reads ``home-assistant.log`` inside the Core container, the same file the
+    container lane reads through its bind mount. ``ha core logs`` was tried
+    first and does not carry the line: it serves a bounded tail of the Core
+    journal, and by the time this test runs the boot-time registration line
+    is outside that window. The ``|| true`` keeps grep's no-match exit status
+    from tripping ssh_exec's ``check=True``.
     """
-    script = f"ha core logs 2>/dev/null | grep -c '{_REGISTRATION_LINE}' || true"
+    script = (
+        f"docker exec {_HAOS_CORE_CONTAINER} sh -c "
+        f"\"grep -c '{_REGISTRATION_LINE}' /config/home-assistant.log 2>/dev/null"
+        ' || true"'
+    )
     deadline = time.monotonic() + _REGISTRATION_TIMEOUT_S
     count = ""
     while True:
         # Bound each ssh call by what is left of the deadline (with a small
         # floor so a near-expired deadline still gets one real attempt), so a
-        # stalled `ha core logs` cannot outlive the deadline it polls for.
+        # stalled call cannot outlive the deadline it polls for.
         remaining = max(5.0, deadline - time.monotonic())
         count = ssh_exec(["sh", "-c", script], timeout=remaining).stdout.strip()
         if count.isdigit() and int(count) > 0:
@@ -244,7 +250,8 @@ def _assert_registration_logged_in_haos() -> None:
         LOG.debug("LLM-API registration line not in Core's log yet (count=%r)", count)
         time.sleep(_REGISTRATION_POLL_S)
     raise AssertionError(
-        f"{_REGISTRATION_LINE!r} never appeared in Core's log within "
+        f"{_REGISTRATION_LINE!r} never appeared in /config/home-assistant.log "
+        f"inside the {_HAOS_CORE_CONTAINER} container within "
         f"{_REGISTRATION_TIMEOUT_S}s (grep count: {count!r}), so the toolset "
         "was never registered as an LLM API inside this Home Assistant"
     )
