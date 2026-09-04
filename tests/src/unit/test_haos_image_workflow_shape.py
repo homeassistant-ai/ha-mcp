@@ -12,6 +12,7 @@ _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
 # lanes participate in every surviving workflow event.
 _STABLE_WORKFLOW = "haos-e2e-tests.yml"
 _BETA_WORKFLOW = "haos-e2e-beta-tests.yml"
+_CONTAINER_BETA_WORKFLOW = "e2e-beta-tests.yml"
 # 7 actual consumers (the six HAOS lanes + the image builder); the floor is what
 # catches a lane that silently loses its image-cache step.
 _CACHE_KEY_CONSUMER_FLOOR = 7
@@ -209,10 +210,13 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
     )
     beta_resolvers: list[str] = []
     beta_cache_keys: list[str] = []
+    # The container beta workflow's resolver job is the only other beta.json
+    # consumer; it has no HAOS mode and is pinned down by
+    # test_container_beta_lane_resolves_the_beta_core_image_once below.
     assert _beta_lane_jobs() == {
         (_BETA_WORKFLOW, beta_job_id, mode)
         for beta_job_id, mode, _stable_job_id in lane_specs
-    }
+    } | {(_CONTAINER_BETA_WORKFLOW, "resolve-beta", "None")}
 
     beta_path = _WORKFLOW_DIR / _BETA_WORKFLOW
     assert beta_path.is_file(), "both beta lanes live in one workflow file"
@@ -341,3 +345,81 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
 
     assert beta_resolvers[0] == beta_resolvers[1]
     assert beta_cache_keys[0] == beta_cache_keys[1]
+
+
+def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
+    """The container beta lanes mirror the HAOS beta trigger shape (#2361).
+
+    One resolver job reads the beta Core version and every test job pins its
+    HA image to that job's output, so all five lanes test the same image and
+    the stable renovate pin never leaks into a beta run.
+    """
+    path = _WORKFLOW_DIR / _CONTAINER_BETA_WORKFLOW
+    assert path.is_file()
+    workflow = _workflow(path)
+
+    triggers = workflow[True]
+    assert "pull_request" not in triggers, (
+        "beta compatibility runs after changes land on master, not on every "
+        "push to an open PR"
+    )
+    assert triggers["push"] == {"branches": ["master"]}, (
+        "no paths filter: a nightly must run regardless of the last commit"
+    )
+    assert triggers["schedule"] == [{"cron": "37 3 * * *"}]
+    assert set(triggers["workflow_dispatch"]["inputs"]) == {
+        "pytest_args",
+        "pytest_paths",
+    }
+    assert workflow["concurrency"] == {
+        "group": (
+            "${{ github.workflow }}-${{ github.event_name == "
+            "'workflow_dispatch' && github.run_id || 'full' }}"
+        ),
+        "cancel-in-progress": True,
+    }
+    assert "changes" not in workflow["jobs"]
+    assert "HA_IMAGE_GHCR" not in workflow.get("env", {}), (
+        "the beta workflow must not carry the stable image pin"
+    )
+
+    resolver = workflow["jobs"]["resolve-beta"]
+    resolve = next(
+        step
+        for step in _job_steps(resolver)
+        if "version.home-assistant.io/beta.json" in str(step.get("run", ""))
+    )
+    assert '["homeassistant"]["default"]' in resolve["run"], (
+        "the container lanes want the multi-arch docker tag, not qemux86-64"
+    )
+    assert "image=ghcr.io/home-assistant/home-assistant:$core_version" in resolve["run"]
+    assert resolver["outputs"] == {
+        "core_version": "${{ steps.versions.outputs.core_version }}",
+        "image": "${{ steps.versions.outputs.image }}",
+    }
+
+    image_ref = "${{ needs.resolve-beta.outputs.image }}"
+    test_jobs = {
+        job_id: job
+        for job_id, job in workflow["jobs"].items()
+        if job_id != "resolve-beta"
+    }
+    assert set(test_jobs) == {
+        "e2e-tests",
+        "e2e-tests-no-component",
+        "e2e-tests-embedded",
+        "e2e-tests-embedded-server-only",
+        "e2e-tests-update-path",
+    }, "the beta workflow mirrors e2e-tests.yml job for job"
+    for job_id, job in test_jobs.items():
+        assert job["needs"] == "resolve-beta", job_id
+        assert job["env"]["HA_IMAGE_GHCR"] == image_ref, job_id
+        assert job["env"]["HA_TEST_IMAGE"] == image_ref, (
+            f"{job_id}: the E2E fixtures build their container from "
+            "tests/test_constants.HA_TEST_IMAGE, which only the environment "
+            "can override"
+        )
+        assert not any(
+            "version.home-assistant.io" in str(step.get("run", ""))
+            for step in _job_steps(job)
+        ), f"{job_id} must not resolve the beta version a second time"
