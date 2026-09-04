@@ -233,12 +233,15 @@ def _assert_registration_logged_in_haos() -> None:
     source. ``ha core logs`` alone serves a bounded tail that no longer holds
     the boot-time registration line by the time this test runs, so ask for a
     window large enough to reach back to boot (``--lines`` becomes a Range
-    header on the Supervisor's logs endpoint). The ``|| true`` keeps grep's
-    no-match exit status from tripping ssh_exec's ``check=True``.
+    header on the Supervisor's logs endpoint).
     """
+    # Only grep's own no-match status (1) is tolerated; a failing
+    # ``ha core logs`` propagates as a non-zero exit so ssh_exec raises with
+    # its stderr instead of the poll reading it as "0 matches".
     script = (
-        f"ha core logs --lines {_HAOS_LOG_WINDOW_LINES} 2>/dev/null"
-        f" | grep -c '{_REGISTRATION_LINE}' || true"
+        f"out=$(ha core logs --lines {_HAOS_LOG_WINDOW_LINES}) || exit $?; "
+        f"printf '%s\\n' \"$out\" | grep -c '{_REGISTRATION_LINE}'; "
+        "rc=$?; [ $rc -le 1 ] || exit $rc"
     )
     deadline = time.monotonic() + _REGISTRATION_TIMEOUT_S
     count = ""
@@ -247,7 +250,13 @@ def _assert_registration_logged_in_haos() -> None:
         # floor so a near-expired deadline still gets one real attempt), so a
         # stalled call cannot outlive the deadline it polls for.
         remaining = max(5.0, deadline - time.monotonic())
-        count = ssh_exec(["sh", "-c", script], timeout=remaining).stdout.strip()
+        try:
+            count = ssh_exec(["sh", "-c", script], timeout=remaining).stdout.strip()
+        except RuntimeError as err:
+            raise AssertionError(
+                f"could not read Core's journal on HAOS while checking for "
+                f"{_REGISTRATION_LINE!r}:\n{err}"
+            ) from err
         if count.isdigit() and int(count) > 0:
             return
         if time.monotonic() >= deadline:
