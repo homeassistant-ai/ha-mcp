@@ -192,19 +192,28 @@ def _convert_all(tools, convert_parameters, probatio, Draft202012Validator, repo
                 report["draft2020_invalid"].append(tool.name + ": " + _short(err))
 
 
+class _ProbeTimeout(BaseException):
+    # BaseException, not Exception, on purpose: the per-tool ``except
+    # Exception`` handlers in _convert_all must not be able to swallow the
+    # alarm, or the one-shot signal would be consumed and the probe would
+    # carry on into the next blocking conversion and finish with
+    # timed_out=False.
+    pass
+
+
 def _on_alarm(signum, frame):
     # asyncio.timeout can only cancel at an await; a converter that blocks
     # never reaches one. SIGALRM interrupts the main thread regardless, so
     # the probe still reports what it had instead of hanging until the exec
     # wrapper kills it with no output.
-    raise TimeoutError("probe exceeded " + str(TIMEOUT_S) + "s")
+    raise _ProbeTimeout("probe exceeded " + str(TIMEOUT_S) + "s")
 
 
 signal.signal(signal.SIGALRM, _on_alarm)
 signal.alarm(TIMEOUT_S + 5)
 try:
     asyncio.run(_run())
-except TimeoutError as err:
+except _ProbeTimeout as err:
     REPORT["timed_out"] = True
     REPORT["conversion_failures"] = list(REPORT.get("conversion_failures", [])) + [
         "probe: " + str(err)
