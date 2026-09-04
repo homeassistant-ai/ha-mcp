@@ -1137,6 +1137,17 @@ class TestExclusiveBoundNormalisation:
 
         assert llm_api._to_inclusive_bounds(schema) == schema
 
+    def test_a_specification_extension_is_copied_not_aliased(self):
+        """Like instance values: the result must not share the input's objects."""
+        extension = {"exclusiveMinimum": 5, "nested": {"list": [1, 2]}}
+        schema = {"type": "number", "x-ui": extension}
+
+        result = llm_api._to_inclusive_bounds(schema)
+        result["x-ui"]["nested"]["list"].append(3)
+
+        assert extension["nested"]["list"] == [1, 2]
+        assert result["x-ui"] is not extension
+
     def test_a_property_named_like_the_keyword_is_left_alone(self):
         schema = {
             "type": "object",
