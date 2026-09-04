@@ -1,5 +1,6 @@
 """Guard shared HAOS workflow contracts without restructuring proven lanes."""
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -247,9 +248,10 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
         "means it can never authorize a skip (#2311)"
     )
 
-    # Both lanes are skipped when beta.json and stable.json agree: the stable
-    # HAOS lanes bake from the stable channel, so an identical beta would only
-    # repeat them. The compare job reads both channels once.
+    # The skip gate; its rationale is the resolve-beta job comment in the
+    # workflow itself. Pinned here: both channels read, every value validated
+    # (a failed parse must fail the job, never skip the lanes), and a manual
+    # dispatch always runs.
     resolver = workflow["jobs"]["resolve-beta"]
     assert resolver["outputs"] == {
         "superfluous": "${{ steps.compare.outputs.superfluous }}"
@@ -259,7 +261,12 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
     assert "version.home-assistant.io/stable.json" in compare["run"]
     assert '["supervisor"]' in compare["run"]
     assert '["homeassistant"]["qemux86-64"]' in compare["run"]
-    skip_guard = "needs.resolve-beta.outputs.superfluous != 'true'"
+    assert compare["run"].count("|| exit 1") == 4
+    assert "::error::" in compare["run"]
+    skip_guard = (
+        "github.event_name == 'workflow_dispatch' || "
+        "needs.resolve-beta.outputs.superfluous != 'true'"
+    )
 
     for beta_job_id, mode, stable_job_id in lane_specs:
         job = workflow["jobs"][beta_job_id]
@@ -273,7 +280,7 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
             )
             assert job["if"] == (
                 "${{ !cancelled() && needs.resolve-beta.result == 'success' "
-                f"&& {skip_guard} }}}}"
+                f"&& ({skip_guard}) }}}}"
             ), (
                 "the embedded lane must continue after a writer failure, but "
                 "not after a superseding run cancels the workflow, and never "
@@ -421,9 +428,20 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
     }
     # The skip compares against the stable lane's PIN, not stable.json: while
     # the Renovate bump lags a release, beta equals the new stable and this
-    # lane is the only container lane on it.
+    # lane is the only container lane on it. The resolver reads that pin with
+    # sed; pin the extraction here so a reformatted pin cannot silently turn
+    # into an empty comparison on the nightly.
     assert ".github/workflows/e2e-tests.yml" in resolve["run"]
     assert "superfluous=$superfluous" in resolve["run"]
+    stable_workflow = (_WORKFLOW_DIR / "e2e-tests.yml").read_text(encoding="utf-8")
+    pins = re.findall(
+        r'^  HA_IMAGE_GHCR: "ghcr\.io/home-assistant/home-assistant:(.*)"$',
+        stable_workflow,
+        flags=re.MULTILINE,
+    )
+    assert len(pins) == 1 and re.fullmatch(r"\d{4}\.\d{1,2}\.\d+", pins[0]), (
+        f"the resolver's sed over e2e-tests.yml would not find one version pin: {pins}"
+    )
     checkout = _job_steps(resolver)[0]
     assert str(checkout.get("uses", "")).startswith("actions/checkout@")
     assert checkout["with"]["sparse-checkout"] == ".github/workflows/e2e-tests.yml"
@@ -441,10 +459,15 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
         "e2e-tests-embedded-server-only",
         "e2e-tests-update-path",
     }, "the beta workflow mirrors e2e-tests.yml job for job"
+    skip_guard = (
+        "github.event_name == 'workflow_dispatch' || "
+        "needs.resolve-beta.outputs.superfluous != 'true'"
+    )
     for job_id, job in test_jobs.items():
         assert job["needs"] == "resolve-beta", job_id
-        assert job["if"] == "needs.resolve-beta.outputs.superfluous != 'true'", (
-            f"{job_id} must be skipped when beta equals the stable pin"
+        assert job["if"] == skip_guard, (
+            f"{job_id} must be skipped when beta equals the stable pin, except "
+            "on a manual dispatch"
         )
         assert job["env"]["HA_IMAGE_GHCR"] == image_ref, job_id
         assert job["env"]["HA_TEST_IMAGE"] == image_ref, (

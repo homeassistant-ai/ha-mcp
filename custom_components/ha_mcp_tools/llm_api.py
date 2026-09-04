@@ -986,7 +986,9 @@ async def async_register_llm_api(
             exc_info=True,
         )
         return
-    # The embedded e2e (test_llm_api_registered_inside_ha) asserts on this
+    # The embedded e2e (test_llm_api_registered_inside_ha) and the in-HA
+    # probe tests (tests/src/e2e/workflows/embedded/test_llm_api_in_ha.py)
+    # assert on this
     # message to prove the registration ran inside a real HA — keep the
     # "Registered the HA-MCP toolset as LLM API" prefix stable.
     _LOGGER.info(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 
@@ -25,6 +26,16 @@ def test_hacs_requires_supported_home_assistant_version() -> None:
     rather than at it (#2361).
     """
     metadata = json.loads((_REPO_ROOT / "hacs.json").read_text(encoding="utf-8"))
+
+    # The runtime floor the config flow enforces for the in-process server
+    # entry must not admit a Core the integration cannot load on. const.py is
+    # loaded by path: importing the package would pull in homeassistant.
+    const_path = _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "const.py"
+    spec = importlib.util.spec_from_file_location("ha_mcp_tools_const", const_path)
+    assert spec is not None and spec.loader is not None
+    const = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(const)
+    assert metadata["homeassistant"] == const.MIN_EMBEDDED_HOME_ASSISTANT_VERSION
 
     assert metadata["homeassistant"] == "2026.8.0"
 

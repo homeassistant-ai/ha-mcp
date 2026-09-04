@@ -47,13 +47,21 @@ The bring-up runs in the background, so it never delays Home Assistant startup.
 
 ## Requirements
 
-The component requires **Home Assistant 2026.8.0 or newer** (the floor HACS
-enforces). Older Core releases constrain dependencies to versions that cannot
-run current `ha-mcp` servers, and from component 2.1.3 the manifest declares
-`voluptuous-openapi`, which Core releases before 2026.7 pin to an older version,
-so the integration does not load there at all. On a Core between that and the
-floor, the config flow still blocks creation of the in-process server entry
-when the running version is older than the floor.
+Three floors apply, from the outside in:
+
+- **HACS installs the component only on Home Assistant 2026.8.0 or newer**
+  (`hacs.json`), the floor the config flow also enforces for the in-process
+  server entry.
+- **The integration does not load at all before Core 2026.7.** From component
+  2.1.3 the manifest declares `voluptuous-openapi`, and earlier Core releases
+  pin that package to an older version, so the requirement cannot resolve and
+  Home Assistant refuses to set up the integration, File & YAML entry included.
+- **Between 2026.7 and 2026.8.0 a manual copy loads**, but the config flow
+  blocks creation of the in-process server entry; the File & YAML services
+  entry still works with an external app or Docker server.
+
+Older Core releases also constrain other dependencies to versions that cannot
+run current `ha-mcp` servers.
 
 ## Setup
 

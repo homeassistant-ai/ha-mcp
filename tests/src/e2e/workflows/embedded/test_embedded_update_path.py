@@ -439,14 +439,17 @@ def _dump_ha_log(config_path: Path) -> str:
     """Return a labelled tail of ``home-assistant.log``; never raises.
 
     Empty string when the file does not exist yet (HA never got far enough to
-    write one), so the caller can concatenate it unconditionally.
+    write one) or is empty; a labelled reason when it exists but cannot be
+    read, since silence there would read as "nothing to show". The caller
+    concatenates the result unconditionally.
     """
     log_file = config_path / "home-assistant.log"
     if not log_file.is_file():
         return ""
-    text = ""
-    with contextlib.suppress(OSError):
+    try:
         text = log_file.read_text(encoding="utf-8", errors="replace")
+    except OSError as err:
+        return f"\n(could not read {log_file}: {err})"
     if not text:
         return ""
     return (

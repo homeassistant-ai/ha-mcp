@@ -1486,6 +1486,23 @@ class TestExclusiveBoundNormalisation:
         assert set(guard._EXCLUSIVE_KEYWORDS) == {
             exclusive for exclusive, *_ in llm_api._EXCLUSIVE_BOUNDS
         }
+        # The fourth copy is a prefix rule rather than a set: OpenAPI ``x-``
+        # extensions are opaque to the component and skipped by the guard.
+        assert llm_api._is_opaque_key("x-anything")
+        assert guard._exclusive_bounds({"x-a": {"exclusiveMinimum": 1}}, "r") == []
+        # ...but only as a KEYWORD: a property literally named ``x-limit`` is a
+        # subschema on both sides, so its bound is normalised and reported.
+        named = {
+            "type": "object",
+            "properties": {"x-limit": {"type": "number", "exclusiveMinimum": 0}},
+        }
+        assert llm_api._to_inclusive_bounds(named)["properties"]["x-limit"] == {
+            "type": "number",
+            "minimum": 0,
+        }
+        assert guard._exclusive_bounds(named, "r") == [
+            "r.properties.x-limit: exclusiveMinimum"
+        ]
 
     def test_an_untouched_schema_is_not_reported(self, caplog):
         """Nothing changed, so nothing is worth an operator's attention."""

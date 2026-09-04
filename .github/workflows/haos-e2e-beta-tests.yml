@@ -57,11 +57,13 @@ env:
   LIBGUESTFS_BACKEND: direct
 
 jobs:
-  # Decide once whether beta is currently distinct from stable. When beta.json
-  # and stable.json name the same Supervisor and Core, the stable HAOS lanes
-  # (which bake from the stable channel) already ran exactly this image on the
-  # PR, and both lanes below are skipped. Each lane still resolves the versions
-  # itself for its cache key and build inputs.
+  # Decide once whether beta is currently distinct from stable. The gate checks
+  # one thing: whether beta.json and stable.json name the same Supervisor and
+  # Core. When they do, the stable HAOS lanes bake that same Core and
+  # Supervisor from the stable channel on every pull request, so both lanes
+  # below are skipped on push and schedule; a manual dispatch always runs.
+  # Each lane still resolves the versions itself for its cache key and build
+  # inputs.
   resolve-beta:
     name: Resolve beta versions
     runs-on: ubuntu-latest
@@ -77,12 +79,38 @@ jobs:
             https://version.home-assistant.io/beta.json)
           stable=$(curl --fail --silent --show-error \
             https://version.home-assistant.io/stable.json)
-          read -r beta_supervisor beta_core <<<"$(python3 -c \
-            'import json, sys; d = json.load(sys.stdin); print(d["supervisor"], d["homeassistant"]["qemux86-64"])' \
-            <<<"$beta")"
-          read -r stable_supervisor stable_core <<<"$(python3 -c \
-            'import json, sys; d = json.load(sys.stdin); print(d["supervisor"], d["homeassistant"]["qemux86-64"])' \
-            <<<"$stable")"
+          # Each value is captured separately so a failing python3 call aborts
+          # the job. A ``read`` over a failed substitution would leave the
+          # variables empty, make the comparison below trivially true, and skip
+          # both lanes silently; the fail-safe direction here is to run them.
+          supervisor_re='^[0-9]{4}\.[0-9]{1,2}\.[0-9]+([.]dev[0-9]+)?$'
+          core_re='^[0-9]{4}\.[0-9]{1,2}\.[0-9]+([.]dev[0-9]+|b[0-9]+)?$'
+          check() {
+            if [ -z "$2" ]; then
+              echo "::error::Empty $1 version in the channel metadata"
+              exit 1
+            fi
+            if ! [[ "$2" =~ $3 ]]; then
+              echo "::error::Unexpected $1 version: $2"
+              exit 1
+            fi
+          }
+          beta_supervisor=$(python3 -c \
+            'import json, sys; print(json.load(sys.stdin)["supervisor"])' \
+            <<<"$beta") || exit 1
+          beta_core=$(python3 -c \
+            'import json, sys; print(json.load(sys.stdin)["homeassistant"]["qemux86-64"])' \
+            <<<"$beta") || exit 1
+          stable_supervisor=$(python3 -c \
+            'import json, sys; print(json.load(sys.stdin)["supervisor"])' \
+            <<<"$stable") || exit 1
+          stable_core=$(python3 -c \
+            'import json, sys; print(json.load(sys.stdin)["homeassistant"]["qemux86-64"])' \
+            <<<"$stable") || exit 1
+          check "beta Supervisor" "$beta_supervisor" "$supervisor_re"
+          check "beta Core" "$beta_core" "$core_re"
+          check "stable Supervisor" "$stable_supervisor" "$supervisor_re"
+          check "stable Core" "$stable_core" "$core_re"
           superfluous=false
           if [ "$beta_supervisor" = "$stable_supervisor" ] && [ "$beta_core" = "$stable_core" ]; then
             superfluous=true
@@ -95,7 +123,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 75
     needs: resolve-beta
-    if: needs.resolve-beta.outputs.superfluous != 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.resolve-beta.outputs.superfluous != 'true'
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -375,7 +403,7 @@ jobs:
     # run if the inaddon suite fails after saving it, and build locally if that
     # lane failed before the save; only a cancelled workflow suppresses this.
     needs: [resolve-beta, haos-e2e-inaddon-beta]
-    if: ${{ !cancelled() && needs.resolve-beta.result == 'success' && needs.resolve-beta.outputs.superfluous != 'true' }}
+    if: ${{ !cancelled() && needs.resolve-beta.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.resolve-beta.outputs.superfluous != 'true') }}
     runs-on: ubuntu-22.04
     # The embedded beta lane receives extra headroom for the per-worker runtime
     # package installation inside the resource-constrained QEMU guest.

@@ -86,11 +86,14 @@ jobs:
 
       - name: Resolve current beta Core version
         id: versions
-        # ``superfluous`` is true when the beta Core is the version the stable
-        # container lanes already pin: every job below would then repeat
-        # e2e-tests.yml on the same image, so they are skipped. Compared against
-        # the pin rather than stable.json on purpose: while the Renovate bump
-        # lags a release, beta equals the new stable and this lane is the only
+        # ``superfluous`` is true when the beta Core equals the stable lane's
+        # pin. The stable lanes run that exact image on every pull request, so
+        # the jobs below are skipped on push and schedule -- including the
+        # nightly, which therefore does not run while beta and stable agree.
+        # A manual dispatch always runs: it is a deliberate request, often a
+        # targeted one via pytest_args/pytest_paths. Compared against the pin
+        # rather than stable.json on purpose: while the Renovate bump lags a
+        # release, beta equals the new stable and this lane is the only
         # container lane on it.
         run: |
           metadata=$(curl --fail --silent --show-error \
@@ -122,7 +125,7 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     needs: resolve-beta
-    if: needs.resolve-beta.outputs.superfluous != 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.resolve-beta.outputs.superfluous != 'true'
     env:
       HA_IMAGE_GHCR: ${{ needs.resolve-beta.outputs.image }}
       HA_TEST_IMAGE: ${{ needs.resolve-beta.outputs.image }}
@@ -213,7 +216,7 @@ jobs:
     name: E2E Tests (No Component)
     runs-on: ubuntu-latest
     needs: resolve-beta
-    if: needs.resolve-beta.outputs.superfluous != 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.resolve-beta.outputs.superfluous != 'true'
     env:
       HA_IMAGE_GHCR: ${{ needs.resolve-beta.outputs.image }}
       HA_TEST_IMAGE: ${{ needs.resolve-beta.outputs.image }}
@@ -307,7 +310,7 @@ jobs:
     name: E2E Tests (Embedded Server, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     needs: resolve-beta
-    if: needs.resolve-beta.outputs.superfluous != 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.resolve-beta.outputs.superfluous != 'true'
     env:
       HA_IMAGE_GHCR: ${{ needs.resolve-beta.outputs.image }}
       HA_TEST_IMAGE: ${{ needs.resolve-beta.outputs.image }}
@@ -410,7 +413,7 @@ jobs:
     name: E2E Tests (Embedded Server, server entry only)
     runs-on: ubuntu-latest
     needs: resolve-beta
-    if: needs.resolve-beta.outputs.superfluous != 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.resolve-beta.outputs.superfluous != 'true'
     env:
       HA_IMAGE_GHCR: ${{ needs.resolve-beta.outputs.image }}
       HA_TEST_IMAGE: ${{ needs.resolve-beta.outputs.image }}
@@ -505,7 +508,7 @@ jobs:
     name: E2E Tests (Update Path)
     runs-on: ubuntu-latest
     needs: resolve-beta
-    if: needs.resolve-beta.outputs.superfluous != 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.resolve-beta.outputs.superfluous != 'true'
     env:
       HA_IMAGE_GHCR: ${{ needs.resolve-beta.outputs.image }}
       HA_TEST_IMAGE: ${{ needs.resolve-beta.outputs.image }}

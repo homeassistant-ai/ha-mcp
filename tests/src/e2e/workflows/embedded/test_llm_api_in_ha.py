@@ -1,14 +1,16 @@
 """The LLM API's schema conversion, proved INSIDE Home Assistant (issue #2361).
 
-``test_embedded_server.py::test_llm_api_client_path_full_catalog`` drives the
-same transport, but its conversion runs in the pytest process against the test
-host's ``voluptuous_openapi``. Home Assistant resolves its own converter
-(``probatio.from_openapi`` since Core 2026.9) and, before a conversation turn
-reaches the model, re-emits every converted schema through
-``probatio.to_openapi``. That round trip is invisible from the host and is
-exactly where the reported defect lived: an exclusive bound came back in the
-draft-4 ``{"minimum": 0, "exclusiveMinimum": true}`` spelling, which is not
-valid JSON Schema draft 2020-12, and every Anthropic turn failed.
+``test_embedded_server.py::test_llm_api_client_path_full_catalog`` used to
+convert every schema in the pytest process against the test host's
+``voluptuous_openapi``; that loop was removed because it proved nothing about
+Home Assistant. HA resolves its own converter (``probatio.from_openapi`` since
+Core 2026.9 unless the component's manifest requirement restores
+``voluptuous_openapi``) and, before a conversation turn reaches the model,
+re-emits every converted schema through ``probatio.to_openapi``. That round
+trip is invisible from the host and is exactly where the reported defect lived:
+an exclusive bound came back in the draft-4 ``{"minimum": 0,
+"exclusiveMinimum": true}`` spelling, which is not valid JSON Schema draft
+2020-12, and every Anthropic turn failed.
 
 So these tests run the component's own client path in Home Assistant's own
 interpreter through ``utilities.llm_api_probe``, and assert on the report it
@@ -29,6 +31,7 @@ docstring; the ceilings were bumped when these landed.
 from __future__ import annotations
 
 import logging
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -39,7 +42,9 @@ from haos_runtime import HA_MCP_SERVER_WEBHOOK_ID, ssh_exec
 from ...conftest import _EMBEDDED_WEBHOOK_ID
 from ...utilities.llm_api_probe import (
     LLM_API_SCHEMA_PROBE,
+    PROBE_SENTINEL,
     PROBE_URL_ENV,
+    assert_report_clean,
     parse_probe_report,
 )
 
@@ -51,8 +56,10 @@ _REGISTRATION_LINE = "Registered the HA-MCP toolset as LLM API"
 _REGISTRATION_TIMEOUT_S = 60
 _REGISTRATION_POLL_S = 2
 
-# The probe's own budget is 120s; give the exec wrapper room above it so a hang
-# surfaces as the probe's timeout rather than an opaque kill.
+# The probe's own budget is 120s (plus a 5s alarm margin). Both callers pass
+# this larger wrapper timeout, the docker client on the container lane and
+# ssh_exec on HAOS, so a hang surfaces as the probe's own partial report rather
+# than as an opaque kill by the wrapper.
 _PROBE_EXEC_TIMEOUT_S = 180
 
 # Home Assistant answers its own webhook on loopback from inside the container /
@@ -67,61 +74,6 @@ _HAOS_CORE_CONTAINER = "homeassistant"
 # at INFO, a full lane run logs a few thousand Core lines, so this reaches
 # back to boot with margin.
 _HAOS_LOG_WINDOW_LINES = 20000
-
-
-def _assert_report_clean(report: dict[str, Any]) -> None:
-    """Fail with the offending tool names when the in-HA conversion misbehaved."""
-    converter = report.get("converter")
-    context = (
-        f"converter={converter!r}, probatio={report.get('probatio')!r}, "
-        f"inclusive-bounds normaliser="
-        f"{report.get('inclusive_bounds_normaliser')!r}, "
-        f"HA {report.get('ha_version')}"
-    )
-
-    assert not report.get("timed_out"), (
-        f"the in-HA probe hit its own timeout ({context}); partial report: {report}"
-    )
-
-    tool_count = report.get("tool_count", 0)
-    assert tool_count > 60, (
-        f"expected the full tool inventory from inside HA, got {tool_count} "
-        f"({context}) — a handful would mean a truncated or wrong server"
-    )
-
-    failures = report.get("conversion_failures") or []
-    assert not failures, (
-        f"{len(failures)}/{tool_count} tool schemas failed to convert inside "
-        f"Home Assistant ({context}). At runtime each of these is skipped with "
-        "only a warning, so the toolset would silently shrink:\n" + "\n".join(failures)
-    )
-
-    if not report.get("probatio"):
-        # Core <= 2026.8: no re-emission step exists, so conversion success is
-        # the whole contract on this image.
-        LOG.info("probatio is absent in this HA image; re-emission checks skipped")
-        return
-
-    boolean_exclusive = report.get("boolean_exclusive") or []
-    assert not boolean_exclusive, (
-        "probatio.to_openapi re-emitted a BOOLEAN exclusiveMinimum/"
-        "exclusiveMaximum (the draft-4 spelling) for "
-        f"{boolean_exclusive} ({context}) — that is what breaks every "
-        "conversation turn on an agent that validates draft 2020-12"
-    )
-
-    integer_lost = report.get("integer_lost") or []
-    assert not integer_lost, (
-        f"the round trip through {converter!r} and probatio.to_openapi lost "
-        f"integer typing for {integer_lost} ({context}) — the model would be "
-        "handed a looser schema than the tool actually accepts"
-    )
-
-    draft_invalid = report.get("draft2020_invalid") or []
-    assert not draft_invalid, (
-        "the re-emitted schema is not valid JSON Schema draft 2020-12 for "
-        f"{len(draft_invalid)} tool(s) ({context}):\n" + "\n".join(draft_invalid)
-    )
 
 
 @pytest.mark.embedded_only
@@ -142,20 +94,30 @@ def test_llm_api_schemas_survive_core_reemission_container(
         f"container=None with backend={info.get('backend')!r}"
     )
 
-    result = container.get_wrapped_container().exec_run(
-        ["python3", "-c", LLM_API_SCHEMA_PROBE],
-        environment={PROBE_URL_ENV: _CONTAINER_WEBHOOK_URL},
-    )
-    output = (result.output or b"").decode("utf-8", "replace")
-    assert result.exit_code == 0, (
-        "the in-HA LLM-API probe exited "
-        f"{result.exit_code} instead of completing:\n{output[-4000:]}"
-    )
     # Registration first: it is the cheaper, lane-plumbing half, and it must
     # keep being exercised while the report assertion is expectedly red on a
     # Core that carries the #2361 defect.
     _assert_registration_logged_in_container(Path(info["config_path"]))
-    _assert_report_clean(parse_probe_report(output))
+
+    # A client with an explicit timeout above the probe's own budget: the
+    # testcontainers handle's client keeps docker-py's 60s default, which sits
+    # BELOW the probe's 120s and would kill a slow probe with no report.
+    import docker
+
+    client = docker.from_env(timeout=_PROBE_EXEC_TIMEOUT_S)
+    result = client.containers.get(container.get_wrapped_container().id).exec_run(
+        ["python3", "-c", LLM_API_SCHEMA_PROBE],
+        environment={PROBE_URL_ENV: _CONTAINER_WEBHOOK_URL},
+    )
+    output = (result.output or b"").decode("utf-8", "replace")
+    # Report first, exit code second: a timed-out probe exits non-zero AFTER
+    # printing a partial report, and that report is the better diagnosis.
+    # parse_probe_report raises with the raw output when there is none.
+    assert_report_clean(parse_probe_report(output))
+    assert result.exit_code == 0, (
+        "the in-HA LLM-API probe exited "
+        f"{result.exit_code} despite a clean report:\n{output[-4000:]}"
+    )
 
 
 def _assert_registration_logged_in_container(config_path: Path) -> None:
@@ -200,6 +162,9 @@ def test_llm_api_schemas_survive_core_reemission_haos(
         f"backend={info.get('backend')!r}"
     )
 
+    # Same order as the container test: registration plumbing first.
+    _assert_registration_logged_in_haos()
+
     try:
         result = ssh_exec(
             [
@@ -216,12 +181,25 @@ def test_llm_api_schemas_survive_core_reemission_haos(
         )
     except RuntimeError as err:
         # ssh_exec runs with check=True and re-raises a failed remote command
-        # as RuntimeError carrying stdout+stderr.
+        # as RuntimeError carrying stdout+stderr. A timed-out probe exits
+        # non-zero after printing its partial report, which is the better
+        # diagnosis, so parse it out of the error text when it is there.
+        text = str(err)
+        if PROBE_SENTINEL in text:
+            assert_report_clean(parse_probe_report(text))
         raise AssertionError(f"the in-HA LLM-API probe failed in HAOS:\n{err}") from err
+    except subprocess.TimeoutExpired as err:
+        stdout = (
+            err.stdout.decode("utf-8", "replace")
+            if isinstance(err.stdout, bytes)
+            else err.stdout
+        )
+        raise AssertionError(
+            f"the in-HA LLM-API probe did not return within {_PROBE_EXEC_TIMEOUT_S}s "
+            f"over ssh; captured stdout:\n{(stdout or '')[-4000:]}"
+        ) from err
 
-    # Same order as the container test: registration plumbing first.
-    _assert_registration_logged_in_haos()
-    _assert_report_clean(parse_probe_report(result.stdout))
+    assert_report_clean(parse_probe_report(result.stdout))
 
 
 def _assert_registration_logged_in_haos() -> None:
@@ -257,12 +235,23 @@ def _assert_registration_logged_in_haos() -> None:
                 f"could not read Core's journal on HAOS while checking for "
                 f"{_REGISTRATION_LINE!r}:\n{err}"
             ) from err
+        except subprocess.TimeoutExpired as err:
+            raise AssertionError(
+                f"reading Core's journal on HAOS did not return within {remaining:.0f}s "
+                f"while checking for {_REGISTRATION_LINE!r}; captured stdout: "
+                f"{err.stdout!r}"
+            ) from err
         if count.isdigit() and int(count) > 0:
             return
         if time.monotonic() >= deadline:
             break
         LOG.debug("LLM-API registration line not in Core's log yet (count=%r)", count)
         time.sleep(_REGISTRATION_POLL_S)
+    assert count.isdigit(), (
+        "the journal command on HAOS did not print a bare match count "
+        f"({count!r}); the registration check could not run, which says "
+        "nothing about whether the toolset was registered"
+    )
     raise AssertionError(
         f"{_REGISTRATION_LINE!r} never appeared in the last "
         f"{_HAOS_LOG_WINDOW_LINES} Core journal lines within "
