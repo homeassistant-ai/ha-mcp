@@ -105,8 +105,13 @@ class TestStartupLogCollectorReentrancy:
         collector = StartupLogCollector()
         log = _make_logger("test_2357.reset", collector)
 
-        assert _emit_in_thread(lambda: log.debug("outer %s", _LogsOnRepr(log)))
-        log.debug("later record")
+        def outer_then_later() -> None:
+            log.debug("outer %s", _LogsOnRepr(log))
+            log.debug("later record")
+
+        # Both on the same thread: the guard is per-thread, so a flag left set
+        # by the reentrant record would only ever affect that thread.
+        assert _emit_in_thread(outer_then_later)
 
         messages = [entry["message"] for entry in collector.get_logs()]
         # A stuck per-thread flag would silently drop every later record on

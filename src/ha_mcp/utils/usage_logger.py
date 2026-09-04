@@ -2,6 +2,7 @@
 Usage logging for MCP tool calls to track usage patterns and performance metrics.
 """
 
+import copy
 import json
 import logging
 import threading
@@ -103,7 +104,13 @@ class StartupLogCollector(logging.Handler):
             )
             # Honour the stdlib path too (logging.raiseExceptions / stderr);
             # at DEBUG on root this may be the only handler that saw the record.
-            self.handleError(record)
+            # Hand it a copy carrying the synthetic message and no args:
+            # handleError() formats ``record.args`` again and re-raises a
+            # RecursionError from that, which would escape into the caller.
+            safe = copy.copy(record)
+            safe.msg = message
+            safe.args = ()
+            self.handleError(safe)
         finally:
             self._formatting.active = False
 

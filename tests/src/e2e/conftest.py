@@ -278,6 +278,17 @@ def _apply_haos_tls_skip(item: Any, enabled: bool, skip_marker: Any) -> None:
         item.add_marker(skip_marker)
 
 
+def _apply_haos_embedded_only_skip(
+    item: Any, haos_embedded: bool, skip_marker: Any
+) -> None:
+    """Skip a ``haos_embedded_only`` item everywhere but the HAOS embedded lane.
+
+    Out-of-line for the same reason as ``_apply_haos_tls_skip``.
+    """
+    if "haos_embedded_only" in item.keywords and not haos_embedded:
+        item.add_marker(skip_marker)
+
+
 def _apply_embedded_only_skip(
     item: Any, embedded_selected: bool, skip_marker: Any
 ) -> None:
@@ -347,6 +358,9 @@ def pytest_collection_modifyitems(config, items):
       installed ``ha-mcp`` command and uses real stdio JSON-RPC framing).
     - ``haos_tls``: final HAOS-embedded scenario. It restarts Core with HTTPS,
       exercises the same VM, and restores HTTP before session teardown.
+    - ``haos_embedded_only``: HAOS embedded mode only — the in-process server
+      shares Home Assistant's process and event loop, which is the property
+      under test (#2357).
     - ``requires_tools_entry`` / ``no_tools_only``: the two directions of the
       no-tools lane gate (``E2E_NO_TOOLS_ENTRY=1``, #2292). The first needs the
       component's "File & YAML Tools" config entry and skips where it is
@@ -395,6 +409,9 @@ def pytest_collection_modifyitems(config, items):
     skip_haos_tls = pytest.mark.skip(
         reason="final Core TLS scenario runs only in the existing HAOS embedded worker"
     )
+    skip_haos_embedded_only = pytest.mark.skip(
+        reason="HAOS embedded mode required (set HAOS_TEST_MODE=embedded)"
+    )
     skip_external_only = pytest.mark.skip(
         reason="out-of-process server (stdio/inaddon/embedded); test needs an "
         "in-process server it can reconfigure via env/monkeypatch or reach an "
@@ -438,6 +455,7 @@ def pytest_collection_modifyitems(config, items):
         if "haos_stdio_only" in keywords and not haos_stdio:
             item.add_marker(skip_haos_stdio_only)
         _apply_haos_tls_skip(item, haos_embedded, skip_haos_tls)
+        _apply_haos_embedded_only_skip(item, haos_embedded, skip_haos_embedded_only)
         _apply_beta_haos_only_skip(item, beta_haos, skip_beta_haos_only)
         _apply_no_tools_entry_skips(
             item, no_tools_entry, skip_requires_tools_entry, skip_no_tools_only

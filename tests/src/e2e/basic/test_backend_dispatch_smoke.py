@@ -123,8 +123,8 @@ _SKIP_CEILING_PER_LANE = {
     # and observed slightly LOWER counts than their stable siblings
     # (haos_embedded beta 125, haos_inaddon beta 93), so the stable-lane numbers
     # here cover both.
-    "container": 87,  # was 79; +8 #2292 no_tools_only
-    "haos": 66,  # was 58; +8 #2292 no_tools_only
+    "container": 88,  # was 79; +8 #2292 no_tools_only; +1 #2357 haos_embedded_only
+    "haos": 67,  # was 58; +8 #2292 no_tools_only; +1 #2357 haos_embedded_only
     # HAOS stdio is the external HAOS set plus ``external_only`` tests, whose
     # test-process monkeypatches cannot reach the subprocess server. The first
     # full lane run on 2026-08-18 observed 103 collection-time marker skips
@@ -136,8 +136,8 @@ _SKIP_CEILING_PER_LANE = {
     # This entry moved 117 -> 119 rather than by that 8: the 117 was a ceiling
     # carrying headroom above its own observed count, so part of the +8 landed
     # inside that headroom and 119 is what round-1 CI actually observed.
-    "haos_stdio": 119,
-    "haos_inaddon": 94,  # was 86; +8 #2292 no_tools_only
+    "haos_stdio": 120,  # +1 #2357 haos_embedded_only
+    "haos_inaddon": 95,  # was 86; +8 #2292 no_tools_only; +1 #2357 haos_embedded_only
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
     # lane's marker-skips PLUS two embedded-specific additions:
     #   - haos_only + inaddon_only tests skip on embedded just like on container
@@ -153,7 +153,7 @@ _SKIP_CEILING_PER_LANE = {
     # +1 visibility e2e (haos_stdio_only) and +1 #2241 haos_tls scenario
     # (haos_only) bridge 133 -> 135.
     # Read future changes from CI instead of deriving them.
-    "embedded": 145,  # was 137; +8 #2292 no_tools_only
+    "embedded": 146,  # was 137; +8 #2292 no_tools_only; +1 #2357 haos_embedded_only
     # HAOS embedded backend (#1527, HAOS_TEST_MODE=embedded). A HAOS lane, so it
     # skips the SAME set as the external HAOS lane (container_only + inaddon_only)
     # PLUS two haos_embedded-specific additions:
@@ -182,10 +182,10 @@ _SKIP_CEILING_PER_LANE = {
     # The haos (external) and haos_stdio backends have no no-tools lane today,
     # so they deliberately have no key here — an unknown backend fails loudly in
     # the test below rather than silently skipping the ceiling check.
-    "container_no_tools": 192,  # observed 187
-    "embedded_no_tools": 249,  # observed 244
+    "container_no_tools": 193,  # observed 187; +1 #2357 haos_embedded_only
+    "embedded_no_tools": 250,  # observed 244; +1 #2357 haos_embedded_only
     "haos_embedded_no_tools": 230,  # observed 225
-    "haos_inaddon_no_tools": 198,  # observed 193
+    "haos_inaddon_no_tools": 199,  # observed 193; +1 #2357 haos_embedded_only
 }
 
 

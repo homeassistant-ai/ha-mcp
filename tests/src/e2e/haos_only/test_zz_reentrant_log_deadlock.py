@@ -32,7 +32,10 @@ from haos_runtime import _wait_http_ok, ssh_exec
 
 logger = logging.getLogger(__name__)
 
-pytestmark = [pytest.mark.system, pytest.mark.slow]
+# ``haos_embedded_only``: ha_mcp's log handler only shares a process (and an
+# event loop) with Home Assistant on the embedded lane. Gated at collection so
+# the other HAOS lanes do not boot a VM just to skip this module.
+pytestmark = [pytest.mark.haos_embedded_only, pytest.mark.system, pytest.mark.slow]
 
 PROBE_DOMAIN = "reentrant_log_probe"
 
@@ -52,6 +55,14 @@ CONFIG_DIR_CANDIDATES = (
     "/homeassistant",
     "/config",
     "/mnt/data/supervisor/homeassistant",
+)
+
+# The reporter's recipe: a throwaway python container sharing the host pid
+# namespace dumps every thread of the frozen Core process.
+PY_SPY_DUMP_COMMAND = (
+    "docker run --rm --pid host --privileged python:3.13 sh -c "
+    + "'pip install -q py-spy && py-spy dump --pid "
+    + "$(docker inspect --format {{.State.Pid}} homeassistant)'"
 )
 
 PROBE_INIT_PY = '''\
@@ -199,9 +210,7 @@ def _py_spy_dump() -> str:
             [
                 "sh",
                 "-c",
-                "docker run --rm --pid host --privileged python:3.13 sh -c "
-                "'pip install -q py-spy && py-spy dump --pid "
-                "$(docker inspect --format {{.State.Pid}} homeassistant)'",
+                PY_SPY_DUMP_COMMAND,
             ],
             timeout=420.0,
         )
@@ -236,14 +245,7 @@ def test_reentrant_debug_log_does_not_freeze_home_assistant(
     Fails by TIMEOUT on the pre-fix handler: Core never answers again, which is
     the reported #2357 symptom (port 8123 dead, recorder silent, no log line).
     """
-    container = ha_container_with_fresh_config
-    if container.get("backend") != "haos_embedded":
-        pytest.skip(
-            "ha_mcp's log handler only shares a process (and an event loop) "
-            "with Home Assistant on the embedded lane"
-        )
-
-    base_url = container["base_url"]
+    base_url = ha_container_with_fresh_config["base_url"]
     ready_url = f"{base_url}/manifest.json"
     config_dir = _find_config_dir()
     probe_dir = f"{config_dir}/custom_components/{PROBE_DOMAIN}"
@@ -257,6 +259,7 @@ def test_reentrant_debug_log_does_not_freeze_home_assistant(
         "entry into the existing block instead."
     )
 
+    body_failed = False
     try:
         _sh(f"cp {shlex.quote(config_yaml)} {shlex.quote(backup_yaml)}")
         _write_in_vm(f"{probe_dir}/__init__.py", PROBE_INIT_PY)
@@ -264,7 +267,6 @@ def test_reentrant_debug_log_does_not_freeze_home_assistant(
         _write_in_vm(config_yaml, _sh(f"cat {shlex.quote(backup_yaml)}") + PROBE_YAML)
 
         logger.info("Restarting Core with the re-entrant log probe installed")
-        restarted_at = time.monotonic()
         _restart_core()
 
         _require_ha_responsive(
@@ -272,13 +274,17 @@ def test_reentrant_debug_log_does_not_freeze_home_assistant(
             HA_RETURN_TIMEOUT_S,
             "Home Assistant never came back after the probe restart",
         )
+        # The soak is measured from readiness, not from the restart: a slow
+        # boot must not eat the window in which continued responsiveness is
+        # what is being checked.
+        ready_at = time.monotonic()
 
         # Stay past the collector's 60s window so the probe (firing every 2s
         # from setup) is guaranteed to have been formatted by it while it was
         # active, then confirm HA is STILL answering. Both checks matter: the
         # pre-fix handler can let the boot complete and freeze the loop a few
         # records later, which is what the reported instance did.
-        while time.monotonic() - restarted_at < SOAK_SECONDS:
+        while time.monotonic() - ready_at < SOAK_SECONDS:
             time.sleep(5.0)
         _require_ha_responsive(
             ready_url,
@@ -296,6 +302,9 @@ def test_reentrant_debug_log_does_not_freeze_home_assistant(
             "the probe integration never emitted its debug record, so this run "
             f"did not exercise the re-entrant path (grep count: {fired!r})"
         )
+    except BaseException:
+        body_failed = True
+        raise
     finally:
         _sh(
             f"rm -rf {shlex.quote(probe_dir)}; "
@@ -303,9 +312,18 @@ def test_reentrant_debug_log_does_not_freeze_home_assistant(
             f"mv {shlex.quote(backup_yaml)} {shlex.quote(config_yaml)} || true"
         )
         # Hand a healthy VM back to the rest of the worker's session — the
-        # Supervisor CLI restarts Core even when its loop is wedged.
+        # Supervisor CLI restarts Core even when its loop is wedged. Later
+        # modules on this xdist worker share the VM, so a cleanup that leaves
+        # Core down is a failure of this test — unless the body already
+        # failed, in which case that failure must stay the one reported.
         _restart_core()
         try:
             _wait_http_ok(ready_url, timeout=HA_RETURN_TIMEOUT_S)
-        except TimeoutError:
-            logger.error("Home Assistant did not recover after probe cleanup")
+        except TimeoutError as exc:
+            if body_failed:
+                logger.error("Home Assistant did not recover after probe cleanup")
+            else:
+                raise AssertionError(
+                    "Home Assistant did not recover after probe cleanup; the "
+                    "worker's VM is unusable for later modules"
+                ) from exc
