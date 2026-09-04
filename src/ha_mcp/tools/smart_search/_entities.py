@@ -5,6 +5,7 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
+from ...utils.device_registry_semantics import build_device_registry_snapshot
 from ...utils.entity_membership import normalize_member_entity_ids
 from ...utils.fuzzy_search import calculate_partial_ratio, calculate_ratio
 from ...visibility.resolver import (
@@ -652,12 +653,8 @@ class EntitySearchMixin(_SearchBase):
         cls, result: Any, warnings: list[str] | None = None
     ) -> dict[str, str | None]:
         """Parse the device registry into ``device_id -> area_id``."""
-        device_area_map: dict[str, str | None] = {}
-        for device in cls._extract_registry_list(result, "device registry", warnings):
-            device_id = device.get("id", "")
-            if device_id:
-                device_area_map[device_id] = device.get("area_id")
-        return device_area_map
+        device_rows = cls._extract_registry_list(result, "device registry", warnings)
+        return build_device_registry_snapshot(list(device_rows)).effective_area_by_id
 
     @staticmethod
     def _match_exact_registry_ids(

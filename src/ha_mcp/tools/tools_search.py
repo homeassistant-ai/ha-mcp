@@ -25,6 +25,10 @@ from ..client.websocket_client import get_websocket_client
 from ..config import get_global_settings
 from ..errors import create_validation_error
 from ..transforms.categorized_search import DEFAULT_PINNED_TOOLS
+from ..utils.device_registry_semantics import (
+    build_device_registry_snapshot,
+    effective_device_area_id,
+)
 from ..utils.entity_membership import normalize_member_entity_ids
 from ..utils.fuzzy_search import apply_hidden_penalty
 from ..visibility.model import VisibilityWire, wire_has_allowlist_dimensions
@@ -869,6 +873,15 @@ def _ws_result_map(resp: Any) -> dict[str, dict[str, Any]]:
     return {}
 
 
+def _ws_registry_rows(resp: Any) -> list[Any]:
+    """Return rows from a successful registry-list response, else an empty list."""
+    if isinstance(resp, dict) and resp.get("success"):
+        result = resp.get("result")
+        if isinstance(result, list):
+            return result
+    return []
+
+
 def _ws_registry_index(resp: Any, key: str) -> dict[str, dict[str, Any]]:
     """Index a ``config/*_registry/list`` reply by its id field (area_id/floor_id/…).
 
@@ -877,10 +890,9 @@ def _ws_registry_index(resp: Any, key: str) -> dict[str, dict[str, Any]]:
     empty rather than raising.
     """
     out: dict[str, dict[str, Any]] = {}
-    if isinstance(resp, dict) and resp.get("success"):
-        for item in resp.get("result") or []:
-            if isinstance(item, dict) and item.get(key):
-                out[item[key]] = item
+    for item in _ws_registry_rows(resp):
+        if isinstance(item, dict) and item.get(key):
+            out[item[key]] = item
     return out
 
 
@@ -925,7 +937,7 @@ def _entity_enrichment_fields(
     device = devices.get(device_id) if device_id else None
     if device:
         if area_id is None:
-            area_id = device.get("area_id")
+            area_id = effective_device_area_id(device, devices)
         label_ids |= set(device.get("labels") or [])
     area = areas.get(area_id) if area_id else None
     area_name = area.get("name") if area else None
@@ -3153,7 +3165,8 @@ class SearchTools:
         areas = _ws_registry_index(names[0], "area_id") if need_names else {}
         floors = _ws_registry_index(names[1], "floor_id") if need_names else {}
         labels = _ws_registry_index(names[2], "label_id") if need_names else {}
-        devices = _ws_registry_index(names[3], "id") if need_names else {}
+        device_rows = _ws_registry_rows(names[3]) if need_names else []
+        devices = build_device_registry_snapshot(device_rows).by_id
         enrichment = {
             eid: _entity_enrichment_fields(
                 entries.get(eid) or {}, areas, floors, labels, devices, requested

@@ -14,6 +14,7 @@ import logging
 from typing import Any
 
 from ..utils.data_paths import get_data_dir
+from ..utils.device_registry_semantics import build_device_registry_snapshot
 from .model import VisibilityConfig, VisibilityWire
 from .persistence import load_visibility_config
 
@@ -121,16 +122,12 @@ def _parse_device_registry(
     device_labels: dict[str, list[str]] = {}
     if not isinstance(device_registry_result, dict):
         return device_area, device_labels
-    devices = device_registry_result.get("result", [])
-    if not isinstance(devices, list):
+    raw_devices = device_registry_result.get("result", [])
+    if not isinstance(raw_devices, list):
         return device_area, device_labels
-    for device in devices:
-        if not isinstance(device, dict):
-            continue
-        device_id = device.get("id")
-        if not device_id:
-            continue
-        area_id = device.get("area_id")
+    snapshot = build_device_registry_snapshot(raw_devices)
+    for device_id, device in snapshot.by_id.items():
+        area_id = snapshot.effective_area_by_id.get(device_id)
         if area_id:
             device_area[device_id] = area_id
         labels = _normalize_labels(device.get("labels"))

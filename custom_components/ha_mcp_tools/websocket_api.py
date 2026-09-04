@@ -1525,7 +1525,7 @@ def _registry_enrichment(view: _RegistryView, entity_id: str) -> dict[str, Any]:
     dev_texts: list[str] = []
     if dev is not None:
         if area_id is None:
-            area_id = getattr(dev, "area_id", None)
+            area_id = _effective_device_area_id(view, dev)
         labels |= set(getattr(dev, "labels", None) or [])
         for attr in ("name_by_user", "name", "manufacturer", "model"):
             val = getattr(dev, attr, None)
@@ -2325,6 +2325,84 @@ def _device(view: _RegistryView, device_id: str | None) -> Any:
     return _call_lookup(view.device, "async_get", device_id)
 
 
+def _device_collection_values(collection: Any) -> list[Any]:
+    """Enumerate a Core device collection across old and 2026.9 shapes.
+
+    Before Core 2026.9 ``registry.devices`` was a mapping-like container. Core
+    2026.9 exposes supported iterable collections for both ``devices`` and
+    ``child_devices``. Mapping fakes and older containers still use ``values``;
+    modern collections are consumed by iteration so the deprecated mapping API
+    on ``registry.devices`` is not invoked.
+    """
+    if collection is None:
+        return []
+    if isinstance(collection, Mapping):
+        try:
+            return list(collection.values())
+        except Exception:  # pragma: no cover - defensive
+            return []
+    try:
+        return list(collection)
+    except Exception:  # pragma: no cover - defensive
+        return []
+
+
+def _all_device_entries(view: _RegistryView) -> list[Any]:
+    """Return every unambiguous main and child device entry once.
+
+    Core 2026.9 stores child devices in a separate collection. Older releases
+    have only the mapping-like ``devices`` container. Duplicate ids cannot occur
+    in a valid Core registry; if a drifted/corrupt view supplies conflicting
+    entries, remove that identity rather than choosing one arbitrarily.
+    """
+    reg = view.device
+    if reg is None:
+        return []
+    main_collection = getattr(reg, "devices", None)
+    if hasattr(reg, "child_devices"):
+        candidates = _device_collection_values(main_collection)
+        candidates.extend(
+            _device_collection_values(getattr(reg, "child_devices", None))
+        )
+    else:
+        # The pre-2026.9 container is mapping-like and iterates ids, not entries.
+        candidates = _mapping_values(main_collection)
+
+    order: list[str] = []
+    by_id: dict[str, Any] = {}
+    conflicts: set[str] = set()
+    for entry in candidates:
+        device_id = getattr(entry, "id", None)
+        if not isinstance(device_id, str) or not device_id or device_id in conflicts:
+            continue
+        if device_id not in by_id:
+            order.append(device_id)
+            by_id[device_id] = entry
+            continue
+        prior = _device_dict_repr(by_id[device_id])
+        current = _device_dict_repr(entry)
+        if prior != current or prior is None:
+            conflicts.add(device_id)
+            del by_id[device_id]
+    return [by_id[device_id] for device_id in order if device_id in by_id]
+
+
+def _effective_device_area_id(view: _RegistryView, device: Any) -> str | None:
+    """Return Core 2026.9's direct-or-parent effective device area."""
+    direct_area = getattr(device, "area_id", None)
+    if direct_area is not None:
+        return direct_area if isinstance(direct_area, str) else None
+    parent_id = getattr(device, "parent_device_id", None)
+    if not isinstance(parent_id, str) or not parent_id:
+        return None
+    parent = _device(view, parent_id)
+    if parent is None or getattr(parent, "parent_device_id", None) is not None:
+        # Core requires a main-device parent. This also bounds malformed cycles.
+        return None
+    parent_area = getattr(parent, "area_id", None)
+    return parent_area if isinstance(parent_area, str) else None
+
+
 def _area_name(view: _RegistryView, area_id: str | None) -> str | None:
     if not area_id:
         return None
@@ -2780,17 +2858,14 @@ def _overview_entity_registry(view: _RegistryView) -> list[dict[str, Any]]:
 def _overview_device_registry(view: _RegistryView) -> list[dict[str, Any]]:
     """Device registry as a bare list (id + area + labels + name/manufacturer/model)."""
     out: list[dict[str, Any]] = []
-    reg = view.device
-    devices = getattr(reg, "devices", None) if reg is not None else None
-    values = _mapping_values(devices)
-    for dev in values:
+    for dev in _all_device_entries(view):
         dev_id = getattr(dev, "id", None)
         if not dev_id:
             continue
         out.append(
             {
                 "id": dev_id,
-                "area_id": getattr(dev, "area_id", None),
+                "area_id": _effective_device_area_id(view, dev),
                 "labels": sorted(str(x) for x in (getattr(dev, "labels", None) or [])),
                 "name": getattr(dev, "name", None),
                 "name_by_user": getattr(dev, "name_by_user", None),
@@ -3166,6 +3241,11 @@ def _do_device_get(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any
     result: dict[str, Any] = {
         "device": _device_dict_repr(entry) if entry is not None else None
     }
+    if entry is not None and isinstance(getattr(entry, "parent_device_id", None), str):
+        # Additive internal transport metadata. The raw child ``dict_repr`` stays
+        # byte-identical to Core while the server can expose its existing area_id
+        # field using Core's effective placement without a whole-registry read.
+        result["effective_area_id"] = _effective_device_area_id(view, entry)
     if include_entities:
         result["entities"] = _device_entities(view, device_id) if device_id else []
     return result
@@ -3181,10 +3261,8 @@ def _do_device_list(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, An
     than emitted as a partial record.
     """
     view = _resolve_registries(hass)
-    reg = view.device
-    devices = getattr(reg, "devices", None) if reg is not None else None
     out: list[dict[str, Any]] = []
-    for dev in _mapping_values(devices):
+    for dev in _all_device_entries(view):
         repr_dict = _device_dict_repr(dev)
         if repr_dict is not None:
             out.append(repr_dict)
@@ -5359,7 +5437,7 @@ def _effective_area_for_entry(view: _RegistryView, entry: Any) -> str | None:
     device_id = getattr(entry, "device_id", None)
     if isinstance(device_id, str) and device_id:
         dev = _device(view, device_id)
-        dev_area = getattr(dev, "area_id", None) if dev is not None else None
+        dev_area = _effective_device_area_id(view, dev) if dev is not None else None
         return dev_area if isinstance(dev_area, str) and dev_area else None
     return None
 

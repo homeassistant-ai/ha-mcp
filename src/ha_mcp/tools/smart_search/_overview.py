@@ -6,6 +6,7 @@ import random
 from itertools import islice
 from typing import Any
 
+from ...utils.device_registry_semantics import build_device_registry_snapshot
 from ...visibility.resolver import load_hidden_set
 from ..helpers import exception_to_structured_error
 from ._base import _SearchBase
@@ -238,17 +239,15 @@ class SystemOverviewMixin(_SearchBase):
         device_registry: list[dict[str, Any]],
     ) -> dict[str, str | None]:
         """Map entity_id -> area_id. Priority: entity direct area_id > device area_id."""
-        device_area_map: dict[str, str | None] = {}
-        for device in device_registry:
-            device_id = device.get("id", "")
-            if device_id:
-                device_area_map[device_id] = device.get("area_id")
+        device_area_map = build_device_registry_snapshot(
+            list(device_registry)
+        ).effective_area_by_id
 
         entity_area_map: dict[str, str | None] = {}
         for entry in entity_registry:
             entity_id = entry.get("entity_id")
             area_id = entry.get("area_id")
-            if not area_id:
+            if area_id is None:
                 device_id = entry.get("device_id")
                 if device_id:
                     area_id = device_area_map.get(device_id)
