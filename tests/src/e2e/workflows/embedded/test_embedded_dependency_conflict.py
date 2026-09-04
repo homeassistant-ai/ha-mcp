@@ -339,19 +339,9 @@ def _seed_config(config_path: Path, wheel_name: str, wheel_version: str) -> None
     )
     storage_file.write_text(json.dumps(data, indent=2))
 
-    # This HA writes only WARNING+ to home-assistant.log without a `logger:`
-    # block. The two lines asserted here are WARNING and ERROR, so they would
-    # land either way; raising the component to INFO additionally captures the
-    # success line the fixture polls for as its "the repro premise is gone"
-    # tripwire, and the surrounding bring-up context when something else fails.
-    config_yaml = config_path / "configuration.yaml"
-    config_yaml.write_text(
-        config_yaml.read_text(encoding="utf-8")
-        + "\n# e2e: surface the component's INFO lines"
-        " (#2239 dependency-conflict e2e).\n"
-        "logger:\n  logs:\n    custom_components.ha_mcp_tools: info\n",
-        encoding="utf-8",
-    )
+    # The seeded configuration.yaml already raises custom_components.ha_mcp_tools
+    # to INFO (tests/initial_test_state/configuration.yaml), so the component's
+    # success lines reach home-assistant.log here without a second logger: block.
 
     # HA runs as uid 0 in the test image but the bind mount must be traversable.
     for path in config_path.rglob("*"):

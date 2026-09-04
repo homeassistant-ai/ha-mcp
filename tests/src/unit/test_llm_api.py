@@ -1123,6 +1123,31 @@ class TestExclusiveBoundNormalisation:
 
         assert llm_api._to_inclusive_bounds(schema) == schema
 
+    def test_a_specification_extension_is_opaque(self):
+        """``x-`` keys hold arbitrary vendor objects, not subschemas.
+
+        The OpenAPI specification allows any value under an ``x-`` extension,
+        so a bound-like key inside one is vendor data; rewriting it would
+        corrupt the extension while leaving the schema itself unchanged.
+        """
+        schema = {
+            "type": "number",
+            "x-ui": {"exclusiveMinimum": 5, "nested": {"exclusiveMaximum": True}},
+        }
+
+        assert llm_api._to_inclusive_bounds(schema) == schema
+
+    def test_a_specification_extension_is_copied_not_aliased(self):
+        """Like instance values: the result must not share the input's objects."""
+        extension = {"exclusiveMinimum": 5, "nested": {"list": [1, 2]}}
+        schema = {"type": "number", "x-ui": extension}
+
+        result = llm_api._to_inclusive_bounds(schema)
+        result["x-ui"]["nested"]["list"].append(3)
+
+        assert extension["nested"]["list"] == [1, 2]
+        assert result["x-ui"] is not extension
+
     def test_a_property_named_like_the_keyword_is_left_alone(self):
         schema = {
             "type": "object",
@@ -1461,6 +1486,23 @@ class TestExclusiveBoundNormalisation:
         assert set(guard._EXCLUSIVE_KEYWORDS) == {
             exclusive for exclusive, *_ in llm_api._EXCLUSIVE_BOUNDS
         }
+        # The fourth copy is a prefix rule rather than a set: OpenAPI ``x-``
+        # extensions are opaque to the component and skipped by the guard.
+        assert llm_api._is_opaque_key("x-anything")
+        assert guard._exclusive_bounds({"x-a": {"exclusiveMinimum": 1}}, "r") == []
+        # ...but only as a KEYWORD: a property literally named ``x-limit`` is a
+        # subschema on both sides, so its bound is normalised and reported.
+        named = {
+            "type": "object",
+            "properties": {"x-limit": {"type": "number", "exclusiveMinimum": 0}},
+        }
+        assert llm_api._to_inclusive_bounds(named)["properties"]["x-limit"] == {
+            "type": "number",
+            "minimum": 0,
+        }
+        assert guard._exclusive_bounds(named, "r") == [
+            "r.properties.x-limit: exclusiveMinimum"
+        ]
 
     def test_an_untouched_schema_is_not_reported(self, caplog):
         """Nothing changed, so nothing is worth an operator's attention."""

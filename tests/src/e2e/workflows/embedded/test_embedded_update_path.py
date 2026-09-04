@@ -428,6 +428,36 @@ def _dump_logs(container: Any) -> Any:
     return logs
 
 
+# Container stdout carries HA's console handler only. The component's own
+# install / LLM-API / bring-up errors land in ``home-assistant.log`` under the
+# bind-mounted /config, and on 2026-09-04 a phase-1 timeout was diagnosable
+# only from there — the container log showed nothing about the real cause.
+_HA_LOG_TAIL_CHARS = 4000
+
+
+def _dump_ha_log(config_path: Path) -> str:
+    """Return a labelled tail of ``home-assistant.log``; never raises.
+
+    Empty string when the file does not exist yet (HA never got far enough to
+    write one) or is empty; a labelled reason when it exists but cannot be
+    read, since silence there would read as "nothing to show". The caller
+    concatenates the result unconditionally.
+    """
+    log_file = config_path / "home-assistant.log"
+    if not log_file.is_file():
+        return ""
+    try:
+        text = log_file.read_text(encoding="utf-8", errors="replace")
+    except OSError as err:
+        return f"\n(could not read {log_file}: {err})"
+    if not text:
+        return ""
+    return (
+        f"\nhome-assistant.log (last {_HA_LOG_TAIL_CHARS} chars of "
+        f"{log_file}):\n{text[-_HA_LOG_TAIL_CHARS:]}"
+    )
+
+
 def _submit_options_update(
     base_url: str, entry_id: str, user_input: dict[str, Any], container: Any
 ) -> dict[str, Any]:
@@ -548,7 +578,15 @@ def update_path_ha(request):
         base_url = f"http://{host}:{port}"
         headers = {"Authorization": f"Bearer {TEST_TOKEN}"}
 
-        _wait_http_ok(f"{base_url}/api/", headers, _API_READY_TIMEOUT_S)
+        try:
+            _wait_http_ok(f"{base_url}/api/", headers, _API_READY_TIMEOUT_S)
+        except AssertionError as err:
+            # Same reason as the phase-1 raise below: the component's failures
+            # are in home-assistant.log, not on container stdout.
+            raise AssertionError(
+                f"{err}\nContainer logs:\n{_dump_logs(container)}"
+                f"{_dump_ha_log(config_path)}"
+            ) from err
 
         phase1_version, _ = _wait_for_server(base_url, _PHASE1_READY_TIMEOUT_S)
         # Reject the "unknown" fallback as well as None: a server that answers
@@ -559,6 +597,7 @@ def update_path_ha(request):
                 "the PyPI-installed in-process server never reported a usable "
                 f"version within {_PHASE1_READY_TIMEOUT_S}s (got "
                 f"{phase1_version!r}). Container logs:\n{_dump_logs(container)}"
+                f"{_dump_ha_log(config_path)}"
             )
         yield {
             "base_url": base_url,
