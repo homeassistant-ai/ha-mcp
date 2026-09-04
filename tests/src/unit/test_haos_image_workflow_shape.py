@@ -426,25 +426,39 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
         "image": "${{ steps.versions.outputs.image }}",
         "superfluous": "${{ steps.versions.outputs.superfluous }}",
     }
-    # The skip compares against the stable lane's PIN, not stable.json: while
-    # the Renovate bump lags a release, beta equals the new stable and this
-    # lane is the only container lane on it. The resolver reads that pin with
-    # sed; pin the extraction here so a reformatted pin cannot silently turn
-    # into an empty comparison on the nightly.
-    assert ".github/workflows/e2e-tests.yml" in resolve["run"]
+    # The skip compares against the image the E2E fixtures actually build
+    # from (tests/test_constants.HA_TEST_IMAGE's default), not stable.json:
+    # while the Renovate bump lags a release, beta equals the new stable and
+    # this lane is the only container lane on it. The resolver reads that
+    # literal with sed; pin the extraction here so a reformatted pin cannot
+    # silently turn into an empty comparison on the nightly.
+    assert "tests/test_constants.py" in resolve["run"]
     assert "superfluous=$superfluous" in resolve["run"]
-    stable_workflow = (_WORKFLOW_DIR / "e2e-tests.yml").read_text(encoding="utf-8")
+    constants = (_REPO_ROOT / "tests" / "test_constants.py").read_text(encoding="utf-8")
     pins = re.findall(
-        r'^  HA_IMAGE_GHCR: "ghcr\.io/home-assistant/home-assistant:(.*)"$',
-        stable_workflow,
+        r'^_DEFAULT_HA_TEST_IMAGE = "ghcr\.io/home-assistant/home-assistant:(.*)"$',
+        constants,
         flags=re.MULTILINE,
     )
     assert len(pins) == 1 and re.fullmatch(r"\d{4}\.\d{1,2}\.\d+", pins[0]), (
-        f"the resolver's sed over e2e-tests.yml would not find one version pin: {pins}"
+        f"the resolver's sed over tests/test_constants.py would not find one pin: {pins}"
     )
+    # The workflow-level pins are pre-pull and cache-key inputs for the same
+    # image; Renovate moves all four together, and the skip's premise (the
+    # stable lanes ran exactly this image) holds only while they agree.
+    for pinned_workflow in ("pr.yml", "e2e-tests.yml", "performance-tests.yml"):
+        text = (_WORKFLOW_DIR / pinned_workflow).read_text(encoding="utf-8")
+        workflow_pins = re.findall(
+            r'^  HA_IMAGE_GHCR: "ghcr\.io/home-assistant/home-assistant:(.*)"$',
+            text,
+            flags=re.MULTILINE,
+        )
+        assert workflow_pins == pins, (
+            f"{pinned_workflow} pins {workflow_pins} but the fixtures run {pins}"
+        )
     checkout = _job_steps(resolver)[0]
     assert str(checkout.get("uses", "")).startswith("actions/checkout@")
-    assert checkout["with"]["sparse-checkout"] == ".github/workflows/e2e-tests.yml"
+    assert checkout["with"]["sparse-checkout"] == "tests/test_constants.py"
 
     image_ref = "${{ needs.resolve-beta.outputs.image }}"
     test_jobs = {

@@ -10,6 +10,8 @@ table-tested.
 
 from __future__ import annotations
 
+import ast
+import inspect
 import sys
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,7 @@ _E2E_UTILITIES = Path(__file__).resolve().parents[1] / "e2e" / "utilities"
 if str(_E2E_UTILITIES) not in sys.path:
     sys.path.insert(0, str(_E2E_UTILITIES))
 
+import llm_api_probe  # noqa: E402
 from llm_api_probe import (  # noqa: E402
     LLM_API_SCHEMA_PROBE,
     MIN_TOOL_COUNT,
@@ -39,7 +42,6 @@ def _clean_report(**overrides: Any) -> dict[str, Any]:
         "probatio_import_error": None,
         "draft2020_checked": True,
         "jsonschema_import_error": None,
-        "inclusive_bounds_normaliser": True,
         "normalise_schema": True,
         "conversion_failures": [],
         "boolean_exclusive": [],
@@ -58,9 +60,61 @@ def _helpers() -> dict[str, Any]:
     return namespace
 
 
+def _written_report_keys() -> set[str]:
+    """Keys of the ``report.update({...})`` literal the runner writes."""
+    tree = ast.parse(llm_api_probe._PROBE_RUNNER_SOURCE)
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "update"
+            and node.args
+            and isinstance(node.args[0], ast.Dict)
+        ):
+            return {
+                key.value for key in node.args[0].keys if isinstance(key, ast.Constant)
+            }
+    raise AssertionError("no report.update({...}) literal found in the probe runner")
+
+
+def _read_report_keys() -> set[str]:
+    """Every ``report.get("...")`` and ``report["..."]`` key the reader uses."""
+    tree = ast.parse(inspect.getsource(assert_report_clean))
+    keys: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+        ):
+            keys.add(node.args[0].value)
+        elif (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, str)
+        ):
+            keys.add(node.slice.value)
+    return keys
+
+
 class TestProbeSource:
     def test_the_probe_source_compiles(self) -> None:
         compile(LLM_API_SCHEMA_PROBE, "<probe>", "exec")
+
+    def test_every_key_the_reader_uses_is_one_the_runner_writes(self) -> None:
+        """A renamed defect-signal key must fail here, not degrade to green.
+
+        The reader goes through ``report.get``, so a key the runner stopped
+        writing reads as "no problem"; bind the two statically.
+        """
+        written = _written_report_keys()
+        read = _read_report_keys()
+
+        assert read, "the reader reads no keys at all?"
+        assert read <= written, f"read but never written: {sorted(read - written)}"
+        assert written <= read, f"written but never read: {sorted(written - read)}"
 
     def test_the_helpers_compile_and_load_standalone(self) -> None:
         helpers = _helpers()

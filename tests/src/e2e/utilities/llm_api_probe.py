@@ -144,7 +144,6 @@ async def _run():
         "probatio_import_error": None,
         "draft2020_checked": False,
         "jsonschema_import_error": None,
-        "inclusive_bounds_normaliser": hasattr(llm_api, "_to_inclusive_bounds"),
         "normalise_schema": normalise_schema is not None,
         "conversion_failures": [],
         "boolean_exclusive": [],

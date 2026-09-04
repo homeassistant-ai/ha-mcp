@@ -59,11 +59,12 @@ env:
 jobs:
   # Decide once whether beta is currently distinct from stable. The gate checks
   # one thing: whether beta.json and stable.json name the same Supervisor and
-  # Core. When they do, the stable HAOS lanes bake that same Core and
-  # Supervisor from the stable channel on every pull request, so both lanes
-  # below are skipped on push and schedule; a manual dispatch always runs.
-  # Each lane still resolves the versions itself for its cache key and build
-  # inputs.
+  # Core. When they do, the stable HAOS lanes' image (baked from the stable
+  # channel, so it follows the current stable release as of its last bake;
+  # keyed on the bake inputs and re-primed weekly) is taken to cover it, and
+  # both lanes below are skipped on push and schedule; a manual dispatch
+  # always runs. Each lane still resolves the versions itself for its cache
+  # key and build inputs.
   resolve-beta:
     name: Resolve beta versions
     runs-on: ubuntu-latest

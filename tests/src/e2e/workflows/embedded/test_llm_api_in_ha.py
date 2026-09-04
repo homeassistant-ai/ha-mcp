@@ -223,6 +223,7 @@ def _assert_registration_logged_in_haos() -> None:
     )
     deadline = time.monotonic() + _REGISTRATION_TIMEOUT_S
     count = ""
+    last_error: RuntimeError | None = None
     while True:
         # Bound each ssh call by what is left of the deadline (with a small
         # floor so a near-expired deadline still gets one real attempt), so a
@@ -231,10 +232,16 @@ def _assert_registration_logged_in_haos() -> None:
         try:
             count = ssh_exec(["sh", "-c", script], timeout=remaining).stdout.strip()
         except RuntimeError as err:
-            raise AssertionError(
-                f"could not read Core's journal on HAOS while checking for "
-                f"{_REGISTRATION_LINE!r}:\n{err}"
-            ) from err
+            # A failing ``ha core logs`` (Supervisor still settling, a
+            # transient API error) is retried inside the budget; only a
+            # failure that persists to the deadline is reported, with its
+            # stderr. ssh_exec itself retries transport errors only.
+            last_error = err
+            LOG.debug("journal read failed on HAOS, retrying: %s", err)
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(_REGISTRATION_POLL_S)
+            continue
         except subprocess.TimeoutExpired as err:
             raise AssertionError(
                 f"reading Core's journal on HAOS did not return within {remaining:.0f}s "
@@ -247,6 +254,10 @@ def _assert_registration_logged_in_haos() -> None:
             break
         LOG.debug("LLM-API registration line not in Core's log yet (count=%r)", count)
         time.sleep(_REGISTRATION_POLL_S)
+    assert last_error is None, (
+        f"could not read Core's journal on HAOS within {_REGISTRATION_TIMEOUT_S}s "
+        f"while checking for {_REGISTRATION_LINE!r}; last error:\n{last_error}"
+    )
     assert count.isdigit(), (
         "the journal command on HAOS did not print a bare match count "
         f"({count!r}); the registration check could not run, which says "
