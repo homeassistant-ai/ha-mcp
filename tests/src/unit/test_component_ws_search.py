@@ -533,11 +533,25 @@ class FakeChildDevice:
         self.disabled_by = disabled_by
 
     def __getattr__(self, name):
-        if name in {"manufacturer", "model", "connections"}:
-            raise AssertionError(
-                f"Core 2026.9 ChildDeviceEntry does not expose {name} as an attribute"
-            )
         raise AttributeError(name)
+
+    @property
+    def manufacturer(self):
+        pytest.fail(
+            "Core 2026.9 ChildDeviceEntry does not expose manufacturer as an attribute"
+        )
+
+    @property
+    def model(self):
+        pytest.fail(
+            "Core 2026.9 ChildDeviceEntry does not expose model as an attribute"
+        )
+
+    @property
+    def connections(self):
+        pytest.fail(
+            "Core 2026.9 ChildDeviceEntry does not expose connections as an attribute"
+        )
 
     @property
     def dict_repr(self):
@@ -576,7 +590,7 @@ class _IterOnlyDeviceCollection:
         raise AssertionError("Core 2026.9 device collections do not support get")
 
     def __getitem__(self, _device_id):
-        raise AssertionError("Core 2026.9 device collections are not subscriptable")
+        raise KeyError("Core 2026.9 device collections are not subscriptable")
 
 
 class FakeDeviceReg:
