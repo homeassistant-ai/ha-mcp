@@ -58,7 +58,9 @@ markers so the tests run unconditionally on every lane.
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 from typing import Any
 
 from ..utilities.assertions import safe_call_tool
@@ -78,7 +80,7 @@ _COLLECTION_FLOOR = 850
 # and are bumped when new marker-gated tests intentionally consume that
 # historical buffer. This still catches a mass-skip incident like PR #1375
 # (14 tests started skipping silently because a marker was applied too broadly).
-_SKIP_CEILING_PER_LANE = {
+_SKIP_CEILING_BASELINE = {
     # The 6 dashboard-screenshot E2E tests
     # (tests/src/e2e/haos_only/test_dashboard_screenshot_addon.py) are marked
     # haos_only + inaddon_only: they RUN only on the haos_inaddon lane (the
@@ -128,18 +130,8 @@ _SKIP_CEILING_PER_LANE = {
     # gains a collection-time skip for every one of the two it does not run —
     # two on every lane except embedded and haos_embedded (and their no-tools
     # variants), which run one and skip the other.
-    # #2329 adds two marker-gated blueprint tests
-    # (tests/src/e2e/workflows/blueprints/test_blueprints.py): one
-    # ``embedded_only`` (the direct blueprint file read) and one
-    # ``no_tools_only`` (text still arrives without the tools entry). Every
-    # lane gains one collection-time skip per marker it does not satisfy.
-    # ``embedded_only`` runs on the container-embedded lane alone — NOT on
-    # haos_embedded, which is a HAOS lane — so that lane takes both: +2 on
-    # container / haos / haos_stdio / haos_inaddon / haos_embedded, +1 on
-    # embedded (no_tools_only), +1 on the no-tools lanes except
-    # embedded_no_tools (embedded_only).
-    "container": 92,  # was 90; +2 #2329 embedded_only + no_tools_only
-    "haos": 71,  # was 69; +2 #2329 embedded_only + no_tools_only
+    "container": 90,  # was 79; +8 #2292 no_tools_only; +1 #2357 haos_embedded_only; +2 #2361 in-HA LLM-API probe
+    "haos": 69,  # was 58; +8 #2292 no_tools_only; +1 #2357 haos_embedded_only; +2 #2361 in-HA LLM-API probe
     # HAOS stdio is the external HAOS set plus ``external_only`` tests, whose
     # test-process monkeypatches cannot reach the subprocess server. The first
     # full lane run on 2026-08-18 observed 103 collection-time marker skips
@@ -151,8 +143,8 @@ _SKIP_CEILING_PER_LANE = {
     # This entry moved 117 -> 119 rather than by that 8: the 117 was a ceiling
     # carrying headroom above its own observed count, so part of the +8 landed
     # inside that headroom and 119 is what round-1 CI actually observed.
-    "haos_stdio": 124,  # was 122; +2 #2329 embedded_only + no_tools_only
-    "haos_inaddon": 99,  # was 97; +2 #2329 embedded_only + no_tools_only
+    "haos_stdio": 122,  # +1 #2357 haos_embedded_only; +2 #2361 in-HA LLM-API probe
+    "haos_inaddon": 97,  # was 86; +8 #2292 no_tools_only; +1 #2357 haos_embedded_only; +2 #2361 in-HA LLM-API probe
     # Embedded backend (#1527, E2E_BACKEND=embedded). Skips exactly the container
     # lane's marker-skips PLUS two embedded-specific additions:
     #   - haos_only + inaddon_only tests skip on embedded just like on container
@@ -168,7 +160,7 @@ _SKIP_CEILING_PER_LANE = {
     # +1 visibility e2e (haos_stdio_only) and +1 #2241 haos_tls scenario
     # (haos_only) bridge 133 -> 135.
     # Read future changes from CI instead of deriving them.
-    "embedded": 148,  # was 147; +1 #2329 no_tools_only
+    "embedded": 147,  # was 137; +8 #2292 no_tools_only; +1 #2357 haos_embedded_only; +1 #2361 (its haos_embedded_only half)
     # HAOS embedded backend (#1527, HAOS_TEST_MODE=embedded). A HAOS lane, so it
     # skips the SAME set as the external HAOS lane (container_only + inaddon_only)
     # PLUS two haos_embedded-specific additions:
@@ -186,7 +178,7 @@ _SKIP_CEILING_PER_LANE = {
     # 107 in the 2026-08-18 CI run (106 before the self-restart e2e).
     # Read future changes from CI instead of deriving them.
     # #2270 stable observed 118 marker skips; beta observed 117.
-    "haos_embedded": 129,  # was 127; +2 #2329 embedded_only + no_tools_only
+    "haos_embedded": 127,  # was 118; +8 #2292 no_tools_only; +1 #2361 (its embedded_only half)
     # No-tools topology keys (#2292). On the ``E2E_NO_TOOLS_ENTRY=1`` lanes the
     # lookup key gains a ``_no_tools`` suffix, because those lanes skip a
     # completely different — and much larger — set: every ``requires_tools_entry``
@@ -197,11 +189,40 @@ _SKIP_CEILING_PER_LANE = {
     # The haos (external) and haos_stdio backends have no no-tools lane today,
     # so they deliberately have no key here — an unknown backend fails loudly in
     # the test below rather than silently skipping the ceiling check.
-    "container_no_tools": 196,  # was 195; +1 #2329 embedded_only
+    "container_no_tools": 195,  # observed 187; +1 #2357 haos_embedded_only; +2 #2361 in-HA LLM-API probe
     "embedded_no_tools": 251,  # observed 244; +1 #2357 haos_embedded_only; +1 #2361 (its haos_embedded_only half)
-    "haos_embedded_no_tools": 232,  # was 231; +1 #2329 embedded_only
-    "haos_inaddon_no_tools": 202,  # was 201; +1 #2329 embedded_only
+    "haos_embedded_no_tools": 231,  # observed 225; +1 #2361 (its embedded_only half)
+    "haos_inaddon_no_tools": 201,  # observed 193; +1 #2357 haos_embedded_only; +2 #2361 in-HA LLM-API probe
 }
+
+# Per-PR increments live beside this file in ``skip_ceiling/pr<N>.json``, one
+# fragment per pull request, so two PRs that each add marker-gated tests no
+# longer rewrite the same lines above (that block conflicted on three
+# consecutive master merges while #2356 was in review). A fragment is
+# ``{"reason": str, "deltas": {lane: int}}``; every fragment's deltas are added
+# to the baseline. Re-pin the baseline only from a CI observation, and when
+# doing so delete the fragments the new numbers already include.
+_SKIP_CEILING_FRAGMENT_DIR = Path(__file__).with_name("skip_ceiling")
+
+
+def _load_skip_ceiling_fragments() -> dict[str, dict[str, Any]]:
+    """Every ``skip_ceiling/*.json`` fragment, keyed by filename."""
+    return {
+        path.name: json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(_SKIP_CEILING_FRAGMENT_DIR.glob("*.json"))
+    }
+
+
+def _skip_ceilings_with_fragments() -> dict[str, int]:
+    ceilings = dict(_SKIP_CEILING_BASELINE)
+    for name, fragment in _load_skip_ceiling_fragments().items():
+        for lane, delta in fragment["deltas"].items():
+            assert lane in ceilings, f"{name}: unknown lane {lane!r}"
+            ceilings[lane] += delta
+    return ceilings
+
+
+_SKIP_CEILING_PER_LANE = _skip_ceilings_with_fragments()
 
 
 def test_backend_dispatch_matches_workflow_env(
@@ -428,5 +449,20 @@ def test_session_skipped_count_below_ceiling(
         f"applied too broadly in pytest_collection_modifyitems — "
         f"check pytest_collection_modifyitems in tests/src/e2e/conftest.py for recent changes. "
         f"If the increase is intentional (legitimate new marker-gated "
-        f"tests), bump _SKIP_CEILING_PER_LANE[{lane!r}] in this file."
+        f"tests), add the per-lane increments in a "
+        f"tests/src/e2e/basic/skip_ceiling/pr<N>.json fragment (see "
+        f"_SKIP_CEILING_BASELINE in this file) rather than editing the baseline."
     )
+
+
+def test_skip_ceiling_fragments_are_well_formed() -> None:
+    """Every ``skip_ceiling/*.json`` fragment names known lanes with positive
+    integer increments and says why, so a typo cannot silently raise nothing
+    (or raise the wrong lane) and the reason survives beside the number."""
+    for name, fragment in _load_skip_ceiling_fragments().items():
+        assert set(fragment) == {"reason", "deltas"}, name
+        assert isinstance(fragment["reason"], str) and fragment["reason"].strip(), name
+        assert fragment["deltas"], f"{name}: no deltas"
+        for lane, delta in fragment["deltas"].items():
+            assert lane in _SKIP_CEILING_BASELINE, (name, lane)
+            assert isinstance(delta, int) and delta > 0, (name, lane, delta)

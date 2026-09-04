@@ -37,6 +37,13 @@ expressions, not the summary docstring — `external_only`'s name has misled
 before (#1375 found 14 supervisor-mock tests silently skipping on every
 testcontainer run).
 
+A marker-gated test changes the per-lane skip counts that
+`tests/src/e2e/basic/test_backend_dispatch_smoke.py` caps. Record the
+increments in a new `tests/src/e2e/basic/skip_ceiling/pr<N>.json` fragment
+(`{"reason": ..., "deltas": {lane: n}}`) rather than editing
+`_SKIP_CEILING_BASELINE`; fragments from different PRs never conflict. Re-pin
+the baseline only from a CI observation, deleting the fragments it absorbs.
+
 **Two different things share the `ha_mcp_tools` name — don't conflate them:**
 
 - **The component itself** (filesystem / registry tools) is installed on
