@@ -532,6 +532,13 @@ class FakeChildDevice:
         self.config_subentry_id = config_subentry_id
         self.disabled_by = disabled_by
 
+    def __getattr__(self, name):
+        if name in {"manufacturer", "model", "connections"}:
+            raise AssertionError(
+                f"Core 2026.9 ChildDeviceEntry does not expose {name} as an attribute"
+            )
+        raise AttributeError(name)
+
     @property
     def dict_repr(self):
         # Exact Core 2026.9 child-device wire fields. In particular, child entries

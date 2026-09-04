@@ -1540,9 +1540,10 @@ def _registry_enrichment(view: _RegistryView, entity_id: str) -> dict[str, Any]:
     )
     dev_texts: list[str] = []
     if dev is not None:
-        labels |= set(getattr(dev, "labels", None) or [])
+        dev_row = _device_dict_repr(dev) or {}
+        labels |= set(dev_row.get("labels") or [])
         for attr in ("name_by_user", "name", "manufacturer", "model"):
-            val = getattr(dev, attr, None)
+            val = dev_row.get(attr)
             if val:
                 dev_texts.append(str(val))
 
@@ -2430,24 +2431,31 @@ def _all_device_entries(view: _RegistryView) -> list[Any]:
 def _effective_device_area_id(view: _RegistryView, device: Any) -> str | None:
     """Return Core 2026.9's direct-or-parent effective device area."""
     devices_by_id = _unambiguous_device_entries(view)
-    device_id = getattr(device, "id", None)
+    device_row = _device_dict_repr(device)
+    if device_row is None:
+        return None
+    device_id = device_row.get("id")
     if not isinstance(device_id, str) or not device_id:
         return None
     device = devices_by_id.get(device_id)
     if device is None:
         # Conflicting identities never contribute semantic placement.
         return None
-    direct_area = getattr(device, "area_id", None)
+    device_row = _device_dict_repr(device)
+    if device_row is None:
+        return None
+    direct_area = device_row.get("area_id")
     if direct_area is not None:
         return direct_area if isinstance(direct_area, str) and direct_area else None
-    parent_id = getattr(device, "parent_device_id", None)
+    parent_id = device_row.get("parent_device_id")
     if not isinstance(parent_id, str) or not parent_id:
         return None
     parent = devices_by_id.get(parent_id)
-    if parent is None or getattr(parent, "parent_device_id", None) is not None:
+    parent_row = _device_dict_repr(parent) if parent is not None else None
+    if parent_row is None or parent_row.get("parent_device_id") is not None:
         # Core requires a main-device parent. This also bounds malformed cycles.
         return None
-    parent_area = getattr(parent, "area_id", None)
+    parent_area = parent_row.get("area_id")
     return parent_area if isinstance(parent_area, str) and parent_area else None
 
 
@@ -2907,18 +2915,21 @@ def _overview_device_registry(view: _RegistryView) -> list[dict[str, Any]]:
     """Device registry as a bare list (id + area + labels + name/manufacturer/model)."""
     out: list[dict[str, Any]] = []
     for dev in _all_device_entries(view):
-        dev_id = getattr(dev, "id", None)
+        dev_row = _device_dict_repr(dev)
+        if dev_row is None:
+            continue
+        dev_id = dev_row.get("id")
         if not dev_id:
             continue
         out.append(
             {
                 "id": dev_id,
                 "area_id": _effective_device_area_id(view, dev),
-                "labels": sorted(str(x) for x in (getattr(dev, "labels", None) or [])),
-                "name": getattr(dev, "name", None),
-                "name_by_user": getattr(dev, "name_by_user", None),
-                "manufacturer": getattr(dev, "manufacturer", None),
-                "model": getattr(dev, "model", None),
+                "labels": sorted(str(x) for x in (dev_row.get("labels") or [])),
+                "name": dev_row.get("name"),
+                "name_by_user": dev_row.get("name_by_user"),
+                "manufacturer": dev_row.get("manufacturer"),
+                "model": dev_row.get("model"),
             }
         )
     return out
@@ -3289,10 +3300,13 @@ def _do_device_get(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any
     include_entities = params.get("include_entities", False)
     view = _resolve_registries(hass)
     entry = _unambiguous_device_entries(view).get(device_id) if device_id else None
-    result: dict[str, Any] = {
-        "device": _device_dict_repr(entry) if entry is not None else None
-    }
-    if entry is not None and isinstance(getattr(entry, "parent_device_id", None), str):
+    entry_row = _device_dict_repr(entry) if entry is not None else None
+    result: dict[str, Any] = {"device": entry_row}
+    if (
+        entry is not None
+        and isinstance(entry_row, dict)
+        and isinstance(entry_row.get("parent_device_id"), str)
+    ):
         # Additive internal transport metadata. The raw child ``dict_repr`` stays
         # byte-identical to Core while the server can expose its existing area_id
         # field using Core's effective placement without a whole-registry read.
@@ -5500,7 +5514,9 @@ def _effective_labels_for_entry(view: _RegistryView, entry: Any) -> set[str]:
     if isinstance(device_id, str) and device_id:
         dev = _unambiguous_device_entries(view).get(device_id)
         if dev is not None:
-            labels |= set(getattr(dev, "labels", None) or [])
+            dev_row = _device_dict_repr(dev)
+            if dev_row is not None:
+                labels |= set(dev_row.get("labels") or [])
     return labels
 
 
