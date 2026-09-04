@@ -326,6 +326,36 @@ class TestSchemaConversionCompatibility:
 
         assert llm_api.convert_to_voluptuous(schema) == {"probatio": schema}
 
+    def test_the_fallback_announces_which_codec_is_converting(
+        self, monkeypatch, caplog
+    ):
+        """Nothing else reports that the component runs on the other codec.
+
+        A requirement that failed to install never gets here: Home Assistant
+        logs that itself and abandons the integration before importing it.
+        What does get here -- skip_pip, or a deps tree that lost the package
+        -- produces no message anywhere else, and the conversion then
+        succeeds quietly with a codec that retypes integers.
+        """
+        probatio = SimpleNamespace(from_openapi=lambda value: value)
+
+        def _import_module(name):
+            if name == "voluptuous_openapi":
+                raise ModuleNotFoundError(
+                    "No module named 'voluptuous_openapi'",
+                    name="voluptuous_openapi",
+                )
+            return probatio
+
+        monkeypatch.setattr(llm_api.importlib, "import_module", _import_module)
+
+        with caplog.at_level(logging.DEBUG, logger=llm_api._LOGGER.name):
+            llm_api.convert_to_voluptuous({"type": "object"})
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "voluptuous-openapi" in warnings[0].getMessage()
+
     def test_reraises_nested_module_not_found(self, monkeypatch):
         def _import_module(name):
             assert name == "voluptuous_openapi"
@@ -1001,3 +1031,447 @@ class TestPreRenameSdkFallback:
             assert client.timeout.read is not None
         finally:
             await client.aclose()
+
+
+class TestExclusiveBoundNormalisation:
+    """Issue #2361: an exclusive bound must not reach Core's schema conversion.
+
+    Why it is fatal, and why normalising here rather than only at the source,
+    is written out once in ``llm_api._to_inclusive_bounds``. These tests pin
+    the walk's behaviour, not the reasoning.
+    """
+
+    def test_numeric_exclusive_bounds_become_inclusive(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "budget": {
+                    "anyOf": [
+                        {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "exclusiveMaximum": 300,
+                        },
+                        {"type": "null"},
+                    ]
+                }
+            },
+        }
+
+        branch = llm_api._to_inclusive_bounds(schema)["properties"]["budget"]["anyOf"]
+
+        assert branch[0] == {"type": "number", "minimum": 0, "maximum": 300}
+        assert branch[1] == {"type": "null"}
+
+    def test_nested_definitions_and_array_items_are_reached(self):
+        schema = {
+            "$defs": {"Item": {"type": "integer", "exclusiveMinimum": 1}},
+            "properties": {
+                "rows": {"type": "array", "items": {"exclusiveMaximum": 9}},
+            },
+        }
+
+        normalised = llm_api._to_inclusive_bounds(schema)
+
+        # The integer node folds exactly: 1 is excluded, so 2 is the bound.
+        # The untyped one widens, there being no smaller step to take.
+        assert normalised["$defs"]["Item"] == {"type": "integer", "minimum": 2}
+        assert normalised["properties"]["rows"]["items"] == {"maximum": 9}
+
+    def test_an_integer_bound_folds_to_the_value_the_server_accepts(self):
+        """An integer excluding 1 accepts 2, and advertising 1 would lie.
+
+        The widening trade the untyped case makes -- advertise an edge the
+        server rejects, and let the server reject it on arrival -- is not a
+        trade that has to be made here: the exact equivalent exists.
+        """
+        assert llm_api._to_inclusive_bounds(
+            {"type": "integer", "exclusiveMinimum": 1}
+        ) == {"type": "integer", "minimum": 2}
+        assert llm_api._to_inclusive_bounds(
+            {"type": "integer", "exclusiveMaximum": 9}
+        ) == {"type": "integer", "maximum": 8}
+        # A fractional bound on an integer node lands on the first integer
+        # inside it, not on the next one out.
+        assert llm_api._to_inclusive_bounds(
+            {"type": "integer", "exclusiveMinimum": 1.5}
+        ) == {"type": "integer", "minimum": 2}
+        # Nullable integers are still integers.
+        assert llm_api._to_inclusive_bounds(
+            {"type": ["integer", "null"], "exclusiveMinimum": 1}
+        ) == {"type": ["integer", "null"], "minimum": 2}
+
+    def test_a_union_that_also_admits_numbers_is_not_tightened(self):
+        """1.0001 is a legal value there, so 2 would reject what the server takes."""
+        assert llm_api._to_inclusive_bounds(
+            {"type": ["integer", "number"], "exclusiveMinimum": 1}
+        ) == {"type": ["integer", "number"], "minimum": 1}
+
+    def test_a_discriminator_mapping_is_a_name_map(self):
+        """Its keys are author-chosen tags and its values are refs, not bounds.
+
+        Descending into it would drop the tag as a non-numeric bound and hand
+        the model a discriminated union with a missing branch.
+        """
+        schema = {
+            "oneOf": [{"$ref": "#/$defs/A"}],
+            "discriminator": {
+                "propertyName": "kind",
+                "mapping": {"exclusiveMinimum": "#/$defs/A"},
+            },
+        }
+
+        assert llm_api._to_inclusive_bounds(schema) == schema
+
+    def test_a_property_named_like_the_keyword_is_left_alone(self):
+        schema = {
+            "type": "object",
+            "properties": {"exclusiveMinimum": {"type": "number"}},
+        }
+
+        assert llm_api._to_inclusive_bounds(schema) == schema
+
+    def test_instance_values_are_left_alone(self):
+        """default/const/enum/examples hold data, not subschemas."""
+        schema = {
+            "type": "object",
+            "default": {"exclusiveMinimum": 5},
+            "const": {"exclusiveMinimum": 5},
+            "enum": [{"exclusiveMinimum": 5}],
+            "examples": [{"exclusiveMinimum": 5}],
+        }
+
+        assert llm_api._to_inclusive_bounds(schema) == schema
+
+    def test_every_non_numeric_bound_is_dropped(self):
+        """Measured against probatio 0.11.4, none of these survive downstream.
+
+        A string or a list raises SchemaError, which costs the whole tool;
+        ``None`` is worse than a refusal, re-emitting a number parameter as
+        ``{"type": "string"}`` with no error anywhere. The name maps and
+        instance-value keywords keep foreign data out of reach before this
+        runs, so a key here is in a subschema slot, where no dialect permits
+        a non-numeric bound.
+        """
+        for schema in (
+            {"exclusiveMinimum": "not-a-number"},
+            {"exclusiveMinimum": None},
+            {"exclusiveMaximum": ["a"]},
+        ):
+            assert llm_api._to_inclusive_bounds(schema) == {}
+
+    def test_dependent_required_keys_are_property_names(self):
+        schema = {"dependentRequired": {"exclusiveMinimum": ["a"]}}
+
+        assert llm_api._to_inclusive_bounds(schema) == schema
+
+    def test_the_openapi_singular_example_is_instance_data_too(self):
+        schema = {"example": {"exclusiveMinimum": 5}}
+
+        assert llm_api._to_inclusive_bounds(schema) == schema
+
+    def test_draft4_boolean_form_is_dropped_and_its_bound_kept(self):
+        schema = {"type": "number", "minimum": 0, "exclusiveMinimum": True}
+
+        assert llm_api._to_inclusive_bounds(schema) == {"type": "number", "minimum": 0}
+
+    def test_a_stray_boolean_flag_is_dropped_so_the_tool_still_converts(self):
+        """Pins the trade: repair the malformed node, do not preserve it.
+
+        Probatio refuses a boolean ``exclusiveMinimum`` wherever it sits in a
+        subschema slot — with or without the ``minimum`` the Draft-4 form
+        requires beside it, and regardless of what else the node carries. A
+        preserved flag therefore costs the whole tool, which is a worse
+        outcome than dropping a keyword that means nothing on its own.
+        """
+        assert llm_api._to_inclusive_bounds(
+            {"type": "number", "exclusiveMinimum": True}
+        ) == {"type": "number"}
+        assert llm_api._to_inclusive_bounds(
+            {"allOf": [{"type": "number"}, {"exclusiveMinimum": True}]}
+        ) == {"allOf": [{"type": "number"}, {}]}
+
+    def test_dependencies_keys_are_property_names(self):
+        """Draft-7's ``dependencies`` is a name map like its 2020-12 heirs."""
+        schema = {"dependencies": {"exclusiveMinimum": ["a"]}}
+
+        assert llm_api._to_inclusive_bounds(schema) == schema
+
+    def test_the_tighter_bound_wins_when_both_are_present(self):
+        # Both directions: the fold must never loosen a bound the schema
+        # already carried, whichever of the two happens to be tighter.
+        assert llm_api._to_inclusive_bounds({"minimum": 1, "exclusiveMinimum": 5}) == {
+            "minimum": 5
+        }
+        assert llm_api._to_inclusive_bounds({"minimum": 9, "exclusiveMinimum": 5}) == {
+            "minimum": 9
+        }
+        assert llm_api._to_inclusive_bounds({"maximum": 9, "exclusiveMaximum": 5}) == {
+            "maximum": 5
+        }
+        assert llm_api._to_inclusive_bounds({"maximum": 1, "exclusiveMaximum": 5}) == {
+            "maximum": 1
+        }
+
+    def test_a_malformed_twin_is_replaced_rather_than_kept(self):
+        """A non-numeric ``minimum`` is not a bound probatio can read.
+
+        It refuses the schema outright ("'minimum' must be a number, got
+        str"), so the folded numeric bound replacing it repairs a tool that
+        would otherwise be dropped -- the same trade as the Draft-4 flag.
+        """
+        assert llm_api._to_inclusive_bounds(
+            {"minimum": "x", "exclusiveMinimum": 5}
+        ) == {"minimum": 5}
+
+    def test_the_incoming_schema_is_not_mutated(self):
+        """Including the instance values, which are copied rather than aliased.
+
+        The result is handed to Core and kept in the search catalog; a shared
+        sub-object would let either reach back into the MCP result object.
+        """
+        schema = {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "default": {"nested": {"a": 1}},
+        }
+
+        result = llm_api._to_inclusive_bounds(schema)
+        result["default"]["nested"]["a"] = 99
+
+        assert schema == {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "default": {"nested": {"a": 1}},
+        }
+
+    def test_the_search_catalog_shows_the_same_schema_that_is_mirrored(self):
+        """A tool must not advertise one bound and list another."""
+        api = _make_api(_make_hass(), mode=EXPOSURE_TOOL_SEARCH)
+        tool = SimpleNamespace(
+            name="ha_search",
+            description="d",
+            inputSchema={
+                "type": "object",
+                "properties": {"budget": {"type": "number", "exclusiveMinimum": 0}},
+            },
+        )
+
+        tools = api._build_tool_search_tools([tool], {"ha_search"})
+
+        catalog = next(t for t in tools if t.name == "ha_search_tools")._catalog
+        entry = next(c for c in catalog if c["name"] == "ha_search")
+        assert entry["input_schema"]["properties"]["budget"] == {
+            "type": "number",
+            "minimum": 0,
+        }
+
+    def test_probatio_reemits_a_raw_exclusive_bound_in_the_draft4_form(
+        self, real_probatio
+    ):
+        """Positive control: the premise every docstring here rests on.
+
+        Without this, the tests below only show that the walk rewrites a
+        keyword -- not that leaving the keyword alone would break anything.
+        Probatio is what Core 2026.9+ converts with; the legacy
+        voluptuous-openapi cannot show the defect at all, since it drops an
+        exclusive bound on ingest and never emits the Draft-4 flag.
+        """
+        raw = {
+            "type": "object",
+            "properties": {"b": {"type": "number", "exclusiveMinimum": 0}},
+        }
+
+        out = real_probatio.to_openapi(real_probatio.from_openapi(raw))
+
+        assert out["properties"]["b"].get("exclusiveMinimum") is True
+
+    def test_the_normalised_schema_survives_the_probatio_round_trip(
+        self, real_probatio
+    ):
+        """The same schema, normalised first, carries no flag out the far end."""
+        import json as _json
+
+        raw = {
+            "type": "object",
+            "properties": {"b": {"type": "number", "exclusiveMinimum": 0}},
+        }
+
+        out = real_probatio.to_openapi(
+            real_probatio.from_openapi(llm_api._to_inclusive_bounds(raw))
+        )
+
+        assert "exclusiveMinimum" not in _json.dumps(out)
+
+    def test_the_mirrored_path_converts_a_normalised_schema(self, monkeypatch):
+        """Core's converter must never see the bound, in either exposure mode."""
+        seen: list[Any] = []
+
+        def _capture(schema: Any) -> Any:
+            seen.append(schema)
+            return schema
+
+        monkeypatch.setattr(llm_api, "convert_to_voluptuous", _capture)
+        tool = SimpleNamespace(
+            name="ha_search",
+            description="d",
+            inputSchema={
+                "type": "object",
+                "properties": {"budget": {"type": "number", "exclusiveMinimum": 0}},
+            },
+        )
+
+        _make_api(_make_hass(), mode=EXPOSURE_FULL)._build_full_tools([tool])
+        _make_api(_make_hass(), mode=EXPOSURE_TOOL_SEARCH)._build_tool_search_tools(
+            [tool], {"ha_search"}
+        )
+
+        assert len(seen) == 2
+        for schema in seen:
+            assert schema["properties"]["budget"] == {"type": "number", "minimum": 0}
+
+    def test_a_tool_on_both_surfaces_is_normalised_once(self, monkeypatch):
+        """The catalog entry and the mirrored parameters share one rewrite.
+
+        Two rewrites would also mean two log lines per turn for every pinned
+        tool, which is what makes the report below readable.
+        """
+        # Counted at the entry point, not on the walk: ``_to_inclusive_bounds``
+        # recurses, so counting it would measure the schema's depth instead.
+        calls: list[Any] = []
+        real = llm_api._normalise_schema
+        monkeypatch.setattr(
+            llm_api,
+            "_normalise_schema",
+            lambda schema, tool_name: (
+                calls.append(tool_name) or real(schema, tool_name)
+            ),
+        )
+        tool = SimpleNamespace(
+            name="ha_search",
+            description="d",
+            inputSchema={
+                "type": "object",
+                "properties": {"budget": {"type": "number", "exclusiveMinimum": 0}},
+            },
+        )
+
+        api = _make_api(_make_hass(), mode=EXPOSURE_TOOL_SEARCH)
+        api._build_tool_search_tools([tool], {"ha_search"})
+
+        assert len(calls) == 1
+
+    def test_the_rewrite_is_reported_once_per_tool_with_its_name(self, caplog):
+        """Both branches log, and both name the tool that carried the schema.
+
+        The catalog path publishes without converting anything, so a log line
+        emitted from the converter would say nothing about the tools that
+        reach the model through tool search -- the default mode.
+        """
+        api = _make_api(_make_hass(), mode=EXPOSURE_TOOL_SEARCH)
+        folded = SimpleNamespace(
+            name="ha_folded",
+            description="d",
+            inputSchema={"type": "number", "exclusiveMinimum": 0},
+        )
+        dropped = SimpleNamespace(
+            name="ha_dropped",
+            description="d",
+            inputSchema={"type": "number", "exclusiveMinimum": True},
+        )
+
+        with caplog.at_level(logging.DEBUG, logger=llm_api._LOGGER.name):
+            api._build_tool_search_tools([folded, dropped], set())
+
+        debug = [r for r in caplog.records if r.levelno == logging.DEBUG]
+        warning = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len([r for r in debug if "ha_folded" in r.getMessage()]) == 1
+        assert len([r for r in warning if "ha_dropped" in r.getMessage()]) == 1
+
+    def test_one_tool_that_both_drops_and_folds_reports_both(self, caplog):
+        """The two branches are independent, and a schema can hit both.
+
+        Reported separately because they call for different things: the drop
+        is the server's bug to fix, the fold is a widened edge to expect.
+        """
+        api = _make_api(_make_hass(), mode=EXPOSURE_TOOL_SEARCH)
+        tool = SimpleNamespace(
+            name="ha_both",
+            description="d",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "bad": {"type": "number", "exclusiveMinimum": True},
+                    "good": {"type": "number", "exclusiveMinimum": 0},
+                },
+            },
+        )
+
+        with caplog.at_level(logging.DEBUG, logger=llm_api._LOGGER.name):
+            api._build_tool_search_tools([tool], set())
+
+        levels = {r.levelno for r in caplog.records if "ha_both" in r.getMessage()}
+        assert levels == {logging.WARNING, logging.DEBUG}
+
+    def test_two_bad_nodes_do_not_read_as_one(self, caplog):
+        """A count, because the keyword name alone cannot carry the number.
+
+        Someone reading this line is looking for the schema to fix. Collapsing
+        two malformed nodes into the single-node wording sends them off after
+        one bound and leaves the other in place.
+        """
+        api = _make_api(_make_hass(), mode=EXPOSURE_TOOL_SEARCH)
+        tool = SimpleNamespace(
+            name="ha_two_bad",
+            description="d",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "a": {"type": "number", "exclusiveMinimum": "x"},
+                    "b": {"type": "number", "exclusiveMinimum": "y"},
+                },
+            },
+        )
+
+        with caplog.at_level(logging.DEBUG, logger=llm_api._LOGGER.name):
+            api._build_tool_search_tools([tool], set())
+
+        warning = next(
+            r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+        )
+        assert "exclusiveMinimum x2" in warning
+
+    def test_the_guard_mirrors_the_components_keyword_sets(self):
+        """The registry guard repeats these sets rather than importing them.
+
+        That keeps the guard runnable without the Home Assistant component on
+        the path, at the cost of two copies that can drift apart silently.
+        This module imports both sides anyway, so the equality is pinned here
+        rather than left to review.
+        """
+        from . import test_tool_schema_exclusive_bounds as guard
+
+        assert guard._NAME_MAPS == llm_api._SCHEMA_MAPS
+        assert (
+            guard._NOT_SUBSCHEMAS == llm_api._INSTANCE_VALUES | llm_api._OPAQUE_KEYWORDS
+        )
+        # The third copy: a keyword added to the fold table but not to the
+        # walk would be normalised by the component and left unguarded here,
+        # with the registry-wide test still passing.
+        assert set(guard._EXCLUSIVE_KEYWORDS) == {
+            exclusive for exclusive, *_ in llm_api._EXCLUSIVE_BOUNDS
+        }
+
+    def test_an_untouched_schema_is_not_reported(self, caplog):
+        """Nothing changed, so nothing is worth an operator's attention."""
+        api = _make_api(_make_hass(), mode=EXPOSURE_TOOL_SEARCH)
+        tool = SimpleNamespace(
+            name="ha_clean",
+            description="d",
+            inputSchema={"type": "number", "minimum": 0},
+        )
+
+        with caplog.at_level(logging.DEBUG, logger=llm_api._LOGGER.name):
+            api._build_tool_search_tools([tool], set())
+
+        assert [r for r in caplog.records if "ha_clean" in r.getMessage()] == []
