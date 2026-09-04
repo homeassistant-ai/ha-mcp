@@ -430,8 +430,10 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
     # from (tests/test_constants.HA_TEST_IMAGE's default), not stable.json:
     # while the Renovate bump lags a release, beta equals the new stable and
     # this lane is the only container lane on it. The resolver reads that
-    # literal with sed; pin the extraction here so a reformatted pin cannot
-    # silently turn into an empty comparison on the nightly.
+    # literal with sed and aborts on an empty result, so a reformatted pin
+    # can never reach the comparison; pinning the extraction here surfaces
+    # such a reformat on the pull request instead of as a failed resolver on
+    # the next push or nightly.
     assert "tests/test_constants.py" in resolve["run"]
     assert "superfluous=$superfluous" in resolve["run"]
     constants = (_REPO_ROOT / "tests" / "test_constants.py").read_text(encoding="utf-8")
@@ -460,7 +462,9 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
     assert str(checkout.get("uses", "")).startswith("actions/checkout@")
     assert checkout["with"]["sparse-checkout"] == "tests/test_constants.py"
     # A single-file pattern needs non-cone mode; actions/checkout defaults
-    # cone mode to true, which would leave the file out of the checkout.
+    # cone mode to true, which would leave the file out of the checkout, the
+    # sed would find nothing, and the resolver's empty-pin check would abort
+    # the job. The pin protects the job, not the comparison.
     assert checkout["with"]["sparse-checkout-cone-mode"] is False
 
     image_ref = "${{ needs.resolve-beta.outputs.image }}"
