@@ -47,6 +47,7 @@ stateless session each — the in-process server serves ``stateless_http=True``.
 from __future__ import annotations
 
 import asyncio
+import copy
 import importlib
 import logging
 from collections.abc import AsyncIterator, Callable, Iterable
@@ -147,9 +148,9 @@ def convert_to_voluptuous(schema: Any) -> vol.Schema:
     return cast(vol.Schema, _schema_converter()(schema))
 
 
-# JSON Schema keywords whose value is a mapping of *names* to schemas. Their
-# keys are user-chosen, so a key spelled like a keyword is a property name and
-# must not be rewritten.
+# Keywords whose value is a mapping keyed by author-chosen names — property
+# names, definition names, regexes — rather than by JSON Schema keywords. A key
+# spelled like a bound is one of those names and must not be rewritten.
 _SCHEMA_MAPS: frozenset[str] = frozenset(
     {
         "properties",
@@ -185,10 +186,10 @@ def _to_inclusive_bounds(schema: Any) -> Any:
     one such bound anywhere in the mirrored toolset fails every conversation
     turn, not just calls to the tool carrying it.
 
-    The bound moves by one representable point and the server still enforces
-    the real one when the call arrives, so nothing becomes callable that was
-    not callable before; only the advertised edge widens. A Draft-4 boolean
-    flag carries no value of its own and is dropped.
+    A numeric bound moves by one representable point; the server still
+    enforces the real one when the call arrives, so nothing becomes callable
+    that was not callable before, only the advertised edge widens. A boolean
+    is the Draft-4 flag rather than a bound and is dropped outright.
 
     Normalising here rather than only at the source covers the server versions
     this component does not control: the ha-mcp package installs and updates
@@ -202,7 +203,10 @@ def _to_inclusive_bounds(schema: Any) -> Any:
     result: dict[str, Any] = {}
     for key, value in schema.items():
         if key in _INSTANCE_VALUES:
-            result[key] = value
+            # Copied, not aliased: the result is handed to Core and kept in
+            # the search catalog, and neither may reach back into the MCP
+            # result object this schema came from.
+            result[key] = copy.deepcopy(value)
         elif key in _SCHEMA_MAPS and isinstance(value, dict):
             result[key] = {
                 name: _to_inclusive_bounds(sub) for name, sub in value.items()
@@ -226,22 +230,21 @@ def _fold_bound(node: dict[str, Any], exclusive: str, inclusive: str) -> None:
         return
     bound = node[exclusive]
     if not _is_number(bound):
-        # A boolean is the Draft-4 flag: it carries no value of its own, and
-        # Probatio refuses the schema outright wherever one sits in a subschema
-        # slot -- with or without the `minimum` its dialect requires beside it.
-        # Dropping it repairs a malformed schema that would otherwise cost the
-        # whole tool. Only the flag goes: any other non-numeric value is not a
-        # bound at all and stays, so a key spelled like one inside foreign data
-        # keeps its value.
-        if isinstance(bound, bool):
-            del node[exclusive]
+        # Nothing non-numeric is a readable bound in a subschema slot, and the
+        # slot is all this can be: the name maps and instance-value keywords
+        # above keep foreign data out of reach. Probatio refuses a string, a
+        # list and the Draft-4 boolean outright -- costing the whole tool --
+        # and silently retypes a null number param to a string one. Dropping
+        # the key repairs all four.
+        del node[exclusive]
         return
     del node[exclusive]
     current = node.get(inclusive)
     if not _is_number(current):
         node[inclusive] = bound
         return
-    # Keep the tighter of the two, so the round trip never widens twice.
+    # Both spellings present: keep the tighter, so a schema that already
+    # carried an inclusive bound is not loosened to the exclusive one.
     node[inclusive] = (
         max(current, bound) if inclusive == "minimum" else min(current, bound)
     )

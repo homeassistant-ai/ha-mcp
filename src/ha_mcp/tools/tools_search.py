@@ -2226,9 +2226,11 @@ class SearchTools:
             float | None,
             Field(
                 default=None,
-                # Inclusive floor, not gt=0: an exclusive bound reaches an
-                # Anthropic agent as an invalid input_schema and breaks every
-                # conversation turn. See tests/src/unit/
+                # Inclusive floor, not gt=0. Home Assistant re-emits this
+                # schema for a conversation agent through an OpenAPI 3.0
+                # codec, which turns an exclusive bound into a form Anthropic
+                # rejects as an invalid input_schema — failing every turn, not
+                # just calls to this tool. See tests/src/unit/
                 # test_tool_schema_exclusive_bounds.py (issue #2361).
                 ge=0.001,
                 le=300,
@@ -4555,8 +4557,9 @@ class SearchTools:
             float | None,
             Field(
                 default=None,
-                # Same inclusive floor as the ha_search parameter feeding this
-                # one — keep the two bounds identical (issue #2361).
+                # Keep this identical to the ha_search parameter feeding it.
+                # Undecorated helper, so this Field never reaches an advertised
+                # schema and no guard can see it.
                 ge=0.001,
                 le=300,
                 description=(

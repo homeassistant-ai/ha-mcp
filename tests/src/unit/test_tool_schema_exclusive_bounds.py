@@ -1,19 +1,19 @@
 """Schema regression test (issue #2361): no tool may advertise an exclusive bound.
 
-Home Assistant re-emits every LLM-API tool schema through Probatio's OpenAPI
-codec, which defaults to OpenAPI 3.0 and spells an exclusive bound the Draft-4
-way -- ``minimum`` beside ``exclusiveMinimum: true``. The Anthropic API
-validates ``input_schema`` as JSON Schema draft 2020-12, where
-``exclusiveMinimum`` must be a number, so it rejects the whole request. One
-tool carrying such a bound therefore fails *every* conversation turn, not just
-calls to that tool. A mandatory tool cannot be disabled or unpinned to work
-around it either; the one escape is turning that tool's separate LLM-API
-exposure switch off, which costs the tool for every conversation agent.
+Why an exclusive bound is fatal on the conversation-agent path is written out
+once, in ``custom_components/ha_mcp_tools/llm_api.py::_to_inclusive_bounds``.
+The short of it: Home Assistant re-emits the schema through a codec that spells
+the bound in a form the Anthropic API rejects, and it rejects the whole
+request, so one such bound fails *every* turn rather than only calls to the
+tool carrying it. A mandatory tool cannot be disabled or unpinned to escape
+that; only its separate LLM-API exposure switch can, at the cost of the tool
+for every conversation agent.
 
 ``config_time_budget`` on ``ha_search`` was the first instance: ``gt=0``
 produced ``exclusiveMinimum`` and broke the Anthropic agent outright. Use an
-inclusive bound (``ge=``/``le=``) with a small positive floor instead; the
-value the server enforces is unchanged for every practical input.
+inclusive bound (``ge=``/``le=``) with a small positive floor instead. That
+does narrow the accepted range -- ``(0, 0.001)`` is no longer valid -- but the
+smallest budget anywhere in the tree is 0.005.
 
 Coverage: the shared registry walk forces every bool feature flag on, but
 ``enable_dev_mode`` is an advanced setting rather than a feature flag, so the
@@ -42,9 +42,10 @@ _DEV_TOOLS = ("ha_dev_manage_server", "ha_dev_manage_settings")
 def all_tools() -> Any:
     """Every registered tool, dev mode included.
 
-    The settings singleton is rebuilt from the restored environment on the way
-    out: leaving a dev-mode-on singleton behind would hand the next test in the
-    session a different tool surface than it asked for.
+    The cached settings singleton is dropped on the way out so the next read
+    rebuilds it from the restored environment: leaving a dev-mode-on singleton
+    behind would hand the next test in the session a different tool surface
+    than it asked for.
     """
     from ha_mcp.config import _reset_global_settings
 

@@ -1003,17 +1003,44 @@ class TestPreRenameSdkFallback:
             await client.aclose()
 
 
+@pytest.fixture
+def real_probatio():
+    """The installed probatio, past the stub this tier installs for it.
+
+    ``_embedded_stubs`` replaces the module unconditionally with a two-line
+    fake, so a plain import here would assert against that fake instead of the
+    library Core actually converts with.
+    """
+    import importlib
+    import sys
+
+    saved = {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "probatio" or name.startswith("probatio.")
+    }
+    for name in saved:
+        del sys.modules[name]
+    try:
+        module = importlib.import_module("probatio")
+        assert hasattr(module, "to_openapi"), "got the stub, not the library"
+        yield module
+    finally:
+        for name in [
+            name
+            for name in sys.modules
+            if name == "probatio" or name.startswith("probatio.")
+        ]:
+            del sys.modules[name]
+        sys.modules.update(saved)
+
+
 class TestExclusiveBoundNormalisation:
     """Issue #2361: an exclusive bound must not reach Core's schema conversion.
 
-    Core re-emits the converted schema through Probatio's OpenAPI 3.0 codec,
-    which spells an exclusive bound the Draft-4 way -- ``exclusiveMinimum: true``
-    beside ``minimum``. Anthropic validates ``input_schema`` as draft 2020-12
-    and rejects the whole request, so a single such bound anywhere in the
-    mirrored toolset breaks every conversation turn. The server package no
-    longer emits one, but the component mirrors whatever server it is pointed
-    at, and the ha-mcp package version is independent of the component's (an
-    explicit pip-spec even pins it), so the incoming schema is normalised here.
+    Why it is fatal, and why normalising here rather than only at the source,
+    is written out once in ``llm_api._to_inclusive_bounds``. These tests pin
+    the walk's behaviour, not the reasoning.
     """
 
     def test_numeric_exclusive_bounds_become_inclusive(self):
@@ -1071,18 +1098,22 @@ class TestExclusiveBoundNormalisation:
 
         assert llm_api._to_inclusive_bounds(schema) == schema
 
-    def test_a_non_numeric_value_is_left_where_it_is(self):
-        """Only a number is a bound; anything else is data and stays put.
+    def test_every_non_numeric_bound_is_dropped(self):
+        """Measured against probatio 0.11.4, none of these survive downstream.
 
-        The Draft-4 flag is the one exception below. Dropping the rest would
-        delete a key the schema author put there on purpose.
+        A string or a list raises SchemaError, which costs the whole tool;
+        ``None`` is worse than a refusal, re-emitting a number parameter as
+        ``{"type": "string"}`` with no error anywhere. The name maps and
+        instance-value keywords keep foreign data out of reach before this
+        runs, so a key here is in a subschema slot, where no dialect permits
+        a non-numeric bound.
         """
         for schema in (
             {"exclusiveMinimum": "not-a-number"},
             {"exclusiveMinimum": None},
             {"exclusiveMaximum": ["a"]},
         ):
-            assert llm_api._to_inclusive_bounds(schema) == schema
+            assert llm_api._to_inclusive_bounds(schema) == {}
 
     def test_dependent_required_keys_are_property_names(self):
         schema = {"dependentRequired": {"exclusiveMinimum": ["a"]}}
@@ -1122,19 +1153,52 @@ class TestExclusiveBoundNormalisation:
         assert llm_api._to_inclusive_bounds(schema) == schema
 
     def test_the_tighter_bound_wins_when_both_are_present(self):
+        # Both directions: the fold must never loosen a bound the schema
+        # already carried, whichever of the two happens to be tighter.
         assert llm_api._to_inclusive_bounds({"minimum": 1, "exclusiveMinimum": 5}) == {
             "minimum": 5
+        }
+        assert llm_api._to_inclusive_bounds({"minimum": 9, "exclusiveMinimum": 5}) == {
+            "minimum": 9
         }
         assert llm_api._to_inclusive_bounds({"maximum": 9, "exclusiveMaximum": 5}) == {
             "maximum": 5
         }
+        assert llm_api._to_inclusive_bounds({"maximum": 1, "exclusiveMaximum": 5}) == {
+            "maximum": 1
+        }
+
+    def test_a_malformed_twin_is_replaced_rather_than_kept(self):
+        """A non-numeric ``minimum`` is not a bound probatio can read.
+
+        It refuses the schema outright ("'minimum' must be a number, got
+        str"), so the folded numeric bound replacing it repairs a tool that
+        would otherwise be dropped -- the same trade as the Draft-4 flag.
+        """
+        assert llm_api._to_inclusive_bounds(
+            {"minimum": "x", "exclusiveMinimum": 5}
+        ) == {"minimum": 5}
 
     def test_the_incoming_schema_is_not_mutated(self):
-        schema = {"type": "number", "exclusiveMinimum": 0}
+        """Including the instance values, which are copied rather than aliased.
 
-        llm_api._to_inclusive_bounds(schema)
+        The result is handed to Core and kept in the search catalog; a shared
+        sub-object would let either reach back into the MCP result object.
+        """
+        schema = {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "default": {"nested": {"a": 1}},
+        }
 
-        assert schema == {"type": "number", "exclusiveMinimum": 0}
+        result = llm_api._to_inclusive_bounds(schema)
+        result["default"]["nested"]["a"] = 99
+
+        assert schema == {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "default": {"nested": {"a": 1}},
+        }
 
     def test_the_search_catalog_shows_the_same_schema_that_is_mirrored(self):
         """A tool must not advertise one bound and list another."""
@@ -1156,6 +1220,43 @@ class TestExclusiveBoundNormalisation:
             "type": "number",
             "minimum": 0,
         }
+
+    def test_probatio_reemits_a_raw_exclusive_bound_in_the_draft4_form(
+        self, real_probatio
+    ):
+        """Positive control: the premise every docstring here rests on.
+
+        Without this, the tests below only show that the walk rewrites a
+        keyword -- not that leaving the keyword alone would break anything.
+        Probatio is what Core 2026.9+ converts with; the legacy
+        voluptuous-openapi cannot show the defect at all, since it drops an
+        exclusive bound on ingest and never emits the Draft-4 flag.
+        """
+        raw = {
+            "type": "object",
+            "properties": {"b": {"type": "number", "exclusiveMinimum": 0}},
+        }
+
+        out = real_probatio.to_openapi(real_probatio.from_openapi(raw))
+
+        assert out["properties"]["b"].get("exclusiveMinimum") is True
+
+    def test_the_normalised_schema_survives_the_probatio_round_trip(
+        self, real_probatio
+    ):
+        """The same schema, normalised first, carries no flag out the far end."""
+        import json as _json
+
+        raw = {
+            "type": "object",
+            "properties": {"b": {"type": "number", "exclusiveMinimum": 0}},
+        }
+
+        out = real_probatio.to_openapi(
+            real_probatio.from_openapi(llm_api._to_inclusive_bounds(raw))
+        )
+
+        assert "exclusiveMinimum" not in _json.dumps(out)
 
     def test_convert_parameters_normalises_before_converting(self, monkeypatch):
         seen: dict[str, Any] = {}

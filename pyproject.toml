@@ -298,6 +298,11 @@ dev = [
     # the REAL tool-schema catalog exactly like llm_api.py does at runtime
     # (HA core provides it at runtime; unit tests stub it).
     "voluptuous-openapi>=0.4.1",
+    # Its successor, which HA core 2026.9 switched to. Needed to assert the
+    # round trip an LLM-API tool schema actually makes there (#2361):
+    # voluptuous-openapi alone cannot show the defect, since it spells an
+    # exclusive bound in the numeric form Anthropic accepts.
+    "probatio>=0.11.4",
     "pytest-xdist>=3.8.0",
     "requests>=2.25.0",
     "lefthook>=1.10.0",
