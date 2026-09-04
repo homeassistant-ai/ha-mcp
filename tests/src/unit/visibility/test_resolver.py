@@ -1,6 +1,8 @@
 import asyncio
 import logging
 
+import pytest
+
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig
 from ha_mcp.visibility.persistence import save_visibility_config
@@ -195,6 +197,22 @@ def test_exclude_area_hides_child_device_entity_via_parent_area():
     )
 
     assert _hidden_dev(reg, cfg, dev) == {"sensor.child"}
+
+
+def test_strict_area_filter_rejects_conflicting_device_identity():
+    reg = _reg(
+        {"entity_id": "sensor.ambiguous", "area_id": None, "device_id": "duplicate"}
+    )
+    dev = _dev(
+        {"id": "duplicate", "area_id": "office"},
+        {"id": "duplicate", "area_id": "garage"},
+    )
+    cfg = VisibilityConfig(
+        enabled=True, exclude_categories=[], exclude_areas=["office"]
+    )
+
+    with pytest.raises(resolver.VisibilityDataUnavailable):
+        hidden_entity_ids(reg, cfg, device_registry_result=dev, strict=True)
 
 
 def test_present_invalid_entity_area_blocks_child_device_area_fallback():

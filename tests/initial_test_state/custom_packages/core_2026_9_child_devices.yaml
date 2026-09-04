@@ -1,0 +1,4 @@
+# Core 2026.9 fixture with one main power-strip device and child outlet devices.
+# Device-registry E2E tests use this to prove real child-device enumeration and
+# effective parent-area behavior rather than only replaying synthetic rows.
+kitchen_sink:

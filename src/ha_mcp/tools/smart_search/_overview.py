@@ -241,7 +241,7 @@ class SystemOverviewMixin(_SearchBase):
         entity_registry: list[dict[str, Any]],
         device_registry: list[dict[str, Any]],
     ) -> dict[str, str | None]:
-        """Map entity_id -> area_id. Priority: entity direct area_id > device area_id."""
+        """Map entity IDs to direct area, then device direct-or-parent effective area."""
         device_area_map = build_device_registry_snapshot(
             list(device_registry)
         ).effective_area_by_id

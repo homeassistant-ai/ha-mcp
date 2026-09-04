@@ -206,6 +206,36 @@ async def test_single_lookup_served_by_component() -> None:
 
 
 @pytest.mark.asyncio
+async def test_child_component_result_preserves_effective_area_and_ownership() -> None:
+    child = _raw_device(
+        "child-1",
+        parent_device_id="parent-1",
+        area_id=None,
+        config_entries=None,
+        config_entry_id="cfg-child",
+    )
+    child.pop("config_entries")
+    ws = make_ws(
+        "ha_mcp_tools/device_get",
+        info_result=_CAPS_DEVICES,
+        cmd_result={
+            "device": child,
+            "entities": [_entity_row("switch.child", "child-1")],
+            "effective_area_id": "office",
+        },
+    )
+    client = RoutingClient()
+    get_device = _build_get_device(client)
+
+    with patch_ws(ws, component_devices):
+        resp = await get_device(device_id="child-1")
+
+    assert resp["device"]["area_id"] == "office"
+    assert resp["device"]["config_entries"] == ["cfg-child"]
+    assert client.device_list_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_entity_id_lookup_resolves_then_device_get() -> None:
     """entity_id mode resolves the device via a single native
     config/entity_registry/get, then reads the device (and its entities) via
@@ -336,6 +366,30 @@ async def test_pre_child_semantics_component_uses_legacy_device_list() -> None:
         call.args[0] == "ha_mcp_tools/device_list"
         for call in ws.send_command.call_args_list
     )
+
+
+@pytest.mark.asyncio
+async def test_area_filter_matches_child_through_parent_effective_area() -> None:
+    ws = make_ws(
+        "ha_mcp_tools/device_list",
+        info_exc=HomeAssistantCommandError("no info", "unknown_command"),
+    )
+    client = RoutingClient(
+        devices=[
+            _raw_device("parent-1", area_id="office"),
+            _raw_device("child-1", area_id=None, parent_device_id="parent-1"),
+            _raw_device("other", area_id="garage"),
+        ]
+    )
+    get_device = _build_get_device(client)
+
+    with patch_ws(ws, component_devices):
+        resp = await get_device(area_id="office")
+
+    assert {row["device_id"] for row in resp["devices"]} == {
+        "parent-1",
+        "child-1",
+    }
 
 
 @pytest.mark.asyncio

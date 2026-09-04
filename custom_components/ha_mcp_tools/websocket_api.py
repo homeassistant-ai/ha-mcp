@@ -2339,7 +2339,7 @@ def _device(view: _RegistryView, device_id: str | None) -> Any:
     return _call_lookup(view.device, "async_get", device_id)
 
 
-def _device_collection_values(collection: Any) -> list[Any]:
+def _device_collection_values(collection: Any, *, collection_name: str) -> list[Any]:
     """Enumerate a Core device collection across old and 2026.9 shapes.
 
     Before Core 2026.9 ``registry.devices`` was a mapping-like container. Core
@@ -2354,10 +2354,20 @@ def _device_collection_values(collection: Any) -> list[Any]:
         try:
             return list(collection.values())
         except Exception:  # pragma: no cover - defensive
+            _LOGGER.warning(
+                "failed to enumerate device registry collection %s",
+                collection_name,
+                exc_info=True,
+            )
             return []
     try:
         return list(collection)
     except Exception:  # pragma: no cover - defensive
+        _LOGGER.warning(
+            "failed to enumerate device registry collection %s",
+            collection_name,
+            exc_info=True,
+        )
         return []
 
 
@@ -2377,9 +2387,13 @@ def _unambiguous_device_entries(view: _RegistryView) -> dict[str, Any]:
         return view._device_entries_by_id_cache
     main_collection = getattr(reg, "devices", None)
     if hasattr(reg, "child_devices"):
-        candidates = _device_collection_values(main_collection)
+        candidates = _device_collection_values(
+            main_collection, collection_name="devices"
+        )
         candidates.extend(
-            _device_collection_values(getattr(reg, "child_devices", None))
+            _device_collection_values(
+                getattr(reg, "child_devices", None), collection_name="child_devices"
+            )
         )
     else:
         # The pre-2026.9 container is mapping-like and iterates ids, not entries.
@@ -2399,6 +2413,11 @@ def _unambiguous_device_entries(view: _RegistryView) -> dict[str, Any]:
         if prior != current or prior is None:
             conflicts.add(device_id)
             del by_id[device_id]
+            _LOGGER.warning(
+                "device registry contained conflicting device identity %r; "
+                "excluding it from this request",
+                device_id,
+            )
     view._device_entries_by_id_cache = by_id
     return view._device_entries_by_id_cache
 
@@ -2420,7 +2439,7 @@ def _effective_device_area_id(view: _RegistryView, device: Any) -> str | None:
         return None
     direct_area = getattr(device, "area_id", None)
     if direct_area is not None:
-        return direct_area if isinstance(direct_area, str) else None
+        return direct_area if isinstance(direct_area, str) and direct_area else None
     parent_id = getattr(device, "parent_device_id", None)
     if not isinstance(parent_id, str) or not parent_id:
         return None
@@ -2429,7 +2448,7 @@ def _effective_device_area_id(view: _RegistryView, device: Any) -> str | None:
         # Core requires a main-device parent. This also bounds malformed cycles.
         return None
     parent_area = getattr(parent, "area_id", None)
-    return parent_area if isinstance(parent_area, str) else None
+    return parent_area if isinstance(parent_area, str) and parent_area else None
 
 
 def _area_name(view: _RegistryView, area_id: str | None) -> str | None:
@@ -3242,9 +3261,10 @@ _BlueprintLoader.add_multi_constructor("!", _drop_blueprint_tag)
 def _do_device_get(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any]:
     """Return one device registry entry by id, optionally with its entities.
 
-    ``{device: <DeviceEntry.dict_repr> | None}`` — ``registry.async_get(device_id)``
-    is a pure O(1) in-memory dict read, and the emitted body is core's
-    ``DeviceEntry.dict_repr`` returned UNMODIFIED — exactly the shape
+    ``{device: <DeviceEntry.dict_repr> | None}`` — a request-local snapshot over
+    Core's supported main and child collections rejects conflicting identities,
+    and the emitted body is core's ``DeviceEntry.dict_repr`` returned UNMODIFIED —
+    exactly the shape
     ``config/device_registry/list`` serializes (it sends
     ``json_bytes(entry.dict_repr)``), so a component-served record is byte-identical
     to one legacy list element by construction (the WS transport JSON-encodes the
@@ -3261,12 +3281,14 @@ def _do_device_get(hass: HomeAssistant, params: dict[str, Any]) -> dict[str, Any
     to match what ``config/entity_registry/list`` returns (it lists disabled entities
     too). The DeviceEntry dict itself stays exactly the raw shape — the join is a
     sibling, so consumers keep their own transforms. The ``entities`` key is present
-    only when requested.
+    only when requested. A child-device result may also carry a sibling
+    ``effective_area_id`` computed from its direct-or-parent placement; that
+    transport-only field is absent from the raw ``device`` mapping.
     """
     device_id = params.get("device_id")
     include_entities = params.get("include_entities", False)
     view = _resolve_registries(hass)
-    entry = _device(view, device_id) if device_id else None
+    entry = _unambiguous_device_entries(view).get(device_id) if device_id else None
     result: dict[str, Any] = {
         "device": _device_dict_repr(entry) if entry is not None else None
     }
@@ -5459,7 +5481,7 @@ def _entity_allowed(
 
 
 def _effective_area_for_entry(view: _RegistryView, entry: Any) -> str | None:
-    """An entity's ``area_id`` falling back to its device's (HA area inheritance)."""
+    """Resolve entity direct area, then its device's direct-or-parent effective area."""
     area_id = getattr(entry, "area_id", None)
     if area_id is not None:
         return area_id if isinstance(area_id, str) and area_id else None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -40,11 +41,11 @@ def test_core_2026_8_ordinary_rows_remain_unchanged() -> None:
     snapshot = build_device_registry_snapshot(rows)
 
     assert snapshot.rows == tuple(rows)
-    assert snapshot.parent_by_id == {"device-b": None, "device-a": None}
     assert snapshot.effective_area_by_id == {
         "device-b": None,
         "device-a": "office",
     }
+    assert snapshot.conflicting_ids == frozenset()
 
 
 def test_child_inherits_parent_area_and_direct_area_takes_precedence() -> None:
@@ -56,11 +57,6 @@ def test_child_inherits_parent_area_and_direct_area_takes_precedence() -> None:
 
     snapshot = build_device_registry_snapshot(rows)
 
-    assert snapshot.parent_by_id == {
-        "parent": None,
-        "inherited": "parent",
-        "direct": "parent",
-    }
     assert snapshot.effective_area_by_id == {
         "parent": "office",
         "inherited": "office",
@@ -84,6 +80,17 @@ def test_present_invalid_entity_area_does_not_inherit_device_area(
         effective_entity_area_id({"area_id": None, "device_id": "child"}, device_areas)
         == "office"
     )
+
+
+def test_empty_device_area_is_invalid_and_does_not_inherit_parent_area() -> None:
+    rows = [
+        _main("parent", area_id="office"),
+        _child("child", "parent", area_id=""),
+    ]
+
+    snapshot = build_device_registry_snapshot(rows)
+
+    assert snapshot.effective_area_by_id["child"] is None
 
 
 @pytest.mark.parametrize(
@@ -126,21 +133,26 @@ def test_identical_duplicates_collapse_without_reordering() -> None:
     assert snapshot.effective_area_by_id["last"] == "office"
 
 
-def test_conflicting_identity_is_removed_with_dependent_enrichment() -> None:
-    snapshot = build_device_registry_snapshot(
-        [
-            _main("parent", area_id="office"),
-            _main("parent", area_id="garage"),
-            _child("child", "parent"),
-            _main("ordinary", area_id="kitchen"),
-        ]
-    )
+def test_conflicting_identity_is_removed_with_dependent_enrichment(caplog) -> None:
+    with caplog.at_level(logging.WARNING):
+        snapshot = build_device_registry_snapshot(
+            [
+                _main("parent", area_id="office"),
+                _main("parent", area_id="garage"),
+                _child("child", "parent"),
+                _main("ordinary", area_id="kitchen"),
+            ]
+        )
 
     assert [row["id"] for row in snapshot.rows] == ["child", "ordinary"]
     assert snapshot.effective_area_by_id == {
         "child": None,
         "ordinary": "kitchen",
     }
+    assert snapshot.conflicting_ids == frozenset({"parent"})
+    assert any(
+        "conflicting device registry identity" in r.message for r in caplog.records
+    )
 
 
 def test_malformed_rows_and_identities_are_ignored() -> None:

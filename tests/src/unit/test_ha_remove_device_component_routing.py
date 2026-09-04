@@ -144,6 +144,31 @@ async def test_body_served_by_component() -> None:
 
 
 @pytest.mark.asyncio
+async def test_child_singular_config_entry_is_used_for_removal() -> None:
+    child = _raw_device(
+        "child-1",
+        parent_device_id="parent-1",
+        config_entry_id="cfg-child",
+    )
+    child.pop("config_entries")
+    ws = make_ws(
+        "ha_mcp_tools/device_get",
+        info_result=_CAPS_DEVICES,
+        cmd_result={"device": child},
+    )
+    client = RoutingClient()
+    remove_device = _build_remove_device(client)
+
+    with patch_ws(ws, component_devices):
+        resp = await remove_device(device_id="child-1")
+
+    assert resp["success"] is True
+    assert resp["config_entries_removed"] == 1
+    assert client.remove_calls == ["cfg-child"]
+    assert client.device_list_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_body_capsless_uses_legacy_list() -> None:
     """Old component → legacy config/device_registry/list for the body."""
     ws = make_ws(

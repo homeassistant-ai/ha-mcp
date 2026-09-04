@@ -14,6 +14,7 @@ or placement.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -22,6 +23,8 @@ from typing import Any
 # device shaper. It never appears in a public response.
 EFFECTIVE_AREA_MARKER = "_ha_mcp_effective_area_id"
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, slots=True)
 class DeviceRegistrySnapshot:
@@ -29,8 +32,8 @@ class DeviceRegistrySnapshot:
 
     rows: tuple[dict[str, Any], ...]
     by_id: dict[str, dict[str, Any]]
-    parent_by_id: dict[str, str | None]
     effective_area_by_id: dict[str, str | None]
+    conflicting_ids: frozenset[str]
 
 
 def effective_device_area_id(
@@ -44,7 +47,7 @@ def effective_device_area_id(
     """
     direct_area = device.get("area_id")
     if direct_area is not None:
-        return direct_area if isinstance(direct_area, str) else None
+        return direct_area if isinstance(direct_area, str) and direct_area else None
 
     parent_id = device.get("parent_device_id")
     if not isinstance(parent_id, str) or not parent_id:
@@ -57,7 +60,7 @@ def effective_device_area_id(
     if parent.get("parent_device_id") is not None:
         return None
     parent_area = parent.get("area_id")
-    return parent_area if isinstance(parent_area, str) else None
+    return parent_area if isinstance(parent_area, str) and parent_area else None
 
 
 def effective_entity_area_id(
@@ -110,20 +113,22 @@ def build_device_registry_snapshot(rows: list[Any]) -> DeviceRegistrySnapshot:
             del by_id[device_id]
 
     ordered_rows = tuple(by_id[device_id] for device_id in order if device_id in by_id)
-    parent_by_id: dict[str, str | None] = {}
+    if conflicts:
+        logger.warning(
+            "Device registry contained conflicting device registry identity rows; "
+            "excluding %d ambiguous device id(s)",
+            len(conflicts),
+        )
+
     effective_area_by_id: dict[str, str | None] = {}
     for device_id, device in by_id.items():
-        parent_id = device.get("parent_device_id")
-        parent_by_id[device_id] = (
-            parent_id if isinstance(parent_id, str) and parent_id else None
-        )
         effective_area_by_id[device_id] = effective_device_area_id(device, by_id)
 
     return DeviceRegistrySnapshot(
         rows=ordered_rows,
         by_id=by_id,
-        parent_by_id=parent_by_id,
         effective_area_by_id=effective_area_by_id,
+        conflicting_ids=frozenset(conflicts),
     )
 
 

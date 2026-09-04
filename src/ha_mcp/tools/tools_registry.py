@@ -162,6 +162,25 @@ def _get_device_info(device: dict[str, Any]) -> dict[str, Any]:
     return device_info
 
 
+def _device_config_entries(device: dict[str, Any]) -> list[str]:
+    """Return the exact owning config-entry IDs for a main or child row.
+
+    Ordinary ``DeviceEntry`` rows carry ``config_entries`` while Core 2026.9
+    ``ChildDeviceEntry`` rows carry one singular ``config_entry_id``. Never mix,
+    coerce, or repair malformed ownership evidence: an explicitly present plural
+    field is authoritative and must be a list of non-empty strings.
+    """
+    if "config_entries" in device:
+        raw = device.get("config_entries")
+        if not isinstance(raw, list) or not all(
+            isinstance(entry_id, str) and entry_id for entry_id in raw
+        ):
+            return []
+        return list(raw)
+    entry_id = device.get("config_entry_id")
+    return [entry_id] if isinstance(entry_id, str) and entry_id else []
+
+
 def _build_entity_maps(
     all_entities: list[dict[str, Any]], need_full: bool
 ) -> tuple[dict[str, str], dict[str, list[dict[str, Any]]]]:
@@ -556,7 +575,7 @@ async def _get_single_device_result(
     device_info["serial_number"] = device.get("serial_number")
     device_info["disabled_by"] = device.get("disabled_by")
     device_info["labels"] = device.get("labels", [])
-    device_info["config_entries"] = device.get("config_entries", [])
+    device_info["config_entries"] = _device_config_entries(device)
     device_info["connections"] = device.get("connections", [])
     device_info["identifiers"] = device.get("identifiers", [])
 
@@ -1144,7 +1163,7 @@ class RegistryTools:
             )
             device = await _lookup_device_for_remove(self._client, device_id)
 
-            config_entries = device.get("config_entries", [])
+            config_entries = _device_config_entries(device)
             device_name = device.get("name_by_user") or device.get("name")
             if not config_entries:
                 raise_tool_error(

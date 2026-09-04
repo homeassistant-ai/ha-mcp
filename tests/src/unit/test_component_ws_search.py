@@ -553,16 +553,33 @@ class FakeChildDevice:
         }
 
 
+class _IterOnlyDeviceCollection:
+    """Core 2026.9 collection: iteration is the only supported read API."""
+
+    def __init__(self, entries):
+        self._entries = tuple(entries)
+
+    def __iter__(self):
+        return iter(self._entries)
+
+    def values(self):
+        raise AssertionError("Core 2026.9 device collections are not mappings")
+
+    def get(self, _device_id):
+        raise AssertionError("Core 2026.9 device collections do not support get")
+
+    def __getitem__(self, _device_id):
+        raise AssertionError("Core 2026.9 device collections are not subscriptable")
+
+
 class FakeDeviceReg:
     def __init__(self, devices, child_devices=()):
         self._devices = {d.id: d for d in devices}
         self._child_devices = {d.id: d for d in child_devices}
-        # Real HA exposes ``registry.devices`` as a mapping (overview reads it).
-        self.devices = dict(self._devices)
-        # Core 2026.9 exposes child devices as a separate collection. Older Core
-        # releases simply have no such attribute; tests that omit children still
-        # exercise the ordinary-device shape used before 2026.9.
-        self.child_devices = tuple(self._child_devices.values())
+        # Core 2026.9's public contract is iteration-only for both collections.
+        # The dedicated pre-2026.9 test below retains a dict-backed registry.
+        self.devices = _IterOnlyDeviceCollection(self._devices.values())
+        self.child_devices = _IterOnlyDeviceCollection(self._child_devices.values())
 
     def async_get(self, device_id):
         return self._devices.get(device_id) or self._child_devices.get(device_id)
@@ -3139,6 +3156,42 @@ class TestDeviceGet:
         assert res["device"]["area_id"] is None
         assert res["effective_area_id"] == "office"
 
+    def test_child_empty_direct_area_is_invalid_not_parent_fallback(self, monkeypatch):
+        parent = FakeDevice("parent", area_id="office")
+        child = FakeChildDevice("child", "parent", area_id="")
+        monkeypatch.setattr(
+            wsapi,
+            "_resolve_registries",
+            lambda h: make_view(devices=[parent], child_devices=[child]),
+        )
+
+        result = wsapi._do_device_get(FakeHass(), {"device_id": "child"})
+
+        assert result["effective_area_id"] is None
+
+    def test_conflicting_identity_is_not_returned_by_single_lookup(
+        self, monkeypatch, caplog
+    ):
+        office = FakeDevice("duplicate", area_id="office")
+        garage = FakeDevice("duplicate", area_id="garage")
+
+        class _ConflictingRegistry:
+            devices = (office, garage)
+            child_devices = ()
+
+            def async_get(self, device_id):
+                return office if device_id == "duplicate" else None
+
+        view = make_view()
+        view.device = _ConflictingRegistry()
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
+
+        with caplog.at_level(logging.WARNING):
+            result = wsapi._do_device_get(FakeHass(), {"device_id": "duplicate"})
+
+        assert result == {"device": None}
+        assert any("conflicting device identity" in r.message for r in caplog.records)
+
 
 class TestDeviceList:
     def test_lists_all_dict_reprs(self, monkeypatch):
@@ -3210,6 +3263,27 @@ class TestDeviceList:
         monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
 
         assert wsapi._do_device_list(FakeHass(), {}) == {"devices": []}
+
+    def test_collection_enumeration_failure_is_logged(self, monkeypatch, caplog):
+        class _BrokenCollection:
+            def __iter__(self):
+                raise RuntimeError("enumeration failed")
+
+        class _BrokenRegistry:
+            devices = _BrokenCollection()
+            child_devices = ()
+
+        view = make_view()
+        view.device = _BrokenRegistry()
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
+
+        with caplog.at_level(logging.WARNING):
+            assert wsapi._do_device_list(FakeHass(), {}) == {"devices": []}
+
+        assert any(
+            "failed to enumerate device registry collection" in r.message
+            for r in caplog.records
+        )
 
     def test_conflicting_device_cannot_supply_effective_area(self):
         office = FakeDevice("duplicate", area_id="office")

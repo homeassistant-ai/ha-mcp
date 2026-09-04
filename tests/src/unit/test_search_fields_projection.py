@@ -1050,6 +1050,19 @@ class TestEntityEnrichmentAliasSentinel:
 class TestEntityEnrichmentAreaPrecedence:
     """Entity placement uses Core's presence-based direct-area precedence."""
 
+    def test_device_effective_area_drives_area_and_floor_projection(self):
+        fields = _entity_enrichment_fields(
+            {"area_id": None, "device_id": "child"},
+            {"office": {"name": "Office", "floor_id": "upstairs"}},
+            {"upstairs": {"name": "Upstairs"}},
+            {},
+            {"child": {"id": "child", "parent_device_id": "parent"}},
+            {"child": "office"},
+            ("area", "floor"),
+        )
+
+        assert fields == {"area": "Office", "floor": "Upstairs"}
+
     def test_present_invalid_area_does_not_inherit_device_area(self):
         fields = _entity_enrichment_fields(
             {"area_id": "", "device_id": "child"},

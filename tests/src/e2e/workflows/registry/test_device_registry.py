@@ -304,6 +304,139 @@ class TestDeviceGet:
 
 
 @pytest.mark.registry
+async def test_core_2026_9_child_devices_inherit_parent_area(mcp_client, ha_client):
+    """Exercise the real Core 2026.9 kitchen-sink child-device topology.
+
+    The fixture creates one power-strip parent with multiple child outlets. The
+    test assigns only the parent to ``living_room`` and proves the same inherited
+    placement through search, single-device lookup, and area-filtered device list.
+    The mutation is always restored, and the component must not touch Core's
+    deprecated mapping methods while serving the reads.
+    """
+    info = await ha_client.send_websocket_message({"type": "ha_mcp_tools/info"})
+    assert info.get("success") is True, info
+    assert "device_registry_child_semantics" in info["result"]["capabilities"]
+
+    device_reply = await ha_client.send_websocket_message(
+        {"type": "config/device_registry/list"}
+    )
+    entity_reply = await ha_client.send_websocket_message(
+        {"type": "config/entity_registry/list"}
+    )
+    assert device_reply.get("success") is True, device_reply
+    assert entity_reply.get("success") is True, entity_reply
+    device_rows = device_reply.get("result")
+    entity_rows = entity_reply.get("result")
+    assert isinstance(device_rows, list)
+    assert isinstance(entity_rows, list)
+
+    devices_by_id = {
+        row["id"]: row
+        for row in device_rows
+        if isinstance(row, dict) and isinstance(row.get("id"), str)
+    }
+    switch_entities_by_device: dict[str, list[str]] = {}
+    for row in entity_rows:
+        if not isinstance(row, dict):
+            continue
+        device_id = row.get("device_id")
+        entity_id = row.get("entity_id")
+        if (
+            isinstance(device_id, str)
+            and isinstance(entity_id, str)
+            and entity_id.startswith("switch.")
+        ):
+            switch_entities_by_device.setdefault(device_id, []).append(entity_id)
+
+    children_by_parent: dict[str, list[dict]] = {}
+    for row in device_rows:
+        if not isinstance(row, dict):
+            continue
+        parent_id = row.get("parent_device_id")
+        child_id = row.get("id")
+        if (
+            isinstance(parent_id, str)
+            and parent_id
+            and isinstance(child_id, str)
+            and switch_entities_by_device.get(child_id)
+        ):
+            children_by_parent.setdefault(parent_id, []).append(row)
+
+    candidates = [
+        (parent_id, sorted(children, key=lambda row: row["id"]))
+        for parent_id, children in children_by_parent.items()
+        if parent_id in devices_by_id and len(children) >= 2
+    ]
+    assert candidates, (
+        "Core 2026.9 kitchen_sink did not create the expected power-strip "
+        "parent with at least two child switch devices"
+    )
+    parent_id, children = sorted(candidates, key=lambda item: item[0])[0]
+    child_id = children[0]["id"]
+    child_entity_id = sorted(switch_entities_by_device[child_id])[0]
+    original_parent_area = devices_by_id[parent_id].get("area_id")
+
+    update = parse_mcp_result(
+        await mcp_client.call_tool(
+            "ha_set_device", {"device_id": parent_id, "area_id": "living_room"}
+        )
+    )
+    assert update.get("success") is True, update
+
+    try:
+        search = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_search",
+                {
+                    "query": child_entity_id,
+                    "domain_filter": "switch",
+                    "exact_match": True,
+                    "result_fields": ["area"],
+                },
+            )
+        )
+        assert search.get("success") is True, search
+        assert any(row.get("area") == "Living Room" for row in search["entities"]), (
+            search
+        )
+
+        single = parse_mcp_result(
+            await mcp_client.call_tool("ha_get_device", {"device_id": child_id})
+        )
+        assert single.get("success") is True, single
+        assert single["device"]["device_id"] == child_id
+        assert single["device"]["area_id"] == "living_room"
+        assert single["device"]["config_entries"]
+
+        area_list = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_get_device", {"area_id": "living_room", "limit": 200}
+            )
+        )
+        assert area_list.get("success") is True, area_list
+        assert child_id in {row["device_id"] for row in area_list["devices"]}
+
+        error_log = (await ha_client.get_error_log(lines=1000)).text
+        deprecated_component_lines = [
+            line
+            for line in error_log.splitlines()
+            if "helpers.frame" in line and "ha_mcp_tools" in line
+        ]
+        assert deprecated_component_lines == []
+    finally:
+        restore = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_set_device",
+                {
+                    "device_id": parent_id,
+                    "area_id": original_parent_area or "",
+                },
+            )
+        )
+        assert restore.get("success") is True, restore
+
+
+@pytest.mark.registry
 class TestDeviceSet:
     """Test ha_set_device functionality."""
 

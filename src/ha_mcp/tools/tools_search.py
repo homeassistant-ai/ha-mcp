@@ -922,7 +922,8 @@ def _entity_enrichment_fields(
 
     Mirrors the component's ``_registry_enrichment`` so the legacy and
     component-served ``result_fields`` values agree: device-inherited area/labels
-    (the entity's own value wins, else the device's), area→floor resolution, and
+    (the entity's own value wins, else the device's direct-or-parent effective
+    area), area→floor resolution, and
     label id→name (falling back to the id when a label has no name). ``aliases``
     pass through from the registry entry. Only the requested keys are returned.
 

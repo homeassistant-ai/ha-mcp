@@ -655,7 +655,7 @@ class EntitySearchMixin(_SearchBase):
     def _parse_device_area_map(
         cls, result: Any, warnings: list[str] | None = None
     ) -> dict[str, str | None]:
-        """Parse the device registry into ``device_id -> area_id``."""
+        """Parse devices into IDs mapped to direct-or-parent effective areas."""
         device_rows = cls._extract_registry_list(result, "device registry", warnings)
         return build_device_registry_snapshot(list(device_rows)).effective_area_by_id
 
@@ -875,7 +875,7 @@ class EntitySearchMixin(_SearchBase):
         include_hidden: bool,
         visibility_hidden: set[str],
     ) -> tuple[dict[str, str], set[str]]:
-        """Map entity_id -> resolved area_id (entity area > device area).
+        """Map entity IDs to direct area, then device direct-or-parent effective area.
 
         Hidden entities are filtered only when include_hidden is False;
         otherwise they pass through and downstream applies the score penalty so
