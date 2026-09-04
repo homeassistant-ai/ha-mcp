@@ -232,7 +232,11 @@ def _assert_registration_logged_in_haos() -> None:
     deadline = time.monotonic() + _REGISTRATION_TIMEOUT_S
     count = ""
     while True:
-        count = ssh_exec(["sh", "-c", script], timeout=180.0).stdout.strip()
+        # Bound each ssh call by what is left of the deadline (with a small
+        # floor so a near-expired deadline still gets one real attempt), so a
+        # stalled `ha core logs` cannot outlive the deadline it polls for.
+        remaining = max(5.0, deadline - time.monotonic())
+        count = ssh_exec(["sh", "-c", script], timeout=remaining).stdout.strip()
         if count.isdigit() and int(count) > 0:
             return
         if time.monotonic() >= deadline:
