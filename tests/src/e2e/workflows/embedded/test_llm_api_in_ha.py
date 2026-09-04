@@ -75,6 +75,10 @@ def _assert_report_clean(report: dict[str, Any]) -> None:
         f"HA {report.get('ha_version')}"
     )
 
+    assert not report.get("timed_out"), (
+        f"the in-HA probe hit its own timeout ({context}); partial report: {report}"
+    )
+
     tool_count = report.get("tool_count", 0)
     assert tool_count > 60, (
         f"expected the full tool inventory from inside HA, got {tool_count} "

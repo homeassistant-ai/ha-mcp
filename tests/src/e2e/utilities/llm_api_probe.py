@@ -34,6 +34,7 @@ LLM_API_SCHEMA_PROBE = f"""
 import asyncio
 import json
 import os
+import signal
 import sys
 
 sys.path.insert(0, "/config")
@@ -45,6 +46,9 @@ URL_ENV = "{PROBE_URL_ENV}"
 # The list/convert budget for the whole catalog; the caller's own exec timeout
 # sits above it so a hang reports here rather than as an opaque kill.
 TIMEOUT_S = 120
+
+# Filled by _run; module-level so the timeout backstop can still print it.
+REPORT = {{}}
 
 
 def _walk(node):
@@ -101,7 +105,9 @@ async def _run():
     # measure. It reads nothing from self, so the class attribute is called
     # directly. None means the component would have skipped the tool.
     convert_parameters = llm_api.HaMcpLlmApi._convert_parameters
-    report = {{
+    report = REPORT
+    report.update({{
+        "timed_out": False,
         "tool_count": 0,
         "converter": getattr(converter, "__module__", "") or repr(converter),
         "probatio": False,
@@ -111,7 +117,7 @@ async def _run():
         "integer_lost": [],
         "draft2020_invalid": [],
         "ha_version": "unknown",
-    }}
+    }})
 
     try:
         from homeassistant.const import __version__ as ha_version
@@ -161,8 +167,15 @@ def _convert_all(tools, convert_parameters, probatio, Draft202012Validator, repo
             continue
         try:
             # Exactly what homeassistant/components/anthropic/entity.py's
-            # _format_tool hands the model (default OpenAPI 3.0 dialect).
+            # _format_tool hands the model: to_openapi in its default OpenAPI
+            # 3.0 dialect, then the ROOT-level combinators dropped. Nested
+            # ones stay, which is where the reported bound lived.
             emitted = probatio.to_openapi(params)
+            emitted = {{
+                key: value
+                for key, value in emitted.items()
+                if key not in ("oneOf", "anyOf", "allOf")
+            }}
         except Exception as err:  # collecting, not suppressing
             report["conversion_failures"].append(
                 tool.name + ": to_openapi: " + _short(err)
@@ -179,7 +192,27 @@ def _convert_all(tools, convert_parameters, probatio, Draft202012Validator, repo
                 report["draft2020_invalid"].append(tool.name + ": " + _short(err))
 
 
-asyncio.run(_run())
+def _on_alarm(signum, frame):
+    # asyncio.timeout can only cancel at an await; a converter that blocks
+    # never reaches one. SIGALRM interrupts the main thread regardless, so
+    # the probe still reports what it had instead of hanging until the exec
+    # wrapper kills it with no output.
+    raise TimeoutError("probe exceeded " + str(TIMEOUT_S) + "s")
+
+
+signal.signal(signal.SIGALRM, _on_alarm)
+signal.alarm(TIMEOUT_S + 5)
+try:
+    asyncio.run(_run())
+except TimeoutError as err:
+    REPORT["timed_out"] = True
+    REPORT["conversion_failures"] = list(REPORT.get("conversion_failures", [])) + [
+        "probe: " + str(err)
+    ]
+    print(SENTINEL + " " + json.dumps(REPORT))
+    sys.exit(3)
+finally:
+    signal.alarm(0)
 """
 
 
