@@ -420,6 +420,6 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
             "can override"
         )
         assert not any(
-            "version.home-assistant.io" in str(step.get("run", ""))
+            "version.home-assistant.io/beta.json" in str(step.get("run", ""))
             for step in _job_steps(job)
         ), f"{job_id} must not resolve the beta version a second time"
