@@ -172,8 +172,8 @@ summary only when the pull request actually reaches that state.
 | `pr.yml` | Pull request | Fast checks and validation orchestration. |
 | `e2e-tests.yml` | Push to `master` touching code, or manual | Full container-backend E2E validation on the pinned stable Core image. |
 | `haos-e2e-tests.yml` | Pull request or manual | Six HAOS lanes against a baked qcow2; required status checks. |
-| `haos-e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The inaddon and embedded HAOS lanes against the current beta Supervisor and Core. |
-| `e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The container-backend E2E jobs against the current beta Core image. |
+| `haos-e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The inaddon and embedded HAOS lanes against the current beta Supervisor and Core; skipped when beta equals stable. |
+| `e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The container-backend E2E jobs against the current beta Core image; skipped when beta equals the stable lane's pin. |
 | `publish-dev.yml` | Push to `master` | Development `.devN` release. |
 | `notify-dev-channel.yml` | Push to `master` touching `src/` | Development-testing notices. |
 | `semver-release.yml` | Biweekly or manual | Stable version tag and GitHub release. |

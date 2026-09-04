@@ -216,7 +216,10 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
     assert _beta_lane_jobs() == {
         (_BETA_WORKFLOW, beta_job_id, mode)
         for beta_job_id, mode, _stable_job_id in lane_specs
-    } | {(_CONTAINER_BETA_WORKFLOW, "resolve-beta", "None")}
+    } | {
+        (_BETA_WORKFLOW, "resolve-beta", "None"),
+        (_CONTAINER_BETA_WORKFLOW, "resolve-beta", "None"),
+    }
 
     beta_path = _WORKFLOW_DIR / _BETA_WORKFLOW
     assert beta_path.is_file(), "both beta lanes live in one workflow file"
@@ -244,19 +247,37 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
         "means it can never authorize a skip (#2311)"
     )
 
+    # Both lanes are skipped when beta.json and stable.json agree: the stable
+    # HAOS lanes bake from the stable channel, so an identical beta would only
+    # repeat them. The compare job reads both channels once.
+    resolver = workflow["jobs"]["resolve-beta"]
+    assert resolver["outputs"] == {
+        "superfluous": "${{ steps.compare.outputs.superfluous }}"
+    }
+    compare = next(step for step in _job_steps(resolver) if step.get("id") == "compare")
+    assert "version.home-assistant.io/beta.json" in compare["run"]
+    assert "version.home-assistant.io/stable.json" in compare["run"]
+    assert '["supervisor"]' in compare["run"]
+    assert '["homeassistant"]["qemux86-64"]' in compare["run"]
+    skip_guard = "needs.resolve-beta.outputs.superfluous != 'true'"
+
     for beta_job_id, mode, stable_job_id in lane_specs:
         job = workflow["jobs"][beta_job_id]
 
         if mode == "inaddon":
-            assert "needs" not in job
-            assert "if" not in job
+            assert job["needs"] == "resolve-beta"
+            assert job["if"] == skip_guard
         else:
-            assert job["needs"] == "haos-e2e-inaddon-beta", (
+            assert job["needs"] == ["resolve-beta", "haos-e2e-inaddon-beta"], (
                 "the embedded lane must wait for the sole cache writer"
             )
-            assert job["if"] == "${{ !cancelled() }}", (
+            assert job["if"] == (
+                "${{ !cancelled() && needs.resolve-beta.result == 'success' "
+                f"&& {skip_guard} }}}}"
+            ), (
                 "the embedded lane must continue after a writer failure, but "
-                "not after a superseding run cancels the workflow"
+                "not after a superseding run cancels the workflow, and never "
+                "when the compare job failed or found beta equal to stable"
             )
         steps = _job_steps(job)
 
@@ -396,7 +417,16 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
     assert resolver["outputs"] == {
         "core_version": "${{ steps.versions.outputs.core_version }}",
         "image": "${{ steps.versions.outputs.image }}",
+        "superfluous": "${{ steps.versions.outputs.superfluous }}",
     }
+    # The skip compares against the stable lane's PIN, not stable.json: while
+    # the Renovate bump lags a release, beta equals the new stable and this
+    # lane is the only container lane on it.
+    assert ".github/workflows/e2e-tests.yml" in resolve["run"]
+    assert "superfluous=$superfluous" in resolve["run"]
+    checkout = _job_steps(resolver)[0]
+    assert str(checkout.get("uses", "")).startswith("actions/checkout@")
+    assert checkout["with"]["sparse-checkout"] == ".github/workflows/e2e-tests.yml"
 
     image_ref = "${{ needs.resolve-beta.outputs.image }}"
     test_jobs = {
@@ -413,6 +443,9 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
     }, "the beta workflow mirrors e2e-tests.yml job for job"
     for job_id, job in test_jobs.items():
         assert job["needs"] == "resolve-beta", job_id
+        assert job["if"] == "needs.resolve-beta.outputs.superfluous != 'true'", (
+            f"{job_id} must be skipped when beta equals the stable pin"
+        )
         assert job["env"]["HA_IMAGE_GHCR"] == image_ref, job_id
         assert job["env"]["HA_TEST_IMAGE"] == image_ref, (
             f"{job_id}: the E2E fixtures build their container from "

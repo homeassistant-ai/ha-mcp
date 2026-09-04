@@ -57,10 +57,45 @@ env:
   LIBGUESTFS_BACKEND: direct
 
 jobs:
+  # Decide once whether beta is currently distinct from stable. When beta.json
+  # and stable.json name the same Supervisor and Core, the stable HAOS lanes
+  # (which bake from the stable channel) already ran exactly this image on the
+  # PR, and both lanes below are skipped. Each lane still resolves the versions
+  # itself for its cache key and build inputs.
+  resolve-beta:
+    name: Resolve beta versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      superfluous: ${{ steps.compare.outputs.superfluous }}
+
+    steps:
+      - name: Compare the beta channel with stable
+        id: compare
+        run: |
+          beta=$(curl --fail --silent --show-error \
+            https://version.home-assistant.io/beta.json)
+          stable=$(curl --fail --silent --show-error \
+            https://version.home-assistant.io/stable.json)
+          read -r beta_supervisor beta_core <<<"$(python3 -c \
+            'import json, sys; d = json.load(sys.stdin); print(d["supervisor"], d["homeassistant"]["qemux86-64"])' \
+            <<<"$beta")"
+          read -r stable_supervisor stable_core <<<"$(python3 -c \
+            'import json, sys; d = json.load(sys.stdin); print(d["supervisor"], d["homeassistant"]["qemux86-64"])' \
+            <<<"$stable")"
+          superfluous=false
+          if [ "$beta_supervisor" = "$stable_supervisor" ] && [ "$beta_core" = "$stable_core" ]; then
+            superfluous=true
+            echo "::notice::Beta (Supervisor $beta_supervisor, Core $beta_core) equals stable; skipping the beta lanes"
+          fi
+          echo "superfluous=$superfluous" >> "$GITHUB_OUTPUT"
+
   haos-e2e-inaddon-beta:
     name: HAOS E2E Tests (inaddon beta)
     runs-on: ubuntu-22.04
     timeout-minutes: 75
+    needs: resolve-beta
+    if: needs.resolve-beta.outputs.superfluous != 'true'
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -339,8 +374,8 @@ jobs:
     # Wait for the sole cache writer to finish priming a new beta image. Still
     # run if the inaddon suite fails after saving it, and build locally if that
     # lane failed before the save; only a cancelled workflow suppresses this.
-    needs: haos-e2e-inaddon-beta
-    if: ${{ !cancelled() }}
+    needs: [resolve-beta, haos-e2e-inaddon-beta]
+    if: ${{ !cancelled() && needs.resolve-beta.result == 'success' && needs.resolve-beta.outputs.superfluous != 'true' }}
     runs-on: ubuntu-22.04
     # The embedded beta lane receives extra headroom for the per-worker runtime
     # package installation inside the resource-constrained QEMU guest.
