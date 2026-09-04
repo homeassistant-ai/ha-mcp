@@ -95,6 +95,12 @@ async def _run():
 
     converter = llm_api._schema_converter()
     normaliser = getattr(llm_api, "_to_inclusive_bounds", None)
+    # The production path, not a re-implementation of it: whatever
+    # HaMcpLlmApi._convert_parameters does to a tool's schema before Core sees
+    # it (normalisation included, once #2363 lands) is what this probe must
+    # measure. It reads nothing from self, so the class attribute is called
+    # directly. None means the component would have skipped the tool.
+    convert_parameters = llm_api.HaMcpLlmApi._convert_parameters
     report = {{
         "tool_count": 0,
         "converter": getattr(converter, "__module__", "") or repr(converter),
@@ -129,15 +135,27 @@ async def _run():
     async with asyncio.timeout(TIMEOUT_S):
         async with llm_api._mcp_session(url) as (session, _init):
             tools = (await session.list_tools()).tools
+        _convert_all(tools, convert_parameters, probatio, Draft202012Validator, report)
 
+    print(SENTINEL + " " + json.dumps(report))
+
+
+def _convert_all(tools, convert_parameters, probatio, Draft202012Validator, report):
+    # Inside the caller's timeout on purpose: the conversion loop is the
+    # operation under test, so a converter that hangs on one schema must
+    # surface as the probe's own timeout, not as an opaque exec kill.
     report["tool_count"] = len(tools)
     for tool in tools:
         schema = tool.inputSchema
         try:
-            normalised = normaliser(schema) if normaliser else schema
-            params = llm_api.convert_to_voluptuous(normalised)
+            params = convert_parameters(None, tool)
         except Exception as err:  # collecting, not suppressing
             report["conversion_failures"].append(tool.name + ": " + _short(err))
+            continue
+        if params is None:
+            report["conversion_failures"].append(
+                tool.name + ": _convert_parameters returned None (tool skipped)"
+            )
             continue
         if probatio is None:
             continue
@@ -159,8 +177,6 @@ async def _run():
                 Draft202012Validator.check_schema(emitted)
             except Exception as err:  # collecting, not suppressing
                 report["draft2020_invalid"].append(tool.name + ": " + _short(err))
-
-    print(SENTINEL + " " + json.dumps(report))
 
 
 asyncio.run(_run())
