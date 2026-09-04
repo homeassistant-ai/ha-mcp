@@ -306,24 +306,33 @@ def test_reentrant_debug_log_does_not_freeze_home_assistant(
         body_failed = True
         raise
     finally:
-        _sh(
-            f"rm -rf {shlex.quote(probe_dir)}; "
-            f"[ -f {shlex.quote(backup_yaml)} ] && "
-            f"mv {shlex.quote(backup_yaml)} {shlex.quote(config_yaml)} || true"
-        )
-        # Hand a healthy VM back to the rest of the worker's session — the
-        # Supervisor CLI restarts Core even when its loop is wedged. Later
-        # modules on this xdist worker share the VM, so a cleanup that leaves
-        # Core down is a failure of this test — unless the body already
-        # failed, in which case that failure must stay the one reported.
+        # Hand a healthy VM back to the rest of the worker's session. Later
+        # modules on this xdist worker share it, so a restore that leaves the
+        # probe config behind or a restart that leaves Core down is a failure
+        # of this test — unless the body already failed, in which case that
+        # failure must stay the one reported.
+        cleanup_error: Exception | None = None
+        try:
+            _sh(f"rm -rf {shlex.quote(probe_dir)}")
+            # The backup exists from the moment the body's first step ran; a
+            # failed mv here must not be papered over.
+            _sh(
+                f"if [ -f {shlex.quote(backup_yaml)} ]; then "
+                f"mv {shlex.quote(backup_yaml)} {shlex.quote(config_yaml)}; fi"
+            )
+        except AssertionError as exc:
+            cleanup_error = exc
+        # The Supervisor CLI restarts Core even when its loop is wedged.
         _restart_core()
         try:
             _wait_http_ok(ready_url, timeout=HA_RETURN_TIMEOUT_S)
         except TimeoutError as exc:
+            cleanup_error = cleanup_error or exc
+        if cleanup_error is not None:
             if body_failed:
-                logger.error("Home Assistant did not recover after probe cleanup")
+                logger.error("probe cleanup did not fully recover: %s", cleanup_error)
             else:
                 raise AssertionError(
-                    "Home Assistant did not recover after probe cleanup; the "
-                    "worker's VM is unusable for later modules"
-                ) from exc
+                    "probe cleanup did not fully recover the worker's VM, which "
+                    f"later modules share: {cleanup_error}"
+                ) from cleanup_error
