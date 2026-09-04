@@ -103,19 +103,19 @@ class TestRepoPyprojectIsAligned:
         dependencies = checker.direct_dependencies(
             (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         )
-        # Verbatim from homeassistant/package_constraints.txt @ 2026.8.0.
-        frozen_2026_8_0 = "\n".join(
+        # Verbatim from homeassistant/package_constraints.txt @ 2026.9.0.
+        frozen_2026_9_0 = "\n".join(
             [
                 "websockets>=15.0.1",
                 "httpx==0.28.1",
                 "pydantic==2.13.4",
                 "cryptography==48.0.1",
                 "packaging>=23.1",
-                "typing-extensions>=4.15.0,<5.0",
+                "typing-extensions>=4.16.0,<5.0",
             ]
         )
         violations = checker.check_alignment(
-            dependencies, checker.parse_requirement_lines(frozen_2026_8_0)
+            dependencies, checker.parse_requirement_lines(frozen_2026_9_0)
         )
         assert violations == []
 

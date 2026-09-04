@@ -104,7 +104,10 @@
       "matchDepNames": [
         "ghcr.io/home-assistant/home-assistant"
       ],
-      "minimumReleaseAge": null
+      "minimumReleaseAge": null,
+      "schedule": [
+        "at any time"
+      ]
     },
     {
       "description": "Keep Python interpreter changes coordinated while allowing same-tag digest refreshes",
