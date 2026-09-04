@@ -218,6 +218,9 @@ def _skip_ceilings_with_fragments() -> dict[str, int]:
     for name, fragment in _load_skip_ceiling_fragments().items():
         for lane, delta in fragment["deltas"].items():
             assert lane in ceilings, f"{name}: unknown lane {lane!r}"
+            # ``type(...) is int``: JSON ``true`` is a bool, and bool subclasses
+            # int, so ``isinstance`` would let it add 1 to a ceiling.
+            assert type(delta) is int and delta > 0, (name, lane, delta)
             ceilings[lane] += delta
     return ceilings
 
@@ -465,4 +468,4 @@ def test_skip_ceiling_fragments_are_well_formed() -> None:
         assert fragment["deltas"], f"{name}: no deltas"
         for lane, delta in fragment["deltas"].items():
             assert lane in _SKIP_CEILING_BASELINE, (name, lane)
-            assert isinstance(delta, int) and delta > 0, (name, lane, delta)
+            assert type(delta) is int and delta > 0, (name, lane, delta)
