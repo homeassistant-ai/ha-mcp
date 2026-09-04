@@ -290,6 +290,11 @@ def _validate_device_registry_rows(
             "Home Assistant device registry returned a conflicting device identity",
             cause=InfrastructureErrorCause.MALFORMED_DEVICE_REGISTRY,
         )
+    if snapshot.invalid_area_ids:
+        raise BulkSelectorInfrastructureError(
+            "Home Assistant device registry returned invalid device area evidence",
+            cause=InfrastructureErrorCause.MALFORMED_DEVICE_REGISTRY,
+        )
     return snapshot
 
 

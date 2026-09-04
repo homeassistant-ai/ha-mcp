@@ -203,6 +203,39 @@ async def test_conflicting_device_identity_fails_before_action_selection() -> No
 
 
 @pytest.mark.asyncio
+async def test_invalid_device_ancestry_fails_before_action_selection() -> None:
+    """An area selector must not silently omit a child with invalid ancestry."""
+    client = SelectorClient(
+        states=[_state("switch.safe"), _state("switch.orphan")],
+        entities=[
+            {
+                "entity_id": "switch.safe",
+                "area_id": "salon",
+                "device_id": None,
+            },
+            {
+                "entity_id": "switch.orphan",
+                "area_id": None,
+                "device_id": "child",
+            },
+        ],
+        devices=[{"id": "child", "area_id": None, "parent_device_id": "missing"}],
+    )
+
+    with pytest.raises(
+        BulkSelectorInfrastructureError, match="invalid device area evidence"
+    ):
+        await resolve_bulk_selector(
+            client,
+            {"domain": "switch", "area_ids": ["salon"]},
+            action="off",
+            parameters=None,
+            timeout_seconds=None,
+            validate_first=True,
+        )
+
+
+@pytest.mark.asyncio
 async def test_membership_cycle_fails_before_returning_operations() -> None:
     """A cyclic aggregate graph is an all-or-nothing preflight failure."""
     client = SelectorClient(

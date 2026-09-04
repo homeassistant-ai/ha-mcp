@@ -36,6 +36,9 @@ from ha_mcp.tools.radio.zigbee import _resolve_ieee
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
+from ha_mcp.visibility import resolver
+from ha_mcp.visibility.model import VisibilityConfig
+from ha_mcp.visibility.persistence import save_visibility_config
 
 from ._component_routing_helpers import patch_ws
 from .test_component_ws_search import (
@@ -354,6 +357,103 @@ class TestOverviewSeam:
         assert resp["success"] is True
         assert resp["area_analysis"]["office"]["count"] == 1
         assert client.total_legacy_fetches() == 0
+
+    @pytest.mark.parametrize("evidence", ["conflict", "invalid_ancestry"])
+    def test_ambiguous_device_evidence_invalidates_overview_slice(
+        self, monkeypatch, evidence
+    ) -> None:
+        """The component must force legacy fallback instead of losing evidence."""
+        if evidence == "conflict":
+            office = FakeDevice("duplicate", area_id="office")
+            garage = FakeDevice("duplicate", area_id="garage")
+
+            class _ConflictingRegistry:
+                devices = (office, garage)
+                child_devices = ()
+
+            view = make_view()
+            view.device = _ConflictingRegistry()
+        else:
+            view = make_view(
+                child_devices=[FakeChildDevice("child", "missing")],
+            )
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
+
+        result = wsapi._do_overview(self._hass(), {})
+
+        assert result["device_registry"] == []
+        assert result["slice_errors"] == ["device_registry"]
+
+    def test_direct_area_precedes_missing_parent_in_overview_slice(
+        self, monkeypatch
+    ) -> None:
+        """A valid direct area remains authoritative despite invalid ancestry."""
+        view = make_view(
+            child_devices=[FakeChildDevice("child", "missing", area_id="office")],
+        )
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
+
+        result = wsapi._do_overview(self._hass(), {})
+
+        assert result["slice_errors"] == []
+        assert result["device_registry"] == [
+            {
+                "id": "child",
+                "area_id": "office",
+                "labels": [],
+                "name": None,
+                "name_by_user": None,
+                "manufacturer": None,
+                "model": None,
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_conflicting_device_overview_falls_back_with_warning(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The real component/server seam preserves conflict evidence via fallback."""
+        office = FakeDevice("duplicate", area_id="office")
+        garage = FakeDevice("duplicate", area_id="garage")
+
+        class _ConflictingRegistry:
+            devices = (office, garage)
+            child_devices = ()
+
+        view = make_view()
+        view.device = _ConflictingRegistry()
+        monkeypatch.setattr(wsapi, "_resolve_registries", lambda h: view)
+        save_visibility_config(
+            tmp_path,
+            VisibilityConfig(enabled=True, exclude_areas=["office"]),
+        )
+        monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+
+        class _ConflictClient(OverviewRoutingClient):
+            async def send_websocket_message(self, msg):
+                if msg.get("type") == "config/device_registry/list":
+                    self.ws_types[msg["type"]] += 1
+                    return {
+                        "success": True,
+                        "result": [
+                            {"id": "duplicate", "area_id": "office"},
+                            {"id": "duplicate", "area_id": "garage"},
+                        ],
+                    }
+                return await super().send_websocket_message(msg)
+
+        client = _ConflictClient()
+        tool = _build_overview_tool(client)
+        with patch_ws(_real_component_ws(self._hass()), tools_search):
+            response = await tool()
+
+        assert response["success"] is True
+        assert client.total_legacy_fetches() > 0
+        assert resolver._DEVICE_REGISTRY_CONFLICT_WARNING in response["warnings"]
+        assert any(
+            "component overview returned malformed slices" in warning
+            for warning in response["warnings"]
+        )
 
 
 # --- search ---------------------------------------------------------------------

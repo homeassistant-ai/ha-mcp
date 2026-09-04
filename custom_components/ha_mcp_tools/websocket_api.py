@@ -2966,9 +2966,19 @@ def _overview_entity_registry(view: _RegistryView) -> list[dict[str, Any]]:
 
 
 def _overview_device_registry(view: _RegistryView) -> list[dict[str, Any]]:
-    """Device registry as a bare list (id + area + labels + name/manufacturer/model)."""
+    """Device registry as a bare list, or raise when projection would lose evidence.
+
+    The overview projection cannot represent conflicting identities or invalid
+    ancestry. Raising marks this slice degraded so the server uses its existing
+    native registry fallback, which retains that evidence for visibility.
+    """
+    devices = _all_device_entries(view)
+    if _conflicting_device_ids(view):
+        raise ValueError("device registry contains conflicting identities")
+    if _invalid_device_area_ids(view):
+        raise ValueError("device registry contains invalid area evidence")
     out: list[dict[str, Any]] = []
-    for dev in _all_device_entries(view):
+    for dev in devices:
         dev_row = _device_dict_repr(dev)
         if dev_row is None:
             continue
