@@ -46,9 +46,9 @@ def test_manifest_declares_the_pre_probatio_schema_converter() -> None:
     release the floor admits.
     """
     manifest = json.loads(
-        (
-            _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
-        ).read_text(encoding="utf-8")
+        (_REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json").read_text(
+            encoding="utf-8"
+        )
     )
 
     assert "voluptuous-openapi>=0.4.1" in manifest["requirements"]

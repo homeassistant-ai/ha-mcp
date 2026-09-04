@@ -326,6 +326,36 @@ class TestSchemaConversionCompatibility:
 
         assert llm_api.convert_to_voluptuous(schema) == {"probatio": schema}
 
+    def test_the_fallback_announces_which_codec_is_converting(
+        self, monkeypatch, caplog
+    ):
+        """Nothing else reports that the component runs on the other codec.
+
+        A requirement that failed to install never gets here: Home Assistant
+        logs that itself and abandons the integration before importing it.
+        What does get here -- skip_pip, or a deps tree that lost the package
+        -- produces no message anywhere else, and the conversion then
+        succeeds quietly with a codec that retypes integers.
+        """
+        probatio = SimpleNamespace(from_openapi=lambda value: value)
+
+        def _import_module(name):
+            if name == "voluptuous_openapi":
+                raise ModuleNotFoundError(
+                    "No module named 'voluptuous_openapi'",
+                    name="voluptuous_openapi",
+                )
+            return probatio
+
+        monkeypatch.setattr(llm_api.importlib, "import_module", _import_module)
+
+        with caplog.at_level(logging.DEBUG, logger=llm_api._LOGGER.name):
+            llm_api.convert_to_voluptuous({"type": "object"})
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "voluptuous-openapi" in warnings[0].getMessage()
+
     def test_reraises_nested_module_not_found(self, monkeypatch):
         def _import_module(name):
             assert name == "voluptuous_openapi"
@@ -1313,7 +1343,9 @@ class TestExclusiveBoundNormalisation:
         monkeypatch.setattr(
             llm_api,
             "_normalise_schema",
-            lambda schema, tool_name: calls.append(tool_name) or real(schema, tool_name),
+            lambda schema, tool_name: (
+                calls.append(tool_name) or real(schema, tool_name)
+            ),
         )
         tool = SimpleNamespace(
             name="ha_search",
@@ -1337,8 +1369,8 @@ class TestExclusiveBoundNormalisation:
         reach the model through tool search -- the default mode.
         """
         api = _make_api(_make_hass(), mode=EXPOSURE_TOOL_SEARCH)
-        widened = SimpleNamespace(
-            name="ha_widened",
+        folded = SimpleNamespace(
+            name="ha_folded",
             description="d",
             inputSchema={"type": "number", "exclusiveMinimum": 0},
         )
@@ -1349,12 +1381,86 @@ class TestExclusiveBoundNormalisation:
         )
 
         with caplog.at_level(logging.DEBUG, logger=llm_api._LOGGER.name):
-            api._build_tool_search_tools([widened, dropped], set())
+            api._build_tool_search_tools([folded, dropped], set())
 
         debug = [r for r in caplog.records if r.levelno == logging.DEBUG]
         warning = [r for r in caplog.records if r.levelno == logging.WARNING]
-        assert len([r for r in debug if "ha_widened" in r.getMessage()]) == 1
+        assert len([r for r in debug if "ha_folded" in r.getMessage()]) == 1
         assert len([r for r in warning if "ha_dropped" in r.getMessage()]) == 1
+
+    def test_one_tool_that_both_drops_and_folds_reports_both(self, caplog):
+        """The two branches are independent, and a schema can hit both.
+
+        Reported separately because they call for different things: the drop
+        is the server's bug to fix, the fold is a widened edge to expect.
+        """
+        api = _make_api(_make_hass(), mode=EXPOSURE_TOOL_SEARCH)
+        tool = SimpleNamespace(
+            name="ha_both",
+            description="d",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "bad": {"type": "number", "exclusiveMinimum": True},
+                    "good": {"type": "number", "exclusiveMinimum": 0},
+                },
+            },
+        )
+
+        with caplog.at_level(logging.DEBUG, logger=llm_api._LOGGER.name):
+            api._build_tool_search_tools([tool], set())
+
+        levels = {r.levelno for r in caplog.records if "ha_both" in r.getMessage()}
+        assert levels == {logging.WARNING, logging.DEBUG}
+
+    def test_two_bad_nodes_do_not_read_as_one(self, caplog):
+        """A count, because the keyword name alone cannot carry the number.
+
+        Someone reading this line is looking for the schema to fix. Collapsing
+        two malformed nodes into the single-node wording sends them off after
+        one bound and leaves the other in place.
+        """
+        api = _make_api(_make_hass(), mode=EXPOSURE_TOOL_SEARCH)
+        tool = SimpleNamespace(
+            name="ha_two_bad",
+            description="d",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "a": {"type": "number", "exclusiveMinimum": "x"},
+                    "b": {"type": "number", "exclusiveMinimum": "y"},
+                },
+            },
+        )
+
+        with caplog.at_level(logging.DEBUG, logger=llm_api._LOGGER.name):
+            api._build_tool_search_tools([tool], set())
+
+        warning = next(
+            r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+        )
+        assert "exclusiveMinimum x2" in warning
+
+    def test_the_guard_mirrors_the_components_keyword_sets(self):
+        """The registry guard repeats these sets rather than importing them.
+
+        That keeps the guard runnable without the Home Assistant component on
+        the path, at the cost of two copies that can drift apart silently.
+        This module imports both sides anyway, so the equality is pinned here
+        rather than left to review.
+        """
+        from . import test_tool_schema_exclusive_bounds as guard
+
+        assert guard._NAME_MAPS == llm_api._SCHEMA_MAPS
+        assert (
+            guard._NOT_SUBSCHEMAS == llm_api._INSTANCE_VALUES | llm_api._OPAQUE_KEYWORDS
+        )
+        # The third copy: a keyword added to the fold table but not to the
+        # walk would be normalised by the component and left unguarded here,
+        # with the registry-wide test still passing.
+        assert set(guard._EXCLUSIVE_KEYWORDS) == {
+            exclusive for exclusive, *_ in llm_api._EXCLUSIVE_BOUNDS
+        }
 
     def test_an_untouched_schema_is_not_reported(self, caplog):
         """Nothing changed, so nothing is worth an operator's attention."""

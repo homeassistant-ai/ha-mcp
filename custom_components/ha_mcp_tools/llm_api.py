@@ -51,6 +51,7 @@ import copy
 import importlib
 import logging
 import math
+from collections import Counter
 from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
@@ -141,13 +142,15 @@ def _schema_converter() -> Callable[[Any], Any]:
             raise
         probatio = importlib.import_module("probatio")
         _LOGGER.warning(
-            "voluptuous-openapi is missing; converting tool schemas with "
-            "probatio instead. The component manifest requires it, so this "
-            "means the requirement did not install. Probatio's OpenAPI codec "
-            "cannot express the node it builds for an integer, so a numeric "
-            "parameter can reach the conversation agent as a string, an empty "
-            "schema or a plain number. Reinstall the integration to restore "
-            "the requirement."
+            "voluptuous-openapi is not importable; converting tool schemas "
+            "with probatio instead. The manifest declares it, so this is "
+            "Home Assistant running with skip_pip, or a deps tree that lost "
+            "the package after setup. A requirement that genuinely failed to "
+            "install never reaches this line -- Home Assistant reports that "
+            "itself and abandons the integration before importing it. "
+            "Probatio's OpenAPI codec cannot express the node it builds for "
+            "an integer, so a numeric parameter can reach the conversation "
+            "agent as a string, an empty schema or a plain number."
         )
         return cast(Callable[[Any], Any], probatio.from_openapi)
     return cast(Callable[[Any], Any], legacy.convert_to_voluptuous)
@@ -205,7 +208,7 @@ class _Rewrite:
     once per node or not at all.
     """
 
-    widened: list[str] = field(default_factory=list)
+    folded: list[str] = field(default_factory=list)
     dropped: list[str] = field(default_factory=list)
 
 
@@ -245,8 +248,7 @@ def _to_inclusive_bounds(schema: Any, rewrite: _Rewrite | None = None) -> Any:
             result[key] = copy.deepcopy(value)
         elif key in _SCHEMA_MAPS and isinstance(value, dict):
             result[key] = {
-                name: _to_inclusive_bounds(sub, rewrite)
-                for name, sub in value.items()
+                name: _to_inclusive_bounds(sub, rewrite) for name, sub in value.items()
             }
         else:
             result[key] = _to_inclusive_bounds(value, rewrite)
@@ -300,7 +302,21 @@ def _fold_bounds(node: dict[str, Any], rewrite: _Rewrite | None = None) -> None:
         current = node.get(inclusive)
         node[inclusive] = tighter(current, bound) if _is_number(current) else bound
         if rewrite is not None:
-            rewrite.widened.append(exclusive)
+            rewrite.folded.append(exclusive)
+
+
+def _tally(keywords: list[str]) -> str:
+    """Render the rewritten keywords with a count, so two nodes read as two.
+
+    One line per tool keeps the log readable, but a bare set of keyword names
+    would make a schema with several malformed bounds indistinguishable from
+    one carrying a single bad node -- and the count is the only hint left that
+    more than one place needs fixing.
+    """
+    return ", ".join(
+        keyword if seen == 1 else f"{keyword} x{seen}"
+        for keyword, seen in sorted(Counter(keywords).items())
+    )
 
 
 def _normalise_schema(schema: Any, tool_name: str) -> Any:
@@ -320,17 +336,17 @@ def _normalise_schema(schema: Any, tool_name: str) -> Any:
             "Assistant's codec answers such a node by refusing the tool or by "
             "retyping the parameter. The server should advertise the bound as "
             "a number, the only form draft 2020-12 permits.",
-            ", ".join(sorted(set(rewrite.dropped))),
+            _tally(rewrite.dropped),
             tool_name,
         )
-    if rewrite.widened:
+    if rewrite.folded:
         _LOGGER.debug(
             "Rewrote %s in %s's schema to the inclusive twin so Home Assistant "
             "does not re-emit it in the Draft-4 form. On a non-integer bound "
             "the advertised edge is now one representable point wider than the "
             "server enforces, so a model passing that edge gets a rejection "
             "that is otherwise unattributable from any log.",
-            ", ".join(sorted(set(rewrite.widened))),
+            _tally(rewrite.folded),
             tool_name,
         )
     return result
@@ -862,9 +878,15 @@ class HaMcpLlmApi(llm.API):
         for tool in exposed:
             exposed_names.add(tool.name)
             # One normalisation feeds both surfaces, so a search result never
-            # shows a bound the mirrored tool does not advertise. Neither
-            # consumer mutates it: the catalog is serialised as-is and the
-            # converter reads it to build a separate voluptuous schema.
+            # shows a bound the mirrored tool does not advertise. Sharing the
+            # object rests on the converter not writing into its input. Both
+            # backends this component can reach were read for that: every
+            # write in voluptuous-openapi 0.4.1's convert_to_voluptuous and in
+            # probatio 0.11.4's JSON-Schema codec lands in a dict the
+            # converter built itself, and instrumenting probatio's inputs
+            # recorded no mutating call at all. A
+            # converter that wrote back would corrupt the catalog entry, so
+            # re-check this before pointing the component at a third one.
             schema = _normalise_schema(tool.inputSchema, tool.name)
             catalog.append(
                 {
