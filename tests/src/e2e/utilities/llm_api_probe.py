@@ -105,6 +105,10 @@ async def _run():
     # measure. It reads nothing from self, so the class attribute is called
     # directly. None means the component would have skipped the tool.
     convert_parameters = llm_api.HaMcpLlmApi._convert_parameters
+    # Since #2363 the mirror paths normalise once per tool and hand the
+    # result to _convert_parameters(self, tool, schema); before that the
+    # method took only the tool. Follow whichever shape this build has.
+    normalise_schema = getattr(llm_api, "_normalise_schema", None)
     report = REPORT
     report.update({{
         "timed_out": False,
@@ -141,12 +145,21 @@ async def _run():
     async with asyncio.timeout(TIMEOUT_S):
         async with llm_api._mcp_session(url) as (session, _init):
             tools = (await session.list_tools()).tools
-        _convert_all(tools, convert_parameters, probatio, Draft202012Validator, report)
+        _convert_all(
+            tools,
+            convert_parameters,
+            normalise_schema,
+            probatio,
+            Draft202012Validator,
+            report,
+        )
 
     print(SENTINEL + " " + json.dumps(report))
 
 
-def _convert_all(tools, convert_parameters, probatio, Draft202012Validator, report):
+def _convert_all(
+    tools, convert_parameters, normalise_schema, probatio, Draft202012Validator, report
+):
     # Inside the caller's timeout on purpose: the conversion loop is the
     # operation under test, so a converter that hangs on one schema must
     # surface as the probe's own timeout, not as an opaque exec kill.
@@ -154,7 +167,12 @@ def _convert_all(tools, convert_parameters, probatio, Draft202012Validator, repo
     for tool in tools:
         schema = tool.inputSchema
         try:
-            params = convert_parameters(None, tool)
+            if normalise_schema is not None:
+                params = convert_parameters(
+                    None, tool, normalise_schema(schema, tool.name)
+                )
+            else:
+                params = convert_parameters(None, tool)
         except Exception as err:  # collecting, not suppressing
             report["conversion_failures"].append(tool.name + ": " + _short(err))
             continue
