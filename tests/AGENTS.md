@@ -25,6 +25,7 @@ before adding a gate:
 | `external_only` | anywhere the server-under-test runs IN the pytest process: plain testcontainer and HAOS external. Skips stdio, inaddon, container-embedded and HAOS-embedded, which cannot be reconfigured via test-process env / monkeypatch or reach an in-process mock. The name is historical — it does NOT mean "HAOS external only" |
 | `inaddon_only` | HAOS inaddon mode only (`HAOS_TEST_MODE=inaddon`), where `is_running_in_addon()` paths are live |
 | `haos_stdio_only` | HAOS stdio mode only (`HAOS_TEST_MODE=stdio`), where the installed `ha-mcp` command is exercised through a real subprocess transport |
+| `haos_embedded_only` | HAOS embedded mode only (`HAOS_TEST_MODE=embedded`), where the in-process server shares Home Assistant's process and event loop — for tests whose subject is that shared loop (#2357). Skips every other lane at collection, so no VM boots just to skip |
 | `not_on_embedded` / `not_on_haos_embedded` | everywhere except that lane, for tests the lane's own session backend already covers |
 | `requires_tools_entry` | every lane EXCEPT the no-tools lanes (`E2E_NO_TOOLS_ENTRY=1`), where the File & YAML Tools entry is absent (#2292) |
 | `no_tools_only` | the no-tools lanes only — the mirror of `requires_tools_entry` |

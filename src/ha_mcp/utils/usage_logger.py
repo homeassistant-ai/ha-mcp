@@ -2,6 +2,7 @@
 Usage logging for MCP tool calls to track usage patterns and performance metrics.
 """
 
+import copy
 import json
 import logging
 import threading
@@ -29,6 +30,13 @@ AVG_LOG_ENTRIES_PER_TOOL = 3
 # Startup log collection duration in seconds
 STARTUP_LOG_DURATION_SECONDS = 60
 
+# Hard cap on collected startup entries. The collector sits on the root logger
+# at DEBUG with no filter, so an instance with `logger:` debug overrides on a
+# chatty integration can emit tens of thousands of records inside the window.
+# Keep the earliest ones — ha_report_issue's startup diagnostics care about the
+# boot sequence, and the tail of a debug flood is noise.
+MAX_STARTUP_LOG_ENTRIES = 5000
+
 
 class StartupLogCollector(logging.Handler):
     """Collects log messages during the first minute of server startup."""
@@ -40,10 +48,40 @@ class StartupLogCollector(logging.Handler):
         self._logs: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         self._active = True
+        # Per-thread, not an instance flag: emit() runs on every thread that
+        # logs, and a shared flag would drop unrelated records from other
+        # threads while one thread is mid-format.
+        self._formatting = threading.local()
+        # Nested records the guard dropped; surfaced by get_logs() so the
+        # startup diagnostics show the hole instead of hiding it.
+        self._dropped_nested = 0
 
     def emit(self, record: logging.LogRecord) -> None:
-        """Capture log record if within startup window."""
+        """Capture log record if within startup window.
+
+        ``record.getMessage()`` is deliberately called OUTSIDE ``self._lock``
+        and under a per-thread reentrancy guard. Formatting a record runs
+        arbitrary third-party code: ``%s`` of an entity invokes
+        ``Entity.__repr__`` -> ``_stringify_state`` -> the entity's ``state``
+        property, and an integration whose property logs at debug re-enters
+        this handler on the same thread. This handler runs in-process with
+        Home Assistant in embedded mode, so that thread is the event loop.
+
+        Formatting inside the lock made that re-entry a hard self-deadlock on a
+        non-reentrant ``threading.Lock``, freezing the whole HA process — no
+        port 8123, no recorder writes, and no log line explaining it, because
+        the freeze happens inside logging itself (#2357).
+        """
         if not self._active:
+            return
+
+        # Nested emit from within our own formatting: drop the record rather
+        # than recurse. The outer record still gets collected, and the chain
+        # (repr -> log -> repr -> log) cannot run away. The lock is free on
+        # this path (formatting happens outside it), so counting is safe.
+        if getattr(self._formatting, "active", False):
+            with self._lock:
+                self._dropped_nested += 1
             return
 
         elapsed = time.time() - self._start_time
@@ -51,21 +89,69 @@ class StartupLogCollector(logging.Handler):
             self._active = False
             return
 
+        self._formatting.active = True
+        try:
+            message = record.getMessage()
+        except Exception as exc:
+            # Mirrors logging's own contract: a handler never propagates. Only
+            # attributes the logging machinery itself set are interpolated —
+            # ``exc``'s repr or ``record.msg`` could run the code that just
+            # failed. pathname:lineno names the broken call site, which the
+            # logger name alone does not.
+            message = (
+                f"<unformattable record from {record.pathname}:{record.lineno}: "
+                f"{type(exc).__name__}>"
+            )
+            # Honour the stdlib path too (logging.raiseExceptions / stderr);
+            # at DEBUG on root this may be the only handler that saw the record.
+            # Hand it a copy carrying the synthetic message and no args:
+            # handleError() formats ``record.args`` again and re-raises a
+            # RecursionError from that, which would escape into the caller.
+            safe = copy.copy(record)
+            safe.msg = message
+            safe.args = ()
+            self.handleError(safe)
+        finally:
+            self._formatting.active = False
+
         with self._lock:
+            if len(self._logs) >= MAX_STARTUP_LOG_ENTRIES:
+                self._active = False
+                return
             self._logs.append(
                 {
                     "timestamp": datetime.now(UTC).isoformat(),
                     "level": record.levelname,
                     "logger": record.name,
-                    "message": record.getMessage(),
+                    "message": message,
                     "elapsed_seconds": round(elapsed, 2),
                 }
             )
 
     def get_logs(self) -> list[dict[str, Any]]:
-        """Get collected startup logs."""
+        """Get collected startup logs.
+
+        If the reentrancy guard dropped any nested records, one synthetic
+        trailing entry says how many, so a reader of the diagnostics can tell
+        "the integration logged nothing" from "records were swallowed".
+        """
         with self._lock:
-            return list(self._logs)
+            logs = list(self._logs)
+            dropped = self._dropped_nested
+        if dropped:
+            logs.append(
+                {
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "level": "WARNING",
+                    "logger": __name__,
+                    "message": (
+                        f"<{dropped} nested log record(s) emitted during message "
+                        "formatting were dropped by the reentrancy guard>"
+                    ),
+                    "elapsed_seconds": round(time.time() - self._start_time, 2),
+                }
+            )
+        return logs
 
     def is_active(self) -> bool:
         """Check if still collecting startup logs."""
