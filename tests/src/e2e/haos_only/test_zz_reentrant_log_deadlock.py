@@ -172,20 +172,21 @@ def _find_config_dir() -> str:
     )
 
 
-def _restart_core() -> None:
-    """Restart HA Core from inside the VM.
+def _restart_core() -> bool:
+    """Restart HA Core from inside the VM; True if a restart was issued.
 
     Driven through the Supervisor CLI rather than HA's own restart service so
     it still works when Core's event loop is wedged — which is exactly the
     state this test's cleanup has to recover from. Falls back to restarting the
-    container directly, and never raises: the caller polls for readiness itself,
-    and this runs in a ``finally`` where an exception would mask the real
-    failure.
+    container directly, and never raises: this runs in a ``finally`` where an
+    exception would mask the real failure. The caller must not treat a later
+    readiness check as proof of a restart — the OLD process answers it just as
+    well — so a double failure is reported through the return value.
     """
     try:
         result = ssh_exec(["sh", "-c", "ha core restart"], timeout=300.0)
         if result.returncode == 0:
-            return
+            return True
         logger.warning(
             "`ha core restart` exited %s (%s); restarting the container",
             result.returncode,
@@ -194,9 +195,18 @@ def _restart_core() -> None:
     except Exception as exc:
         logger.warning("`ha core restart` failed (%s); restarting the container", exc)
     try:
-        ssh_exec(["sh", "-c", "docker restart homeassistant"], timeout=300.0)
+        result = ssh_exec(["sh", "-c", "docker restart homeassistant"], timeout=300.0)
     except Exception as exc:
         logger.error("container restart also failed: %s", exc)
+        return False
+    if result.returncode != 0:
+        logger.error(
+            "container restart also failed (%s): %s",
+            result.returncode,
+            (result.stderr or result.stdout).strip()[:200],
+        )
+        return False
+    return True
 
 
 def _py_spy_dump() -> str:
@@ -267,7 +277,7 @@ def test_reentrant_debug_log_does_not_freeze_home_assistant(
         _write_in_vm(config_yaml, _sh(f"cat {shlex.quote(backup_yaml)}") + PROBE_YAML)
 
         logger.info("Restarting Core with the re-entrant log probe installed")
-        _restart_core()
+        assert _restart_core(), "could not restart Core to load the probe"
 
         _require_ha_responsive(
             ready_url,
@@ -311,19 +321,28 @@ def test_reentrant_debug_log_does_not_freeze_home_assistant(
         # probe config behind or a restart that leaves Core down is a failure
         # of this test — unless the body already failed, in which case that
         # failure must stay the one reported.
+        # Each step is attempted regardless of the previous one — a failed
+        # probe removal must not skip the config restore, and vice versa — and
+        # the first failure is what gets reported.
         cleanup_error: Exception | None = None
-        try:
-            _sh(f"rm -rf {shlex.quote(probe_dir)}")
+        for step in (
+            f"rm -rf {shlex.quote(probe_dir)}",
             # The backup exists from the moment the body's first step ran; a
             # failed mv here must not be papered over.
-            _sh(
-                f"if [ -f {shlex.quote(backup_yaml)} ]; then "
-                f"mv {shlex.quote(backup_yaml)} {shlex.quote(config_yaml)}; fi"
+            f"if [ -f {shlex.quote(backup_yaml)} ]; then "
+            f"mv {shlex.quote(backup_yaml)} {shlex.quote(config_yaml)}; fi",
+        ):
+            try:
+                _sh(step)
+            except AssertionError as exc:
+                cleanup_error = cleanup_error or exc
+        # The Supervisor CLI restarts Core even when its loop is wedged. A
+        # restart that never happened leaves the probe loaded even though the
+        # old process still answers the readiness check below.
+        if not _restart_core():
+            cleanup_error = cleanup_error or AssertionError(
+                "Core restart failed during cleanup; the probe is still loaded"
             )
-        except AssertionError as exc:
-            cleanup_error = exc
-        # The Supervisor CLI restarts Core even when its loop is wedged.
-        _restart_core()
         try:
             _wait_http_ok(ready_url, timeout=HA_RETURN_TIMEOUT_S)
         except TimeoutError as exc:
