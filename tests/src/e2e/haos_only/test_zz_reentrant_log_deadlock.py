@@ -30,6 +30,8 @@ from posixpath import dirname
 import pytest
 from haos_runtime import _wait_http_ok, ssh_exec
 
+from ..utilities.logger_seed import with_probe_logger_config
+
 logger = logging.getLogger(__name__)
 
 # ``haos_embedded_only``: ha_mcp's log handler only shares a process (and an
@@ -123,14 +125,14 @@ PROBE_MANIFEST = """\
 }
 """
 
-PROBE_YAML = """
+PROBE_COMPONENT_YAML = """
 # --- ha-mcp #2357 probe (removed by the test) ---
 reentrant_log_probe:
-logger:
-  logs:
-    custom_components.reentrant_log_probe: debug
 # --- end ha-mcp #2357 probe ---
 """
+PROBE_LOGGER_ENTRY = (
+    "    custom_components.reentrant_log_probe: debug  # ha-mcp #2357 probe\n"
+)
 
 
 def _sh(script: str, *, timeout: float = 60.0) -> str:
@@ -265,19 +267,19 @@ def test_reentrant_debug_log_does_not_freeze_home_assistant(
     config_yaml = f"{config_dir}/configuration.yaml"
     backup_yaml = f"{config_dir}/configuration.yaml.2357.bak"
 
-    existing = _sh(f"grep -c '^logger:' {shlex.quote(config_yaml)} || true").strip()
-    assert existing in ("", "0"), (
-        "the seeded configuration.yaml already declares `logger:` — appending a "
-        "second block would be a duplicate YAML key. Merge the probe's logger "
-        "entry into the existing block instead."
-    )
-
     body_failed = False
     try:
         _sh(f"cp {shlex.quote(config_yaml)} {shlex.quote(backup_yaml)}")
         _write_in_vm(f"{probe_dir}/__init__.py", PROBE_INIT_PY)
         _write_in_vm(f"{probe_dir}/manifest.json", PROBE_MANIFEST)
-        _write_in_vm(config_yaml, _sh(f"cat {shlex.quote(backup_yaml)}") + PROBE_YAML)
+        _write_in_vm(
+            config_yaml,
+            with_probe_logger_config(
+                _sh(f"cat {shlex.quote(backup_yaml)}"),
+                PROBE_COMPONENT_YAML,
+                PROBE_LOGGER_ENTRY,
+            ),
+        )
 
         logger.info("Restarting Core with the re-entrant log probe installed")
         assert _restart_core(), "could not restart Core to load the probe"

@@ -1,5 +1,6 @@
 """Guard shared HAOS workflow contracts without restructuring proven lanes."""
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -216,7 +217,10 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
     assert _beta_lane_jobs() == {
         (_BETA_WORKFLOW, beta_job_id, mode)
         for beta_job_id, mode, _stable_job_id in lane_specs
-    } | {(_CONTAINER_BETA_WORKFLOW, "resolve-beta", "None")}
+    } | {
+        (_BETA_WORKFLOW, "resolve-beta", "None"),
+        (_CONTAINER_BETA_WORKFLOW, "resolve-beta", "None"),
+    }
 
     beta_path = _WORKFLOW_DIR / _BETA_WORKFLOW
     assert beta_path.is_file(), "both beta lanes live in one workflow file"
@@ -244,19 +248,43 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
         "means it can never authorize a skip (#2311)"
     )
 
+    # The skip gate; its rationale is the resolve-beta job comment in the
+    # workflow itself. Pinned here: both channels read, every value validated
+    # (a failed parse must fail the job, never skip the lanes), and a manual
+    # dispatch always runs.
+    resolver = workflow["jobs"]["resolve-beta"]
+    assert resolver["outputs"] == {
+        "superfluous": "${{ steps.compare.outputs.superfluous }}"
+    }
+    compare = next(step for step in _job_steps(resolver) if step.get("id") == "compare")
+    assert "version.home-assistant.io/beta.json" in compare["run"]
+    assert "version.home-assistant.io/stable.json" in compare["run"]
+    assert '["supervisor"]' in compare["run"]
+    assert '["homeassistant"]["qemux86-64"]' in compare["run"]
+    assert compare["run"].count("|| exit 1") == 4
+    assert "::error::" in compare["run"]
+    skip_guard = (
+        "github.event_name == 'workflow_dispatch' || "
+        "needs.resolve-beta.outputs.superfluous != 'true'"
+    )
+
     for beta_job_id, mode, stable_job_id in lane_specs:
         job = workflow["jobs"][beta_job_id]
 
         if mode == "inaddon":
-            assert "needs" not in job
-            assert "if" not in job
+            assert job["needs"] == "resolve-beta"
+            assert job["if"] == skip_guard
         else:
-            assert job["needs"] == "haos-e2e-inaddon-beta", (
+            assert job["needs"] == ["resolve-beta", "haos-e2e-inaddon-beta"], (
                 "the embedded lane must wait for the sole cache writer"
             )
-            assert job["if"] == "${{ !cancelled() }}", (
+            assert job["if"] == (
+                "${{ !cancelled() && needs.resolve-beta.result == 'success' "
+                f"&& ({skip_guard}) }}}}"
+            ), (
                 "the embedded lane must continue after a writer failure, but "
-                "not after a superseding run cancels the workflow"
+                "not after a superseding run cancels the workflow, and never "
+                "when the compare job failed or found beta equal to stable"
             )
         steps = _job_steps(job)
 
@@ -396,7 +424,48 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
     assert resolver["outputs"] == {
         "core_version": "${{ steps.versions.outputs.core_version }}",
         "image": "${{ steps.versions.outputs.image }}",
+        "superfluous": "${{ steps.versions.outputs.superfluous }}",
     }
+    # The skip compares against the image the E2E fixtures actually build
+    # from (tests/test_constants.HA_TEST_IMAGE's default), not stable.json:
+    # while the Renovate bump lags a release, beta equals the new stable and
+    # this lane is the only container lane on it. The resolver reads that
+    # literal with sed and aborts on an empty result, so a reformatted pin
+    # can never reach the comparison; pinning the extraction here surfaces
+    # such a reformat on the pull request instead of as a failed resolver on
+    # the next push or nightly.
+    assert "tests/test_constants.py" in resolve["run"]
+    assert "superfluous=$superfluous" in resolve["run"]
+    constants = (_REPO_ROOT / "tests" / "test_constants.py").read_text(encoding="utf-8")
+    pins = re.findall(
+        r'^_DEFAULT_HA_TEST_IMAGE = "ghcr\.io/home-assistant/home-assistant:(.*)"$',
+        constants,
+        flags=re.MULTILINE,
+    )
+    assert len(pins) == 1 and re.fullmatch(r"\d{4}\.\d{1,2}\.\d+", pins[0]), (
+        f"the resolver's sed over tests/test_constants.py would not find one pin: {pins}"
+    )
+    # The workflow-level pins are pre-pull and cache-key inputs for the same
+    # image; Renovate moves all four together, and the skip's premise (the
+    # stable lanes ran exactly this image) holds only while they agree.
+    for pinned_workflow in ("pr.yml", "e2e-tests.yml", "performance-tests.yml"):
+        text = (_WORKFLOW_DIR / pinned_workflow).read_text(encoding="utf-8")
+        workflow_pins = re.findall(
+            r'^  HA_IMAGE_GHCR: "ghcr\.io/home-assistant/home-assistant:(.*)"$',
+            text,
+            flags=re.MULTILINE,
+        )
+        assert workflow_pins == pins, (
+            f"{pinned_workflow} pins {workflow_pins} but the fixtures run {pins}"
+        )
+    checkout = _job_steps(resolver)[0]
+    assert str(checkout.get("uses", "")).startswith("actions/checkout@")
+    assert checkout["with"]["sparse-checkout"] == "tests/test_constants.py"
+    # A single-file pattern needs non-cone mode; actions/checkout defaults
+    # cone mode to true, which would leave the file out of the checkout, the
+    # sed would find nothing, and the resolver's empty-pin check would abort
+    # the job. The pin protects the job, not the comparison.
+    assert checkout["with"]["sparse-checkout-cone-mode"] is False
 
     image_ref = "${{ needs.resolve-beta.outputs.image }}"
     test_jobs = {
@@ -411,8 +480,16 @@ def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
         "e2e-tests-embedded-server-only",
         "e2e-tests-update-path",
     }, "the beta workflow mirrors e2e-tests.yml job for job"
+    skip_guard = (
+        "github.event_name == 'workflow_dispatch' || "
+        "needs.resolve-beta.outputs.superfluous != 'true'"
+    )
     for job_id, job in test_jobs.items():
         assert job["needs"] == "resolve-beta", job_id
+        assert job["if"] == skip_guard, (
+            f"{job_id} must be skipped when beta equals the stable pin, except "
+            "on a manual dispatch"
+        )
         assert job["env"]["HA_IMAGE_GHCR"] == image_ref, job_id
         assert job["env"]["HA_TEST_IMAGE"] == image_ref, (
             f"{job_id}: the E2E fixtures build their container from "

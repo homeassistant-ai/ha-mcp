@@ -85,3 +85,11 @@ template:
         device_class: humidity
         state_class: measurement
         unit_of_measurement: "%"
+# e2e: default_config loads the logger integration at WARNING, so the
+# component's INFO lines never reach home-assistant.log or the console. The
+# in-HA LLM-API proof (tests/src/e2e/workflows/embedded/test_llm_api_in_ha.py)
+# asserts on the component's INFO registration line, on the container and
+# HAOS embedded lanes alike, so raise just this component's logger here.
+logger:
+  logs:
+    custom_components.ha_mcp_tools: info

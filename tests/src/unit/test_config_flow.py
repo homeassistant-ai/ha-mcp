@@ -60,7 +60,7 @@ _core.callback = lambda func: func  # identity so async_get_options_flow builds
 sys.modules["homeassistant.core"] = _core
 
 _ha_const = MagicMock()
-_ha_const.__version__ = "2026.6.0"
+_ha_const.__version__ = "2026.8.0"
 sys.modules["homeassistant.const"] = _ha_const
 
 
@@ -231,7 +231,7 @@ class TestServerBranch:
         assert result["reason"] == "unsupported_home_assistant"
         assert result["description_placeholders"] == {
             "installed": "2025.9.4",
-            "required": "2026.6.0",
+            "required": "2026.8.0",
         }
         flow.async_set_unique_id.assert_not_awaited()
 

@@ -98,7 +98,10 @@ def _exclusive_bounds(node: Any, path: str) -> list[str]:
             f"{path}: {keyword}" for keyword in _EXCLUSIVE_KEYWORDS if keyword in node
         )
         for key, value in node.items():
-            if key in _NOT_SUBSCHEMAS:
+            # OpenAPI ``x-`` extensions hold vendor data the component copies
+            # through untouched (llm_api._is_opaque_key), so a bound-like key
+            # inside one is not a bound this guard should reject either.
+            if key in _NOT_SUBSCHEMAS or key.startswith("x-"):
                 continue
             if key in _NAME_MAPS and isinstance(value, dict):
                 for name, sub in value.items():
@@ -122,6 +125,17 @@ def test_the_walk_reports_a_bound_wherever_it_hides() -> None:
         "t.$defs.Item: exclusiveMaximum",
         "t.properties.a.anyOf[0]: exclusiveMinimum",
     ]
+
+
+def test_the_walk_does_not_report_extension_data() -> None:
+    """An ``x-`` extension is opaque to the component, so also to the guard."""
+    schema = {
+        "type": "object",
+        "x-ui": {"exclusiveMinimum": 5},
+        "properties": {"n": {"type": "number", "x-hint": {"exclusiveMaximum": 9}}},
+    }
+
+    assert _exclusive_bounds(schema, "root") == []
 
 
 def test_the_walk_does_not_report_names_or_instance_data() -> None:

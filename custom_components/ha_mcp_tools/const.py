@@ -39,7 +39,12 @@ ENTRY_TYPE_SERVER = "server"
 # carrying the legacy default (a user-customized title is left alone).
 TOOLS_ENTRY_TITLE = "HA-MCP File & YAML Tools"
 TOOLS_ENTRY_LEGACY_TITLE = "HA MCP Tools"
-MIN_EMBEDDED_HOME_ASSISTANT_VERSION = "2026.6.0"
+# Kept level with the HACS floor in hacs.json: from component 2.1.3 the manifest
+# declares voluptuous-openapi, which Core releases before 2026.7 pin to an older
+# version so the requirement cannot resolve there, and
+# that requirement gates the whole integration before any entry's config flow
+# runs, so a lower runtime floor here would promise what the load cannot keep.
+MIN_EMBEDDED_HOME_ASSISTANT_VERSION = "2026.8.0"
 
 # Allowed directories for file operations (relative to config dir).
 # "blueprints" is read-only BY DEFAULT — in ALLOWED_READ_DIRS but not
