@@ -114,8 +114,13 @@ _TRACKER_PRUNE_BATCH = 1_000
 _FILENAME_RE = re.compile(
     r"^(?P<domain>[A-Za-z0-9_]+)\."
     r"(?P<entity_id>[A-Za-z0-9._-]+)\."
-    r"(?P<ts>\d{8}_\d{6})(?:_\d{2})?\.yaml$"
+    r"(?P<ts>\d{8}_\d{6})(?:_(?P<seq>\d{2}))?\.yaml$"
 )
+
+# A sanitised id's stem ends in the digest ``_safe_entity_id`` appends. Only
+# such stems need the payload opened to learn the id they stand for; a stem
+# without one IS the id (or a pre-digest spelling of one).
+_DIGEST_STEM_RE = re.compile(r"-[0-9a-f]{8}$")
 
 # Captures of one entity inside one second before the manager gives up on a
 # free name. Two is the realistic case (a save then a delete of the same
@@ -224,6 +229,35 @@ def _safe_entity_id(entity_id: str) -> str:
         return cleaned
     digest = hashlib.sha256(entity_id.encode("utf-8")).hexdigest()[:8]
     return f"{cleaned}-{digest}"
+
+
+def _snapshot_order(path: Path) -> tuple[str, str, str]:
+    """Sort key placing snapshots in capture order, oldest first.
+
+    Filenames cannot be compared directly: an id the sanitiser rewrote has
+    two stems, and the digest stem sorts before the bare one on every name
+    (``-`` < ``.``) regardless of timestamp, so by name every new capture
+    would age below every pre-digest file. The parsed timestamp and the
+    same-second sequence order them; the name only breaks exact ties.
+    """
+    m = _FILENAME_RE.match(path.name)
+    if m is None:
+        return ("", "", path.name)
+    return (m.group("ts"), m.group("seq") or "", path.name)
+
+
+def _id_matches(payload_id: str | None, wanted: str) -> bool:
+    """Whether a snapshot whose payload names ``payload_id`` is ``wanted``.
+
+    Two spellings select an entity: the id itself, and the digest stem
+    ``_safe_entity_id`` derives from it — the stem a listing used to show and
+    a filename still carries. Both name exactly one entity. The bare
+    pre-digest stem is deliberately not accepted: it is the current stem of a
+    differently-named entity, which is the ambiguity this check exists for.
+    """
+    if payload_id is None:
+        return False
+    return payload_id == wanted or _safe_entity_id(payload_id) == wanted
 
 
 def _now_ts() -> str:
@@ -606,17 +640,17 @@ class BackupManager:
             f"{_MAX_SAME_SECOND} snapshots of {domain}:{safe} inside one second"
         )
 
-    def _snapshot_is_for(self, path: Path, entity_id: str) -> bool:
-        """Whether ``path`` actually holds a snapshot of ``entity_id``.
+    def _payload_entity_id(self, path: Path) -> str | None:
+        """The id the snapshot at ``path`` was taken for, from its payload.
 
         Filename stems are ambiguous in both directions: the legacy stem for
         ``user/motion.yaml`` is ``user_motion.yaml``, which is also the
         CURRENT stem of a differently-named blueprint. The payload keeps the
         original id, so rotation and the entity filter behind ``list_snapshots``
         / ``delete_bulk`` ask it rather than trusting the name. A file that
-        cannot be read is treated as not ours: skipping it wastes a rotation
-        slot or hides it from one entity's listing, deleting it could destroy
-        another entity's only restore point.
+        cannot be read answers ``None`` and is treated as not ours: skipping it
+        wastes a rotation slot or hides it from one entity's listing, deleting
+        it could destroy another entity's only restore point.
         """
         try:
             with path.open(encoding="utf-8") as handle:
@@ -627,14 +661,24 @@ class BackupManager:
                 path.name,
                 err,
             )
-            return False
-        return isinstance(loaded, dict) and loaded.get("entity_id") == entity_id
+            return None
+        if not isinstance(loaded, dict):
+            return None
+        found = loaded.get("entity_id")
+        return found if isinstance(found, str) else None
+
+    def _snapshot_is_for(self, path: Path, entity_id: str) -> bool:
+        """Whether ``path`` holds a snapshot of ``entity_id`` (see ``_id_matches``)."""
+        return _id_matches(self._payload_entity_id(path), entity_id)
 
     def _rotate(self, domain: str, entity_id: str) -> None:
         candidates: set[Path] = set()
         for safe in _entity_id_aliases(entity_id):
             candidates.update(self._dir.glob(f"{domain}.{safe}.*.yaml"))
-        files = [p for p in sorted(candidates) if self._snapshot_is_for(p, entity_id)]
+        files = sorted(
+            (p for p in candidates if self._snapshot_is_for(p, entity_id)),
+            key=_snapshot_order,
+        )
         excess = len(files) - self.retain_per_entity
         for old in files[: max(0, excess)]:
             try:
@@ -667,28 +711,54 @@ class BackupManager:
         # returned here, and the caller named one entity.
         safe_filter = set(_entity_id_aliases(entity_id)) if entity_id else None
         out: list[dict[str, Any]] = []
-        # Reverse-sorted glob — newest filenames sort last lexicographically,
-        # so reverse=True yields newest-first.
-        for path in sorted(self._dir.glob("*.yaml"), reverse=True):
-            meta = self._parse_filename(path.name)
-            if meta is None:
+        # Newest first by capture time — see ``_snapshot_order`` for why the
+        # filename itself is not the key.
+        for path in sorted(self._dir.glob("*.yaml"), key=_snapshot_order, reverse=True):
+            row = self._listing_row(
+                path, domain=domain, safe_filter=safe_filter, entity_id=entity_id
+            )
+            if row is None:
                 continue
-            if domain and meta["domain"] != domain:
-                continue
-            if safe_filter and meta["entity_id"] not in safe_filter:
-                continue
-            if entity_id and not self._snapshot_is_for(path, entity_id):
-                continue
-            try:
-                stat = path.stat()
-            except OSError:
-                continue
-            meta["size"] = stat.st_size
-            meta["mtime"] = stat.st_mtime
-            out.append(meta)
+            out.append(row)
             if limit and len(out) >= limit:
                 break
         return out
+
+    def _listing_row(
+        self,
+        path: Path,
+        *,
+        domain: str | None,
+        safe_filter: set[str] | None,
+        entity_id: str | None,
+    ) -> dict[str, Any] | None:
+        """One ``list_snapshots`` entry for ``path``, or ``None`` if filtered out."""
+        meta = self._parse_filename(path.name)
+        if meta is None:
+            return None
+        if domain and meta["domain"] != domain:
+            return None
+        if safe_filter and meta["entity_id"] not in safe_filter:
+            return None
+        # The payload is opened only when the name cannot answer alone: a
+        # filter needs the stored id to settle the stem ambiguity, and a
+        # digest stem is reported as the id it stands for, so what a row
+        # shows is what the settings UI and ha_manage_backup can send
+        # straight back as the filter and get that entity's whole history.
+        payload_id: str | None = None
+        if entity_id or _DIGEST_STEM_RE.search(meta["entity_id"]):
+            payload_id = self._payload_entity_id(path)
+        if entity_id and not _id_matches(payload_id, entity_id):
+            return None
+        if payload_id is not None:
+            meta["entity_id"] = payload_id
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        meta["size"] = stat.st_size
+        meta["mtime"] = stat.st_mtime
+        return meta
 
     def _parse_filename(self, name: str) -> dict[str, Any] | None:
         m = _FILENAME_RE.match(name)

@@ -10,7 +10,6 @@ and production environments. Blueprint availability may vary.
 """
 
 import logging
-import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -824,11 +823,10 @@ class TestBlueprintManagement:
                     "auto-backup is off in this lane; the pre-save snapshot "
                     f"cannot be verified: {data}"
                 )
-                safe_path = re.sub(r"[^A-Za-z0-9._-]", "_", path)
                 matching = [
                     b
                     for b in data["backups"]
-                    if str(b.get("entity_id", "")).startswith(safe_path)
+                    if b.get("entity_id") == path
                     and b.get("domain") == "blueprint_automation"
                 ]
                 if faithful_copy_available:
@@ -1210,16 +1208,12 @@ class TestBlueprintManagement:
                     "auto-backup is off in this lane; the pre-delete snapshot "
                     f"cannot be verified: {data}"
                 )
-                # Snapshot names sanitise the id the way the backup manager
-                # does (``_safe_entity_id``): every character outside
-                # ``[A-Za-z0-9._-]`` — the ``/`` in a blueprint path — is ``_``,
-                # plus a digest of the original, because sanitising alone would
-                # let two different paths share one snapshot namespace.
-                safe_path = re.sub(r"[^A-Za-z0-9._-]", "_", path)
+                # The listing reports the id each snapshot was taken for (the
+                # blueprint path), not the sanitised filename stem.
                 matching = [
                     b
                     for b in data["backups"]
-                    if str(b.get("entity_id", "")).startswith(safe_path)
+                    if b.get("entity_id") == path
                     and b.get("domain") == "blueprint_automation"
                 ]
                 if faithful_copy_available:
