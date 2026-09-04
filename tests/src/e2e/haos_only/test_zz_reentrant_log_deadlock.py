@@ -134,14 +134,17 @@ logger:
 
 
 def _sh(script: str, *, timeout: float = 60.0) -> str:
-    """Run a shell script inside the VM via the Advanced SSH addon."""
-    result = ssh_exec(["sh", "-c", script], timeout=timeout)
-    if result.returncode != 0:
-        raise AssertionError(
-            f"in-VM command failed ({result.returncode}): {script}\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}"
-        )
-    return result.stdout
+    """Run a shell script inside the VM via the Advanced SSH addon.
+
+    ``ssh_exec`` runs with ``check=True`` and re-raises a failed remote command
+    as ``RuntimeError`` (carrying stdout+stderr); it never returns a non-zero
+    exit. Normalised to ``AssertionError`` here so the test body and its
+    cleanup handle one exception type.
+    """
+    try:
+        return ssh_exec(["sh", "-c", script], timeout=timeout).stdout
+    except RuntimeError as exc:
+        raise AssertionError(f"in-VM command failed: {script}\n{exc}") from exc
 
 
 def _write_in_vm(path: str, content: str) -> None:
