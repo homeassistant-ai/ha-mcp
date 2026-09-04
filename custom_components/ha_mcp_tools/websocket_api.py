@@ -2,10 +2,10 @@
 
 This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
 ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
-capability gate. It registers twenty-three commands. It advertises twenty-six
-capabilities: twenty-two command capabilities plus four additive flags
-(dashboards_doc_search, search_visibility, search_entity_membership, and
-search_visibility_allowlist_authorization);
+capability gate. It registers twenty-three commands. It advertises twenty-seven
+capabilities: twenty-two command capabilities plus five additive flags
+(dashboards_doc_search, device_registry_child_semantics, search_visibility,
+search_entity_membership, and search_visibility_allowlist_authorization);
 the info handshake carries no capability entry:
 
 * ``ha_mcp_tools/info`` — the handshake: ``schema_version`` + ``capabilities[]``
