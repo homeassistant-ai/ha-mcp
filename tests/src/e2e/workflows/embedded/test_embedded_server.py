@@ -10,10 +10,15 @@ real MCP protocol over ``POST /api/webhook/<id>`` — ``initialize`` → ``tools
 full tool inventory is present.
 
 Also proves the conversation-agent LLM API (#1745) for real: the bring-up
-registered it inside HA (log assertion), and the exact client stack
-``llm_api.py`` uses — mcp SDK streamable-HTTP session + ``convert_to_voluptuous``
-— works against the real server and the REAL tool-schema catalog with zero
-conversion failures.
+registered it inside HA (log assertion), and the transport half of the client
+stack ``llm_api.py`` uses — mcp SDK streamable-HTTP session, ``initialize``
+instructions, the full ``tools/list`` catalog, one read-only call, and the
+per-tool exposure stamps — works against the real server. The CONVERSION half
+is not provable from here: this process runs the test host's schema library,
+not the one Home Assistant resolved, and Core re-emits every converted schema
+before a conversation turn sees it. That proof lives in
+``test_llm_api_in_ha.py``, which runs the component's own client path inside
+Home Assistant's interpreter (#2361).
 
 This uses a DEDICATED, module-scoped container (not the shared session one): the
 always-on server would otherwise runtime-install the whole fastmcp tree and run a
@@ -478,23 +483,25 @@ class TestEmbeddedServerEndToEnd:
         ``homeassistant.*`` imports need a running HA), so this makes the
         same call sequence it makes, with the real SDK, against the real
         server: streamable-HTTP session -> ``initialize`` (whose
-        ``instructions`` become the API prompt) -> ``tools/list`` ->
-        ``convert_to_voluptuous`` on EVERY tool's schema -> one read-only
-        ``call_tool`` dumped the way ``HaMcpTool.async_call`` returns it.
-        The transport is NOT the same: this drives the webhook relay URL
+        ``instructions`` become the API prompt) -> ``tools/list`` -> one
+        read-only ``call_tool`` dumped the way ``HaMcpTool.async_call``
+        returns it, plus the per-tool exposure stamps the component filters
+        on. The transport is NOT the same: this drives the webhook relay URL
         and lets the SDK build its own default httpx client, whereas
         ``_mcp_session`` targets the loopback URL with a dedicated client
         (explicit generous timeout, ``verify=False``, ``trust_env=False``).
 
-        The zero-conversion-failures assertion is the point: at runtime an
-        unconvertible schema is skipped per-tool with only a warning, so a
-        systemic ``voluptuous_openapi`` incompatibility with the real
-        catalog would silently shrink the toolset — this test fails loudly
-        instead.
+        Schema conversion is deliberately NOT asserted here. Converting in
+        this process runs the TEST HOST's library, which since Core 2026.9 is
+        not even the one Home Assistant resolves (``probatio.from_openapi``),
+        and it never performs the re-emission Core applies before a
+        conversation turn — so a green run here says nothing about whether
+        the toolset converts inside HA. ``test_llm_api_in_ha.py`` runs the
+        component's own conversion path in Home Assistant's own interpreter
+        and owns that proof (#2361).
         """
         from mcp.client.session import ClientSession
         from mcp.client.streamable_http import streamable_http_client
-        from voluptuous_openapi import convert_to_voluptuous
 
         base_url, _session_id, _config, _container = embedded_ha
         url = f"{base_url}/api/webhook/{_WEBHOOK_ID}"
@@ -512,19 +519,6 @@ class TestEmbeddedServerEndToEnd:
                 listed = await session.list_tools()
                 assert len(listed.tools) > 60, (
                     f"expected the full tool inventory, got {len(listed.tools)}"
-                )
-
-                failures = []
-                for tool in listed.tools:
-                    try:
-                        convert_to_voluptuous(tool.inputSchema)
-                    except Exception as err:  # collecting, not suppressing
-                        failures.append(f"{tool.name}: {err!r}")
-                assert not failures, (
-                    "convert_to_voluptuous failed for "
-                    f"{len(failures)}/{len(listed.tools)} tools — these would "
-                    "be silently skipped from every conversation turn:\n"
-                    + "\n".join(failures)
                 )
 
                 call = await session.call_tool("ha_get_state", {"entity_id": "sun.sun"})
