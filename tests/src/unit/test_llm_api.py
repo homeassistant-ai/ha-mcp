@@ -1001,3 +1001,182 @@ class TestPreRenameSdkFallback:
             assert client.timeout.read is not None
         finally:
             await client.aclose()
+
+
+class TestExclusiveBoundNormalisation:
+    """Issue #2361: an exclusive bound must not reach Core's schema conversion.
+
+    Core re-emits the converted schema through Probatio's OpenAPI 3.0 codec,
+    which spells an exclusive bound the Draft-4 way -- ``exclusiveMinimum: true``
+    beside ``minimum``. Anthropic validates ``input_schema`` as draft 2020-12
+    and rejects the whole request, so a single such bound anywhere in the
+    mirrored toolset breaks every conversation turn. The server package no
+    longer emits one, but the component mirrors whatever server it is pointed
+    at, and the ha-mcp package version is independent of the component's (an
+    explicit pip-spec even pins it), so the incoming schema is normalised here.
+    """
+
+    def test_numeric_exclusive_bounds_become_inclusive(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "budget": {
+                    "anyOf": [
+                        {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "exclusiveMaximum": 300,
+                        },
+                        {"type": "null"},
+                    ]
+                }
+            },
+        }
+
+        branch = llm_api._to_inclusive_bounds(schema)["properties"]["budget"]["anyOf"]
+
+        assert branch[0] == {"type": "number", "minimum": 0, "maximum": 300}
+        assert branch[1] == {"type": "null"}
+
+    def test_nested_definitions_and_array_items_are_reached(self):
+        schema = {
+            "$defs": {"Item": {"type": "integer", "exclusiveMinimum": 1}},
+            "properties": {
+                "rows": {"type": "array", "items": {"exclusiveMaximum": 9}},
+            },
+        }
+
+        normalised = llm_api._to_inclusive_bounds(schema)
+
+        assert normalised["$defs"]["Item"] == {"type": "integer", "minimum": 1}
+        assert normalised["properties"]["rows"]["items"] == {"maximum": 9}
+
+    def test_a_property_named_like_the_keyword_is_left_alone(self):
+        schema = {
+            "type": "object",
+            "properties": {"exclusiveMinimum": {"type": "number"}},
+        }
+
+        assert llm_api._to_inclusive_bounds(schema) == schema
+
+    def test_instance_values_are_left_alone(self):
+        """default/const/enum/examples hold data, not subschemas."""
+        schema = {
+            "type": "object",
+            "default": {"exclusiveMinimum": 5},
+            "const": {"exclusiveMinimum": 5},
+            "enum": [{"exclusiveMinimum": 5}],
+            "examples": [{"exclusiveMinimum": 5}],
+        }
+
+        assert llm_api._to_inclusive_bounds(schema) == schema
+
+    def test_a_non_numeric_value_is_left_where_it_is(self):
+        """Only a number is a bound; anything else is data and stays put.
+
+        The Draft-4 flag is the one exception below. Dropping the rest would
+        delete a key the schema author put there on purpose.
+        """
+        for schema in (
+            {"exclusiveMinimum": "not-a-number"},
+            {"exclusiveMinimum": None},
+            {"exclusiveMaximum": ["a"]},
+        ):
+            assert llm_api._to_inclusive_bounds(schema) == schema
+
+    def test_dependent_required_keys_are_property_names(self):
+        schema = {"dependentRequired": {"exclusiveMinimum": ["a"]}}
+
+        assert llm_api._to_inclusive_bounds(schema) == schema
+
+    def test_the_openapi_singular_example_is_instance_data_too(self):
+        schema = {"example": {"exclusiveMinimum": 5}}
+
+        assert llm_api._to_inclusive_bounds(schema) == schema
+
+    def test_draft4_boolean_form_is_dropped_and_its_bound_kept(self):
+        schema = {"type": "number", "minimum": 0, "exclusiveMinimum": True}
+
+        assert llm_api._to_inclusive_bounds(schema) == {"type": "number", "minimum": 0}
+
+    def test_a_stray_boolean_flag_is_dropped_so_the_tool_still_converts(self):
+        """Pins the trade: repair the malformed node, do not preserve it.
+
+        Probatio refuses a boolean ``exclusiveMinimum`` wherever it sits in a
+        subschema slot — with or without the ``minimum`` the Draft-4 form
+        requires beside it, and regardless of what else the node carries. A
+        preserved flag therefore costs the whole tool, which is a worse
+        outcome than dropping a keyword that means nothing on its own.
+        """
+        assert llm_api._to_inclusive_bounds(
+            {"type": "number", "exclusiveMinimum": True}
+        ) == {"type": "number"}
+        assert llm_api._to_inclusive_bounds(
+            {"allOf": [{"type": "number"}, {"exclusiveMinimum": True}]}
+        ) == {"allOf": [{"type": "number"}, {}]}
+
+    def test_dependencies_keys_are_property_names(self):
+        """Draft-7's ``dependencies`` is a name map like its 2020-12 heirs."""
+        schema = {"dependencies": {"exclusiveMinimum": ["a"]}}
+
+        assert llm_api._to_inclusive_bounds(schema) == schema
+
+    def test_the_tighter_bound_wins_when_both_are_present(self):
+        assert llm_api._to_inclusive_bounds({"minimum": 1, "exclusiveMinimum": 5}) == {
+            "minimum": 5
+        }
+        assert llm_api._to_inclusive_bounds({"maximum": 9, "exclusiveMaximum": 5}) == {
+            "maximum": 5
+        }
+
+    def test_the_incoming_schema_is_not_mutated(self):
+        schema = {"type": "number", "exclusiveMinimum": 0}
+
+        llm_api._to_inclusive_bounds(schema)
+
+        assert schema == {"type": "number", "exclusiveMinimum": 0}
+
+    def test_the_search_catalog_shows_the_same_schema_that_is_mirrored(self):
+        """A tool must not advertise one bound and list another."""
+        api = _make_api(_make_hass(), mode=EXPOSURE_TOOL_SEARCH)
+        tool = SimpleNamespace(
+            name="ha_search",
+            description="d",
+            inputSchema={
+                "type": "object",
+                "properties": {"budget": {"type": "number", "exclusiveMinimum": 0}},
+            },
+        )
+
+        tools = api._build_tool_search_tools([tool], {"ha_search"})
+
+        catalog = next(t for t in tools if t.name == "ha_search_tools")._catalog
+        entry = next(c for c in catalog if c["name"] == "ha_search")
+        assert entry["input_schema"]["properties"]["budget"] == {
+            "type": "number",
+            "minimum": 0,
+        }
+
+    def test_convert_parameters_normalises_before_converting(self, monkeypatch):
+        seen: dict[str, Any] = {}
+
+        def _capture(schema: Any) -> Any:
+            seen["schema"] = schema
+            return schema
+
+        monkeypatch.setattr(llm_api, "convert_to_voluptuous", _capture)
+        api = _make_api(_make_hass())
+        tool = SimpleNamespace(
+            name="ha_search",
+            inputSchema={
+                "type": "object",
+                "properties": {"budget": {"type": "number", "exclusiveMinimum": 0}},
+            },
+        )
+
+        api._convert_parameters(tool)
+
+        assert seen["schema"]["properties"]["budget"] == {
+            "type": "number",
+            "minimum": 0,
+        }

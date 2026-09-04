@@ -147,6 +147,106 @@ def convert_to_voluptuous(schema: Any) -> vol.Schema:
     return cast(vol.Schema, _schema_converter()(schema))
 
 
+# JSON Schema keywords whose value is a mapping of *names* to schemas. Their
+# keys are user-chosen, so a key spelled like a keyword is a property name and
+# must not be rewritten.
+_SCHEMA_MAPS: frozenset[str] = frozenset(
+    {
+        "properties",
+        "patternProperties",
+        "$defs",
+        "definitions",
+        "dependentSchemas",
+        "dependentRequired",
+        # Draft-7's predecessor of the two above; still emitted by some servers.
+        "dependencies",
+    }
+)
+# Keywords whose value is instance data rather than a subschema. A key spelled
+# like a bound inside one of these is a value in someone's default, not a bound.
+# ``example`` is OpenAPI's singular spelling of ``examples``.
+_INSTANCE_VALUES: frozenset[str] = frozenset(
+    {"default", "const", "enum", "examples", "example"}
+)
+_EXCLUSIVE_BOUNDS: tuple[tuple[str, str], ...] = (
+    ("exclusiveMinimum", "minimum"),
+    ("exclusiveMaximum", "maximum"),
+)
+
+
+def _to_inclusive_bounds(schema: Any) -> Any:
+    """Return the schema with every exclusive numeric bound made inclusive.
+
+    Home Assistant re-emits the converted schema through Probatio's OpenAPI
+    codec, which defaults to OpenAPI 3.0 and writes an exclusive bound the
+    Draft-4 way: ``minimum`` beside ``exclusiveMinimum: true``. The Anthropic
+    API validates ``input_schema`` as JSON Schema draft 2020-12, where
+    ``exclusiveMinimum`` must be a number, and rejects the entire request — so
+    one such bound anywhere in the mirrored toolset fails every conversation
+    turn, not just calls to the tool carrying it.
+
+    The bound moves by one representable point and the server still enforces
+    the real one when the call arrives, so nothing becomes callable that was
+    not callable before; only the advertised edge widens. A Draft-4 boolean
+    flag carries no value of its own and is dropped.
+
+    Normalising here rather than only at the source covers the server versions
+    this component does not control: the ha-mcp package installs and updates
+    independently of the component, and an explicit pip-spec pins it outright.
+    """
+    if isinstance(schema, list):
+        return [_to_inclusive_bounds(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+
+    result: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key in _INSTANCE_VALUES:
+            result[key] = value
+        elif key in _SCHEMA_MAPS and isinstance(value, dict):
+            result[key] = {
+                name: _to_inclusive_bounds(sub) for name, sub in value.items()
+            }
+        else:
+            result[key] = _to_inclusive_bounds(value)
+
+    for exclusive, inclusive in _EXCLUSIVE_BOUNDS:
+        _fold_bound(result, exclusive, inclusive)
+    return result
+
+
+def _is_number(value: Any) -> bool:
+    """True for a JSON number. bool is an int subclass and is not one."""
+    return not isinstance(value, bool) and isinstance(value, int | float)
+
+
+def _fold_bound(node: dict[str, Any], exclusive: str, inclusive: str) -> None:
+    """Fold one exclusive keyword into its inclusive twin, in place."""
+    if exclusive not in node:
+        return
+    bound = node[exclusive]
+    if not _is_number(bound):
+        # A boolean is the Draft-4 flag: it carries no value of its own, and
+        # Probatio refuses the schema outright wherever one sits in a subschema
+        # slot -- with or without the `minimum` its dialect requires beside it.
+        # Dropping it repairs a malformed schema that would otherwise cost the
+        # whole tool. Only the flag goes: any other non-numeric value is not a
+        # bound at all and stays, so a key spelled like one inside foreign data
+        # keeps its value.
+        if isinstance(bound, bool):
+            del node[exclusive]
+        return
+    del node[exclusive]
+    current = node.get(inclusive)
+    if not _is_number(current):
+        node[inclusive] = bound
+        return
+    # Keep the tighter of the two, so the round trip never widens twice.
+    node[inclusive] = (
+        max(current, bound) if inclusive == "minimum" else min(current, bound)
+    )
+
+
 # Used when the server's initialize result carries no instructions (it always
 # should — ha-mcp ships server-level instructions — but never render an empty
 # prompt if a build does not).
@@ -635,7 +735,18 @@ class HaMcpLlmApi(llm.API):
     def _convert_parameters(self, tool: Any) -> vol.Schema | None:
         """Convert one tool's JSON schema, or None (logged) when it fails."""
         try:
-            return convert_to_voluptuous(tool.inputSchema)
+            schema = _to_inclusive_bounds(tool.inputSchema)
+            if schema != tool.inputSchema:
+                # The advertised bound now differs from the server's own. Say
+                # so once per turn: the resulting failure — model passes the
+                # newly-legal edge value, server rejects it — is otherwise
+                # unattributable from any log.
+                _LOGGER.debug(
+                    "Widened an exclusive bound in %s's schema so Home "
+                    "Assistant does not re-emit it in the Draft-4 form",
+                    tool.name,
+                )
+            return convert_to_voluptuous(schema)
         except Exception:
             # One unconvertible schema must not take down the whole
             # toolset for the conversation — skip that tool, loudly.
@@ -671,7 +782,10 @@ class HaMcpLlmApi(llm.API):
                 {
                     "name": tool.name,
                     "description": tool.description or "",
-                    "input_schema": tool.inputSchema,
+                    # Same normalisation the mirrored parameters get, so a
+                    # search result never shows a bound the tool does not
+                    # advertise.
+                    "input_schema": _to_inclusive_bounds(tool.inputSchema),
                 }
             )
             if tool.name in pinned:
