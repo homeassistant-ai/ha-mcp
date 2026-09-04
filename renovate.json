@@ -100,6 +100,13 @@
       "groupName": "uv"
     },
     {
+      "description": "Home Assistant Core images move the day a release ships. The beta lanes (haos-e2e-beta-tests.yml, e2e-beta-tests.yml) have already exercised each release for a month before it goes stable, so the 7-day age gate only holds the stable lanes behind what users are running (#2361)",
+      "matchDepNames": [
+        "ghcr.io/home-assistant/home-assistant"
+      ],
+      "minimumReleaseAge": null
+    },
+    {
       "description": "Keep Python interpreter changes coordinated while allowing same-tag digest refreshes",
       "matchManagers": [
         "dockerfile"
