@@ -1123,6 +1123,20 @@ class TestExclusiveBoundNormalisation:
 
         assert llm_api._to_inclusive_bounds(schema) == schema
 
+    def test_a_specification_extension_is_opaque(self):
+        """``x-`` keys hold arbitrary vendor objects, not subschemas.
+
+        The OpenAPI specification allows any value under an ``x-`` extension,
+        so a bound-like key inside one is vendor data; rewriting it would
+        corrupt the extension while leaving the schema itself unchanged.
+        """
+        schema = {
+            "type": "number",
+            "x-ui": {"exclusiveMinimum": 5, "nested": {"exclusiveMaximum": True}},
+        }
+
+        assert llm_api._to_inclusive_bounds(schema) == schema
+
     def test_a_property_named_like_the_keyword_is_left_alone(self):
         schema = {
             "type": "object",

@@ -186,8 +186,17 @@ _INSTANCE_VALUES: frozenset[str] = frozenset(
 # OpenAPI's ``discriminator`` holds a ``propertyName`` and a ``mapping`` of
 # author-chosen tags to ``$ref`` strings; a tag spelled like a bound is one of
 # those names, and its ``$ref`` value would read as a non-numeric bound and be
-# dropped, corrupting a valid discriminated union.
+# dropped, corrupting a valid discriminated union. OpenAPI ``x-`` specification
+# extensions carry arbitrary vendor objects the same way and are matched by
+# prefix in ``_is_opaque_key``.
 _OPAQUE_KEYWORDS: frozenset[str] = frozenset({"discriminator"})
+
+
+def _is_opaque_key(key: str) -> bool:
+    """True for a keyword whose value must be copied through untouched."""
+    return key in _OPAQUE_KEYWORDS or key.startswith("x-")
+
+
 # Each exclusive keyword, the inclusive twin it folds into, the picker that
 # keeps the tighter of the two when both are present, and the step to the
 # nearest integer the bound still admits.
@@ -241,7 +250,7 @@ def _to_inclusive_bounds(schema: Any, rewrite: _Rewrite | None = None) -> Any:
 
     result: dict[str, Any] = {}
     for key, value in schema.items():
-        if key in _INSTANCE_VALUES or key in _OPAQUE_KEYWORDS:
+        if key in _INSTANCE_VALUES or _is_opaque_key(key):
             # Copied, not aliased: the result is handed to Core and kept in
             # the search catalog, and neither may reach back into the MCP
             # result object this schema came from.
