@@ -1022,8 +1022,13 @@ class _RegistryView:
     label: Any = None
     device: Any = None
 
-    # One request-local, conflict-filtered semantic snapshot.
+    # One request-local, conflict-filtered semantic snapshot plus the identities
+    # removed from it. Visibility filtering consumes the former and its warning
+    # projection consumes the latter, so both paths observe the same evidence.
     _device_entries_by_id_cache: dict[str, Any] | None = dataclass_field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _device_conflicting_ids_cache: frozenset[str] | None = dataclass_field(
         default=None, init=False, repr=False, compare=False
     )
 
@@ -1106,10 +1111,11 @@ def _do_search(
     view = _resolve_registries(hass)
     diagnostics: dict[str, int] = {}
     partial_reasons: list[str] = []
-    # Visibility degradation warnings (unknown category / empty-registry allowlist /
-    # Assist unavailable), collected in the entity block below when a visibility
-    # filter is applied. Surfaced additively so the fast path isn't silent about
-    # incomplete filtering (parity with the server's load_hidden_set warnings).
+    # Visibility degradation warnings (unknown category / conflicting device /
+    # empty-registry allowlist / Assist unavailable), collected in the entity block
+    # below when a visibility filter is applied. Surfaced additively so the fast
+    # path isn't silent about incomplete filtering (parity with the server's
+    # load_hidden_set warnings).
     visibility_warnings: list[str] = []
     hidden: set[str] = set()
 
@@ -2385,6 +2391,7 @@ def _unambiguous_device_entries(view: _RegistryView) -> dict[str, Any]:
     reg = view.device
     if reg is None:
         view._device_entries_by_id_cache = {}
+        view._device_conflicting_ids_cache = frozenset()
         return view._device_entries_by_id_cache
     main_collection = getattr(reg, "devices", None)
     if hasattr(reg, "child_devices"):
@@ -2420,12 +2427,19 @@ def _unambiguous_device_entries(view: _RegistryView) -> dict[str, Any]:
                 device_id,
             )
     view._device_entries_by_id_cache = by_id
+    view._device_conflicting_ids_cache = frozenset(conflicts)
     return view._device_entries_by_id_cache
 
 
 def _all_device_entries(view: _RegistryView) -> list[Any]:
     """Return every unambiguous main and child device entry once."""
     return list(_unambiguous_device_entries(view).values())
+
+
+def _conflicting_device_ids(view: _RegistryView) -> frozenset[str]:
+    """Return device identities excluded from this request as conflicting."""
+    _unambiguous_device_entries(view)
+    return view._device_conflicting_ids_cache or frozenset()
 
 
 def _effective_device_area_id(view: _RegistryView, device: Any) -> str | None:
@@ -5171,6 +5185,11 @@ _ALLOWLIST_REGISTRY_EMPTY_WARNING = (
     "this request (an allow_entity_ids list, if set, still applies) so the filter "
     "does not blank every entity."
 )
+_DEVICE_REGISTRY_CONFLICT_WARNING = (
+    "Entity visibility filter is enabled with an area/label dimension but the "
+    "device registry contained conflicting identities; ambiguous device-derived "
+    "placement and labels were excluded."
+)
 
 
 class _AllowlistState(NamedTuple):
@@ -5349,8 +5368,9 @@ def _visibility_warnings(
 
     Companion to :func:`_visibility_hidden_set`: the hidden-set function silently
     fails open on a degraded dimension (an unknown ``exclude_category``, an
-    area/label allowlist against an empty registry, or a requested-but-unavailable
-    Assist dimension), so this returns the operator-facing warnings the server's
+    area/label dimension against conflicting device identities, an area/label
+    allowlist against an empty registry, or a requested-but-unavailable Assist
+    dimension), so this returns the operator-facing warnings the server's
     ``load_hidden_set`` would emit for the same config. The ha_search consumer
     merges them into the response so the component fast path is no longer silent
     about incomplete filtering. Byte-identical to ``visibility.resolver``'s warning
@@ -5367,6 +5387,15 @@ def _visibility_warnings(
     unknown = exclude_categories - _KNOWN_ENTITY_CATEGORIES
     if unknown:
         warnings.append(_unknown_categories_warning(unknown))
+
+    area_or_label_dimension_active = bool(
+        visibility.get("exclude_areas")
+        or visibility.get("exclude_labels")
+        or visibility.get("allow_areas")
+        or visibility.get("allow_labels")
+    )
+    if area_or_label_dimension_active and _conflicting_device_ids(view):
+        warnings.append(_DEVICE_REGISTRY_CONFLICT_WARNING)
 
     if inventory is None:
         inventory = _visibility_inventory(view, states, visibility)
