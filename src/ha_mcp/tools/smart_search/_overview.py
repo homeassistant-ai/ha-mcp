@@ -23,7 +23,7 @@ class SystemOverviewMixin(_SearchBase):
 
     async def _fetch_legacy_overview_slices(self) -> list[Any]:
         """Fetch broad legacy slices sequentially, failing fast on states."""
-        results = [await self.client.get_states()]
+        results: list[Any] = [await self.client.get_states()]
         fetches = (
             self.client.get_services,
             lambda: self.client.send_websocket_message(
