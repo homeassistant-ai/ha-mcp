@@ -291,8 +291,8 @@ class HomeAssistantSmartMCPServer:
 
         # Bound HA-facing work across every connected MCP session. This sits
         # after approval gates so a call waiting for user approval does not
-        # occupy a slot. Nested proxy redispatch is reentrant and keeps the
-        # outer call's slot.
+        # occupy a slot. Proxy envelopes also bypass this middleware; their
+        # redispatched real tool acquires capacity after its approval gate.
         from .ha_request_queue import (
             HomeAssistantRequestQueueMiddleware,
             configure_ha_transport_concurrency,

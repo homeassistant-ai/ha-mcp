@@ -10,6 +10,14 @@ from weakref import WeakKeyDictionary
 
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 
+CALL_PROXY_META_TOOLS = frozenset(
+    {
+        "ha_call_read_tool",
+        "ha_call_write_tool",
+        "ha_call_delete_tool",
+    }
+)
+
 _transport_concurrency = 1
 _transport_semaphores: WeakKeyDictionary[
     asyncio.AbstractEventLoop, asyncio.Semaphore
@@ -51,6 +59,9 @@ class HomeAssistantRequestQueueMiddleware(Middleware):
     async def on_call_tool(
         self, context: MiddlewareContext, call_next: CallNext
     ) -> Any:
+        if context.message.name in CALL_PROXY_META_TOOLS:
+            return await call_next(context)
+
         depth = self._depth.get()
         if depth:
             token = self._depth.set(depth + 1)

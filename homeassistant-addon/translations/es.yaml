@@ -126,6 +126,10 @@ configuration:
       es la única que publica esa clave de confirmación. Depende de la opción "Adjuntar
       skills de buenas prácticas en las escrituras" de arriba y es inerte mientras
       esa opción principal esté desactivada. Requiere reiniciar para que surta efecto.'
+  ha_tool_concurrency:
+    name: Home Assistant request concurrency
+    description: Maximum concurrent tool workloads and requests sent to Home Assistant
+      across all sessions. Keep at 1 on resource-constrained systems.
   disabled_tools:
     name: Herramientas desactivadas (separadas por comas)
     description: 'Las herramientas indicadas aquí quedan forzadas a desactivadas y

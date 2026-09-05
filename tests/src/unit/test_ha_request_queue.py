@@ -15,6 +15,11 @@ from ha_mcp.ha_request_queue import (
 )
 
 
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
 def make_context(name: str) -> MagicMock:
     message = MagicMock()
     message.name = name
@@ -83,6 +88,46 @@ async def test_nested_redispatch_does_not_reacquire_the_queue() -> None:
         )
 
     assert result == "ha_get_state"
+
+
+@pytest.mark.anyio
+async def test_proxy_envelope_defers_queue_slot_until_inner_dispatch() -> None:
+    middleware = HomeAssistantRequestQueueMiddleware(max_concurrency=1)
+    proxy_entered = anyio.Event()
+    release_proxy = anyio.Event()
+    normal_entered = anyio.Event()
+    inner_entered = anyio.Event()
+
+    async def inner_call_next(context: MagicMock) -> str:
+        inner_entered.set()
+        return context.message.name
+
+    async def proxy_call_next(_context: MagicMock) -> str:
+        proxy_entered.set()
+        await release_proxy.wait()
+        return await middleware.on_call_tool(
+            make_context("ha_get_state"), inner_call_next
+        )
+
+    async def normal_call_next(context: MagicMock) -> str:
+        normal_entered.set()
+        return context.message.name
+
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(
+            middleware.on_call_tool,
+            make_context("ha_call_read_tool"),
+            proxy_call_next,
+        )
+        await proxy_entered.wait()
+        result = await middleware.on_call_tool(
+            make_context("ha_get_overview"), normal_call_next
+        )
+        assert result == "ha_get_overview"
+        assert normal_entered.is_set()
+        release_proxy.set()
+
+    assert inner_entered.is_set()
 
 
 @pytest.mark.asyncio

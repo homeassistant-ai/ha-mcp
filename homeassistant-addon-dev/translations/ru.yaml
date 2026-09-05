@@ -204,6 +204,10 @@ configuration:
       Это дочерний параметр расположенного выше параметра «Прикреплять навыки с рекомендациями
       при записи», который не действует, пока родительский параметр выключен. Для
       применения требуется перезапуск.'
+  ha_tool_concurrency:
+    name: Home Assistant request concurrency
+    description: Maximum concurrent tool workloads and requests sent to Home Assistant
+      across all sessions. Keep at 1 on resource-constrained systems.
   enable_filesystem_tools:
     name: Включить инструменты файловой системы (бета)
     description: 'Устанавливает HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Разрешает прямой

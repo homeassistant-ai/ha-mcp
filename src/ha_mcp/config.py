@@ -894,6 +894,9 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
         True,
     ),
     # Operations.
+    AdvancedField(
+        "ha_tool_concurrency", "HA_TOOL_CONCURRENCY", int, "operations", True
+    ),
     AdvancedField("backup_hint", "BACKUP_HINT", str, "operations", True),
     AdvancedField("enable_websocket", "ENABLE_WEBSOCKET", bool, "operations", True),
     # Dashboard-screenshot engine URL (#1538): docker/.env users could set
@@ -1004,6 +1007,7 @@ _ADVANCED_SETTINGS_BOUNDS: dict[str, tuple[float, float]] = {
     "scene_config_time_budget": (1.0, 600.0),
     "individual_config_timeout": (1.0, 600.0),
     "individual_fetch_batch_size": (1, 100),
+    "ha_tool_concurrency": (1, 32),
     "code_mode_max_duration": (1.0, 300.0),
     "code_mode_max_memory": (1_048_576, 268_435_456),
     "code_mode_max_recursion": (1, 10_000),
@@ -1040,6 +1044,7 @@ _ADVANCED_SETTINGS_CHOICES: dict[str, tuple[str, ...]] = {
 # batches addon-origin writes and POSTs them via Supervisor.
 ADDON_SYNCED_ADVANCED_FIELDS: tuple[str, ...] = (
     "backup_hint",
+    "ha_tool_concurrency",
     "verify_ssl",
 )
 

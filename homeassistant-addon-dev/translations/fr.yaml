@@ -210,6 +210,10 @@ configuration:
       éditeur de la clé d''accusé de réception. Enfant de l''option « Attacher les
       compétences de bonnes pratiques aux écritures » ci-dessus et inerte lorsque
       ce parent est désactivé. Nécessite un redémarrage pour prendre effet.'
+  ha_tool_concurrency:
+    name: Home Assistant request concurrency
+    description: Maximum concurrent tool workloads and requests sent to Home Assistant
+      across all sessions. Keep at 1 on resource-constrained systems.
   enable_filesystem_tools:
     name: Activer les outils de système de fichiers (bêta)
     description: 'Définit HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Active l''accès direct

@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Timeout for each automation/script/scene config fetch. Range 1–600. Restart required.",
     "advanced.individual_fetch_batch_size.label": "Config fetch batch size",
     "advanced.individual_fetch_batch_size.help": "Concurrent per-ID config fetches. Lower toward 1 on serial HA servers. Range 1–100. Restart required.",
+    "advanced.ha_tool_concurrency.label": "Home Assistant request concurrency",
+    "advanced.ha_tool_concurrency.help": "Maximum concurrent tool workloads and requests sent to Home Assistant across all sessions. Keep at 1 on resource-constrained systems. Range 1–32. Restart required.",
     "advanced.backup_hint.label": "Backup-hint level",
     "advanced.backup_hint.help": "Controls how strongly the LLM is prompted to take a full HA snapshot before risky writes.",
     "advanced.backup_hint.choices.strong": "Strong",
@@ -468,6 +470,8 @@
     "addon.pinned_tools.description": "Tools listed here are locked pinned — they appear at the top of the Tools tab and cannot be unpinned from the web Settings UI without unsetting this option first. Useful in combination with Tool Search. Comma-separated tool names.",
     "addon.verify_ssl.name": "Verify TLS certificate",
     "addon.verify_ssl.description": "Verify the Home Assistant server's TLS certificate. The app (add-on) connects via the Supervisor proxy, so this normally has no effect and should stay enabled. Disable only if you've reconfigured the app (add-on) to talk to HA over a public HTTPS hostname with a self-signed certificate or hostname mismatch. Disabling weakens transport security — leave on unless you know you need it. Requires restart to take effect.",
+    "addon.ha_tool_concurrency.name": "Home Assistant request concurrency",
+    "addon.ha_tool_concurrency.description": "Maximum concurrent tool workloads and requests sent to Home Assistant across all sessions. Keep at 1 on resource-constrained systems.",
     "addon_stable.enable_tool_search.description": "Replace the full tool catalog with search-based discovery. Reduces idle context by roughly 90%, to about 5K tokens. ⚠️ Do NOT enable this in clients with their own built-in tool search / deferred tools (claude.ai, Claude Desktop, Claude Code) — the two search layers conflict, and the client's built-in tool search is the better choice there; leave this off. Whether tools are deferred depends on your client and model combination: use this when your setup loads the full catalog up front — models without native deferred tools (e.g. Gemini, OpenAI-compatible local models, Claude Haiku), clients that inline all tool schemas regardless of model (e.g. GitHub Copilot CLI), or smaller context windows. Some Codex models and ChatGPT include deferred tools too — check your client/model directly to confirm its features so you don't leave this enabled unnecessarily. Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete). Requires an app (add-on) restart to take effect — then reconnect or refresh the MCP server in your AI client so it reloads the tool list. Restarting the app (add-on) alone does NOT refresh a client's cached tool list; this applies after changing any setting here."
   },
   "tool_groups": {},

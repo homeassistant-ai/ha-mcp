@@ -12,6 +12,7 @@ from anyio.to_thread import run_sync as run_in_thread
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 
 from ..errors import ErrorCode, create_error_response
+from ..ha_request_queue import CALL_PROXY_META_TOOLS
 from ..renamed_tools import current_tool_name
 from ..tools.helpers import raise_tool_error, safe_progress
 from .approval_queue import ApprovalQueue, PendingApproval, compute_args_hash
@@ -33,13 +34,6 @@ logger = logging.getLogger(__name__)
 # tool's args (for example args.domain), while the proxy receives a wrapped
 # {"name": "...", "arguments": {...}} envelope. Its dispatch re-enters the
 # middleware chain with the real name and args, so the inner call is gated there.
-CALL_PROXY_META_TOOLS = frozenset(
-    {
-        "ha_call_read_tool",
-        "ha_call_write_tool",
-        "ha_call_delete_tool",
-    }
-)
 # Policy itself also leaves catalog search ungated; unlike the call proxies it
 # never dispatches a tool named in client-supplied arguments.
 PROXY_META_TOOLS = CALL_PROXY_META_TOOLS | {"ha_search_tools"}

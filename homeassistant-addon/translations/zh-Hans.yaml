@@ -52,6 +52,10 @@ configuration:
     description: 严格模式：在客户端能证明已阅读最佳实践之前，阻止其使用该工具。开启时，六个最佳实践写入工具（自动化、脚本、场景、辅助元素、仪表盘、原始
       YAML）会被阻止并返回错误，指引客户端通过 ha_get_skill_guide 阅读最佳实践技能并回传在那里获得的确认密钥。开启时，ha_get_skill_guide
       工具被锁定启用——它是确认密钥的唯一发布方。为上方“写入时附加最佳实践技能”选项的子项，当其父项关闭时无效。需要重启才能生效。
+  ha_tool_concurrency:
+    name: Home Assistant request concurrency
+    description: Maximum concurrent tool workloads and requests sent to Home Assistant
+      across all sessions. Keep at 1 on resource-constrained systems.
   disabled_tools:
     name: 已禁用的工具（以逗号分隔）
     description: 此处列出的工具会被强制关闭，并在网页设置界面（“工具”选项卡）中锁定——在取消此选项之前无法在那里重新启用。少数必备工具（ha_search、ha_get_overview、ha_get_state、ha_report_issue、ha_manage_backup）无法禁用，即使列在此处也会继续运行。ha_get_skill_guide
