@@ -10,6 +10,7 @@ ha_get_history -- Retrieve historical data with source-selectable mode:
 """
 
 import logging
+import math
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
@@ -116,6 +117,21 @@ _DEFAULT_START_HOURS_BY_SOURCE: dict[str, int] = {"history": 24, "statistics": 3
 _DEFAULT_HISTORY_LIMIT = 100
 _MAX_HISTORY_LIMIT = 1000
 
+# Home Assistant's recorder WebSocket APIs have no server-side row limit. These
+# budgets constrain query work before HA materializes the complete time range.
+_MAX_HISTORY_ENTITIES = 10
+_MAX_HISTORY_ENTITY_HOURS = 168.0
+_MAX_STATISTICS_ENTITIES = 25
+_MAX_STATISTICS_ROWS = 10_000
+_STATISTICS_PERIOD_SECONDS = {
+    "5minute": 5 * 60,
+    "hour": 60 * 60,
+    "day": 24 * 60 * 60,
+    "week": 7 * 24 * 60 * 60,
+    "month": 30 * 24 * 60 * 60,
+    "year": 365 * 24 * 60 * 60,
+}
+
 
 class HistoryTools:
     """Historical data access tools for Home Assistant."""
@@ -199,6 +215,18 @@ class HistoryTools:
                 ge=0,
             ),
         ] = None,
+        allow_unsafe_query: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Allow a recorder query that exceeds the built-in entity/time "
+                    "workload budget. Default: false. Home Assistant returns every "
+                    "matching row before limit/offset are applied, so enabling this "
+                    "can make HA and its dashboards unresponsive."
+                ),
+                default=False,
+            ),
+        ] = False,
         # Statistics-specific (ignored when source="history")
         period: Annotated[
             str,
@@ -249,7 +277,8 @@ class HistoryTools:
         - "history" (default): Raw state changes, ~10 day retention, full resolution
         - "statistics": Pre-aggregated data, permanent retention, requires state_class
 
-        **Shared params:** entity_ids, start_time, end_time, limit, offset
+        **Shared params:** entity_ids, start_time, end_time, limit, offset,
+        allow_unsafe_query
         **History params:** minimal_response, significant_changes_only
         **Statistics params:** period, statistic_types
 
@@ -269,6 +298,9 @@ class HistoryTools:
         All data is fetched from HA before slicing; limit/offset are client-side.
         With multiple entity_ids, offset must be 0 — use a single entity_id for offset > 0.
         Use has_more and next_offset from the response to paginate.
+        Oversized entity/time workloads are rejected before HA is queried. Narrow the
+        time range or entity list; use allow_unsafe_query=true only when the user accepts
+        that HA may become unresponsive while the recorder materializes the full result.
 
         **Example -- history (default):**
         ```python
@@ -321,6 +353,16 @@ class HistoryTools:
 
             # Parse time parameters
             start_dt, end_dt = _parse_time_range(start_time, end_time, default_hours)
+            _validate_query_workload(
+                source=source,
+                entity_ids=entity_id_list,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                minimal_response=minimal_response,
+                significant_changes_only=significant_changes_only,
+                period=period,
+                allow_unsafe_query=allow_unsafe_query,
+            )
 
             await safe_info(
                 ctx,
@@ -490,6 +532,88 @@ def _parse_time_range(
         end_dt = datetime.now(UTC)
 
     return start_dt, end_dt
+
+
+def _validate_query_workload(
+    *,
+    source: str,
+    entity_ids: list[str],
+    start_dt: datetime,
+    end_dt: datetime,
+    minimal_response: bool,
+    significant_changes_only: bool,
+    period: str,
+    allow_unsafe_query: bool,
+) -> None:
+    """Reject recorder requests likely to monopolize Home Assistant resources."""
+    window_seconds = (end_dt - start_dt).total_seconds()
+    if window_seconds <= 0:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "end_time must be later than start_time",
+                context={
+                    "start_time": start_dt.isoformat(),
+                    "end_time": end_dt.isoformat(),
+                },
+                suggestions=["Choose an end_time later than start_time."],
+            )
+        )
+
+    if allow_unsafe_query:
+        return
+
+    entity_count = len(entity_ids)
+    if source == "history":
+        detail_weight = 1
+        if not significant_changes_only:
+            detail_weight *= 4
+        if not minimal_response:
+            detail_weight *= 2
+        estimated_entity_hours = window_seconds / 3600 * entity_count * detail_weight
+        if (
+            entity_count <= _MAX_HISTORY_ENTITIES
+            and estimated_entity_hours <= _MAX_HISTORY_ENTITY_HOURS
+        ):
+            return
+        context = {
+            "entity_count": entity_count,
+            "max_entities": _MAX_HISTORY_ENTITIES,
+            "estimated_entity_hours": round(estimated_entity_hours, 2),
+            "max_entity_hours": _MAX_HISTORY_ENTITY_HOURS,
+            "detail_weight": detail_weight,
+        }
+    else:
+        period_seconds = _STATISTICS_PERIOD_SECONDS.get(period)
+        if period_seconds is None:
+            return
+        estimated_rows = math.ceil(window_seconds / period_seconds) * entity_count
+        if (
+            entity_count <= _MAX_STATISTICS_ENTITIES
+            and estimated_rows <= _MAX_STATISTICS_ROWS
+        ):
+            return
+        context = {
+            "entity_count": entity_count,
+            "max_entities": _MAX_STATISTICS_ENTITIES,
+            "estimated_rows": estimated_rows,
+            "max_estimated_rows": _MAX_STATISTICS_ROWS,
+            "period": period,
+        }
+
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            "Recorder query exceeds the safe workload budget",
+            context=context,
+            suggestions=[
+                "Query fewer entities or use a shorter time range.",
+                "Use source='statistics' with a coarser period for long ranges.",
+                "Set allow_unsafe_query=true only when the user accepts that Home "
+                "Assistant may become unresponsive while the query runs.",
+            ],
+        )
+    )
 
 
 def _raise_recorder_ws_failure(

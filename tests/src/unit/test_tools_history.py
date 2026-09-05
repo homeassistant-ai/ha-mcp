@@ -83,6 +83,89 @@ class TestHaGetHistoryExceptionSuggestions:
         assert any("entity" in s.lower() for s in suggestions)
 
 
+class TestHaGetHistoryWorkloadGuardrails:
+    """Recorder query bounds protect HA before the WebSocket call starts."""
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.base_url = "http://homeassistant.local"
+        client.token = "test_token"
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def history_tool(self, mock_client):
+        return HistoryTools(mock_client).ha_get_history
+
+    @pytest.mark.asyncio
+    async def test_rejects_reversed_time_range(self, history_tool, mock_client):
+        with pytest.raises(ToolError) as exc_info:
+            await history_tool(
+                entity_ids="sensor.temp",
+                start_time="2026-01-02T00:00:00Z",
+                end_time="2026-01-01T00:00:00Z",
+            )
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        mock_client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_rejects_excessive_raw_history_entity_hours(
+        self, history_tool, mock_client
+    ):
+        with pytest.raises(ToolError) as exc_info:
+            await history_tool(
+                entity_ids=["sensor.one", "sensor.two"],
+                start_time="2026-01-01T00:00:00Z",
+                end_time="2026-01-05T00:00:00Z",
+            )
+
+        response = json.loads(str(exc_info.value))
+        assert response["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert response["estimated_entity_hours"] == 192.0
+        mock_client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_rejects_excessive_statistics_rows(self, history_tool, mock_client):
+        with pytest.raises(ToolError) as exc_info:
+            await history_tool(
+                entity_ids=["sensor.one", "sensor.two"],
+                source="statistics",
+                start_time="2026-01-01T00:00:00Z",
+                end_time="2026-01-31T00:00:00Z",
+                period="5minute",
+            )
+
+        response = json.loads(str(exc_info.value))
+        assert response["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert response["estimated_rows"] > 10000
+        mock_client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_allow_unsafe_query_bypasses_workload_budget(
+        self, history_tool, mock_client
+    ):
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"sensor.temp": []},
+        }
+        with patch(
+            "ha_mcp.tools.tools_history.add_timezone_metadata",
+            side_effect=lambda _client, data: data,
+        ):
+            result = await history_tool(
+                entity_ids="sensor.temp",
+                start_time="2026-01-01T00:00:00Z",
+                end_time="2026-02-01T00:00:00Z",
+                allow_unsafe_query=True,
+            )
+
+        assert result["success"] is True
+        mock_client.send_websocket_message.assert_awaited_once()
+
+
 # _fetch_history returns the unwrapped inner payload; ha_get_history then runs
 # project_fields and wraps with add_timezone_metadata at the call site.
 _HISTORY_INNER = {
