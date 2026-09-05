@@ -241,6 +241,65 @@ class TestGetScriptCanonicalId:
         )
 
 
+class TestGetScriptReturnsTheBody:
+    """``config`` is the script body, not the REST envelope (#2329).
+
+    It used to be the envelope, so ``result["config"]`` was
+    ``{success, script_id, config}`` and ``result["config"]["sequence"]`` did
+    not exist -- callers had to unwrap twice, and the e2e carried a helper
+    that did exactly that. ``ha_config_get_automation`` returns the body and
+    this tool's docstring promises the body.
+    """
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(return_value={"success": False})
+        client.get_script_config = AsyncMock(
+            return_value={
+                "success": True,
+                "script_id": "1234567890",
+                "config": {
+                    "alias": "Morning Routine",
+                    "sequence": [{"delay": {"seconds": 1}}],
+                },
+            }
+        )
+        return client
+
+    @pytest.fixture
+    def tools(self, mock_client):
+        return ConfigScriptTools(mock_client)
+
+    async def test_config_is_the_script_body(self, tools):
+        result = await tools.ha_config_get_script(script_id="morning_routine")
+
+        config = result["config"]
+        assert config["alias"] == "Morning Routine"
+        assert config["sequence"] == [{"delay": {"seconds": 1}}]
+
+    async def test_the_envelope_does_not_leak_into_config(self, tools):
+        """A second ``config`` key under ``config`` is the old double-wrap."""
+        result = await tools.ha_config_get_script(script_id="morning_routine")
+
+        assert "config" not in result["config"]
+        assert "success" not in result["config"]
+        assert "script_id" not in result["config"]
+
+    async def test_category_is_injected_into_the_body(self, tools, mock_client):
+        """The category has to ride inside ``config`` now that it is the body."""
+        mock_client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": {"categories": {"script": "cat-123"}},
+            }
+        )
+
+        result = await tools.ha_config_get_script(script_id="morning_routine")
+
+        assert result["config"].get("category") == "cat-123"
+
+
 class TestScriptUpsertResolvedThreading:
     """Issue #1813 Phase 0 item #6: when the tool pre-resolves the storage key
     (its hash-verify fetch already resolved it via the REST envelope), it passes

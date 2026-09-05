@@ -47,11 +47,11 @@ async def test_python_transform_simple_update(mcp_client, ha_client):
     assert result["action"] == "python_transform"
     assert result["config_hash"] is not None
 
-    # Verify update via inner config body
+    # ``config`` is the script body, so no second unwrap.
     verify = await mcp.call_tool_success(
         "ha_config_get_script", {"script_id": "test_py_transform"}
     )
-    actual_config = verify["config"]["config"]
+    actual_config = verify["config"]
     assert actual_config["sequence"][0]["data"]["brightness"] == 255
 
 

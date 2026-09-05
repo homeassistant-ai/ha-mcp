@@ -25,7 +25,7 @@ DOMAIN = "ha_mcp_tools"
 # in CI. The
 # capability negotiation — not this version — gates each WS command (see
 # ``websocket_api.CAPABILITIES``).
-COMPONENT_VERSION = "2.1.3"
+COMPONENT_VERSION = "2.1.4"
 
 # Config-entry discriminator (``entry.data[CONF_ENTRY_TYPE]``). A missing value
 # means "tools" so the pre-existing services entry keeps working across the
@@ -53,9 +53,10 @@ MIN_EMBEDDED_HOME_ASSISTANT_VERSION = "2026.8.0"
 # allowlist, not an absolute guarantee: an admin who adds "blueprints" as a
 # custom extra directory (issue #1567, see _current_extra_dirs) grants it
 # read+write, since extra_dirs are honored on the write path too. Blueprint
-# writes should instead go through ha_import_blueprint (which invokes the
-# blueprint/save WS command internally). Prefer ha_get_blueprint for the parsed
-# body; raw read is the escape hatch for the exact on-disk text.
+# writes should instead go through ha_manage_blueprints(action="import") (which
+# invokes the blueprint/save WS command internally). Prefer
+# ha_manage_blueprints(action="get") for the parsed body; raw read is the escape
+# hatch for the exact on-disk text.
 ALLOWED_READ_DIRS = ["www", "themes", "custom_templates", "dashboards", "blueprints"]
 ALLOWED_WRITE_DIRS = ["www", "themes", "custom_templates", "dashboards"]
 

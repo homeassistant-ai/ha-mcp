@@ -826,6 +826,7 @@ class TestInfo:
             "helpers_list",
             "states",
             "blueprint_get",
+            "blueprint_text",
             "device_get",
             "device_list",
             "device_registry_child_semantics",
@@ -902,7 +903,7 @@ class TestInfo:
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
             ).read_text(encoding="utf-8")
         )
-        assert manifest["version"] == COMPONENT_VERSION == "2.1.3"
+        assert manifest["version"] == COMPONENT_VERSION == "2.1.4"
 
 
 # =============================================================================
@@ -2458,11 +2459,14 @@ class TestBlueprintGet:
         self._write_blueprint(
             tmp_path, "automation", "user/motion.yaml", self._MOTION_LIGHT
         )
-        body = wsapi._read_blueprint_file(
+        read = wsapi._read_blueprint_file(
             self._hass(tmp_path), "automation", "user/motion.yaml"
         )
         res = wsapi._do_blueprint_get(
-            self._hass(tmp_path), {"domain": "automation"}, body=body
+            self._hass(tmp_path),
+            {"domain": "automation"},
+            body=read.body,
+            text=read.text,
         )
         assert res["metadata"]["name"] == "Motion Light"
         assert res["config"]["blueprint"]["domain"] == "automation"
@@ -2470,13 +2474,61 @@ class TestBlueprintGet:
         assert res["config"]["trigger"][0]["platform"] == "state"
         assert res["config"]["action"][0]["service"] == "light.turn_on"
 
+    def test_returns_the_raw_file_text_byte_for_byte(self, tmp_path):
+        """``yaml`` is the file as written, not a re-serialization of the body.
+
+        The server hands this string straight back to ``blueprint/save``, so a
+        round trip has to preserve comments, key order and the ``!input`` tags
+        the parsed body replaces with markers.
+        """
+        self._write_blueprint(
+            tmp_path, "automation", "user/motion.yaml", self._MOTION_LIGHT
+        )
+        read = wsapi._read_blueprint_file(
+            self._hass(tmp_path), "automation", "user/motion.yaml"
+        )
+        res = wsapi._do_blueprint_get(
+            self._hass(tmp_path),
+            {"domain": "automation"},
+            body=read.body,
+            text=read.text,
+        )
+        assert res["yaml"] == self._MOTION_LIGHT
+        assert "!input motion_sensor" in res["yaml"]
+
+    def test_unparseable_file_keeps_its_text(self, tmp_path):
+        """A file that reads but does not parse still yields ``yaml``.
+
+        Losing the text too would leave a caller unable to see — or repair —
+        the very file Home Assistant is refusing to load.
+        """
+        self._write_blueprint(
+            tmp_path, "automation", "broken.yaml", "blueprint: [unclosed\n"
+        )
+        read = wsapi._read_blueprint_file(
+            self._hass(tmp_path), "automation", "broken.yaml"
+        )
+        assert read.text == "blueprint: [unclosed\n"
+        assert read.body is None
+        res = wsapi._do_blueprint_get(
+            self._hass(tmp_path),
+            {"domain": "automation"},
+            body=read.body,
+            text=read.text,
+        )
+        assert res == {
+            "metadata": None,
+            "config": None,
+            "yaml": "blueprint: [unclosed\n",
+        }
+
     def test_input_tag_preserved_as_marker(self, tmp_path):
         self._write_blueprint(
             tmp_path, "automation", "user/motion.yaml", self._MOTION_LIGHT
         )
         body = wsapi._read_blueprint_file(
             self._hass(tmp_path), "automation", "user/motion.yaml"
-        )
+        ).body
         assert body["trigger"][0]["entity_id"] == {"__input__": "motion_sensor"}
         assert body["action"][0]["entity_id"] == {"__input__": "target_light"}
 
@@ -2493,7 +2545,7 @@ class TestBlueprintGet:
         self._write_blueprint(tmp_path, "automation", "sneaky.yaml", text)
         body = wsapi._read_blueprint_file(
             self._hass(tmp_path), "automation", "sneaky.yaml"
-        )
+        ).body
         # The !secret leaf is None — never a resolved plaintext value.
         assert body["action"][0]["data"] == {"token": None}
         assert "my_api_token" not in json.dumps(body)
@@ -2508,29 +2560,28 @@ class TestBlueprintGet:
         ],
     )
     def test_path_traversal_rejected(self, tmp_path, evil):
-        # Even if the target exists outside the jail, it must never be read.
+        # Even if the target exists outside the jail, it must never be read —
+        # neither its parsed body NOR its raw text.
         (tmp_path / "secrets.yaml").write_text("db_pw: hunter2\n", encoding="utf-8")
-        body = wsapi._read_blueprint_file(self._hass(tmp_path), "automation", evil)
-        assert body is None
+        read = wsapi._read_blueprint_file(self._hass(tmp_path), "automation", evil)
+        assert read.body is None
+        assert read.text is None
 
-    def test_missing_file_returns_none(self, tmp_path):
-        assert (
-            wsapi._read_blueprint_file(self._hass(tmp_path), "automation", "nope.yaml")
-            is None
+    def test_missing_file_returns_nothing(self, tmp_path):
+        read = wsapi._read_blueprint_file(
+            self._hass(tmp_path), "automation", "nope.yaml"
         )
+        assert read.text is None
+        assert read.body is None
 
     def test_do_blueprint_get_without_body(self):
         res = wsapi._do_blueprint_get(FakeHass(), {"domain": "automation"}, body=None)
-        assert res == {"metadata": None, "config": None}
+        assert res == {"metadata": None, "config": None, "yaml": None}
 
     @pytest.mark.asyncio
     async def test_prep_offloads_read_and_feeds_do(self, tmp_path):
-        self._write_blueprint(
-            tmp_path,
-            "script",
-            "user/s.yaml",
-            "blueprint:\n  name: S\n  domain: script\nsequence:\n  - delay: 1\n",
-        )
+        source = "blueprint:\n  name: S\n  domain: script\nsequence:\n  - delay: 1\n"
+        self._write_blueprint(tmp_path, "script", "user/s.yaml", source)
         hass = self._hass(tmp_path)
         extra = await wsapi._blueprint_get_prep(
             hass, {"domain": "script", "path": "user/s.yaml"}
@@ -2538,6 +2589,8 @@ class TestBlueprintGet:
         res = wsapi._do_blueprint_get(hass, {"domain": "script"}, **extra)
         assert res["metadata"]["name"] == "S"
         assert res["config"]["sequence"] == [{"delay": 1}]
+        # One read serves both views: the prep carries the text through too.
+        assert res["yaml"] == source
 
 
 # =============================================================================

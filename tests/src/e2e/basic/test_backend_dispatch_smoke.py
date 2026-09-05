@@ -58,8 +58,12 @@ markers so the tests run unconditionally on every lane.
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 from typing import Any
+
+import pytest
 
 from ..utilities.assertions import safe_call_tool
 from ..utilities.topology import tools_entry_absent
@@ -78,7 +82,7 @@ _COLLECTION_FLOOR = 850
 # and are bumped when new marker-gated tests intentionally consume that
 # historical buffer. This still catches a mass-skip incident like PR #1375
 # (14 tests started skipping silently because a marker was applied too broadly).
-_SKIP_CEILING_PER_LANE = {
+_SKIP_CEILING_BASELINE = {
     # The 6 dashboard-screenshot E2E tests
     # (tests/src/e2e/haos_only/test_dashboard_screenshot_addon.py) are marked
     # haos_only + inaddon_only: they RUN only on the haos_inaddon lane (the
@@ -192,6 +196,60 @@ _SKIP_CEILING_PER_LANE = {
     "haos_embedded_no_tools": 231,  # observed 225; +1 #2361 (its embedded_only half)
     "haos_inaddon_no_tools": 201,  # observed 193; +1 #2357 haos_embedded_only; +2 #2361 in-HA LLM-API probe
 }
+
+# Per-PR increments live beside this file in ``skip_ceiling/pr<N>.json``, one
+# fragment per pull request, so two PRs that each add marker-gated tests no
+# longer rewrite the same lines above (that block conflicted on three
+# consecutive master merges while #2356 was in review). A fragment is
+# ``{"reason": str, "deltas": {lane: int}}``; every fragment's deltas are added
+# to the baseline. Re-pin the baseline only from a CI observation, and when
+# doing so delete the fragments the new numbers already include.
+_SKIP_CEILING_FRAGMENT_DIR = Path(__file__).with_name("skip_ceiling")
+
+
+def _load_skip_ceiling_fragments() -> dict[str, dict[str, Any]]:
+    """Every ``skip_ceiling/*.json`` fragment, keyed by filename."""
+    return {
+        path.name: json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(_SKIP_CEILING_FRAGMENT_DIR.glob("*.json"))
+    }
+
+
+def _validate_skip_ceiling_fragment(
+    name: str, fragment: Any, lanes: dict[str, int]
+) -> dict[str, int]:
+    """Return ``fragment``'s deltas, or raise ``AssertionError`` naming ``name``.
+
+    Runs at import for every real fragment (so a bad one fails the module at
+    collection, loudly) and is pinned on synthetic fragments by
+    ``test_skip_ceiling_fragment_validator_rejects`` below.
+    """
+    assert isinstance(fragment, dict) and set(fragment) == {"reason", "deltas"}, (
+        f"{name}: expected exactly the keys 'reason' and 'deltas'"
+    )
+    reason, deltas = fragment["reason"], fragment["deltas"]
+    assert isinstance(reason, str) and reason.strip(), f"{name}: empty reason"
+    assert isinstance(deltas, dict) and deltas, f"{name}: no deltas"
+    for lane, delta in deltas.items():
+        assert lane in lanes, f"{name}: unknown lane {lane!r}"
+        # ``type(...) is int``: JSON ``true`` is a bool, and bool subclasses
+        # int, so ``isinstance`` would let it add 1 to a ceiling.
+        assert type(delta) is int and delta > 0, (
+            f"{name}: delta for {lane!r} must be a positive int, got {delta!r}"
+        )
+    return deltas
+
+
+def _skip_ceilings_with_fragments() -> dict[str, int]:
+    ceilings = dict(_SKIP_CEILING_BASELINE)
+    for name, fragment in _load_skip_ceiling_fragments().items():
+        deltas = _validate_skip_ceiling_fragment(name, fragment, ceilings)
+        for lane, delta in deltas.items():
+            ceilings[lane] += delta
+    return ceilings
+
+
+_SKIP_CEILING_PER_LANE = _skip_ceilings_with_fragments()
 
 
 def test_backend_dispatch_matches_workflow_env(
@@ -418,5 +476,33 @@ def test_session_skipped_count_below_ceiling(
         f"applied too broadly in pytest_collection_modifyitems — "
         f"check pytest_collection_modifyitems in tests/src/e2e/conftest.py for recent changes. "
         f"If the increase is intentional (legitimate new marker-gated "
-        f"tests), bump _SKIP_CEILING_PER_LANE[{lane!r}] in this file."
+        f"tests), add the per-lane increments in a "
+        f"tests/src/e2e/basic/skip_ceiling/pr<N>.json fragment (see "
+        f"_SKIP_CEILING_BASELINE in this file) rather than editing the baseline."
     )
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    [
+        pytest.param({"reason": "r", "deltas": {"contaner": 1}}, id="typo-lane"),
+        pytest.param({"reason": "r", "deltas": {"container": True}}, id="bool-delta"),
+        pytest.param({"reason": "r", "deltas": {"container": 0}}, id="zero-delta"),
+        pytest.param({"reason": "r", "deltas": {"container": "1"}}, id="string-delta"),
+        pytest.param({"reason": " ", "deltas": {"container": 1}}, id="blank-reason"),
+        pytest.param({"reason": "r", "deltas": {}}, id="no-deltas"),
+        pytest.param(
+            {"reason": "r", "deltas": {"container": 1}, "x": 1}, id="extra-key"
+        ),
+        pytest.param(["reason", "deltas"], id="not-a-mapping"),
+    ],
+)
+def test_skip_ceiling_fragment_validator_rejects(fragment: Any) -> None:
+    """A fragment that could misroute or silently inflate a ceiling is refused.
+
+    The real fragments are validated at import, so a bad one never reaches a
+    test body; the validator's rejections are pinned here on synthetic input,
+    each error naming the offending file.
+    """
+    with pytest.raises(AssertionError, match=r"bad\.json"):
+        _validate_skip_ceiling_fragment("bad.json", fragment, _SKIP_CEILING_BASELINE)

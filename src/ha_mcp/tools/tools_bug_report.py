@@ -29,14 +29,20 @@ from ha_mcp import __version__
 from .._version import get_version, is_embedded, is_running_in_addon
 from ..client.supervisor_client import make_supervisor_httpx_client
 from ..config import Settings, get_global_settings
+from ..errors import create_validation_error
 from ..utils.usage_logger import (
     AVG_LOG_ENTRIES_PER_TOOL,
     get_recent_logs,
     get_startup_logs,
 )
 from .component_api import get_component_caps
-from .helpers import log_tool_usage, register_tool_methods
-from .util_helpers import ANSI_ESCAPE_RE, JSON_STRING_COERCION, project_fields
+from .helpers import log_tool_usage, raise_tool_error, register_tool_methods
+from .util_helpers import (
+    ANSI_ESCAPE_RE,
+    JSON_STRING_COERCION,
+    parse_string_list_param,
+    project_fields,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -948,6 +954,19 @@ class BugReportTools:
           usual cause, and refreshing the MCP connection is the fix
         - `suggested_title`, `duplicate_check_urls`, `anonymization_guide`
         """
+        # Validate fields= before anything is collected: the projection at the
+        # end was the only parse, outside any ValueError handler, so a
+        # malformed value reached FastMCP as a bare exception after the whole
+        # report had been assembled.
+        parsed_fields: list[str] | None = None
+        if fields is not None:
+            try:
+                parsed_fields = parse_string_list_param(
+                    fields, "fields", allow_csv=True
+                )
+            except ValueError as exc:
+                raise_tool_error(create_validation_error(str(exc), parameter="fields"))
+
         # Detect installation method, platform, and runtime config.
         install_method = _detect_installation_method()
         platform_info = _detect_platform()
@@ -1166,7 +1185,7 @@ class BugReportTools:
                 "CRITICAL: Always ANONYMIZE the report BEFORE presenting it in markdown code blocks!"
             ),
         }
-        return project_fields(result, fields)
+        return project_fields(result, parsed_fields)
 
 
 def register_bug_report_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

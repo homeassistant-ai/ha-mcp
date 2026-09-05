@@ -4121,7 +4121,10 @@ class SearchTools:
         )
         include_dismissed_repairs_bool = bool(include_dismissed_repairs)
 
-        parsed_domains = parse_string_list_param(domains, "domains", allow_csv=True)
+        try:
+            parsed_domains = parse_string_list_param(domains, "domains", allow_csv=True)
+        except ValueError as exc:
+            raise_tool_error(create_validation_error(str(exc), parameter="domains"))
 
         result = await self._collect_overview(
             _OverviewInputs(

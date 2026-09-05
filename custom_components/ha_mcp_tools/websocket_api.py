@@ -37,7 +37,7 @@ the info handshake carries no capability entry:
   is byte-identical to the REST ``/api/states/<id>`` serialization by
   construction; the server maps found/missing onto its per-id error contract.
 * ``ha_mcp_tools/blueprint_get`` — the full body of one installed blueprint
-  (``{metadata, config}``), which core's ``blueprint/list`` never returns (it
+  (``{metadata, config, yaml}``), which core's ``blueprint/list`` never returns (it
   serves only ``{metadata}``). The path is jailed under
   ``<config>/blueprints/<domain>/`` (symlink-safe containment, mirroring the
   file-tool jail) and the file read + parse run off the event loop in the async
@@ -360,6 +360,11 @@ CAPABILITIES: list[str] = [
     "helpers_list",
     "states",
     "blueprint_get",
+    # A flag on blueprint_get: gates its additive ``yaml`` result field (the raw
+    # on-disk blueprint text). The server only asks for the text when this is
+    # advertised, so an older build simply serves the parsed body and the server
+    # looks for the text elsewhere.
+    "blueprint_text",
     "device_get",
     "device_list",
     # A semantic flag shared by every device-registry-backed read. Components
@@ -3205,27 +3210,31 @@ def _do_blueprint_get(
     params: dict[str, Any],
     *,
     body: dict[str, Any] | None = None,
+    text: str | None = None,
 ) -> dict[str, Any]:
-    """Return one installed blueprint's full body as ``{metadata, config}``.
+    """Return one installed blueprint as ``{metadata, config, yaml}``.
 
     core's ``blueprint/list`` returns only ``{metadata}`` (no triggers /
-    conditions / actions / sequence), so the server can otherwise serve metadata
-    only. This reads the on-disk blueprint file and returns the parsed body:
-    ``config`` is the full file (the server merges it additively over the
-    ``blueprint/list`` metadata) and ``metadata`` is its ``blueprint:`` section.
-    When the file is missing, unparseable, or the requested path escapes the jail,
-    both come back ``None`` (the server keeps metadata-only) — see
-    :func:`_read_blueprint_file`.
+    conditions / actions / sequence, and never the file text), so the server can
+    otherwise serve metadata only. This reads the on-disk blueprint file once and
+    returns both views of it: ``config`` is the parsed file (the server merges it
+    additively over the ``blueprint/list`` metadata), ``metadata`` is its
+    ``blueprint:`` section, and ``yaml`` is the raw text the server hands back for
+    a round trip through ``blueprint/save``. Each is ``None`` when it could not be
+    produced — a file that reads but does not parse still yields its ``yaml`` —
+    and all three are ``None`` when the file is missing or the requested path
+    escapes the jail (see :func:`_read_blueprint_file`).
 
     Pure: the blocking jail-resolve + file read + YAML parse run in the executor
-    via :func:`_blueprint_get_prep`, which passes the parsed ``body`` in.
+    via :func:`_blueprint_get_prep`, which passes both views in.
     """
     if not isinstance(body, dict):
-        return {"metadata": None, "config": None}
+        return {"metadata": None, "config": None, "yaml": text}
     metadata = body.get("blueprint")
     return {
         "metadata": _plainify(metadata) if isinstance(metadata, dict) else None,
         "config": _plainify(body),
+        "yaml": text,
     }
 
 
@@ -3237,27 +3246,41 @@ async def _blueprint_get_prep(
     The path jail (symlink-safe ``Path.resolve`` containment), the ``open()`` and
     the YAML parse are all blocking filesystem work, so they run in the executor
     via :meth:`hass.async_add_executor_job` — keeping :func:`_do_blueprint_get` a
-    pure assembler over the parsed ``body`` this returns (``None`` on any failure).
+    pure assembler over the raw text and parsed body this returns (both ``None``
+    on a failed read).
     """
     domain = msg["domain"]
     path = msg["path"]
-    body = await hass.async_add_executor_job(_read_blueprint_file, hass, domain, path)
-    return {"body": body}
+    read = await hass.async_add_executor_job(_read_blueprint_file, hass, domain, path)
+    return {"body": read.body, "text": read.text}
 
 
-def _read_blueprint_file(
-    hass: HomeAssistant, domain: str, path: str
-) -> dict[str, Any] | None:
-    """Resolve + jail + read + parse one blueprint YAML file. ``None`` on failure.
+class _BlueprintFile(NamedTuple):
+    """One blueprint file read once: its raw ``text`` and its parsed ``body``.
+
+    ``text`` is ``None`` when the file could not be read at all; ``body`` is
+    additionally ``None`` when it read but did not parse into a mapping.
+    """
+
+    text: str | None
+    body: dict[str, Any] | None
+
+
+_UNREADABLE_BLUEPRINT = _BlueprintFile(None, None)
+
+
+def _read_blueprint_file(hass: HomeAssistant, domain: str, path: str) -> _BlueprintFile:
+    """Resolve + jail + read + parse one blueprint YAML file, reading it once.
 
     Blueprint files live under ``<config>/blueprints/<domain>/``. The requested
     ``path`` is joined under that root and resolved symlink-safe (mirrors the
     file-tool jail's ``_resolves_within`` — resolve the RAW input, following
     symlinks, THEN check containment, so ``<root>/<symlink>/..`` cannot escape). A
     path escaping the root — via ``..``, an absolute path, or a symlink — yields
-    ``None`` (rejected, never opened). A missing file, a non-file target, a read
-    error, or a YAML parse error also yields ``None``. Only a valid, contained,
-    parseable blueprint returns its full parsed body.
+    an empty result (rejected, never opened), as does a missing file, a non-file
+    target, or a read error. A file that reads but does not parse into a mapping
+    keeps its ``text`` and drops its ``body``, so the caller can still round-trip
+    the exact bytes it holds.
 
     Parsed with :class:`_BlueprintLoader`: ``!input`` markers are preserved and
     every other custom tag (``!secret`` / ``!include`` / …) is neutralized to
@@ -3267,29 +3290,32 @@ def _read_blueprint_file(
     config = getattr(hass, "config", None)
     path_fn = getattr(config, "path", None)
     if not callable(path_fn):
-        return None
+        return _UNREADABLE_BLUEPRINT
     try:
         base = Path(path_fn("blueprints", domain))
         candidate = Path(path) if path.startswith("/") else base / path
         real = candidate.resolve()
         base_real = base.resolve()
     except (OSError, ValueError):
-        return None
+        return _UNREADABLE_BLUEPRINT
     if not (real == base_real or real.is_relative_to(base_real)):
-        return None
+        return _UNREADABLE_BLUEPRINT
     try:
-        with open(real, encoding="utf-8") as handle:
-            # Instance form (not yaml.load) mirrors the component's existing
-            # _PackagesDirLoader usage; _BlueprintLoader is a SafeLoader subclass,
-            # so no !!python/object can construct arbitrary types.
-            loader = _BlueprintLoader(handle)
-            try:
-                parsed = loader.get_single_data()
-            finally:
-                loader.dispose()
-    except (OSError, ValueError, yaml.YAMLError):
-        return None
-    return parsed if isinstance(parsed, dict) else None
+        text = real.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return _UNREADABLE_BLUEPRINT
+    try:
+        # Instance form (not yaml.load) mirrors the component's existing
+        # _PackagesDirLoader usage; _BlueprintLoader is a SafeLoader subclass,
+        # so no !!python/object can construct arbitrary types.
+        loader = _BlueprintLoader(text)
+        try:
+            parsed = loader.get_single_data()
+        finally:
+            loader.dispose()
+    except (ValueError, yaml.YAMLError):
+        return _BlueprintFile(text, None)
+    return _BlueprintFile(text, parsed if isinstance(parsed, dict) else None)
 
 
 def _construct_blueprint_input(loader: Any, node: Any) -> dict[str, str]:

@@ -49,17 +49,13 @@ def _backups_for(
 ) -> list[dict[str, Any]]:
     """Filter list-snapshots entries by domain + entity_id.
 
-    Snapshot filenames are sanitized (``_safe_entity_id`` replaces every
-    char outside ``[A-Za-z0-9._-]`` with ``_``), and ``list_snapshots``
-    returns the parsed-from-filename entity_id — so a caller filtering
-    with a composite ID like ``area:foo`` would otherwise never match
-    the stored ``area_foo``. Sanitize both sides through the same
-    function for a symmetric comparison.
+    ``list_snapshots`` reports the id a snapshot was taken for: a composite
+    id like ``area:foo`` comes back as ``area:foo`` (the payload's id, read
+    because its filename stem carries a digest), while a plain entity id is
+    its own filename stem. Either way the row's ``entity_id`` is the id the
+    caller asked for.
     """
-    from ha_mcp.backup_manager import _safe_entity_id
-
-    safe_id = _safe_entity_id(entity_id)
-    return [e for e in entries if e["domain"] == domain and e["entity_id"] == safe_id]
+    return [e for e in entries if e["domain"] == domain and e["entity_id"] == entity_id]
 
 
 # Fixed delay between create and edit to let HA's WS-backed registries
