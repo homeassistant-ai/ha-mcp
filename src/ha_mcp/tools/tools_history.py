@@ -62,7 +62,12 @@ def _convert_timestamp(value: Any) -> str | None:
     return None
 
 
-def parse_relative_time(time_str: str | None, default_hours: int = 24) -> datetime:
+def parse_relative_time(
+    time_str: str | None,
+    default_hours: int = 24,
+    *,
+    reference_time: datetime | None = None,
+) -> datetime:
     """
     Parse a time string that can be either ISO format or relative (e.g., '24h', '7d').
 
@@ -73,8 +78,9 @@ def parse_relative_time(time_str: str | None, default_hours: int = 24) -> dateti
     Returns:
         datetime object in UTC
     """
+    now = reference_time or datetime.now(UTC)
     if time_str is None:
-        return datetime.now(UTC) - timedelta(hours=default_hours)
+        return now - timedelta(hours=default_hours)
 
     # Check for relative time format
     relative_pattern = r"^(\d+)([hdwm])$"
@@ -85,14 +91,14 @@ def parse_relative_time(time_str: str | None, default_hours: int = 24) -> dateti
         unit = match.group(2)
 
         if unit == "h":
-            return datetime.now(UTC) - timedelta(hours=value)
+            return now - timedelta(hours=value)
         elif unit == "d":
-            return datetime.now(UTC) - timedelta(days=value)
+            return now - timedelta(days=value)
         elif unit == "w":
-            return datetime.now(UTC) - timedelta(weeks=value)
+            return now - timedelta(weeks=value)
         elif unit == "m":
             # Approximate month as 30 days
-            return datetime.now(UTC) - timedelta(days=value * 30)
+            return now - timedelta(days=value * 30)
 
     # Try parsing as ISO format
     try:
@@ -215,18 +221,6 @@ class HistoryTools:
                 ge=0,
             ),
         ] = None,
-        allow_unsafe_query: Annotated[
-            bool,
-            Field(
-                description=(
-                    "Allow a recorder query that exceeds the built-in entity/time "
-                    "workload budget. Default: false. Home Assistant returns every "
-                    "matching row before limit/offset are applied, so enabling this "
-                    "can make HA and its dashboards unresponsive."
-                ),
-                default=False,
-            ),
-        ] = False,
         # Statistics-specific (ignored when source="history")
         period: Annotated[
             str,
@@ -268,10 +262,22 @@ class HistoryTools:
                 ),
             ),
         ] = None,
+        allow_unsafe_query: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Allow a recorder query that exceeds the built-in entity/time "
+                    "workload budget. Default: false. Home Assistant returns every "
+                    "matching row before limit/offset are applied, so enabling this "
+                    "can make HA and its dashboards unresponsive."
+                ),
+                default=False,
+            ),
+        ] = False,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """
-        Retrieve historical data from Home Assistant's recorder.
+        Get historical data from Home Assistant's recorder.
 
         **Sources:**
         - "history" (default): Raw state changes, ~10 day retention, full resolution
@@ -305,7 +311,7 @@ class HistoryTools:
         **Example -- history (default):**
         ```python
         ha_get_history(entity_ids="sensor.bedroom_temperature", start_time="24h")
-        ha_get_history(entity_ids=["sensor.temperature", "sensor.humidity"], start_time="7d", limit=500)
+        ha_get_history(entity_ids=["sensor.temperature", "sensor.humidity"], start_time="3d", limit=500)
         # Default order="desc" returns newest states first.
         # To paginate oldest-first, use order="asc":
         ha_get_history(entity_ids="sensor.temperature", start_time="7d", limit=100, offset=100, order="asc")
@@ -501,8 +507,13 @@ def _parse_time_range(
     default_hours: int,
 ) -> tuple[datetime, datetime]:
     """Parse start_time and end_time into datetime objects."""
+    reference_time = datetime.now(UTC)
     try:
-        start_dt = parse_relative_time(start_time, default_hours=default_hours)
+        start_dt = parse_relative_time(
+            start_time,
+            default_hours=default_hours,
+            reference_time=reference_time,
+        )
     except ValueError as e:
         raise_tool_error(
             create_error_response(
@@ -518,7 +529,11 @@ def _parse_time_range(
 
     if end_time:
         try:
-            end_dt = parse_relative_time(end_time, default_hours=0)
+            end_dt = parse_relative_time(
+                end_time,
+                default_hours=0,
+                reference_time=reference_time,
+            )
         except ValueError as e:
             raise_tool_error(
                 create_error_response(
@@ -529,7 +544,7 @@ def _parse_time_range(
                 )
             )
     else:
-        end_dt = datetime.now(UTC)
+        end_dt = reference_time
 
     return start_dt, end_dt
 

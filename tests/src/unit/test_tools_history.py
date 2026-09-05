@@ -1,5 +1,6 @@
 """Unit tests for ha_get_history tool exception handling."""
 
+import inspect
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -98,6 +99,11 @@ class TestHaGetHistoryWorkloadGuardrails:
     def history_tool(self, mock_client):
         return HistoryTools(mock_client).ha_get_history
 
+    def test_unsafe_override_is_appended_after_existing_public_parameters(self):
+        parameters = list(inspect.signature(HistoryTools.ha_get_history).parameters)
+
+        assert parameters.index("allow_unsafe_query") > parameters.index("fields")
+
     @pytest.mark.asyncio
     async def test_rejects_reversed_time_range(self, history_tool, mock_client):
         with pytest.raises(ToolError) as exc_info:
@@ -126,6 +132,26 @@ class TestHaGetHistoryWorkloadGuardrails:
         assert response["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert response["estimated_entity_hours"] == 192.0
         mock_client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_allows_relative_window_exactly_at_budget(
+        self, history_tool, mock_client
+    ):
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"sensor.temp": []},
+        }
+        with patch(
+            "ha_mcp.tools.tools_history.add_timezone_metadata",
+            side_effect=lambda _client, data: data,
+        ):
+            result = await history_tool(
+                entity_ids="sensor.temp",
+                start_time="7d",
+            )
+
+        assert result["success"] is True
+        mock_client.send_websocket_message.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_rejects_excessive_statistics_rows(self, history_tool, mock_client):
