@@ -585,6 +585,9 @@ class BlueprintTools:
         consumers = await self._blueprint_consumers(domain, path)
         remove_tool = f"ha_config_remove_{domain}"
         set_tool = f"ha_config_set_{domain}"
+        # The two set tools key their target differently; name the real
+        # parameter so the call shape shown is one that validates.
+        id_param = "identifier" if domain == "automation" else "script_id"
         suggestions = [
             (
                 f"Delete the {domain}s that use it with {remove_tool}, or re-point "
@@ -592,7 +595,8 @@ class BlueprintTools:
             ),
             (
                 f"Removing the {domain}s is what frees the blueprint. Taking "
-                f"control of them ({set_tool}(take_control_of_blueprint=True)) "
+                f"control of them ({set_tool}({id_param}=<{domain} id>, "
+                "take_control_of_blueprint=True)) "
                 "converts them to standalone configs but does NOT release the "
                 f"blueprint: Home Assistant keeps counting a converted {domain} "
                 "as a user until it is removed"

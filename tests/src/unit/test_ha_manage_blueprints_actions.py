@@ -372,6 +372,9 @@ async def test_delete_in_use_names_consumers() -> None:
     # refusal must not send the caller down that path as a fix (#2329).
     assert "ha_config_remove_automation" in joined
     assert "does NOT release the blueprint" in joined
+    # The take-control call it names must be a valid call shape: the
+    # automation tool keys on ``identifier`` (CodeRabbit).
+    assert "ha_config_set_automation(identifier=" in joined
     assert 'action="delete"' in joined
 
 
@@ -403,7 +406,7 @@ async def test_delete_in_use_names_the_script_tool_for_a_script_blueprint() -> N
     payload = _error_payload(exc.value)
     joined = " ".join(payload["error"]["suggestions"])
     assert "ha_config_remove_script" in joined
-    assert "ha_config_set_script" in joined
+    assert "ha_config_set_script(script_id=" in joined
     assert "ha_config_remove_automation" not in joined
     assert "ha_config_set_automation" not in joined
     assert payload["in_use_by"] == ["script.bedtime"]

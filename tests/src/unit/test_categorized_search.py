@@ -861,6 +861,20 @@ class TestArgumentsAsString:
         ctx.fastmcp.call_tool.assert_not_called()
 
     @pytest.mark.anyio
+    async def test_deeply_nested_json_string_rejected(self, transform):
+        """A JSON string nested past the interpreter's recursion limit makes
+        ``json.loads`` raise ``RecursionError``, not ``JSONDecodeError``; it
+        must still come back as the structured INVALID_JSON refusal rather
+        than escape as an internal error (CodeRabbit)."""
+        ctx = _make_ctx()
+        fn = self._get_proxy_fn(transform, "read")
+        with pytest.raises(ToolError) as exc_info:
+            await fn("ha_get_state", "[" * 20_000, ctx)
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_INVALID_JSON"
+        ctx.fastmcp.call_tool.assert_not_called()
+
+    @pytest.mark.anyio
     async def test_json_string_not_object_rejected(self, transform):
         """JSON that parses to a non-object (e.g. array) raises a clear error."""
         ctx = _make_ctx()

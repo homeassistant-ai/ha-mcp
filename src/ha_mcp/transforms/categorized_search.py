@@ -257,7 +257,9 @@ def _coerce_proxy_arguments(
         return arguments
     try:
         parsed = json.loads(arguments)
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, RecursionError) as e:
+        # RecursionError: a string nested past the interpreter's limit is
+        # still "not valid JSON" to the caller, not an internal error.
         raise ToolError(
             json.dumps(
                 create_error_response(
