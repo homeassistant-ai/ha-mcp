@@ -1438,7 +1438,7 @@ const BACKUP_FIELD_LABELS = {
   },
   auto_backup_dir: {
     label: 'Backup directory override',
-    help: 'Leave empty for the default: /data/ha_mcp_backups in the App (add-on), otherwise the backups/ subdirectory of the ha-mcp data directory. Or enter an absolute path.',
+    help: 'Leave empty for the default: /data/ha_mcp_backups in the App (add-on), otherwise the backups/ subdirectory of the ha-mcp data directory; an install that already holds snapshots under the earlier default keeps using it. The directory in use is shown in the backup status. Or enter an absolute path.',
   },
   auto_backup_calendar_lookahead_days: {
     label: 'Calendar lookahead (days)',

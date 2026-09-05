@@ -251,7 +251,7 @@
     "backup.fields.auto_backup_retain_per_entity.label": "Retain per entity",
     "backup.fields.auto_backup_retain_per_entity.help": "Maximum snapshots kept per entity (1–10000). Older ones rotate out.",
     "backup.fields.auto_backup_dir.label": "Backup directory override",
-    "backup.fields.auto_backup_dir.help": "Leave empty for the default: /data/ha_mcp_backups in the App (add-on), otherwise the backups/ subdirectory of the ha-mcp data directory. Or enter an absolute path.",
+    "backup.fields.auto_backup_dir.help": "Leave empty for the default: /data/ha_mcp_backups in the App (add-on), otherwise the backups/ subdirectory of the ha-mcp data directory; an install that already holds snapshots under the earlier default keeps using it. The directory in use is shown in the backup status. Or enter an absolute path.",
     "backup.fields.auto_backup_calendar_lookahead_days.label": "Calendar lookahead (days)",
     "backup.fields.auto_backup_calendar_lookahead_days.help": "How far ahead to query calendar events for pre-edit snapshots. Range 1–365.",
     "backup.fields.enable_snapshot_delete.label": "Allow snapshot deletion",
