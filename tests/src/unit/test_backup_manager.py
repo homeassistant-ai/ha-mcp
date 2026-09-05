@@ -1296,6 +1296,99 @@ class TestFactory:
             )
 
 
+# ---------------------------------------------------------------- default dir
+
+
+@pytest.fixture
+def _standalone_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A non-add-on process whose data dir is ``tmp_path / "data"``.
+
+    ``get_data_dir`` is memoized, so the cache is cleared on both sides:
+    before, so an earlier test's directory is not returned here, and after,
+    so this test's tmpdir does not leak into the next one.
+    """
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path / "data"))
+    bm.get_data_dir.cache_clear()
+    yield tmp_path / "data"
+    bm.get_data_dir.cache_clear()
+
+
+class TestDefaultDir:
+    """#2372: the default must live in the directory the data volume persists."""
+
+    def test_new_install_defaults_under_data_dir(self, _standalone_env: Path) -> None:
+        assert bm._resolve_default_dir() == _standalone_env / "backups"
+
+    def test_manager_creates_default_under_data_dir(
+        self, _standalone_env: Path
+    ) -> None:
+        mgr = BackupManager(_StubSettings(auto_backup_dir=""), _StubClient())
+        assert mgr.backup_dir == _standalone_env / "backups"
+        assert mgr.backup_dir.is_dir()
+        assert mgr.init_dir_error is None
+        assert mgr.enabled
+
+    def test_existing_home_snapshots_keep_their_dir(
+        self, _standalone_env: Path, tmp_path: Path
+    ) -> None:
+        legacy = tmp_path / "home" / ".local" / "share" / "ha_mcp" / "backups"
+        legacy.mkdir(parents=True)
+        (legacy / "automation.kitchen.20260101_000000.yaml").write_text("x")
+        assert bm._resolve_default_dir() == legacy.resolve()
+
+    def test_existing_xdg_snapshots_keep_their_dir(
+        self, _standalone_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        legacy = tmp_path / "xdg" / "ha_mcp" / "backups"
+        legacy.mkdir(parents=True)
+        (legacy / "script.morning.20260101_000000.yaml").write_text("x")
+        assert bm._resolve_default_dir() == legacy
+
+    def test_empty_legacy_dir_moves_to_data_dir(
+        self, _standalone_env: Path, tmp_path: Path
+    ) -> None:
+        # An empty directory has nothing to list or restore from, so keeping
+        # it would only preserve the ephemeral location the issue is about.
+        (tmp_path / "home" / ".local" / "share" / "ha_mcp" / "backups").mkdir(
+            parents=True
+        )
+        assert bm._resolve_default_dir() == _standalone_env / "backups"
+
+    def test_unreadable_legacy_dir_counts_as_empty(
+        self, _standalone_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def boom(_self: Path) -> Any:
+            raise PermissionError("denied")
+
+        monkeypatch.setattr(Path, "iterdir", boom)
+        assert bm._resolve_default_dir() == _standalone_env / "backups"
+
+    def test_addon_dir_unchanged(
+        self, _standalone_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The add-on path is named in the add-on option descriptions; the
+        # data-dir default must not displace it even when snapshots exist
+        # under the legacy path.
+        addon_dir = tmp_path / "addon-data" / "ha_mcp_backups"
+        addon_dir.parent.mkdir()
+        monkeypatch.setattr(bm, "_ADDON_BACKUP_DIR", addon_dir)
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "token")
+        assert bm._resolve_default_dir() == addon_dir
+
+    def test_addon_requires_data_dir(
+        self, _standalone_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # SUPERVISOR_TOKEN alone is not the add-on: the HA core container
+        # carries it too. Without /data the data-dir default applies.
+        monkeypatch.setattr(bm, "_ADDON_BACKUP_DIR", tmp_path / "missing" / "b")
+        monkeypatch.setenv("SUPERVISOR_TOKEN", "token")
+        assert bm._resolve_default_dir() == _standalone_env / "backups"
+
+
 # ---------------------------------------------------------------- bookkeeping
 
 
