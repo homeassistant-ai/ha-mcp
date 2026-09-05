@@ -1589,6 +1589,7 @@ _OVERVIEW_REPAIR_FIELDS = frozenset(
 )
 _OVERVIEW_ENTITY_FIELDS = frozenset(
     {
+        "domains",
         "system_summary",
         "domain_stats",
         "area_analysis",

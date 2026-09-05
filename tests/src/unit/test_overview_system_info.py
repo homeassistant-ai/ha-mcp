@@ -223,8 +223,9 @@ class TestHaGetOverviewFieldsProjection:
         self, overview_tool, mock_smart_tools
     ):
         """Entity-derived fields retain the established full assembly path."""
-        await overview_tool(fields=["domains"])
+        result = await overview_tool(fields=["domains"])
 
+        assert result["domains"] == {"light": {"count": 3}}
         mock_smart_tools.get_system_overview.assert_awaited_once()
 
     @pytest.mark.asyncio
