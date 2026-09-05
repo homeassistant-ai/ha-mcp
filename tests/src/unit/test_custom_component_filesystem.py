@@ -36,6 +36,7 @@ sys.modules["homeassistant.loader"] = MagicMock()
 # Now we can import the functions
 from custom_components.ha_mcp_tools import (  # noqa: E402
     _PACKAGE_DIR_CACHE,
+    TAILED_LOG_FILES,
     _decode_legacy_backup_name,
     _delete_file_sync,
     _detect_package_dirs,
@@ -57,6 +58,7 @@ from custom_components.ha_mcp_tools import (  # noqa: E402
     _path_in_package_dir,
     _read_file_sync,
     _read_legacy_backup_sync,
+    _read_log_tail_sync,
     _resolves_within,
     _violates_deny_floor,
     _volume_root_for,
@@ -70,6 +72,72 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
 )
 
 from ._symlink_support import symlink_or_skip  # noqa: E402
+
+
+class TestReadLogTailSync:
+    """``_read_log_tail_sync`` matches the whole-file ``split("\\n")`` tail."""
+
+    @staticmethod
+    def _reference(content: str, tail: int) -> tuple[str, int, bool]:
+        lines = content.split("\n")
+        truncated = len(lines) > tail
+        return "\n".join(lines[-tail:] if truncated else lines), len(lines), truncated
+
+    @pytest.mark.parametrize("tail", [1, 2, 3, 6, 7, 50])
+    @pytest.mark.parametrize("chunk_size", [1, 3, 4, 7, 1 << 16])
+    def test_matches_whole_file_split_semantics(self, tmp_path, tail, chunk_size):
+        content = "l1\nlé2\n\nl4 ünïcode\nl5\n"
+        target = tmp_path / "home-assistant.log.fault"
+        target.write_text(content, encoding="utf-8")
+        result = _read_log_tail_sync(target, tail, chunk_size=chunk_size)
+        expected_content, expected_total, expected_truncated = self._reference(
+            content, tail
+        )
+        assert result["content"] == expected_content
+        assert result["total_lines"] == expected_total
+        assert result["truncated"] is expected_truncated
+        assert result["size"] == len(content.encode("utf-8"))
+
+    def test_empty_file(self, tmp_path):
+        target = tmp_path / "home-assistant.log.fault"
+        target.write_text("")
+        result = _read_log_tail_sync(target, 10)
+        assert result == {
+            "content": "",
+            "size": 0,
+            "mtime": target.stat().st_mtime,
+            "total_lines": 1,
+            "truncated": False,
+        }
+
+    def test_missing_and_directory(self, tmp_path):
+        assert _read_log_tail_sync(tmp_path / "nope", 5) == {"_error": "not_found"}
+        assert _read_log_tail_sync(tmp_path, 5) == {"_error": "not_a_file"}
+
+    def test_reads_only_the_tail_bytes(self, tmp_path, monkeypatch):
+        target = tmp_path / "home-assistant.log"
+        target.write_text("x\n" * 10_000)
+        reads: list[int] = []
+        real_open = Path.open
+
+        def spy_open(self_path, *args, **kwargs):
+            fh = real_open(self_path, *args, **kwargs)
+            real_read = fh.read
+
+            def read(n=-1):
+                data = real_read(n)
+                reads.append(len(data))
+                return data
+
+            fh.read = read
+            return fh
+
+        monkeypatch.setattr(Path, "open", spy_open)
+        result = _read_log_tail_sync(target, 3, chunk_size=64)
+        assert result["content"] == "x\nx\n"
+        assert result["total_lines"] == 10_001
+        # One streaming pass to count, then a single 64-byte chunk for the tail.
+        assert reads[-2:] == [0, 64] or reads[-1] == 64
 
 
 class TestIsPathAllowedForDir:
@@ -237,6 +305,11 @@ class TestIsPathAllowedForRead:
     def test_allows_home_assistant_log(self, tmp_path):
         """Should allow reading home-assistant.log."""
         assert _is_path_allowed_for_read(tmp_path, "home-assistant.log") is True
+
+    def test_allows_fault_log(self, tmp_path):
+        """faulthandler's crash dump is readable (issue #2373)."""
+        assert _is_path_allowed_for_read(tmp_path, "home-assistant.log.fault") is True
+        assert "home-assistant.log.fault" in TAILED_LOG_FILES
 
     def test_allows_www_files(self, tmp_path):
         """Should allow reading files in www/ directory."""

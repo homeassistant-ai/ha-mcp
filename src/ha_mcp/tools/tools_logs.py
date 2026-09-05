@@ -22,10 +22,11 @@ from .log_common import (
     _validate_log_slug,
 )
 from .log_sources import CoreLogSourcesMixin
+from .log_sources_fault import FaultLogSourceMixin
 from .log_sources_supervisor import SupervisorLogSourcesMixin
 
 
-class LogTools(CoreLogSourcesMixin, SupervisorLogSourcesMixin):
+class LogTools(CoreLogSourcesMixin, SupervisorLogSourcesMixin, FaultLogSourceMixin):
     """Dispatches ``ha_get_logs`` to one log source and shapes the response."""
 
     def __init__(self, client: Any) -> None:
@@ -76,6 +77,10 @@ class LogTools(CoreLogSourcesMixin, SupervisorLogSourcesMixin):
             # logger reports per-integration levels, not time-ordered events;
             # 'order' does not apply (a warning is emitted upstream).
             return await self._get_logger_info(limit=limit, search=search)
+        if source == "fault_log":
+            return await self._get_fault_log(
+                limit=limit, search=search, offset=offset, order=order
+            )
         if source == "system_service":
             assert slug is not None  # guaranteed by _validate_log_slug
             return await self._get_system_service_log(
@@ -171,6 +176,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "supervisor",
             "system_service",
             "logger",
+            "fault_log",
         ] = "logbook",
         # Shared parameters
         limit: int | None = None,
@@ -180,7 +186,8 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 description=(
                     "Sort order for time-ordered sources (logbook, system, "
-                    "error_log, supervisor, system_service): 'newest' (default) "
+                    "error_log, supervisor, system_service, fault_log): "
+                    "'newest' (default) "
                     "returns most-recent first; 'oldest' returns chronological-"
                     "first. Ignored for source='logger', and for "
                     "source='error_log' with structured=True (that summary is "
@@ -197,10 +204,12 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 ge=0,
                 description=(
-                    "Page deeper into source='logbook' and source='error_log' "
-                    "(ignored for other sources). On error_log it counts raw "
-                    "log lines back from the newest entry; pass the response's "
-                    "'next_offset' to continue while 'has_more' is true."
+                    "Page deeper into source='logbook', 'error_log' and "
+                    "'fault_log' (ignored for other sources). On error_log it "
+                    "counts raw log lines back from the newest entry; on "
+                    "fault_log it counts lines from the start of the assembled "
+                    "crash text. Pass the response's 'next_offset' to continue "
+                    "while 'has_more' is true."
                 ),
             ),
         ] = 0,
@@ -245,6 +254,15 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - "system_service": HA-Supervisor-managed system service logs (requires
           slug ∈ {supervisor, host, core, dns, audio, cli, multicast, observer})
         - "logger": Effective log level per integration via logger/log_info (confirms logger.set_level changes took effect)
+        - "fault_log": HA Core's faulthandler crash dump (home-assistant.log.fault).
+          Written only when HA dies from a native fatal signal (segfault, abort,
+          Python fatal error), which never reaches journald or error_log. Empty
+          on a healthy install (crash_recorded=False). Whole crash blocks are
+          ordered (newest first by default) with each block's lines kept in
+          place so the traceback reads correctly; search keeps every block
+          that mentions the term; offset/limit page through the assembled
+          text. Reads through the "HA-MCP File & YAML Tools"
+          entry (component >= 2.1.4).
 
         **Prefer source='system' for triage.** It returns HA's own deduplicated
         system_log entries with counts, first_occurred and full tracebacks; of
@@ -258,10 +276,12 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         cap, or for the per-component rollup.
 
         **Shared params:** limit, search (keyword filter on entries/lines; matches integration domain for source='logger')
-        **Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service); ignored for source='logger' and for error_log with structured=True. For raw-text sources (error_log, supervisor, system_service) it sets the read direction of the most-recent window.
+        **Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service, fault_log); ignored for source='logger' and for error_log with structured=True. For raw-text sources (error_log, supervisor, system_service) it sets the read direction of the most-recent window; fault_log orders whole crash blocks instead of lines.
         **Logbook params:** hours_back, entity_id, end_time, compact (default True — strips attribute dicts to save context)
-        **Pagination (logbook + error_log):** offset pages deeper; ignored for the
-            other sources. Logbook responses carry has_more plus a
+        **Pagination (logbook + error_log + fault_log):** offset pages deeper; ignored for the
+            other sources. fault_log always reads a fixed window from the end of
+            the file, orders its crash blocks, and pages the assembled text
+            from the start with has_more/next_offset. Logbook responses carry has_more plus a
             pagination_hint. On error_log, offset counts raw log lines back from
             the newest entry (journald entries on Supervisor-backed installs),
             both modes read a bounded window per call — so `level`/`search`

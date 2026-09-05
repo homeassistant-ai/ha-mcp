@@ -128,7 +128,7 @@ def _collect_log_warnings(
             f"ignored for source='{source}'"
         )
     if (
-        source in ("logbook", "logger", "supervisor", "system_service")
+        source in ("logbook", "logger", "supervisor", "system_service", "fault_log")
         and level is not None
     ):
         warnings.append(
@@ -140,10 +140,10 @@ def _collect_log_warnings(
             "Parameter 'slug' only applies to source='supervisor' or "
             f"'system_service'; ignored for source='{source}'"
         )
-    if source not in ("logbook", "error_log") and offset:
+    if source not in ("logbook", "error_log", "fault_log") and offset:
         warnings.append(
-            "Parameter 'offset' only applies to source='logbook' or "
-            f"'error_log'; ignored for source='{source}'"
+            "Parameter 'offset' only applies to source='logbook', 'error_log' "
+            f"or 'fault_log'; ignored for source='{source}'"
         )
     return warnings
 
