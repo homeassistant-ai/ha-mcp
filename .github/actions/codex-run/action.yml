@@ -1,321 +1,335 @@
-name: Execute Codex automation
-description: Prepare authentication (if required) and invoke Codex in async or sync mode.
+name: Run Codex agent
+description: Run arbitrary caller-provided instructions with Codex in the checked-out repository.
+
 inputs:
-  mode:
-    description: "Execution mode: 'async' launches a cloud worker, 'sync' runs remediation locally, 'comment' posts a PR failure notice."
+  instructions:
+    description: Instructions passed to Codex verbatim on stdin.
     required: false
-    default: async
-  prompt:
-    description: Fully composed prompt to feed into Codex.
-    required: true
+    default: ""
+  instructions-file:
+    description: Optional repository-relative file passed to Codex verbatim instead of instructions.
+    required: false
+    default: ""
   codex-auth:
-    description: Raw CODEX_AUTH secret material used for authentication.
+    description: Raw auth.json content stored in the CODEX_AUTH secret.
+    required: true
+  codex-version:
+    description: Exact @openai/codex version to install.
     required: false
-  codex-auth-pat:
-    description: Personal access token used for Codex-authenticated Git operations.
+    default: "0.151.0"
+  working-directory:
+    description: Repository-relative directory used as the Codex working root.
     required: false
-  require-pat:
-    description: "Set to 'true' to require the PAT before marking the environment as available."
+    default: "."
+  sandbox:
+    description: Codex filesystem sandbox (read-only or workspace-write).
     required: false
-    default: 'false'
+    default: read-only
+  allow-shell:
+    description: Whether Codex may execute shell commands. Disable for attacker-controlled context.
+    required: false
+    default: "true"
+  timeout-minutes:
+    description: Maximum duration of the Codex invocation; keep below the caller job timeout.
+    required: false
+    default: "10"
+  model:
+    description: Optional model override. Empty uses the authenticated account default.
+    required: false
+    default: ""
+  reasoning-effort:
+    description: Optional reasoning effort override.
+    required: false
+    default: ""
+  output-schema:
+    description: Optional repository-relative JSON Schema for the final response.
+    required: false
+    default: ""
+
 outputs:
-  available:
-    description: Whether Codex credentials were present and usable.
-    value: ${{ steps.export.outputs.available }}
-  codex_auth_path:
-    description: Absolute path to the written auth.json file, if created.
-    value: ${{ steps.export.outputs.codex_auth_path }}
-  original_codex_auth:
-    description: Path to the original auth snapshot, if captured.
-    value: ${{ steps.export.outputs.original_codex_auth }}
-  summary_markdown:
-    description: Markdown summary of Codex changes (sync mode only).
-    value: ${{ steps.export.outputs.summary_markdown }}
-  testing_markdown:
-    description: Markdown list of Codex-reported tests (sync mode only).
-    value: ${{ steps.export.outputs.testing_markdown }}
+  output-path:
+    description: Absolute path to the final Codex message.
+    value: ${{ steps.prepare.outputs.output-path }}
+  auth-path:
+    description: Absolute path to auth.json after Codex exits.
+    value: ${{ steps.prepare.outputs.auth-path }}
+  original-auth-path:
+    description: Absolute path to the pre-run auth.json snapshot.
+    value: ${{ steps.prepare.outputs.original-auth-path }}
+  codex-version:
+    description: Installed Codex CLI version.
+    value: ${{ steps.install.outputs.codex-version }}
+
 runs:
   using: composite
   steps:
-    - id: resolve_state
+    - id: prepare
       shell: bash
       env:
-        CODEX_ENV_PREPARED: ${{ env.CODEX_ENV_PREPARED }}
-        CODEX_AVAILABLE: ${{ env.CODEX_AVAILABLE }}
-        MODE: ${{ inputs.mode }}
+        CODEX_AUTH_INPUT: ${{ inputs.codex-auth }}
+        INSTRUCTIONS_INPUT: ${{ inputs.instructions }}
+        INSTRUCTIONS_FILE_INPUT: ${{ inputs.instructions-file }}
+        WORKING_DIRECTORY_INPUT: ${{ inputs.working-directory }}
+        SANDBOX_INPUT: ${{ inputs.sandbox }}
+        ALLOW_SHELL_INPUT: ${{ inputs.allow-shell }}
+        TIMEOUT_MINUTES_INPUT: ${{ inputs.timeout-minutes }}
+        OUTPUT_SCHEMA_INPUT: ${{ inputs.output-schema }}
       run: |
         set -euo pipefail
 
-        if [[ "${MODE:-}" == "comment" ]]; then
-          echo "skip_prep=true" >> "$GITHUB_OUTPUT"
-          echo "preexisting_available=false" >> "$GITHUB_OUTPUT"
-          {
-            echo "CODEX_ENV_PREPARED=true"
-            echo "CODEX_AVAILABLE=false"
-          } >> "$GITHUB_ENV"
-          exit 0
+        if [[ -z "${CODEX_AUTH_INPUT:-}" ]]; then
+          echo "::error::The CODEX_AUTH secret is missing."
+          exit 1
         fi
-
-        if [[ "${CODEX_ENV_PREPARED:-}" == "true" ]]; then
-          echo "skip_prep=true" >> "$GITHUB_OUTPUT"
-          echo "preexisting_available=${CODEX_AVAILABLE:-false}" >> "$GITHUB_OUTPUT"
-        else
-          echo "skip_prep=false" >> "$GITHUB_OUTPUT"
+        if [[ -n "${INSTRUCTIONS_INPUT:-}" && -n "${INSTRUCTIONS_FILE_INPUT:-}" ]]; then
+          echo "::error::Set instructions or instructions-file, not both."
+          exit 1
         fi
-
-    - id: check_credentials
-      if: ${{ steps.resolve_state.outputs.skip_prep != 'true' }}
-      shell: bash
-      env:
-        CODEX_AUTH: ${{ inputs.codex-auth }}
-        CODEX_AUTH_PAT: ${{ inputs.codex-auth-pat }}
-        REQUIRE_PAT: ${{ inputs.require-pat }}
-      run: |
-        set -euo pipefail
-        require_pat="${REQUIRE_PAT,,}"
-        if [[ -z "${CODEX_AUTH:-}" ]]; then
-          echo "::notice::CODEX_AUTH secret missing; Codex automation will be skipped." >&2
-          {
-            echo "CODEX_ENV_PREPARED=true"
-            echo "CODEX_AVAILABLE=false"
-          } >> "$GITHUB_ENV"
-          echo "available=false" >> "$GITHUB_OUTPUT"
-          exit 0
+        if [[ -z "${INSTRUCTIONS_INPUT:-}" && -z "${INSTRUCTIONS_FILE_INPUT:-}" ]]; then
+          echo "::error::Codex instructions must not be empty."
+          exit 1
         fi
-
-        if [[ "$require_pat" == "true" && -z "${CODEX_AUTH_PAT:-}" ]]; then
-          echo "::notice::CODEX_AUTH_PAT secret missing; Codex automation will be skipped." >&2
-          {
-            echo "CODEX_ENV_PREPARED=true"
-            echo "CODEX_AVAILABLE=false"
-          } >> "$GITHUB_ENV"
-          echo "available=false" >> "$GITHUB_OUTPUT"
-          exit 0
+        case "$SANDBOX_INPUT" in
+          read-only|workspace-write) ;;
+          *)
+            echo "::error::sandbox must be read-only or workspace-write."
+            exit 1
+            ;;
+        esac
+        allow_shell="${ALLOW_SHELL_INPUT,,}"
+        if [[ "$allow_shell" != "true" && "$allow_shell" != "false" ]]; then
+          echo "::error::allow-shell must be true or false."
+          exit 1
         fi
-
-        {
-          echo "CODEX_ENV_PREPARED=true"
-          echo "CODEX_AVAILABLE=true"
-        } >> "$GITHUB_ENV"
-        echo "available=true" >> "$GITHUB_OUTPUT"
-
-    - id: write_auth
-      if: ${{ steps.resolve_state.outputs.skip_prep != 'true' && steps.check_credentials.outputs.available == 'true' }}
-      shell: bash
-      env:
-        CODEX_AUTH: ${{ inputs.codex-auth }}
-        RUNNER_TEMP: ${{ runner.temp }}
-      run: |
-        set -euo pipefail
-        auth_path="${CODEX_AUTH_PATH:-$HOME/.codex/auth.json}"
-        mkdir -p "$(dirname "$auth_path")"
-        printf '%s' "$CODEX_AUTH" > "$auth_path"
-        chmod 600 "$auth_path"
-        echo "auth_path=$auth_path" >> "$GITHUB_OUTPUT"
-
-        if [[ -n "${RUNNER_TEMP:-}" ]]; then
-          snapshot="$RUNNER_TEMP/codex-auth-original.json"
-          cp "$auth_path" "$snapshot"
-          echo "original_auth=$snapshot" >> "$GITHUB_OUTPUT"
-          {
-            echo "CODEX_ORIGINAL_AUTH=$snapshot"
-          } >> "$GITHUB_ENV"
-        else
-          echo "original_auth=" >> "$GITHUB_OUTPUT"
-          echo "CODEX_ORIGINAL_AUTH=" >> "$GITHUB_ENV"
-        fi
-
-        echo "CODEX_AUTH_PATH=$auth_path" >> "$GITHUB_ENV"
-
-    - name: Install Codex CLI
-      if: ${{ steps.resolve_state.outputs.skip_prep != 'true' && steps.check_credentials.outputs.available == 'true' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        if ! command -v codex >/dev/null 2>&1; then
-          npm install -g @openai/codex
-        fi
-
-    - id: capture_availability
-      shell: bash
-      env:
-        CODEX_AVAILABLE: ${{ env.CODEX_AVAILABLE }}
-        PREEXISTING: ${{ steps.resolve_state.outputs.preexisting_available }}
-        CHECKED: ${{ steps.check_credentials.outputs.available }}
-      run: |
-        set -euo pipefail
-        available="${CODEX_AVAILABLE:-}"
-        if [[ -z "$available" ]]; then
-          available="${CHECKED:-${PREEXISTING:-false}}"
-          if [[ -z "$available" ]]; then
-            available=false
-          fi
-          echo "CODEX_AVAILABLE=$available" >> "$GITHUB_ENV"
-        fi
-        echo "available=$available" >> "$GITHUB_OUTPUT"
-
-    - id: run_async
-      if: ${{ steps.capture_availability.outputs.available == 'true' && inputs.mode == 'async' }}
-      shell: bash
-      env:
-        PROMPT_TEXT: ${{ inputs.prompt }}
-      run: |
-        set -euo pipefail
-        printf '%s\n' "${PROMPT_TEXT}" | \
-          codex cloud exec --env 68f2eebb94d48191ba53625a2b09ae54 -
-
-    - id: run_sync
-      if: ${{ steps.capture_availability.outputs.available == 'true' && inputs.mode == 'sync' }}
-      shell: bash
-      env:
-        PROMPT_TEXT: ${{ inputs.prompt }}
-        RUNNER_TEMP: ${{ runner.temp }}
-      run: |
-        set -euo pipefail
-
-        temp_dir="${RUNNER_TEMP:-$(mktemp -d)}"
-        schema="$temp_dir/codex-output-schema.json"
-        cat <<'JSON' > "$schema"
-{
-  "type": "object",
-  "properties": {
-    "summary": { "type": "array", "items": { "type": "string" } },
-    "testing": { "type": "array", "items": { "type": "string" } }
-  },
-  "required": ["summary", "testing"],
-  "additionalProperties": false
-}
-JSON
-
-        prompt_file="$(mktemp)"
-        printf '%s\n' "${PROMPT_TEXT}" > "$prompt_file"
-
-        output_file="$temp_dir/codex-output.json"
-        export CODEX_QUIET_MODE=1
-        codex exec \
-          --full-auto \
-          --skip-git-repo-check \
-          --output-schema "$schema" \
-          -o "$output_file" \
-          - < "$prompt_file"
-
-        echo "output_path=$output_file" >> "$GITHUB_OUTPUT"
-
-    - name: Comment token unavailable
-      if: ${{ inputs.mode == 'comment' && env.GH_TOKEN_CODEX_COMMENT == '' }}
-      shell: bash
-      run: |
-        echo '::notice::GH_TOKEN_CODEX_COMMENT is not set; skipping PR comment.'
-
-    - id: run_comment
-      if: ${{ inputs.mode == 'comment' && env.GH_TOKEN_CODEX_COMMENT != '' }}
-      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
-      env:
-        COMMENT_TOKEN: ${{ env.GH_TOKEN_CODEX_COMMENT }}
-      with:
-        github-token: ${{ env.GH_TOKEN_CODEX_COMMENT }}
-        script: |
-          const run = context.payload.workflow_run;
-          if (!run) {
-            core.setFailed('workflow_run payload missing.');
-            return;
-          }
-
-          const owner = run.head_repository?.owner?.login;
-          const repo = run.head_repository?.name;
-          if (!owner || !repo) {
-            core.setFailed('Failed to resolve repository details for workflow_run.');
-            return;
-          }
-
-          let pr = (run.pull_requests && run.pull_requests[0]) || null;
-          if (!pr) {
-            const prsForCommit = await github.request(
-              'GET /repos/{owner}/{repo}/commits/{ref}/pulls',
-              { owner, repo, ref: run.head_sha, mediaType: { previews: ['groot'] } }
-            );
-            pr = prsForCommit.data?.[0] || null;
-          }
-
-          if (!pr) {
-            core.notice('No associated pull request found; skipping PR comment.');
-            return;
-          }
-
-          const bodyLines = [
-            '@codex PR is failing',
-            '',
-            `Workflow: ${run.name}`,
-            `Run URL: ${run.html_url}`,
-            `Head branch: ${run.head_branch}`,
-            `Head SHA: ${run.head_sha}`,
-          ];
-
-          await github.rest.issues.createComment({
-            owner,
-            repo,
-            issue_number: pr.number,
-            body: bodyLines.join('\n'),
-          });
-
-    - id: parse
-      if: ${{ steps.run_sync.outcome == 'success' }}
-      shell: bash
-      env:
-        OUTPUT_PATH: ${{ steps.run_sync.outputs.output_path }}
-      run: |
-        set -euo pipefail
-        if [[ -z "${OUTPUT_PATH:-}" || ! -f "$OUTPUT_PATH" ]]; then
-          echo "Codex output file missing" >&2
+        if [[ ! "$TIMEOUT_MINUTES_INPUT" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::timeout-minutes must be a positive integer."
           exit 1
         fi
 
-        python - <<'PY'
-import json
-import os
+        case "$WORKING_DIRECTORY_INPUT" in
+          /*) workdir_candidate="$WORKING_DIRECTORY_INPUT" ;;
+          *) workdir_candidate="$GITHUB_WORKSPACE/$WORKING_DIRECTORY_INPUT" ;;
+        esac
+        workdir="$(realpath -m "$workdir_candidate")"
+        case "$workdir/" in
+          "$GITHUB_WORKSPACE/"*) ;;
+          *)
+            echo "::error::working-directory must stay inside GITHUB_WORKSPACE."
+            exit 1
+            ;;
+        esac
+        if [[ ! -d "$workdir" ]]; then
+          echo "::error::working-directory does not point to a directory."
+          exit 1
+        fi
 
-path = os.environ['OUTPUT_PATH']
-with open(path, 'r', encoding='utf-8') as fh:
-    data = json.load(fh)
-summary = data.get('summary') or []
-testing = data.get('testing') or []
-summary_md = '\n'.join(f"- {item}" for item in summary) or '- Codex did not provide a summary.'
-testing_md = '\n'.join(f"- {item}" for item in testing) or '- Codex did not report any tests.'
-with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
-    out.write(f"summary_md<<EOF\n{summary_md}\nEOF\n")
-    out.write(f"testing_md<<EOF\n{testing_md}\nEOF\n")
-PY
+        credential_root="$RUNNER_TEMP/codex-action-state"
+        mkdir -p "$credential_root"
+        chmod 700 "$credential_root"
+        printf 'EXPOSED' > "$credential_root/visibility-probe.txt"
+        chmod 600 "$credential_root/visibility-probe.txt"
+        codex_home="$(mktemp -d "$credential_root/home.XXXXXX")"
+        chmod 700 "$codex_home"
+        auth_path="$codex_home/auth.json"
+        original_auth_path="$(mktemp "$credential_root/original.XXXXXX.json")"
+        printf '%s' "$CODEX_AUTH_INPUT" > "$auth_path"
+        chmod 600 "$auth_path"
+        jq -e 'type == "object" and (.auth_mode | type == "string")' "$auth_path" >/dev/null
+        cp "$auth_path" "$original_auth_path"
+        chmod 600 "$original_auth_path"
 
-    - id: export
+        output_path="$(mktemp "$RUNNER_TEMP/codex-last-message.XXXXXX.md")"
+        instructions_path="$(mktemp "$RUNNER_TEMP/codex-instructions.XXXXXX.txt")"
+        if [[ -n "$INSTRUCTIONS_FILE_INPUT" ]]; then
+          case "$INSTRUCTIONS_FILE_INPUT" in
+            /*) instructions_candidate="$INSTRUCTIONS_FILE_INPUT" ;;
+            *) instructions_candidate="$GITHUB_WORKSPACE/$INSTRUCTIONS_FILE_INPUT" ;;
+          esac
+          instructions_source="$(realpath -m "$instructions_candidate")"
+          case "$instructions_source/" in
+            "$GITHUB_WORKSPACE/"*) ;;
+            *)
+              echo "::error::instructions-file must stay inside GITHUB_WORKSPACE."
+              exit 1
+              ;;
+          esac
+          if [[ ! -f "$instructions_source" ]]; then
+            echo "::error::instructions-file does not point to a file."
+            exit 1
+          fi
+          cp "$instructions_source" "$instructions_path"
+        else
+          printf '%s' "$INSTRUCTIONS_INPUT" > "$instructions_path"
+        fi
+        if [[ ! -s "$instructions_path" ]]; then
+          echo "::error::Codex instructions must not be empty."
+          exit 1
+        fi
+        chmod 600 "$instructions_path"
+
+        schema_path=""
+        if [[ -n "$OUTPUT_SCHEMA_INPUT" ]]; then
+          case "$OUTPUT_SCHEMA_INPUT" in
+            /*) schema_candidate="$OUTPUT_SCHEMA_INPUT" ;;
+            *) schema_candidate="$GITHUB_WORKSPACE/$OUTPUT_SCHEMA_INPUT" ;;
+          esac
+          schema_path="$(realpath -m "$schema_candidate")"
+          if [[ ! -f "$schema_path" ]]; then
+            echo "::error::output-schema does not point to a file."
+            exit 1
+          fi
+        fi
+
+        profile_name=ci-action
+        profile_path="$codex_home/$profile_name.config.toml"
+        case "$SANDBOX_INPUT" in
+          read-only) parent_profile=:read-only ;;
+          workspace-write) parent_profile=:workspace ;;
+        esac
+        {
+          printf 'default_permissions = "%s"\n\n' "$profile_name"
+          printf '[shell_environment_policy]\n'
+          printf 'inherit = "core"\n\n'
+          printf '[permissions.%s]\n' "$profile_name"
+          printf 'extends = "%s"\n\n' "$parent_profile"
+          printf '[permissions.%s.filesystem]\n' "$profile_name"
+          printf '"%s" = "deny"\n' "$credential_root"
+        } > "$profile_path"
+        chmod 600 "$profile_path"
+
+        {
+          echo "CODEX_HOME=$codex_home"
+          echo "CODEX_ACTION_WORKDIR=$workdir"
+          echo "CODEX_ACTION_OUTPUT=$output_path"
+          echo "CODEX_ACTION_INSTRUCTIONS=$instructions_path"
+          echo "CODEX_ACTION_SCHEMA=$schema_path"
+          echo "CODEX_ACTION_ALLOW_SHELL=$allow_shell"
+          echo "CODEX_ACTION_TIMEOUT_MINUTES=$TIMEOUT_MINUTES_INPUT"
+          echo "CODEX_ACTION_PROFILE=$profile_name"
+        } >> "$GITHUB_ENV"
+        {
+          echo "output-path=$output_path"
+          echo "auth-path=$auth_path"
+          echo "original-auth-path=$original_auth_path"
+        } >> "$GITHUB_OUTPUT"
+
+    - id: install
       shell: bash
       env:
-        AVAILABLE: ${{ steps.capture_availability.outputs.available }}
-        AUTH_PATH: ${{ env.CODEX_AUTH_PATH }}
-        ORIGINAL_AUTH: ${{ env.CODEX_ORIGINAL_AUTH }}
-        SUMMARY_MD: ${{ steps.parse.outputs.summary_md }}
-        TESTING_MD: ${{ steps.parse.outputs.testing_md }}
+        CODEX_VERSION_INPUT: ${{ inputs.codex-version }}
       run: |
         set -euo pipefail
-        echo "available=$AVAILABLE" >> "$GITHUB_OUTPUT"
-        echo "codex_auth_path=${AUTH_PATH:-}" >> "$GITHUB_OUTPUT"
-        echo "original_codex_auth=${ORIGINAL_AUTH:-}" >> "$GITHUB_OUTPUT"
+        if [[ ! "$CODEX_VERSION_INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::codex-version must be an exact semantic version."
+          exit 1
+        fi
+        npm install --global --no-audit --no-fund "@openai/codex@$CODEX_VERSION_INPUT"
+        installed="$(codex --version | awk '{print $2}')"
+        if [[ "$installed" != "$CODEX_VERSION_INPUT" ]]; then
+          echo "::error::Expected Codex $CODEX_VERSION_INPUT, installed $installed."
+          exit 1
+        fi
+        echo "codex-version=$installed" >> "$GITHUB_OUTPUT"
+        echo "Using Codex CLI $installed"
 
-        if [[ -n "${SUMMARY_MD:-}" ]]; then
-          {
-            echo 'summary_markdown<<EOF'
-            printf '%s\n' "$SUMMARY_MD"
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
-        else
-          echo 'summary_markdown=' >> "$GITHUB_OUTPUT"
+    - name: Prepare Bubblewrap sandbox on Ubuntu
+      if: ${{ runner.os == 'Linux' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        sudo apt-get update --quiet
+        sudo apt-get install --yes --no-install-recommends \
+          apparmor-profiles \
+          apparmor-utils \
+          bubblewrap
+
+        profile_source=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+        profile_target=/etc/apparmor.d/bwrap-userns-restrict
+        if [[ -f "$profile_source" ]]; then
+          sudo install -m 0644 "$profile_source" "$profile_target"
+          sudo apparmor_parser -r "$profile_target"
+          echo "Loaded the Bubblewrap AppArmor profile."
+        elif [[ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || true)" == "1" ]]; then
+          echo "::error::Bubblewrap requires an AppArmor profile on this restricted runner."
+          exit 1
         fi
 
-        if [[ -n "${TESTING_MD:-}" ]]; then
-          {
-            echo 'testing_markdown<<EOF'
-            printf '%s\n' "$TESTING_MD"
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
-        else
-          echo 'testing_markdown=' >> "$GITHUB_OUTPUT"
+        bwrap --version
+
+    - name: Verify credential isolation
+      shell: bash
+      run: |
+        set -euo pipefail
+        codex sandbox \
+          --profile "$CODEX_ACTION_PROFILE" \
+          --permission-profile "$CODEX_ACTION_PROFILE" \
+          --cd "$CODEX_ACTION_WORKDIR" \
+          -- \
+          bash -c '[[ ! -r "$1" && ! -r "$2" ]]' \
+          _ \
+          "$CODEX_HOME/auth.json" \
+          "${{ steps.prepare.outputs.original-auth-path }}"
+
+    - id: agent
+      name: Run Codex
+      shell: bash
+      env:
+        INSTRUCTIONS_INPUT: ${{ inputs.instructions }}
+        SANDBOX_INPUT: ${{ inputs.sandbox }}
+        MODEL_INPUT: ${{ inputs.model }}
+        REASONING_EFFORT_INPUT: ${{ inputs.reasoning-effort }}
+      run: |
+        set -euo pipefail
+
+        args=(
+          exec
+          --profile "$CODEX_ACTION_PROFILE"
+          --strict-config
+          -c apps._default.enabled=false
+          --ephemeral
+          --color never
+          --cd "$CODEX_ACTION_WORKDIR"
+          --output-last-message "$CODEX_ACTION_OUTPUT"
+        )
+        if [[ -n "$MODEL_INPUT" ]]; then
+          args+=(--model "$MODEL_INPUT")
         fi
+        if [[ -n "$REASONING_EFFORT_INPUT" ]]; then
+          args+=(-c "model_reasoning_effort=\"$REASONING_EFFORT_INPUT\"")
+        fi
+        if [[ -n "$CODEX_ACTION_SCHEMA" ]]; then
+          args+=(--output-schema "$CODEX_ACTION_SCHEMA")
+        fi
+        if [[ "$CODEX_ACTION_ALLOW_SHELL" == "false" ]]; then
+          args+=(--disable shell_tool)
+        fi
+
+        set +e
+        timeout --signal=TERM --kill-after=30s \
+          "${CODEX_ACTION_TIMEOUT_MINUTES}m" \
+          codex "${args[@]}" - \
+          < "$CODEX_ACTION_INSTRUCTIONS"
+        codex_status=$?
+        set -e
+        if [[ "$codex_status" -eq 124 ]]; then
+          echo "::error::Codex exceeded the ${CODEX_ACTION_TIMEOUT_MINUTES}-minute invocation timeout."
+        fi
+        exit "$codex_status"
+
+    - name: Show final Codex output
+      if: ${{ always() }}
+      shell: bash
+      run: |
+        if [[ ! -s "${CODEX_ACTION_OUTPUT:-}" ]]; then
+          echo "Codex did not produce a final message."
+          exit 0
+        fi
+        echo "::group::Codex final output"
+        sed 's/^/Codex | /' "$CODEX_ACTION_OUTPUT"
+        echo "::endgroup::"
+        {
+          echo "## Codex final output"
+          echo
+          cat "$CODEX_ACTION_OUTPUT"
+        } >> "$GITHUB_STEP_SUMMARY"
