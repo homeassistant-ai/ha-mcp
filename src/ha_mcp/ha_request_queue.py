@@ -19,10 +19,16 @@ CALL_PROXY_META_TOOLS = frozenset(
     }
 )
 
+_APPROVAL_MANAGEMENT_TOOL = "ha_dev_manage_server"
+_APPROVAL_MANAGEMENT_ACTIONS = frozenset({"list_pending", "approve", "deny"})
+
 _transport_concurrency = 1
 _transport_semaphores: WeakKeyDictionary[
     asyncio.AbstractEventLoop, asyncio.Semaphore
 ] = WeakKeyDictionary()
+_transport_request_depth: ContextVar[int] = ContextVar(
+    "ha_transport_request_depth", default=0
+)
 
 
 def configure_ha_transport_concurrency(max_concurrency: int) -> None:
@@ -37,13 +43,39 @@ def configure_ha_transport_concurrency(max_concurrency: int) -> None:
 @asynccontextmanager
 async def limit_ha_transport_request() -> AsyncIterator[None]:
     """Bound in-flight HA REST and WebSocket requests across all clients."""
+    depth = _transport_request_depth.get()
+    if depth:
+        token = _transport_request_depth.set(depth + 1)
+        try:
+            yield
+        finally:
+            _transport_request_depth.reset(token)
+        return
+
     loop = asyncio.get_running_loop()
     semaphore = _transport_semaphores.get(loop)
     if semaphore is None:
         semaphore = asyncio.Semaphore(_transport_concurrency)
         _transport_semaphores[loop] = semaphore
     async with semaphore:
-        yield
+        token = _transport_request_depth.set(1)
+        try:
+            yield
+        finally:
+            _transport_request_depth.reset(token)
+
+
+def is_approval_management_call(name: str, args: dict[str, Any]) -> bool:
+    """Return whether a dispatch manages the policy approval queue."""
+    return (
+        name == _APPROVAL_MANAGEMENT_TOOL
+        and args.get("action") in _APPROVAL_MANAGEMENT_ACTIONS
+    )
+
+
+def _bypasses_outer_queue(name: str, args: dict[str, Any]) -> bool:
+    """Return whether a dispatch must run without an outer queue slot."""
+    return name in CALL_PROXY_META_TOOLS or is_approval_management_call(name, args)
 
 
 class HomeAssistantRequestQueueMiddleware(Middleware):
@@ -60,7 +92,7 @@ class HomeAssistantRequestQueueMiddleware(Middleware):
     async def on_call_tool(
         self, context: MiddlewareContext, call_next: CallNext
     ) -> Any:
-        if context.message.name in CALL_PROXY_META_TOOLS:
+        if _bypasses_outer_queue(context.message.name, context.message.arguments or {}):
             return await call_next(context)
 
         depth = self._depth.get()

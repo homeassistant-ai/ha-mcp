@@ -12,7 +12,7 @@ from anyio.to_thread import run_sync as run_in_thread
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 
 from ..errors import ErrorCode, create_error_response
-from ..ha_request_queue import CALL_PROXY_META_TOOLS
+from ..ha_request_queue import CALL_PROXY_META_TOOLS, is_approval_management_call
 from ..renamed_tools import current_tool_name
 from ..tools.helpers import raise_tool_error, safe_progress
 from .approval_queue import ApprovalQueue, PendingApproval, compute_args_hash
@@ -47,21 +47,11 @@ PROXY_META_TOOLS = CALL_PROXY_META_TOOLS | {"ha_search_tools"}
 # remain gateable like any other high-stakes action. The exemption is not
 # a free self-approval: approve/deny separately require the
 # dev_tools_security_policy_access setting (off by default, issue #2141).
-_APPROVAL_MANAGEMENT_TOOL = "ha_dev_manage_server"
-_APPROVAL_MANAGEMENT_ACTIONS = frozenset({"list_pending", "approve", "deny"})
-
-
-def _is_approval_management(name: str, args: dict[str, Any]) -> bool:
-    """True for dev-tool calls that manage the approval queue itself."""
-    return (
-        name == _APPROVAL_MANAGEMENT_TOOL
-        and args.get("action") in _APPROVAL_MANAGEMENT_ACTIONS
-    )
 
 
 def _passes_ungated(name: str, args: dict[str, Any]) -> bool:
     """Calls that must bypass gating: proxy meta-tools + queue management."""
-    return name in PROXY_META_TOOLS or _is_approval_management(name, args)
+    return name in PROXY_META_TOOLS or is_approval_management_call(name, args)
 
 
 class PolicyMiddleware(Middleware):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -23,6 +24,7 @@ def anyio_backend() -> str:
 def make_context(name: str) -> MagicMock:
     message = MagicMock()
     message.name = name
+    message.arguments = {}
     context = MagicMock()
     context.message = message
     return context
@@ -158,13 +160,83 @@ async def test_transport_requests_share_process_wide_capacity() -> None:
     assert second_entered.is_set()
 
 
+@pytest.mark.asyncio
+async def test_transport_reservation_is_reentrant() -> None:
+    configure_ha_transport_concurrency(1)
+
+    with anyio.fail_after(1):
+        async with limit_ha_transport_request():
+            async with limit_ha_transport_request():
+                pass
+
+
+@pytest.mark.asyncio
+async def test_request_timeout_starts_after_transport_admission() -> None:
+    configure_ha_transport_concurrency(1)
+    first_entered = anyio.Event()
+    release_first = anyio.Event()
+    second_completed = anyio.Event()
+
+    async def first_request() -> None:
+        async with limit_ha_transport_request():
+            first_entered.set()
+            await release_first.wait()
+
+    async def second_request() -> None:
+        async with limit_ha_transport_request():
+            await asyncio.wait_for(anyio.lowlevel.checkpoint(), timeout=0.01)
+            second_completed.set()
+
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(first_request)
+        await first_entered.wait()
+        task_group.start_soon(second_request)
+        with anyio.move_on_after(0.05) as wait_scope:
+            await second_completed.wait()
+        assert wait_scope.cancel_called
+        release_first.set()
+
+    assert second_completed.is_set()
+
+
+@pytest.mark.anyio
+async def test_approval_management_bypasses_outer_queue() -> None:
+    middleware = HomeAssistantRequestQueueMiddleware(max_concurrency=1)
+    first_entered = anyio.Event()
+    release_first = anyio.Event()
+    approval_entered = anyio.Event()
+
+    async def first_call_next(_context: MagicMock) -> None:
+        first_entered.set()
+        await release_first.wait()
+
+    async def approval_call_next(_context: MagicMock) -> str:
+        approval_entered.set()
+        return "approved"
+
+    approval_context = make_context("ha_dev_manage_server")
+    approval_context.message.arguments = {"action": "approve"}
+
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(
+            middleware.on_call_tool,
+            make_context("ha_manage_custom_tool"),
+            first_call_next,
+        )
+        await first_entered.wait()
+        result = await middleware.on_call_tool(approval_context, approval_call_next)
+        assert result == "approved"
+        assert approval_entered.is_set()
+        release_first.set()
+
+
 def test_rest_and_websocket_transports_use_shared_limiter() -> None:
     root = Path(__file__).parents[3] / "src" / "ha_mcp" / "client"
     rest_source = (root / "rest_client.py").read_text(encoding="utf-8")
     websocket_source = (root / "websocket_client.py").read_text(encoding="utf-8")
 
     assert "async with limit_ha_transport_request():" in rest_source
-    assert websocket_source.count("async with limit_ha_transport_request():") == 2
+    assert websocket_source.count("async with limit_ha_transport_request():") == 4
 
 
 @pytest.mark.parametrize("max_concurrency", [0, 33])

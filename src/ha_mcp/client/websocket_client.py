@@ -829,6 +829,13 @@ class HomeAssistantWebSocketClient:
         return result_response, event_response
 
     async def subscribe_events(self, event_type: str | None = None) -> int:
+        """Establish an event subscription under the shared transport limit."""
+        from ..ha_request_queue import limit_ha_transport_request
+
+        async with limit_ha_transport_request():
+            return await self._subscribe_events_unlimited(event_type)
+
+    async def _subscribe_events_unlimited(self, event_type: str | None = None) -> int:
         """Subscribe to Home Assistant events.
 
         HA's WebSocket API identifies a subscription by the ``id`` of the
@@ -940,6 +947,21 @@ class HomeAssistantWebSocketClient:
             )
 
     async def subscribe_command(
+        self,
+        command_type: str,
+        *,
+        timeout: float = 30.0,
+        **kwargs: Any,
+    ) -> tuple[int, asyncio.Queue[dict[str, Any]]]:
+        """Establish a command subscription under the shared transport limit."""
+        from ..ha_request_queue import limit_ha_transport_request
+
+        async with limit_ha_transport_request():
+            return await self._subscribe_command_unlimited(
+                command_type, timeout=timeout, **kwargs
+            )
+
+    async def _subscribe_command_unlimited(
         self,
         command_type: str,
         *,
