@@ -21,6 +21,30 @@ logger = logging.getLogger(__name__)
 class SystemOverviewMixin(_SearchBase):
     """``get_system_overview`` and its analysis/format/paginate helpers."""
 
+    async def _fetch_legacy_overview_slices(self) -> list[Any]:
+        """Fetch broad legacy slices sequentially, failing fast on states."""
+        results: list[Any] = [await self.client.get_states()]
+        fetches = (
+            self.client.get_services,
+            lambda: self.client.send_websocket_message(
+                {"type": "config/area_registry/list"}
+            ),
+            lambda: self.client.send_websocket_message(
+                {"type": "config/entity_registry/list"}
+            ),
+            lambda: self.client.send_websocket_message(
+                {"type": "config/device_registry/list"}
+            ),
+        )
+        for fetch in fetches:
+            try:
+                results.append(await fetch())
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                results.append(exc)
+        return results
+
     async def get_system_overview(
         self,
         detail_level: str = "standard",
@@ -76,22 +100,11 @@ class SystemOverviewMixin(_SearchBase):
                     prefetched_slices["device_registry"],
                 ]
             else:
-                # Fetch all data in parallel. return_exceptions=True so a degraded
-                # registry/service fetch doesn't abort the whole overview.
-                results = await asyncio.gather(
-                    self.client.get_states(),
-                    self.client.get_services(),
-                    self.client.send_websocket_message(
-                        {"type": "config/area_registry/list"}
-                    ),
-                    self.client.send_websocket_message(
-                        {"type": "config/entity_registry/list"}
-                    ),
-                    self.client.send_websocket_message(
-                        {"type": "config/device_registry/list"}
-                    ),
-                    return_exceptions=True,
-                )
+                # Keep broad legacy reads sequential so one overview cannot burst
+                # five expensive requests into HA. Capture ordinary failures for
+                # the established partial-result handling below; cancellation
+                # still propagates immediately.
+                results = await self._fetch_legacy_overview_slices()
 
             # Entities are mandatory — surface connection/auth errors immediately.
             # Use BaseException so a cancelled states fetch propagates instead of

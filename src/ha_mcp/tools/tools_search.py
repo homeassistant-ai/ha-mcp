@@ -1558,6 +1558,65 @@ class _OverviewSlices:
     repairs: dict[str, Any]
 
 
+_OVERVIEW_INDEPENDENT_FIELDS = frozenset(
+    {
+        "success",
+        "system_info",
+        "notification_count",
+        "notifications",
+        "repair_count",
+        "dismissed_repair_count",
+        "repairs",
+        "repairs_error",
+        "warnings",
+        "partial",
+        "tool_discovery",
+        "settings_url",
+        "settings_url_hint",
+        "read_only_mode",
+        "read_only_mode_hint",
+        "ha_mcp_update",
+    }
+)
+_OVERVIEW_NOTIFICATION_FIELDS = frozenset({"notification_count", "notifications"})
+_OVERVIEW_REPAIR_FIELDS = frozenset(
+    {
+        "repair_count",
+        "dismissed_repair_count",
+        "repairs",
+        "repairs_error",
+    }
+)
+_OVERVIEW_ENTITY_FIELDS = frozenset(
+    {
+        "domains",
+        "system_summary",
+        "domain_stats",
+        "area_analysis",
+        "ai_insights",
+        "pagination",
+        "device_types",
+        "service_availability",
+    }
+)
+
+
+def _count_overview_independent_collectors(
+    requested_fields: set[str], include_notifications: bool
+) -> int:
+    """Count HA collectors needed for an independent overview projection."""
+    return sum(
+        (
+            "system_info" in requested_fields,
+            bool(
+                include_notifications
+                and requested_fields & _OVERVIEW_NOTIFICATION_FIELDS
+            ),
+            bool(requested_fields & _OVERVIEW_REPAIR_FIELDS),
+        )
+    )
+
+
 def _build_component_overview_request(inputs: _OverviewInputs) -> dict[str, Any]:
     """Translate resolved ha_get_overview inputs into an ``ha_mcp_tools/overview`` request.
 
@@ -4078,6 +4137,14 @@ class SearchTools:
         Use fields= to project the response to only the keys you need — a
         significantly smaller payload when fetching a single sub-section (e.g.
         fields=["system_info"] returns just that section instead of the full overview).
+        Requests composed only of system_info, notification, repair, or server
+        metadata fields also skip the unrelated state, service, and registry reads.
+
+        Do not use this tool to inspect a known entity or a narrow set of entities.
+        Use ha_get_state for one entity, ha_get_entity for registry metadata, or
+        ha_search with a domain or area filter. An unprojected overview collects
+        system-wide state, service, and registry data and can be expensive on large
+        Home Assistant installations.
 
         When (and only when) the ha-mcp settings-UI sidecar is running
         (stdio mode, e.g. Claude Desktop / Claude Code), the response
@@ -4126,19 +4193,32 @@ class SearchTools:
         except ValueError as exc:
             raise_tool_error(create_validation_error(str(exc), parameter="domains"))
 
-        result = await self._collect_overview(
-            _OverviewInputs(
+        requested_fields = set(parsed_fields or [])
+        recognized_fields = requested_fields & _OVERVIEW_INDEPENDENT_FIELDS
+        use_independent_collectors = (
+            parsed_fields is not None and not requested_fields & _OVERVIEW_ENTITY_FIELDS
+        )
+        if use_independent_collectors:
+            result = await self._collect_independent_overview(
+                requested_fields=recognized_fields,
                 detail_level=detail_level,
-                max_entities_per_domain=max_entities_per_domain,
-                include_state=include_state_bool,
-                include_entity_id=include_entity_id_bool,
-                domains_filter=parsed_domains,
-                limit=limit,
-                offset=offset,
                 include_notifications=include_notifications_bool,
                 include_dismissed_repairs=include_dismissed_repairs_bool,
             )
-        )
+        else:
+            result = await self._collect_overview(
+                _OverviewInputs(
+                    detail_level=detail_level,
+                    max_entities_per_domain=max_entities_per_domain,
+                    include_state=include_state_bool,
+                    include_entity_id=include_entity_id_bool,
+                    domains_filter=parsed_domains,
+                    limit=limit,
+                    offset=offset,
+                    include_notifications=include_notifications_bool,
+                    include_dismissed_repairs=include_dismissed_repairs_bool,
+                )
+            )
 
         settings = get_global_settings()
         if settings.enable_tool_search:
@@ -4215,12 +4295,41 @@ class SearchTools:
 
         return projected
 
+    async def _collect_independent_overview(
+        self,
+        *,
+        requested_fields: set[str],
+        detail_level: str,
+        include_notifications: bool,
+        include_dismissed_repairs: bool,
+    ) -> dict[str, Any]:
+        """Collect only the independent HA sections requested by a projection."""
+        result: dict[str, Any] = {"success": True}
+        strict = (
+            _count_overview_independent_collectors(
+                requested_fields, include_notifications
+            )
+            == 1
+        )
+        if "system_info" in requested_fields:
+            await self._fetch_system_info(result, detail_level, raise_on_error=strict)
+        if include_notifications and requested_fields & _OVERVIEW_NOTIFICATION_FIELDS:
+            await self._fetch_notifications(result, raise_on_error=strict)
+        if requested_fields & _OVERVIEW_REPAIR_FIELDS:
+            await self._fetch_repairs(
+                result,
+                include_dismissed_repairs,
+                raise_on_error=strict,
+            )
+        return result
+
     async def _fetch_system_info(
         self,
         result: dict[str, Any],
         detail_level: str,
         *,
         prefetched_config: dict[str, Any] | None = None,
+        raise_on_error: bool = False,
     ) -> None:
         """Populate result['system_info'] from HA config; tolerates failure.
 
@@ -4265,6 +4374,8 @@ class SearchTools:
             if "system_summary" in result:
                 result["system_summary"]["version"] = config.get("version") or "unknown"
         except Exception as e:
+            if raise_on_error:
+                raise
             logger.warning(
                 "Failed to fetch system info for overview: %s", e, exc_info=True
             )
@@ -4276,6 +4387,7 @@ class SearchTools:
         result: dict[str, Any],
         *,
         prefetched_notifications: dict[str, Any] | None = None,
+        raise_on_error: bool = False,
     ) -> None:
         """Attach active persistent notifications to result.
 
@@ -4313,10 +4425,14 @@ class SearchTools:
                 err_msg = (
                     err.get("message") if isinstance(err, dict) else err
                 ) or "unknown error"
+                if raise_on_error:
+                    raise RuntimeError(f"notifications unavailable: {err_msg}")
                 result.setdefault("warnings", []).append(
                     f"notifications unavailable: {err_msg}"
                 )
         except Exception as e:
+            if raise_on_error:
+                raise
             logger.warning(
                 "Failed to fetch notifications for overview: %s", e, exc_info=True
             )
@@ -4330,6 +4446,7 @@ class SearchTools:
         include_dismissed_repairs_bool: bool,
         *,
         prefetched_repairs: dict[str, Any] | None = None,
+        raise_on_error: bool = False,
     ) -> None:
         """Attach active repairs issues to result.
 
@@ -4377,11 +4494,15 @@ class SearchTools:
                 err_msg = (
                     err.get("message") if isinstance(err, dict) else str(err)
                 ) or "unknown error"
+                if raise_on_error:
+                    raise RuntimeError(f"repairs unavailable: {err_msg}")
                 logger.warning(
                     "repairs/list_issues returned success=false: %s", err_msg
                 )
                 result["repairs_error"] = f"Could not fetch repairs: {err_msg}"
         except Exception as e:
+            if raise_on_error:
+                raise
             logger.warning("Failed to fetch repairs for overview: %s", e, exc_info=True)
             result["repairs_error"] = f"Could not fetch repairs: {e}"
 

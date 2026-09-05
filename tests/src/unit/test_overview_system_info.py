@@ -169,6 +169,66 @@ class TestHaGetOverviewFieldsProjection:
             assert key not in result, f"unexpected key {key!r} survived projection"
 
     @pytest.mark.asyncio
+    async def test_system_info_projection_skips_full_overview_collection(
+        self, overview_tool, mock_client, mock_smart_tools
+    ):
+        """A narrow response must also produce a narrow HA-side workload."""
+        result = await overview_tool(fields=["system_info"])
+
+        assert result["system_info"]["version"] == "2026.5.0"
+        mock_client.get_config.assert_awaited_once()
+        mock_client.send_websocket_message.assert_not_awaited()
+        mock_smart_tools.get_system_overview.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_independent_sections_skip_full_overview_collection(
+        self, overview_tool, mock_client, mock_smart_tools
+    ):
+        """Config, notifications, and repairs use only their own collectors."""
+
+        async def dispatch(message):
+            if message["type"] == "persistent_notification/get":
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "notification_id": "test",
+                            "title": "Test",
+                            "message": "Body",
+                        }
+                    ],
+                }
+            if message["type"] == "repairs/list_issues":
+                return {"success": True, "result": {"issues": []}}
+            raise AssertionError(f"unexpected command: {message['type']}")
+
+        mock_client.send_websocket_message.side_effect = dispatch
+
+        result = await overview_tool(
+            fields=["system_info", "notifications", "repair_count"]
+        )
+
+        assert {
+            "success",
+            "system_info",
+            "notifications",
+            "repair_count",
+        } <= set(result)
+        mock_client.get_config.assert_awaited_once()
+        assert mock_client.send_websocket_message.await_count == 2
+        mock_smart_tools.get_system_overview.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_domain_projection_still_uses_full_overview(
+        self, overview_tool, mock_smart_tools
+    ):
+        """Entity-derived fields retain the established full assembly path."""
+        result = await overview_tool(fields=["domains"])
+
+        assert result["domains"] == {"light": {"count": 3}}
+        mock_smart_tools.get_system_overview.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_fields_multiple_keys(self, overview_tool):
         """fields=["system_info", "domains"] keeps exactly those two (+ success)."""
         result = await overview_tool(fields=["system_info", "domains"])
@@ -188,6 +248,26 @@ class TestHaGetOverviewFieldsProjection:
         result = await overview_tool(fields=["nonexistent_key"])
         assert result["success"] is True
         assert "nonexistent_key" not in result
+
+    @pytest.mark.asyncio
+    async def test_unknown_key_does_not_trigger_full_overview(
+        self, overview_tool, mock_smart_tools
+    ):
+        result = await overview_tool(fields=["nonexistent_key"])
+
+        assert result["success"] is True
+        mock_smart_tools.get_system_overview.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_sole_independent_collector_failure_propagates(
+        self, overview_tool, mock_client, mock_smart_tools
+    ):
+        mock_client.get_config.side_effect = RuntimeError("config unavailable")
+
+        with pytest.raises(RuntimeError, match="config unavailable"):
+            await overview_tool(fields=["system_info"])
+
+        mock_smart_tools.get_system_overview.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_bad_fields_integer_raises_tool_error(self, overview_tool):
