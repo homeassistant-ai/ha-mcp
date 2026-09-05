@@ -200,6 +200,15 @@ class TestRecordedCrash:
         assert result["fatal_error_blocks_in_window"] == 2
 
     @pytest.mark.asyncio
+    async def test_pagination_hint_keeps_the_search_filter(self) -> None:
+        result = await _get(_read_file_ok(_TWO_CRASHES), search="fatal", limit=2)
+        assert result["has_more"] is True
+        assert result["pagination_hint"] == (
+            "ha_get_logs(source='fault_log', offset=2, limit=2, "
+            "order='newest', search='fatal')"
+        )
+
+    @pytest.mark.asyncio
     async def test_search_is_case_insensitive_across_blocks(self) -> None:
         result = await _get(_read_file_ok(_TWO_CRASHES), search="FATAL PYTHON")
         assert result["matched_blocks"] == 2
@@ -238,6 +247,9 @@ class TestFailures:
         payload = _parse_tool_error(exc_info)
         assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "Permission denied" in payload["error"]["message"]
+        suggestions = payload["error"]["suggestions"]
+        assert any(FAULT_LOG_PATH in sug for sug in suggestions)
+        assert any("readable" in sug for sug in suggestions)
 
     @pytest.mark.asyncio
     async def test_caller_token_gate_error_passes_through(self) -> None:

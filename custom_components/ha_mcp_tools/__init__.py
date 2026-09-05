@@ -1352,6 +1352,53 @@ def _read_file_sync(target_file: Path) -> dict[str, Any]:
     return {"content": content, "size": stat.st_size, "mtime": stat.st_mtime}
 
 
+def _read_log_tail_sync(
+    target_file: Path, tail_lines: int, *, chunk_size: int = 1 << 16
+) -> dict[str, Any]:
+    """Tail a log for one executor offload without materialising the whole file.
+
+    HA Core appends to ``home-assistant.log.fault`` for the life of the
+    install, so reading the file whole just to keep its last ``tail_lines``
+    lines scales with the crash history rather than the request. Line count
+    streams the file in chunks; the tail seeks back from the end until it holds
+    ``tail_lines`` newlines. The result carries the same ``content`` /
+    ``total_lines`` / ``truncated`` the whole-file split produced (``split("\n")``
+    semantics, so a trailing newline yields one empty last line), plus
+    ``size``/``mtime`` like ``_read_file_sync``.
+    """
+    if not target_file.exists():
+        return {"_error": "not_found"}
+    if not target_file.is_file():
+        return {"_error": "not_a_file"}
+    stat = target_file.stat()
+    newlines = 0
+    with target_file.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(chunk_size), b""):
+            newlines += chunk.count(b"\n")
+        total_lines = newlines + 1
+        pos = fh.tell()
+        buf = b""
+        while pos > 0 and buf.count(b"\n") < tail_lines:
+            step = min(chunk_size, pos)
+            pos -= step
+            fh.seek(pos)
+            buf = fh.read(step) + buf
+    parts = buf.split(b"\n")
+    truncated = total_lines > tail_lines
+    if truncated:
+        # The leading part may start mid-character at a chunk boundary; it is
+        # never part of the tail, so decode only what is returned.
+        parts = parts[-tail_lines:]
+    content = b"\n".join(parts).decode("utf-8")
+    return {
+        "content": content,
+        "size": stat.st_size,
+        "mtime": stat.st_mtime,
+        "total_lines": total_lines,
+        "truncated": truncated,
+    }
+
+
 def _write_file_sync(
     target_file: Path,
     content: str,
@@ -2779,25 +2826,19 @@ async def _shape_read_file_response(
     if normalized == "secrets.yaml":
         content = await hass.async_add_executor_job(_mask_secrets_content, content)
 
-    # Apply tail for log files
+    # Log files arrive already tailed by ``_read_log_tail_sync``.
     if normalized in TAILED_LOG_FILES:
-        lines = content.split("\n")
         limit = tail_lines if tail_lines else DEFAULT_LOG_TAIL_LINES
-        if len(lines) > limit:
-            content = "\n".join(lines[-limit:])
-            truncated = True
-        else:
-            truncated = False
-
+        total_lines = result["total_lines"]
         return {
             "success": True,
             "path": rel_path,
             "content": content,
             "size": stat_size,
             "modified": modified_dt.isoformat(),
-            "lines_returned": min(len(lines), limit),
-            "total_lines": len(lines),
-            "truncated": truncated,
+            "lines_returned": min(total_lines, limit),
+            "total_lines": total_lines,
+            "truncated": result["truncated"],
         }
 
     # Apply tail for other files if requested
@@ -2866,7 +2907,16 @@ def _build_read_file_handler(
         target_file = config_dir / rel_path
 
         try:
-            result = await hass.async_add_executor_job(_read_file_sync, target_file)
+            if os.path.normpath(rel_path) in TAILED_LOG_FILES:  # noqa: ASYNC240
+                # Bounded read: the fault log is append-only for the life of
+                # the install, so never materialise the whole file for a tail.
+                result = await hass.async_add_executor_job(
+                    _read_log_tail_sync,
+                    target_file,
+                    tail_lines if tail_lines else DEFAULT_LOG_TAIL_LINES,
+                )
+            else:
+                result = await hass.async_add_executor_job(_read_file_sync, target_file)
         except PermissionError:
             _LOGGER.error("Permission denied reading: %s", rel_path)
             return {

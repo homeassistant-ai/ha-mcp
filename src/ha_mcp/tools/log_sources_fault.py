@@ -107,6 +107,13 @@ def _raise_read_failure(error: str) -> NoReturn:
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
             f"read_file failed for {FAULT_LOG_PATH}: {error or 'unknown error'}",
+            suggestions=[
+                f"Check that {FAULT_LOG_PATH} in the Home Assistant config "
+                "directory is readable by Home Assistant",
+                "Check Home Assistant logs for the ha_mcp_tools read error",
+                "Retry after the file is readable; an absent or empty file is "
+                "reported as no crash, not as an error",
+            ],
             context={"source": "fault_log"},
         )
     )
@@ -172,9 +179,12 @@ def _shape_crash_page(
     )
     if has_more:
         data["next_offset"] = offset + limit
+        # Carry the active filter: the next page must slice the same
+        # filtered block list, or offset lands in unrelated blocks.
+        search_arg = f", search={search!r}" if search else ""
         data["pagination_hint"] = (
             f"ha_get_logs(source='fault_log', offset={offset + limit}, "
-            f"limit={limit}, order='{order}')"
+            f"limit={limit}, order='{order}'{search_arg})"
         )
     if filters_applied:
         data["filters_applied"] = filters_applied
