@@ -579,6 +579,7 @@ def _validate_query_workload(
         return
 
     entity_count = len(entity_ids)
+    context: dict[str, Any]
     if source == "history":
         detail_weight = 1
         if not significant_changes_only:
@@ -624,8 +625,7 @@ def _validate_query_workload(
             suggestions=[
                 "Query fewer entities or use a shorter time range.",
                 "Use source='statistics' with a coarser period for long ranges.",
-                "Set allow_unsafe_query=true only when the user accepts that Home "
-                "Assistant may become unresponsive while the query runs.",
+                "Set allow_unsafe_query=true only when the user accepts that Home Assistant may become unresponsive while the query runs.",
             ],
         )
     )
