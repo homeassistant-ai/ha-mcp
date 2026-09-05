@@ -289,7 +289,7 @@ class TestGetHistory:
             "ha_get_history",
             {
                 "entity_ids": "sun.sun",
-                "start_time": "24h",
+                "start_time": "12h",
                 "minimal_response": False,
                 "significant_changes_only": False,
                 "limit": 10,
