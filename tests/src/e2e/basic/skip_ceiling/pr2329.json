@@ -1,0 +1,14 @@
+{
+  "reason": "#2329 adds two marker-gated blueprint tests (tests/src/e2e/workflows/blueprints/test_blueprints.py): one embedded_only (the direct blueprint file read) and one no_tools_only (text still arrives without the tools entry). Every lane gains one collection-time skip per marker it does not satisfy; embedded_only runs on the container-embedded lane alone, not on haos_embedded, so that lane takes both.",
+  "deltas": {
+    "container": 2,
+    "haos": 2,
+    "haos_stdio": 2,
+    "haos_inaddon": 2,
+    "embedded": 1,
+    "haos_embedded": 2,
+    "container_no_tools": 1,
+    "haos_embedded_no_tools": 1,
+    "haos_inaddon_no_tools": 1
+  }
+}

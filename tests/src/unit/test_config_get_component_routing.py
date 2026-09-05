@@ -304,10 +304,11 @@ class TestScriptConfigGetAlwaysLegacy:
             )
         assert resp["success"] is True
         assert resp["script_id"] == "morning"
-        # The legacy path returns the REST envelope under ``config`` (script_id +
-        # category injected).
-        assert resp["config"]["script_id"] == "morning"
+        # ``config`` is the script BODY, matching the automation sibling above.
+        # The storage key stays top-level; the category injects into the body.
         assert resp["config"]["category"] == "cat_s"
+        assert "script_id" not in resp["config"]
+        assert "success" not in resp["config"]
         assert client.get_script_config.await_count == 1
         assert ws.send_command.await_count == 0
 

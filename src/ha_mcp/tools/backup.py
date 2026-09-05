@@ -1749,7 +1749,7 @@ survives an agent's own mistakes.
                 default=None,
                 description=(
                     "(edits.view / edits.restore / edits.delete) Auto-backup filename "
-                    "(format '<domain>.<entity_id>.<timestamp>.yaml'). Not a tarball ID."
+                    "(format '<domain>.<entity_id>.<timestamp>[_NN].yaml'). Not a tarball ID."
                 ),
             ),
         ] = None,

@@ -25,7 +25,7 @@ from typing import Any
 
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 
-from ..renamed_tools import RENAMED_TOOLS
+from ..renamed_tools import RENAMED_TOOLS, adapt_retired_arguments
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,13 @@ class RenamedToolAliasMiddleware(Middleware):
                 retired,
                 current,
             )
+        # A consolidated tool needs the ``action`` the retired signature
+        # never carried; a plain rename forwards the arguments as they are.
+        arguments = adapt_retired_arguments(retired, context.message.arguments)
         return await call_next(
-            context.copy(message=context.message.model_copy(update={"name": current}))
+            context.copy(
+                message=context.message.model_copy(
+                    update={"name": current, "arguments": arguments}
+                )
+            )
         )

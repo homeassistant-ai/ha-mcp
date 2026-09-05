@@ -20,6 +20,7 @@ from ha_mcp.policy.evaluator import find_matching_rule
 from ha_mcp.policy.persistence import load_policy
 from ha_mcp.renamed_tools import (
     RENAMED_TOOLS,
+    adapt_retired_arguments,
     current_tool_name,
     rename_retired_keys,
 )
@@ -116,13 +117,61 @@ class TestStoredToolConfig:
 
         assert config["tools"] == {"ha_manage_app": "disabled"}
 
-    def test_the_env_overlays_tie_rule_survives_the_rename(self) -> None:
-        """``env_pinned_tools`` documents the opposite tie: pinned wins."""
+    def test_the_env_tie_rule_still_applies_to_one_name_in_both_vars(self) -> None:
+        """PINNED_TOOLS wins when the SAME tool is named in both vars."""
+        settings = SimpleNamespace(
+            disabled_tools="ha_manage_app", pinned_tools="ha_manage_app"
+        )
+
+        assert env_pinned_tools(settings) == {"ha_manage_app": "pinned"}
+
+    def test_two_retired_names_colliding_keep_the_restriction(self) -> None:
+        """A disabled half must not come back enabled via its pinned sibling.
+
+        ``rename_retired_keys`` states that principle for the STORED config;
+        the env overlay always wins over stored state, so letting "pinned" win
+        a consolidation collision here would hand the operator back an enabled
+        write-capable tool they had explicitly disabled.
+        """
         settings = SimpleNamespace(
             disabled_tools="ha_manage_addon", pinned_tools="ha_manage_app"
         )
 
-        assert env_pinned_tools(settings) == {"ha_manage_app": "pinned"}
+        assert env_pinned_tools(settings) == {"ha_manage_app": "disabled"}
+
+    def test_a_repeated_pinned_alias_cannot_undo_the_restriction(self) -> None:
+        """Naming the disabled spelling in PINNED_TOOLS too must not free the
+        OTHER spelling's restriction.
+
+        Resolving alias by alias let the same-name tie fire first and leave
+        "pinned" in place, so the second alias then merged against "pinned"
+        instead of "disabled" and the restriction vanished.
+        """
+        settings = SimpleNamespace(
+            disabled_tools="ha_get_blueprint",
+            pinned_tools="ha_get_blueprint,ha_import_blueprint",
+        )
+
+        assert env_pinned_tools(settings) == {"ha_manage_blueprints": "pinned"}
+
+    def test_a_disabled_alias_never_named_in_pinned_keeps_the_restriction(
+        self,
+    ) -> None:
+        """Order must not matter either: the disabled spelling is not pinned."""
+        settings = SimpleNamespace(
+            disabled_tools="ha_import_blueprint",
+            pinned_tools="ha_get_blueprint",
+        )
+
+        assert env_pinned_tools(settings) == {"ha_manage_blueprints": "disabled"}
+
+    def test_a_disabled_blueprint_alias_survives_a_pinned_sibling(self) -> None:
+        """The pair this PR consolidates, through the same path."""
+        settings = SimpleNamespace(
+            disabled_tools="ha_get_blueprint", pinned_tools="ha_import_blueprint"
+        )
+
+        assert env_pinned_tools(settings) == {"ha_manage_blueprints": "disabled"}
 
 
 class TestStoredPolicy:
@@ -215,3 +264,90 @@ class TestStoredPolicy:
 
         assert [rule.tool_name for rule in policy.rules] == ["ha_call_service"]
         assert not set(RENAMED_TOOLS) & {rule.tool_name for rule in policy.rules}
+
+
+class TestBlueprintConsolidation:
+    """#2329 folded two tools into one: both retired names must still resolve,
+    their stored states must merge restrictively, and a call on either old
+    signature must gain the ``action`` the merged tool dispatches on."""
+
+    def test_both_retired_blueprint_names_resolve(self) -> None:
+        assert current_tool_name("ha_get_blueprint") == "ha_manage_blueprints"
+        assert current_tool_name("ha_import_blueprint") == "ha_manage_blueprints"
+
+    def test_disagreeing_retired_states_take_the_restrictive_one(self) -> None:
+        def restrictive(first: str, second: str) -> str:
+            return "disabled" if "disabled" in (first, second) else first
+
+        states = rename_retired_keys(
+            {"ha_get_blueprint": "pinned", "ha_import_blueprint": "disabled"},
+            prefer=restrictive,
+        )
+        assert states == {"ha_manage_blueprints": "disabled"}
+
+        states = rename_retired_keys(
+            {"ha_import_blueprint": "disabled", "ha_get_blueprint": "pinned"},
+            prefer=restrictive,
+        )
+        assert states == {"ha_manage_blueprints": "disabled"}
+
+    def test_a_disabled_retired_blueprint_tool_disables_the_merged_one(
+        self, tmp_path: Path
+    ) -> None:
+        config_path = tmp_path / "tool_config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "tools": {
+                        "ha_get_blueprint": "pinned",
+                        "ha_import_blueprint": "disabled",
+                    },
+                    "llm_api": {"ha_get_blueprint": True, "ha_import_blueprint": False},
+                }
+            ),
+            encoding="utf-8",
+        )
+        with patch(
+            "ha_mcp.settings_ui._persistence._get_config_path", return_value=config_path
+        ):
+            config = load_tool_config(
+                SimpleNamespace(disabled_tools="", pinned_tools="")
+            )
+
+        assert config["tools"] == {"ha_manage_blueprints": "disabled"}
+        assert config["llm_api"] == {"ha_manage_blueprints": False}
+
+    def test_get_blueprint_arguments_gain_list_or_get(self) -> None:
+        assert adapt_retired_arguments("ha_get_blueprint", {"domain": "script"}) == {
+            "action": "list",
+            "domain": "script",
+        }
+        assert adapt_retired_arguments(
+            "ha_get_blueprint", {"path": "user/motion.yaml", "domain": "automation"}
+        ) == {"action": "get", "path": "user/motion.yaml", "domain": "automation"}
+
+    def test_import_blueprint_arguments_gain_import(self) -> None:
+        assert adapt_retired_arguments(
+            "ha_import_blueprint", {"url": "https://example.com/bp.yaml"}
+        ) == {"action": "import", "url": "https://example.com/bp.yaml"}
+
+    def test_an_explicit_action_survives_the_adapter(self) -> None:
+        """The docstring promises it, and the dict spread is what delivers it.
+
+        A caller reaching the consolidated tool through a retired name can
+        still ask for any action; the adapter only supplies the default the
+        old signature implied.
+        """
+        assert adapt_retired_arguments(
+            "ha_get_blueprint",
+            {"action": "delete", "path": "user/motion.yaml", "confirm": True},
+        ) == {"action": "delete", "path": "user/motion.yaml", "confirm": True}
+        assert adapt_retired_arguments(
+            "ha_import_blueprint", {"action": "list", "domain": "script"}
+        ) == {"action": "list", "domain": "script"}
+
+    def test_names_without_an_adapter_pass_arguments_through(self) -> None:
+        assert adapt_retired_arguments("ha_manage_addon", {"slug": "x"}) == {
+            "slug": "x"
+        }
+        assert adapt_retired_arguments("ha_get_state", None) is None

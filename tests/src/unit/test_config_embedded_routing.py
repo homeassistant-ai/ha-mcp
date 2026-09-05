@@ -252,3 +252,35 @@ class TestEmbeddedConnection:
         settings = config.Settings(_env_file=None)
         config._apply_embedded_connection(settings)
         assert settings.verify_ssl is True
+
+    def test_config_dir_is_read_back_only_through_the_getter(self):
+        # Issue #2329: the component hands over HA's own config directory so
+        # the in-process server can read blueprint files directly. It is
+        # deliberately NOT a Settings field — nothing env- or override-file
+        # driven can point it anywhere — so the getter is the only reader.
+        config.set_embedded_connection(
+            "http://127.0.0.1:8123", "tok123", config_dir="/config"
+        )
+        assert config.get_embedded_config_dir() == "/config"
+        settings = config.Settings(_env_file=None)
+        config._apply_embedded_connection(settings)
+        assert not hasattr(settings, "embedded_config_dir")
+        assert not hasattr(settings, "config_dir")
+
+    def test_config_dir_absent_by_default(self):
+        assert config.get_embedded_config_dir() is None
+        config.set_embedded_connection("http://127.0.0.1:8123", "tok123")
+        assert config.get_embedded_config_dir() is None
+
+    def test_config_dir_reregistration_without_it_clears_it(self):
+        # An entry reload against an older component that no longer passes
+        # config_dir must not keep serving the previous directory.
+        config.set_embedded_connection(
+            "http://127.0.0.1:8123", "tok123", config_dir="/config"
+        )
+        config.set_embedded_connection("http://127.0.0.1:8123", "tok123")
+        assert config.get_embedded_config_dir() is None
+
+    def test_blank_config_dir_reads_as_none(self):
+        config.set_embedded_connection("http://127.0.0.1:8123", "tok123", config_dir="")
+        assert config.get_embedded_config_dir() is None
