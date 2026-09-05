@@ -311,6 +311,29 @@ async def test_logbook_empty_result(mcp_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.requires_tools_entry
+async def test_logs_fault_log_source(mcp_client):
+    """source='fault_log' reads faulthandler's dump via the tools entry (#2373).
+
+    The test instance has never died from a native signal, so the healthy
+    shape is pinned: success with ``crash_recorded=False`` and the guidance
+    message, never an error for an empty or absent file.
+    """
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success("ha_get_logs", {"source": "fault_log"})
+    data = get_logbook_data(raw_data)
+
+    assert data["success"] is True
+    assert data["source"] == "fault_log"
+    assert data["path"] == "home-assistant.log.fault"
+    assert data["crash_recorded"] is False, (
+        "the test Home Assistant recorded a native crash: " + data.get("log", "")
+    )
+    assert data["returned_lines"] == 0
+    assert "No native crash recorded" in data["message"]
+
+
+@pytest.mark.asyncio
 async def test_logs_system_source(mcp_client):
     """Test system log retrieval via source='system'."""
     logger.info("Testing system log source")

@@ -36,6 +36,7 @@ sys.modules["homeassistant.loader"] = MagicMock()
 # Now we can import the functions
 from custom_components.ha_mcp_tools import (  # noqa: E402
     _PACKAGE_DIR_CACHE,
+    TAILED_LOG_FILES,
     _decode_legacy_backup_name,
     _delete_file_sync,
     _detect_package_dirs,
@@ -237,6 +238,11 @@ class TestIsPathAllowedForRead:
     def test_allows_home_assistant_log(self, tmp_path):
         """Should allow reading home-assistant.log."""
         assert _is_path_allowed_for_read(tmp_path, "home-assistant.log") is True
+
+    def test_allows_fault_log(self, tmp_path):
+        """faulthandler's crash dump is readable (issue #2373)."""
+        assert _is_path_allowed_for_read(tmp_path, "home-assistant.log.fault") is True
+        assert "home-assistant.log.fault" in TAILED_LOG_FILES
 
     def test_allows_www_files(self, tmp_path):
         """Should allow reading files in www/ directory."""

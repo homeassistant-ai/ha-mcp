@@ -128,7 +128,7 @@ def _collect_log_warnings(
             f"ignored for source='{source}'"
         )
     if (
-        source in ("logbook", "logger", "supervisor", "system_service")
+        source in ("logbook", "logger", "supervisor", "system_service", "fault_log")
         and level is not None
     ):
         warnings.append(

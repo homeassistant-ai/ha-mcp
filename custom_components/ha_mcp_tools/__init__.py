@@ -271,7 +271,14 @@ ALLOWED_READ_FILES = [
     "scenes.yaml",
     "secrets.yaml",
     "home-assistant.log",
+    # faulthandler's crash dump (HA Core's ``__main__`` enables it on this file).
+    # Written only on a native fatal signal, so it is the one place that
+    # traceback exists: journald / error_log never see it (issue #2373).
+    "home-assistant.log.fault",
 ]
+
+# Root-level log files that the read service tails by default.
+TAILED_LOG_FILES = frozenset({"home-assistant.log", "home-assistant.log.fault"})
 
 # Default tail lines for log files
 DEFAULT_LOG_TAIL_LINES = 1000
@@ -2773,7 +2780,7 @@ async def _shape_read_file_response(
         content = await hass.async_add_executor_job(_mask_secrets_content, content)
 
     # Apply tail for log files
-    if normalized == "home-assistant.log":
+    if normalized in TAILED_LOG_FILES:
         lines = content.split("\n")
         limit = tail_lines if tail_lines else DEFAULT_LOG_TAIL_LINES
         if len(lines) > limit:

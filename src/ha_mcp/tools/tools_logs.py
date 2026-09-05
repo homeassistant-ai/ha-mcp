@@ -22,10 +22,11 @@ from .log_common import (
     _validate_log_slug,
 )
 from .log_sources import CoreLogSourcesMixin
+from .log_sources_fault import FaultLogSourceMixin
 from .log_sources_supervisor import SupervisorLogSourcesMixin
 
 
-class LogTools(CoreLogSourcesMixin, SupervisorLogSourcesMixin):
+class LogTools(CoreLogSourcesMixin, SupervisorLogSourcesMixin, FaultLogSourceMixin):
     """Dispatches ``ha_get_logs`` to one log source and shapes the response."""
 
     def __init__(self, client: Any) -> None:
@@ -76,6 +77,8 @@ class LogTools(CoreLogSourcesMixin, SupervisorLogSourcesMixin):
             # logger reports per-integration levels, not time-ordered events;
             # 'order' does not apply (a warning is emitted upstream).
             return await self._get_logger_info(limit=limit, search=search)
+        if source == "fault_log":
+            return await self._get_fault_log(limit=limit, search=search, order=order)
         if source == "system_service":
             assert slug is not None  # guaranteed by _validate_log_slug
             return await self._get_system_service_log(
@@ -171,6 +174,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "supervisor",
             "system_service",
             "logger",
+            "fault_log",
         ] = "logbook",
         # Shared parameters
         limit: int | None = None,
@@ -180,7 +184,8 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 description=(
                     "Sort order for time-ordered sources (logbook, system, "
-                    "error_log, supervisor, system_service): 'newest' (default) "
+                    "error_log, supervisor, system_service, fault_log): "
+                    "'newest' (default) "
                     "returns most-recent first; 'oldest' returns chronological-"
                     "first. Ignored for source='logger', and for "
                     "source='error_log' with structured=True (that summary is "
@@ -245,6 +250,11 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - "system_service": HA-Supervisor-managed system service logs (requires
           slug ∈ {supervisor, host, core, dns, audio, cli, multicast, observer})
         - "logger": Effective log level per integration via logger/log_info (confirms logger.set_level changes took effect)
+        - "fault_log": HA Core's faulthandler crash dump (home-assistant.log.fault).
+          Written only when HA dies from a native fatal signal (segfault, abort,
+          Python fatal error), which never reaches journald or error_log. Empty
+          on a healthy install (crash_recorded=False). Reads through the
+          "HA-MCP File & YAML Tools" entry (component >= 2.1.4).
 
         **Prefer source='system' for triage.** It returns HA's own deduplicated
         system_log entries with counts, first_occurred and full tracebacks; of
@@ -258,7 +268,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         cap, or for the per-component rollup.
 
         **Shared params:** limit, search (keyword filter on entries/lines; matches integration domain for source='logger')
-        **Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service); ignored for source='logger' and for error_log with structured=True. For raw-text sources (error_log, supervisor, system_service) it sets the read direction of the most-recent window.
+        **Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service, fault_log); ignored for source='logger' and for error_log with structured=True. For raw-text sources (error_log, supervisor, system_service, fault_log) it sets the read direction of the most-recent window.
         **Logbook params:** hours_back, entity_id, end_time, compact (default True — strips attribute dicts to save context)
         **Pagination (logbook + error_log):** offset pages deeper; ignored for the
             other sources. Logbook responses carry has_more plus a
