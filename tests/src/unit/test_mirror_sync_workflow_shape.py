@@ -61,8 +61,6 @@ class TestShape:
 
 # ------------------------------------------------------------------ behaviour
 
-_MANIFEST = Path("custom_components/ha_mcp_tools/manifest.json")
-
 
 def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(
