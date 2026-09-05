@@ -2860,7 +2860,7 @@ def _build_read_file_handler(
             )
             return {
                 "success": False,
-                "error": f"Path not allowed. Allowed patterns: {', '.join(allowed_patterns)}",
+                "error": f"Path not allowed. Allowed paths: {', '.join(allowed_patterns)}",
             }
 
         target_file = config_dir / rel_path

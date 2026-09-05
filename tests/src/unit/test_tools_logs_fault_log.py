@@ -222,7 +222,7 @@ class TestFailures:
         with pytest.raises(ToolError) as exc_info:
             await _get(
                 _read_file_error(
-                    "Path not allowed. Allowed patterns: configuration.yaml, home-assistant.log"
+                    "Path not allowed. Allowed paths: configuration.yaml, home-assistant.log"
                 )
             )
         payload = _parse_tool_error(exc_info)

@@ -288,7 +288,7 @@
     "backup.bulk.confirm": "Delete all backups matching: {filters}?",
     "backup.bulk.deleted": "Deleted {count} backup(s)",
     "filesystem.custom.title": "Custom filesystem paths (advanced)",
-    "filesystem.custom.help": "Extra paths (one per line) that file tools may <strong>read and write</strong>. Config-relative paths, including exact filenames such as <code>sensor.yaml</code>, and paths under <code>/share</code>, <code>/media</code>, <code>/ssl</code>, and <code>/backup</code> are supported. Each entry allows that path and anything below it. You can also manage these paths in Home Assistant under Settings → Devices & Services → HA-MCP Custom Component → HA-MCP File & YAML Tools → Configure; both locations edit the same setting and apply changes immediately.",
+    "filesystem.custom.help": "Extra paths (one per line) that file tools may <strong>read and write</strong>. Config-relative paths, including exact filenames such as <code>sensor.yaml</code>, and paths under <code>/share</code>, <code>/media</code>, <code>/ssl</code>, and <code>/backup</code> are supported. Each entry allows that path and anything below it. Entries are matched literally; wildcards such as <code>*</code> are not supported. You can also manage these paths in Home Assistant under Settings → Devices & Services → HA-MCP Custom Component → HA-MCP File & YAML Tools → Configure; both locations edit the same setting and apply changes immediately.",
     "filesystem.custom.blocked": "Always blocked: {paths}, path traversal (<code>..</code>), and absolute paths outside allowed HAOS volumes.",
     "filesystem.custom.enable_first": "Enable beta features and filesystem tools above to edit.",
     "filesystem.custom.unavailable": "Custom paths are currently unavailable.",
