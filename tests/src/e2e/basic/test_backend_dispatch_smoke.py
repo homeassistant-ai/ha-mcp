@@ -63,6 +63,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from ..utilities.assertions import safe_call_tool
 from ..utilities.topology import tools_entry_absent
 
@@ -213,14 +215,36 @@ def _load_skip_ceiling_fragments() -> dict[str, dict[str, Any]]:
     }
 
 
+def _validate_skip_ceiling_fragment(
+    name: str, fragment: Any, lanes: dict[str, int]
+) -> dict[str, int]:
+    """Return ``fragment``'s deltas, or raise ``AssertionError`` naming ``name``.
+
+    Runs at import for every real fragment (so a bad one fails the module at
+    collection, loudly) and is pinned on synthetic fragments by
+    ``test_skip_ceiling_fragment_validator_rejects`` below.
+    """
+    assert isinstance(fragment, dict) and set(fragment) == {"reason", "deltas"}, (
+        f"{name}: expected exactly the keys 'reason' and 'deltas'"
+    )
+    reason, deltas = fragment["reason"], fragment["deltas"]
+    assert isinstance(reason, str) and reason.strip(), f"{name}: empty reason"
+    assert isinstance(deltas, dict) and deltas, f"{name}: no deltas"
+    for lane, delta in deltas.items():
+        assert lane in lanes, f"{name}: unknown lane {lane!r}"
+        # ``type(...) is int``: JSON ``true`` is a bool, and bool subclasses
+        # int, so ``isinstance`` would let it add 1 to a ceiling.
+        assert type(delta) is int and delta > 0, (
+            f"{name}: delta for {lane!r} must be a positive int, got {delta!r}"
+        )
+    return deltas
+
+
 def _skip_ceilings_with_fragments() -> dict[str, int]:
     ceilings = dict(_SKIP_CEILING_BASELINE)
     for name, fragment in _load_skip_ceiling_fragments().items():
-        for lane, delta in fragment["deltas"].items():
-            assert lane in ceilings, f"{name}: unknown lane {lane!r}"
-            # ``type(...) is int``: JSON ``true`` is a bool, and bool subclasses
-            # int, so ``isinstance`` would let it add 1 to a ceiling.
-            assert type(delta) is int and delta > 0, (name, lane, delta)
+        deltas = _validate_skip_ceiling_fragment(name, fragment, ceilings)
+        for lane, delta in deltas.items():
             ceilings[lane] += delta
     return ceilings
 
@@ -458,14 +482,27 @@ def test_session_skipped_count_below_ceiling(
     )
 
 
-def test_skip_ceiling_fragments_are_well_formed() -> None:
-    """Every ``skip_ceiling/*.json`` fragment names known lanes with positive
-    integer increments and says why, so a typo cannot silently raise nothing
-    (or raise the wrong lane) and the reason survives beside the number."""
-    for name, fragment in _load_skip_ceiling_fragments().items():
-        assert set(fragment) == {"reason", "deltas"}, name
-        assert isinstance(fragment["reason"], str) and fragment["reason"].strip(), name
-        assert fragment["deltas"], f"{name}: no deltas"
-        for lane, delta in fragment["deltas"].items():
-            assert lane in _SKIP_CEILING_BASELINE, (name, lane)
-            assert type(delta) is int and delta > 0, (name, lane, delta)
+@pytest.mark.parametrize(
+    "fragment",
+    [
+        pytest.param({"reason": "r", "deltas": {"contaner": 1}}, id="typo-lane"),
+        pytest.param({"reason": "r", "deltas": {"container": True}}, id="bool-delta"),
+        pytest.param({"reason": "r", "deltas": {"container": 0}}, id="zero-delta"),
+        pytest.param({"reason": "r", "deltas": {"container": "1"}}, id="string-delta"),
+        pytest.param({"reason": " ", "deltas": {"container": 1}}, id="blank-reason"),
+        pytest.param({"reason": "r", "deltas": {}}, id="no-deltas"),
+        pytest.param(
+            {"reason": "r", "deltas": {"container": 1}, "x": 1}, id="extra-key"
+        ),
+        pytest.param(["reason", "deltas"], id="not-a-mapping"),
+    ],
+)
+def test_skip_ceiling_fragment_validator_rejects(fragment: Any) -> None:
+    """A fragment that could misroute or silently inflate a ceiling is refused.
+
+    The real fragments are validated at import, so a bad one never reaches a
+    test body; the validator's rejections are pinned here on synthetic input,
+    each error naming the offending file.
+    """
+    with pytest.raises(AssertionError, match=r"bad\.json"):
+        _validate_skip_ceiling_fragment("bad.json", fragment, _SKIP_CEILING_BASELINE)

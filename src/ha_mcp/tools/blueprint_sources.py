@@ -180,7 +180,7 @@ _NO_COMPONENT_BODY = _ComponentBody(None, None, None)
 
 
 async def _via_component(client: Any, domain: str, path: str) -> _ComponentBody:
-    """Tier 2: the component's parsed body, plus its raw text on 2.1.3+.
+    """Tier 2: the component's parsed body, plus its raw text on 2.1.4+.
 
     Returns:
 

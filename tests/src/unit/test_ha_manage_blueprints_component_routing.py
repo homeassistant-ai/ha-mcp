@@ -73,10 +73,10 @@ _CAPS_BLUEPRINT = {
     "capabilities": ["blueprint_get"],
     "limits": {},
 }
-# The 2.1.3+ component: ``blueprint_text`` gates the additive ``yaml`` field.
+# The 2.1.4+ component: ``blueprint_text`` gates the additive ``yaml`` field.
 _CAPS_BLUEPRINT_TEXT = {
     "schema_version": 1,
-    "component_version": "2.1.3",
+    "component_version": "2.1.4",
     "capabilities": ["blueprint_get", "blueprint_text"],
     "limits": {},
 }
@@ -340,7 +340,7 @@ async def test_list_mode_never_touches_component() -> None:
 
 @pytest.mark.asyncio
 async def test_component_text_capability_surfaces_yaml() -> None:
-    """A 2.1.3+ component serves the on-disk text, tagged ``yaml_source``."""
+    """A 2.1.4+ component serves the on-disk text, tagged ``yaml_source``."""
     ws = make_ws(
         "ha_mcp_tools/blueprint_get",
         info_result=_CAPS_BLUEPRINT_TEXT,

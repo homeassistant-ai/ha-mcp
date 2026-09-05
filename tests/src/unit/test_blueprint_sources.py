@@ -45,7 +45,7 @@ _URL_YAML = "blueprint:\n  name: From Source URL\n  domain: automation\n"
 
 _CAPS_TEXT = {
     "schema_version": 1,
-    "component_version": "2.1.3",
+    "component_version": "2.1.4",
     "capabilities": ["blueprint_get", "blueprint_text"],
     "limits": {},
 }
@@ -57,7 +57,7 @@ _CAPS_BODY_ONLY = {
 }
 _CAPS_NONE = {
     "schema_version": 1,
-    "component_version": "2.1.3",
+    "component_version": "2.1.4",
     "capabilities": ["search"],
     "limits": {},
 }
