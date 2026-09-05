@@ -205,7 +205,9 @@ def _parse_json_to_str_list(s: str, param_name: str) -> list[str]:
         if not all(isinstance(item, str) for item in parsed):
             raise ValueError(f"{param_name} must be a JSON array of strings")
         return parsed
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, RecursionError) as e:
+        # RecursionError: nested past the interpreter's limit is still
+        # "not valid JSON" to the caller, which expects ValueError here.
         raise ValueError(f"Invalid JSON in {param_name}: {e}") from e
 
 

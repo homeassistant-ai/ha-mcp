@@ -411,6 +411,91 @@ class TestCategorizedCallDispatch:
         )
 
     @pytest.mark.anyio
+    async def test_read_proxy_admits_a_mixed_tools_read_action(
+        self, transform: CategorizedSearchTransform
+    ) -> None:
+        """A write-categorised tool's read actions stay reachable on the read
+        proxy (#2329). The tool is advertised under the write proxy only —
+        membership is unchanged — but a read-approved client that calls it
+        anyway, for a read, is admitted."""
+        _prepopulate_cache(
+            transform,
+            [
+                _make_tool("ha_manage_blueprints", destructive=True),
+                _make_tool("ha_get_state", read_only=True),
+            ],
+        )
+        assert "ha_manage_blueprints" not in transform._read_tools
+        ctx = _make_ctx(call_tool_return={"success": True})
+        fn = self._get_proxy_fn(transform, "read")
+
+        result = await fn("ha_manage_blueprints", {"action": "list"}, ctx)
+
+        assert result == {"success": True}
+        ctx.fastmcp.call_tool.assert_called_once_with(
+            "ha_manage_blueprints", {"action": "list"}
+        )
+
+    @pytest.mark.anyio
+    async def test_read_proxy_refuses_a_mixed_tools_write_action(
+        self, transform: CategorizedSearchTransform
+    ) -> None:
+        """Admission is per call, not per tool: a state-changing action on the
+        same tool is still refused on the read proxy."""
+        _prepopulate_cache(
+            transform,
+            [
+                _make_tool("ha_manage_blueprints", destructive=True),
+                _make_tool("ha_get_state", read_only=True),
+            ],
+        )
+        ctx = _make_ctx()
+        fn = self._get_proxy_fn(transform, "read")
+
+        with pytest.raises(ToolError):
+            await fn(
+                "ha_manage_blueprints",
+                {"action": "delete", "path": "user/motion.yaml", "confirm": True},
+                ctx,
+            )
+        ctx.fastmcp.call_tool.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_read_proxy_refuses_a_plain_write_tool(
+        self, transform: CategorizedSearchTransform
+    ) -> None:
+        """The admission covers mixed tools only — a tool with no read surface
+        is refused as before."""
+        ctx = _make_ctx()
+        fn = self._get_proxy_fn(transform, "read")
+
+        with pytest.raises(ToolError):
+            await fn("ha_config_set_automation", {"config": {}}, ctx)
+        ctx.fastmcp.call_tool.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_proxy_adapts_a_retired_blueprint_call(
+        self, transform: CategorizedSearchTransform
+    ) -> None:
+        """A stale catalog calling ha_get_blueprint reaches the consolidated
+        tool with the action its old signature never carried."""
+        _prepopulate_cache(
+            transform,
+            [
+                _make_tool("ha_manage_blueprints", destructive=True),
+                _make_tool("ha_get_state", read_only=True),
+            ],
+        )
+        ctx = _make_ctx(call_tool_return={"success": True})
+        fn = self._get_proxy_fn(transform, "write")
+
+        await fn("ha_get_blueprint", {"domain": "script"}, ctx)
+
+        ctx.fastmcp.call_tool.assert_called_once_with(
+            "ha_manage_blueprints", {"action": "list", "domain": "script"}
+        )
+
+    @pytest.mark.anyio
     async def test_proxy_dispatches_a_renamed_tool_under_its_current_name(
         self, transform
     ):
@@ -597,6 +682,89 @@ class TestDoubleUnwrap:
         )
 
     @pytest.mark.anyio
+    async def test_double_wrapped_consolidated_tool_gets_its_action(
+        self, transform: CategorizedSearchTransform
+    ) -> None:
+        """The envelope carries the retired signature too (#2329).
+
+        A nested `ha_get_blueprint` resolves to `ha_manage_blueprints`, which
+        dispatches on `action` — so the unwrap has to adapt the inner
+        arguments, not just the inner name, or the call arrives actionless.
+        """
+        _prepopulate_cache(
+            transform,
+            [
+                _make_tool("ha_manage_blueprints", destructive=True),
+                _make_tool("ha_get_state", read_only=True),
+            ],
+        )
+        ctx = _make_ctx(call_tool_return={"success": True})
+        fn = self._get_proxy_fn(transform, "write")
+
+        result = await fn(
+            "ha_call_write_tool",
+            {"name": "ha_get_blueprint", "arguments": {"domain": "script"}},
+            ctx,
+        )
+
+        assert result == {"success": True}
+        ctx.fastmcp.call_tool.assert_called_once_with(
+            "ha_manage_blueprints", {"action": "list", "domain": "script"}
+        )
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        ("nested", "code"),
+        [
+            # A bare string is first tried as JSON, exactly as the outer
+            # payload is, so it classifies as invalid JSON rather than as a
+            # non-object.
+            ("x", "VALIDATION_INVALID_JSON"),
+            ([1, 2], "VALIDATION_INVALID_PARAMETER"),
+            (7, "VALIDATION_INVALID_PARAMETER"),
+        ],
+    )
+    async def test_double_wrapped_non_object_arguments_refused(
+        self, transform: CategorizedSearchTransform, nested: Any, code: str
+    ) -> None:
+        """A scalar or list nested payload is refused with the same structured
+        error the outer payload gets — never a bare ValueError out of the
+        retired-name adapter's dict()."""
+        ctx = _make_ctx()
+        fn = self._get_proxy_fn(transform, "read")
+
+        with pytest.raises(ToolError) as exc:
+            await fn(
+                "ha_call_read_tool",
+                {"name": "ha_get_state", "arguments": nested},
+                ctx,
+            )
+
+        payload = json.loads(str(exc.value))
+        assert payload["error"]["code"] == code
+        ctx.fastmcp.call_tool.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_double_wrapped_json_string_arguments_are_parsed(
+        self, transform: CategorizedSearchTransform
+    ) -> None:
+        """The nested payload gets the same JSON-string tolerance as the outer
+        one, so a model that serialized it twice still dispatches."""
+        ctx = _make_ctx(call_tool_return={"state": "on"})
+        fn = self._get_proxy_fn(transform, "read")
+
+        result = await fn(
+            "ha_call_read_tool",
+            {"name": "ha_get_state", "arguments": '{"entity_id": "light.kitchen"}'},
+            ctx,
+        )
+
+        assert result == {"state": "on"}
+        ctx.fastmcp.call_tool.assert_called_once_with(
+            "ha_get_state", {"entity_id": "light.kitchen"}
+        )
+
+    @pytest.mark.anyio
     async def test_double_wrapped_wrong_category_still_rejected(self, transform):
         """Double-wrapped write tool via read proxy is rejected after unwrapping."""
         ctx = _make_ctx()
@@ -688,6 +856,20 @@ class TestArgumentsAsString:
         fn = self._get_proxy_fn(transform, "read")
         with pytest.raises(ToolError) as exc_info:
             await fn("ha_get_state", "not valid json", ctx)
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "VALIDATION_INVALID_JSON"
+        ctx.fastmcp.call_tool.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_deeply_nested_json_string_rejected(self, transform):
+        """A JSON string nested past the interpreter's recursion limit makes
+        ``json.loads`` raise ``RecursionError``, not ``JSONDecodeError``; it
+        must still come back as the structured INVALID_JSON refusal rather
+        than escape as an internal error (CodeRabbit)."""
+        ctx = _make_ctx()
+        fn = self._get_proxy_fn(transform, "read")
+        with pytest.raises(ToolError) as exc_info:
+            await fn("ha_get_state", "[" * 20_000, ctx)
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "VALIDATION_INVALID_JSON"
         ctx.fastmcp.call_tool.assert_not_called()
@@ -968,5 +1150,41 @@ class TestApplySearchKeywordEnrichment:
             "contract",
             "read",
             "get",
+        ):
+            assert term in enriched.description.lower(), f"{term!r} missing"
+
+    @pytest.mark.anyio
+    async def test_blueprint_keywords_route_the_retired_tool_names(self):
+        """Blueprint queries and the pre-#2329 names must reach ha_manage_blueprints.
+
+        The consolidation removed ha_get_blueprint and ha_import_blueprint, so
+        an agent working from the older catalog searches names that no longer
+        exist. The boost carries both, plus the verbs the merged tool gained
+        ("delete", "substitute") that its own description does not lead with.
+        """
+        from ha_mcp.server import HomeAssistantSmartMCPServer
+
+        keywords = HomeAssistantSmartMCPServer._SEARCH_KEYWORDS
+        assert "ha_manage_blueprints" in keywords
+
+        transform = SearchKeywordsTransform(keywords=keywords)
+        tool = _make_tool(
+            "ha_manage_blueprints",
+            destructive=True,
+            description="Manage Home Assistant blueprints.",
+        )
+        enriched = (await transform.list_tools([tool]))[0]
+
+        assert enriched.description.startswith("Manage Home Assistant blueprints.")
+        for term in (
+            "blueprint",
+            "blueprints",
+            "import",
+            "delete",
+            "substitute",
+            "take-control",
+            "list",
+            "ha_get_blueprint",
+            "ha_import_blueprint",
         ):
             assert term in enriched.description.lower(), f"{term!r} missing"

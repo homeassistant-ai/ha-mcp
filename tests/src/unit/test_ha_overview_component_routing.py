@@ -18,11 +18,13 @@ the component path.
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
@@ -666,3 +668,26 @@ async def test_component_and_legacy_response_parity(tmp_path, monkeypatch) -> No
     assert component == legacy
     # And the component path did not touch the legacy fetch inventory.
     assert client_component.total_legacy_fetches() == 0
+
+
+@pytest.mark.asyncio
+async def test_over_nested_domains_string_is_a_validation_error(
+    tmp_path, monkeypatch
+) -> None:
+    """``domains`` was the one list parameter parsed outside a ``ValueError``
+    handler, so a string nested past the recursion limit escaped the tool as a
+    bare exception and FastMCP reported generic tool text (Codex, PR #2375).
+    It is refused as a structured validation error naming the parameter, and
+    nothing is fetched."""
+    _setup_visibility_disabled(tmp_path, monkeypatch)
+    _quiet_tail(monkeypatch)
+    client = OverviewRoutingClient()
+    overview = _build_overview_tool(client)
+
+    with pytest.raises(ToolError) as exc:
+        await overview(domains="[" * 20_000)
+
+    payload = json.loads(str(exc.value))
+    assert payload["error"]["code"].startswith("VALIDATION")
+    assert payload.get("parameter") == "domains" or "domains" in str(payload)
+    assert client.total_legacy_fetches() == 0

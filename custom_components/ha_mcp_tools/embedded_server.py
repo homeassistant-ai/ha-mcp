@@ -1520,6 +1520,49 @@ class EmbeddedServerManager:
 
     # -- worker thread -----------------------------------------------------
 
+    def _register_embedded_connection(
+        self, hamcp_config: Any, access_token: str
+    ) -> None:
+        """Hand the loopback URL, admin token and config dir over in memory.
+
+        Optional keywords are dropped one at a time, newest first, when the
+        installed server rejects them with ``TypeError``: an older release
+        predates ``config_dir`` (issue #2329) or ``verify_ssl`` (issue #1890).
+        Only the rejected keyword is dropped — falling straight back to the
+        two-argument call would re-open #1890's certificate failure on an
+        SSL-enabled instance just because the server is missing an unrelated,
+        newer parameter.
+        """
+        kwargs: dict[str, Any] = {"config_dir": self._hass_config_dir}
+        if self._loopback_verify_ssl is not None:
+            kwargs["verify_ssl"] = self._loopback_verify_ssl
+        for optional in ("config_dir", "verify_ssl", None):
+            try:
+                hamcp_config.set_embedded_connection(
+                    self._server_url, access_token, **kwargs
+                )
+                return
+            except TypeError:
+                if optional is None:
+                    raise
+                if optional not in kwargs:
+                    continue
+                del kwargs[optional]
+                if optional == "config_dir":
+                    # Only costs the direct blueprint file read; the server
+                    # falls back to reading through this component.
+                    _LOGGER.debug(
+                        "Installed ha-mcp server does not accept config_dir for "
+                        "the embedded connection; blueprint reads route through "
+                        "the component until the server package updates"
+                    )
+                else:
+                    _LOGGER.warning(
+                        "Installed ha-mcp server does not accept verify_ssl for "
+                        "the embedded connection; loopback TLS verification stays "
+                        "enabled until the server package updates"
+                    )
+
     def _note_startup_phase(self, phase: str) -> None:
         """Publish the worker's startup phase (a plain attribute write).
 
@@ -1629,27 +1672,7 @@ class EmbeddedServerManager:
                 "entry may serve stale override values until HA restarts"
             )
 
-        if self._loopback_verify_ssl is None:
-            _hamcp_config.set_embedded_connection(self._server_url, access_token)
-        else:
-            try:
-                _hamcp_config.set_embedded_connection(
-                    self._server_url,
-                    access_token,
-                    verify_ssl=self._loopback_verify_ssl,
-                )
-            except TypeError:
-                # Server predates the verify_ssl parameter (< the release
-                # carrying issue #1890's fix). Register url+token the old way;
-                # on an SSL-enabled instance the wss loopback will fail
-                # certificate verification until the server package updates —
-                # no worse than the plaintext failure it replaces.
-                _LOGGER.warning(
-                    "Installed ha-mcp server does not accept verify_ssl for "
-                    "the embedded connection; loopback TLS verification stays "
-                    "enabled until the server package updates"
-                )
-                _hamcp_config.set_embedded_connection(self._server_url, access_token)
+        self._register_embedded_connection(_hamcp_config, access_token)
 
         # Imported here, in the worker thread, after the connection is registered.
         from ha_mcp.server import HomeAssistantSmartMCPServer

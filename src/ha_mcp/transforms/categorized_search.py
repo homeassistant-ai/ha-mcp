@@ -28,7 +28,7 @@ from fastmcp.tools import Tool
 from mcp.types import ToolAnnotations
 
 from ..errors import ErrorCode, create_error_response
-from ..renamed_tools import current_tool_name
+from ..renamed_tools import adapt_retired_arguments, current_tool_name
 
 if TYPE_CHECKING:
     from fastmcp.server.transforms import GetToolNext
@@ -192,6 +192,29 @@ def categorize_capability(
     return "write"
 
 
+def _is_read_call_on_write_tool(name: str, arguments: dict[str, Any] | None) -> bool:
+    """Whether this call on a non-read-category tool is one of its read actions.
+
+    A mixed read/write tool (``ha_manage_backup``, ``ha_manage_updates``,
+    ``ha_manage_blueprints``, ...) is categorised ``write`` by its annotations,
+    which is where it stays: it is advertised under the write proxy and appears
+    in no other category set. But refusing its list/get actions on the read
+    proxy would strip real read surface from a client that only holds that
+    proxy — for blueprints, folding the old read tool into the merged one would
+    otherwise have removed listing entirely (#2329).
+
+    So membership decides advertisement, and this decides admission: read-only
+    mode already enumerates, per call, which invocations of such a tool are
+    reads (``READ_ONLY_EXEMPT_TOOLS``), and the read proxy reuses that verdict
+    so the two surfaces cannot disagree about what counts as a read. A call
+    that changes state is still refused here.
+    """
+    from ..read_only import READ_ONLY_EXEMPT_TOOLS
+
+    exemption = READ_ONLY_EXEMPT_TOOLS.get(name)
+    return exemption is not None and exemption.blocked_write(arguments or {}) is None
+
+
 def _categorize_tool(tool: Tool) -> Capability:
     """Categorize a Tool as read, write, or delete based on annotations and name."""
     annotations = tool.annotations
@@ -199,6 +222,24 @@ def _categorize_tool(tool: Tool) -> Capability:
         tool.name,
         read_only=bool(annotations and annotations.readOnlyHint),
         destructive=bool(annotations and annotations.destructiveHint),
+    )
+
+
+def _raise_non_object_arguments(value: Any, proxy_name: str, name: str) -> NoReturn:
+    """Refuse a proxy ``arguments`` payload that is not an object."""
+    raise ToolError(
+        json.dumps(
+            create_error_response(
+                code=ErrorCode.VALIDATION_INVALID_PARAMETER,
+                message=(
+                    f"'arguments' must be a JSON object (got {type(value).__name__})."
+                ),
+                suggestions=[
+                    "Pass 'arguments' as an object (dict), not a list or scalar.",
+                ],
+                context={"proxy_used": proxy_name, "tool_name": name},
+            )
+        )
     )
 
 
@@ -216,7 +257,9 @@ def _coerce_proxy_arguments(
         return arguments
     try:
         parsed = json.loads(arguments)
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, RecursionError) as e:
+        # RecursionError: a string nested past the interpreter's limit is
+        # still "not valid JSON" to the caller, not an internal error.
         raise ToolError(
             json.dumps(
                 create_error_response(
@@ -230,21 +273,7 @@ def _coerce_proxy_arguments(
             )
         ) from e
     if not isinstance(parsed, dict):
-        raise ToolError(
-            json.dumps(
-                create_error_response(
-                    code=ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    message=(
-                        "'arguments' must be a JSON object "
-                        f"(got {type(parsed).__name__})."
-                    ),
-                    suggestions=[
-                        "Pass 'arguments' as an object (dict), not a list or scalar.",
-                    ],
-                    context={"proxy_used": proxy_name, "tool_name": name},
-                )
-            )
-        )
+        _raise_non_object_arguments(parsed, proxy_name, name)
     logger.warning(
         "Proxy %s received 'arguments' as a JSON string for tool %s — parsed as fallback",
         proxy_name,
@@ -447,12 +476,16 @@ class CategorizedSearchTransform(BM25SearchTransform):
             # catalog, so it would reject that call before the re-dispatch
             # reaches RenamedToolAliasMiddleware — resolve the name here too,
             # and the alias covers both call shapes.
+            requested = name
             name = current_tool_name(name)
 
             # Tolerate `arguments` passed as a JSON string — small models
             # sometimes serialize it before sending. Parse once up front so
             # downstream logic can assume a dict (or None).
             arguments = _coerce_proxy_arguments(arguments, proxy_name, name)
+            # A retired name folded into an action-dispatched tool (#2329)
+            # needs the action its old signature never carried.
+            arguments = adapt_retired_arguments(requested, arguments)
 
             # Determine which category set to check
             if category == "read":
@@ -485,7 +518,8 @@ class CategorizedSearchTransform(BM25SearchTransform):
                 # inner name for the same reason the outer one is resolved
                 # above, or the alias covers one envelope shape and not the
                 # other.
-                inner_name = current_tool_name(arguments["name"])
+                requested_inner = arguments["name"]
+                inner_name = current_tool_name(requested_inner)
                 if inner_name in all_known:
                     logger.warning(
                         "Detected double-wrapped proxy call for '%s' via %s"
@@ -494,9 +528,23 @@ class CategorizedSearchTransform(BM25SearchTransform):
                         name,
                     )
                     name = inner_name
-                    arguments = arguments.get("arguments") or {}
+                    # The nested payload gets the same treatment as the outer
+                    # one: a JSON string is parsed, a scalar or list is
+                    # refused with the same structured error rather than
+                    # reaching the adapter, whose dict() would raise a bare
+                    # ValueError, and a retired inner name gets its action.
+                    nested = _coerce_proxy_arguments(
+                        arguments.get("arguments"), proxy_name, inner_name
+                    )
+                    if nested is not None and not isinstance(nested, dict):
+                        _raise_non_object_arguments(nested, proxy_name, inner_name)
+                    arguments = adapt_retired_arguments(requested_inner, nested or {})
 
-            if name not in allowed:
+            # Membership is the advertised category; a mixed tool's read
+            # actions are additionally admitted here (see the helper).
+            if name not in allowed and not (
+                category == "read" and _is_read_call_on_write_tool(name, arguments)
+            ):
                 _raise_wrong_category_error(name, transform, proxy_name)
 
             return await ctx.fastmcp.call_tool(name, arguments)

@@ -24,9 +24,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ha_mcp.tools import (
+    blueprint_sources,
     component_api,
     component_devices,
-    tools_blueprints,
     tools_config_helpers,
     tools_entities,
     tools_search,
@@ -63,12 +63,6 @@ from .test_ha_config_list_helpers_component_routing import (
 from .test_ha_config_list_helpers_component_routing import (
     _build_list_helpers,
 )
-from .test_ha_get_blueprint_component_routing import (
-    RoutingClient as BlueprintRoutingClient,
-)
-from .test_ha_get_blueprint_component_routing import (
-    _build_get_blueprint,
-)
 from .test_ha_get_device_component_routing import (
     RoutingClient as GetDeviceRoutingClient,
 )
@@ -93,6 +87,12 @@ from .test_ha_get_state_component_routing import (
 )
 from .test_ha_get_state_component_routing import (
     _build_get_state,
+)
+from .test_ha_manage_blueprints_component_routing import (
+    RoutingClient as BlueprintRoutingClient,
+)
+from .test_ha_manage_blueprints_component_routing import (
+    _build_get_blueprint,
 )
 from .test_ha_overview_component_routing import (
     OverviewRoutingClient,
@@ -191,10 +191,11 @@ class TestConfigGetSeam:
 
     @pytest.mark.asyncio
     async def test_script_get_stays_legacy_with_full_caps(self) -> None:
-        """Script analog: the legacy REST envelope is returned under ``config``
-        (storage key + category injected). Scripts run NO root-key
-        canonicalization (unlike automations' action->actions), so the storage
-        ``sequence`` body passes through byte-exact."""
+        """Script analog: the legacy path returns the script BODY under
+        ``config`` (category injected), the storage key staying top-level.
+        Scripts run NO root-key canonicalization (unlike automations'
+        action->actions), so the storage ``sequence`` body passes through
+        byte-exact."""
         client = GetRoutingClient(
             script_envelope={
                 "success": True,
@@ -213,13 +214,11 @@ class TestConfigGetSeam:
             resp = await ConfigScriptTools(client).ha_config_get_script("morning")
         assert resp["success"] is True
         assert resp["script_id"] == "morning"
-        assert resp["config"]["script_id"] == "morning"
         assert resp["config"]["category"] == "cat-s"
+        assert "script_id" not in resp["config"]
         # raw_config served byte-exact — the sequence body is untouched.
-        assert resp["config"]["config"] == {
-            "alias": "Morning Script",
-            "sequence": [{"delay": {"seconds": 5}}],
-        }
+        assert resp["config"]["alias"] == "Morning Script"
+        assert resp["config"]["sequence"] == [{"delay": {"seconds": 5}}]
         assert ws.send_command.await_count == 0
         assert client.get_script_config.await_count == 1
 
@@ -578,7 +577,8 @@ class TestBlueprintGetSeam:
 
     @pytest.mark.asyncio
     async def test_full_body_merged_from_real_file_read(self, tmp_path) -> None:
-        """ha_get_blueprint merges the REAL executor-read, jailed file body under
+        """ha_manage_blueprints(action="get") merges the REAL executor-read, jailed
+        file body under
         ``config`` (``!input`` preserved as a marker) over the list metadata."""
         target = tmp_path / "blueprints" / "automation" / "user" / "motion.yaml"
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -587,15 +587,20 @@ class TestBlueprintGetSeam:
         client = BlueprintRoutingClient()  # its blueprint/list serves user/motion.yaml
         ws = _real_component_ws(self._hass(tmp_path))
         tool = _build_get_blueprint(client)
-        with patch_ws(ws, tools_blueprints):
+        with patch_ws(ws, blueprint_sources):
             resp = await tool(path="user/motion.yaml", domain="automation")
 
         assert resp["success"] is True
-        assert resp["metadata"]["name"] == "Motion Light"
-        assert resp["config"]["trigger"][0]["entity_id"] == {
+        data = resp["data"]
+        assert data["metadata"]["name"] == "Motion Light"
+        assert data["config"]["trigger"][0]["entity_id"] == {
             "__input__": "motion_sensor"
         }
-        assert resp["config"]["action"] == [{"service": "light.turn_on"}]
+        assert data["config"]["action"] == [{"service": "light.turn_on"}]
+        # The raw text round-trips the file byte for byte, tagged with the tier
+        # that produced it — this is what a caller edits and saves back.
+        assert data["yaml"] == _MOTION_BLUEPRINT
+        assert data["yaml_source"] == "component"
 
     @pytest.mark.asyncio
     async def test_path_traversal_rejected_by_real_jail(self, tmp_path) -> None:
@@ -617,12 +622,17 @@ class TestBlueprintGetSeam:
         client = _EvilListClient()
         ws = _real_component_ws(self._hass(tmp_path))
         tool = _build_get_blueprint(client)
-        with patch_ws(ws, tools_blueprints):
+        with patch_ws(ws, blueprint_sources):
             resp = await tool(path=evil, domain="automation")
 
         assert resp["success"] is True
-        # The real jail blocked the read — no body, and the secret never leaked.
-        assert "config" not in resp
+        # The real jail blocked the read — no body, no text, and the secret
+        # never leaked. Asserted against ``data``, where the body keys live:
+        # checking the top level would pass no matter what the jail did.
+        data = resp["data"]
+        assert "config" not in data
+        assert "yaml" not in data
+        assert "yaml_source" not in data
         assert "hunter2" not in json.dumps(resp)
 
 
