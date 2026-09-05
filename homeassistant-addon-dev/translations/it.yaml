@@ -212,6 +212,10 @@ configuration:
       chiave di conferma. È figlia dell''opzione «Allega le skill di buone pratiche
       alle scritture» qui sopra e resta inerte finché quella è disattivata. Richiede
       il riavvio per avere effetto.'
+  ha_tool_concurrency:
+    name: Home Assistant request concurrency
+    description: Maximum concurrent tool workloads and requests sent to Home Assistant
+      across all sessions. Keep at 1 on resource-constrained systems.
   enable_filesystem_tools:
     name: Attiva gli strumenti per il filesystem (beta)
     description: 'Imposta HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Abilita l''accesso diretto

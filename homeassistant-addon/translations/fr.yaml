@@ -123,6 +123,10 @@ configuration:
       éditeur de la clé d''accusé de réception. Enfant de l''option « Attacher les
       compétences de bonnes pratiques aux écritures » ci-dessus et inerte lorsque
       ce parent est désactivé. Nécessite un redémarrage pour prendre effet.'
+  ha_tool_concurrency:
+    name: Home Assistant request concurrency
+    description: Maximum concurrent tool workloads and requests sent to Home Assistant
+      across all sessions. Keep at 1 on resource-constrained systems.
   disabled_tools:
     name: Outils désactivés (séparés par des virgules)
     description: Les outils listés ici sont forcément désactivés et verrouillés dans

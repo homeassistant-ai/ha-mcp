@@ -94,6 +94,10 @@ configuration:
       ngoq yInobqa''. chu''lu''taHvIS, ha_get_skill_guide chu''taH net poQ — lajta''ghach
       ngoq neH ''ang janvam. DungDaq "ghItlhDI'' mIw nIvmey yIchel" DuH puq ''oH,
       ''ej DuHvetlh chu''Ha''lu''chugh Qapbe''. QapchoHmeH add-on Dataghqa''moHnIS.'
+  ha_tool_concurrency:
+    name: Home Assistant request concurrency
+    description: Maximum concurrent tool workloads and requests sent to Home Assistant
+      across all sessions. Keep at 1 on resource-constrained systems.
   disabled_tools:
     name: janmey luQotlhlu'bogh (comma-mey)
     description: naDev lutetlhlu'bogh janmey luchu'Ha'lu' 'ej web DuHmey UI (janmey

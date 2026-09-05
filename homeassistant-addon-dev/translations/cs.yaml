@@ -190,6 +190,10 @@ configuration:
       vydavatelem potvrzovacího klíče. Je podřízeno výše uvedené možnosti „Připojit
       dovednosti osvědčených postupů při zápisu“ a je neaktivní, pokud je tato nadřazená
       možnost vypnuta. Vyžaduje restart, aby se projevilo.'
+  ha_tool_concurrency:
+    name: Home Assistant request concurrency
+    description: Maximum concurrent tool workloads and requests sent to Home Assistant
+      across all sessions. Keep at 1 on resource-constrained systems.
   enable_filesystem_tools:
     name: Povolit nástroje souborového systému (beta)
     description: 'Nastaví HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Povoluje přímý přístup

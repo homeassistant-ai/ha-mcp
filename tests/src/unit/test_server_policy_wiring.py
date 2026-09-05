@@ -45,6 +45,7 @@ def test_alias_middleware_is_registered_before_the_policy_gate():
 
     stub = MagicMock()
     stub.mcp = MagicMock()
+    stub.settings.ha_tool_concurrency = 1
     HomeAssistantSmartMCPServer._initialize_server(stub)
 
     calls = list(stub.mock_calls)

@@ -24,6 +24,7 @@ from ha_mcp.visibility.enforcement import (
 def _make_server_stub() -> MagicMock:
     stub = MagicMock()
     stub.mcp = MagicMock()
+    stub.settings.ha_tool_concurrency = 1
     return stub
 
 

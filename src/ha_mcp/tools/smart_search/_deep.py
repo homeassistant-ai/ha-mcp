@@ -10,6 +10,7 @@ from fastmcp.exceptions import ToolError
 
 from ...client.rest_client import HomeAssistantAPIError
 from ...errors import get_error_code, get_error_message
+from ...ha_request_queue import limit_ha_transport_request
 from ..component_api import component_supports, get_component_caps
 from ..config_entry_flow import FLOW_HELPER_TYPES
 from ..helpers import exception_to_structured_error, safe_info, safe_progress
@@ -529,10 +530,11 @@ class DeepSearchMixin(SceneSearchMixin):
             uid: str,
         ) -> tuple[str, dict[str, Any] | None, str | None]:
             try:
-                config = await asyncio.wait_for(
-                    self.client._request("GET", f"/config/automation/config/{uid}"),
-                    timeout=INDIVIDUAL_CONFIG_TIMEOUT,
-                )
+                async with limit_ha_transport_request():
+                    config = await asyncio.wait_for(
+                        self.client._request("GET", f"/config/automation/config/{uid}"),
+                        timeout=INDIVIDUAL_CONFIG_TIMEOUT,
+                    )
                 return (uid, config, None)
             except HomeAssistantAPIError as e:
                 if e.status_code == 404:
@@ -672,10 +674,11 @@ class DeepSearchMixin(SceneSearchMixin):
             sid: str,
         ) -> tuple[str, dict[str, Any] | None, str | None]:
             try:
-                config_resp = await asyncio.wait_for(
-                    self.client.get_script_config(sid),
-                    timeout=INDIVIDUAL_CONFIG_TIMEOUT,
-                )
+                async with limit_ha_transport_request():
+                    config_resp = await asyncio.wait_for(
+                        self.client.get_script_config(sid),
+                        timeout=INDIVIDUAL_CONFIG_TIMEOUT,
+                    )
                 return (sid, config_resp.get("config", {}), None)
             except HomeAssistantAPIError as e:
                 if e.status_code == 404:
@@ -1126,10 +1129,11 @@ class DeepSearchMixin(SceneSearchMixin):
                 get_data: dict[str, Any] = {"type": "lovelace/config"}
                 if url_path != "default":
                     get_data["url_path"] = url_path
-                resp = await asyncio.wait_for(
-                    self.client.send_websocket_message(get_data),
-                    timeout=INDIVIDUAL_CONFIG_TIMEOUT,
-                )
+                async with limit_ha_transport_request():
+                    resp = await asyncio.wait_for(
+                        self.client.send_websocket_message(get_data),
+                        timeout=INDIVIDUAL_CONFIG_TIMEOUT,
+                    )
                 # A soft failure does NOT raise: send_websocket_message returns
                 # {"success": False, "error": ...} on a 403-after-retries or a
                 # command error. Without this guard that error envelope is a

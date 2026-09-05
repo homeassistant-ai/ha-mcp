@@ -205,6 +205,10 @@ configuration:
       der einzige Herausgeber des Bestätigungsschlüssels. Kind der Option Best-Practice-Skills
       bei Schreibvorgängen anhängen oben und inert, während dieser Elternteil ausgeschaltet
       ist. Erfordert Neustart, um wirksam zu werden.'
+  ha_tool_concurrency:
+    name: Home Assistant request concurrency
+    description: Maximum concurrent tool workloads and requests sent to Home Assistant
+      across all sessions. Keep at 1 on resource-constrained systems.
   enable_filesystem_tools:
     name: Dateisystem-Tools aktivieren (Beta)
     description: 'Setzt HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Aktiviert direkten Dateilese-/-schreibzugriff

@@ -106,6 +106,10 @@ configuration:
       alternativet ”Bifoga bästa praxis-färdigheter vid skrivningar” ovan och inaktivt
       när det överordnade alternativet är avstängt. Kräver omstart för att träda i
       kraft.'
+  ha_tool_concurrency:
+    name: Home Assistant request concurrency
+    description: Maximum concurrent tool workloads and requests sent to Home Assistant
+      across all sessions. Keep at 1 on resource-constrained systems.
   disabled_tools:
     name: Inaktiverade verktyg (kommaseparerade)
     description: Verktyg som listas här är tvingade att vara avstängda och låsta i

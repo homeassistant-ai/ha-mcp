@@ -175,6 +175,7 @@ class TestAddonStructure:
         # non-empty disabled_tools default would silently lock tools off.
         expected = {
             "tool_search_max_results": ("int(2,10)?", 5),
+            "ha_tool_concurrency": ("int(1,32)?", 1),
             "disabled_tools": ("str?", ""),
             "pinned_tools": ("str?", ""),
             # Read Only Mode (#1569) — non-beta safety toggle, default OFF
@@ -206,6 +207,7 @@ class TestAddonStructure:
         addresses: dev gains/changes an option, stable is forgotten)."""
         keys = (
             "tool_search_max_results",
+            "ha_tool_concurrency",
             "disabled_tools",
             "pinned_tools",
             "read_only_mode",
@@ -223,6 +225,14 @@ class TestAddonStructure:
             assert stable["schema"].get(key) == dev["schema"].get(key), (
                 f"{key!r} schema type differs between stable and dev add-ons"
             )
+
+    def test_start_py_wires_ha_tool_concurrency_env(self):
+        """The app option must reach the server's validated setting."""
+        start_src = (_REPO_ROOT / ADDON_DIR / "start.py").read_text(encoding="utf-8")
+        config_src = (_REPO_ROOT / "src/ha_mcp/config.py").read_text(encoding="utf-8")
+        assert 'config.get("ha_tool_concurrency", 1)' in start_src
+        assert 'os.environ["HA_TOOL_CONCURRENCY"]' in start_src
+        assert 'alias="HA_TOOL_CONCURRENCY"' in config_src
 
     def test_start_py_wires_read_only_mode_env(self):
         """start.py must read the ``read_only_mode`` addon option and export

@@ -156,6 +156,10 @@ configuration:
       ngoq yInobqa''. chu''lu''taHvIS, ha_get_skill_guide chu''taH net poQ — lajta''ghach
       ngoq neH ''ang janvam. DungDaq "ghItlhDI'' mIw nIvmey yIchel" DuH puq ''oH,
       ''ej DuHvetlh chu''Ha''lu''chugh Qapbe''. QapchoHmeH add-on Dataghqa''moHnIS.'
+  ha_tool_concurrency:
+    name: Home Assistant request concurrency
+    description: Maximum concurrent tool workloads and requests sent to Home Assistant
+      across all sessions. Keep at 1 on resource-constrained systems.
   enable_filesystem_tools:
     name: '''a''baqa'' pat janmey tIQotlhHa'' (Beta)'
     description: 'HAMCP_ENABLE_FILESYSTEM_TOOLS=true wIv. Home Assistant ''a''baqa''mey

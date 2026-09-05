@@ -289,6 +289,20 @@ class HomeAssistantSmartMCPServer:
         # wraps the final tool surface (including the search proxies).
         self._apply_tool_security_policies()
 
+        # Bound HA-facing work across every connected MCP session. This sits
+        # after approval gates so a call waiting for user approval does not
+        # occupy a slot. Proxy envelopes also bypass this middleware; their
+        # redispatched real tool acquires capacity after its approval gate.
+        from .ha_request_queue import (
+            HomeAssistantRequestQueueMiddleware,
+            configure_ha_transport_concurrency,
+        )
+
+        configure_ha_transport_concurrency(self.settings.ha_tool_concurrency)
+        self.mcp.add_middleware(
+            HomeAssistantRequestQueueMiddleware(self.settings.ha_tool_concurrency)
+        )
+
         # Known-secret-value scrub (#2157) — registered just before the
         # visibility outbound half so that half stays innermost (its scan
         # must see truly raw output; a secret value could embed a hidden

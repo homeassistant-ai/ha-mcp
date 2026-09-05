@@ -118,6 +118,10 @@ configuration:
       Это дочерний параметр расположенного выше параметра «Прикреплять навыки с рекомендациями
       при записи», который не действует, пока родительский параметр выключен. Для
       применения требуется перезапуск.'
+  ha_tool_concurrency:
+    name: Home Assistant request concurrency
+    description: Maximum concurrent tool workloads and requests sent to Home Assistant
+      across all sessions. Keep at 1 on resource-constrained systems.
   disabled_tools:
     name: Отключённые инструменты (через запятую)
     description: 'Перечисленные здесь инструменты принудительно отключаются и блокируются

@@ -56,6 +56,7 @@ options:
   redact_secrets: false
   enable_mandatory_bps: true
   enable_strict_mandatory_bps: true
+  ha_tool_concurrency: 1
   disabled_tools: ""
   pinned_tools: ""
   enable_auto_backup: true
@@ -79,6 +80,7 @@ schema:
   redact_secrets: bool?
   enable_mandatory_bps: bool?
   enable_strict_mandatory_bps: bool?
+  ha_tool_concurrency: int(1,32)?
   disabled_tools: str?
   pinned_tools: str?
   enable_auto_backup: bool?

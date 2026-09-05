@@ -89,6 +89,10 @@ configuration:
     description: 严格模式：在客户端能证明已阅读最佳实践之前，阻止其使用该工具。开启时，六个最佳实践写入工具（自动化、脚本、场景、辅助元素、仪表盘、原始
       YAML）会被阻止并返回错误，指引客户端通过 ha_get_skill_guide 阅读最佳实践技能并回传在那里获得的确认密钥。开启时，ha_get_skill_guide
       工具被锁定启用——它是确认密钥的唯一发布方。为上方“写入时附加最佳实践技能”选项的子项，当其父项关闭时无效。需要重启才能生效。
+  ha_tool_concurrency:
+    name: Home Assistant request concurrency
+    description: Maximum concurrent tool workloads and requests sent to Home Assistant
+      across all sessions. Keep at 1 on resource-constrained systems.
   enable_filesystem_tools:
     name: 启用文件系统工具（测试版）
     description: 设置 HAMCP_ENABLE_FILESYSTEM_TOOLS=true。启用对您的 Home Assistant 文件系统的直接文件读/写访问。警告：这会让

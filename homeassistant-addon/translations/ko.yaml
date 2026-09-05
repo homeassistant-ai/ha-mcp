@@ -75,6 +75,10 @@ configuration:
       모범 사례 스킬을 읽은 뒤 거기서 받은 확인 키를 다시 전달하라는 오류를 반환합니다. 또한 켜져 있는 동안 ha_get_skill_guide
       도구는 활성 상태로 잠깁니다. 확인 키를 발급하는 유일한 도구이기 때문입니다. 위의 "쓰기 시 모범 사례 스킬 첨부" 옵션의 하위 항목이며,
       상위 옵션이 꺼져 있으면 아무 효과가 없습니다. 적용하려면 다시 시작해야 합니다.
+  ha_tool_concurrency:
+    name: Home Assistant request concurrency
+    description: Maximum concurrent tool workloads and requests sent to Home Assistant
+      across all sessions. Keep at 1 on resource-constrained systems.
   disabled_tools:
     name: 비활성화할 도구(쉼표로 구분)
     description: '여기에 나열한 도구는 강제로 꺼지고 웹 설정 UI(도구 탭)에서 잠깁니다. 이 옵션을 먼저 해제하지 않으면 거기서

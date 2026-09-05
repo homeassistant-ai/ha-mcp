@@ -604,6 +604,45 @@ class TestSubscribeEventsContract:
         return client
 
     @pytest.mark.asyncio
+    async def test_subscription_setup_holds_transport_slot_through_ack(self):
+        """A second subscription cannot send until the first ack arrives."""
+        from ha_mcp.ha_request_queue import configure_ha_transport_concurrency
+
+        configure_ha_transport_concurrency(1)
+        first_client = self._prepare_client()
+        second_client = self._prepare_client()
+        first_sent = asyncio.Event()
+        release_first = asyncio.Event()
+        second_sent = asyncio.Event()
+
+        async def _resolve(client, message: dict) -> None:
+            future = client._state._pending_requests.get(message["id"])
+            assert future is not None
+            future.set_result({"id": message["id"], "type": "result", "success": True})
+
+        async def _send_first(message: dict) -> None:
+            first_sent.set()
+            await release_first.wait()
+            await _resolve(first_client, message)
+
+        async def _send_second(message: dict) -> None:
+            second_sent.set()
+            await _resolve(second_client, message)
+
+        first_client.send_json_message = _send_first  # type: ignore[method-assign]
+        second_client.send_json_message = _send_second  # type: ignore[method-assign]
+
+        first_task = asyncio.create_task(first_client.subscribe_events())
+        await first_sent.wait()
+        second_task = asyncio.create_task(second_client.subscribe_events())
+        await asyncio.sleep(0)
+        assert not second_sent.is_set()
+
+        release_first.set()
+        await asyncio.gather(first_task, second_task)
+        assert second_sent.is_set()
+
+    @pytest.mark.asyncio
     async def test_returns_message_id_with_null_result(self):
         """HA's canonical ``result: null`` reply must NOT raise.
 
