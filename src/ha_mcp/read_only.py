@@ -153,6 +153,21 @@ def _updates_write(args: dict[str, Any]) -> str | None:
     return f"action={action!r}"
 
 
+def _blueprint_write(args: dict[str, Any]) -> str | None:
+    # Reads (allowed): listing installed blueprints and reading one's
+    # metadata/inputs/body. ``substitute`` joins them because it is a pure
+    # render — core builds the standalone config in memory and sends it back,
+    # touching neither the blueprint store nor any automation/script; writing
+    # the rendered config anywhere still needs ha_config_set_automation /
+    # ha_config_set_script, which read-only mode blocks. ``import`` (writes a
+    # blueprint file), ``save`` (overwrites one with caller-supplied YAML) and
+    # ``delete`` stay blocked, and a missing/unknown action fails closed.
+    action = args.get("action")
+    if action in ("list", "get", "substitute"):
+        return None
+    return f"action={action!r}"
+
+
 def _theme_write(args: dict[str, Any]) -> str | None:
     # Reads (allowed): listing installed themes and inspecting the screenshot
     # engine account's saved per-user theme. The latter has no pure-read
@@ -258,6 +273,14 @@ READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
     "ha_manage_security_policy": ReadOnlyExemption(
         _security_policy_write,
         "reading the policy document (action='get')",
+    ),
+    # Blueprint listing and reading exist only here — ha_get_blueprint was
+    # merged into this tool (issue #2329), so hiding it would remove the read
+    # surface entirely.
+    "ha_manage_blueprints": ReadOnlyExemption(
+        _blueprint_write,
+        "listing and reading blueprints (action='list' or 'get') and "
+        "rendering a standalone config (action='substitute')",
     ),
 }
 

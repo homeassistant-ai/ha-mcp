@@ -651,10 +651,12 @@ class HomeAssistantSmartMCPServer:
         ),
         "ha_config_set_automation": (
             "create update modify edit automation triggers conditions actions "
-            "new automation write save"
+            "new automation write save take control blueprint detach "
+            "unlink standalone convert"
         ),
         "ha_config_set_script": (
-            "create update modify edit script sequence actions new script write save"
+            "create update modify edit script sequence actions new script write "
+            "save take control blueprint detach unlink standalone convert"
         ),
         "ha_config_set_yaml": (
             "edit yaml configuration.yaml packages template sensor "
@@ -681,6 +683,14 @@ class HomeAssistantSmartMCPServer:
             "cost costs kwh peak off-peak offpeak contract utility bill "
             "grid solar battery gas water consumption "
             "number_energy_price entity_energy_price stat_energy_from"
+        ),
+        # Old tool names from before the #2329 consolidation, plus the verbs
+        # the merged tool gained. An agent that still knows ha_get_blueprint /
+        # ha_import_blueprint routes to the replacement instead of failing
+        # tool lookup.
+        "ha_manage_blueprints": (
+            "blueprint blueprints import delete remove unused substitute "
+            "take-control list ha_get_blueprint ha_import_blueprint"
         ),
         # Old tool names from before #1134 consolidation. BM25 retrieval
         # on agents that still know the previous catalog ("call
@@ -716,11 +726,13 @@ class HomeAssistantSmartMCPServer:
         ),
         "ha_config_set_automation": (
             "Create or update a Home Assistant automation.\n\n"
-            "Supports two modes: full `config` replacement, or surgical "
+            "Supports three modes: full `config` replacement, surgical "
             "`python_transform` on an existing automation (requires "
             "`identifier` and `config_hash` from "
-            "ha_config_get_automation). Omit `identifier` to create a "
-            "new automation.\n\n"
+            "ha_config_get_automation), or `take_control_of_blueprint` "
+            "to convert a blueprint-backed automation into an editable "
+            "standalone one (the UI's Take control action). Omit "
+            "`identifier` to create a new automation.\n\n"
             "For schema details, examples, and native-vs-template "
             "guidance, see ha_get_skill_guide or your locally "
             "installed skills."
@@ -735,10 +747,12 @@ class HomeAssistantSmartMCPServer:
         ),
         "ha_config_set_script": (
             "Create or update a Home Assistant script.\n\n"
-            "Supports two modes: full `config` replacement, or surgical "
+            "Supports three modes: full `config` replacement, surgical "
             "`python_transform` on an existing script (requires "
-            "`config_hash` from ha_config_get_script). `script_id` names "
-            "the script in both modes.\n\n"
+            "`config_hash` from ha_config_get_script), or "
+            "`take_control_of_blueprint` to convert a blueprint-backed "
+            "script into an editable standalone one. `script_id` names "
+            "the script in every mode.\n\n"
             "For schema details and examples, see "
             "ha_get_skill_guide or your locally installed skills."
         ),

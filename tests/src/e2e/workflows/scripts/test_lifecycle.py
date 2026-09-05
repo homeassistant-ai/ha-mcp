@@ -73,12 +73,14 @@ def enhanced_parse_mcp_result(result) -> dict[str, Any]:
 
 
 def extract_script_config(get_data: dict[str, Any]) -> dict[str, Any]:
-    """Extract script configuration from a ha_config_get_script response."""
-    # Handle nested config structure: get_data["config"]["config"]
-    config_wrapper = get_data.get("config", {})
-    if isinstance(config_wrapper, dict) and "config" in config_wrapper:
-        return config_wrapper.get("config", {})
-    return config_wrapper
+    """Extract script configuration from a ha_config_get_script response.
+
+    ``config`` is the script body. It used to be the REST envelope, so this
+    helper unwrapped a second ``config`` key; doing that now would corrupt a
+    script whose body legitimately carries one.
+    """
+    config = get_data.get("config", {})
+    return config if isinstance(config, dict) else {}
 
 
 def wait_for_script_registration(script_count: int = 1) -> int:
@@ -1153,10 +1155,10 @@ async def script_blueprint_path(mcp_client):
     """Fixture to get the path of the first available script blueprint."""
     async with MCPAssertions(mcp_client) as mcp:
         list_result = await mcp.call_tool_success(
-            "ha_get_blueprint",
-            {"domain": "script"},
+            "ha_manage_blueprints",
+            {"action": "list", "domain": "script"},
         )
-        blueprints = list_result.get("blueprints", [])
+        blueprints = list_result["data"].get("blueprints", [])
         if not blueprints:
             pytest.skip("No script blueprints available for testing")
         return blueprints[0]["path"]
@@ -1182,11 +1184,11 @@ async def test_blueprint_script_lifecycle(
 
         # Step 2: Get blueprint details to understand required inputs
         detail_result = await mcp.call_tool_success(
-            "ha_get_blueprint",
-            {"path": blueprint_path, "domain": "script"},
+            "ha_manage_blueprints",
+            {"action": "get", "path": blueprint_path, "domain": "script"},
         )
 
-        inputs = detail_result.get("inputs", {})
+        inputs = detail_result["data"].get("inputs", {})
         logger.info(f"Blueprint has {len(inputs)} inputs")
 
         # Step 3: Create script from blueprint (no sequence field)

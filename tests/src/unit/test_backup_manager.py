@@ -31,6 +31,7 @@ from ha_mcp.backup_manager import (
     DomainHandler,
     _build_text_diff_response,
     _compute_json_patch,
+    _entity_id_aliases,
     _fetch_calendar_event,
     _fetch_todo_item,
     _pointer_segment,
@@ -593,6 +594,41 @@ def test_destructive_tools_carry_auto_backup_decorator() -> None:
             assert "mandatory=True" in head, f"{func} lost mandatory=True"
 
 
+def test_ha_manage_blueprints_carries_auto_backup_decorator() -> None:
+    """Source guard for the computed-key wiring (#2329).
+
+    Deleting a blueprint unlinks a file core will not rebuild and saving over
+    one replaces it, so the pre-write snapshot is the only way back. The
+    behavioral tests below drive a stand-in callable, so only this guard notices
+    the decorator (or its domain/skip lambdas) disappearing from the real tool.
+    """
+    from pathlib import Path
+
+    tools_dir = Path(__file__).resolve().parents[3] / "src" / "ha_mcp" / "tools"
+    src = (tools_dir / "tools_blueprints.py").read_text(encoding="utf-8")
+    idx = src.index("async def ha_manage_blueprints(")
+    head = src[max(0, idx - 1200) : idx]  # the decorator block above the def
+    assert "with_auto_backup(" in head, "ha_manage_blueprints lost @with_auto_backup"
+    assert "domain_fn=" in head, "ha_manage_blueprints lost its blueprint domain_fn"
+    assert "blueprint_{kw.get(" in head, "the backup domain no longer follows `domain`"
+    assert "id_fn=" in head, "ha_manage_blueprints wrong/missing id_fn"
+    assert "blueprint_snapshot_target" in head, (
+        "the snapshot key no longer normalises the path the way blueprint/save "
+        "does - an overwriting save of 'user/motion' would replace "
+        "user/motion.yaml with nothing captured"
+    )
+    assert 'kw.get("action") not in ("delete", "save")' in head, (
+        "ha_manage_blueprints lost the delete/save-only skip_fn - either every "
+        "action would attempt a snapshot, or an overwriting save would destroy "
+        "the previous file with nothing captured"
+    )
+    assert 'not kw.get("confirm")' in head, (
+        "ha_manage_blueprints lost the confirm half of its skip_fn - an "
+        "unconfirmed delete changes nothing, but would again pay a component "
+        "file read and an outbound source_url re-fetch before being refused"
+    )
+
+
 # ---------------------------------------------------------------- filenames
 
 
@@ -602,7 +638,11 @@ class TestFilenameSafety:
         assert "\\" not in _safe_entity_id("a\\b")
 
     def test_unicode_replaced(self) -> None:
-        assert _safe_entity_id("foo🎉bar") == "foo_bar"
+        # Sanitising is lossy, so the result also carries a digest of the
+        # original; what this pins is that no unsafe character survives.
+        safe = _safe_entity_id("foo🎉bar")
+        assert safe.startswith("foo_bar")
+        assert "🎉" not in safe
 
     def test_leading_dot_stripped(self) -> None:
         assert not _safe_entity_id("...env").startswith(".")
@@ -613,6 +653,48 @@ class TestFilenameSafety:
 
     def test_keeps_safe_chars(self) -> None:
         assert _safe_entity_id("entity.foo_bar-1") == "entity.foo_bar-1"
+
+    def test_sanitised_ids_do_not_collide(self) -> None:
+        """Blueprint domains key on paths, where sanitising is lossy (#2329).
+
+        ``user/motion.yaml`` and ``user_motion.yaml`` both clean to
+        ``user_motion.yaml``. Sharing one snapshot namespace means captures in
+        the same second overwrite each other and rotation counts both
+        histories as one, so it can delete the only restore point for a
+        blueprint that was never written.
+        """
+        assert _safe_entity_id("user/motion.yaml") != _safe_entity_id(
+            "user_motion.yaml"
+        )
+        assert _safe_entity_id("a/b") != _safe_entity_id("a_b")
+
+    def test_the_same_id_always_sanitises_the_same_way(self) -> None:
+        """Rotation and listing glob on this, so it has to be stable."""
+        assert _safe_entity_id("user/motion.yaml") == _safe_entity_id(
+            "user/motion.yaml"
+        )
+
+    def test_snapshots_written_before_the_digest_stay_discoverable(self) -> None:
+        """Rotation and entity filtering must still find the older names.
+
+        Adding the digest changed the filename for path-shaped ids, so files
+        captured under the bare sanitised name would otherwise stop being
+        counted: never pruned, and absent from an entity-filtered listing.
+        """
+        aliases = _entity_id_aliases("user/motion.yaml")
+
+        assert _safe_entity_id("user/motion.yaml") in aliases
+        assert "user_motion.yaml" in aliases
+
+    def test_an_already_safe_id_has_exactly_one_alias(self) -> None:
+        """Entity ids never had a second spelling, so nothing is widened."""
+        assert _entity_id_aliases("automation.morning") == ["automation.morning"]
+
+    def test_already_safe_ids_are_returned_unchanged(self) -> None:
+        """Entity ids must keep their existing filenames, so snapshots taken
+        before this change stay discoverable."""
+        for entity_id in ("automation.morning", "script.bedtime", "light.hall-1"):
+            assert _safe_entity_id(entity_id) == entity_id
 
 
 # ---------------------------------------------------------------- capture
@@ -710,8 +792,115 @@ class TestCapture:
         assert p1 is not None
         assert p2 is not None
 
+    async def test_two_captures_in_one_second_keep_both_states(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The throttle defaults to 0 and the filename timestamp is a second.
+
+        A save then a delete of one blueprint, or two rapid edits of one
+        automation, land inside a second; with one name for both the atomic
+        replace discarded the earlier pre-write state (CodeRabbit, PR #2356).
+        The second capture takes a suffixed name that still sorts newest-last
+        and parses to the same timestamp.
+        """
+        monkeypatch.setattr(bm, "_now_ts", lambda: "20260903_120000")
+        versions = iter([{"v": 1}, {"v": 2}, {"v": 3}])
+
+        async def fetch(_client: Any, _entity_id: str) -> Any:
+            return next(versions)
+
+        async def restore(_client: Any, _entity_id: str, _config: Any) -> Any:
+            return "ok"
+
+        mgr = _mk_manager(tmp_path)
+        mgr.register(DomainHandler(domain="automation", fetch=fetch, restore=restore))
+
+        first = await mgr.maybe_snapshot("automation", "x")
+        second = await mgr.maybe_snapshot("automation", "x")
+        third = await mgr.maybe_snapshot("automation", "x")
+
+        assert first is not None and second is not None and third is not None
+        assert len({first.name, second.name, third.name}) == 3
+        assert mgr.read_snapshot(first.name)["config"] == {"v": 1}
+        assert mgr.read_snapshot(second.name)["config"] == {"v": 2}
+        assert mgr.read_snapshot(third.name)["config"] == {"v": 3}
+        # Newest first, and every name reports the second it was taken in.
+        listed = mgr.list_snapshots(entity_id="x")
+        assert [m["name"] for m in listed] == [third.name, second.name, first.name]
+        assert {m["timestamp"] for m in listed} == {"20260903_120000"}
+
+    async def test_same_second_suffix_counts_toward_rotation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Suffixed names are ordinary snapshots: rotation prunes the oldest of
+        them and the entity's own retention cap still holds."""
+        monkeypatch.setattr(bm, "_now_ts", lambda: "20260903_120000")
+        mgr = _mk_manager(tmp_path, auto_backup_retain_per_entity=2)
+        mgr.register(_mk_handler(fetched={"v": 1}))
+
+        first = await mgr.maybe_snapshot("automation", "x")
+        await mgr.maybe_snapshot("automation", "x")
+        await mgr.maybe_snapshot("automation", "x")
+
+        assert first is not None
+        assert not first.exists()
+        assert len(list(tmp_path.glob("automation.x.*.yaml"))) == 2
+
 
 # ---------------------------------------------------------------- retention
+
+
+def _write_named(tmp_path: Path, name: str, entity_id: str) -> Path:
+    """Drop a snapshot file under an explicit filename.
+
+    Lets a test place the legacy (pre-digest) stem and two colliding
+    ids without racing the second-resolution timestamp.
+    """
+    target = tmp_path / name
+    target.write_text(
+        "# ha_mcp_backup\n"
+        + yaml.safe_dump(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "domain": "blueprint_automation",
+                "entity_id": entity_id,
+                "captured": "2026-09-03T00:00:00+00:00",
+                "tool": "t",
+                "config": "blueprint: {}\n",
+                "kind": "text",
+            },
+            sort_keys=False,
+        )
+    )
+    return target
+
+
+def _colliding_blueprint_snapshots(tmp_path: Path) -> dict[str, Path]:
+    """Three files whose stems collide the way blueprint paths do (#2329).
+
+    ``user/motion.yaml`` sanitises to ``user_motion.yaml``, which is the
+    CURRENT stem of the distinct blueprint ``user_motion.yaml``. A snapshot
+    of the path written before the digest suffix existed sits under that
+    bare stem too, so the name alone cannot tell the two histories apart.
+    """
+    digest_stem = _safe_entity_id("user/motion.yaml")
+    return {
+        "digest": _write_named(
+            tmp_path,
+            f"blueprint_automation.{digest_stem}.20260903_120000.yaml",
+            "user/motion.yaml",
+        ),
+        "legacy": _write_named(
+            tmp_path,
+            "blueprint_automation.user_motion.yaml.20260903_110000.yaml",
+            "user/motion.yaml",
+        ),
+        "other": _write_named(
+            tmp_path,
+            "blueprint_automation.user_motion.yaml.20260903_100000.yaml",
+            "user_motion.yaml",
+        ),
+    }
 
 
 class TestRetention:
@@ -735,6 +924,36 @@ class TestRetention:
         # alpha rotated to 2, beta kept its single file.
         assert len(list(tmp_path.glob("automation.alpha.*.yaml"))) == 2
         assert len(list(tmp_path.glob("automation.beta.*.yaml"))) == 1
+
+    async def test_rotation_ages_files_by_timestamp_not_by_stem(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An id the sanitiser rewrote has two stems, and the digest one sorts
+        before the bare one on every filename (``-`` < ``.``) whatever the
+        timestamps say. Aged by name, rotation pruned the NEW history first —
+        once the pre-digest files alone filled the cap, the snapshot just
+        written was the one deleted (Patch76, PR #2356 concern 3).
+        """
+        monkeypatch.setattr(bm, "_now_ts", lambda: "20260903_120000")
+        legacy_new = _write_named(
+            tmp_path,
+            "blueprint_automation.user_motion.yaml.20260903_110000.yaml",
+            "user/motion.yaml",
+        )
+        legacy_old = _write_named(
+            tmp_path,
+            "blueprint_automation.user_motion.yaml.20260903_090000.yaml",
+            "user/motion.yaml",
+        )
+        mgr = _mk_manager(tmp_path, auto_backup_retain_per_entity=2)
+        mgr.register(_mk_handler("blueprint_automation", fetched="blueprint: {}\n"))
+
+        written = await mgr.maybe_snapshot("blueprint_automation", "user/motion.yaml")
+
+        assert written is not None
+        assert written.exists(), "the fresh pre-write snapshot must survive"
+        assert legacy_new.exists()
+        assert not legacy_old.exists(), "the oldest file is the one rotated out"
 
 
 # ---------------------------------------------------------------- list/read/delete
@@ -765,6 +984,142 @@ class TestListReadDelete:
         only_alpha = mgr.list_snapshots(entity_id="alpha")
         assert len(only_alpha) == 1
         assert only_alpha[0]["entity_id"] == "alpha"
+
+    def test_entity_filter_reads_the_payload_across_the_stem_collision(
+        self, tmp_path: Path
+    ) -> None:
+        """An entity-filtered listing is that entity's history, not its stem's.
+
+        Rotation already asks the payload before trusting a filename; the
+        listing has to as well, or ``user/motion.yaml`` reports the distinct
+        blueprint ``user_motion.yaml``'s snapshots as its own — and the bulk
+        delete built on it unlinks them (Patch76, PR #2356).
+        """
+        files = _colliding_blueprint_snapshots(tmp_path)
+        mgr = _mk_manager(tmp_path)
+
+        for_path = {m["name"] for m in mgr.list_snapshots(entity_id="user/motion.yaml")}
+        for_other = {
+            m["name"] for m in mgr.list_snapshots(entity_id="user_motion.yaml")
+        }
+
+        assert for_path == {files["digest"].name, files["legacy"].name}
+        assert for_other == {files["other"].name}
+
+    def test_delete_bulk_by_entity_leaves_the_colliding_blueprint_alone(
+        self, tmp_path: Path
+    ) -> None:
+        """The caller asked to delete ONE blueprint's history.
+
+        Both spellings of that blueprint's stem go, including the pre-digest
+        one; the other blueprint that happens to share the bare stem keeps its
+        only restore point.
+        """
+        files = _colliding_blueprint_snapshots(tmp_path)
+        mgr = _mk_manager(tmp_path)
+
+        bulk = mgr.delete_bulk(entity_id="user/motion.yaml")
+
+        assert set(bulk["deleted"]) == {files["digest"].name, files["legacy"].name}
+        assert bulk["failed"] == []
+        assert not files["digest"].exists()
+        assert not files["legacy"].exists()
+        assert files["other"].exists()
+
+    def test_listing_orders_across_stems_by_timestamp(self, tmp_path: Path) -> None:
+        """Newest first means by capture time, not by which stem the file has."""
+        files = _colliding_blueprint_snapshots(tmp_path)
+        older = _write_named(
+            tmp_path,
+            "blueprint_automation.user_motion.yaml.20260903_090000.yaml",
+            "user/motion.yaml",
+        )
+        mgr = _mk_manager(tmp_path)
+
+        names = [m["name"] for m in mgr.list_snapshots(entity_id="user/motion.yaml")]
+
+        assert names == [files["digest"].name, files["legacy"].name, older.name]
+
+    def test_every_row_reports_the_id_its_payload_names(self, tmp_path: Path) -> None:
+        """A stem is a filename artefact; the row shows the entity.
+
+        That has to hold for the pre-digest file too: its stem is the bare
+        sanitised name, which the filter refuses as ambiguous, so a row
+        showing it would show a value that selects nothing — or the other
+        entity (Patch76, PR #2356 concern 5).
+        """
+        files = _colliding_blueprint_snapshots(tmp_path)
+        mgr = _mk_manager(tmp_path)
+
+        shown = {m["name"]: m["entity_id"] for m in mgr.list_snapshots()}
+
+        assert shown[files["digest"].name] == "user/motion.yaml"
+        assert shown[files["legacy"].name] == "user/motion.yaml"
+        assert shown[files["other"].name] == "user_motion.yaml"
+
+    def test_listed_entity_id_round_trips_into_the_filter(self, tmp_path: Path) -> None:
+        """What a listing shows is what the settings UI and ha_manage_backup
+        send back as the filter, so it has to select that entity's whole
+        history — both stems — and nothing else, whichever row it was read
+        from (Patch76, PR #2356 concerns 4 and 5).
+        """
+        files = _colliding_blueprint_snapshots(tmp_path)
+        mgr = _mk_manager(tmp_path)
+        shown = {m["name"]: m["entity_id"] for m in mgr.list_snapshots()}
+
+        for row in (files["digest"].name, files["legacy"].name):
+            listed = {m["name"] for m in mgr.list_snapshots(entity_id=shown[row])}
+            assert listed == {files["digest"].name, files["legacy"].name}, row
+
+        deleted = set(mgr.delete_bulk(entity_id=shown[files["legacy"].name])["deleted"])
+
+        assert deleted == {files["digest"].name, files["legacy"].name}
+        assert files["other"].exists()
+
+    def test_payload_id_comes_from_the_header_not_the_body(
+        self, tmp_path: Path
+    ) -> None:
+        """Every listing row opens its file, so the read stops at ``config:``.
+
+        A snapshot whose body is not even valid YAML still identifies itself,
+        which is what pins that the body is never parsed: an unfiltered
+        listing of hundreds of whole-file snapshots must stay a header read
+        per row, not a full parse (Patch76, PR #2356 concern 5).
+        """
+        bad = tmp_path / "file.packages_foo.yaml.20260903_110000.yaml"
+        bad.write_text(
+            "# ha_mcp_backup\n"
+            "schema_version: 1\n"
+            "domain: file\n"
+            "entity_id: packages/foo.yaml\n"
+            "captured: '2026-09-03T00:00:00+00:00'\n"
+            "tool: t\n"
+            "config: [this body never closes\n"
+            "kind: text\n",
+            encoding="utf-8",
+        )
+        mgr = _mk_manager(tmp_path)
+
+        with pytest.raises(ValueError):
+            mgr.read_snapshot(bad.name)
+        rows = mgr.list_snapshots()
+
+        assert [m["entity_id"] for m in rows] == ["packages/foo.yaml"]
+        assert [
+            m["name"] for m in mgr.list_snapshots(entity_id="packages/foo.yaml")
+        ] == [bad.name]
+
+    def test_digest_stem_filter_selects_only_that_entity(self, tmp_path: Path) -> None:
+        """The digest stem names exactly one entity, so a caller holding it
+        (an older listing, a filename) still gets that entity's post-digest
+        files, reported under the id they belong to."""
+        files = _colliding_blueprint_snapshots(tmp_path)
+        mgr = _mk_manager(tmp_path)
+
+        rows = mgr.list_snapshots(entity_id=_safe_entity_id("user/motion.yaml"))
+
+        assert [m["name"] for m in rows] == [files["digest"].name]
+        assert rows[0]["entity_id"] == "user/motion.yaml"
 
     async def test_read_snapshot_returns_full_payload(self, tmp_path: Path) -> None:
         mgr = _mk_manager(tmp_path)
@@ -2283,6 +2638,319 @@ class TestYamlFileHandler:
         )
         with pytest.raises(HomeAssistantError):
             await bm._restore_yaml_file(_StubClient(), "configuration.yaml", "a: 1\n")
+
+
+async def _bp_noop_tool(**_kwargs: Any) -> str:
+    """Stand-in for ``ha_manage_blueprints``: the decorator is what is tested."""
+    return "ok"
+
+
+class _BlueprintWsClient:
+    """Dispatch-on-``type`` WebSocket spy for the blueprint handler's tier 2."""
+
+    def __init__(self, responses: dict[str, Any]) -> None:
+        self.responses = responses
+        self.sent: list[dict[str, Any]] = []
+
+    async def send_websocket_message(self, msg: dict[str, Any]) -> Any:
+        self.sent.append(msg)
+        frame_type = msg.get("type")
+        if frame_type not in self.responses:
+            raise AssertionError(f"unexpected WebSocket frame: {frame_type}")
+        return self.responses[frame_type]
+
+    def frames(self, frame_type: str) -> list[dict[str, Any]]:
+        return [m for m in self.sent if m.get("type") == frame_type]
+
+
+_BP_PATH = "user/motion.yaml"
+_BP_YAML = "blueprint:\n  name: Motion Light\n  domain: automation\n"
+_BP_SOURCE_URL = "https://example.com/motion.yaml"
+
+
+def _bp_listing(*, source_url: str | None) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"name": "Motion Light"}
+    if source_url is not None:
+        metadata["source_url"] = source_url
+    return {"success": True, "result": {_BP_PATH: {"metadata": metadata}}}
+
+
+def _bp_import(suggested: str, raw: str = _BP_YAML) -> dict[str, Any]:
+    return {
+        "success": True,
+        "result": {"suggested_filename": suggested, "raw_data": raw},
+    }
+
+
+class TestBlueprintHandler:
+    """blueprint_automation / blueprint_script: the pre-delete snapshot (#2329)."""
+
+    def test_both_domains_are_text_domains(self) -> None:
+        assert "blueprint_automation" in bm._TEXT_DOMAINS
+        assert "blueprint_script" in bm._TEXT_DOMAINS
+
+    async def test_both_domains_registered_in_defaults(self, tmp_path: Path) -> None:
+        mgr = _mk_manager(tmp_path)
+        bm.register_default_handlers(mgr, _StubClient())
+        for domain in ("blueprint_automation", "blueprint_script"):
+            assert mgr.handler_for(domain) is not None, domain
+            assert domain in mgr.supported_domains()
+
+    async def test_reads_the_installed_file_through_the_tools_entry(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The installed-file read is the faithful copy — no re-fetch needed."""
+        calls: list[Any] = []
+        _patch_services(
+            monkeypatch, {"read_file": {"success": True, "content": _BP_YAML}}, calls
+        )
+        client = _BlueprintWsClient(
+            {"blueprint/list": _bp_listing(source_url=_BP_SOURCE_URL)}
+        )
+
+        assert await bm._fetch_blueprint(client, _BP_PATH, "automation") == _BP_YAML
+        assert calls[0][1]["path"] == f"blueprints/automation/{_BP_PATH}"
+        # No listing and no re-fetch: a snapshot only ever reads the
+        # installed file, so no third-party URL is contacted.
+        assert client.sent == []
+
+    async def test_read_uses_the_blueprint_domain_directory(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[Any] = []
+        _patch_services(
+            monkeypatch, {"read_file": {"success": True, "content": _BP_YAML}}, calls
+        )
+        client = _BlueprintWsClient({"blueprint/list": _bp_listing(source_url=None)})
+        await bm._fetch_blueprint(client, _BP_PATH, "script")
+        assert calls[0][1]["path"] == f"blueprints/script/{_BP_PATH}"
+
+    async def test_no_installed_file_tier_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_services(
+            monkeypatch,
+            {"read_file": {"success": False, "error": "File does not exist"}},
+            [],
+        )
+        client = _BlueprintWsClient({})
+
+        assert await bm._fetch_blueprint(client, _BP_PATH, "automation") is None
+        assert client.sent == []
+
+    async def test_source_url_is_never_a_snapshot_source(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``get`` may fall back to re-downloading ``source_url``; a snapshot
+        must not, because a restore from it could write what the author
+        publishes now rather than what the delete destroyed (Codex P1 on
+        #2356). With no installed-file tier the capture skips outright."""
+
+        async def refuse(_c: Any, _s: str, _d: dict[str, Any]) -> Any:
+            raise ToolError(
+                json.dumps(
+                    create_error_response(
+                        ErrorCode.COMPONENT_NOT_INSTALLED, "entry not set up"
+                    )
+                )
+            )
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_filesystem.call_mcp_tools_service", refuse
+        )
+        client = _BlueprintWsClient(
+            {
+                "blueprint/list": _bp_listing(source_url=_BP_SOURCE_URL),
+                "blueprint/import": _bp_import("user/motion"),
+            }
+        )
+
+        assert await bm._fetch_blueprint(client, _BP_PATH, "automation") is None
+        assert client.frames("blueprint/import") == []
+        assert client.frames("blueprint/list") == []
+
+    async def test_restore_sends_blueprint_save(self) -> None:
+        client = _BlueprintWsClient({"blueprint/save": {"success": True, "result": {}}})
+        await bm._restore_blueprint(client, _BP_PATH, _BP_YAML, "automation")
+        assert client.frames("blueprint/save") == [
+            {
+                "type": "blueprint/save",
+                "domain": "automation",
+                "path": _BP_PATH,
+                "yaml": _BP_YAML,
+                "allow_override": True,
+            }
+        ]
+
+    async def test_restore_raises_on_failure(self) -> None:
+        client = _BlueprintWsClient(
+            {"blueprint/save": {"success": False, "error": "Invalid blueprint"}}
+        )
+        with pytest.raises(HomeAssistantError):
+            await bm._restore_blueprint(client, _BP_PATH, _BP_YAML, "automation")
+
+    async def test_registered_handler_round_trips_through_the_manager(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The registered handler pair - not the module functions - is what the
+        decorator reaches, so drive it through ``handler_for``."""
+        _patch_services(
+            monkeypatch, {"read_file": {"success": True, "content": _BP_YAML}}, []
+        )
+        mgr = _mk_manager(tmp_path)
+        bm.register_default_handlers(mgr, _StubClient())
+        handler = mgr.handler_for("blueprint_script")
+        assert handler is not None
+
+        client = _BlueprintWsClient(
+            {
+                "blueprint/list": _bp_listing(source_url=None),
+                "blueprint/save": {"success": True},
+            }
+        )
+        assert await handler.fetch(client, _BP_PATH) == _BP_YAML
+        await handler.restore(client, _BP_PATH, _BP_YAML)
+        assert client.frames("blueprint/save")[0]["domain"] == "script"
+
+    async def test_fetch_delegates_to_the_shared_tier_ladder(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The snapshot walks the SAME ladder ``action="get"`` walks.
+
+        Two ladders would eventually disagree about which copy of a blueprint is
+        authoritative, so this pins the delegation rather than re-testing the
+        tiers (``test_blueprint_sources.py`` owns those).
+        """
+        seen: list[tuple[str, str, str | None]] = []
+
+        async def fake_resolve(
+            _client: Any, domain: str, path: str, *, source_url: str | None
+        ) -> Any:
+            seen.append((domain, path, source_url))
+            from ha_mcp.tools.blueprint_sources import BlueprintSource
+
+            return BlueprintSource(_BP_YAML, None, "tools_entry", None)
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.blueprint_sources.resolve_blueprint_source", fake_resolve
+        )
+        client = _BlueprintWsClient(
+            {"blueprint/list": _bp_listing(source_url=_BP_SOURCE_URL)}
+        )
+
+        assert await bm._fetch_blueprint(client, _BP_PATH, "automation") == _BP_YAML
+        # source_url=None: the ladder's re-download tier is withheld from
+        # snapshots on purpose.
+        assert seen == [("automation", _BP_PATH, None)]
+
+
+class TestBlueprintDecoratorWiring:
+    """``ha_manage_blueprints`` captures only on delete, keyed by blueprint domain."""
+
+    @staticmethod
+    def _decorate() -> Any:
+        return with_auto_backup(
+            domain_fn=lambda kw: f"blueprint_{kw.get('domain') or 'automation'}",
+            id_param="path",
+            skip_fn=lambda kw: (
+                kw.get("action") not in ("delete", "save")
+                or (kw.get("action") == "delete" and not kw.get("confirm"))
+            ),
+            client=object(),
+        )(_bp_noop_tool)
+
+    async def _run(
+        self, monkeypatch: pytest.MonkeyPatch, **kwargs: Any
+    ) -> list[tuple[str, str, str | None]]:
+        calls: list[tuple[str, str, str | None]] = []
+
+        class _FakeMgr:
+            async def maybe_snapshot(
+                self,
+                domain: str,
+                entity_id: str,
+                *,
+                tool_name: str | None = None,
+                mandatory: bool = False,
+            ) -> None:
+                calls.append((domain, entity_id, tool_name))
+
+        class _Settings:
+            enable_auto_backup = True
+
+        monkeypatch.setattr("ha_mcp.tools.auto_backup.get_global_settings", _Settings)
+        monkeypatch.setattr(
+            "ha_mcp.tools.auto_backup.get_backup_manager", lambda _c, _s: _FakeMgr()
+        )
+        assert await self._decorate()(**kwargs) == "ok"
+        return calls
+
+    async def test_list_captures_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert await self._run(monkeypatch, action="list", domain="automation") == []
+
+    async def test_get_captures_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = await self._run(
+            monkeypatch, action="get", domain="automation", path=_BP_PATH
+        )
+        assert calls == []
+
+    async def test_unconfirmed_delete_captures_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The tool refuses an unconfirmed delete and changes nothing, so
+        capturing for it would pay a component read and, with no component, an
+        outbound re-fetch of a third-party source_url for no reason."""
+        calls = await self._run(
+            monkeypatch,
+            action="delete",
+            domain="automation",
+            path=_BP_PATH,
+            confirm=False,
+        )
+        assert calls == []
+
+    async def test_delete_resolves_the_blueprint_domain_target(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = await self._run(
+            monkeypatch,
+            action="delete",
+            domain="automation",
+            path=_BP_PATH,
+            confirm=True,
+        )
+        assert calls == [("blueprint_automation", _BP_PATH, "_bp_noop_tool")]
+
+    async def test_delete_follows_the_script_domain(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = await self._run(
+            monkeypatch, action="delete", domain="script", path=_BP_PATH, confirm=True
+        )
+        assert calls[0][0] == "blueprint_script"
+
+    async def test_save_captures_without_a_confirm_flag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An overwriting save destroys the previous file, so it captures too.
+
+        ``save`` carries no ``confirm`` parameter — the confirm half of the skip
+        test belongs to ``delete`` alone and must not suppress this capture.
+        """
+        calls = await self._run(
+            monkeypatch, action="save", domain="automation", path=_BP_PATH
+        )
+        assert calls == [("blueprint_automation", _BP_PATH, "_bp_noop_tool")]
+
+    async def test_import_captures_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Import addresses a path core chooses, not the ``path`` argument, so
+        the decorator's ``id_param`` would name the wrong file."""
+        calls = await self._run(
+            monkeypatch, action="import", url="https://example.com/bp.yaml"
+        )
+        assert calls == []
 
 
 class TestLegacyList:

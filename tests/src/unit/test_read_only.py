@@ -291,6 +291,34 @@ class TestExemptionRules:
         rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_theme"].blocked_write
         assert (rule(args) is None) is allowed
 
+    @pytest.mark.parametrize(
+        ("args", "allowed"),
+        [
+            ({"action": "list"}, True),
+            ({"action": "list", "domain": "script"}, True),
+            ({"action": "get", "path": "user/motion.yaml"}, True),
+            # A pure render: core builds the standalone config in memory and
+            # sends it back without touching the blueprint store or any
+            # automation/script.
+            ({"action": "substitute", "path": "user/motion.yaml", "input": {}}, True),
+            # Writes stay blocked: import writes a blueprint file, save
+            # overwrites one, delete unlinks one.
+            ({"action": "import", "url": "https://example.com/bp.yaml"}, False),
+            (
+                {"action": "save", "path": "user/motion.yaml", "yaml": "blueprint:\n"},
+                False,
+            ),
+            ({"action": "delete", "path": "user/motion.yaml", "confirm": True}, False),
+            # ``action`` is required with no schema default, so an absent key
+            # is a malformed call — fail closed, never a silent read.
+            ({}, False),
+            ({"action": "purge"}, False),
+        ],
+    )
+    def test_manage_blueprints(self, args, allowed):
+        rule = READ_ONLY_EXEMPT_TOOLS["ha_manage_blueprints"].blocked_write
+        assert (rule(args) is None) is allowed
+
 
 @pytest.mark.anyio
 class TestMiddleware:
@@ -659,6 +687,7 @@ class TestExemptTableContract:
             "ha_manage_updates",
             "ha_manage_security_policy",
             "ha_manage_theme",
+            "ha_manage_blueprints",
         }
 
     def test_every_exemption_describes_whats_allowed(self):
@@ -683,6 +712,7 @@ _EXEMPT_TOOL_MODULES = {
     "ha_manage_updates": "tools_updates.py",
     "ha_manage_security_policy": "tools_security_policy.py",
     "ha_manage_theme": "tools_themes.py",
+    "ha_manage_blueprints": "tools_blueprints.py",
 }
 
 # INDEPENDENT, hardcoded manifests of the argument names each exempt
@@ -713,6 +743,7 @@ _EXEMPT_INSPECTED_ARGS = {
     "ha_manage_radio": {"action"},
     "ha_manage_updates": {"action"},
     "ha_manage_security_policy": {"action"},
+    "ha_manage_blueprints": {"action"},
 }
 
 # The subset of the addon manifest that ``_addon_write`` iterates as
@@ -864,6 +895,29 @@ _EXEMPT_GATED_OR_READ_ARGS = {
         # inspected ``action`` dispatch blocks before either is read.
         "policy",
         "expected_version",
+    },
+    "ha_manage_blueprints": {
+        # Selector for the allowed reads (list/get/substitute) and for the
+        # blocked delete — the inspected ``action`` decides which, so it
+        # carries no mutation capability of its own.
+        "domain",
+        "path",
+        # Import-only: the source URL. action='import' is blocked outright, so
+        # it is not independently write-capable.
+        "url",
+        # Shared by the two blocked writes (import / save), which the inspected
+        # ``action`` refuses before either is read.
+        "overwrite",
+        # The save payload and the origin URL stamped into its metadata.
+        # action='save' is blocked outright, so neither can write on its own.
+        "yaml",
+        "source_url",
+        # Rendering inputs for action='substitute', a pure in-memory render
+        # that writes nothing.
+        "input",
+        # Delete confirmation gate — action='delete' is already blocked, and
+        # confirm only decides whether that blocked action would proceed.
+        "confirm",
     },
 }
 

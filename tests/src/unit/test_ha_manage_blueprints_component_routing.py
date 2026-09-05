@@ -1,13 +1,17 @@
-"""Routing tests for ``ha_get_blueprint`` over the ``ha_mcp_tools`` component gate.
+"""Routing tests for ``ha_manage_blueprints(action="get")`` over the ``ha_mcp_tools``
+component gate.
 
 core's ``blueprint/list`` returns metadata only — never the body — so
-``ha_get_blueprint`` can serve triggers/conditions/actions/sequence only when the
+``action="get"`` can serve triggers/conditions/actions/sequence only when the
 component advertises the ``blueprint_get`` capability, which reads the on-disk
 blueprint file and returns the full parsed body merged additively under
 ``config``. These tests pin that merge, the metadata-only fallback when the
 component is absent / lacks the capability / returns a null body, and the
 error-taxonomy fallbacks (invalidate on ``unknown_command``; metadata-only on
 other command errors).
+
+The component call itself lives in ``tools.blueprint_sources`` (the shared tier
+ladder), so that is the module whose ``get_websocket_client`` these tests patch.
 
 The WS client is an ``AsyncMock`` whose ``send_command`` dispatches on the
 command type; the HA client is a spy serving the legacy ``blueprint/list``.
@@ -25,7 +29,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools import component_api, tools_blueprints
+from ha_mcp.tools import blueprint_sources, component_api
 from ha_mcp.tools.tools_blueprints import register_blueprint_tools
 
 from ._component_routing_helpers import (
@@ -61,12 +65,31 @@ _FULL_BODY = {
     "action": [{"service": "light.turn_on"}],
 }
 
+# A component that reads the body but predates the ``blueprint_text`` flag: it
+# serves ``config`` and no text, which is the pre-#2329 contract these cases pin.
 _CAPS_BLUEPRINT = {
     "schema_version": 1,
     "component_version": "1.1.0",
     "capabilities": ["blueprint_get"],
     "limits": {},
 }
+# The 2.1.4+ component: ``blueprint_text`` gates the additive ``yaml`` field.
+_CAPS_BLUEPRINT_TEXT = {
+    "schema_version": 1,
+    "component_version": "2.1.4",
+    "capabilities": ["blueprint_get", "blueprint_text"],
+    "limits": {},
+}
+_MOTION_YAML = (
+    "blueprint:\n"
+    "  name: Motion Light\n"
+    "  domain: automation\n"
+    "trigger:\n"
+    "  - platform: state\n"
+    "    entity_id: !input motion_sensor\n"
+    "action:\n"
+    "  - service: light.turn_on\n"
+)
 _CAPS_OTHER = {
     "schema_version": 1,
     "component_version": "1.1.0",
@@ -75,8 +98,10 @@ _CAPS_OTHER = {
 }
 
 
-def _component_blueprint_result(config: dict[str, Any] | None) -> dict[str, Any]:
-    return {"metadata": _FULL_BODY["blueprint"], "config": config}
+def _component_blueprint_result(
+    config: dict[str, Any] | None, text: str | None = None
+) -> dict[str, Any]:
+    return {"metadata": _FULL_BODY["blueprint"], "config": config, "yaml": text}
 
 
 class RoutingClient:
@@ -94,7 +119,8 @@ class RoutingClient:
         return {"success": False, "error": "unexpected"}
 
 
-def _build_get_blueprint(client: Any) -> Any:
+def _build_manage_blueprints(client: Any) -> Any:
+    """Return the registered ``ha_manage_blueprints`` bound method."""
     registered: dict[str, Any] = {}
 
     def capture_add_tool(method: Any) -> None:
@@ -108,7 +134,21 @@ def _build_get_blueprint(client: Any) -> Any:
     mcp = MagicMock()
     mcp.add_tool = capture_add_tool
     register_blueprint_tools(mcp, client)
-    return registered["ha_get_blueprint"]
+    return registered["ha_manage_blueprints"]
+
+
+def _build_get_blueprint(client: Any) -> Any:
+    """Bind the tool to ``action="get"`` so the routing cases stay one call.
+
+    Imported by ``test_component_readapi_contract.py``, which drives the same
+    seam against the real component implementation.
+    """
+    tool = _build_manage_blueprints(client)
+
+    async def get_blueprint(**kwargs: Any) -> Any:
+        return await tool(action="get", **kwargs)
+
+    return get_blueprint
 
 
 @pytest.fixture(autouse=True)
@@ -139,15 +179,17 @@ async def test_component_merges_full_body_under_config() -> None:
     client = RoutingClient()
     get_blueprint = _build_get_blueprint(client)
 
-    with patch_ws(ws, tools_blueprints):
+    with patch_ws(ws, blueprint_sources):
         resp = await get_blueprint(path=_PATH, domain="automation")
 
     assert resp["success"] is True
-    assert resp["metadata"]["name"] == "Motion Light"
-    assert resp["inputs"] == {"motion_sensor": {"name": "Motion Sensor"}}
+    assert resp["data"]["metadata"]["name"] == "Motion Light"
+    assert resp["data"]["inputs"] == {"motion_sensor": {"name": "Motion Sensor"}}
     # The additive body core's blueprint/list never returns.
-    assert resp["config"]["trigger"][0]["entity_id"] == {"__input__": "motion_sensor"}
-    assert resp["config"]["action"] == [{"service": "light.turn_on"}]
+    assert resp["data"]["config"]["trigger"][0]["entity_id"] == {
+        "__input__": "motion_sensor"
+    }
+    assert resp["data"]["config"]["action"] == [{"service": "light.turn_on"}]
     call = _bp_calls(ws)[0]
     assert call.kwargs == {"domain": "automation", "path": _PATH}
 
@@ -163,12 +205,12 @@ async def test_capability_miss_serves_metadata_only() -> None:
     client = RoutingClient()
     get_blueprint = _build_get_blueprint(client)
 
-    with patch_ws(ws, tools_blueprints):
+    with patch_ws(ws, blueprint_sources):
         resp = await get_blueprint(path=_PATH, domain="automation")
 
     assert resp["success"] is True
-    assert resp["metadata"]["name"] == "Motion Light"
-    assert "config" not in resp
+    assert resp["data"]["metadata"]["name"] == "Motion Light"
+    assert "config" not in resp["data"]
     assert not _bp_calls(ws)
 
 
@@ -185,11 +227,11 @@ async def test_null_config_from_component_warns_metadata_only() -> None:
     client = RoutingClient()
     get_blueprint = _build_get_blueprint(client)
 
-    with patch_ws(ws, tools_blueprints):
+    with patch_ws(ws, blueprint_sources):
         resp = await get_blueprint(path=_PATH, domain="automation")
 
     assert resp["success"] is True
-    assert "config" not in resp
+    assert "config" not in resp["data"]
     assert len(_bp_calls(ws)) == 1
     # The null-body outcome is surfaced, not silent.
     assert any("could not be read or parsed" in w for w in resp.get("warnings", [])), (
@@ -209,11 +251,11 @@ async def test_capability_miss_serves_metadata_only_no_warning() -> None:
     client = RoutingClient()
     get_blueprint = _build_get_blueprint(client)
 
-    with patch_ws(ws, tools_blueprints):
+    with patch_ws(ws, blueprint_sources):
         resp = await get_blueprint(path=_PATH, domain="automation")
 
     assert resp["success"] is True
-    assert "config" not in resp
+    assert "config" not in resp["data"]
     assert not any("could not be read or parsed" in w for w in resp.get("warnings", []))
 
 
@@ -228,11 +270,11 @@ async def test_unknown_command_invalidates_and_metadata_only() -> None:
     client = RoutingClient()
     get_blueprint = _build_get_blueprint(client)
 
-    with patch_ws(ws, tools_blueprints):
+    with patch_ws(ws, blueprint_sources):
         resp = await get_blueprint(path=_PATH, domain="automation")
 
     assert resp["success"] is True
-    assert "config" not in resp
+    assert "config" not in resp["data"]
 
 
 @pytest.mark.asyncio
@@ -246,11 +288,11 @@ async def test_command_error_metadata_only_silent() -> None:
     client = RoutingClient()
     get_blueprint = _build_get_blueprint(client)
 
-    with patch_ws(ws, tools_blueprints):
+    with patch_ws(ws, blueprint_sources):
         resp = await get_blueprint(path=_PATH, domain="automation")
 
     assert resp["success"] is True
-    assert "config" not in resp
+    assert "config" not in resp["data"]
 
 
 @pytest.mark.asyncio
@@ -265,32 +307,98 @@ async def test_ws_establish_failure_metadata_only_silent() -> None:
 
     with patch_ws_establish_failure(
         caps_ws,
-        tools_blueprints,
+        blueprint_sources,
         HomeAssistantConnectionError("Failed to connect to Home Assistant WebSocket"),
     ):
         resp = await get_blueprint(path=_PATH, domain="automation")
 
     assert resp["success"] is True
-    assert "config" not in resp
+    assert "config" not in resp["data"]
 
 
 @pytest.mark.asyncio
 async def test_list_mode_never_touches_component() -> None:
-    """Listing (no path) is unchanged: the component is never probed or called."""
+    """Listing is unchanged: the component is never probed or called."""
     ws = make_ws(
         "ha_mcp_tools/blueprint_get",
         info_result=_CAPS_BLUEPRINT,
         cmd_result=_component_blueprint_result(_FULL_BODY),
     )
     client = RoutingClient()
-    get_blueprint = _build_get_blueprint(client)
+    manage_blueprints = _build_manage_blueprints(client)
 
-    with patch_ws(ws, tools_blueprints):
-        resp = await get_blueprint(domain="automation")
+    with patch_ws(ws, blueprint_sources):
+        resp = await manage_blueprints(action="list", domain="automation")
 
     assert resp["success"] is True
-    assert resp["count"] == 1
+    assert resp["data"]["count"] == 1
     assert not _bp_calls(ws)
     assert not [
         c for c in ws.send_command.call_args_list if c.args[0] == "ha_mcp_tools/info"
     ]
+
+
+@pytest.mark.asyncio
+async def test_component_text_capability_surfaces_yaml() -> None:
+    """A 2.1.4+ component serves the on-disk text, tagged ``yaml_source``."""
+    ws = make_ws(
+        "ha_mcp_tools/blueprint_get",
+        info_result=_CAPS_BLUEPRINT_TEXT,
+        cmd_result=_component_blueprint_result(_FULL_BODY, _MOTION_YAML),
+    )
+    client = RoutingClient()
+    get_blueprint = _build_get_blueprint(client)
+
+    with patch_ws(ws, blueprint_sources):
+        resp = await get_blueprint(path=_PATH, domain="automation")
+
+    assert resp["data"]["yaml"] == _MOTION_YAML
+    assert resp["data"]["yaml_source"] == "component"
+    assert resp["data"]["config"]["action"] == [{"service": "light.turn_on"}]
+
+
+@pytest.mark.asyncio
+async def test_text_ignored_without_the_capability_flag() -> None:
+    """A component that sends ``yaml`` without advertising ``blueprint_text``.
+
+    Routing is capability-gated, never param/field-sniffed: the field is not
+    read, so ``get`` keeps the pre-#2329 metadata + config shape and no
+    ``yaml`` / ``yaml_source`` key appears.
+    """
+    ws = make_ws(
+        "ha_mcp_tools/blueprint_get",
+        info_result=_CAPS_BLUEPRINT,
+        cmd_result=_component_blueprint_result(_FULL_BODY, _MOTION_YAML),
+    )
+    client = RoutingClient()
+    get_blueprint = _build_get_blueprint(client)
+
+    with patch_ws(ws, blueprint_sources):
+        resp = await get_blueprint(path=_PATH, domain="automation")
+
+    assert resp["data"]["config"]["action"] == [{"service": "light.turn_on"}]
+    assert "yaml" not in resp["data"]
+    assert "yaml_source" not in resp["data"]
+
+
+@pytest.mark.asyncio
+async def test_unparseable_text_still_returned_with_no_config() -> None:
+    """Text that will not parse is still handed back; only ``config`` is lost.
+
+    A parse failure must never mask bytes that were successfully read — that
+    text is exactly what a caller needs to repair the file and save it back.
+    """
+    ws = make_ws(
+        "ha_mcp_tools/blueprint_get",
+        info_result=_CAPS_BLUEPRINT_TEXT,
+        cmd_result=_component_blueprint_result(None, "blueprint: [unclosed\n"),
+    )
+    client = RoutingClient()
+    get_blueprint = _build_get_blueprint(client)
+
+    with patch_ws(ws, blueprint_sources):
+        resp = await get_blueprint(path=_PATH, domain="automation")
+
+    assert resp["data"]["yaml"] == "blueprint: [unclosed\n"
+    assert resp["data"]["yaml_source"] == "component"
+    assert "config" not in resp["data"]

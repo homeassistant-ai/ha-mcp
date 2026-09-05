@@ -97,6 +97,13 @@ class TestParseStringListParam:
         with pytest.raises(ValueError, match="Invalid JSON"):
             parse_string_list_param("not valid json")
 
+    def test_deeply_nested_json_raises_the_same_error(self):
+        """A string nested past the recursion limit makes ``json.loads`` raise
+        ``RecursionError``, which callers do not expect; it is refused as
+        invalid JSON like any other unparseable string (Patch76, PR #2356)."""
+        with pytest.raises(ValueError, match="Invalid JSON"):
+            parse_string_list_param("[" * 20_000)
+
     def test_json_object_raises_error(self):
         """JSON object (not array) raises ValueError."""
         with pytest.raises(ValueError, match="must be a JSON array"):

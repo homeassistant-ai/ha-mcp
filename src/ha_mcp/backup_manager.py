@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import hashlib
 import logging
 import os
 import re
@@ -103,14 +104,23 @@ class MandatoryBackupError(Exception):
 _TRACKER_SOFT_CAP = 10_000
 _TRACKER_PRUNE_BATCH = 1_000
 
-# Filename pattern: <domain>.<safe_entity_id>.<YYYYMMDD_HHMMSS>.yaml
+# Filename pattern: <domain>.<safe_entity_id>.<YYYYMMDD_HHMMSS>[_NN].yaml
 # The middle ``.`` separators make the timestamp rsplit reliable even
-# when entity_id contains dots (after sanitization, dots are kept).
+# when entity_id contains dots (after sanitization, dots are kept). ``_NN``
+# is the same-second sequence (see ``_unclaimed_target``): the timestamp is
+# a second and the throttle defaults to 0, so a second capture of one entity
+# inside that second takes the next free suffix rather than replacing the
+# first. ``_`` sorts after ``.``, so a suffixed name stays newest-last.
 _FILENAME_RE = re.compile(
     r"^(?P<domain>[A-Za-z0-9_]+)\."
     r"(?P<entity_id>[A-Za-z0-9._-]+)\."
-    r"(?P<ts>\d{8}_\d{6})\.yaml$"
+    r"(?P<ts>\d{8}_\d{6})(?:_(?P<seq>\d{2}))?\.yaml$"
 )
+
+# Captures of one entity inside one second before the manager gives up on a
+# free name. Two is the realistic case (a save then a delete of the same
+# blueprint); the cap only bounds the ``exists()`` probe.
+_MAX_SAME_SECOND = 100
 
 # Domains whose snapshot ``config`` is raw text (file/YAML content) rather
 # than a structured dict. They carry a ``kind: "text"`` marker in the
@@ -121,7 +131,19 @@ _FILENAME_RE = re.compile(
 # (read_file), but restored via edit_yaml_config(action="replace_file") because
 # write_file rejects config files. It backs the pre-restore safety snapshot and
 # the legacy-store restore (#1579).
-_TEXT_DOMAINS = frozenset({"file", "yaml", "yaml_file"})
+#
+# ``blueprint_automation`` / ``blueprint_script`` snapshot the blueprint's raw
+# YAML text (#2329): core stores blueprints as files, and ``blueprint/save``
+# takes the same YAML string back, so the round trip is text on both ends.
+_TEXT_DOMAINS = frozenset(
+    {
+        "file",
+        "yaml",
+        "yaml_file",
+        "blueprint_automation",
+        "blueprint_script",
+    }
+)
 
 # Pre-#1579 backups (``.ha_mcp_tools_backups/*.bak``) are surfaced through the
 # same scope="edits" actions under a synthetic name ``legacy:<filename>``. The
@@ -163,17 +185,74 @@ class DomainHandler:
 # ----------------------------- backup manager -------------------------------
 
 
+def _entity_id_aliases(entity_id: str) -> list[str]:
+    """Every filename stem a snapshot of ``entity_id`` may carry.
+
+    Sanitised ids gained a digest suffix, so snapshots written before that
+    sit under the bare sanitised name. Rotation and entity filtering match
+    both, otherwise those older files would never be counted again: they
+    would never be pruned, and would drop out of an entity-filtered listing.
+    """
+    current = _safe_entity_id(entity_id)
+    legacy = _SAFE_ID_RE.sub("_", entity_id).lstrip(".") or "_"
+    return [current] if legacy == current else [current, legacy]
+
+
 def _safe_entity_id(entity_id: str) -> str:
     """Sanitize an entity id for use in a filename.
 
     Replaces any character outside ``[A-Za-z0-9._-]`` with ``_``. Path
     separators get caught by this (the regex excludes both ``/`` and ``\\``).
     Strips leading dots to prevent dotfile collisions.
+
+    Sanitizing is lossy, so ids that needed it get a short digest of the
+    ORIGINAL appended. Blueprint domains (#2329) key on paths, where
+    ``user/motion.yaml`` and ``user_motion.yaml`` both clean to
+    ``user_motion.yaml`` -- without the digest they share one snapshot
+    namespace, so captures in the same second overwrite each other and
+    rotation counts both histories as one, able to delete the only restore
+    point for a blueprint that was never written. Entity ids are already
+    within the safe set, so their filenames are unchanged and existing
+    snapshots stay discoverable.
     """
     if not entity_id:
         return "_"
     cleaned = _SAFE_ID_RE.sub("_", entity_id).lstrip(".")
-    return cleaned or "_"
+    if not cleaned:
+        return "_"
+    if cleaned == entity_id:
+        return cleaned
+    digest = hashlib.sha256(entity_id.encode("utf-8")).hexdigest()[:8]
+    return f"{cleaned}-{digest}"
+
+
+def _snapshot_order(path: Path) -> tuple[str, str, str]:
+    """Sort key placing snapshots in capture order, oldest first.
+
+    Filenames cannot be compared directly: an id the sanitiser rewrote has
+    two stems, and the digest stem sorts before the bare one on every name
+    (``-`` < ``.``) regardless of timestamp, so by name every new capture
+    would age below every pre-digest file. The parsed timestamp and the
+    same-second sequence order them; the name only breaks exact ties.
+    """
+    m = _FILENAME_RE.match(path.name)
+    if m is None:
+        return ("", "", path.name)
+    return (m.group("ts"), m.group("seq") or "", path.name)
+
+
+def _id_matches(payload_id: str | None, wanted: str) -> bool:
+    """Whether a snapshot whose payload names ``payload_id`` is ``wanted``.
+
+    Two spellings select an entity: the id itself, and the digest stem
+    ``_safe_entity_id`` derives from it — the stem a listing used to show and
+    a filename still carries. Both name exactly one entity. The bare
+    pre-digest stem is deliberately not accepted: it is the current stem of a
+    differently-named entity, which is the ambiguity this check exists for.
+    """
+    if payload_id is None:
+        return False
+    return payload_id == wanted or _safe_entity_id(payload_id) == wanted
 
 
 def _now_ts() -> str:
@@ -517,9 +596,7 @@ class BackupManager:
         self, domain: str, entity_id: str, config: Any, tool_name: str | None
     ) -> Path:
         safe = _safe_entity_id(entity_id)
-        ts = _now_ts()
-        filename = f"{domain}.{safe}.{ts}.yaml"
-        target = self._dir / filename
+        target = self._unclaimed_target(domain, safe, _now_ts())
         payload: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "domain": domain,
@@ -538,10 +615,76 @@ class BackupManager:
         logger.info("Auto-backup: wrote %s", target.name)
         return target
 
+    def _unclaimed_target(self, domain: str, safe: str, ts: str) -> Path:
+        """First filename for ``ts`` that no snapshot of this entity holds yet.
+
+        The bare name is taken when it is free; each later capture inside the
+        same second appends ``_01``, ``_02``, ... so the atomic replace in
+        ``_write_snapshot`` can never discard an earlier pre-write state.
+        ``maybe_snapshot`` serialises captures per key, so the ``exists()``
+        probe is not racing another capture of the same entity.
+        """
+        target = self._dir / f"{domain}.{safe}.{ts}.yaml"
+        for seq in range(1, _MAX_SAME_SECOND):
+            if not target.exists():
+                return target
+            target = self._dir / f"{domain}.{safe}.{ts}_{seq:02d}.yaml"
+        if not target.exists():
+            return target
+        raise OSError(
+            f"{_MAX_SAME_SECOND} snapshots of {domain}:{safe} inside one second"
+        )
+
+    def _payload_entity_id(self, path: Path) -> str | None:
+        """The id the snapshot at ``path`` was taken for, from its payload.
+
+        Filename stems are ambiguous in both directions: the legacy stem for
+        ``user/motion.yaml`` is ``user_motion.yaml``, which is also the
+        CURRENT stem of a differently-named blueprint. The payload keeps the
+        original id, so rotation and the entity filter behind ``list_snapshots``
+        / ``delete_bulk`` ask it rather than trusting the name. A file that
+        cannot be read answers ``None`` and is treated as not ours: skipping it
+        wastes a rotation slot or hides it from one entity's listing, deleting
+        it could destroy another entity's only restore point.
+
+        Only the header is read. ``_write_snapshot`` emits ``entity_id`` before
+        ``config`` (which is the whole automation, dashboard or file), so the
+        read stops at the ``config:`` line and never parses the body: every
+        listing row opens its file, and an unfiltered listing of hundreds of
+        whole-file snapshots has to stay a header read per row.
+        """
+        try:
+            with path.open(encoding="utf-8") as handle:
+                header: list[str] = []
+                for line in handle:
+                    if line.startswith("config:"):
+                        break
+                    header.append(line)
+                loaded = yaml.safe_load("".join(header))
+        except (OSError, yaml.YAMLError) as err:
+            logger.warning(
+                "Auto-backup: cannot identify %s, leaving it in place: %s",
+                path.name,
+                err,
+            )
+            return None
+        if not isinstance(loaded, dict):
+            return None
+        found = loaded.get("entity_id")
+        return found if isinstance(found, str) else None
+
+    def _snapshot_is_for(self, path: Path, entity_id: str) -> bool:
+        """Whether ``path`` holds a snapshot of ``entity_id`` (see ``_id_matches``)."""
+        return _id_matches(self._payload_entity_id(path), entity_id)
+
     def _rotate(self, domain: str, entity_id: str) -> None:
-        safe = _safe_entity_id(entity_id)
-        pattern = f"{domain}.{safe}.*.yaml"
-        files = sorted(self._dir.glob(pattern))
+        candidates: set[Path] = set()
+        for safe in _entity_id_aliases(entity_id):
+            candidates.update(self._dir.glob(f"{domain}.{safe}.*.yaml"))
+        files = sorted(
+            (p for p in candidates if self._snapshot_is_for(p, entity_id)),
+            key=_snapshot_order,
+        )
         excess = len(files) - self.retain_per_entity
         for old in files[: max(0, excess)]:
             try:
@@ -566,29 +709,63 @@ class BackupManager:
         # would otherwise never match a filter passed in original form.
         # Sanitize the filter once up front so the per-file comparison is
         # symmetric: filter and ``meta["entity_id"]`` both come from the
-        # same sanitization function.
-        safe_filter = _safe_entity_id(entity_id) if entity_id else None
+        # same sanitization function. The stem only narrows the candidates:
+        # sanitising is lossy in both directions (``user/motion.yaml``'s
+        # pre-digest stem IS ``user_motion.yaml``'s current stem), so each
+        # stem match is confirmed against the id the payload stores before it
+        # counts as this entity's — ``delete_bulk`` unlinks whatever is
+        # returned here, and the caller named one entity.
+        safe_filter = set(_entity_id_aliases(entity_id)) if entity_id else None
         out: list[dict[str, Any]] = []
-        # Reverse-sorted glob — newest filenames sort last lexicographically,
-        # so reverse=True yields newest-first.
-        for path in sorted(self._dir.glob("*.yaml"), reverse=True):
-            meta = self._parse_filename(path.name)
-            if meta is None:
+        # Newest first by capture time — see ``_snapshot_order`` for why the
+        # filename itself is not the key.
+        for path in sorted(self._dir.glob("*.yaml"), key=_snapshot_order, reverse=True):
+            row = self._listing_row(
+                path, domain=domain, safe_filter=safe_filter, entity_id=entity_id
+            )
+            if row is None:
                 continue
-            if domain and meta["domain"] != domain:
-                continue
-            if safe_filter and meta["entity_id"] != safe_filter:
-                continue
-            try:
-                stat = path.stat()
-            except OSError:
-                continue
-            meta["size"] = stat.st_size
-            meta["mtime"] = stat.st_mtime
-            out.append(meta)
+            out.append(row)
             if limit and len(out) >= limit:
                 break
         return out
+
+    def _listing_row(
+        self,
+        path: Path,
+        *,
+        domain: str | None,
+        safe_filter: set[str] | None,
+        entity_id: str | None,
+    ) -> dict[str, Any] | None:
+        """One ``list_snapshots`` entry for ``path``, or ``None`` if filtered out."""
+        meta = self._parse_filename(path.name)
+        if meta is None:
+            return None
+        if domain and meta["domain"] != domain:
+            return None
+        if safe_filter and meta["entity_id"] not in safe_filter:
+            return None
+        # Every row reports the id its payload names, not its stem: a filter
+        # needs the stored id to settle the stem ambiguity anyway, and a stem
+        # shown to the caller — digest or pre-digest — is a value the filter
+        # would refuse or misroute, where the stored id is what the settings
+        # UI and ha_manage_backup can send straight back and get that entity's
+        # whole history. The read is header-only (``_payload_entity_id``); a
+        # file that cannot identify itself keeps its stem in an unfiltered
+        # listing and is left out of a filtered one.
+        payload_id = self._payload_entity_id(path)
+        if entity_id and not _id_matches(payload_id, entity_id):
+            return None
+        if payload_id is not None:
+            meta["entity_id"] = payload_id
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        meta["size"] = stat.st_size
+        meta["mtime"] = stat.st_mtime
+        return meta
 
     def _parse_filename(self, name: str) -> dict[str, Any] | None:
         m = _FILENAME_RE.match(name)
@@ -2272,6 +2449,62 @@ async def _read_legacy_backup(client: Any, filename: str) -> dict[str, Any]:
     return unwrap_service_response(result)
 
 
+# Blueprints (#2329) — ``ha_manage_blueprints`` can unlink a blueprint file that
+# core will not rebuild (``action="delete"``) or overwrite one
+# (``action="save"``), so the pre-write snapshot is the only way back.
+# ``entity_id`` is the blueprint path inside ``blueprints/<domain>/`` (e.g.
+# ``user/motion.yaml``) and the snapshot ``config`` is the raw YAML text,
+# restored through ``blueprint/save``.
+
+
+async def _fetch_blueprint(client: Any, path: str, domain: str) -> Any:
+    """Fetch a blueprint's YAML for snapshotting, best copy first.
+
+    Delegates to the shared tier ladder in ``tools.blueprint_sources`` — the
+    same one ``ha_manage_blueprints(action="get")`` walks — but only its
+    installed-file tiers: the embedded read, the component's ``blueprint_get``
+    text, and the tools entry's ``read_file``. The ``source_url`` re-fetch
+    ``get`` may fall back to is deliberately NOT a snapshot source: it is what
+    the author publishes now, so a restore from it could silently write
+    different YAML than the delete or overwrite destroyed.
+
+    ``None`` means there is nothing to snapshot (no installed-file tier could
+    serve it); the decorator logs that skip and the write proceeds
+    un-backed-up, which is the best-effort contract.
+    """
+    from .tools.blueprint_sources import resolve_blueprint_source
+
+    found = await resolve_blueprint_source(client, domain, path, source_url=None)
+    return found.text
+
+
+async def _restore_blueprint(client: Any, path: str, config: Any, domain: str) -> Any:
+    """Re-install a captured blueprint via ``blueprint/save``."""
+    response = await client.send_websocket_message(
+        {
+            "type": "blueprint/save",
+            "domain": domain,
+            "path": path,
+            "yaml": str(config),
+            "allow_override": True,
+        }
+    )
+    if not isinstance(response, dict) or not response.get("success"):
+        error = response.get("error") if isinstance(response, dict) else response
+        raise HomeAssistantError(f"blueprint/save restore failed for {path!r}: {error}")
+    return response.get("result") or {}
+
+
+def _make_blueprint_handler(domain: str) -> DomainHandler:
+    async def fetch(client: Any, entity_id: str) -> Any:
+        return await _fetch_blueprint(client, entity_id, domain)
+
+    async def restore(client: Any, entity_id: str, config: Any) -> Any:
+        return await _restore_blueprint(client, entity_id, config, domain)
+
+    return DomainHandler(domain=f"blueprint_{domain}", fetch=fetch, restore=restore)
+
+
 def _make_helper_handler(helper_type: str) -> DomainHandler:
     async def fetch(client: Any, entity_id: str) -> Any:
         return await _fetch_helper(client, entity_id, helper_type)
@@ -2325,5 +2558,9 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
     # edit_yaml_config(replace_file) since write_file rejects config files.
     # Backs the legacy-restore write path and its pre-restore safety snapshot.
     mgr.register(DomainHandler("yaml_file", _fetch_file, _restore_yaml_file))
+    # Blueprint files (#2329): the pre-write snapshot for
+    # ha_manage_blueprints(action="delete" / "save").
+    for blueprint_domain in ("automation", "script"):
+        mgr.register(_make_blueprint_handler(blueprint_domain))
     for helper_type in _KNOWN_HELPER_TYPES:
         mgr.register(_make_helper_handler(helper_type))

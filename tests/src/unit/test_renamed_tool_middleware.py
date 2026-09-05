@@ -30,16 +30,38 @@ def _make_mcp() -> FastMCP:
     async def ha_manage_app(slug: str) -> dict:
         return {"tool": "ha_manage_app", "slug": slug}
 
+    @mcp.tool()
+    async def ha_manage_blueprints(
+        action: str,
+        domain: str = "automation",
+        path: str | None = None,
+        url: str | None = None,
+    ) -> dict:
+        return {
+            "tool": "ha_manage_blueprints",
+            "action": action,
+            "domain": domain,
+            "path": path,
+            "url": url,
+        }
+
     return mcp
+
+
+# One valid call per retired name, in the retired signature.
+_RETIRED_CALLS = {
+    "ha_get_addon": {"source": "available"},
+    "ha_manage_addon": {"slug": "core_ssh"},
+    "ha_get_blueprint": {"path": "user/motion.yaml"},
+    "ha_import_blueprint": {"url": "https://example.com/bp.yaml"},
+}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("old", "current"), sorted(RENAMED_TOOLS.items()))
 async def test_a_call_on_the_old_name_reaches_the_current_tool(old, current):
     """The rewrite happens before resolution, so the old name still dispatches."""
-    arguments = {"slug": "core_ssh"} if "manage" in old else {"source": "available"}
-
-    result = await _make_mcp().call_tool(old, arguments)
+    result = await _make_mcp().call_tool(old, _RETIRED_CALLS[old])
 
     assert result.structured_content is not None
     assert result.structured_content["tool"] == current
@@ -68,7 +90,7 @@ async def test_the_old_names_stay_out_of_the_catalog():
 
     listed = {tool.name for tool in (await mcp.list_tools())}
 
-    assert listed == {"ha_get_app", "ha_manage_app"}
+    assert listed == {"ha_get_app", "ha_manage_app", "ha_manage_blueprints"}
     assert not listed & set(RENAMED_TOOLS)
 
 
@@ -108,3 +130,24 @@ async def test_an_unrelated_unknown_name_is_left_alone():
     """Only the mapped names are rewritten; everything else resolves as before."""
     with pytest.raises(NotFoundError):
         await _make_mcp().call_tool("ha_get_addon_typo", {})
+
+
+@pytest.mark.asyncio
+async def test_a_consolidated_tool_gets_the_action_its_old_signature_lacked():
+    """#2329: ha_get_blueprint listed without a path and read with one;
+    ha_import_blueprint always imported. The alias supplies the action."""
+    mcp = _make_mcp()
+
+    listed = await mcp.call_tool("ha_get_blueprint", {"domain": "script"})
+    assert listed.structured_content["action"] == "list"
+    assert listed.structured_content["domain"] == "script"
+
+    read = await mcp.call_tool("ha_get_blueprint", {"path": "user/motion.yaml"})
+    assert read.structured_content["action"] == "get"
+    assert read.structured_content["path"] == "user/motion.yaml"
+
+    imported = await mcp.call_tool(
+        "ha_import_blueprint", {"url": "https://example.com/bp.yaml"}
+    )
+    assert imported.structured_content["action"] == "import"
+    assert imported.structured_content["url"] == "https://example.com/bp.yaml"

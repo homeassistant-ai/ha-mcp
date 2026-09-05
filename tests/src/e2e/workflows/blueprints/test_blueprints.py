@@ -2,8 +2,8 @@
 Blueprint Management E2E Tests
 
 Tests the blueprint management tools:
-- ha_get_blueprint - List blueprints (no path) or get details (with path)
-- ha_import_blueprint - Import blueprint from URL
+- ha_manage_blueprints - one tool for the blueprint lifecycle:
+  list / get / import / save / delete / substitute
 
 Note: Tests are designed to work with both Docker test environment (localhost:8124)
 and production environments. Blueprint availability may vary.
@@ -12,6 +12,7 @@ and production environments. Blueprint availability may vary.
 import logging
 import uuid
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -52,6 +53,51 @@ action:
 """
 
 
+# The demo platform in the e2e image registers this light on every lane; the
+# automation lifecycle suites lean on it the same way.
+_STABLE_ENTITY = "light.bed_light"
+
+# Every tier the get action can name in ``yaml_source``.
+_YAML_SOURCES = ("file", "component", "tools_entry", "source_url")
+
+
+class _ServedBlueprint:
+    """One uniquely named blueprint served from the test HA's /local path.
+
+    ``import_into`` writes the file and imports it through the tool under test,
+    returning the installed path; ``delete`` removes it through the tool;
+    ``cleanup`` unlinks the served file and belongs in ``finally``.
+    """
+
+    def __init__(self, server: dict[str, Any], tag: str) -> None:
+        local_dir = server.get("local_dir")
+        assert local_dir, (
+            "local_blueprint_server must expose local_dir (writable served directory)"
+        )
+        self.run_id = uuid.uuid4().hex[:8]
+        self.marker = f"{tag}-{self.run_id}"
+        self.filename = f"e2e_{tag}_{self.run_id}.yaml"
+        self.served_file = Path(local_dir) / self.filename
+        self.url = f"{server['base_url']}/{self.filename}"
+        self.yaml = _blueprint_yaml(f"E2E {tag} {self.run_id}", self.marker)
+
+    async def import_into(self, mcp: MCPAssertions) -> str:
+        self.served_file.write_text(self.yaml, encoding="utf-8")
+        imported = await mcp.call_tool_success(
+            "ha_manage_blueprints", {"action": "import", "url": self.url}
+        )
+        return imported["data"]["imported_blueprint"]["path"]
+
+    async def delete(self, mcp: MCPAssertions, path: str) -> None:
+        await mcp.call_tool_success(
+            "ha_manage_blueprints",
+            {"action": "delete", "domain": "automation", "path": path, "confirm": True},
+        )
+
+    def cleanup(self) -> None:
+        self.served_file.unlink(missing_ok=True)
+
+
 @pytest.mark.blueprint
 class TestBlueprintManagement:
     """Test blueprint management workflows."""
@@ -62,22 +108,23 @@ class TestBlueprintManagement:
 
         Validates that we can list automation blueprints from Home Assistant.
         """
-        logger.info("Testing ha_get_blueprint (list mode) for automation domain...")
+        logger.info("Testing ha_manage_blueprints (list) for automation domain...")
 
         async with MCPAssertions(mcp_client) as mcp:
             # List automation blueprints (path=None lists all)
             result = await mcp.call_tool_success(
-                "ha_get_blueprint",
-                {"domain": "automation"},
+                "ha_manage_blueprints",
+                {"action": "list", "domain": "automation"},
             )
 
             # Verify response structure
-            assert "blueprints" in result, "Response should contain 'blueprints' key"
-            assert "count" in result, "Response should contain 'count' key"
-            assert "domain" in result, "Response should contain 'domain' key"
-            assert result["domain"] == "automation", "Domain should be 'automation'"
+            data = result["data"]
+            assert "blueprints" in data, "Response should contain 'blueprints' key"
+            assert "count" in data, "Response should contain 'count' key"
+            assert "domain" in data, "Response should contain 'domain' key"
+            assert data["domain"] == "automation", "Domain should be 'automation'"
 
-            blueprints = result.get("blueprints", [])
+            blueprints = data.get("blueprints", [])
             logger.info(f"Found {len(blueprints)} automation blueprints")
 
             # If blueprints exist, verify their structure
@@ -90,7 +137,7 @@ class TestBlueprintManagement:
                     f"First blueprint: {first_blueprint.get('name')} ({first_blueprint.get('path')})"
                 )
 
-            logger.info("ha_get_blueprint (list mode) for automation domain succeeded")
+            logger.info("ha_manage_blueprints (list) for automation domain succeeded")
 
     async def test_list_script_blueprints(self, mcp_client):
         """
@@ -98,24 +145,25 @@ class TestBlueprintManagement:
 
         Validates that we can list script blueprints from Home Assistant.
         """
-        logger.info("Testing ha_get_blueprint (list mode) for script domain...")
+        logger.info("Testing ha_manage_blueprints (list) for script domain...")
 
         async with MCPAssertions(mcp_client) as mcp:
             # List script blueprints (path=None lists all)
             result = await mcp.call_tool_success(
-                "ha_get_blueprint",
-                {"domain": "script"},
+                "ha_manage_blueprints",
+                {"action": "list", "domain": "script"},
             )
 
             # Verify response structure
-            assert "blueprints" in result, "Response should contain 'blueprints' key"
-            assert "count" in result, "Response should contain 'count' key"
-            assert result["domain"] == "script", "Domain should be 'script'"
+            data = result["data"]
+            assert "blueprints" in data, "Response should contain 'blueprints' key"
+            assert "count" in data, "Response should contain 'count' key"
+            assert data["domain"] == "script", "Domain should be 'script'"
 
-            blueprints = result.get("blueprints", [])
+            blueprints = data.get("blueprints", [])
             logger.info(f"Found {len(blueprints)} script blueprints")
 
-            logger.info("ha_get_blueprint (list mode) for script domain succeeded")
+            logger.info("ha_manage_blueprints (list) for script domain succeeded")
 
     async def test_list_blueprints_invalid_domain(self, mcp_client):
         """
@@ -123,13 +171,13 @@ class TestBlueprintManagement:
 
         Validates proper error handling for invalid domain parameter.
         """
-        logger.info("Testing ha_get_blueprint with invalid domain...")
+        logger.info("Testing ha_manage_blueprints with invalid domain...")
 
         async with MCPAssertions(mcp_client) as mcp:
             # Try to list blueprints with invalid domain
             result = await mcp.call_tool_failure(
-                "ha_get_blueprint",
-                {"domain": "invalid_domain"},
+                "ha_manage_blueprints",
+                {"action": "list", "domain": "invalid_domain"},
                 expected_error="Invalid domain",
             )
 
@@ -137,7 +185,7 @@ class TestBlueprintManagement:
             assert "valid_domains" in result, (
                 "Error response should include valid domains"
             )
-            logger.info("ha_get_blueprint properly rejects invalid domain")
+            logger.info("ha_manage_blueprints properly rejects invalid domain")
 
     async def test_get_blueprint_details(self, mcp_client):
         """
@@ -146,16 +194,16 @@ class TestBlueprintManagement:
         Validates that we can get detailed information about a specific blueprint.
         First lists blueprints, then retrieves details of an existing one.
         """
-        logger.info("Testing ha_get_blueprint...")
+        logger.info("Testing ha_manage_blueprints...")
 
         async with MCPAssertions(mcp_client) as mcp:
             # First, list available blueprints
             list_result = await mcp.call_tool_success(
-                "ha_get_blueprint",
-                {"domain": "automation"},
+                "ha_manage_blueprints",
+                {"action": "list", "domain": "automation"},
             )
 
-            blueprints = list_result.get("blueprints", [])
+            blueprints = list_result["data"].get("blueprints", [])
 
             if not blueprints:
                 logger.info("No automation blueprints available, skipping detail test")
@@ -166,38 +214,39 @@ class TestBlueprintManagement:
             logger.info(f"Getting details for blueprint: {first_blueprint_path}")
 
             detail_result = await mcp.call_tool_success(
-                "ha_get_blueprint",
-                {"path": first_blueprint_path, "domain": "automation"},
+                "ha_manage_blueprints",
+                {"action": "get", "path": first_blueprint_path, "domain": "automation"},
             )
 
             # Verify response structure
-            assert "path" in detail_result, "Response should contain 'path'"
-            assert "domain" in detail_result, "Response should contain 'domain'"
-            assert "name" in detail_result, "Response should contain 'name'"
-            assert detail_result["path"] == first_blueprint_path, (
+            detail = detail_result["data"]
+            assert "path" in detail, "Response should contain 'path'"
+            assert "domain" in detail, "Response should contain 'domain'"
+            assert "name" in detail, "Response should contain 'name'"
+            assert detail["path"] == first_blueprint_path, (
                 "Path should match requested path"
             )
 
-            logger.info(f"Blueprint details retrieved: {detail_result.get('name')}")
+            logger.info(f"Blueprint details retrieved: {detail.get('name')}")
 
             # Check for metadata if available
-            if "metadata" in detail_result:
-                meta = detail_result["metadata"]
+            if "metadata" in detail:
+                meta = detail["metadata"]
                 logger.info(
                     f"  Description: {(meta.get('description') or 'N/A')[:100]}..."
                 )
                 logger.info(f"  Author: {meta.get('author') or 'N/A'}")
 
             # Check for inputs if available
-            if "inputs" in detail_result:
-                inputs = detail_result["inputs"]
+            if "inputs" in detail:
+                inputs = detail["inputs"]
                 logger.info(f"  Inputs: {len(inputs)} defined")
 
-            logger.info("ha_get_blueprint succeeded")
+            logger.info("ha_manage_blueprints succeeded")
 
     async def test_get_blueprint_not_found(self, mcp_client):
         """
-        Test: ha_get_blueprint with a nonexistent path returns a structured
+        Test: ha_manage_blueprints with a nonexistent path returns a structured
         error with code RESOURCE_NOT_FOUND, not success=True.
 
         Source path: tools_blueprints.py — when the requested path is absent
@@ -207,13 +256,14 @@ class TestBlueprintManagement:
         Hardened from a single suggestions-presence check to explicit
         error-code and structured suggestion-presence assertions.
         """
-        logger.info("Testing ha_get_blueprint with non-existent path...")
+        logger.info("Testing ha_manage_blueprints with non-existent path...")
 
         async with MCPAssertions(mcp_client) as mcp:
             # Try to get a non-existent blueprint
             result = await mcp.call_tool_failure(
-                "ha_get_blueprint",
+                "ha_manage_blueprints",
                 {
+                    "action": "get",
                     "path": "nonexistent/blueprint_a2_e2e_xyz_404.yaml",
                     "domain": "automation",
                 },
@@ -226,7 +276,7 @@ class TestBlueprintManagement:
             assert "suggestion" in result["error"], (
                 "Error response should include a suggestion"
             )
-            logger.info("ha_get_blueprint properly handles non-existent blueprint")
+            logger.info("ha_manage_blueprints properly handles non-existent blueprint")
 
     async def test_get_blueprint_invalid_domain(self, mcp_client):
         """
@@ -234,20 +284,20 @@ class TestBlueprintManagement:
 
         Validates proper error handling for invalid domain parameter.
         """
-        logger.info("Testing ha_get_blueprint with invalid domain...")
+        logger.info("Testing ha_manage_blueprints with invalid domain...")
 
         async with MCPAssertions(mcp_client) as mcp:
             # Try with invalid domain
             result = await mcp.call_tool_failure(
-                "ha_get_blueprint",
-                {"path": "some/path.yaml", "domain": "invalid_domain"},
+                "ha_manage_blueprints",
+                {"action": "get", "path": "some/path.yaml", "domain": "invalid_domain"},
                 expected_error="Invalid domain",
             )
 
             assert "valid_domains" in result, (
                 "Error response should include valid domains"
             )
-            logger.info("ha_get_blueprint properly rejects invalid domain")
+            logger.info("ha_manage_blueprints properly rejects invalid domain")
 
     async def test_import_blueprint_invalid_url(self, mcp_client):
         """
@@ -255,17 +305,17 @@ class TestBlueprintManagement:
 
         Validates proper error handling for invalid URL format.
         """
-        logger.info("Testing ha_import_blueprint with invalid URL...")
+        logger.info("Testing ha_manage_blueprints with invalid URL...")
 
         async with MCPAssertions(mcp_client) as mcp:
             # Try with invalid URL format
             await mcp.call_tool_failure(
-                "ha_import_blueprint",
-                {"url": "not-a-valid-url"},
+                "ha_manage_blueprints",
+                {"action": "import", "url": "not-a-valid-url"},
                 expected_error="Invalid URL",
             )
 
-            logger.info("ha_import_blueprint properly rejects invalid URL format")
+            logger.info("ha_manage_blueprints properly rejects invalid URL format")
 
     @pytest.mark.slow
     async def test_import_blueprint_nonexistent_url(self, mcp_client):
@@ -275,20 +325,23 @@ class TestBlueprintManagement:
         Validates proper error handling when URL doesn't exist or isn't accessible.
         Note: This test makes an actual network request, hence marked as slow.
         """
-        logger.info("Testing ha_import_blueprint with non-existent URL...")
+        logger.info("Testing ha_manage_blueprints with non-existent URL...")
 
         async with MCPAssertions(mcp_client) as mcp:
             # Try with URL that doesn't exist
             result = await mcp.call_tool_failure(
-                "ha_import_blueprint",
-                {"url": "https://example.com/nonexistent/blueprint.yaml"},
+                "ha_manage_blueprints",
+                {
+                    "action": "import",
+                    "url": "https://example.com/nonexistent/blueprint.yaml",
+                },
             )
 
             # Should fail with appropriate error (suggestions nested under "error")
             assert "suggestions" in result.get("error", {}), (
                 "Error response should include suggestions"
             )
-            logger.info("ha_import_blueprint properly handles non-existent URL")
+            logger.info("ha_manage_blueprints properly handles non-existent URL")
 
     @pytest.mark.slow
     async def test_import_blueprint_saves_to_disk(
@@ -297,12 +350,12 @@ class TestBlueprintManagement:
         """
         Test: Import blueprint actually saves to disk (issue #685)
 
-        Validates that ha_import_blueprint calls both blueprint/import (validate)
+        Validates that ha_manage_blueprints calls both blueprint/import (validate)
         AND blueprint/save (persist), so the blueprint appears in the list.
         Uses a blueprint file served by the test Home Assistant instance to
         avoid external network dependencies.
         """
-        logger.info("Testing ha_import_blueprint saves blueprint to disk...")
+        logger.info("Testing ha_manage_blueprints saves blueprint to disk...")
 
         # Serve the blueprint through Home Assistant's own /local static path.
         # This avoids external network dependencies and host-to-container
@@ -313,21 +366,21 @@ class TestBlueprintManagement:
         async with MCPAssertions(mcp_client) as mcp:
             # List blueprints before import
             before = await mcp.call_tool_success(
-                "ha_get_blueprint",
-                {"domain": "automation"},
+                "ha_manage_blueprints",
+                {"action": "list", "domain": "automation"},
             )
-            before_paths = [bp["path"] for bp in before.get("blueprints", [])]
+            before_paths = [bp["path"] for bp in before["data"].get("blueprints", [])]
 
             # Try to import
             result = await safe_call_tool(
                 mcp_client,
-                "ha_import_blueprint",
-                {"url": test_url},
+                "ha_manage_blueprints",
+                {"action": "import", "url": test_url},
             )
 
             if result.get("success"):
                 # Import succeeded - verify metadata is populated
-                imported = result.get("imported_blueprint", {})
+                imported = result.get("data", {}).get("imported_blueprint", {})
                 assert imported.get("path", "").endswith(".yaml"), (
                     f"Blueprint path should end with .yaml, got: {imported.get('path')}"
                 )
@@ -344,10 +397,10 @@ class TestBlueprintManagement:
 
                 # Verify it appears in the blueprint list
                 after = await mcp.call_tool_success(
-                    "ha_get_blueprint",
-                    {"domain": imported.get("domain", "automation")},
+                    "ha_manage_blueprints",
+                    {"action": "list", "domain": imported.get("domain", "automation")},
                 )
-                after_paths = [bp["path"] for bp in after.get("blueprints", [])]
+                after_paths = [bp["path"] for bp in after["data"].get("blueprints", [])]
                 assert imported["path"] in after_paths, (
                     f"Imported blueprint {imported['path']} should appear in blueprint list"
                 )
@@ -360,7 +413,7 @@ class TestBlueprintManagement:
                 )
                 logger.info("Blueprint already existed (prior test run), still valid")
 
-            logger.info("ha_import_blueprint save-to-disk test completed")
+            logger.info("ha_manage_blueprints save-to-disk test completed")
 
     @pytest.mark.slow
     async def test_reimport_blueprint_with_overwrite(
@@ -381,8 +434,8 @@ class TestBlueprintManagement:
             # Ensure the blueprint is installed (tolerate a prior import)
             first = await safe_call_tool(
                 mcp_client,
-                "ha_import_blueprint",
-                {"url": test_url},
+                "ha_manage_blueprints",
+                {"action": "import", "url": test_url},
             )
             if not first.get("success"):
                 error_msg = extract_error_message(first)
@@ -393,8 +446,8 @@ class TestBlueprintManagement:
 
             # Re-import without overwrite must fail with a structured error
             failure = await mcp.call_tool_failure(
-                "ha_import_blueprint",
-                {"url": test_url},
+                "ha_manage_blueprints",
+                {"action": "import", "url": test_url},
                 expected_error="already exists",
             )
             assert failure["error"]["code"] == "RESOURCE_ALREADY_EXISTS", (
@@ -407,13 +460,13 @@ class TestBlueprintManagement:
 
             # Re-import with overwrite succeeds and reports the override
             result = await mcp.call_tool_success(
-                "ha_import_blueprint",
-                {"url": test_url, "overwrite": True},
+                "ha_manage_blueprints",
+                {"action": "import", "url": test_url, "overwrite": True},
             )
-            assert result.get("overrides_existing") is True, (
+            assert result.get("data", {}).get("overrides_existing") is True, (
                 f"Expected overrides_existing=True, got: {result}"
             )
-            imported = result.get("imported_blueprint", {})
+            imported = result.get("data", {}).get("imported_blueprint", {})
             assert imported.get("path", "").endswith(".yaml"), (
                 f"Blueprint path should end with .yaml, got: {imported.get('path')}"
             )
@@ -430,7 +483,7 @@ class TestBlueprintManagement:
         user re-imports to pick up the new version. Serves v1 of a uniquely-named
         blueprint, imports it (overwrite=true on a fresh import must succeed with
         overrides_existing=False), then serves changed content and re-imports,
-        verifying via ha_get_blueprint that the NEW content landed.
+        verifying via ha_manage_blueprints that the NEW content landed.
         """
         local_dir = local_blueprint_server.get("local_dir")
         assert local_dir, (
@@ -452,13 +505,13 @@ class TestBlueprintManagement:
             async with MCPAssertions(mcp_client) as mcp:
                 # overwrite=true on a not-yet-installed blueprint: plain install
                 first = await mcp.call_tool_success(
-                    "ha_import_blueprint",
-                    {"url": test_url, "overwrite": True},
+                    "ha_manage_blueprints",
+                    {"action": "import", "url": test_url, "overwrite": True},
                 )
-                assert first.get("overrides_existing") is False, (
+                assert first["data"].get("overrides_existing") is False, (
                     f"Fresh import must not report an override, got: {first}"
                 )
-                blueprint_path = first["imported_blueprint"]["path"]
+                blueprint_path = first["data"]["imported_blueprint"]["path"]
 
                 # Serve changed content and re-import
                 served_file.write_text(
@@ -466,22 +519,24 @@ class TestBlueprintManagement:
                     encoding="utf-8",
                 )
                 second = await mcp.call_tool_success(
-                    "ha_import_blueprint",
-                    {"url": test_url, "overwrite": True},
+                    "ha_manage_blueprints",
+                    {"action": "import", "url": test_url, "overwrite": True},
                 )
-                assert second.get("overrides_existing") is True, (
+                assert second["data"].get("overrides_existing") is True, (
                     f"Re-import must report the override, got: {second}"
                 )
-                assert "reload" in second.get("message", "").lower(), (
+                assert "reload" in second["data"].get("message", "").lower(), (
                     f"Override response should mention the consumer reload, got: {second}"
                 )
 
                 # The installed blueprint must now carry the v2 content
                 detail = await mcp.call_tool_success(
-                    "ha_get_blueprint",
-                    {"path": blueprint_path, "domain": "automation"},
+                    "ha_manage_blueprints",
+                    {"action": "get", "path": blueprint_path, "domain": "automation"},
                 )
-                description = (detail.get("metadata") or {}).get("description") or ""
+                description = (detail["data"].get("metadata") or {}).get(
+                    "description"
+                ) or ""
                 assert marker_v2 in description, (
                     f"Re-imported blueprint should carry '{marker_v2}', got: {description}"
                 )
@@ -526,8 +581,8 @@ class TestBlueprintManagement:
 
             async with MCPAssertions(mcp_client) as mcp:
                 result = await mcp.call_tool_failure(
-                    "ha_import_blueprint",
-                    {"url": test_url, "overwrite": True},
+                    "ha_manage_blueprints",
+                    {"action": "import", "url": test_url, "overwrite": True},
                     expected_error="Requires at least Home Assistant",
                 )
                 assert result["error"]["code"] == "VALIDATION_FAILED", (
@@ -536,6 +591,640 @@ class TestBlueprintManagement:
                 logger.info("Unsupported blueprint properly rejected at import")
         finally:
             served_file.unlink(missing_ok=True)
+
+    # ------------------------------------------------------------------ #2329
+    # The tests below each serve a uniquely named blueprint from the test HA's
+    # own /local path (no external network), import it, exercise the new
+    # action, and unlink the served file in ``finally``. Installed blueprints
+    # are deleted through the tool under test where the test succeeds; a
+    # failed test leaves its uniquely named blueprint behind, which no other
+    # test depends on.
+
+    @pytest.mark.slow
+    async def test_get_blueprint_returns_yaml_text(
+        self, mcp_client, local_blueprint_server
+    ):
+        """``get`` carries the blueprint's YAML text and names the tier that
+        produced it. Which tier answers depends on the lane (embedded → file,
+        tools entry → component / tools_entry, bare install → source_url), so
+        this asserts the contract every lane shares; the lane-specific tests
+        below pin the tier."""
+        served = _ServedBlueprint(local_blueprint_server, "get_yaml")
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                path = await served.import_into(mcp)
+                detail = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                assert served.marker in detail["data"].get("yaml", ""), (
+                    f"get should return the served YAML text, got: {detail}"
+                )
+                assert detail["data"].get("yaml_source") in _YAML_SOURCES, detail
+                # The parsed body arrives too, from whichever tier read the text.
+                assert detail["data"]["config"]["blueprint"]["domain"] == "automation"
+                if detail["data"]["yaml_source"] == "source_url":
+                    assert any("re-fetched" in w for w in detail.get("warnings", [])), (
+                        f"a source_url re-fetch must be flagged: {detail}"
+                    )
+                else:
+                    assert not any(
+                        "re-fetched" in w for w in detail.get("warnings", [])
+                    ), detail
+                await served.delete(mcp, path)
+        finally:
+            served.cleanup()
+
+    @pytest.mark.slow
+    @pytest.mark.embedded_only
+    async def test_get_blueprint_reads_the_installed_file_when_embedded(
+        self, mcp_client, local_blueprint_server
+    ):
+        """The in-process server reads the blueprint file itself (#2329 tier 1):
+        no component command, no tools entry, no re-download."""
+        served = _ServedBlueprint(local_blueprint_server, "embedded_file")
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                path = await served.import_into(mcp)
+                detail = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                assert detail["data"].get("yaml_source") == "file", detail
+                assert served.marker in detail["data"]["yaml"]
+                await served.delete(mcp, path)
+        finally:
+            served.cleanup()
+
+    @pytest.mark.slow
+    @pytest.mark.no_tools_only
+    async def test_get_blueprint_yaml_arrives_without_the_tools_entry(
+        self, mcp_client, local_blueprint_server
+    ):
+        """Without the File & YAML Tools entry the text still arrives — through
+        the embedded read on the server-entry-only lanes, or the source_url
+        re-fetch on a bare install — never through the filesystem tools."""
+        served = _ServedBlueprint(local_blueprint_server, "no_tools")
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                path = await served.import_into(mcp)
+                detail = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                assert served.marker in detail["data"].get("yaml", ""), detail
+                # Never "tools_entry": that tier is the File & YAML Tools
+                # service, which these lanes deliberately do not have.
+                assert detail["data"].get("yaml_source") in (
+                    "file",
+                    "component",
+                    "source_url",
+                ), detail
+                await served.delete(mcp, path)
+        finally:
+            served.cleanup()
+
+    @pytest.mark.slow
+    async def test_duplicate_blueprint_via_save(
+        self, mcp_client, local_blueprint_server
+    ):
+        """get → save under a new path duplicates a blueprint without the
+        filesystem tools; both are listed afterwards."""
+        served = _ServedBlueprint(local_blueprint_server, "dup")
+        copy_path = f"e2e_copy_{served.run_id}.yaml"
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                path = await served.import_into(mcp)
+                detail = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                saved = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {
+                        "action": "save",
+                        "domain": "automation",
+                        "path": copy_path,
+                        "yaml": detail["data"]["yaml"],
+                    },
+                )
+                assert saved["data"]["overrides_existing"] is False, saved
+                listing = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "list", "domain": "automation"},
+                )
+                paths = {bp["path"] for bp in listing["data"]["blueprints"]}
+                assert {path, copy_path} <= paths, (
+                    f"expected both installed, got {paths}"
+                )
+                await served.delete(mcp, copy_path)
+                await served.delete(mcp, path)
+        finally:
+            served.cleanup()
+
+    @pytest.mark.slow
+    async def test_edit_blueprint_in_place_via_save(
+        self, mcp_client, local_blueprint_server
+    ):
+        """get → edit the text → save back with overwrite=True replaces the
+        installed file and reports the consumer reload."""
+        served = _ServedBlueprint(local_blueprint_server, "edit")
+        edited_marker = f"edited-{served.run_id}"
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                path = await served.import_into(mcp)
+                detail = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                edited = detail["data"]["yaml"].replace(served.marker, edited_marker)
+                assert edited != detail["data"]["yaml"]
+                saved = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {
+                        "action": "save",
+                        "domain": "automation",
+                        "path": path,
+                        "yaml": edited,
+                        "overwrite": True,
+                    },
+                )
+                assert saved["data"]["overrides_existing"] is True, saved
+                assert "reloaded" in saved["data"]["message"].lower()
+                after = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                description = (after["data"].get("metadata") or {}).get(
+                    "description"
+                ) or ""
+                assert edited_marker in description, after
+                assert served.marker not in description, after
+                await served.delete(mcp, path)
+        finally:
+            served.cleanup()
+
+    @pytest.mark.slow
+    async def test_save_without_extension_overwrites_the_installed_file(
+        self, mcp_client, local_blueprint_server
+    ):
+        """Home Assistant appends ``.yaml`` to a save path that lacks it, so
+        ``save(path="x/y", overwrite=True)`` replaces the installed ``x/y.yaml``.
+        The tool must report that path and snapshot THAT file first, rather
+        than key the capture on a path no tier can read and report a path the
+        store never had (PR #2356 review)."""
+        served = _ServedBlueprint(local_blueprint_server, "noext")
+        edited_marker = f"noext-edited-{served.run_id}"
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                path = await served.import_into(mcp)
+                assert path.endswith(".yaml"), path
+                detail = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                faithful_copy_available = detail["data"].get("yaml_source") in (
+                    "file",
+                    "component",
+                    "tools_entry",
+                )
+                edited = detail["data"]["yaml"].replace(served.marker, edited_marker)
+                saved = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {
+                        "action": "save",
+                        "domain": "automation",
+                        "path": path.removesuffix(".yaml"),
+                        "yaml": edited,
+                        "overwrite": True,
+                    },
+                )
+                assert saved["data"]["path"] == path, saved
+                assert saved["data"]["overrides_existing"] is True, saved
+                after = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                description = (after["data"].get("metadata") or {}).get(
+                    "description"
+                ) or ""
+                assert edited_marker in description, after
+                backups = await mcp.call_tool_success(
+                    "ha_manage_backup",
+                    {
+                        "scope": "edits",
+                        "action": "list",
+                        "domain": "blueprint_automation",
+                        "entity_id": path,
+                    },
+                )
+                data = backups["data"]
+                assert data["enabled"] is True, (
+                    "auto-backup is off in this lane; the pre-save snapshot "
+                    f"cannot be verified: {data}"
+                )
+                matching = [
+                    b
+                    for b in data["backups"]
+                    if b.get("entity_id") == path
+                    and b.get("domain") == "blueprint_automation"
+                ]
+                if faithful_copy_available:
+                    assert matching, (
+                        f"no pre-save snapshot under the path core wrote ({path}): "
+                        f"{data}"
+                    )
+                else:
+                    assert not matching, (
+                        "a source_url re-fetch must never be stored as the "
+                        f"installed file: {data}"
+                    )
+                await served.delete(mcp, path)
+        finally:
+            served.cleanup()
+
+    @pytest.mark.slow
+    async def test_save_without_overwrite_rejects_existing(
+        self, mcp_client, local_blueprint_server
+    ):
+        served = _ServedBlueprint(local_blueprint_server, "save_exists")
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                path = await served.import_into(mcp)
+                result = await mcp.call_tool_failure(
+                    "ha_manage_blueprints",
+                    {
+                        "action": "save",
+                        "domain": "automation",
+                        "path": path,
+                        "yaml": served.yaml,
+                    },
+                    expected_error="already exists",
+                )
+                assert result["error"]["code"] == "RESOURCE_ALREADY_EXISTS", result
+                await served.delete(mcp, path)
+        finally:
+            served.cleanup()
+
+    async def test_save_rejects_invalid_yaml(self, mcp_client):
+        async with MCPAssertions(mcp_client) as mcp:
+            result = await mcp.call_tool_failure(
+                "ha_manage_blueprints",
+                {
+                    "action": "save",
+                    "domain": "automation",
+                    "path": f"e2e_invalid_{uuid.uuid4().hex[:8]}.yaml",
+                    "yaml": "not: [a blueprint",
+                },
+            )
+            assert result["error"]["code"] == "VALIDATION_FAILED", result
+            listing = await mcp.call_tool_success(
+                "ha_manage_blueprints", {"action": "list", "domain": "automation"}
+            )
+            assert not any(
+                bp["path"].startswith("e2e_invalid_")
+                for bp in listing["data"]["blueprints"]
+            ), "an invalid blueprint must never be written"
+
+    @pytest.mark.slow
+    async def test_delete_blueprint_round_trip(
+        self, mcp_client, local_blueprint_server
+    ):
+        """import → delete(confirm=True) → gone from list, get reports not found."""
+        served = _ServedBlueprint(local_blueprint_server, "delete")
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                path = await served.import_into(mcp)
+                deleted = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {
+                        "action": "delete",
+                        "domain": "automation",
+                        "path": path,
+                        "confirm": True,
+                    },
+                )
+                assert deleted["data"]["path"] == path, deleted
+                listing = await mcp.call_tool_success(
+                    "ha_manage_blueprints", {"action": "list", "domain": "automation"}
+                )
+                assert path not in {bp["path"] for bp in listing["data"]["blueprints"]}
+                missing = await mcp.call_tool_failure(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                    expected_error="not found",
+                )
+                assert missing["error"]["code"] == "RESOURCE_NOT_FOUND", missing
+        finally:
+            served.cleanup()
+
+    @pytest.mark.slow
+    async def test_delete_blueprint_requires_confirm(
+        self, mcp_client, local_blueprint_server
+    ):
+        served = _ServedBlueprint(local_blueprint_server, "confirm")
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                path = await served.import_into(mcp)
+                result = await mcp.call_tool_failure(
+                    "ha_manage_blueprints",
+                    {"action": "delete", "domain": "automation", "path": path},
+                    expected_error="confirm",
+                )
+                assert result["error"]["code"] == "VALIDATION_INVALID_PARAMETER", result
+                listing = await mcp.call_tool_success(
+                    "ha_manage_blueprints", {"action": "list", "domain": "automation"}
+                )
+                assert path in {bp["path"] for bp in listing["data"]["blueprints"]}, (
+                    "an unconfirmed delete must change nothing"
+                )
+                await served.delete(mcp, path)
+        finally:
+            served.cleanup()
+
+    @pytest.mark.slow
+    async def test_get_reports_no_consumers_for_an_unused_blueprint(
+        self, mcp_client, local_blueprint_server
+    ):
+        """``used_by`` is an empty list for a freshly imported blueprint, not a
+        missing key — absence would be indistinguishable from "unknown"."""
+        served = _ServedBlueprint(local_blueprint_server, "unused")
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                path = await served.import_into(mcp)
+                detail = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                assert detail["data"].get("used_by") == [], detail
+                await served.delete(mcp, path)
+        finally:
+            served.cleanup()
+
+    async def test_delete_blueprint_not_found(self, mcp_client):
+        async with MCPAssertions(mcp_client) as mcp:
+            result = await mcp.call_tool_failure(
+                "ha_manage_blueprints",
+                {
+                    "action": "delete",
+                    "domain": "automation",
+                    "path": f"e2e_missing_{uuid.uuid4().hex[:8]}.yaml",
+                    "confirm": True,
+                },
+                expected_error="not found",
+            )
+            assert result["error"]["code"] == "RESOURCE_NOT_FOUND", result
+
+    @pytest.mark.slow
+    async def test_delete_blueprint_in_use_rejected(
+        self, mcp_client, local_blueprint_server, cleanup_tracker
+    ):
+        """Home Assistant refuses to delete a blueprint an automation uses; the
+        tool names that automation, and the delete succeeds once it is gone."""
+        served = _ServedBlueprint(local_blueprint_server, "in_use")
+        automation_id = None
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                path = await served.import_into(mcp)
+                created = await mcp.call_tool_success(
+                    "ha_config_set_automation",
+                    {
+                        "config": {
+                            "alias": f"E2E blueprint consumer {served.run_id}",
+                            "use_blueprint": {
+                                "path": path,
+                                "input": {"target_entity": _STABLE_ENTITY},
+                            },
+                        }
+                    },
+                )
+                automation_id = created["automation_id"]
+                cleanup_tracker.track("automation", automation_id)
+                assert await wait_for_automation(mcp_client, automation_id), (
+                    f"{automation_id} never became retrievable"
+                )
+
+                # The UI's "Show automations using this blueprint", answerable
+                # without attempting the delete first.
+                detail = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                assert automation_id in detail["data"].get("used_by", []), (
+                    f"get should report the consumer in used_by: {detail}"
+                )
+
+                refused = await mcp.call_tool_failure(
+                    "ha_manage_blueprints",
+                    {
+                        "action": "delete",
+                        "domain": "automation",
+                        "path": path,
+                        "confirm": True,
+                    },
+                    expected_error="in use",
+                )
+                assert refused["error"]["code"] == "RESOURCE_LOCKED", refused
+                assert automation_id in refused.get("in_use_by", []), (
+                    f"the consumer must be named: {refused}"
+                )
+                assert path in {
+                    bp["path"]
+                    for bp in (
+                        await mcp.call_tool_success(
+                            "ha_manage_blueprints",
+                            {"action": "list", "domain": "automation"},
+                        )
+                    )["data"]["blueprints"]
+                }, "a refused delete must leave the blueprint installed"
+
+                await mcp.call_tool_success(
+                    "ha_config_remove_automation", {"identifier": automation_id}
+                )
+                automation_id = None
+                await served.delete(mcp, path)
+        finally:
+            if automation_id:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_config_remove_automation",
+                    {"identifier": automation_id},
+                )
+            served.cleanup()
+
+    @pytest.mark.slow
+    async def test_substitute_blueprint_renders_standalone_config(
+        self, mcp_client, local_blueprint_server
+    ):
+        """``substitute`` renders the blueprint plus inputs into a config that
+        no longer references the blueprint — the UI's "Take control"."""
+        served = _ServedBlueprint(local_blueprint_server, "substitute")
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                path = await served.import_into(mcp)
+                rendered = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {
+                        "action": "substitute",
+                        "domain": "automation",
+                        "path": path,
+                        "input": {"target_entity": _STABLE_ENTITY},
+                    },
+                )
+                config = rendered["data"]["config"]
+                assert "blueprint" not in config and "use_blueprint" not in config, (
+                    config
+                )
+                actions = config.get("action") or config.get("actions")
+                assert actions, config
+                assert actions[0]["target"]["entity_id"] == _STABLE_ENTITY, config
+                # Nothing was written: the blueprint is still the only artifact.
+                listing = await mcp.call_tool_success(
+                    "ha_manage_blueprints", {"action": "list", "domain": "automation"}
+                )
+                assert path in {bp["path"] for bp in listing["data"]["blueprints"]}
+                await served.delete(mcp, path)
+        finally:
+            served.cleanup()
+
+    @pytest.mark.slow
+    async def test_take_control_detaches_an_automation_from_its_blueprint(
+        self, mcp_client, local_blueprint_server, cleanup_tracker
+    ):
+        """``take_control_of_blueprint`` converts a consumer in place.
+
+        The automation keeps its identity and gains the blueprint's rendered
+        config as its own. It does NOT stop counting as a consumer: Home
+        Assistant frees the blueprint only when the automation is removed, so
+        the delete here happens after that removal, not after the conversion.
+        """
+        served = _ServedBlueprint(local_blueprint_server, "take_control")
+        automation_id = None
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                path = await served.import_into(mcp)
+                alias = f"E2E take control {served.run_id}"
+                created = await mcp.call_tool_success(
+                    "ha_config_set_automation",
+                    {
+                        "config": {
+                            "alias": alias,
+                            "description": "must survive the conversion",
+                            "use_blueprint": {
+                                "path": path,
+                                "input": {"target_entity": _STABLE_ENTITY},
+                            },
+                        }
+                    },
+                )
+                automation_id = created["automation_id"]
+                cleanup_tracker.track("automation", automation_id)
+                assert await wait_for_automation(mcp_client, automation_id), (
+                    f"{automation_id} never became retrievable"
+                )
+
+                took = await mcp.call_tool_success(
+                    "ha_config_set_automation",
+                    {
+                        "identifier": automation_id,
+                        "take_control_of_blueprint": True,
+                    },
+                )
+                assert took["took_control_of_blueprint"] == path, took
+
+                fetched = await mcp.call_tool_success(
+                    "ha_config_get_automation", {"identifier": automation_id}
+                )
+                config = fetched["config"]
+                assert "use_blueprint" not in config, (
+                    f"the automation must no longer reference the blueprint: {config}"
+                )
+                assert config["alias"] == alias, config
+                assert config["description"] == "must survive the conversion", config
+                actions = config.get("actions") or config.get("action")
+                assert actions, config
+                assert actions[0]["target"]["entity_id"] == _STABLE_ENTITY, config
+
+                # Home Assistant goes on counting a converted automation as a
+                # user of the blueprint (verified live on 2026.9 -- an
+                # automation reload does not clear it either), so the delete
+                # stays refused until the automation is actually removed. This
+                # pins that boundary: converting is not detaching.
+                still = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                assert automation_id in still["data"].get("used_by", []), still
+
+                await mcp.call_tool_success(
+                    "ha_config_remove_automation", {"identifier": automation_id}
+                )
+                automation_id = None
+                await served.delete(mcp, path)
+        finally:
+            if automation_id:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_config_remove_automation",
+                    {"identifier": automation_id},
+                )
+            served.cleanup()
+
+    @pytest.mark.slow
+    async def test_delete_blueprint_writes_auto_backup(
+        self, mcp_client, local_blueprint_server
+    ):
+        """A confirmed delete is snapshotted first so ha_manage_backup can
+        restore the file (#2329) — but only from an installed-file tier.
+        The source_url re-download ``get`` may fall back to is never a
+        snapshot source (a restore from it could write what the author
+        publishes now, not what was deleted), so on a lane where ``get`` had
+        to re-fetch, the contract is that NO snapshot was written."""
+        served = _ServedBlueprint(local_blueprint_server, "backup")
+        try:
+            async with MCPAssertions(mcp_client) as mcp:
+                path = await served.import_into(mcp)
+                detail = await mcp.call_tool_success(
+                    "ha_manage_blueprints",
+                    {"action": "get", "domain": "automation", "path": path},
+                )
+                faithful_copy_available = detail["data"].get("yaml_source") in (
+                    "file",
+                    "component",
+                    "tools_entry",
+                )
+                await served.delete(mcp, path)
+                backups = await mcp.call_tool_success(
+                    "ha_manage_backup",
+                    {
+                        "scope": "edits",
+                        "action": "list",
+                        "domain": "blueprint_automation",
+                        "entity_id": path,
+                    },
+                )
+                data = backups["data"]
+                assert data["enabled"] is True, (
+                    "auto-backup is off in this lane; the pre-delete snapshot "
+                    f"cannot be verified: {data}"
+                )
+                # The listing reports the id each snapshot was taken for (the
+                # blueprint path), not the sanitised filename stem.
+                matching = [
+                    b
+                    for b in data["backups"]
+                    if b.get("entity_id") == path
+                    and b.get("domain") == "blueprint_automation"
+                ]
+                if faithful_copy_available:
+                    assert matching, f"no pre-delete snapshot for {path}: {data}"
+                else:
+                    assert not matching, (
+                        "a source_url re-fetch must never be stored as the "
+                        f"installed file: {data}"
+                    )
+        finally:
+            served.cleanup()
 
 
 @pytest.mark.blueprint
@@ -554,39 +1243,44 @@ async def test_blueprint_discovery_workflow(mcp_client):
         # Step 1: List automation blueprints
         logger.info("Step 1: List automation blueprints...")
         list_result = await mcp.call_tool_success(
-            "ha_get_blueprint",
-            {"domain": "automation"},
+            "ha_manage_blueprints",
+            {"action": "list", "domain": "automation"},
         )
 
-        automation_count = list_result.get("count", 0)
+        automation_count = list_result["data"].get("count", 0)
         logger.info(f"Found {automation_count} automation blueprints")
 
         # Step 2: List script blueprints
         logger.info("Step 2: List script blueprints...")
         script_result = await mcp.call_tool_success(
-            "ha_get_blueprint",
-            {"domain": "script"},
+            "ha_manage_blueprints",
+            {"action": "list", "domain": "script"},
         )
 
-        script_count = script_result.get("count", 0)
+        script_count = script_result["data"].get("count", 0)
         logger.info(f"Found {script_count} script blueprints")
 
         # Step 3: If blueprints exist, explore one
-        blueprints = list_result.get("blueprints", [])
+        blueprints = list_result["data"].get("blueprints", [])
         if blueprints:
             logger.info("Step 3: Exploring first blueprint...")
             first_blueprint = blueprints[0]
 
             detail_result = await mcp.call_tool_success(
-                "ha_get_blueprint",
-                {"path": first_blueprint["path"], "domain": "automation"},
+                "ha_manage_blueprints",
+                {
+                    "action": "get",
+                    "path": first_blueprint["path"],
+                    "domain": "automation",
+                },
             )
 
-            logger.info(f"Explored blueprint: {detail_result.get('name')}")
+            explored = detail_result["data"]
+            logger.info(f"Explored blueprint: {explored.get('name')}")
 
             # Log input requirements if available
-            if "inputs" in detail_result:
-                inputs = detail_result["inputs"]
+            if "inputs" in explored:
+                inputs = explored["inputs"]
                 logger.info(f"Blueprint requires {len(inputs)} inputs:")
                 for input_name, input_config in list(inputs.items())[:3]:
                     logger.info(
@@ -611,11 +1305,11 @@ async def test_blueprint_search_integration(mcp_client):
     async with MCPAssertions(mcp_client) as mcp:
         # List blueprints
         result = await mcp.call_tool_success(
-            "ha_get_blueprint",
-            {"domain": "automation"},
+            "ha_manage_blueprints",
+            {"action": "list", "domain": "automation"},
         )
 
-        blueprints = result.get("blueprints", [])
+        blueprints = result["data"].get("blueprints", [])
         logger.info(f"Blueprint search found {len(blueprints)} results")
 
         # Verify blueprint metadata is searchable/useful
@@ -639,11 +1333,11 @@ async def test_blueprint_automation_lifecycle(mcp_client):
     async with MCPAssertions(mcp_client) as mcp:
         # Step 1: List available blueprints
         list_result = await mcp.call_tool_success(
-            "ha_get_blueprint",
-            {"domain": "automation"},
+            "ha_manage_blueprints",
+            {"action": "list", "domain": "automation"},
         )
 
-        blueprints = list_result.get("blueprints", [])
+        blueprints = list_result["data"].get("blueprints", [])
         if not blueprints:
             logger.info("No automation blueprints available, skipping test")
             pytest.skip("No automation blueprints available for testing")
@@ -654,11 +1348,11 @@ async def test_blueprint_automation_lifecycle(mcp_client):
 
         # Step 2: Get blueprint details to understand required inputs
         detail_result = await mcp.call_tool_success(
-            "ha_get_blueprint",
-            {"path": blueprint_path, "domain": "automation"},
+            "ha_manage_blueprints",
+            {"action": "get", "path": blueprint_path, "domain": "automation"},
         )
 
-        inputs = detail_result.get("inputs", {})
+        inputs = detail_result["data"].get("inputs", {})
         logger.info(f"Blueprint has {len(inputs)} inputs")
 
         # Step 3: Create automation from blueprint (no trigger/action fields)
@@ -739,11 +1433,11 @@ async def test_blueprint_automation_with_empty_arrays(mcp_client):
     async with MCPAssertions(mcp_client) as mcp:
         # List available blueprints
         list_result = await mcp.call_tool_success(
-            "ha_get_blueprint",
-            {"domain": "automation"},
+            "ha_manage_blueprints",
+            {"action": "list", "domain": "automation"},
         )
 
-        blueprints = list_result.get("blueprints", [])
+        blueprints = list_result["data"].get("blueprints", [])
         if not blueprints:
             pytest.skip("No automation blueprints available for testing")
 

@@ -1557,7 +1557,10 @@ _EMBEDDED_CONNECTION: dict[str, str | bool] = {}
 
 
 def set_embedded_connection(
-    url: str, token: str, verify_ssl: bool | None = None
+    url: str,
+    token: str,
+    verify_ssl: bool | None = None,
+    config_dir: str | None = None,
 ) -> None:
     """Register the in-process HA connection for embedded mode.
 
@@ -1581,6 +1584,14 @@ def set_embedded_connection(
     for 127.0.0.1, so verification on the loopback connection can only fail.
     ``None`` (the default, and what pre-#1890 components pass implicitly)
     leaves ``Settings.verify_ssl`` alone.
+
+    ``config_dir`` is Home Assistant's own configuration directory (#2329).
+    Embedded mode is its only writer and it is read back through
+    :func:`get_embedded_config_dir` alone — deliberately NOT a ``Settings``
+    field, so no env var or override file can point it anywhere. It lets an
+    in-process server read a blueprint's on-disk YAML directly instead of
+    routing the read through the component, and grants nothing an external
+    server could not already reach.
     """
     _EMBEDDED_CONNECTION["url"] = url
     _EMBEDDED_CONNECTION["token"] = token
@@ -1588,8 +1599,23 @@ def set_embedded_connection(
         _EMBEDDED_CONNECTION.pop("verify_ssl", None)
     else:
         _EMBEDDED_CONNECTION["verify_ssl"] = verify_ssl
+    if config_dir is None:
+        _EMBEDDED_CONNECTION.pop("config_dir", None)
+    else:
+        _EMBEDDED_CONNECTION["config_dir"] = config_dir
     if _settings is not None:
         _apply_embedded_connection(_settings)
+
+
+def get_embedded_config_dir() -> str | None:
+    """Home Assistant's configuration directory, when running embedded.
+
+    ``None`` outside embedded mode, and on an embedded install whose component
+    predates the ``config_dir`` keyword. Consumers must treat it as an optional
+    capability and fall back to their component / service path.
+    """
+    config_dir = _EMBEDDED_CONNECTION.get("config_dir")
+    return config_dir if isinstance(config_dir, str) and config_dir else None
 
 
 def _reset_embedded_connection() -> None:
