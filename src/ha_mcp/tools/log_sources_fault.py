@@ -107,12 +107,19 @@ def _raise_read_failure(error: str) -> NoReturn:
         create_error_response(
             ErrorCode.SERVICE_CALL_FAILED,
             f"read_file failed for {FAULT_LOG_PATH}: {error or 'unknown error'}",
+            # Parenthesised so each reads as one suggestion rather than a
+            # list entry with a missing comma (py/implicit-string-
+            # concatenation-in-list).
             suggestions=[
-                f"Check that {FAULT_LOG_PATH} in the Home Assistant config "
-                "directory is readable by Home Assistant",
+                (
+                    f"Check that {FAULT_LOG_PATH} in the Home Assistant config "
+                    "directory is readable by Home Assistant"
+                ),
                 "Check Home Assistant logs for the ha_mcp_tools read error",
-                "Retry after the file is readable; an absent or empty file is "
-                "reported as no crash, not as an error",
+                (
+                    "Retry after the file is readable; an absent or empty file "
+                    "is reported as no crash, not as an error"
+                ),
             ],
             context={"source": "fault_log"},
         )
