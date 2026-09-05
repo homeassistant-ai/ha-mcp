@@ -1438,7 +1438,7 @@ const BACKUP_FIELD_LABELS = {
   },
   auto_backup_dir: {
     label: 'Backup directory override',
-    help: 'Empty = default (/data/ha_mcp_backups in the App (add-on), the backups/ subdirectory of the ha-mcp data directory otherwise). Override with an absolute path.',
+    help: 'Leave empty for the default: /data/ha_mcp_backups in the App (add-on), otherwise the backups/ subdirectory of the ha-mcp data directory. Or enter an absolute path.',
   },
   auto_backup_calendar_lookahead_days: {
     label: 'Calendar lookahead (days)',
