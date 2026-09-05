@@ -8,7 +8,11 @@ neither journald nor ``home-assistant.log``. No other ``ha_get_logs`` source can
 show it (issue #2373).
 
 The file is opened in append mode on every start, so on a healthy install it
-exists and is empty; each crash appends one ``Fatal Python error: ...`` block.
+exists and is empty; each crash appends one block that opens with a
+``Fatal Python error: ...`` line followed by one traceback per thread. A block
+is only readable in its original line order, so unlike the line-oriented
+raw-text sources this one orders whole blocks and pages through the result
+with ``offset`` instead of reversing lines.
 
 The read goes through the File & YAML Tools entry's privileged ``read_file``
 service (the same route as ``ha_read_file``), which allows the path from
@@ -32,7 +36,7 @@ from .log_common import (
     SUPERVISOR_SEARCH_WINDOW_LINES,
     _coerce_limit,
 )
-from .tools_filesystem import call_mcp_tools_service
+from .tools_filesystem import _assert_mcp_tools_available, call_mcp_tools_service
 from .util_helpers import unwrap_service_response
 
 # Config-relative path HA Core hands to ``faulthandler.enable`` (``FAULT_LOG_FILENAME``
@@ -44,7 +48,14 @@ FAULT_LOG_PATH = "home-assistant.log.fault"
 # version signal, no separate probe needed.
 MIN_COMPONENT_VERSION_FAULT_LOG = "2.1.4"
 
-# faulthandler prefixes every dump with this line, so counting it counts crashes.
+# Lines tailed from the file per call, independent of ``limit``. A single dump
+# lists every thread, so it routinely runs past a 100-line ``limit``; tailing
+# only ``limit`` lines would cut off the ``Fatal Python error`` header that
+# names the signal. The window is the same one the other raw-text sources use
+# for a search, and ``offset`` pages through it.
+FAULT_LOG_WINDOW_LINES = SUPERVISOR_SEARCH_WINDOW_LINES
+
+# faulthandler opens every dump with this line, so it delimits crash blocks.
 _FATAL_MARKER = "Fatal Python error:"
 
 _NO_CRASH_MESSAGE = (
@@ -64,6 +75,7 @@ def _no_crash(data: dict[str, Any], total_lines: int) -> dict[str, Any]:
         log="",
         total_lines=total_lines,
         returned_lines=0,
+        has_more=False,
         message=_NO_CRASH_MESSAGE,
     )
     return data
@@ -100,38 +112,67 @@ def _raise_read_failure(error: str) -> NoReturn:
     )
 
 
-def _shape_crash_window(
+def _split_blocks(lines: list[str]) -> list[list[str]]:
+    """Group the window into crash blocks, each opening with the fatal marker.
+
+    Lines before the first marker are the tail of a block whose header fell
+    outside the window; they form a leading partial block so nothing is lost.
+    """
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for line in lines:
+        if line.startswith(_FATAL_MARKER) and current:
+            blocks.append(current)
+            current = []
+        current.append(line)
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def _shape_crash_page(
     data: dict[str, Any],
     lines: list[str],
     *,
     limit: int,
+    offset: int,
     search: str | None,
     order: Literal["newest", "oldest"],
 ) -> dict[str, Any]:
-    """Filter, slice and orient the fetched lines like the other raw-text sources."""
-    # Count dumps on the fetched window before any search narrows it. The file
-    # is append-only across crashes, so a long history can exceed the tail;
-    # the count is scoped to the window, not the file.
-    fatal_blocks = sum(1 for ln in lines if ln.startswith(_FATAL_MARKER))
+    """Order whole crash blocks, then page through the flattened text.
+
+    ``order='newest'`` puts the latest block first; every block keeps its own
+    line order so the traceback stays readable. ``offset``/``limit`` slice the
+    assembled text from its start, and ``has_more``/``next_offset`` continue it.
+    """
+    blocks = _split_blocks(lines)
+    fatal_blocks = sum(1 for block in blocks if block[0].startswith(_FATAL_MARKER))
+    if order == "newest":
+        blocks.reverse()
+    flat = [line for block in blocks for line in block]
 
     filters_applied: dict[str, str] = {}
     if search:
         search_lower = search.lower()
-        lines = [ln for ln in lines if search_lower in ln.lower()]
+        flat = [ln for ln in flat if search_lower in ln.lower()]
         filters_applied["search"] = search
-    matched_lines = len(lines)
+    matched_lines = len(flat)
 
-    # Most-recent window; 'order' only flips the display direction.
-    lines = lines[-limit:]
-    if order == "newest":
-        lines = list(reversed(lines))
-
+    page = flat[offset : offset + limit]
+    has_more = offset + limit < len(flat)
     data.update(
         crash_recorded=True,
-        log="\n".join(lines),
-        returned_lines=len(lines),
+        log="\n".join(page),
+        returned_lines=len(page),
         fatal_error_blocks_in_window=fatal_blocks,
+        has_more=has_more,
     )
+    if has_more:
+        data["next_offset"] = offset + limit
+        data["pagination_hint"] = (
+            f"ha_get_logs(source='fault_log', offset={offset + limit}, "
+            f"limit={limit}, order='{order}')"
+        )
     if filters_applied:
         data["filters_applied"] = filters_applied
         data["matched_lines"] = matched_lines
@@ -143,18 +184,21 @@ class FaultLogSourceMixin:
 
     _client: Any
 
-    async def _read_fault_file(self, tail_lines: int) -> dict[str, Any]:
-        """One ``read_file`` call, unwrapped; transport errors become ToolErrors.
+    async def _read_fault_file(self) -> dict[str, Any]:
+        """One gated ``read_file`` call, unwrapped; transport errors become ToolErrors.
 
-        The caller-token gate inside ``call_mcp_tools_service`` raises its own
-        actionable ToolError when the File & YAML Tools entry is missing or the
-        component predates the bootstrap service; that passes through untouched.
+        The live tools-entry probe runs first, as the file and YAML tools do,
+        so an entry removed after this client cached its caller token surfaces
+        the actionable "add the entry" error rather than HA's 400 for a
+        service that no longer exists. That gate and the caller-token gate
+        raise their own ToolErrors, which pass through untouched.
         """
         try:
+            await _assert_mcp_tools_available(self._client)
             raw = await call_mcp_tools_service(
                 self._client,
                 "read_file",
-                {"path": FAULT_LOG_PATH, "tail_lines": tail_lines},
+                {"path": FAULT_LOG_PATH, "tail_lines": FAULT_LOG_WINDOW_LINES},
             )
         except ToolError:
             raise
@@ -172,31 +216,30 @@ class FaultLogSourceMixin:
         self,
         limit: int | None = None,
         search: str | None = None,
+        offset: int = 0,
         order: Literal["newest", "oldest"] = "newest",
     ) -> dict[str, Any]:
-        """Tail ``home-assistant.log.fault`` through the component's read_file.
+        """Read ``home-assistant.log.fault`` through the component's read_file.
 
-        Mirrors the raw-text sources: ``search`` widens the fetched window,
-        ``limit`` slices the most-recent lines of it, ``order`` only sets the
-        display direction. An absent or empty file is the healthy state and
-        returns success with ``crash_recorded=False`` rather than an error.
+        Always tails :data:`FAULT_LOG_WINDOW_LINES` from the file; ``order``
+        arranges whole crash blocks, ``search`` filters lines, and
+        ``offset``/``limit`` page through the assembled text. An absent or
+        empty file is the healthy state and returns success with
+        ``crash_recorded=False`` rather than an error.
         """
         effective_limit = _coerce_limit(
             limit, default=DEFAULT_LOG_LIMIT, suggestion_example="100"
         )
-        fetch_lines = (
-            max(effective_limit, SUPERVISOR_SEARCH_WINDOW_LINES)
-            if search
-            else effective_limit
-        )
-        result = await self._read_fault_file(fetch_lines)
+        result = await self._read_fault_file()
 
         data: dict[str, Any] = {
             "success": True,
             "source": "fault_log",
             "path": FAULT_LOG_PATH,
             "limit": effective_limit,
+            "offset": offset,
             "order": order,
+            "window_lines": FAULT_LOG_WINDOW_LINES,
         }
         if not result.get("success", False):
             error = str(result.get("error", ""))
@@ -214,13 +257,19 @@ class FaultLogSourceMixin:
         total_lines = result.get("total_lines")
         if not isinstance(total_lines, int):
             total_lines = len(lines)
-        data["window_lines"] = fetch_lines
         if isinstance(result.get("modified"), str):
             data["modified"] = result["modified"]
 
         if not any(line.strip() for line in lines):
             return _no_crash(data, total_lines=total_lines)
         data["total_lines"] = total_lines
-        return _shape_crash_window(
-            data, lines, limit=effective_limit, search=search, order=order
+        # Older blocks beyond the window are unreachable by offset; say so.
+        data["window_truncated"] = bool(result.get("truncated", False))
+        return _shape_crash_page(
+            data,
+            lines,
+            limit=effective_limit,
+            offset=offset,
+            search=search,
+            order=order,
         )
