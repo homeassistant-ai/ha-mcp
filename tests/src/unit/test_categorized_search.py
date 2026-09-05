@@ -118,7 +118,23 @@ class TestRenderResults:
         ]
         results = await transform._render_results(tools)
         assert "ha_call_write_tool" in results[0]["execute_via"]
+        assert "ha_call_read_tool" not in results[0]["execute_via"]
         assert "ha_config_set_automation" in results[0]["execute_via"]
+
+    @pytest.mark.anyio
+    async def test_mixed_manage_tool_execute_via_read_and_write(self, transform):
+        """Mixed tools advertise both proxies so reads can use the safe path."""
+        tools = [
+            _make_tool("ha_manage_updates", destructive=True, description="Manage")
+        ]
+
+        results = await transform._render_results(tools)
+
+        hint = results[0]["execute_via"]
+        assert "ha_call_read_tool" in hint
+        assert "ha_call_write_tool" in hint
+        assert hint.index("ha_call_read_tool") < hint.index("ha_call_write_tool")
+        assert "ha_manage_updates" in hint
 
     @pytest.mark.anyio
     async def test_delete_tool_execute_via(self, transform):
@@ -415,9 +431,8 @@ class TestCategorizedCallDispatch:
         self, transform: CategorizedSearchTransform
     ) -> None:
         """A write-categorised tool's read actions stay reachable on the read
-        proxy (#2329). The tool is advertised under the write proxy only —
-        membership is unchanged — but a read-approved client that calls it
-        anyway, for a read, is admitted."""
+        proxy (#2329). Category membership is unchanged, but tool-search results
+        advertise both proxy paths and a read-approved call is admitted."""
         _prepopulate_cache(
             transform,
             [
