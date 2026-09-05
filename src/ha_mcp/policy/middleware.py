@@ -49,9 +49,14 @@ PROXY_META_TOOLS = CALL_PROXY_META_TOOLS | {"ha_search_tools"}
 # dev_tools_security_policy_access setting (off by default, issue #2141).
 
 
+def _is_approval_management(name: str, args: dict[str, Any]) -> bool:
+    """True for dev-tool calls that manage the approval queue itself."""
+    return is_approval_management_call(name, args)
+
+
 def _passes_ungated(name: str, args: dict[str, Any]) -> bool:
     """Calls that must bypass gating: proxy meta-tools + queue management."""
-    return name in PROXY_META_TOOLS or is_approval_management_call(name, args)
+    return name in PROXY_META_TOOLS or _is_approval_management(name, args)
 
 
 class PolicyMiddleware(Middleware):
