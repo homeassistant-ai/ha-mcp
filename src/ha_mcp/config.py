@@ -400,7 +400,7 @@ class Settings(BaseSettings):
 
     # Backup directory override. Empty ("") resolves at runtime to a
     # deployment-mode default: ``/data/ha_mcp_backups`` in the add-on,
-    # otherwise ``${XDG_DATA_HOME:-~/.local/share}/ha_mcp/backups``.
+    # otherwise ``<data dir>/backups`` (see ``backup_manager._resolve_default_dir``).
     auto_backup_dir: str = Field("", alias="HAMCP_BACKUP_DIR")
 
     # Calendar event backups query an ahead-of-now window to locate the
@@ -776,8 +776,8 @@ FEATURE_FLAG_FIELDS: tuple[FeatureFlagField, ...] = (
 )
 
 # Override-file location is the same data dir that holds tool_config.json
-# (resolved via ``utils.data_paths.get_data_dir`` — addon ``/data``,
-# ``HA_MCP_CONFIG_DIR``, ``XDG_DATA_HOME``, or a tmpdir fallback).
+# (resolved via ``utils.data_paths.get_data_dir`` — ``HA_MCP_CONFIG_DIR``,
+# addon ``/data``, ``~/.ha-mcp``, or a tmpdir fallback).
 # Imported lazily inside helpers to avoid a circular import at module
 # load.
 _FEATURE_FLAG_OVERRIDE_FILENAME = "feature_flags.json"
@@ -1656,8 +1656,8 @@ BACKUP_OVERRIDE_FIELDS: tuple[BackupOverrideField, ...] = (
 )
 
 # Override-file location is the same data dir that holds tool_config.json
-# (resolved via ``utils.data_paths.get_data_dir`` — addon ``/data``,
-# ``HA_MCP_CONFIG_DIR``, ``XDG_DATA_HOME``, or a tmpdir fallback).
+# (resolved via ``utils.data_paths.get_data_dir`` — ``HA_MCP_CONFIG_DIR``,
+# addon ``/data``, ``~/.ha-mcp``, or a tmpdir fallback).
 # Imported lazily inside helpers to avoid a circular import at module
 # load (``utils.data_paths`` imports from ``_version`` which imports
 # from ``config`` transitively in some test layouts).
