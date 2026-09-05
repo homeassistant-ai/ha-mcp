@@ -218,22 +218,32 @@ jobs:
         # already pushed to the mirror's main above, which is fine: HACS
         # installs tags, not main. Failing before the dev pre-release step
         # keeps a v<version>-dev.N tag from being cut under changed content.
-        if: >-
-          github.event_name == 'push' && steps.push.outputs.component_changed == 'true'
+        #
+        # Deliberately NOT gated on steps.push.outputs.component_changed: a
+        # failed first attempt has already pushed the offending snapshot, so
+        # a rerun clones a mirror with nothing left to stage, sees no diff,
+        # and would skip the gate and turn the stranded commit green. The
+        # comparison below reads the mirror's current content against the
+        # tag, so it holds on reruns; it costs one ls-remote per push.
+        #
+        # MIRROR_DIR is only overridden by the unit test that runs this script
+        # against a local stand-in (tests/src/unit/test_mirror_sync_workflow_shape.py).
+        if: github.event_name == 'push'
         env:
           GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
         run: |
+          MIRROR_DIR="${MIRROR_DIR:-/tmp/mirror}"
           VER=$(python3 -c "import json; print(json.load(open('custom_components/ha_mcp_tools/manifest.json'))['version'])")
-          existing=$(git -C /tmp/mirror ls-remote --tags origin "refs/tags/v${VER}")
+          existing=$(git -C "$MIRROR_DIR" ls-remote --tags origin "refs/tags/v${VER}")
           if [ -z "$existing" ]; then
             echo "no stable tag v${VER} on the mirror - the component change rides pending ${VER}"
             exit 0
           fi
-          if ! git -C /tmp/mirror fetch --quiet --depth=1 origin "refs/tags/v${VER}:refs/tags/v${VER}"; then
+          if ! git -C "$MIRROR_DIR" fetch --quiet --depth=1 origin "refs/tags/v${VER}:refs/tags/v${VER}"; then
             echo "::warning::mirror tag v${VER} exists but could not be fetched for the post-merge stranded-changes check - the release-time backstop still applies"
             exit 0
           fi
-          if git -C /tmp/mirror diff --quiet "v${VER}" HEAD -- custom_components; then
+          if git -C "$MIRROR_DIR" diff --quiet "v${VER}" HEAD -- custom_components; then
             echo "mirror tag v${VER} exists and the component snapshot is identical - nothing stranded"
             exit 0
           fi

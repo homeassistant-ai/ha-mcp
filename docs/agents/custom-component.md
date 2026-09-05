@@ -40,7 +40,8 @@ that already shipped and therefore has no new installable release. The gap it
 catches is a pull request opened while a version was pending but merged after
 that version became stable: a PR check never reruns for an external event,
 so the recorded green stands and the merge goes through. The push-to-master
-sync leg then fails the merge commit's own run with the bump instruction,
+sync leg then fails the merge commit's own run with the bump instruction
+(on every push, so a rerun after the snapshot already landed still fails),
 and the stable-tag step repeats the check at release time as the backstop.
 
 One exception overrides the shared pending-version rule: if a change adds a
