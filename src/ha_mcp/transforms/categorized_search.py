@@ -197,22 +197,30 @@ def _is_read_call_on_write_tool(name: str, arguments: dict[str, Any] | None) -> 
 
     A mixed read/write tool (``ha_manage_backup``, ``ha_manage_updates``,
     ``ha_manage_blueprints``, ...) is categorised ``write`` by its annotations,
-    which is where it stays: it is advertised under the write proxy and appears
-    in no other category set. But refusing its list/get actions on the read
-    proxy would strip real read surface from a client that only holds that
-    proxy — for blueprints, folding the old read tool into the merged one would
-    otherwise have removed listing entirely (#2329).
+    which is where it stays: it appears in no other category set. But refusing
+    its list/get actions on the read proxy would strip real read surface from a
+    client that only holds that proxy — for blueprints, folding the old read
+    tool into the merged one would otherwise have removed listing entirely
+    (#2329).
 
-    So membership decides advertisement, and this decides admission: read-only
-    mode already enumerates, per call, which invocations of such a tool are
-    reads (``READ_ONLY_EXEMPT_TOOLS``), and the read proxy reuses that verdict
-    so the two surfaces cannot disagree about what counts as a read. A call
-    that changes state is still refused here.
+    Category membership still chooses the write proxy as the default, while
+    tool-search results also advertise the read proxy for these mixed tools.
+    Read-only mode already enumerates, per call, which invocations are reads
+    (``READ_ONLY_EXEMPT_TOOLS``), and the read proxy reuses that verdict so the
+    two surfaces cannot disagree about what counts as a read. A call that
+    changes state is still refused here.
     """
     from ..read_only import READ_ONLY_EXEMPT_TOOLS
 
     exemption = READ_ONLY_EXEMPT_TOOLS.get(name)
     return exemption is not None and exemption.blocked_write(arguments or {}) is None
+
+
+def _has_read_actions(name: str) -> bool:
+    """Whether a write-category tool also has approved read actions."""
+    from ..read_only import READ_ONLY_EXEMPT_TOOLS
+
+    return name in READ_ONLY_EXEMPT_TOOLS
 
 
 def _categorize_tool(tool: Tool) -> Capability:
@@ -443,11 +451,22 @@ class CategorizedSearchTransform(BM25SearchTransform):
         results = []
         for tool in tools:
             data = tool.to_mcp_tool().model_dump(mode="json", exclude_none=True)
-            proxy = proxy_map[_categorize_tool(tool)]
-            data["execute_via"] = (
+            category = _categorize_tool(tool)
+            proxy = proxy_map[category]
+            execute_via = (
                 f'client.{proxy}(name="{tool.name}", arguments={{...}}) '
                 f'or {proxy}(name="{tool.name}", arguments={{...}})'
             )
+            if category == "write" and _has_read_actions(tool.name):
+                read_proxy = self._call_read_name
+                read_execute_via = (
+                    f'client.{read_proxy}(name="{tool.name}", arguments={{...}}) '
+                    f'or {read_proxy}(name="{tool.name}", arguments={{...}})'
+                )
+                execute_via = (
+                    f"Read actions: {read_execute_via}; write actions: {execute_via}"
+                )
+            data["execute_via"] = execute_via
             results.append(data)
         return results
 
