@@ -259,8 +259,9 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
           Python fatal error), which never reaches journald or error_log. Empty
           on a healthy install (crash_recorded=False). Whole crash blocks are
           ordered (newest first by default) with each block's lines kept in
-          place so the traceback reads correctly; offset/limit page through
-          the assembled text. Reads through the "HA-MCP File & YAML Tools"
+          place so the traceback reads correctly; search keeps every block
+          that mentions the term; offset/limit page through the assembled
+          text. Reads through the "HA-MCP File & YAML Tools"
           entry (component >= 2.1.4).
 
         **Prefer source='system' for triage.** It returns HA's own deduplicated

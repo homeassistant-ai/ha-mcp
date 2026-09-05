@@ -189,15 +189,21 @@ class TestRecordedCrash:
         assert result["log"].split("\n") == _ABORT_BLOCK + window[:2]
 
     @pytest.mark.asyncio
-    async def test_search_filters_lines_across_ordered_blocks(self) -> None:
-        result = await _get(_read_file_ok(_TWO_CRASHES), search="fatal python error")
-        assert result["filters_applied"] == {"search": "fatal python error"}
-        assert result["matched_lines"] == 2
-        assert result["log"].split("\n") == [
-            "Fatal Python error: Aborted",
-            "Fatal Python error: Segmentation fault",
-        ]
+    async def test_search_keeps_whole_matching_blocks(self) -> None:
+        # Only the abort block mentions core.py; it comes back intact, header
+        # first, rather than as the single matching frame.
+        result = await _get(_read_file_ok(_TWO_CRASHES), search="core.py")
+        assert result["filters_applied"] == {"search": "core.py"}
+        assert result["matched_blocks"] == 1
+        assert result["log"].split("\n") == _ABORT_BLOCK
+        # Counted on the window, before the search narrowed it.
         assert result["fatal_error_blocks_in_window"] == 2
+
+    @pytest.mark.asyncio
+    async def test_search_is_case_insensitive_across_blocks(self) -> None:
+        result = await _get(_read_file_ok(_TWO_CRASHES), search="FATAL PYTHON")
+        assert result["matched_blocks"] == 2
+        assert result["log"].split("\n") == _ABORT_BLOCK + _SEGV_BLOCK
 
     @pytest.mark.asyncio
     async def test_always_reads_the_full_window(self) -> None:

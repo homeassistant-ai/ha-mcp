@@ -142,21 +142,24 @@ def _shape_crash_page(
     """Order whole crash blocks, then page through the flattened text.
 
     ``order='newest'`` puts the latest block first; every block keeps its own
-    line order so the traceback stays readable. ``offset``/``limit`` slice the
-    assembled text from its start, and ``has_more``/``next_offset`` continue it.
+    line order so the traceback stays readable. ``search`` selects whole
+    blocks (any line matching) rather than lines, so a hit inside a traceback
+    still comes back with its ``Fatal Python error`` header and the rest of
+    the frames. ``offset``/``limit`` slice the assembled text from its start,
+    and ``has_more``/``next_offset`` continue it.
     """
     blocks = _split_blocks(lines)
     fatal_blocks = sum(1 for block in blocks if block[0].startswith(_FATAL_MARKER))
     if order == "newest":
         blocks.reverse()
-    flat = [line for block in blocks for line in block]
 
     filters_applied: dict[str, str] = {}
     if search:
         search_lower = search.lower()
-        flat = [ln for ln in flat if search_lower in ln.lower()]
+        blocks = [b for b in blocks if any(search_lower in ln.lower() for ln in b)]
         filters_applied["search"] = search
-    matched_lines = len(flat)
+    matched_blocks = len(blocks)
+    flat = [line for block in blocks for line in block]
 
     page = flat[offset : offset + limit]
     has_more = offset + limit < len(flat)
@@ -175,7 +178,7 @@ def _shape_crash_page(
         )
     if filters_applied:
         data["filters_applied"] = filters_applied
-        data["matched_lines"] = matched_lines
+        data["matched_blocks"] = matched_blocks
     return data
 
 
@@ -222,8 +225,8 @@ class FaultLogSourceMixin:
         """Read ``home-assistant.log.fault`` through the component's read_file.
 
         Always tails :data:`FAULT_LOG_WINDOW_LINES` from the file; ``order``
-        arranges whole crash blocks, ``search`` filters lines, and
-        ``offset``/``limit`` page through the assembled text. An absent or
+        arranges whole crash blocks, ``search`` keeps the blocks that mention
+        the term, and ``offset``/``limit`` page through the assembled text. An absent or
         empty file is the healthy state and returns success with
         ``crash_recorded=False`` rather than an error.
         """

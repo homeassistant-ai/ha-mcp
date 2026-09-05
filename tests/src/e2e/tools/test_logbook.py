@@ -348,14 +348,20 @@ async def test_logs_fault_log_source_reads_seeded_crash(mcp_client):
     oldest = get_logbook_data(raw_oldest)
     assert oldest["log"].split("\n")[0] == "Fatal Python error: Segmentation fault"
 
+    # Search selects whole blocks: only the abort block carries the marker,
+    # and it comes back intact with its header first.
     async with MCPAssertions(mcp_client) as mcp:
         raw_search = await mcp.call_tool_success(
-            "ha_get_logs", {"source": "fault_log", "search": "e2e_fake_fault"}
+            "ha_get_logs",
+            {"source": "fault_log", "search": "e2e_fake_fault_abort_marker"},
         )
     searched = get_logbook_data(raw_search)
-    assert searched["filters_applied"] == {"search": "e2e_fake_fault"}
-    assert searched["matched_lines"] == 2
-    assert all("e2e_fake_fault" in ln for ln in searched["log"].split("\n"))
+    assert searched["filters_applied"] == {"search": "e2e_fake_fault_abort_marker"}
+    assert searched["matched_blocks"] == 1
+    searched_lines = searched["log"].split("\n")
+    assert searched_lines[0] == "Fatal Python error: Aborted"
+    assert any("e2e_fake_fault_abort_marker" in ln for ln in searched_lines)
+    assert "Fatal Python error: Segmentation fault" not in searched_lines
 
     async with MCPAssertions(mcp_client) as mcp:
         raw_page = await mcp.call_tool_success(
