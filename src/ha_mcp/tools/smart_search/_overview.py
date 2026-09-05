@@ -76,22 +76,31 @@ class SystemOverviewMixin(_SearchBase):
                     prefetched_slices["device_registry"],
                 ]
             else:
-                # Fetch all data in parallel. return_exceptions=True so a degraded
-                # registry/service fetch doesn't abort the whole overview.
-                results = await asyncio.gather(
-                    self.client.get_states(),
-                    self.client.get_services(),
-                    self.client.send_websocket_message(
+                # Keep broad legacy reads sequential so one overview cannot burst
+                # five expensive requests into HA. Capture ordinary failures for
+                # the established partial-result handling below; cancellation
+                # still propagates immediately.
+                fetches = (
+                    self.client.get_states,
+                    self.client.get_services,
+                    lambda: self.client.send_websocket_message(
                         {"type": "config/area_registry/list"}
                     ),
-                    self.client.send_websocket_message(
+                    lambda: self.client.send_websocket_message(
                         {"type": "config/entity_registry/list"}
                     ),
-                    self.client.send_websocket_message(
+                    lambda: self.client.send_websocket_message(
                         {"type": "config/device_registry/list"}
                     ),
-                    return_exceptions=True,
                 )
+                results = []
+                for fetch in fetches:
+                    try:
+                        results.append(await fetch())
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        results.append(exc)
 
             # Entities are mandatory — surface connection/auth errors immediately.
             # Use BaseException so a cancelled states fetch propagates instead of

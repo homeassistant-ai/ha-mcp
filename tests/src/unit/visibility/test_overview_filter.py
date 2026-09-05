@@ -28,7 +28,7 @@ _ENTITY_REGISTRY = {
 
 
 class _OverviewClient:
-    """Serves the 5-way gather in get_system_overview; only entity registry
+    """Serves the five reads in get_system_overview; only entity registry
     carries data, the other registries are empty."""
 
     def __init__(self, states, entity_registry):
@@ -120,6 +120,49 @@ def test_overview_disabled_keeps_all(tmp_path, monkeypatch):
     res = _run_overview(tmp_path, monkeypatch, VisibilityConfig(enabled=False))
     assert res["system_summary"]["total_entities"] == 2
     assert {"light", "sensor"} <= set(res["domain_stats"])
+
+
+def test_overview_legacy_reads_are_sequential(tmp_path, monkeypatch):
+    """One full overview must not burst five broad requests into HA at once."""
+
+    class SequencedClient(_OverviewClient):
+        def __init__(self):
+            super().__init__([], {"success": True, "result": []})
+            self.active = False
+            self.calls = []
+
+        async def _record(self, name, result):
+            assert self.active is False
+            self.active = True
+            self.calls.append(name)
+            await asyncio.sleep(0)
+            self.active = False
+            return result
+
+        async def get_states(self):
+            return await self._record("states", [])
+
+        async def get_services(self):
+            return await self._record("services", [])
+
+        async def send_websocket_message(self, msg):
+            return await self._record(msg["type"], {"success": True, "result": []})
+
+    save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    mixin = SystemOverviewMixin()
+    client = SequencedClient()
+    mixin.client = client
+
+    asyncio.run(mixin.get_system_overview(detail_level="minimal"))
+
+    assert client.calls == [
+        "states",
+        "services",
+        "config/area_registry/list",
+        "config/entity_registry/list",
+        "config/device_registry/list",
+    ]
 
 
 def test_overview_visibility_warning_does_not_mark_partial(tmp_path, monkeypatch):

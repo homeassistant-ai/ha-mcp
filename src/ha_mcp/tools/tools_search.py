@@ -1558,6 +1558,37 @@ class _OverviewSlices:
     repairs: dict[str, Any]
 
 
+_OVERVIEW_INDEPENDENT_FIELDS = frozenset(
+    {
+        "success",
+        "system_info",
+        "notification_count",
+        "notifications",
+        "repair_count",
+        "dismissed_repair_count",
+        "repairs",
+        "repairs_error",
+        "warnings",
+        "partial",
+        "tool_discovery",
+        "settings_url",
+        "settings_url_hint",
+        "read_only_mode",
+        "read_only_mode_hint",
+        "ha_mcp_update",
+    }
+)
+_OVERVIEW_NOTIFICATION_FIELDS = frozenset({"notification_count", "notifications"})
+_OVERVIEW_REPAIR_FIELDS = frozenset(
+    {
+        "repair_count",
+        "dismissed_repair_count",
+        "repairs",
+        "repairs_error",
+    }
+)
+
+
 def _build_component_overview_request(inputs: _OverviewInputs) -> dict[str, Any]:
     """Translate resolved ha_get_overview inputs into an ``ha_mcp_tools/overview`` request.
 
@@ -4078,6 +4109,8 @@ class SearchTools:
         Use fields= to project the response to only the keys you need — a
         significantly smaller payload when fetching a single sub-section (e.g.
         fields=["system_info"] returns just that section instead of the full overview).
+        Requests composed only of system_info, notification, repair, or server
+        metadata fields also skip the unrelated state, service, and registry reads.
 
         When (and only when) the ha-mcp settings-UI sidecar is running
         (stdio mode, e.g. Claude Desktop / Claude Code), the response
@@ -4123,19 +4156,39 @@ class SearchTools:
 
         parsed_domains = parse_string_list_param(domains, "domains", allow_csv=True)
 
-        result = await self._collect_overview(
-            _OverviewInputs(
-                detail_level=detail_level,
-                max_entities_per_domain=max_entities_per_domain,
-                include_state=include_state_bool,
-                include_entity_id=include_entity_id_bool,
-                domains_filter=parsed_domains,
-                limit=limit,
-                offset=offset,
-                include_notifications=include_notifications_bool,
-                include_dismissed_repairs=include_dismissed_repairs_bool,
-            )
+        requested_fields = set(parsed_fields or [])
+        use_independent_collectors = (
+            parsed_fields is not None
+            and requested_fields.issubset(_OVERVIEW_INDEPENDENT_FIELDS)
         )
+        if use_independent_collectors:
+            result: dict[str, Any] = {"success": True}
+            if "system_info" in requested_fields:
+                await self._fetch_system_info(result, detail_level)
+            if (
+                include_notifications_bool
+                and requested_fields & _OVERVIEW_NOTIFICATION_FIELDS
+            ):
+                await self._fetch_notifications(result)
+            if requested_fields & _OVERVIEW_REPAIR_FIELDS:
+                await self._fetch_repairs(
+                    result,
+                    include_dismissed_repairs_bool,
+                )
+        else:
+            result = await self._collect_overview(
+                _OverviewInputs(
+                    detail_level=detail_level,
+                    max_entities_per_domain=max_entities_per_domain,
+                    include_state=include_state_bool,
+                    include_entity_id=include_entity_id_bool,
+                    domains_filter=parsed_domains,
+                    limit=limit,
+                    offset=offset,
+                    include_notifications=include_notifications_bool,
+                    include_dismissed_repairs=include_dismissed_repairs_bool,
+                )
+            )
 
         settings = get_global_settings()
         if settings.enable_tool_search:
