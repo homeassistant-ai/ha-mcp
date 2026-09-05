@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Any
@@ -34,7 +35,7 @@ def configure_ha_transport_concurrency(max_concurrency: int) -> None:
 
 
 @asynccontextmanager
-async def limit_ha_transport_request():
+async def limit_ha_transport_request() -> AsyncIterator[None]:
     """Bound in-flight HA REST and WebSocket requests across all clients."""
     loop = asyncio.get_running_loop()
     semaphore = _transport_semaphores.get(loop)
