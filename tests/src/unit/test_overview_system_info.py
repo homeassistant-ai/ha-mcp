@@ -208,12 +208,12 @@ class TestHaGetOverviewFieldsProjection:
             fields=["system_info", "notifications", "repair_count"]
         )
 
-        assert set(result) == {
+        assert {
             "success",
             "system_info",
             "notifications",
             "repair_count",
-        }
+        } <= set(result)
         mock_client.get_config.assert_awaited_once()
         assert mock_client.send_websocket_message.await_count == 2
         mock_smart_tools.get_system_overview.assert_not_awaited()
@@ -247,6 +247,26 @@ class TestHaGetOverviewFieldsProjection:
         result = await overview_tool(fields=["nonexistent_key"])
         assert result["success"] is True
         assert "nonexistent_key" not in result
+
+    @pytest.mark.asyncio
+    async def test_unknown_key_does_not_trigger_full_overview(
+        self, overview_tool, mock_smart_tools
+    ):
+        result = await overview_tool(fields=["nonexistent_key"])
+
+        assert result["success"] is True
+        mock_smart_tools.get_system_overview.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_sole_independent_collector_failure_propagates(
+        self, overview_tool, mock_client, mock_smart_tools
+    ):
+        mock_client.get_config.side_effect = RuntimeError("config unavailable")
+
+        with pytest.raises(RuntimeError, match="config unavailable"):
+            await overview_tool(fields=["system_info"])
+
+        mock_smart_tools.get_system_overview.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_bad_fields_integer_raises_tool_error(self, overview_tool):

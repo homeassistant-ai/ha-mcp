@@ -165,6 +165,32 @@ def test_overview_legacy_reads_are_sequential(tmp_path, monkeypatch):
     ]
 
 
+def test_overview_stops_immediately_when_mandatory_states_fail(tmp_path, monkeypatch):
+    class StatesFailClient(_OverviewClient):
+        def __init__(self):
+            super().__init__([], {"success": True, "result": []})
+            self.calls = []
+
+        async def get_states(self):
+            self.calls.append("states")
+            raise RuntimeError("states unavailable")
+
+        async def get_services(self):
+            self.calls.append("services")
+            return []
+
+    save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
+    monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
+    mixin = SystemOverviewMixin()
+    client = StatesFailClient()
+    mixin.client = client
+
+    with pytest.raises(Exception, match="states unavailable"):
+        asyncio.run(mixin.get_system_overview(detail_level="minimal"))
+
+    assert client.calls == ["states"]
+
+
 def test_overview_visibility_warning_does_not_mark_partial(tmp_path, monkeypatch):
     # A pure visibility warning on otherwise-complete data (an unknown exclude
     # category) surfaces in `warnings` but must NOT set `partial` — partial is for
