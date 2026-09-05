@@ -205,6 +205,41 @@ jobs:
             git push origin main
           fi
 
+      - name: Fail a merge that changed the component under an already-released version
+        # Post-merge twin of the stranded-changes backstop in the stable-tag
+        # step below, run on the push leg. The PR Component Version Gate only
+        # runs on pull-request events, so a PR opened while a version was
+        # pending and merged after that version's stable tag was cut keeps
+        # its recorded green (#2356 sat open across the v2.1.3 cut and its
+        # gate stayed green on "pending 2.1.3 ahead of released 2.1.2").
+        # Without this step the drift surfaced only on the NEXT stable
+        # release run; here it lands on the merge commit's own run, minutes
+        # after the merge, with the same bump instruction. The snapshot was
+        # already pushed to the mirror's main above, which is fine: HACS
+        # installs tags, not main. Failing before the dev pre-release step
+        # keeps a v<version>-dev.N tag from being cut under changed content.
+        if: >-
+          github.event_name == 'push' && steps.push.outputs.component_changed == 'true'
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/mirror_key -o IdentitiesOnly=yes
+        run: |
+          VER=$(python3 -c "import json; print(json.load(open('custom_components/ha_mcp_tools/manifest.json'))['version'])")
+          existing=$(git -C /tmp/mirror ls-remote --tags origin "refs/tags/v${VER}")
+          if [ -z "$existing" ]; then
+            echo "no stable tag v${VER} on the mirror - the component change rides pending ${VER}"
+            exit 0
+          fi
+          if ! git -C /tmp/mirror fetch --quiet --depth=1 origin "refs/tags/v${VER}:refs/tags/v${VER}"; then
+            echo "::warning::mirror tag v${VER} exists but could not be fetched for the post-merge stranded-changes check - the release-time backstop still applies"
+            exit 0
+          fi
+          if git -C /tmp/mirror diff --quiet "v${VER}" HEAD -- custom_components; then
+            echo "mirror tag v${VER} exists and the component snapshot is identical - nothing stranded"
+            exit 0
+          fi
+          echo "::error::master changed custom_components/ha_mcp_tools under version ${VER}, which the mirror already released as v${VER} (the PR gate passed before that tag was cut). Bump manifest.json + const.py (and the parity-test literal) to open the next pending version per docs/agents/custom-component.md#version-cycle."
+          exit 1
+
       - name: Tag mirror for stable release
         # Tags the mirror with the current component version after a successful
         # SemVer Release (or a manual re-run). The tag is ANNOTATED and its

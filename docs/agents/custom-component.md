@@ -29,16 +29,19 @@ Apply these rules:
 - Raise an existing pending version only to escalate the required bump level,
   such as patch to minor. Do not create never-shipped intermediate versions.
 - The PR Component Version Gate requires a changed component to lead the
-  mirror's released stable version. The mirror release workflow separately
-  rejects content drift under an already-tagged component version.
+  mirror's released stable version. The mirror sync separately rejects
+  content drift under an already-tagged component version, on the
+  push-to-master leg right after a merge and again at release time.
   In the PR gate, equal means a bump is needed to open the pending version;
   behind means a stale tree or bad merge resurrected an older version.
 
 The mirror drift check prevents changes from being stranded under a version
 that already shipped and therefore has no new installable release. The gap it
 catches is a pull request opened while a version was pending but merged after
-that version became stable: no PR check reruns at merge time, so only the
-mirror can detect that the already-tagged content changed.
+that version became stable: a PR check never reruns for an external event,
+so the recorded green stands and the merge goes through. The push-to-master
+sync leg then fails the merge commit's own run with the bump instruction,
+and the stable-tag step repeats the check at release time as the backstop.
 
 One exception overrides the shared pending-version rule: if a change adds a
 component service or argument that the server depends on, open a fresh pending
