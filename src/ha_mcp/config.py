@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     # Tool configuration
     fuzzy_threshold: int = Field(60, alias="FUZZY_THRESHOLD")
 
+    # Process-wide outer tool-call concurrency. Multiple MCP sessions remain
+    # responsive and queue here instead of issuing overlapping HA workloads.
+    ha_tool_concurrency: int = Field(1, ge=1, le=32, alias="HA_TOOL_CONCURRENCY")
+
     # Smart-search config-fetch time budgets (seconds). Bound how long
     # ha_search spends fetching automation/script/scene
     # definitions during the per-id fallback before reporting a partial

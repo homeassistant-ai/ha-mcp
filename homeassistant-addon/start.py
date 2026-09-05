@@ -564,6 +564,7 @@ def main() -> int:
     # Strict best-practices mode (issue #1779). Non-beta, default-ON child
     # of enable_mandatory_bps; runtime-gated off whenever the parent is off.
     enable_strict_mandatory_bps = True  # default
+    ha_tool_concurrency = 1  # default — serialize HA-facing tool work
     # Master beta toggle: present only in the dev addon's schema.
     # Default to False (stable behaviour); when
     # the dev schema-default merges in, ``beta_master_in_config``
@@ -607,6 +608,14 @@ def main() -> int:
             redact_secrets = resolve_bool_option(config, "redact_secrets", False)
             enable_security_policy_tool = resolve_bool_option(
                 config, "enable_security_policy_tool", False
+            )
+            raw_tool_concurrency = config.get("ha_tool_concurrency", 1)
+            ha_tool_concurrency = (
+                raw_tool_concurrency
+                if isinstance(raw_tool_concurrency, int)
+                and not isinstance(raw_tool_concurrency, bool)
+                and 1 <= raw_tool_concurrency <= 32
+                else 1
             )
             # Beta sub-flag presence tracking. On stable-addon, the 5
             # beta keys are NOT in config.yaml
@@ -794,6 +803,7 @@ def main() -> int:
     # is also written unconditionally. It is runtime-gated off by the server
     # whenever ENABLE_MANDATORY_BPS is off (parent dependency, issue #1779).
     os.environ["ENABLE_STRICT_MANDATORY_BPS"] = str(enable_strict_mandatory_bps).lower()
+    os.environ["HA_TOOL_CONCURRENCY"] = str(ha_tool_concurrency)
     # Beta sub-flags: only write env vars when the key is actually in
     # the addon's options.json. On stable addon,
     # none of these keys are in schema, so config.get(...) returned

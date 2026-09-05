@@ -631,6 +631,15 @@ class HomeAssistantWebSocketClient:
         self._state.cancel_event_response(message_id)
 
     async def send_command(self, command_type: str, **kwargs: Any) -> dict[str, Any]:
+        """Run one complete WebSocket command under the process-wide HA limit."""
+        from ..ha_request_queue import limit_ha_transport_request
+
+        async with limit_ha_transport_request():
+            return await self._send_command_unlimited(command_type, **kwargs)
+
+    async def _send_command_unlimited(
+        self, command_type: str, **kwargs: Any
+    ) -> dict[str, Any]:
         """Send command and wait for response.
 
         Args:
@@ -731,6 +740,20 @@ class HomeAssistantWebSocketClient:
             raise
 
     async def send_command_with_event(
+        self,
+        command_type: str,
+        wait_timeout: float = 10.0,
+        **kwargs: Any,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Run an event-returning command under the process-wide HA limit."""
+        from ..ha_request_queue import limit_ha_transport_request
+
+        async with limit_ha_transport_request():
+            return await self._send_command_with_event_unlimited(
+                command_type, wait_timeout, **kwargs
+            )
+
+    async def _send_command_with_event_unlimited(
         self,
         command_type: str,
         wait_timeout: float = 10.0,

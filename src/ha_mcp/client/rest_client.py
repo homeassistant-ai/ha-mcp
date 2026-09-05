@@ -338,6 +338,15 @@ class HomeAssistantClient:
     async def _raw_request(
         self, method: str, endpoint: str, **kwargs: Any
     ) -> httpx.Response:
+        """Run one complete REST exchange under the process-wide HA limit."""
+        from ..ha_request_queue import limit_ha_transport_request
+
+        async with limit_ha_transport_request():
+            return await self._raw_request_unlimited(method, endpoint, **kwargs)
+
+    async def _raw_request_unlimited(
+        self, method: str, endpoint: str, **kwargs: Any
+    ) -> httpx.Response:
         """Authenticated request that returns the raw httpx.Response.
 
         Handles auth, HTTP 4xx/5xx, and transport errors in one place.
