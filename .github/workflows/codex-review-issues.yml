@@ -26,16 +26,18 @@ concurrency:
 jobs:
   review-issues:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       ITEM_LIMIT: ${{ inputs.limit }}
     steps:
       - name: Checkout
+        timeout-minutes: 2
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
       - name: Collect authorized issue context
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -67,6 +69,7 @@ jobs:
           } > .codex-context/issue-review-prompt.txt
 
       - name: Ask Codex to review open issues
+        timeout-minutes: 18
         id: codex
         uses: ./.github/actions/codex-run
         with:
@@ -78,7 +81,8 @@ jobs:
           instructions-file: .codex-context/issue-review-prompt.txt
 
       - name: Persist refreshed Codex auth
-        if: ${{ always() }}
+        timeout-minutes: 3
+        if: ${{ always() && steps.codex.outputs.auth-path != '' }}
         uses: ./.github/actions/codex-update-auth
         with:
           codex-auth-path: ${{ steps.codex.outputs.auth-path }}

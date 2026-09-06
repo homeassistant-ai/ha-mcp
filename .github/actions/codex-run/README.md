@@ -3,6 +3,9 @@
 `codex-run` passes the caller's `instructions`, or the contents of its
 `instructions-file`, to `codex exec` verbatim. It does not add a role, output
 contract, repository context, or task wrapper.
+Supported runners are Ubuntu with GNU utilities and `sudo apt-get` access.
+The action rejects other operating systems before preparing credential files;
+"generic" describes the task/prompt contract, not cross-platform runner support.
 Hosted ChatGPT apps/connectors are disabled so they cannot bypass the GitHub
 permissions selected by the workflow caller. Callers may collect authorized
 context into workspace files or expose narrowly scoped command-line tokens.
@@ -23,6 +26,15 @@ Each invocation receives unique paths, so a job can call the action more than
 once without overwriting an earlier result or auth snapshot. The invocation
 timeout should remain shorter than the caller's job timeout, leaving time for
 the separate auth-persistence step.
+
+The process timeout starts after installation and sandbox preparation. Callers
+must also bound the **whole action step** and every earlier step. The report
+examples budget 2 minutes for checkout, 5 for collection, 18 for the action
+(including its 12-minute Codex process limit), and 3 for auth persistence inside
+a 30-minute job. Thus even exhausted setup/action budgets leave the persistence
+step its own time, plus job overhead. `always()` alone cannot outlive a job timeout.
+Persist whenever preparation produced auth paths, even if the action or a later
+assertion failed; skip it when no invocation prepared credentials.
 
 Model-executed commands inherit only Codex's `core` shell environment. A named
 filesystem permission profile masks both `CODEX_HOME` and the original auth
@@ -167,3 +179,7 @@ bench with Codex CLI `0.151.0`:
 The review workflows write only to the Actions log and step summary. Hosted
 ChatGPT connectors remain disabled, so repository visibility is bounded by the
 context that the caller collects with its declared GitHub permissions.
+PR collection paginates both review threads and each thread's comments. Patches
+are bounded to complete lines within 50,000 bytes to preserve valid UTF-8;
+an oversized first line may leave no patch text, with an explicit truncation
+notice. Collection timeout/API errors fail before Codex receives partial context.

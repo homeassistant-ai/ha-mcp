@@ -1,5 +1,5 @@
 name: Run Codex agent
-description: Run arbitrary caller-provided instructions with Codex in the checked-out repository.
+description: Run arbitrary caller-provided instructions with Codex on an Ubuntu runner.
 
 inputs:
   instructions:
@@ -63,6 +63,20 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Require Ubuntu before preparing credentials
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "${RUNNER_OS:-}" != Linux ]]; then
+          echo "::error::codex-run supports Ubuntu runners only."
+          exit 1
+        fi
+        . /etc/os-release
+        if [[ "${ID:-}" != ubuntu ]]; then
+          echo "::error::codex-run requires Ubuntu with GNU tools and sudo apt-get access."
+          exit 1
+        fi
+
     - id: prepare
       shell: bash
       env:
@@ -233,7 +247,6 @@ runs:
         echo "Using Codex CLI $installed"
 
     - name: Prepare Bubblewrap sandbox on Ubuntu
-      if: ${{ runner.os == 'Linux' }}
       shell: bash
       run: |
         set -euo pipefail

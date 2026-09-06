@@ -20,14 +20,16 @@ concurrency:
 jobs:
   hello-world:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - name: Checkout
+        timeout-minutes: 2
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
       - name: Run arbitrary instructions
+        timeout-minutes: 18
         id: codex
         uses: ./.github/actions/codex-run
         with:
@@ -44,6 +46,7 @@ jobs:
             Then respond with exactly its stdout and nothing else.
 
       - name: Verify the caller's expectation
+        timeout-minutes: 1
         env:
           OUTPUT_PATH: ${{ steps.codex.outputs.output-path }}
         run: |
@@ -58,7 +61,8 @@ jobs:
           fi
 
       - name: Validate secret-writer PAT and persist auth
-        if: ${{ always() }}
+        timeout-minutes: 3
+        if: ${{ always() && steps.codex.outputs.auth-path != '' }}
         uses: ./.github/actions/codex-update-auth
         with:
           codex-auth-path: ${{ steps.codex.outputs.auth-path }}
