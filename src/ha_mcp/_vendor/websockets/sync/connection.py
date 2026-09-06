@@ -10,6 +10,7 @@ import threading
 import time
 import traceback
 import uuid
+import weakref
 from collections.abc import Iterable, Iterator, Mapping
 from types import TracebackType
 from typing import Any, Literal, Self, overload
@@ -69,7 +70,7 @@ class Connection:
         # Inject reference to this instance in the protocol's logger.
         self.protocol.logger = logging.LoggerAdapter(
             self.protocol.logger,
-            {"websocket": self},
+            {"websocket": weakref.proxy(self)},
         )
 
         # Copy attributes from the protocol for convenience.
@@ -317,6 +318,7 @@ class Connection:
                 :meth:`recv_streaming` concurrently.
 
         """
+        self.maybe_raise_legacy_warning()
         try:
             return self.recv_messages.get(timeout, decode)
         except EOFError:
@@ -387,6 +389,7 @@ class Connection:
                 :meth:`recv_streaming` concurrently.
 
         """
+        self.maybe_raise_legacy_warning()
         try:
             yield from self.recv_messages.get_iter(decode)
             return
@@ -466,6 +469,7 @@ class Connection:
             TypeError: If ``message`` doesn't have a supported type.
 
         """
+        self.maybe_raise_legacy_warning()
         # Unfragmented message — this case must be handled first because
         # strings and bytes-like objects are iterable.
 
@@ -591,6 +595,7 @@ class Connection:
             reason: WebSocket close reason.
 
         """
+        self.maybe_raise_legacy_warning()
         try:
             # The context manager takes care of waiting for the TCP connection
             # to terminate after calling a method that sends a close frame.
@@ -647,6 +652,7 @@ class Connection:
                 the corresponding pong wasn't received yet.
 
         """
+        self.maybe_raise_legacy_warning()
         if isinstance(data, BytesLike):
             data = bytes(data)
         elif isinstance(data, str):
@@ -684,6 +690,7 @@ class Connection:
             ConnectionClosed: When the connection is closed.
 
         """
+        self.maybe_raise_legacy_warning()
         if isinstance(data, BytesLike):
             data = bytes(data)
         elif isinstance(data, str):
@@ -695,6 +702,9 @@ class Connection:
             self.protocol.send_pong(data)
 
     # Private methods
+
+    def maybe_raise_legacy_warning(self) -> None:
+        pass  # see override in ClientConnection
 
     def process_event(self, event: Event) -> None:
         """
