@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import anyio
@@ -11,8 +9,6 @@ import pytest
 
 from ha_mcp.ha_request_queue import (
     HomeAssistantRequestQueueMiddleware,
-    configure_ha_transport_concurrency,
-    limit_ha_transport_request,
 )
 
 
@@ -132,71 +128,60 @@ async def test_proxy_envelope_defers_queue_slot_until_inner_dispatch() -> None:
     assert inner_entered.is_set()
 
 
-@pytest.mark.asyncio
-async def test_transport_requests_share_process_wide_capacity() -> None:
-    configure_ha_transport_concurrency(1)
+@pytest.mark.anyio
+async def test_internal_fanout_is_not_throttled_by_outer_queue() -> None:
+    middleware = HomeAssistantRequestQueueMiddleware(max_concurrency=1)
+    both_entered = anyio.Event()
+    release_workers = anyio.Event()
+    entered = 0
+
+    async def worker() -> None:
+        nonlocal entered
+        entered += 1
+        if entered == 2:
+            both_entered.set()
+        await release_workers.wait()
+
+    async def call_next(_context: MagicMock) -> None:
+        async with anyio.create_task_group() as task_group:
+            task_group.start_soon(worker)
+            task_group.start_soon(worker)
+            with anyio.fail_after(1):
+                await both_entered.wait()
+            release_workers.set()
+
+    await middleware.on_call_tool(make_context("ha_search"), call_next)
+    assert entered == 2
+
+
+@pytest.mark.anyio
+async def test_local_tool_search_bypasses_outer_queue() -> None:
+    middleware = HomeAssistantRequestQueueMiddleware(max_concurrency=1)
     first_entered = anyio.Event()
     release_first = anyio.Event()
-    second_entered = anyio.Event()
+    local_entered = anyio.Event()
 
-    async def first_request() -> None:
-        async with limit_ha_transport_request():
-            first_entered.set()
-            await release_first.wait()
+    async def first_call_next(_context: MagicMock) -> None:
+        first_entered.set()
+        await release_first.wait()
 
-    async def second_request() -> None:
-        await first_entered.wait()
-        async with limit_ha_transport_request():
-            second_entered.set()
+    async def local_call_next(_context: MagicMock) -> str:
+        local_entered.set()
+        return "found"
 
     async with anyio.create_task_group() as task_group:
-        task_group.start_soon(first_request)
+        task_group.start_soon(
+            middleware.on_call_tool,
+            make_context("ha_get_history"),
+            first_call_next,
+        )
         await first_entered.wait()
-        task_group.start_soon(second_request)
-        await anyio.lowlevel.checkpoint()
-        assert not second_entered.is_set()
+        result = await middleware.on_call_tool(
+            make_context("ha_search_tools"), local_call_next
+        )
+        assert result == "found"
+        assert local_entered.is_set()
         release_first.set()
-
-    assert second_entered.is_set()
-
-
-@pytest.mark.asyncio
-async def test_transport_reservation_is_reentrant() -> None:
-    configure_ha_transport_concurrency(1)
-
-    with anyio.fail_after(1):
-        async with limit_ha_transport_request():
-            async with limit_ha_transport_request():
-                pass
-
-
-@pytest.mark.asyncio
-async def test_request_timeout_starts_after_transport_admission() -> None:
-    configure_ha_transport_concurrency(1)
-    first_entered = anyio.Event()
-    release_first = anyio.Event()
-    second_completed = anyio.Event()
-
-    async def first_request() -> None:
-        async with limit_ha_transport_request():
-            first_entered.set()
-            await release_first.wait()
-
-    async def second_request() -> None:
-        async with limit_ha_transport_request():
-            await asyncio.wait_for(anyio.lowlevel.checkpoint(), timeout=0.01)
-            second_completed.set()
-
-    async with anyio.create_task_group() as task_group:
-        task_group.start_soon(first_request)
-        await first_entered.wait()
-        task_group.start_soon(second_request)
-        with anyio.move_on_after(0.05) as wait_scope:
-            await second_completed.wait()
-        assert wait_scope.cancel_called
-        release_first.set()
-
-    assert second_completed.is_set()
 
 
 @pytest.mark.anyio
@@ -230,28 +215,54 @@ async def test_approval_management_bypasses_outer_queue() -> None:
         release_first.set()
 
 
-def test_rest_and_websocket_transports_use_shared_limiter() -> None:
-    root = Path(__file__).parents[3] / "src" / "ha_mcp" / "client"
-    rest_source = (root / "rest_client.py").read_text(encoding="utf-8")
-    websocket_source = (root / "websocket_client.py").read_text(encoding="utf-8")
-
-    assert "async with limit_ha_transport_request():" in rest_source
-    assert websocket_source.count("async with limit_ha_transport_request():") == 4
-
-
 @pytest.mark.parametrize("max_concurrency", [0, 33])
 def test_rejects_out_of_range_concurrency(max_concurrency: int) -> None:
     with pytest.raises(ValueError, match="max_concurrency must be between 1 and 32"):
         HomeAssistantRequestQueueMiddleware(max_concurrency=max_concurrency)
 
 
-def test_server_registers_queue_after_policy_gates() -> None:
-    server_source = (
-        Path(__file__).parents[3] / "src" / "ha_mcp" / "server.py"
-    ).read_text(encoding="utf-8")
+@pytest.mark.parametrize("max_concurrency, expected_count", [(0, 0), (2, 1)])
+def test_server_registers_queue_only_when_enabled(
+    max_concurrency: int, expected_count: int
+) -> None:
+    from ha_mcp.server import HomeAssistantSmartMCPServer
 
-    policy_index = server_source.index("self._apply_tool_security_policies()")
-    queue_index = server_source.index("HomeAssistantRequestQueueMiddleware(")
-    redaction_index = server_source.index("RedactSecretsMiddleware()")
+    stub = MagicMock()
+    stub.mcp = MagicMock()
+    stub.settings.ha_tool_concurrency = max_concurrency
 
-    assert policy_index < queue_index < redaction_index
+    HomeAssistantSmartMCPServer._initialize_server(stub)
+
+    queues = [
+        args[0]
+        for name, args, _kwargs in stub.mock_calls
+        if name == "mcp.add_middleware"
+        and args
+        and isinstance(args[0], HomeAssistantRequestQueueMiddleware)
+    ]
+    assert len(queues) == expected_count
+
+
+def test_server_registers_queue_after_policy_gate() -> None:
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    stub = MagicMock()
+    stub.mcp = MagicMock()
+    stub.settings.ha_tool_concurrency = 1
+
+    HomeAssistantSmartMCPServer._initialize_server(stub)
+
+    calls = list(stub.mock_calls)
+    policy_index = next(
+        index
+        for index, (name, _args, _kwargs) in enumerate(calls)
+        if name == "_apply_tool_security_policies"
+    )
+    queue_index = next(
+        index
+        for index, (name, args, _kwargs) in enumerate(calls)
+        if name == "mcp.add_middleware"
+        and args
+        and isinstance(args[0], HomeAssistantRequestQueueMiddleware)
+    )
+    assert policy_index < queue_index

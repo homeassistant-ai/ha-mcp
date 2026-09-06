@@ -199,9 +199,9 @@ configuration:
       i nieaktywna, gdy opcja nadrzędna jest wyłączona. Wymaga ponownego uruchomienia,
       aby zmiany weszły w życie.'
   ha_tool_concurrency:
-    name: Home Assistant request concurrency
-    description: Maximum concurrent tool workloads and requests sent to Home Assistant
-      across all sessions. Keep at 1 on resource-constrained systems.
+    name: Home Assistant tool concurrency
+    description: Optional limit on concurrent Home Assistant tool calls across all
+      sessions. 0 keeps unlimited behavior; use 1 on resource-constrained systems.
   enable_filesystem_tools:
     name: Włącz narzędzia systemu plików (beta)
     description: 'Ustawia HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Umożliwia bezpośredni

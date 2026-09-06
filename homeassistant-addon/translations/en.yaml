@@ -105,9 +105,9 @@ configuration:
       of the acknowledgment key. Child of the "Attach best-practice skills on writes"
       option above and inert while that parent is off. Requires restart to take effect.'
   ha_tool_concurrency:
-    name: Home Assistant request concurrency
-    description: Maximum concurrent tool workloads and requests sent to Home Assistant
-      across all sessions. Keep at 1 on resource-constrained systems.
+    name: Home Assistant tool concurrency
+    description: Optional limit on concurrent Home Assistant tool calls across all
+      sessions. 0 keeps unlimited behavior; use 1 on resource-constrained systems.
   disabled_tools:
     name: Disabled tools (comma-separated)
     description: Tools listed here are forced off and locked in the web Settings UI

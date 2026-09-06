@@ -62,9 +62,9 @@ class Settings(BaseSettings):
     # Tool configuration
     fuzzy_threshold: int = Field(60, alias="FUZZY_THRESHOLD")
 
-    # Process-wide outer tool-call concurrency. Multiple MCP sessions remain
-    # responsive and queue here instead of issuing overlapping HA workloads.
-    ha_tool_concurrency: int = Field(1, ge=1, le=32, alias="HA_TOOL_CONCURRENCY")
+    # Optional process-wide outer tool-call concurrency. Zero preserves the
+    # existing unlimited behavior; constrained installs can opt into queuing.
+    ha_tool_concurrency: int = Field(0, ge=0, le=32, alias="HA_TOOL_CONCURRENCY")
 
     # Smart-search config-fetch time budgets (seconds). Bound how long
     # ha_search spends fetching automation/script/scene
@@ -1023,6 +1023,7 @@ _ADVANCED_SETTINGS_BOUNDS: dict[str, tuple[float, float]] = {
 # emits min=sentinel so the number input can still express "off"; the
 # override-apply and UI-POST paths accept the sentinel OR the bounded range.
 _ADVANCED_SETTINGS_SENTINELS: dict[str, int] = {
+    "ha_tool_concurrency": 0,
     "sidecar_pin_port": 0,
 }
 

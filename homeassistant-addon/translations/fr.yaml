@@ -124,9 +124,9 @@ configuration:
       compétences de bonnes pratiques aux écritures » ci-dessus et inerte lorsque
       ce parent est désactivé. Nécessite un redémarrage pour prendre effet.'
   ha_tool_concurrency:
-    name: Home Assistant request concurrency
-    description: Maximum concurrent tool workloads and requests sent to Home Assistant
-      across all sessions. Keep at 1 on resource-constrained systems.
+    name: Home Assistant tool concurrency
+    description: Optional limit on concurrent Home Assistant tool calls across all
+      sessions. 0 keeps unlimited behavior; use 1 on resource-constrained systems.
   disabled_tools:
     name: Outils désactivés (séparés par des virgules)
     description: Les outils listés ici sont forcément désactivés et verrouillés dans

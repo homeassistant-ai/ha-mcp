@@ -9,7 +9,6 @@ from ...client.rest_client import (
     SceneResolution,
     SceneStorageConfigNotFoundError,
 )
-from ...ha_request_queue import limit_ha_transport_request
 from ._config import (
     ENTITY_REGISTRY_TIMEOUT,
     INDIVIDUAL_CONFIG_TIMEOUT,
@@ -260,13 +259,12 @@ class SceneSearchMixin(ConfigFetchMixin):
             )
         )
         try:
-            async with limit_ha_transport_request():
-                config_resp = await asyncio.wait_for(
-                    # Fetch by STORAGE key (what the endpoint indexes on),
-                    # return under the SLUG (what the scoring pass looks up).
-                    self.client.get_scene_config(sid, resolution=resolution),
-                    timeout=INDIVIDUAL_CONFIG_TIMEOUT,
-                )
+            config_resp = await asyncio.wait_for(
+                # Fetch by STORAGE key (what the endpoint indexes on),
+                # return under the SLUG (what the scoring pass looks up).
+                self.client.get_scene_config(sid, resolution=resolution),
+                timeout=INDIVIDUAL_CONFIG_TIMEOUT,
+            )
             return (sid, config_resp.get("config", {}), None)
         except SceneStorageConfigNotFoundError as e:
             # The entity EXISTS, it is just not an editable storage scene:

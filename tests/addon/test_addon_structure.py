@@ -175,7 +175,7 @@ class TestAddonStructure:
         # non-empty disabled_tools default would silently lock tools off.
         expected = {
             "tool_search_max_results": ("int(2,10)?", 5),
-            "ha_tool_concurrency": ("int(1,32)?", 1),
+            "ha_tool_concurrency": ("int(0,32)?", 0),
             "disabled_tools": ("str?", ""),
             "pinned_tools": ("str?", ""),
             # Read Only Mode (#1569) — non-beta safety toggle, default OFF
@@ -230,7 +230,7 @@ class TestAddonStructure:
         """The app option must reach the server's validated setting."""
         start_src = (_REPO_ROOT / ADDON_DIR / "start.py").read_text(encoding="utf-8")
         config_src = (_REPO_ROOT / "src/ha_mcp/config.py").read_text(encoding="utf-8")
-        assert 'config.get("ha_tool_concurrency", 1)' in start_src
+        assert 'config.get("ha_tool_concurrency", 0)' in start_src
         assert 'os.environ["HA_TOOL_CONCURRENCY"]' in start_src
         assert 'alias="HA_TOOL_CONCURRENCY"' in config_src
 
