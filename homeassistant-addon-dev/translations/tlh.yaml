@@ -160,7 +160,7 @@ configuration:
     name: Home Assistant tool concurrency
     description: Optional limit on outer Home Assistant tool calls across all sessions.
       Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior; use 1 on resource-constrained systems.
+      unlimited behavior.
   enable_filesystem_tools:
     name: '''a''baqa'' pat janmey tIQotlhHa'' (Beta)'
     description: 'HAMCP_ENABLE_FILESYSTEM_TOOLS=true wIv. Home Assistant ''a''baqa''mey

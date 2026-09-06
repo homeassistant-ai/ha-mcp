@@ -10,9 +10,8 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 import ha_mcp.ha_request_queue as queue_module
-from ha_mcp.ha_request_queue import (
-    HomeAssistantRequestQueueMiddleware,
-)
+
+HomeAssistantRequestQueueMiddleware = queue_module.HomeAssistantRequestQueueMiddleware
 
 
 @pytest.fixture
