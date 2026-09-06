@@ -136,6 +136,25 @@ _MAX_STATISTICS_ROWS = 10_000
 _CALENDAR_STATISTICS_PERIODS = frozenset({"day", "week", "month", "year"})
 
 
+async def _get_statistics_timezone(client: Any) -> tzinfo:
+    """Resolve HA's timezone without accepting an unsafe UTC fallback."""
+    timezone_name, fetch_failed = await _fetch_ha_timezone(client)
+    timezone, resolved_timezone_name = _resolve_local_timezone(timezone_name)
+    if fetch_failed or resolved_timezone_name != timezone_name:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.CONNECTION_FAILED,
+                "Could not resolve the Home Assistant timezone required for safe calendar statistics estimation",
+                context={"home_assistant_timezone": timezone_name},
+                suggestions=[
+                    "Check the Home Assistant connection and configured timezone, then retry.",
+                    "Use period='hour' or period='5minute', which do not require calendar alignment.",
+                ],
+            )
+        )
+    return timezone
+
+
 class HistoryTools:
     """Historical data access tools for Home Assistant."""
 
@@ -343,14 +362,14 @@ class HistoryTools:
 
             # Parse time parameters
             start_dt, end_dt = _parse_time_range(start_time, end_time, default_hours)
+            _validate_time_range(start_dt, end_dt)
             statistics_timezone: tzinfo = UTC
             if (
                 settings.enable_history_query_guardrails
                 and source == "statistics"
                 and period in _CALENDAR_STATISTICS_PERIODS
             ):
-                timezone_name, _ = await _fetch_ha_timezone(self._client)
-                statistics_timezone, _ = _resolve_local_timezone(timezone_name)
+                statistics_timezone = await _get_statistics_timezone(self._client)
             _validate_query_workload(
                 source=source,
                 entity_ids=entity_id_list,
@@ -542,6 +561,22 @@ def _parse_time_range(
     return start_dt, end_dt
 
 
+def _validate_time_range(start_dt: datetime, end_dt: datetime) -> None:
+    """Require a strictly increasing query range before any HA access."""
+    if end_dt <= start_dt:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "end_time must be later than start_time",
+                context={
+                    "start_time": start_dt.isoformat(),
+                    "end_time": end_dt.isoformat(),
+                },
+                suggestions=["Choose an end_time later than start_time."],
+            )
+        )
+
+
 def _validate_query_workload(
     *,
     source: str,
@@ -555,19 +590,8 @@ def _validate_query_workload(
     statistics_timezone: tzinfo = UTC,
 ) -> None:
     """Reject recorder requests likely to monopolize Home Assistant resources."""
+    _validate_time_range(start_dt, end_dt)
     window_seconds = (end_dt - start_dt).total_seconds()
-    if window_seconds <= 0:
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "end_time must be later than start_time",
-                context={
-                    "start_time": start_dt.isoformat(),
-                    "end_time": end_dt.isoformat(),
-                },
-                suggestions=["Choose an end_time later than start_time."],
-            )
-        )
 
     if not enforce_budget:
         return

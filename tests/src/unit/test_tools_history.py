@@ -114,6 +114,34 @@ class TestHaGetHistoryWorkloadGuardrails:
         mock_client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_reversed_calendar_range_rejected_before_timezone_lookup(
+        self, history_tool, mock_client
+    ):
+        timezone_lookup = AsyncMock(return_value=("UTC", False))
+        with (
+            patch.object(
+                tools_history.settings, "enable_history_query_guardrails", True
+            ),
+            patch(
+                "ha_mcp.tools.tools_history._fetch_ha_timezone",
+                new=timezone_lookup,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await history_tool(
+                entity_ids="sensor.temp",
+                source="statistics",
+                start_time="2026-01-02T00:00:00Z",
+                end_time="2026-01-01T00:00:00Z",
+                period="day",
+            )
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        timezone_lookup.assert_not_awaited()
+        mock_client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_rejects_excessive_raw_history_entity_hours(
         self, history_tool, mock_client
     ):
@@ -235,6 +263,32 @@ class TestHaGetHistoryWorkloadGuardrails:
         assert response["estimated_rows"] == (365 + 365) * 24
         assert response["scan_start_time"] == "2025-01-01T00:00:00+00:00"
         assert response["scan_end_time"] == "2027-01-01T00:00:00+00:00"
+        mock_client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_calendar_period_rejected_when_timezone_lookup_fails(
+        self, history_tool, mock_client
+    ):
+        with (
+            patch.object(
+                tools_history.settings, "enable_history_query_guardrails", True
+            ),
+            patch(
+                "ha_mcp.tools.tools_history._fetch_ha_timezone",
+                new=AsyncMock(return_value=("UTC", True)),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await history_tool(
+                entity_ids="sensor.test",
+                source="statistics",
+                start_time="2026-01-01T00:00:00Z",
+                end_time="2026-01-02T00:00:00Z",
+                period="day",
+            )
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "CONNECTION_FAILED"
         mock_client.send_websocket_message.assert_not_awaited()
 
     def test_day_period_scan_accounts_for_dst_transition(self):
