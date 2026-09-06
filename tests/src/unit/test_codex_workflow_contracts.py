@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -79,6 +80,49 @@ def collection():
     )
 
 
+def test_outer_paginator_cannot_pick_a_nested_comment_cursor():
+    outer_query = collection().split("-f query='query(", 1)[1].split("}'", 1)[0]
+    # gh's findEndCursor stops at the FIRST unaliased pageInfo object.
+    assert len(re.findall(r"(?m)^\s*pageInfo\s*\{", outer_query)) == 1
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_schema_cannot_escape_the_workspace(tmp_path, absolute):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (tmp_path / "outside.json").write_text("{}")
+
+    def shell_path(path):
+        value = path.as_posix()
+        return f"/{value[0].lower()}{value[2:]}" if os.name == "nt" else value
+
+    script = next(
+        s["run"]
+        for s in load(".github/actions/codex-run/action.yml")["runs"]["steps"]
+        if s.get("id") == "prepare"
+    )
+    result = shell(
+        script,
+        tmp_path,
+        CODEX_AUTH_INPUT='{"auth_mode":"fixture"}',
+        INSTRUCTIONS_INPUT="hello",
+        INSTRUCTIONS_FILE_INPUT="",
+        WORKING_DIRECTORY_INPUT=".",
+        SANDBOX_INPUT="read-only",
+        ALLOW_SHELL_INPUT="true",
+        TIMEOUT_MINUTES_INPUT="1",
+        OUTPUT_SCHEMA_INPUT=shell_path(tmp_path / "outside.json")
+        if absolute
+        else "../outside.json",
+        GITHUB_WORKSPACE=shell_path(workspace),
+        RUNNER_TEMP=shell_path(tmp_path),
+        GITHUB_ENV=shell_path(tmp_path / "env"),
+        GITHUB_OUTPUT=shell_path(tmp_path / "output"),
+    )
+    assert result.returncode != 0
+    assert b"output-schema must stay inside GITHUB_WORKSPACE" in result.stdout
+
+
 def test_byte_limit_keeps_utf8_valid_and_preserves_complete_lines(tmp_path):
     path = tmp_path / ".codex-context/pull-requests"
     path.mkdir(parents=True)
@@ -99,7 +143,7 @@ def test_collects_late_replies_after_the_first_hundred(tmp_path):
     first_comments = [{"body": f"earlier reply {i}"} for i in range(100)]
     connection = {
         "nodes": first_comments,
-        "pageInfo": {"hasNextPage": True, "endCursor": "comment-100"},
+        "commentPageInfo": {"hasNextPage": True, "endCursor": "comment-100"},
     }
     first_page = [
         {

@@ -183,3 +183,6 @@ PR collection paginates both review threads and each thread's comments. Patches
 are bounded to complete lines within 50,000 bytes to preserve valid UTF-8;
 an oversized first line may leave no patch text, with an explicit truncation
 notice. Collection timeout/API errors fail before Codex receives partial context.
+Nested pagination metadata is aliased so `gh` cannot confuse a comment cursor
+with the outer thread cursor. Schema files must resolve inside the workspace,
+using the same containment rule as instruction files.

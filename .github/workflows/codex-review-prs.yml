@@ -97,7 +97,7 @@ jobs:
                             createdAt
                             url
                           }
-                          pageInfo { hasNextPage endCursor }
+                          commentPageInfo: pageInfo { hasNextPage endCursor }
                         }
                       }
                       pageInfo { hasNextPage endCursor }
@@ -107,12 +107,14 @@ jobs:
               }' \
               > ".codex-context/pull-requests/pr-$number-thread-pages.json"
             jq \
-              '[.[].data.repository.pullRequest.reviewThreads.nodes[]]' \
+              '[.[].data.repository.pullRequest.reviewThreads.nodes[] |
+                .comments.pageInfo = .comments.commentPageInfo | del(.comments.commentPageInfo)]' \
               ".codex-context/pull-requests/pr-$number-thread-pages.json" \
               > ".codex-context/pull-requests/pr-$number-threads.json"
             threads=".codex-context/pull-requests/pr-$number-threads.json"
             # gh --paginate advances one connection at a time. Finish each
-            # long comment connection independently of reviewThreads.
+            # long comment connection independently of reviewThreads. Alias
+            # nested pageInfo above: gh otherwise takes that FIRST cursor.
             while IFS= read -r thread_id; do
               cursor="$(jq -r --arg id "$thread_id" '.[] | select(.id == $id) | .comments.pageInfo.endCursor' "$threads")"
               gh api graphql --paginate --slurp \

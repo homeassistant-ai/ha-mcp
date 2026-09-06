@@ -188,6 +188,13 @@ runs:
             *) schema_candidate="$GITHUB_WORKSPACE/$OUTPUT_SCHEMA_INPUT" ;;
           esac
           schema_path="$(realpath -m "$schema_candidate")"
+          case "$schema_path/" in
+            "$GITHUB_WORKSPACE/"*) ;;
+            *)
+              echo "::error::output-schema must stay inside GITHUB_WORKSPACE."
+              exit 1
+              ;;
+          esac
           if [[ ! -f "$schema_path" ]]; then
             echo "::error::output-schema does not point to a file."
             exit 1
