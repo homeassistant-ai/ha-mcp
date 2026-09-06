@@ -122,31 +122,37 @@ def test_overview_disabled_keeps_all(tmp_path, monkeypatch):
     assert {"light", "sensor"} <= set(res["domain_stats"])
 
 
-def test_overview_legacy_reads_are_sequential(tmp_path, monkeypatch):
-    """One full overview must not burst five broad requests into HA at once."""
+def test_overview_fetches_states_before_parallel_optional_reads(tmp_path, monkeypatch):
+    """States fails fast before the four optional overview reads fan out."""
 
     class SequencedClient(_OverviewClient):
         def __init__(self):
             super().__init__([], {"success": True, "result": []})
-            self.active = False
             self.calls = []
+            self.active_optional = 0
+            self.max_active_optional = 0
 
-        async def _record(self, name, result):
-            assert self.active is False
-            self.active = True
+        async def _record_optional(self, name, result):
             self.calls.append(name)
+            self.active_optional += 1
+            self.max_active_optional = max(
+                self.max_active_optional, self.active_optional
+            )
             await asyncio.sleep(0)
-            self.active = False
+            self.active_optional -= 1
             return result
 
         async def get_states(self):
-            return await self._record("states", [])
+            self.calls.append("states")
+            return []
 
         async def get_services(self):
-            return await self._record("services", [])
+            return await self._record_optional("services", [])
 
         async def send_websocket_message(self, msg):
-            return await self._record(msg["type"], {"success": True, "result": []})
+            return await self._record_optional(
+                msg["type"], {"success": True, "result": []}
+            )
 
     save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
@@ -156,13 +162,14 @@ def test_overview_legacy_reads_are_sequential(tmp_path, monkeypatch):
 
     asyncio.run(mixin.get_system_overview(detail_level="minimal"))
 
-    assert client.calls == [
-        "states",
+    assert client.calls[0] == "states"
+    assert set(client.calls[1:]) == {
         "services",
         "config/area_registry/list",
         "config/entity_registry/list",
         "config/device_registry/list",
-    ]
+    }
+    assert client.max_active_optional == 4
 
 
 def test_overview_stops_immediately_when_mandatory_states_fail(tmp_path, monkeypatch):

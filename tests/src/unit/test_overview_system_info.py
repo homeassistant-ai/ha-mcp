@@ -290,7 +290,7 @@ class TestHaGetOverviewFieldsProjection:
 
         error = json.loads(str(exc_info.value))
         assert error["error"]["code"] == "INTERNAL_ERROR"
-        assert error["context"]["operation"] == "collect requested overview fields"
+        assert error["operation"] == "collect requested overview fields"
         mock_smart_tools.get_system_overview.assert_not_awaited()
 
     @pytest.mark.asyncio
