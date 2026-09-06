@@ -80,7 +80,7 @@ jobs:
         with:
           # Repository config is discovered normally. Loading renovate.json as
           # global config too duplicates its managers and dashboard entries.
-          renovate-version: 44.50.1
+          renovate-version: 44.52.0
           token: ${{ steps.app-token.outputs.token }}
         env:
           LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
