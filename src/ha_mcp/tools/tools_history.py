@@ -12,7 +12,7 @@ ha_get_history -- Retrieve historical data with source-selectable mode:
 import logging
 import math
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Annotated, Any, Literal
 
 from fastmcp import Context
@@ -32,6 +32,8 @@ from .helpers import (
 )
 from .util_helpers import (
     JSON_STRING_COERCION,
+    _fetch_ha_timezone,
+    _resolve_local_timezone,
     add_timezone_metadata,
     build_pagination_metadata,
     is_connection_error_message,
@@ -131,14 +133,7 @@ _MAX_HISTORY_ENTITIES = 10
 _MAX_HISTORY_ENTITY_HOURS = 168.0
 _MAX_STATISTICS_ENTITIES = 25
 _MAX_STATISTICS_ROWS = 10_000
-_STATISTICS_PERIOD_SECONDS = {
-    "5minute": 5 * 60,
-    "hour": 60 * 60,
-    "day": 24 * 60 * 60,
-    "week": 7 * 24 * 60 * 60,
-    "month": 30 * 24 * 60 * 60,
-    "year": 365 * 24 * 60 * 60,
-}
+_CALENDAR_STATISTICS_PERIODS = frozenset({"day", "week", "month", "year"})
 
 
 class HistoryTools:
@@ -348,6 +343,14 @@ class HistoryTools:
 
             # Parse time parameters
             start_dt, end_dt = _parse_time_range(start_time, end_time, default_hours)
+            statistics_timezone: tzinfo = UTC
+            if (
+                settings.enable_history_query_guardrails
+                and source == "statistics"
+                and period in _CALENDAR_STATISTICS_PERIODS
+            ):
+                timezone_name, _ = await _fetch_ha_timezone(self._client)
+                statistics_timezone, _ = _resolve_local_timezone(timezone_name)
             _validate_query_workload(
                 source=source,
                 entity_ids=entity_id_list,
@@ -357,6 +360,7 @@ class HistoryTools:
                 significant_changes_only=significant_changes_only,
                 period=period,
                 enforce_budget=settings.enable_history_query_guardrails,
+                statistics_timezone=statistics_timezone,
             )
 
             await safe_info(
@@ -548,6 +552,7 @@ def _validate_query_workload(
     significant_changes_only: bool,
     period: str,
     enforce_budget: bool,
+    statistics_timezone: tzinfo = UTC,
 ) -> None:
     """Reject recorder requests likely to monopolize Home Assistant resources."""
     window_seconds = (end_dt - start_dt).total_seconds()
@@ -589,10 +594,18 @@ def _validate_query_workload(
             "detail_weight": detail_weight,
         }
     else:
-        period_seconds = _STATISTICS_PERIOD_SECONDS.get(period)
-        if period_seconds is None:
+        if period not in {"5minute", "hour", *_CALENDAR_STATISTICS_PERIODS}:
             return
-        estimated_rows = math.ceil(window_seconds / period_seconds) * entity_count
+        scan_start, scan_end = _statistics_scan_window(
+            start_dt, end_dt, period, statistics_timezone
+        )
+        scan_granularity_seconds = 300 if period == "5minute" else 3600
+        estimated_rows = (
+            math.ceil(
+                (scan_end - scan_start).total_seconds() / scan_granularity_seconds
+            )
+            * entity_count
+        )
         if (
             entity_count <= _MAX_STATISTICS_ENTITIES
             and estimated_rows <= _MAX_STATISTICS_ROWS
@@ -604,6 +617,9 @@ def _validate_query_workload(
             "estimated_rows": estimated_rows,
             "max_estimated_rows": _MAX_STATISTICS_ROWS,
             "period": period,
+            "scan_granularity_minutes": scan_granularity_seconds // 60,
+            "scan_start_time": scan_start.isoformat(),
+            "scan_end_time": scan_end.isoformat(),
         }
 
     raise_tool_error(
@@ -617,6 +633,77 @@ def _validate_query_workload(
                 "An administrator can disable history query guardrails in Advanced settings after evaluating the workload risk.",
             ],
         )
+    )
+
+
+def _statistics_scan_window(
+    start_dt: datetime,
+    end_dt: datetime,
+    period: str,
+    local_timezone: tzinfo,
+) -> tuple[datetime, datetime]:
+    """Mirror Core's calendar alignment before its statistics table query."""
+    if period not in _CALENDAR_STATISTICS_PERIODS:
+        return start_dt, end_dt
+
+    local_start = start_dt.astimezone(local_timezone)
+    local_end = end_dt.astimezone(local_timezone)
+
+    if period == "day":
+        scan_start = local_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        scan_end = local_end.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) + timedelta(days=1)
+    elif period == "week":
+        scan_start = local_start.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(days=local_start.weekday())
+        scan_end = (
+            local_end.replace(hour=0, minute=0, second=0, microsecond=0)
+            - timedelta(days=local_end.weekday())
+            + timedelta(days=7)
+        )
+    elif period == "month":
+        scan_start = local_start.replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        scan_end = _next_month_start(local_end)
+    else:
+        scan_start = local_start.replace(
+            month=1, day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        scan_end = local_end.replace(
+            year=local_end.year + 1,
+            month=1,
+            day=1,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+
+    return scan_start.astimezone(UTC), scan_end.astimezone(UTC)
+
+
+def _next_month_start(value: datetime) -> datetime:
+    """Return local midnight on the first day of the following month."""
+    if value.month == 12:
+        return value.replace(
+            year=value.year + 1,
+            month=1,
+            day=1,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+    return value.replace(
+        month=value.month + 1,
+        day=1,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
     )
 
 

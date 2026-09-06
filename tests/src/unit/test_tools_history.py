@@ -1,14 +1,16 @@
 """Unit tests for ha_get_history tool exception handling."""
 
 import json
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools import tools_history
-from ha_mcp.tools.tools_history import HistoryTools
+from ha_mcp.tools.tools_history import HistoryTools, _statistics_scan_window
 
 
 @pytest.fixture(autouse=True)
@@ -177,6 +179,73 @@ class TestHaGetHistoryWorkloadGuardrails:
         assert response["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert response["estimated_rows"] > 10000
         mock_client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_month_period_counts_aligned_hourly_scan(
+        self, history_tool, mock_client
+    ):
+        with (
+            patch.object(
+                tools_history.settings, "enable_history_query_guardrails", True
+            ),
+            patch(
+                "ha_mcp.tools.tools_history._fetch_ha_timezone",
+                new=AsyncMock(return_value=("UTC", False)),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await history_tool(
+                entity_ids=[f"sensor.test_{index}" for index in range(8)],
+                source="statistics",
+                start_time="2026-01-31T23:59:00Z",
+                end_time="2026-02-01T00:01:00Z",
+                period="month",
+            )
+
+        response = json.loads(str(exc_info.value))
+        assert response["estimated_rows"] == 8 * 59 * 24
+        assert response["scan_granularity_minutes"] == 60
+        assert response["scan_start_time"] == "2026-01-01T00:00:00+00:00"
+        assert response["scan_end_time"] == "2026-03-01T00:00:00+00:00"
+        mock_client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_year_period_counts_aligned_hourly_scan(
+        self, history_tool, mock_client
+    ):
+        with (
+            patch.object(
+                tools_history.settings, "enable_history_query_guardrails", True
+            ),
+            patch(
+                "ha_mcp.tools.tools_history._fetch_ha_timezone",
+                new=AsyncMock(return_value=("UTC", False)),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await history_tool(
+                entity_ids="sensor.test",
+                source="statistics",
+                start_time="2025-12-31T23:59:00Z",
+                end_time="2026-01-01T00:01:00Z",
+                period="year",
+            )
+
+        response = json.loads(str(exc_info.value))
+        assert response["estimated_rows"] == (365 + 365) * 24
+        assert response["scan_start_time"] == "2025-01-01T00:00:00+00:00"
+        assert response["scan_end_time"] == "2027-01-01T00:00:00+00:00"
+        mock_client.send_websocket_message.assert_not_awaited()
+
+    def test_day_period_scan_accounts_for_dst_transition(self):
+        scan_start, scan_end = _statistics_scan_window(
+            datetime(2026, 3, 8, 12, tzinfo=UTC),
+            datetime(2026, 3, 8, 13, tzinfo=UTC),
+            "day",
+            ZoneInfo("America/New_York"),
+        )
+
+        assert (scan_end - scan_start).total_seconds() == 23 * 60 * 60
 
     @pytest.mark.asyncio
     async def test_guardrails_disabled_by_default_preserves_large_queries(
