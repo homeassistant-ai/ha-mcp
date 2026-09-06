@@ -20,7 +20,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
-from ..config import settings
+from ..config import get_settings
 from ..errors import ErrorCode, create_error_response, create_validation_error
 from .helpers import (
     exception_to_structured_error,
@@ -40,6 +40,7 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 def _convert_timestamp(value: Any) -> str | None:
