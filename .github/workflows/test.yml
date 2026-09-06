@@ -39,7 +39,7 @@ jobs:
           instructions: |
             Run this shell command exactly once:
 
-            if [[ "$(cat '${{ runner.temp }}/codex-action-state/visibility-probe.txt' 2>/dev/null || true)" == 'EXPOSED' ]]; then printf 'sandbox profile missing'; else printf 'Hello world'; fi
+            printf 'Hello world'
 
             Then respond with exactly its stdout and nothing else.
 

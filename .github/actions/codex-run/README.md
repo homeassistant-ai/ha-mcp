@@ -77,8 +77,12 @@ This validates CLI/model compatibility with the local account; the repository
 OAuth account and Ubuntu permission profile still require the branch smoke run.
 
 The manual `test.yml` smoke workflow defaults to `gpt-6-astra` with `low`
-reasoning effort and verifies the existing shell-isolation probe and exact
-output. Both report workflows also expose an optional `model` input; leaving
+reasoning effort. The action checks credential isolation directly through
+`codex sandbox`; the model executes an allowed `printf` command whose final
+output is checked byte for byte. Astra correctly refused the older prompt
+asking it to read a path denied by its active policy, so the model is no longer
+asked to violate that policy as part of the smoke test.
+Both report workflows also expose an optional `model` input; leaving
 it empty preserves their account-default behavior. For example, after this
 branch is pushed:
 
