@@ -7,6 +7,9 @@ on:
     - cron: '17 * * * *'
   issues:
     types: [edited]
+  pull_request_target:
+    types: [edited]
+    branches: [master]
   workflow_dispatch:
     inputs:
       logLevel:
@@ -26,17 +29,30 @@ permissions:
 jobs:
   renovate:
     name: Renovate
-    # Checked boxes explicitly override schedule/age gates. Process human
-    # requests promptly without looping on Renovate's own dashboard edits.
+    # Let Renovate handle native checkbox overrides on its next scan. Wake it
+    # for human requests, not bot edits, unrelated PRs, or an already checked box.
     if: >-
-      github.event_name != 'issues' ||
-      (github.event.issue.title == 'Dependency Dashboard' &&
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' &&
+       github.event.issue.title == 'Dependency Dashboard' &&
        github.event.issue.user.login == 'ha-mcp-renovate[bot]' &&
        github.event.sender.type != 'Bot' &&
        github.event.changes.body &&
-       contains(github.event.issue.body, '[x]'))
+       contains(github.event.issue.body, '[x]')) ||
+      (github.event_name == 'pull_request_target' &&
+       github.event.action == 'edited' &&
+       github.event.pull_request.state == 'open' &&
+       github.event.pull_request.user.login == 'ha-mcp-renovate[bot]' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       startsWith(github.event.pull_request.head.ref, 'renovate/') &&
+       github.event.pull_request.base.ref == 'master' &&
+       github.event.sender.type == 'User' &&
+       github.event.changes.body &&
+       contains(github.event.pull_request.body, '[x] <!-- rebase-check -->') &&
+       !contains(github.event.changes.body.from, '[x] <!-- rebase-check -->'))
     # Serialize writers without interrupting a run partway through PR creation.
-    # Job-level concurrency keeps unrelated issue edits out of this queue.
+    # Job-level concurrency keeps unrelated issue/PR edits out of this queue.
     concurrency:
       group: renovate-${{ github.repository }}
       cancel-in-progress: false
@@ -44,6 +60,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # pull_request_target must never check out the PR head/merge commit.
+          # Only trusted default-branch code may run with the app credentials.
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
 
       # The default GITHUB_TOKEN cannot push commits that modify any file
       # under .github/workflows/ — GitHub blocks workflow-file mutations

@@ -71,8 +71,15 @@ def test_scan_discovers_config_once_and_preserves_manual_events() -> None:
     assert workflow[True]["schedule"] == [{"cron": "17 * * * *"}]
     assert "workflow_dispatch" in workflow[True]
     assert workflow[True]["issues"]["types"] == ["edited"]
+    assert workflow[True]["pull_request_target"] == {
+        "types": ["edited"],
+        "branches": ["master"],
+    }
     job = workflow["jobs"]["renovate"]
     assert job["concurrency"]["cancel-in-progress"] is False
+    checkout = next(s for s in job["steps"] if s.get("name") == "Checkout")
+    assert checkout["with"]["ref"] == "${{ github.event.repository.default_branch }}"
+    assert checkout["with"]["persist-credentials"] is False
     action = next(s for s in job["steps"] if s.get("name") == "Self-hosted Renovate")
     assert "configurationFile" not in action["with"]
     assert "RENOVATE_FORCE" not in action["env"]

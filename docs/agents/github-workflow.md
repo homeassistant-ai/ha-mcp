@@ -170,8 +170,9 @@ summary only when the pull request actually reaches that state.
 | Workflow | Trigger | Purpose |
 |---|---|---|
 | `pr.yml` | Pull request | Fast checks and validation orchestration. |
-| `renovate.yml` | Hourly, human dashboard checkbox edit, or manual | Refresh dependency discovery and process eligible updates. |
+| `renovate.yml` | Hourly, human dashboard/PR checkbox edit, or manual | Refresh dependency discovery and process eligible updates. |
 | `renovate-validation.yml` | Relevant pull request or manual | Validate configuration with the scanner’s pinned Renovate engine, without credentials. |
+| `renovate-auto-merge.yml` | Renovate enables auto-merge or updates its PR | Approve the verified current head with the separate maintainer account; GitHub enforces merge requirements. |
 | `e2e-tests.yml` | Push to `master` touching code, or manual | Full container-backend E2E validation on the pinned stable Core image. |
 | `haos-e2e-tests.yml` | Pull request or manual | Six HAOS lanes against a baked qcow2; required status checks. |
 | `haos-e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The inaddon and embedded HAOS lanes against the current beta OS, Supervisor, and Core; skipped on push and nightly only when all three equal stable. |
@@ -214,10 +215,18 @@ stable OS releases. Changes to these builder inputs invalidate the stable
 HAOS image cache. Supervisor still self-updates within its configured channel.
 
 Human checked requests on the Renovate-authored dependency dashboard trigger a
-scan promptly; Renovate's own edits and unrelated issues do not. Native
-dashboard approvals/rebase requests retain their override semantics. Manual
-workflow dispatch starts a scan without globally disabling ordinary policy.
-Runs serialize without cancelling an active writer.
+scan promptly. Checking the native rebase/retry box on an open, same-repository
+Renovate PR targeting master also starts a scan via `pull_request_target: edited`.
+The PR guard requires a human body edit that changes the rebase box from not
+checked to checked; bot edits, unrelated PRs, and edits leaving it checked do not
+start the scanner. Checkout uses trusted default-branch code, never PR code.
+Renovate itself consumes the checkbox and applies its native override semantics;
+the workflow does not rebase branches or force dependency policy globally.
+Manual workflow dispatch likewise starts an ordinary scan. Runs serialize
+without cancelling an active writer. GitHub's scheduled events are best-effort
+and may be delayed or dropped; checkbox events avoid waiting for the hourly scan.
+See [GitHub's event documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)
+and [Renovate's native rebase documentation](https://docs.renovatebot.com/updating-rebasing/#manual-rebasing).
 
 The action must discover `renovate.json` as repository configuration only.
 Passing the same file as action-global `configurationFile` as well duplicates
@@ -231,6 +240,25 @@ This dependency retains the ordinary schedule and release-age policy. Source,
 license, manifest, drift, and API checks still gate the update; a failed
 generator is an artifact error, not an accepted pin-only update.
 The credential-free vendoring fixture exercises the pinned Renovate executor.
+
+Renovate enables GitHub-native squash auto-merge for minor, patch, and digest
+updates, and for its ungrouped vulnerability-alert fixes. Ordinary major
+upgrades remain manual. This does not bypass creation schedules or release-age
+gates. Once eligible PRs exist, GitHub merges only when the repository's required
+checks and reviews are satisfied, including required E2E checks.
+
+The approval workflow mirrors Dependabot's separate-account, exact-head
+approval boundary: Renovate's app token enables auto-merge, and the existing
+`ghhamcp` maintainers-team account approves with the Actions secret
+`GH_TOKEN_CODEX_COMMENT`. That token must grant pull-request write access;
+`DEPENDABOT_APPROVAL_TOKEN` remains in Dependabot's separate secret store.
+The workflow executes no checkout or PR code, re-reads the PR, verifies that
+Renovate enabled squash auto-merge and the event head is still current, checks
+the approval token's identity, and skips an existing approval on that head.
+Renovate pushes trigger fresh approval after stale reviews are dismissed.
+Human-enabled auto-merge and human pushes do not issue new automated approvals.
+Toggling auto-merge does not revoke an existing approval of unchanged content.
+No workflow grants a bypass or performs an admin merge.
 
 ## Releases
 

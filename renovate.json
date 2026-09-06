@@ -8,6 +8,9 @@
     "after 3pm on tuesday"
   ],
   "updateNotScheduled": false,
+  "automergeType": "pr",
+  "automergeStrategy": "squash",
+  "platformAutomerge": true,
   "minimumReleaseAge": "7 days",
   "minimumReleaseAgeBehaviour": "timestamp-optional",
   "logLevelRemap": [
@@ -29,7 +32,9 @@
     }
   ],
   "vulnerabilityAlerts": {
-    "minimumReleaseAge": null
+    "minimumReleaseAge": null,
+    "groupName": null,
+    "automerge": true
   },
   "enabledManagers": [
     "custom.regex",
@@ -101,6 +106,11 @@
     }
   },
   "packageRules": [
+    {
+      "description": "Approve non-major updates through GitHub auto-merge after all required checks.",
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "automerge": true
+    },
     {
       "description": "Regenerate the private websockets tree in the same update as its pin.",
       "matchManagers": [

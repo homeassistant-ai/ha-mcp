@@ -8,6 +8,7 @@ on:
       - tests/haos_image_build/**
       - tests/src/unit/test_renovate_configuration.py
       - tests/src/unit/test_renovate_vendoring.py
+      - tests/src/unit/test_renovate_auto_merge.py
       - scripts/vendor_websockets.py
       - tests/renovate/**
   workflow_dispatch:
@@ -43,7 +44,7 @@ jobs:
         with:
           node-version: "24"
           package-manager-cache: false
-      - name: Exercise release policy and dashboard event decisions
+      - name: Exercise release policy and dashboard/PR event decisions
         env:
           ENGINE: ${{ steps.validate.outputs.engine }}
         run: |
@@ -65,6 +66,7 @@ jobs:
               export RENOVATE_TEST_ROOT
               node /source/tests/renovate/policy.mjs
               node /source/tests/renovate/dashboard-events.mjs
+              node /source/tests/renovate/auto-merge.mjs
             '
       - name: Verify vendored updates with the scanner's executor
         env:

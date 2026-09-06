@@ -54,7 +54,26 @@ try {
   assert.equal(checkMinimumReleaseAge(ordinary, age(1)).isPending, true,
     'Tuesday must not bypass the seven-day age gate');
   assert.equal(checkMinimumReleaseAge(ordinary, age(8)).isPending, false);
-  console.log('Pinned Renovate engine passed HA/ordinary scheduling, age, and limit fixtures.');
+  for (const updateType of ['minor', 'patch', 'digest', 'major', 'pin', 'pinDigest', 'replacement']) {
+    const config = await applyPackageRules({
+      ...getConfig(), ...repository, depName: 'astral-sh/uv', packageName: 'astral-sh/uv',
+      datasource: 'github-releases', manager: 'custom.regex', updateType,
+    });
+    assert.equal(config.automerge, ['minor', 'patch', 'digest'].includes(updateType),
+      `${updateType}: ordinary automerge eligibility`);
+    assert.equal(config.automergeType, 'pr');
+    assert.equal(config.automergeStrategy, 'squash');
+    assert.equal(config.platformAutomerge, true);
+    assert.equal(checkMinimumReleaseAge(config, age(1)).isPending, true,
+      'Automerge must not bypass ordinary age gates');
+  }
+  // Renovate merges this object into each alert-driven update; keep native
+  // ungrouped security fixes eligible even if the fix requires a major bump.
+  const security = { ...getConfig().vulnerabilityAlerts, ...repository.vulnerabilityAlerts };
+  assert.equal(security.automerge, true);
+  assert.equal(security.groupName, null);
+  assert.equal(security.minimumReleaseAge, null);
+  console.log('Pinned Renovate engine passed HA/ordinary scheduling, age, limit, and automerge fixtures.');
 } finally {
   globalThis.Date = NativeDate;
 }
