@@ -96,6 +96,12 @@ class Settings(BaseSettings):
         10, alias="HAMCP_INDIVIDUAL_FETCH_BATCH_SIZE"
     )
 
+    # Optional preflight bounds for recorder queries. Disabled by default to
+    # preserve the established ha_get_history request contract.
+    enable_history_query_guardrails: bool = Field(
+        False, alias="HAMCP_ENABLE_HISTORY_QUERY_GUARDRAILS"
+    )
+
     # Backup tool configuration
     backup_hint: str = Field("normal", alias="BACKUP_HINT")
 
@@ -887,6 +893,13 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
         "HAMCP_INDIVIDUAL_FETCH_BATCH_SIZE",
         int,
         "search",
+        True,
+    ),
+    AdvancedField(
+        "enable_history_query_guardrails",
+        "HAMCP_ENABLE_HISTORY_QUERY_GUARDRAILS",
+        bool,
+        "operations",
         True,
     ),
     # Operations.

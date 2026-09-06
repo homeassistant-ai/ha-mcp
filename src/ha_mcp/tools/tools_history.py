@@ -20,6 +20,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..config import settings
 from ..errors import ErrorCode, create_error_response, create_validation_error
 from .helpers import (
     exception_to_structured_error,
@@ -262,18 +263,6 @@ class HistoryTools:
                 ),
             ),
         ] = None,
-        allow_unsafe_query: Annotated[
-            bool,
-            Field(
-                description=(
-                    "Allow a recorder query that exceeds the built-in entity/time "
-                    "workload budget. Default: false. Home Assistant returns every "
-                    "matching row before limit/offset are applied, so enabling this "
-                    "can make HA and its dashboards unresponsive."
-                ),
-                default=False,
-            ),
-        ] = False,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """
@@ -283,8 +272,7 @@ class HistoryTools:
         - "history" (default): Raw state changes, ~10 day retention, full resolution
         - "statistics": Pre-aggregated data, permanent retention, requires state_class
 
-        **Shared params:** entity_ids, start_time, end_time, limit, offset,
-        allow_unsafe_query
+        **Shared params:** entity_ids, start_time, end_time, limit, offset
         **History params:** minimal_response, significant_changes_only
         **Statistics params:** period, statistic_types
 
@@ -304,9 +292,9 @@ class HistoryTools:
         All data is fetched from HA before slicing; limit/offset are client-side.
         With multiple entity_ids, offset must be 0 — use a single entity_id for offset > 0.
         Use has_more and next_offset from the response to paginate.
-        Oversized entity/time workloads are rejected before HA is queried. Narrow the
-        time range or entity list; use allow_unsafe_query=true only when the user accepts
-        that HA may become unresponsive while the recorder materializes the full result.
+        Administrators can optionally enable recorder workload guardrails in Advanced
+        settings. When enabled, oversized entity/time workloads are rejected before HA
+        is queried; narrow the time range or entity list to stay within the budget.
 
         **Example -- history (default):**
         ```python
@@ -367,7 +355,7 @@ class HistoryTools:
                 minimal_response=minimal_response,
                 significant_changes_only=significant_changes_only,
                 period=period,
-                allow_unsafe_query=allow_unsafe_query,
+                enforce_budget=settings.enable_history_query_guardrails,
             )
 
             await safe_info(
@@ -558,7 +546,7 @@ def _validate_query_workload(
     minimal_response: bool,
     significant_changes_only: bool,
     period: str,
-    allow_unsafe_query: bool,
+    enforce_budget: bool,
 ) -> None:
     """Reject recorder requests likely to monopolize Home Assistant resources."""
     window_seconds = (end_dt - start_dt).total_seconds()
@@ -575,7 +563,7 @@ def _validate_query_workload(
             )
         )
 
-    if allow_unsafe_query:
+    if not enforce_budget:
         return
 
     entity_count = len(entity_ids)
@@ -625,7 +613,7 @@ def _validate_query_workload(
             suggestions=[
                 "Query fewer entities or use a shorter time range.",
                 "Use source='statistics' with a coarser period for long ranges.",
-                "Set allow_unsafe_query=true only when the user accepts that Home Assistant may become unresponsive while the query runs.",
+                "An administrator can disable history query guardrails in Advanced settings after evaluating the workload risk.",
             ],
         )
     )

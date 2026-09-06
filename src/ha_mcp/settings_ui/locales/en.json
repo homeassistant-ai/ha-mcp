@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Timeout for each automation/script/scene config fetch. Range 1–600. Restart required.",
     "advanced.individual_fetch_batch_size.label": "Config fetch batch size",
     "advanced.individual_fetch_batch_size.help": "Concurrent per-ID config fetches. Lower toward 1 on serial HA servers. Range 1–100. Restart required.",
+    "advanced.enable_history_query_guardrails.label": "History query guardrails",
+    "advanced.enable_history_query_guardrails.help": "Reject recorder queries that exceed conservative entity and time-range budgets. Disabled by default.",
     "advanced.backup_hint.label": "Backup-hint level",
     "advanced.backup_hint.help": "Controls how strongly the LLM is prompted to take a full HA snapshot before risky writes.",
     "advanced.backup_hint.choices.strong": "Strong",

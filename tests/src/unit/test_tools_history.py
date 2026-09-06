@@ -1,6 +1,5 @@
 """Unit tests for ha_get_history tool exception handling."""
 
-import inspect
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -99,11 +98,6 @@ class TestHaGetHistoryWorkloadGuardrails:
     def history_tool(self, mock_client):
         return HistoryTools(mock_client).ha_get_history
 
-    def test_unsafe_override_is_appended_after_existing_public_parameters(self):
-        parameters = list(inspect.signature(HistoryTools.ha_get_history).parameters)
-
-        assert parameters.index("allow_unsafe_query") > parameters.index("fields")
-
     @pytest.mark.asyncio
     async def test_rejects_reversed_time_range(self, history_tool, mock_client):
         with pytest.raises(ToolError) as exc_info:
@@ -121,7 +115,12 @@ class TestHaGetHistoryWorkloadGuardrails:
     async def test_rejects_excessive_raw_history_entity_hours(
         self, history_tool, mock_client
     ):
-        with pytest.raises(ToolError) as exc_info:
+        with (
+            patch.object(
+                tools_history.settings, "enable_history_query_guardrails", True
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
             await history_tool(
                 entity_ids=["sensor.one", "sensor.two"],
                 start_time="2026-01-01T00:00:00Z",
@@ -155,7 +154,12 @@ class TestHaGetHistoryWorkloadGuardrails:
 
     @pytest.mark.asyncio
     async def test_rejects_excessive_statistics_rows(self, history_tool, mock_client):
-        with pytest.raises(ToolError) as exc_info:
+        with (
+            patch.object(
+                tools_history.settings, "enable_history_query_guardrails", True
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
             await history_tool(
                 entity_ids=["sensor.one", "sensor.two"],
                 source="statistics",
@@ -170,7 +174,7 @@ class TestHaGetHistoryWorkloadGuardrails:
         mock_client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_allow_unsafe_query_bypasses_workload_budget(
+    async def test_guardrails_disabled_by_default_preserves_large_queries(
         self, history_tool, mock_client
     ):
         mock_client.send_websocket_message.return_value = {
@@ -185,11 +189,30 @@ class TestHaGetHistoryWorkloadGuardrails:
                 entity_ids="sensor.temp",
                 start_time="2026-01-01T00:00:00Z",
                 end_time="2026-02-01T00:00:00Z",
-                allow_unsafe_query=True,
             )
 
         assert result["success"] is True
         mock_client.send_websocket_message.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_reversed_range_rejected_when_guardrails_disabled(
+        self, history_tool, mock_client
+    ):
+        with (
+            patch.object(
+                tools_history.settings, "enable_history_query_guardrails", False
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await history_tool(
+                entity_ids="sensor.temp",
+                start_time="2026-01-02T00:00:00Z",
+                end_time="2026-01-01T00:00:00Z",
+            )
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        mock_client.send_websocket_message.assert_not_awaited()
 
 
 # _fetch_history returns the unwrapped inner payload; ha_get_history then runs
