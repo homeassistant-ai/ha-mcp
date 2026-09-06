@@ -82,7 +82,7 @@ async def test_nested_redispatch_does_not_reacquire_the_queue() -> None:
 
     with anyio.fail_after(1):
         result = await middleware.on_call_tool(
-            make_context("ha_call_read_tool"), outer_call_next
+            make_context("ha_get_overview"), outer_call_next
         )
 
     assert result == "ha_get_state"

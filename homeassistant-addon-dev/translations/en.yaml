@@ -178,10 +178,6 @@ configuration:
       on, the ha_get_skill_guide tool is locked enabled — it is the only publisher
       of the acknowledgment key. Child of the "Attach best-practice skills on writes"
       option above and inert while that parent is off. Requires restart to take effect.'
-  ha_tool_concurrency:
-    name: Home Assistant tool concurrency
-    description: Optional limit on concurrent Home Assistant tool calls across all
-      sessions. 0 keeps unlimited behavior; use 1 on resource-constrained systems.
   enable_filesystem_tools:
     name: Enable filesystem tools (beta)
     description: 'Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write

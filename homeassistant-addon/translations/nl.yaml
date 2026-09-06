@@ -119,10 +119,6 @@ configuration:
       van de bevestigingssleutel. Onderdeel van de optie "Koppel best-practice vaardigheden
       aan schrijfbewerkingen" hierboven en inactief zolang die ouder uitgeschakeld
       is. Vereist een herstart om van kracht te worden.'
-  ha_tool_concurrency:
-    name: Home Assistant tool concurrency
-    description: Optional limit on concurrent Home Assistant tool calls across all
-      sessions. 0 keeps unlimited behavior; use 1 on resource-constrained systems.
   disabled_tools:
     name: Uitgeschakelde tools (komma-gescheiden)
     description: Tools die hier worden vermeld, zijn geforceerd uitgeschakeld en vergrendeld
