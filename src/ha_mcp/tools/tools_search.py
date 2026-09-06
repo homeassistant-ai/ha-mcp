@@ -1568,8 +1568,6 @@ _OVERVIEW_INDEPENDENT_FIELDS = frozenset(
         "dismissed_repair_count",
         "repairs",
         "repairs_error",
-        "warnings",
-        "partial",
         "tool_discovery",
         "settings_url",
         "settings_url_hint",
@@ -1589,32 +1587,17 @@ _OVERVIEW_REPAIR_FIELDS = frozenset(
 )
 _OVERVIEW_ENTITY_FIELDS = frozenset(
     {
-        "domains",
         "system_summary",
         "domain_stats",
         "area_analysis",
         "ai_insights",
         "pagination",
+        "partial",
+        "warnings",
         "device_types",
         "service_availability",
     }
 )
-
-
-def _count_overview_independent_collectors(
-    requested_fields: set[str], include_notifications: bool
-) -> int:
-    """Count HA collectors needed for an independent overview projection."""
-    return sum(
-        (
-            "system_info" in requested_fields,
-            bool(
-                include_notifications
-                and requested_fields & _OVERVIEW_NOTIFICATION_FIELDS
-            ),
-            bool(requested_fields & _OVERVIEW_REPAIR_FIELDS),
-        )
-    )
 
 
 def _build_component_overview_request(inputs: _OverviewInputs) -> dict[str, Any]:
@@ -4104,7 +4087,7 @@ class SearchTools:
                 default=None,
                 description=(
                     "Return only the specified top-level response keys to reduce "
-                    'response size (e.g. ["system_info", "domains"]). '
+                    'response size (e.g. ["system_info", "domain_stats"]). '
                     "None = full response (default). "
                     "Available keys: success, system_summary, domain_stats, "
                     "area_analysis, ai_insights, pagination, partial, warnings, "
@@ -4305,21 +4288,24 @@ class SearchTools:
     ) -> dict[str, Any]:
         """Collect only the independent HA sections requested by a projection."""
         result: dict[str, Any] = {"success": True}
-        strict = (
-            _count_overview_independent_collectors(
-                requested_fields, include_notifications
-            )
-            == 1
-        )
-        if "system_info" in requested_fields:
-            await self._fetch_system_info(result, detail_level, raise_on_error=strict)
-        if include_notifications and requested_fields & _OVERVIEW_NOTIFICATION_FIELDS:
-            await self._fetch_notifications(result, raise_on_error=strict)
-        if requested_fields & _OVERVIEW_REPAIR_FIELDS:
-            await self._fetch_repairs(
-                result,
-                include_dismissed_repairs,
-                raise_on_error=strict,
+        try:
+            if "system_info" in requested_fields:
+                await self._fetch_system_info(result, detail_level, raise_on_error=True)
+            if (
+                include_notifications
+                and requested_fields & _OVERVIEW_NOTIFICATION_FIELDS
+            ):
+                await self._fetch_notifications(result, raise_on_error=True)
+            if requested_fields & _OVERVIEW_REPAIR_FIELDS:
+                await self._fetch_repairs(
+                    result,
+                    include_dismissed_repairs,
+                    raise_on_error=True,
+                )
+        except Exception as exc:
+            exception_to_structured_error(
+                exc,
+                context={"operation": "collect requested overview fields"},
             )
         return result
 

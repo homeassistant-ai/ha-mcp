@@ -137,9 +137,8 @@ class TestHaGetOverviewFieldsProjection:
         smart.get_system_overview = AsyncMock(
             return_value={
                 "success": True,
-                "domains": {"light": {"count": 3}},
-                "entity_summary": [],
-                "total_entities": 3,
+                "domain_stats": {"light": {"count": 3}},
+                "area_analysis": {},
             }
         )
         return smart
@@ -155,7 +154,7 @@ class TestHaGetOverviewFieldsProjection:
         result = await overview_tool()
         assert "success" in result
         assert "system_info" in result
-        assert "domains" in result
+        assert "domain_stats" in result
 
     @pytest.mark.asyncio
     async def test_fields_single_key_projects_correctly(self, overview_tool):
@@ -222,25 +221,43 @@ class TestHaGetOverviewFieldsProjection:
     async def test_domain_projection_still_uses_full_overview(
         self, overview_tool, mock_smart_tools
     ):
-        """Entity-derived fields retain the established full assembly path."""
-        result = await overview_tool(fields=["domains"])
+        """Documented entity-derived fields retain the full assembly path."""
+        result = await overview_tool(fields=["domain_stats"])
 
-        assert result["domains"] == {"light": {"count": 3}}
+        assert result["domain_stats"] == {"light": {"count": 3}}
         mock_smart_tools.get_system_overview.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_fields_multiple_keys(self, overview_tool):
-        """fields=["system_info", "domains"] keeps exactly those two (+ success)."""
-        result = await overview_tool(fields=["system_info", "domains"])
+        """Mixed independent/entity fields use the full path before projection."""
+        result = await overview_tool(fields=["system_info", "domain_stats"])
         assert "system_info" in result
-        assert "domains" in result
-        assert "entity_summary" not in result
+        assert result["domain_stats"] == {"light": {"count": 3}}
+        assert "area_analysis" not in result
 
     @pytest.mark.asyncio
     async def test_fields_success_always_included(self, overview_tool):
         """success is always present even when the caller omits it from fields."""
-        result = await overview_tool(fields=["domains"])
+        result = await overview_tool(fields=["domain_stats"])
         assert "success" in result
+
+    @pytest.mark.asyncio
+    async def test_unsupported_domains_field_does_not_trigger_full_overview(
+        self, overview_tool, mock_smart_tools
+    ):
+        result = await overview_tool(fields=["domains"])
+
+        assert result["success"] is True
+        mock_smart_tools.get_system_overview.assert_not_awaited()
+
+    @pytest.mark.parametrize("field", ["partial", "warnings"])
+    @pytest.mark.asyncio
+    async def test_diagnostic_projection_uses_full_overview(
+        self, field, overview_tool, mock_smart_tools
+    ):
+        await overview_tool(fields=[field])
+
+        mock_smart_tools.get_system_overview.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_fields_unknown_key_silently_absent(self, overview_tool):
@@ -259,14 +276,35 @@ class TestHaGetOverviewFieldsProjection:
         mock_smart_tools.get_system_overview.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_sole_independent_collector_failure_propagates(
+    async def test_independent_collector_failure_is_structured(
         self, overview_tool, mock_client, mock_smart_tools
     ):
+        import json
+
+        from fastmcp.exceptions import ToolError
+
         mock_client.get_config.side_effect = RuntimeError("config unavailable")
 
-        with pytest.raises(RuntimeError, match="config unavailable"):
+        with pytest.raises(ToolError) as exc_info:
             await overview_tool(fields=["system_info"])
 
+        error = json.loads(str(exc_info.value))
+        assert error["error"]["code"] == "INTERNAL_ERROR"
+        assert error["context"]["operation"] == "collect requested overview fields"
+        mock_smart_tools.get_system_overview.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_failure_contract_does_not_depend_on_collector_count(
+        self, overview_tool, mock_client, mock_smart_tools
+    ):
+        from fastmcp.exceptions import ToolError
+
+        mock_client.get_config.side_effect = RuntimeError("config unavailable")
+
+        with pytest.raises(ToolError, match="config unavailable"):
+            await overview_tool(fields=["system_info", "repair_count"])
+
+        mock_client.send_websocket_message.assert_not_awaited()
         mock_smart_tools.get_system_overview.assert_not_awaited()
 
     @pytest.mark.asyncio
