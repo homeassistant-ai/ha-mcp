@@ -5,4 +5,4 @@
 # bump, including the source, license, and manifest in the same update.
 # tests/src/unit/test_vendored_websockets.py still rejects stale or altered trees.
 # For a manual pin change, run the same generator and commit its outputs.
-websockets==17.0.1
+websockets==17.1

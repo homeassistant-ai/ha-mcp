@@ -11,10 +11,9 @@ from collections.abc import AsyncIterator, Generator, Sequence
 from types import TracebackType
 from typing import Any, Callable, Literal, cast
 
-from ..client import ClientProtocol, backoff
+from ..client import ClientProtocol, backoff, process_exception
 from ..datastructures import Headers, HeadersLike
 from ..exceptions import (
-    InvalidMessage,
     InvalidProxyMessage,
     InvalidProxyStatus,
     InvalidStatus,
@@ -28,7 +27,7 @@ from ..http11 import USER_AGENT, Response
 from ..protocol import CONNECTING, Event
 from ..proxy import Proxy, get_proxy, parse_proxy, prepare_connect_request
 from ..streams import StreamReader
-from ..typing import LoggerLike, Origin, Subprotocol
+from ..typing import LoggerLike, Origin, PathLike, Subprotocol
 from ..uri import WebSocketURI, parse_uri
 from .connection import Connection
 
@@ -128,59 +127,14 @@ class ClientConnection(Connection):
             super().process_event(event)
 
 
-def process_exception(exc: Exception) -> Exception | None:
-    """
-    Determine whether a connection error is retryable or fatal.
-
-    When reconnecting automatically with ``async for ... in connect(...)``, if a
-    connection attempt fails, :func:`process_exception` is called to determine
-    whether to retry connecting or to raise the exception.
-
-    This function defines the default behavior, which is to retry on:
-
-    * :exc:`EOFError`, :exc:`OSError`, :exc:`asyncio.TimeoutError`: network
-      errors;
-    * :exc:`~websockets.exceptions.InvalidStatus` when the status code is 500,
-      502, 503, or 504: server or proxy errors.
-
-    All other exceptions are considered fatal.
-
-    You can change this behavior with the ``process_exception`` argument of
-    :func:`connect`.
-
-    Return :obj:`None` if the exception is retryable i.e. when the error could
-    be transient and trying to reconnect with the same parameters could succeed.
-    The exception will be logged at the ``INFO`` level.
-
-    Return an exception, either ``exc`` or a new exception, if the exception is
-    fatal i.e. when trying to reconnect will most likely produce the same error.
-    That exception will be raised, breaking out of the retry loop.
-
-    """
-    # This catches python-socks' ProxyConnectionError and ProxyTimeoutError.
-    if isinstance(exc, (OSError, TimeoutError)):
-        return None
-    if isinstance(exc, InvalidMessage) and isinstance(exc.__cause__, EOFError):
-        return None
-    if isinstance(exc, InvalidStatus) and exc.response.status_code in [
-        500,  # Internal Server Error
-        502,  # Bad Gateway
-        503,  # Service Unavailable
-        504,  # Gateway Timeout
-    ]:
-        return None
-    return exc
-
-
 # This is spelled in lower case because it's exposed as a callable in the API.
 class connect:
     """
     Connect to the WebSocket server at ``uri``.
 
-    This coroutine returns a :class:`ClientConnection` instance, which you can
-    use to send and receive messages.
-
-    :func:`connect` may be used as an asynchronous context manager::
+    :func:`connect` should be treated as an asynchronous context manager
+    yielding a :class:`ClientConnection`, which can then receive and send
+    messages::
 
         from websockets.asyncio.client import connect
 
@@ -189,8 +143,8 @@ class connect:
 
     The connection is closed automatically when exiting the context.
 
-    :func:`connect` can be used as an infinite asynchronous iterator to
-    reconnect automatically on errors::
+    :func:`connect` can also be treated as an infinite asynchronous iterator
+    to reconnect automatically on errors::
 
         async for websocket in connect(...):
             try:
@@ -203,6 +157,13 @@ class connect:
     raised, breaking out of the loop.
 
     The connection is closed automatically after each iteration of the loop.
+
+    :func:`connect` can be awaited directly::
+
+        websocket = await connect(...)
+
+    In that case, you're responsible for closing the connection with
+    :meth:`ClientConnection.close` when no longer needed.
 
     Args:
         uri: URI of the WebSocket server.
@@ -225,7 +186,8 @@ class connect:
             <../../topics/proxies>` for details.
         process_exception: When reconnecting automatically, tell whether an
             error is transient or fatal. The default behavior is defined by
-            :func:`process_exception`. Refer to its documentation for details.
+            :func:`~websockets.client.process_exception`. Refer to its
+            documentation for details.
         open_timeout: Timeout for opening the connection in seconds.
             :obj:`None` disables the timeout.
         ping_interval: Interval between keepalive pings in seconds.
@@ -555,13 +517,7 @@ class connect:
 
         return new_uri
 
-    # ... = await connect(...)
-
-    def __await__(self) -> Generator[Any, None, ClientConnection]:
-        # Create a suitable iterator by calling __await__ on a coroutine.
-        return self.__await_impl__().__await__()
-
-    async def __await_impl__(self) -> ClientConnection:
+    async def connect(self) -> ClientConnection:
         try:
             async with asyncio.timeout(self.open_timeout):
                 for _ in range(MAX_REDIRECTS):
@@ -605,6 +561,12 @@ class connect:
         except TimeoutError as exc:
             # Re-raise exception with an informative error message.
             raise TimeoutError("timed out during opening handshake") from exc
+
+    # ... = await connect(...)
+
+    def __await__(self) -> Generator[Any, None, ClientConnection]:
+        # Create a suitable iterator by calling __await__ on a coroutine.
+        return self.connect().__await__()
 
     # async with connect(...) as ...: ...
 
@@ -668,7 +630,7 @@ class connect:
 
 
 def unix_connect(
-    path: str | None = None,
+    path: PathLike | None = None,
     uri: str | None = None,
     **kwargs: Any,
 ) -> connect:
