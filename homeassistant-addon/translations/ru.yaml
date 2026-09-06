@@ -122,7 +122,7 @@ configuration:
     name: Home Assistant tool concurrency
     description: Optional limit on outer Home Assistant tool calls across all sessions.
       Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior; use 1 on resource-constrained systems.
+      unlimited behavior.
   disabled_tools:
     name: Отключённые инструменты (через запятую)
     description: 'Перечисленные здесь инструменты принудительно отключаются и блокируются

@@ -346,6 +346,28 @@ class TestResolveBoolOption:
         )
 
 
+class TestResolveHaToolConcurrency:
+    """Unit tests for add-on outer tool-call limit validation."""
+
+    @pytest.fixture(autouse=True)
+    def addon(self):
+        self.addon = _load_addon_start()
+
+    @pytest.mark.parametrize("value", [0, 1, 32])
+    def test_valid_value_is_preserved(self, value):
+        assert (
+            self.addon.resolve_ha_tool_concurrency({"ha_tool_concurrency": value})
+            == value
+        )
+
+    @pytest.mark.parametrize("value", [-1, 33, True, "1", None])
+    def test_invalid_value_warns_and_falls_back_to_unlimited(self, value, capsys):
+        assert (
+            self.addon.resolve_ha_tool_concurrency({"ha_tool_concurrency": value}) == 0
+        )
+        assert "applying 0 (unlimited)" in capsys.readouterr().err
+
+
 class TestResolveEffectiveLogLevel:
     """Unit tests for resolve_effective_log_level (#1721).
 

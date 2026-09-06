@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import logging
+from unittest.mock import AsyncMock, MagicMock
 
 import anyio
 import pytest
+from fastmcp.exceptions import ToolError
 
+import ha_mcp.ha_request_queue as queue_module
 from ha_mcp.ha_request_queue import (
     HomeAssistantRequestQueueMiddleware,
 )
@@ -89,12 +92,20 @@ async def test_nested_redispatch_does_not_reacquire_the_queue() -> None:
 
 
 @pytest.mark.anyio
-async def test_proxy_envelope_defers_queue_slot_until_inner_dispatch() -> None:
+@pytest.mark.parametrize("outer_name", ["ha_call_read_tool", "ha_manage_custom_tool"])
+async def test_dispatch_envelope_defers_queue_slot_until_inner_dispatch(
+    outer_name: str,
+) -> None:
     middleware = HomeAssistantRequestQueueMiddleware(max_concurrency=1)
+    blocker_entered = anyio.Event()
+    release_blocker = anyio.Event()
     proxy_entered = anyio.Event()
-    release_proxy = anyio.Event()
-    normal_entered = anyio.Event()
+    inner_attempted = anyio.Event()
     inner_entered = anyio.Event()
+
+    async def blocker_call_next(_context: MagicMock) -> None:
+        blocker_entered.set()
+        await release_blocker.wait()
 
     async def inner_call_next(context: MagicMock) -> str:
         inner_entered.set()
@@ -102,30 +113,111 @@ async def test_proxy_envelope_defers_queue_slot_until_inner_dispatch() -> None:
 
     async def proxy_call_next(_context: MagicMock) -> str:
         proxy_entered.set()
-        await release_proxy.wait()
+        inner_attempted.set()
         return await middleware.on_call_tool(
             make_context("ha_get_state"), inner_call_next
         )
 
-    async def normal_call_next(context: MagicMock) -> str:
-        normal_entered.set()
-        return context.message.name
-
     async with anyio.create_task_group() as task_group:
         task_group.start_soon(
             middleware.on_call_tool,
-            make_context("ha_call_read_tool"),
+            make_context("ha_get_overview"),
+            blocker_call_next,
+        )
+        await blocker_entered.wait()
+        task_group.start_soon(
+            middleware.on_call_tool,
+            make_context(outer_name),
             proxy_call_next,
         )
         await proxy_entered.wait()
-        result = await middleware.on_call_tool(
-            make_context("ha_get_overview"), normal_call_next
-        )
-        assert result == "ha_get_overview"
-        assert normal_entered.is_set()
-        release_proxy.set()
+        await inner_attempted.wait()
+        await anyio.lowlevel.checkpoint()
+        assert not inner_entered.is_set()
+        release_blocker.set()
 
     assert inner_entered.is_set()
+
+
+@pytest.mark.anyio
+async def test_slot_and_depth_are_released_when_call_raises() -> None:
+    middleware = HomeAssistantRequestQueueMiddleware(max_concurrency=1)
+
+    async def failing_call_next(_context: MagicMock) -> None:
+        raise RuntimeError("simulated tool failure")
+
+    async def succeeding_call_next(context: MagicMock) -> str:
+        return context.message.name
+
+    with pytest.raises(RuntimeError, match="simulated tool failure"):
+        await middleware.on_call_tool(make_context("ha_get_history"), failing_call_next)
+
+    assert middleware._depth.get() == 0
+    with anyio.fail_after(1):
+        result = await middleware.on_call_tool(
+            make_context("ha_get_overview"), succeeding_call_next
+        )
+    assert result == "ha_get_overview"
+
+
+@pytest.mark.anyio
+async def test_nested_depth_is_restored_when_inner_call_raises() -> None:
+    middleware = HomeAssistantRequestQueueMiddleware(max_concurrency=1)
+
+    async def failing_inner(_context: MagicMock) -> None:
+        raise RuntimeError("simulated nested failure")
+
+    async def outer_call_next(_context: MagicMock) -> int:
+        assert middleware._depth.get() == 1
+        with pytest.raises(RuntimeError, match="simulated nested failure"):
+            await middleware.on_call_tool(make_context("ha_get_state"), failing_inner)
+        return middleware._depth.get()
+
+    depth = await middleware.on_call_tool(
+        make_context("ha_get_overview"), outer_call_next
+    )
+
+    assert depth == 1
+    assert middleware._depth.get() == 0
+
+
+@pytest.mark.anyio
+async def test_queue_wait_reports_progress_warns_and_times_out(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    middleware = HomeAssistantRequestQueueMiddleware(max_concurrency=1)
+    blocker_entered = anyio.Event()
+    release_blocker = anyio.Event()
+    progress = AsyncMock()
+    monkeypatch.setattr(queue_module, "safe_progress", progress)
+    monkeypatch.setattr(queue_module, "_QUEUE_WAIT_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(queue_module, "_QUEUE_WAIT_HEARTBEAT_SECONDS", 0.01)
+    monkeypatch.setattr(queue_module, "_QUEUE_WAIT_WARNING_SECONDS", 0.01)
+
+    async def blocker_call_next(_context: MagicMock) -> None:
+        blocker_entered.set()
+        await release_blocker.wait()
+
+    async def queued_call_next(_context: MagicMock) -> None:
+        pytest.fail("timed-out queued call must not execute")
+
+    caplog.set_level(logging.DEBUG, logger=queue_module.__name__)
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(
+            middleware.on_call_tool,
+            make_context("ha_get_history"),
+            blocker_call_next,
+        )
+        await blocker_entered.wait()
+        with pytest.raises(ToolError, match="queue admission"):
+            await middleware.on_call_tool(
+                make_context("ha_get_overview"), queued_call_next
+            )
+        release_blocker.set()
+
+    progress.assert_awaited()
+    assert "still waiting for slot tool=ha_get_overview" in caplog.text
+    assert "timed out waiting for slot tool=ha_get_overview" in caplog.text
 
 
 @pytest.mark.anyio
@@ -205,7 +297,7 @@ async def test_approval_management_bypasses_outer_queue() -> None:
     async with anyio.create_task_group() as task_group:
         task_group.start_soon(
             middleware.on_call_tool,
-            make_context("ha_manage_custom_tool"),
+            make_context("ha_get_history"),
             first_call_next,
         )
         await first_entered.wait()
@@ -217,7 +309,9 @@ async def test_approval_management_bypasses_outer_queue() -> None:
 
 @pytest.mark.parametrize("max_concurrency", [0, 33])
 def test_rejects_out_of_range_concurrency(max_concurrency: int) -> None:
-    with pytest.raises(ValueError, match="max_concurrency must be between 1 and 32"):
+    with pytest.raises(
+        ValueError, match="ha_tool_concurrency must be between 0 and 32"
+    ):
         HomeAssistantRequestQueueMiddleware(max_concurrency=max_concurrency)
 
 

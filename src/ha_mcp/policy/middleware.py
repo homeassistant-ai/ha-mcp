@@ -12,8 +12,8 @@ from anyio.to_thread import run_sync as run_in_thread
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 
 from ..errors import ErrorCode, create_error_response
-from ..ha_request_queue import CALL_PROXY_META_TOOLS, is_approval_management_call
 from ..renamed_tools import current_tool_name
+from ..tool_dispatch import CALL_PROXY_META_TOOLS, is_approval_management_call
 from ..tools.helpers import raise_tool_error, safe_progress
 from .approval_queue import ApprovalQueue, PendingApproval, compute_args_hash
 from .evaluator import (
@@ -27,36 +27,12 @@ from .model import Policy, Rule
 
 logger = logging.getLogger(__name__)
 
-# Dispatching call proxies are a strict subset of the ungated tool-search
-# meta-tools. Only these three execute their envelope's ``name``; search merely
-# returns catalog metadata and must not be unwrapped by other middleware.
-# Gating a call proxy directly would be wrong: rule predicates target the real
-# tool's args (for example args.domain), while the proxy receives a wrapped
-# {"name": "...", "arguments": {...}} envelope. Its dispatch re-enters the
-# middleware chain with the real name and args, so the inner call is gated there.
-# Policy itself also leaves catalog search ungated; unlike the call proxies it
-# never dispatches a tool named in client-supplied arguments.
 PROXY_META_TOOLS = CALL_PROXY_META_TOOLS | {"ha_search_tools"}
-
-# ha_dev_manage_server actions that MANAGE the approval queue itself.
-# Gating these deadlocks by construction: with a wildcard (or
-# ha_dev_manage_server) rule in place, an MCP-only "approve" call would
-# itself require approval — creating a second pending entry instead of
-# deciding the first, so nothing can ever be approved through the tool.
-# Only the queue-management actions are exempt; update_source / restart
-# remain gateable like any other high-stakes action. The exemption is not
-# a free self-approval: approve/deny separately require the
-# dev_tools_security_policy_access setting (off by default, issue #2141).
-
-
-def _is_approval_management(name: str, args: dict[str, Any]) -> bool:
-    """True for dev-tool calls that manage the approval queue itself."""
-    return is_approval_management_call(name, args)
 
 
 def _passes_ungated(name: str, args: dict[str, Any]) -> bool:
     """Calls that must bypass gating: proxy meta-tools + queue management."""
-    return name in PROXY_META_TOOLS or _is_approval_management(name, args)
+    return name in PROXY_META_TOOLS or is_approval_management_call(name, args)
 
 
 class PolicyMiddleware(Middleware):

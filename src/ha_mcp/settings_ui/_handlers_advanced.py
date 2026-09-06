@@ -3,7 +3,8 @@
 Factory returning the ``get_advanced_settings`` / ``save_advanced_settings``
 handlers over the ``ADVANCED_SETTINGS_FIELDS`` registry. Most advanced
 fields write to the shared ``feature_flags.json`` override file;
-``ADDON_SYNCED_ADVANCED_FIELDS`` (``backup_hint``, ``verify_ssl``) route
+``ADDON_SYNCED_ADVANCED_FIELDS`` (``backup_hint``, ``ha_tool_concurrency``,
+``verify_ssl``) route
 through the Supervisor add-on options in add-on mode instead.
 
 Handlers are module-level (own C901 budget); ``build_advanced_handlers``
@@ -131,10 +132,10 @@ async def _get_advanced_settings(
     Mirrors ``_get_feature_flags`` / ``_get_backup_config`` but for the
     ``ADVANCED_SETTINGS_FIELDS`` registry. Most advanced fields write to
     ``feature_flags.json`` via the shared override file in either deployment
-    mode. ``ADDON_SYNCED_ADVANCED_FIELDS`` (``backup_hint``, ``verify_ssl``)
-    are an exception: in addon mode they have ``origin="addon"`` (editable)
-    and saves route through Supervisor so the add-on Configuration tab and
-    the web UI share state.
+    mode. ``ADDON_SYNCED_ADVANCED_FIELDS`` (``backup_hint``,
+    ``ha_tool_concurrency``, ``verify_ssl``) are an exception: in addon mode
+    they have ``origin="addon"`` (editable) and saves route through Supervisor
+    so the add-on Configuration tab and the web UI share state.
     """
     from ha_mcp.settings_ui import is_http_settings_mounted
 
@@ -327,7 +328,7 @@ def _validate_one_advanced_field(
                 status_code=409,
             ),
         )
-    # Addon-synced fields (e.g. backup_hint, verify_ssl) are editable in
+    # Addon-synced fields (backup_hint, ha_tool_concurrency, verify_ssl) are editable in
     # addon mode even though their env vars are set — start.py rewrites them
     # from /data/options.json on every boot, so route the write through
     # Supervisor instead of the override file.
@@ -525,11 +526,11 @@ async def _save_advanced_settings(
 ) -> JSONResponse:
     """Persist UI-edited advanced settings.
 
-    Addon-synced fields (``backup_hint``, ``verify_ssl``) in add-on mode
-    route through Supervisor; everything else atomically merges into the
-    shared ``feature_flags.json`` override file. Either sink responds with
-    ``restart_required=True`` (most advanced fields gate one-time startup
-    paths).
+    Addon-synced fields (``backup_hint``, ``ha_tool_concurrency``,
+    ``verify_ssl``) in add-on mode route through Supervisor; everything else
+    atomically merges into the shared ``feature_flags.json`` override file.
+    Either sink responds with ``restart_required=True`` (most advanced fields
+    gate one-time startup paths).
     """
     from ..config import ADVANCED_SETTINGS_FIELDS
 

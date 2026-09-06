@@ -227,6 +227,18 @@ def resolve_bool_option(config: dict[str, Any], key: str, default: bool) -> bool
     return default
 
 
+def resolve_ha_tool_concurrency(config: dict[str, Any]) -> int:
+    """Read the outer tool-call limit, warning before falling back to unlimited."""
+    raw = config.get("ha_tool_concurrency", 0)
+    if isinstance(raw, int) and not isinstance(raw, bool) and 0 <= raw <= 32:
+        return raw
+    log_warning(
+        f"addon option 'ha_tool_concurrency' has invalid value {raw!r} "
+        "(expected an integer from 0 through 32); applying 0 (unlimited)."
+    )
+    return 0
+
+
 def resolve_effective_log_level() -> int:
     """Return the root log level from ha-mcp's effective settings.
 
@@ -609,14 +621,7 @@ def main() -> int:
             enable_security_policy_tool = resolve_bool_option(
                 config, "enable_security_policy_tool", False
             )
-            raw_tool_concurrency = config.get("ha_tool_concurrency", 0)
-            ha_tool_concurrency = (
-                raw_tool_concurrency
-                if isinstance(raw_tool_concurrency, int)
-                and not isinstance(raw_tool_concurrency, bool)
-                and 0 <= raw_tool_concurrency <= 32
-                else 0
-            )
+            ha_tool_concurrency = resolve_ha_tool_concurrency(config)
             # Beta sub-flag presence tracking. On stable-addon, the 5
             # beta keys are NOT in config.yaml
             # schema — options.json carries none of them. If we wrote
