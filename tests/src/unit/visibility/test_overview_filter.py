@@ -176,11 +176,11 @@ def test_overview_fetches_states_before_parallel_optional_reads(tmp_path, monkey
         assert client.calls == ["states"]
 
         release_states.set()
-        await overview_task
-        return client
+        return await overview_task, client
 
-    client = asyncio.run(run_overview())
+    overview, client = asyncio.run(run_overview())
 
+    assert overview["success"] is True
     assert client.calls[0] == "states"
     assert set(client.calls[1:]) == {
         "services",
