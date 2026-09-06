@@ -73,8 +73,9 @@ previous `0.151.0` pin was rejected by OpenAI with HTTP 400 because GPT-6 Astra
 requires a newer Codex version.
 A matching local Windows request with `0.153.4`, `gpt-6-astra`, `low` reasoning,
 shell disabled and hosted connectors disabled returned exactly `ASTRA_OK`.
-This validates CLI/model compatibility with the local account; the repository
-OAuth account and Ubuntu permission profile still require the branch smoke run.
+The subsequent [repository smoke run](https://github.com/homeassistant-ai/ha-mcp/actions/runs/34002972368)
+validated Astra with the repository OAuth account, the Ubuntu permission profile,
+an allowed model shell command, exact output and forced auth persistence.
 
 The manual `test.yml` smoke workflow defaults to `gpt-6-astra` with `low`
 reasoning effort. The action checks credential isolation directly through
@@ -83,13 +84,22 @@ output is checked byte for byte. Astra correctly refused the older prompt
 asking it to read a path denied by its active policy, so the model is no longer
 asked to violate that policy as part of the smoke test.
 Both report workflows also expose an optional `model` input; leaving
-it empty preserves their account-default behavior. For example, after this
-branch is pushed:
+it empty preserves their account-default behavior. The existing smoke workflow
+can be dispatched on the PR branch:
 
 ```bash
 gh workflow run test.yml --ref ci/generic-codex-action -f model=gpt-6-astra
-gh workflow run codex-review-issues.yml --ref ci/generic-codex-action -f model=gpt-6-astra -f limit=5
-gh workflow run codex-review-prs.yml --ref ci/generic-codex-action -f model=gpt-6-astra -f limit=3
+```
+
+The new report workflows become dispatchable in this repository after they
+land on the default branch. Before merge, use the
+[permanent workflow bench](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/blob/master/fixtures/README.md),
+which tests a maintainer-selected full SHA of these canonical actions with its
+own credentials and manifest-controlled scenarios. After merge:
+
+```bash
+gh workflow run codex-review-issues.yml -f model=gpt-6-astra -f limit=5
+gh workflow run codex-review-prs.yml -f model=gpt-6-astra -f limit=3
 ```
 
 An older successful smoke run without an explicit model does not establish
