@@ -140,9 +140,14 @@ class TestHaGetHistoryWorkloadGuardrails:
             "success": True,
             "result": {"sensor.temp": []},
         }
-        with patch(
-            "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _client, data: data,
+        with (
+            patch.object(
+                tools_history.settings, "enable_history_query_guardrails", True
+            ),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _client, data: data,
+            ),
         ):
             result = await history_tool(
                 entity_ids="sensor.temp",
@@ -181,9 +186,14 @@ class TestHaGetHistoryWorkloadGuardrails:
             "success": True,
             "result": {"sensor.temp": []},
         }
-        with patch(
-            "ha_mcp.tools.tools_history.add_timezone_metadata",
-            side_effect=lambda _client, data: data,
+        with (
+            patch.object(
+                tools_history.settings, "enable_history_query_guardrails", False
+            ),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _client, data: data,
+            ),
         ):
             result = await history_tool(
                 entity_ids="sensor.temp",
