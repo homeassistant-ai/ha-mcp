@@ -164,7 +164,14 @@ class TestHaGetOverviewFieldsProjection:
         assert "system_info" in result
         assert result["system_info"]["version"] == "2026.5.0"
         # All other top-level keys must be absent.
-        for key in ("domains", "entity_summary", "total_entities", "repair_count"):
+        for key in (
+            "domain_stats",
+            "area_analysis",
+            "domains",
+            "entity_summary",
+            "total_entities",
+            "repair_count",
+        ):
             assert key not in result, f"unexpected key {key!r} survived projection"
 
     @pytest.mark.asyncio
@@ -248,6 +255,7 @@ class TestHaGetOverviewFieldsProjection:
         result = await overview_tool(fields=["domains"])
 
         assert result["success"] is True
+        assert "domains" not in result
         mock_smart_tools.get_system_overview.assert_not_awaited()
 
     @pytest.mark.parametrize("field", ["partial", "warnings"])

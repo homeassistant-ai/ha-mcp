@@ -126,8 +126,10 @@ def test_overview_fetches_states_before_parallel_optional_reads(tmp_path, monkey
     """States fails fast before the four optional overview reads fan out."""
 
     class SequencedClient(_OverviewClient):
-        def __init__(self):
+        def __init__(self, states_started, release_states):
             super().__init__([], {"success": True, "result": []})
+            self.states_started = states_started
+            self.release_states = release_states
             self.calls = []
             self.active_optional = 0
             self.max_active_optional = 0
@@ -144,6 +146,8 @@ def test_overview_fetches_states_before_parallel_optional_reads(tmp_path, monkey
 
         async def get_states(self):
             self.calls.append("states")
+            self.states_started.set()
+            await self.release_states.wait()
             return []
 
         async def get_services(self):
@@ -156,11 +160,26 @@ def test_overview_fetches_states_before_parallel_optional_reads(tmp_path, monkey
 
     save_visibility_config(tmp_path, VisibilityConfig(enabled=False))
     monkeypatch.setattr(resolver, "get_data_dir", lambda: tmp_path)
-    mixin = SystemOverviewMixin()
-    client = SequencedClient()
-    mixin.client = client
 
-    asyncio.run(mixin.get_system_overview(detail_level="minimal"))
+    async def run_overview():
+        states_started = asyncio.Event()
+        release_states = asyncio.Event()
+        mixin = SystemOverviewMixin()
+        client = SequencedClient(states_started, release_states)
+        mixin.client = client
+
+        overview_task = asyncio.create_task(
+            mixin.get_system_overview(detail_level="minimal")
+        )
+        await states_started.wait()
+        await asyncio.sleep(0)
+        assert client.calls == ["states"]
+
+        release_states.set()
+        await overview_task
+        return client
+
+    client = asyncio.run(run_overview())
 
     assert client.calls[0] == "states"
     assert set(client.calls[1:]) == {
