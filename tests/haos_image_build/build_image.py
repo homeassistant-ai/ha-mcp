@@ -43,7 +43,7 @@ STABLE_HAOS_VERSION = "18.2"
 # renovate: datasource=custom.ha-supervisor-stable depName=home-assistant/supervisor
 STABLE_SUPERVISOR_VERSION = "2026.08.0"
 # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-STABLE_CORE_VERSION = "2026.9.0"
+STABLE_CORE_VERSION = "2026.9.1"
 
 HAOS_VERSION = os.environ.get("HAOS_BUILD_OS_VERSION", STABLE_HAOS_VERSION)
 if re.fullmatch(r"[0-9]+\.[0-9]+(?:\.rc[0-9]+)?", HAOS_VERSION) is None:
