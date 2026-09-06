@@ -2,6 +2,12 @@ name: Codex example - hello world
 
 on:
   workflow_dispatch:
+    inputs:
+      model:
+        description: Codex model to verify with the repository's authenticated account.
+        required: true
+        default: gpt-6-astra
+        type: string
 
 permissions:
   contents: read
@@ -26,6 +32,8 @@ jobs:
         uses: ./.github/actions/codex-run
         with:
           codex-auth: ${{ secrets.CODEX_AUTH }}
+          model: ${{ inputs.model }}
+          reasoning-effort: low
           sandbox: read-only
           timeout-minutes: "5"
           instructions: |

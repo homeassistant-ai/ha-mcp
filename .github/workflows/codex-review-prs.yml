@@ -3,6 +3,11 @@ name: Codex example - review open pull requests
 on:
   workflow_dispatch:
     inputs:
+      model:
+        description: Optional Codex model, e.g. gpt-6-astra; empty uses the account default.
+        required: false
+        default: ""
+        type: string
       limit:
         description: Maximum number of newest open PRs to review (1-10).
         required: false
@@ -141,6 +146,7 @@ jobs:
         uses: ./.github/actions/codex-run
         with:
           codex-auth: ${{ secrets.CODEX_AUTH }}
+          model: ${{ inputs.model }}
           sandbox: read-only
           allow-shell: "false"
           timeout-minutes: "12"

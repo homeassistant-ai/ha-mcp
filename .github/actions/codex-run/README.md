@@ -59,6 +59,39 @@ jobs:
             Do not modify files or external state.
 ```
 
+## Model selection
+
+Set `model: gpt-6-astra` to request GPT-6 Astra explicitly. The action forwards
+the identifier unchanged to `codex exec --model`; it does not select a fallback
+if the authenticated account lacks access. The
+[official model reference](https://developers.openai.com/api/docs/models/gpt-6-astra)
+documents this identifier; access must be checked with the actual `CODEX_AUTH`
+account used by the workflow.
+
+The action pins Codex CLI `0.153.4`. On 2026-09-05, a real request with the
+previous `0.151.0` pin was rejected by OpenAI with HTTP 400 because GPT-6 Astra
+requires a newer Codex version.
+A matching local Windows request with `0.153.4`, `gpt-6-astra`, `low` reasoning,
+shell disabled and hosted connectors disabled returned exactly `ASTRA_OK`.
+This validates CLI/model compatibility with the local account; the repository
+OAuth account and Ubuntu permission profile still require the branch smoke run.
+
+The manual `test.yml` smoke workflow defaults to `gpt-6-astra` with `low`
+reasoning effort and verifies the existing shell-isolation probe and exact
+output. Both report workflows also expose an optional `model` input; leaving
+it empty preserves their account-default behavior. For example, after this
+branch is pushed:
+
+```bash
+gh workflow run test.yml --ref ci/generic-codex-action -f model=gpt-6-astra
+gh workflow run codex-review-issues.yml --ref ci/generic-codex-action -f model=gpt-6-astra -f limit=5
+gh workflow run codex-review-prs.yml --ref ci/generic-codex-action -f model=gpt-6-astra -f limit=3
+```
+
+An older successful smoke run without an explicit model does not establish
+GPT-6 Astra access. Check the new run's model header, CLI version, output
+assertion and auth-persistence result before claiming that validation.
+
 ## Caller-controlled GitHub access
 
 ```yaml
