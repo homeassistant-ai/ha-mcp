@@ -5,6 +5,11 @@ name: Issue 2367 - Manual HAOS reproduction
 on:
   workflow_dispatch:
     inputs:
+      phase:
+        description: Desktop source inspection or HAOS reproduction
+        type: choice
+        options: [haos, inspect]
+        default: haos
       force_local_build:
         description: Rebuild the HAOS image on the GitHub runner
         type: boolean
@@ -23,7 +28,34 @@ env:
   LIBGUESTFS_BACKEND: direct
 
 jobs:
+  desktop-inspect:
+    if: inputs.phase == 'inspect'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Extract pinned official Claude Desktop on GitHub
+        run: |
+          mkdir -p /tmp/desktop-inspection
+          curl -fL --retry 3 https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_1.46388.2_amd64.deb -o /tmp/claude.deb
+          echo '98bf54e85e4916068c4281459b0f0431d8ff68034773f3ee98311d7206566ab1  /tmp/claude.deb' | sha256sum -c -
+          dpkg-deb -x /tmp/claude.deb /tmp/claude-package
+          asar_path=$(find /tmp/claude-package -name app.asar -print -quit)
+          test -n "$asar_path"
+          sha256sum /tmp/claude.deb "$asar_path" > /tmp/desktop-inspection/checksums.txt
+          npx --yes @electron/asar@3.4.1 extract "$asar_path" /tmp/claude-source
+          python3 investigation/issue-2367/inspect_desktop.py /tmp/claude-source
+      - name: Upload Desktop source analysis
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: desktop-inspection
+          path: /tmp/desktop-inspection/
+          retention-days: 7
   haos-e2e-embedded:
+    if: inputs.phase != 'inspect'
     name: Issue 2367 HAOS embedded reproduction
     runs-on: ubuntu-22.04
     # 60 (vs the external/inaddon lanes' 45): the embedded lane pays a per-worker
