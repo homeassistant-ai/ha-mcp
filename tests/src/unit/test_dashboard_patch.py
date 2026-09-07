@@ -126,7 +126,9 @@ def test_malformed_pointer_is_rejected(apply_patch, path) -> None:
         ({"cards": []}, "/cards/-/child"),
     ],
 )
-def test_add_does_not_create_missing_or_scalar_parents(apply_patch, config, path) -> None:
+def test_add_does_not_create_missing_or_scalar_parents(
+    apply_patch, config, path
+) -> None:
     with pytest.raises(ValueError):
         apply_patch(config, [{"op": "add", "path": path, "value": 1}])
 
@@ -149,7 +151,9 @@ def test_add_replaces_existing_object_member_and_accepts_null(apply_patch) -> No
         ([1, 2], [2, 1]),
     ],
 )
-def test_test_operation_rejects_type_or_value_mismatch(apply_patch, actual, expected) -> None:
+def test_test_operation_rejects_type_or_value_mismatch(
+    apply_patch, actual, expected
+) -> None:
     with pytest.raises(ValueError):
         apply_patch(
             {"value": actual}, [{"op": "test", "path": "/value", "value": expected}]
@@ -172,7 +176,9 @@ def test_test_operation_accepts_nested_values_and_object_key_order(apply_patch) 
 
 
 @pytest.mark.parametrize("actual,expected", [(1, 1.0), (1.0, 1), (0, -0.0)])
-def test_test_operation_compares_numbers_by_value(apply_patch, actual, expected) -> None:
+def test_test_operation_compares_numbers_by_value(
+    apply_patch, actual, expected
+) -> None:
     assert apply_patch(
         {"value": actual}, [{"op": "test", "path": "/value", "value": expected}]
     ) == {"value": actual}
