@@ -181,3 +181,10 @@ commit `3e5409ec`, passed the native large-message preflight and the SDK check
 tool calls). This is the final compatibility check, not another HAOS matrix run.
 The older startup attempt 34157397313 ended at its configured 15-minute workflow
 limit with GitHub's `cancelled` conclusion; no cancellation was requested.
+
+## Later chat-session experiment
+
+[SESSION-EMULATION.md](SESSION-EMULATION.md) describes the expanded harness and
+its separate results. It uses the original chat preload and connection lifecycle
+with a simulated signed-in page, and adds conversation changes and renderer
+reloads. The original transport-only results above remain distinct.

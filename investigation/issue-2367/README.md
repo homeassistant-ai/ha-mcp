@@ -31,6 +31,9 @@ exclude suspended asynchronous tasks.
 transport code running inside native Electron/Chromium and real MessagePorts.
 See [DESKTOP-VERIFICATION.md](DESKTOP-VERIFICATION.md) for source provenance,
 Windows comparisons, runtime details and emulation limits.
+[SESSION-EMULATION.md](SESSION-EMULATION.md) records the later `session_mode=true`
+experiment: original chat preload and connection lifecycle, synthetic account
+state, conversation changes, renderer reloads and three further HAOS batches.
 
 The Desktop HAOS matrix has eight cases: two protocol versions, single/dual
 channels, and default/false MandatoryBPS. Each uses three fresh Desktop processes
