@@ -27,7 +27,9 @@ def test_ha_owned_requirements_allow_core_patch_updates(
     name, current, next_patch, breaking
 ):
     project = tomllib.loads((_ROOT / "pyproject.toml").read_text())
-    deps = {dep.name: dep for dep in map(Requirement, project["project"]["dependencies"])}
+    deps = {
+        dep.name: dep for dep in map(Requirement, project["project"]["dependencies"])
+    }
     assert current in deps[name].specifier
     assert next_patch in deps[name].specifier
     assert breaking not in deps[name].specifier
@@ -115,7 +117,9 @@ def test_hacs_minimum_embedded_install_is_part_of_required_e2e_gate():
     assert len(floor) == 1
     assert floor[0]["pytest_workers"] == 1
     steps = embedded["steps"]
-    select = next(step for step in steps if step.get("name") == "Select HACS minimum image")
+    select = next(
+        step for step in steps if step.get("name") == "Select HACS minimum image"
+    )
     assert "matrix.hacs_minimum" in select["if"]
     assert "hacs.json" in select["run"]
     assert "HA_IMAGE_GHCR=" in select["run"]
