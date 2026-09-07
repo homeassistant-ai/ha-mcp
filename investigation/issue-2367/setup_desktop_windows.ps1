@@ -24,7 +24,7 @@ for(const entry of asar.listPackage('C:/tmp/claude-windows.asar')) {
   if(name!=='package.json'&&!(name.startsWith('.vite/build/')&&name.endsWith('.js')))continue;
   const target=path.join('C:/tmp/claude-source',name);
   fs.mkdirSync(path.dirname(target),{recursive:true});
-  fs.writeFileSync(target,asar.extractFile('C:/tmp/claude-windows.asar',name));
+  fs.writeFileSync(target,asar.extractFile('C:/tmp/claude-windows.asar',path.normalize(name)));
 }
 '@ | Set-Content -Encoding utf8 C:/tmp/extract-windows.cjs
 node C:/tmp/extract-windows.cjs
