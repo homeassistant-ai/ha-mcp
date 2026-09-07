@@ -53,7 +53,7 @@ async function main(){
   win=new BrowserWindow({show:false,webPreferences:{nodeIntegration:true,contextIsolation:false}});
   await win.loadFile('/tmp/desktop-harness/renderer.html');
   for(const route of Object.keys(config.mcpServers))await open(route);
-  emit({type:'ready',versions:process.versions,desktop:'1.46388.2',routes:Object.keys(config.mcpServers)});
+  emit({type:'ready',versions:process.versions,desktop:process.env.REPRO_PLATFORM==='win32'?'1.46388.4':'1.46388.2',routes:Object.keys(config.mcpServers)});
   const input=readline.createInterface({input:process.stdin});
   input.on('line',line=>{
     const {route='primary',...message}=JSON.parse(line);

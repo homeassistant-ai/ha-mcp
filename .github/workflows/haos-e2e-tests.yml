@@ -8,7 +8,7 @@ on:
       phase:
         description: Desktop source inspection or HAOS reproduction
         type: choice
-        options: [haos, inspect, sdk]
+        options: [haos, inspect, sdk, windows]
         default: haos
       windows_version:
         description: Windows bundle to compare with the pinned Linux Desktop
@@ -39,6 +39,24 @@ env:
   WINDOWS_VERSION: ${{ inputs.windows_version }}
 
 jobs:
+  desktop-windows:
+    if: inputs.phase == 'windows'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Exercise Windows Desktop transport on native Windows pipes
+        shell: pwsh
+        run: ./investigation/issue-2367/setup_desktop_windows.ps1
+      - name: Upload Windows transport evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: desktop-windows-inspection
+          path: C:/tmp/desktop-inspection/
+          retention-days: 7
   desktop-inspect:
     if: inputs.phase == 'inspect' || inputs.phase == 'sdk'
     runs-on: ubuntu-22.04

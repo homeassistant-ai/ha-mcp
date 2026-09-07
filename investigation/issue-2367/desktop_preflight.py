@@ -8,10 +8,11 @@ from pathlib import Path
 out=Path('/tmp/desktop-inspection')
 config=out/'smoke-config.json'
 config.write_text(json.dumps({'mcpServers':{'primary':{'command':sys.executable,'args':['-u','-c',
-    'import sys,json\nfor line in sys.stdin:\n m=json.loads(line);print(json.dumps({"jsonrpc":"2.0","id":m["id"],"result":{"echo":m["params"]}}),flush=True)']}}}))
+    'import sys,json\nsys.stdin.reconfigure(encoding="utf-8");sys.stdout.reconfigure(encoding="utf-8")\nfor line in sys.stdin:\n m=json.loads(line);print(json.dumps({"jsonrpc":"2.0","id":m["id"],"result":{"echo":m["params"]}}),flush=True)']}}}))
 env={**os.environ,'REPRO_DESKTOP_CONFIG':str(config),'REPRO_DESKTOP_LOG':str(out/'smoke-trace.jsonl'),'REPRO_DESKTOP_PROFILE':'/tmp/desktop-smoke-profile'}
 with (out/'electron-stderr.txt').open('w') as stderr:
-    p=subprocess.Popen(['xvfb-run','-a','/tmp/claude-package/usr/lib/claude-desktop/claude-desktop','--no-sandbox'],env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=stderr,text=True)
+    command=([os.environ['DESKTOP_BINARY'],'--no-sandbox'] if os.name=='nt' else ['xvfb-run','-a','/tmp/claude-package/usr/lib/claude-desktop/claude-desktop','--no-sandbox'])
+    p=subprocess.Popen(command,env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=stderr,text=True,encoding='utf-8')
     try:
         with (out/'electron-stdout.txt').open('w') as startup:
             for line in p.stdout:

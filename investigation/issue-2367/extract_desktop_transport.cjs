@@ -6,9 +6,10 @@ const acorn = require('/tmp/desktop-analysis/node_modules/acorn');
 const walk = require('/tmp/desktop-analysis/node_modules/acorn-walk');
 const scope = require('/tmp/desktop-analysis/node_modules/eslint-scope');
 const dir = '/tmp/claude-source/.vite/build';
-const filename = path.join(dir, 'index.chunk-DrnJEXHK.js');
+const windows=process.env.REPRO_PLATFORM==='win32';
+const filename = path.join(dir, windows?'index.chunk--WuAOADe.js':'index.chunk-DrnJEXHK.js');
 const source = fs.readFileSync(filename, 'utf8');
-if(crypto.createHash('sha256').update(source).digest('hex') !== 'ec48534a81eb0a7faabeccf41d8bfcb93f7c4d678e7e8ddc1cbd83825070a26c') throw Error('Desktop source drift');
+if(crypto.createHash('sha256').update(source).digest('hex') !== (windows?'beb8b9ad91b0979aa0e89b0ab373cc790e95ccb06a161e29a2978bdec653beb8':'ec48534a81eb0a7faabeccf41d8bfcb93f7c4d678e7e8ddc1cbd83825070a26c')) throw Error('Desktop source drift');
 const ast = acorn.parse(source, {ecmaVersion:'latest',sourceType:'script',ranges:true});
 const scopes = scope.analyze(ast,{ecmaVersion:2024,sourceType:'script',optimistic:true,ignoreEval:true});
 const defs = new Map();
@@ -46,7 +47,7 @@ function include(name) {
     if(target && target.defs.some(d=> d.name && defs.has(d.name.name) && defs.get(d.name.name).start <= d.name.start && d.name.end <= defs.get(d.name.name).end)) include(target.name);
   }
 }
-for(const name of ['Op','SHn','jHn','brt','Srt','Dqe','Mp','Tqe','vrt'])include(name);
+for(const name of (windows?['Mp','NUn','HUn','drt','prt','Cqe','Ip','xqe','urt']:['Op','SHn','jHn','brt','Srt','Dqe','Mp','Tqe','vrt']))include(name);
 // Declarations alone omit bundle initialization such as globalThis[zodKey]
 // ??= {} and enum IIFEs. Retain writes to selected bindings/objects in their
 // original order, then close over their dependencies too.
@@ -86,7 +87,7 @@ let output='"use strict";\n'+[...substitutes.values()].join('\n')+'\n';
 for(const {node}of nodes)output+=(node.type==='VariableDeclarator'?'var ':'')+source.slice(node.start,node.end)+';\n';
 fs.writeFileSync('/tmp/desktop-inspection/global-init-source.txt',[...globalMembers].map(key=>{const pos=source.indexOf('globalThis.'+key);return source.slice(Math.max(0,pos-150),pos+500)}).join('\n'));
 fs.writeFileSync('/tmp/desktop-inspection/initializers.txt',[...usedEffects].map(n=>source.slice(n.start,n.end)).join('\n'));
-output+='module.exports={StdioTransport:Op,PortTransport:SHn,bridge:jHn,GroupTransport:brt,spawnSpec:Mp,maxBufferSize:vrt};\n';
+output+=(windows?'module.exports={StdioTransport:Mp,PortTransport:NUn,bridge:HUn,GroupTransport:drt,spawnSpec:Ip,maxBufferSize:urt};\n':'module.exports={StdioTransport:Op,PortTransport:SHn,bridge:jHn,GroupTransport:brt,spawnSpec:Mp,maxBufferSize:vrt};\n');
 fs.writeFileSync(path.join(dir,'repro-transport.cjs'),output);
 fs.writeFileSync('/tmp/desktop-inspection/extracted-transport.txt',output);
 fs.writeFileSync('/tmp/desktop-inspection/extraction.json',JSON.stringify({source:filename,selected:[...selected],bytes:output.length,source_sha256:crypto.createHash('sha256').update(source).digest('hex'),extracted_sha256:crypto.createHash('sha256').update(output).digest('hex')},null,2));
