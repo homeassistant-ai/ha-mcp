@@ -119,8 +119,9 @@ class TestHaGetHistoryWorkloadGuardrails:
     ):
         timezone_lookup = AsyncMock(return_value=("UTC", False))
         with (
-            patch.object(
-                tools_history.settings, "enable_history_query_guardrails", True
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=True),
             ),
             patch(
                 "ha_mcp.tools.tools_history._fetch_ha_timezone",
@@ -146,8 +147,9 @@ class TestHaGetHistoryWorkloadGuardrails:
         self, history_tool, mock_client
     ):
         with (
-            patch.object(
-                tools_history.settings, "enable_history_query_guardrails", True
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=True),
             ),
             pytest.raises(ToolError) as exc_info,
         ):
@@ -171,8 +173,9 @@ class TestHaGetHistoryWorkloadGuardrails:
             "result": {"sensor.temp": []},
         }
         with (
-            patch.object(
-                tools_history.settings, "enable_history_query_guardrails", True
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=True),
             ),
             patch(
                 "ha_mcp.tools.tools_history.add_timezone_metadata",
@@ -190,8 +193,9 @@ class TestHaGetHistoryWorkloadGuardrails:
     @pytest.mark.asyncio
     async def test_rejects_excessive_statistics_rows(self, history_tool, mock_client):
         with (
-            patch.object(
-                tools_history.settings, "enable_history_query_guardrails", True
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=True),
             ),
             pytest.raises(ToolError) as exc_info,
         ):
@@ -213,8 +217,9 @@ class TestHaGetHistoryWorkloadGuardrails:
         self, history_tool, mock_client
     ):
         with (
-            patch.object(
-                tools_history.settings, "enable_history_query_guardrails", True
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=True),
             ),
             patch(
                 "ha_mcp.tools.tools_history._fetch_ha_timezone",
@@ -242,8 +247,9 @@ class TestHaGetHistoryWorkloadGuardrails:
         self, history_tool, mock_client
     ):
         with (
-            patch.object(
-                tools_history.settings, "enable_history_query_guardrails", True
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=True),
             ),
             patch(
                 "ha_mcp.tools.tools_history._fetch_ha_timezone",
@@ -270,8 +276,9 @@ class TestHaGetHistoryWorkloadGuardrails:
         self, history_tool, mock_client
     ):
         with (
-            patch.object(
-                tools_history.settings, "enable_history_query_guardrails", True
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=True),
             ),
             patch(
                 "ha_mcp.tools.tools_history._fetch_ha_timezone",
@@ -310,8 +317,9 @@ class TestHaGetHistoryWorkloadGuardrails:
             "result": {"sensor.temp": []},
         }
         with (
-            patch.object(
-                tools_history.settings, "enable_history_query_guardrails", False
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=False),
             ),
             patch(
                 "ha_mcp.tools.tools_history.add_timezone_metadata",
@@ -328,12 +336,51 @@ class TestHaGetHistoryWorkloadGuardrails:
         mock_client.send_websocket_message.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_guardrail_setting_refreshes_between_queries(
+        self, history_tool, mock_client
+    ):
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"sensor.temp": []},
+        }
+        live_settings = [
+            MagicMock(enable_history_query_guardrails=False),
+            MagicMock(enable_history_query_guardrails=True),
+        ]
+        with (
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                side_effect=live_settings,
+            ) as get_live_settings,
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _client, data: data,
+            ),
+        ):
+            first_result = await history_tool(
+                entity_ids="sensor.temp",
+                start_time="2026-01-01T00:00:00Z",
+                end_time="2026-02-01T00:00:00Z",
+            )
+            with pytest.raises(ToolError):
+                await history_tool(
+                    entity_ids="sensor.temp",
+                    start_time="2026-01-01T00:00:00Z",
+                    end_time="2026-02-01T00:00:00Z",
+                )
+
+        assert first_result["success"] is True
+        assert get_live_settings.call_count == 2
+        mock_client.send_websocket_message.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_reversed_range_rejected_when_guardrails_disabled(
         self, history_tool, mock_client
     ):
         with (
-            patch.object(
-                tools_history.settings, "enable_history_query_guardrails", False
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=False),
             ),
             pytest.raises(ToolError) as exc_info,
         ):

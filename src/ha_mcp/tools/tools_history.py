@@ -20,7 +20,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
-from ..config import get_settings
+from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response, create_validation_error
 from .helpers import (
     exception_to_structured_error,
@@ -42,7 +42,6 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 
 def _convert_timestamp(value: Any) -> str | None:
@@ -363,9 +362,10 @@ class HistoryTools:
             # Parse time parameters
             start_dt, end_dt = _parse_time_range(start_time, end_time, default_hours)
             _validate_time_range(start_dt, end_dt)
+            query_settings = get_global_settings()
             statistics_timezone: tzinfo = UTC
             if (
-                settings.enable_history_query_guardrails
+                query_settings.enable_history_query_guardrails
                 and source == "statistics"
                 and period in _CALENDAR_STATISTICS_PERIODS
             ):
@@ -378,7 +378,7 @@ class HistoryTools:
                 minimal_response=minimal_response,
                 significant_changes_only=significant_changes_only,
                 period=period,
-                enforce_budget=settings.enable_history_query_guardrails,
+                enforce_budget=query_settings.enable_history_query_guardrails,
                 statistics_timezone=statistics_timezone,
             )
 
