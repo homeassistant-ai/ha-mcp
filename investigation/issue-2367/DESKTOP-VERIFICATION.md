@@ -75,3 +75,19 @@ readback and restoration. Standalone mode removes baked HA-MCP integrations and
 asserts they are not loaded; app/component modes use a real HA-hosted MCP server.
 The dual case is a deliberate extra-channel stress test, not a claim that every
 Desktop session launches two servers by default.
+
+## Windows release preceding the report
+
+[Run 34155972855](https://github.com/homeassistant-ai/ha-mcp/actions/runs/34155972855)
+compared Windows **1.44121.2** (September 2) with the tested Linux 1.46388.2.
+The reporter did not supply their Desktop version, so this is a period-appropriate
+comparison candidate, not confirmed installed-client provenance.
+
+Eleven of the thirteen selected transport definitions match. The newer forwarding
+bridge adds an optional `onServerMessage` callback; the older bridge lacks it.
+The newer command resolver also checks the resolved command before launching it.
+The pipe transport, buffer/parser/serializer, MessagePort transport, environment
+selection, process specification, and buffer limit match. The application-level
+startup coordinator also differs and is not part of the extracted transport
+harness. Package dependency declarations match. These observations narrow the
+shared portion; they do not equate either app's full lifecycle with the emulator.

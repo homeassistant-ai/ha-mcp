@@ -47,6 +47,12 @@ def bare_haos():
         yield
 
 
+@pytest.fixture(scope='session',name='ha_container_with_fresh_config')
+def desktop_haos_backend(bare_haos,ha_container_with_fresh_config):
+    """Make offline cleanup a prerequisite of the parent VM fixture."""
+    return ha_container_with_fresh_config
+
+
 def server_env(info,folder):
     return {'HOMEASSISTANT_URL':info['base_url'],'HOMEASSISTANT_TOKEN':info['token'],
             'HA_MCP_CONFIG_DIR':str(folder),'HAMCP_ENV_FILE':'/tmp/repro-no-env-file',
