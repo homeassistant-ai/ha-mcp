@@ -15,15 +15,18 @@ from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 
 from .repro_issue_2367 import (
-    DATA, EXACT_TRANSFORM, attempt, call, get_dashboard, record,
+    DATA, EXACT_TRANSFORM, attempt, call, get_dashboard, make_client, record,
 )
 
-pytestmark=[pytest.mark.haos_stdio_only,pytest.mark.timeout(1200)]
+pytestmark=[pytest.mark.timeout(1200)]
 
 
 @pytest.fixture(scope='session',autouse=True)
 def bare_haos():
     """Remove baked MCP integrations before boot; never install a server in HA."""
+    if os.environ['HAOS_TEST_MODE'] != 'stdio':
+        yield
+        return
     from .. import conftest as suite
     def remove(image):
         with tempfile.TemporaryDirectory() as folder:
@@ -69,6 +72,11 @@ class DesktopClient:
         servers={route:{'command':uvx,'args':['--from',spec,'ha-mcp'],
                        'env':server_env(self.info,self.folder/('server-'+route))}
                  for route in ['primary']+(['secondary'] if self.dual else [])}
+        if self.info['backend'] != 'haos_stdio':
+            url=self.info['embedded_webhook_url'] or self.info['addon_mcp_url']
+            servers={route:{'command':uvx,'args':['--from','fastmcp-remote==4.0.3','fastmcp-remote',url,'--auth','none'],
+                            'env':{'PATH':os.environ['PATH']}}
+                     for route in servers}
         config=self.folder/'config.json'
         config.write_text(json.dumps({'mcpServers':servers}))
         self.stderr=(self.folder/'electron-stderr.txt').open('w')
@@ -165,23 +173,26 @@ class DesktopClient:
 @pytest.mark.parametrize('bps',['default','false'])
 async def test_desktop_issue_2367(ha_container_with_fresh_config,protocol,dual,bps):
     info=ha_container_with_fresh_config
-    assert info['backend']=='haos_stdio'
-    assert info['embedded_webhook_url'] is None
-    assert info['addon_mcp_url'] is None
+    standalone=info['backend']=='haos_stdio'
     import httpx
     async with httpx.AsyncClient() as rest:
         headers={'Authorization':'Bearer '+info['token']}
-        services=await rest.get(info['base_url']+'/api/services',headers=headers)
-        services.raise_for_status()
-        assert not any(s['domain'] in ('ha_mcp_tools','mcp_proxy') for s in services.json())
         config=await rest.get(info['base_url']+'/api/config',headers=headers)
         config.raise_for_status()
-        assert 'ha_mcp_tools' not in config.json()['components']
-        record('standalone_topology',ha_version=config.json()['version'],ha_mcp_component_loaded=False,server_spec=os.environ['REPRO_HAMCP_SPEC'])
+        if standalone:
+            assert info['embedded_webhook_url'] is None
+            assert info['addon_mcp_url'] is None
+            services=await rest.get(info['base_url']+'/api/services',headers=headers)
+            services.raise_for_status()
+            assert not any(s['domain'] in ('ha_mcp_tools','mcp_proxy') for s in services.json())
+            assert 'ha_mcp_tools' not in config.json()['components']
+        record('desktop_topology',ha_version=config.json()['version'],backend=info['backend'],ha_mcp_component_loaded='ha_mcp_tools' in config.json()['components'],server_spec=os.environ['REPRO_HAMCP_SPEC'])
     baseline_config=YAML(typ='safe').load((DATA/'dashboard-media-sanitized.yaml').read_text())
     label=f'desktop/{protocol}/{dual}/{bps}'
     artifact_root=Path('/tmp/desktop-measurements')/label
-    async with Client(StdioTransport(command='ha-mcp',args=[],env=server_env(info,artifact_root/'observer'),keep_alive=False),timeout=240) as observer:
+    observer_client=(Client(StdioTransport(command='ha-mcp',args=[],env=server_env(info,artifact_root/'observer'),keep_alive=False),timeout=240)
+                     if standalone else make_client(info['embedded_webhook_url'] or info['addon_mcp_url'],False))
+    async with observer_client as observer:
         await call(observer,'ha_config_set_dashboard',{'url_path':'dashboard-media','config':baseline_config,'MandatoryBPS':False},label+'/setup')
         baseline=await get_dashboard(observer,label+'/baseline')
         assert baseline['config']==baseline_config

@@ -20,6 +20,7 @@ for(const node of ast.body) {
 // process IO, forwarding, message-port handling and shutdown source unchanged.
 const substitutes = new Map([['N','const N = console;']]);
 const selected = new Set();
+const globalMembers=new Set();
 const references = scopes.scopes.flatMap(s=>s.references).sort((a,b)=>a.identifier.start-b.identifier.start);
 function isTop(target) {
   return target && target.defs.some(d=>d.name && defs.has(d.name.name) && defs.get(d.name.name).start<=d.name.start && d.name.end<=defs.get(d.name.name).end);
@@ -39,6 +40,7 @@ function include(name) {
   if(substitutes.has(name))return;
   const node=defs.get(name);
   if(!node)throw Error('No top-level declaration for '+name);
+  walk.simple(node,{MemberExpression(n){if(n.object.type==='Identifier' && n.object.name==='globalThis' && !n.computed)globalMembers.add(n.property.name)}});
   for(const ref of refsWithin(node)) {
     const target=ref.resolved;
     if(target && target.defs.some(d=> d.name && defs.has(d.name.name) && defs.get(d.name.name).start <= d.name.start && d.name.end <= defs.get(d.name.name).end)) include(target.name);
@@ -63,7 +65,11 @@ while(changed) {
   for(const node of effects) {
     if(usedEffects.has(node))continue;
     let needed=refsWithin(node).some(r=>r.isWrite()&&isTop(r.resolved)&&selected.has(r.resolved.name));
-    walk.simple(node,{AssignmentExpression(n){if(n.left.type==='MemberExpression'&&touchesSelected(n.left))needed=true}});
+    walk.simple(node,{AssignmentExpression(n){
+      if(n.left.type!=='MemberExpression')return;
+      if(touchesSelected(n.left))needed=true;
+      if(n.left.object.type==='Identifier'&&n.left.object.name==='globalThis'&&!n.left.computed&&globalMembers.has(n.left.property.name))needed=true;
+    }});
     if(!needed)continue;
     usedEffects.add(node);changed=true;
     for(const ref of refsWithin(node)) {

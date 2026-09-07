@@ -4,7 +4,20 @@ mkdir -p /tmp/desktop-inspection
 curl -fL --retry 3 https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_1.46388.2_amd64.deb -o /tmp/claude.deb
 echo '98bf54e85e4916068c4281459b0f0431d8ff68034773f3ee98311d7206566ab1  /tmp/claude.deb' | sha256sum -c -
 dpkg-deb -x /tmp/claude.deb /tmp/claude-package
-asar_path=$(find /tmp/claude-package -name app.asar -print -quit)
+asar_path=$(# Public Windows release linked by Anthropic's official MSIX download redirect.
+curl -fL --retry 3 https://downloads.claude.ai/releases/win32/x64/1.46388.4/Claude-50e62f90a2c85243eef42913398f7c8f1534abef.msix -o /tmp/claude-windows.msix
+sha256sum /tmp/claude-windows.msix >> /tmp/desktop-inspection/checksums.txt
+python3 - <<'EXTRACT_WINDOWS'
+import zipfile
+from pathlib import Path
+with zipfile.ZipFile('/tmp/claude-windows.msix') as z:
+    names=[n for n in z.namelist() if n.endswith('/resources/app.asar')]
+    assert len(names)==1,names
+    Path('/tmp/claude-windows.asar').write_bytes(z.read(names[0]))
+EXTRACT_WINDOWS
+npx --yes @electron/asar@3.4.1 extract /tmp/claude-windows.asar /tmp/claude-windows-source
+node investigation/issue-2367/compare_desktop.cjs
+find /tmp/claude-package -name app.asar -print -quit)
 test -n "$asar_path"
 sha256sum /tmp/claude.deb "$asar_path" > /tmp/desktop-inspection/checksums.txt
 npx --yes @electron/asar@3.4.1 extract "$asar_path" /tmp/claude-source

@@ -10,6 +10,11 @@ on:
         type: choice
         options: [haos, inspect]
         default: haos
+      topology:
+        description: Desktop launches standalone ha-mcp or a bridge to HA-hosted MCP
+        type: choice
+        options: [stdio, embedded, inaddon]
+        default: stdio
       force_local_build:
         description: Rebuild the HAOS image on the GitHub runner
         type: boolean
@@ -49,7 +54,7 @@ jobs:
           retention-days: 7
   haos-e2e-standalone:
     if: inputs.phase != 'inspect'
-    name: Issue 2367 Desktop standalone against HAOS
+    name: Issue 2367 Desktop ${{ inputs.topology }} against HAOS
     runs-on: ubuntu-22.04
     # 60 (vs the external/inaddon lanes' 45): the embedded lane pays a per-worker
     # session-setup cost the others don't — enabling the entry kicks off a runtime
@@ -189,7 +194,7 @@ jobs:
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
-          HAOS_TEST_MODE: stdio
+          HAOS_TEST_MODE: ${{ inputs.topology }}
           E2E_NO_TOOLS_ENTRY: "1"
           # Feeds conftest's HACS token injection (qcow2 pre-boot edit) so HACS
           # repo adds don't hit the unauthenticated shared-IP GitHub rate limit —
