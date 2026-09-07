@@ -18,6 +18,7 @@ function load(root){
 }
 function canonical(node){
  const names=new Map();
+ const builtins=new Set(['require','process','Buffer','console','globalThis','Object','Array','Error','TypeError','RangeError','SyntaxError','Map','Set','WeakMap','WeakSet','Promise','JSON','Math','Number','String','Boolean','Symbol','BigInt','RegExp','Date','Reflect','Proxy','undefined','NaN','Infinity','setTimeout','clearTimeout','setInterval','clearInterval','queueMicrotask','URL','URLSearchParams','AbortController','AbortSignal','TextEncoder','TextDecoder','navigator','window']);
  const rename=name=>{if(!names.has(name))names.set(name,'id'+names.size);return names.get(name)};
  function visit(n,parent,key){
   if(typeof n==='bigint')return {bigint:String(n)};
@@ -26,7 +27,7 @@ function canonical(node){
   if(n.type==='Identifier'){
    const property=(parent?.type==='MemberExpression'&&key==='property'&&!parent.computed)||
      (['Property','MethodDefinition','PropertyDefinition'].includes(parent?.type)&&key==='key'&&!parent.computed);
-   return {type:n.type,name:property?n.name:rename(n.name)};
+   return {type:n.type,name:property||builtins.has(n.name)?n.name:rename(n.name)};
   }
   const result={};
   for(const [k,v]of Object.entries(n))if(!['start','end','loc','range','raw'].includes(k))result[k]=visit(v,n,k);
@@ -54,7 +55,9 @@ for(const name of requested){
    for(const c of candidates)snippets+='\nWINDOWS CANDIDATE '+c.n+'\n'+c.text+'\n';
  }
 }
+const selected=JSON.parse(fs.readFileSync('/tmp/desktop-inspection/extraction.json','utf8')).selected.filter(n=>n!=='N');
+const dependencies=selected.map(name=>({linux_symbol:name,windows_matches:winByShape.get(hash(canonical(linux.defs.get(name))))||[]}));
 const metadata=x=>({file:x.filename,bundle_sha256:hash(x.source),version:x.package.version,dependencies:x.package.dependencies});
-fs.writeFileSync('/tmp/desktop-inspection/platform-comparison.json',JSON.stringify({linux:metadata(linux),windows:metadata(win),note:'Identifier-normalized syntax equality is not proof of identical dependencies or operating-system behavior.',symbols:rows},null,2));
+fs.writeFileSync('/tmp/desktop-inspection/platform-comparison.json',JSON.stringify({linux:metadata(linux),windows:metadata(win),note:'Identifier-normalized syntax equality is not proof of identical dependencies or operating-system behavior.',symbols:rows,dependency_comparison:dependencies},null,2));
 fs.writeFileSync('/tmp/desktop-inspection/platform-transport-source.txt',snippets);
 console.log('Platform comparison',linux.package.version,win.package.version,rows.map(r=>[r.linux_symbol,r.windows_matches]));

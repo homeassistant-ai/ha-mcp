@@ -65,7 +65,9 @@ while(changed) {
   for(const node of effects) {
     if(usedEffects.has(node))continue;
     let needed=refsWithin(node).some(r=>r.isWrite()&&isTop(r.resolved)&&selected.has(r.resolved.name));
-    walk.simple(node,{AssignmentExpression(n){
+    walk.simple(node,{MemberExpression(n){
+      if(!n.computed&&globalMembers.has(n.property.name)&&n.object.type==='AssignmentExpression'&&n.object.right.type==='Identifier'&&n.object.right.name==='globalThis')needed=true;
+    },AssignmentExpression(n){
       if(n.left.type!=='MemberExpression')return;
       if(touchesSelected(n.left))needed=true;
       if(n.left.object.type==='Identifier'&&n.left.object.name==='globalThis'&&!n.left.computed&&globalMembers.has(n.left.property.name))needed=true;

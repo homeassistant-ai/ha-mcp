@@ -65,6 +65,14 @@ class DesktopClient:
         self.background=None
 
     async def __aenter__(self):
+        try:
+            return await self._start()
+        except BaseException:
+            if hasattr(self,'proc'):
+                with contextlib.suppress(Exception):await self.__aexit__(None,None,None)
+            raise
+
+    async def _start(self):
         self.folder.mkdir(parents=True)
         uvx=shutil.which('uvx')
         assert uvx
@@ -106,6 +114,10 @@ class DesktopClient:
     async def _read(self):
         try:
             while line:=await self.proc.stdout.readline():
+                if not line.startswith(b'{'):
+                    self.stderr.write(line.decode(errors='replace'))
+                    self.stderr.flush()
+                    continue
                 message=json.loads(line)
                 if message.get('type')=='ready':
                     self.ready.set_result(message)
@@ -205,4 +217,7 @@ async def test_desktop_issue_2367(ha_container_with_fresh_config,protocol,dual,b
                 transform=EXACT_TRANSFORM if large else "config['views'][0]['sections'][1]['cards'][0]['icon'] = 'mdi:music-box'"
                 await attempt(writer,observer,baseline,transform,bps,label+f'/reuse/{iteration}',large)
         await call(observer,'ha_config_delete_dashboard',{'url_path':'dashboard-media'},label+'/cleanup')
+    if standalone:
+        from ha_mcp.stdio_settings_sidecar import retire_sidecar
+        await asyncio.to_thread(retire_sidecar,artifact_root/'observer')
     record('desktop_case_pass',protocol=protocol,dual=dual,bps=bps,attempts=33)
