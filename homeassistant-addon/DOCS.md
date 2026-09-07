@@ -597,7 +597,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 
 ### History & Statistics
 - `ha_get_automation_traces` — Retrieve execution traces for automations and scripts to debug issues.
-- `ha_get_history` — Retrieve historical data from Home Assistant's recorder.
+- `ha_get_history` — Get historical data from Home Assistant's recorder.
 - `ha_get_logs` — Get Home Assistant logs from various sources.
 
 ### Integrations
