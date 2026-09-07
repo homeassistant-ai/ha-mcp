@@ -193,7 +193,11 @@ class PolicyMiddleware(Middleware):
 
         if pending.decision == "approved":
             if self._claim_approval(
-                pending, name, args_hash, remember_minutes=remember_minutes
+                pending,
+                name,
+                args_hash,
+                dynamic_targets=dynamic_targets,
+                remember_minutes=remember_minutes,
             ):
                 return await call_next(context)
             # Another waiter on this shared entry consumed the approval
@@ -245,7 +249,11 @@ class PolicyMiddleware(Middleware):
             return False
         if existing.decision == "approved":
             return self._claim_approval(
-                existing, name, args_hash, remember_minutes=remember_minutes
+                existing,
+                name,
+                args_hash,
+                dynamic_targets=dynamic_targets,
+                remember_minutes=remember_minutes,
             )
         if existing.decision == "denied":
             self._queue.remove(existing.token)
@@ -258,6 +266,7 @@ class PolicyMiddleware(Middleware):
         name: str,
         args_hash: str,
         *,
+        dynamic_targets: bool,
         remember_minutes: int,
     ) -> bool:
         """Consume an approved entry for this invocation.
@@ -270,11 +279,24 @@ class PolicyMiddleware(Middleware):
         contradict the rule they configured. The ``is_remembered`` gate
         earlier in ``on_call_tool`` ran before the approval existed, which
         is why it has to be re-checked here rather than relied upon.
+
+        A dynamic selector call never reads the remember-cache -- that
+        same gate skips the lookup for it, and ``remember_minutes`` is
+        forced to 0 -- so it must not consult one here either. No
+        reachable case arms such a key today (``has_dynamic_selector_targets``
+        is a pure function of the name and args that also produce
+        ``args_hash``, so static and dynamic calls cannot collide on one
+        key), but the guard keeps this branch degrading the same
+        direction as the defensive claim check in
+        ``_resolve_already_decided``: toward an extra prompt, never
+        toward a dispatch the caller was not entitled to.
         """
         if self._queue.consume_and_maybe_remember(
             entry, remember_minutes=remember_minutes
         ):
             return True
+        if dynamic_targets:
+            return False
         return self._queue.is_remembered(name, args_hash)
 
     async def _new_pending(

@@ -906,12 +906,14 @@ async def _attach_counting_find_or_create(queue, monkeypatch, counter: list[int]
     monkeypatch.setattr(queue, "find_or_create", counting)
 
 
-async def _wait_until_both_attached(counter: list[int]) -> None:
+async def _wait_until_attached(counter: list[int], expected: int) -> None:
     for _ in range(500):
-        if len(counter) >= 2:
+        if len(counter) >= expected:
             return
         await anyio.sleep(0.01)
-    raise AssertionError("both calls never attached to the shared pending entry")
+    raise AssertionError(
+        f"only {len(counter)} of {expected} calls attached to the shared entry"
+    )
 
 
 @pytest.mark.anyio
@@ -949,7 +951,7 @@ async def test_concurrent_static_calls_consume_one_approval_once(
             outcomes.append("error")
 
     async def approve_the_shared_row():
-        await _wait_until_both_attached(attached)
+        await _wait_until_attached(attached, 2)
         pending = queue.list_pending()
         assert len(pending) == 1, "identical static calls must share one row"
         approved_token.append(pending[0].token)
@@ -998,7 +1000,7 @@ async def test_remembered_window_lets_the_losing_waiter_proceed(
         )
 
     async def approve_the_shared_row():
-        await _wait_until_both_attached(attached)
+        await _wait_until_attached(attached, 2)
         pending = queue.list_pending()
         assert len(pending) == 1
         queue.approve(pending[0].token)
@@ -1011,3 +1013,63 @@ async def test_remembered_window_lets_the_losing_waiter_proceed(
     assert outcomes == ["ok", "ok"]
     assert call_next.await_count == 2
     assert queue.list_pending() == []
+
+
+@pytest.mark.anyio
+async def test_losing_waiters_share_one_replacement_row(
+    queue, monkeypatch: pytest.MonkeyPatch
+):
+    """Three concurrent identical calls: one dispatch, one replacement row.
+
+    A losing waiter mints its row through ``find_or_create`` like any
+    other call, so a burst does not fan the queue out to one row per
+    caller -- draining N identical calls costs N clicks across N rounds,
+    never N simultaneous rows.
+
+    Two callers cannot pin that bound: there is exactly one loser, so
+    ``len(...) == 1`` holds whether losers share a row or each mint their
+    own. Three callers discriminate, which is what keeps a later refactor
+    from quietly routing the loser path around ``find_or_create``.
+    """
+    args = {"domain": "lock", "service": "unlock"}
+    policy = Policy(rules=[Rule(tool_name="ha_call_service")])
+    mw = PolicyMiddleware(policy_provider=lambda: policy, queue=queue, wait_seconds=5)
+    call_next = AsyncMock(return_value="ok")
+    attached: list[int] = []
+    outcomes: list[object] = []
+    codes: list[str] = []
+    approved_token: list[str] = []
+
+    await _attach_counting_find_or_create(queue, monkeypatch, attached)
+
+    async def call():
+        try:
+            outcomes.append(
+                await mw.on_call_tool(
+                    make_context("ha_call_service", dict(args)), call_next
+                )
+            )
+        except ToolError as exc:
+            codes.append(json.loads(exc.args[0])["error"]["code"])
+            outcomes.append("error")
+
+    async def approve_the_shared_row():
+        await _wait_until_attached(attached, 3)
+        pending = queue.list_pending()
+        assert len(pending) == 1, "identical static calls must share one row"
+        approved_token.append(pending[0].token)
+        queue.approve(pending[0].token)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(call)
+        tg.start_soon(call)
+        tg.start_soon(call)
+        tg.start_soon(approve_the_shared_row)
+
+    call_next.assert_awaited_once()
+    assert sorted(str(o) for o in outcomes) == ["error", "error", "ok"]
+    assert codes == ["USER_APPROVAL_REQUIRED"] * 2
+    # Both losers land on ONE replacement row, not one row each.
+    leftover = queue.list_pending()
+    assert len(leftover) == 1
+    assert leftover[0].token != approved_token[0]
