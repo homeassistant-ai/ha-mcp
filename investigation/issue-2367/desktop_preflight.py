@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 out=Path('/tmp/desktop-inspection')
@@ -13,6 +14,8 @@ env={**os.environ,'REPRO_DESKTOP_CONFIG':str(config),'REPRO_DESKTOP_LOG':str(out
 with (out/'electron-stderr.txt').open('w') as stderr:
     command=([os.environ['DESKTOP_BINARY'],'--no-sandbox'] if os.name=='nt' else ['xvfb-run','-a','/tmp/claude-package/usr/lib/claude-desktop/claude-desktop','--no-sandbox'])
     p=subprocess.Popen(command,env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=stderr,text=True,encoding='utf-8')
+    watchdog=threading.Timer(120,p.kill)
+    watchdog.start()
     try:
         with (out/'electron-stdout.txt').open('w') as startup:
             for line in p.stdout:
@@ -32,4 +35,5 @@ with (out/'electron-stderr.txt').open('w') as stderr:
         assert p.wait(timeout=20)==0
         (out/'smoke-pass.txt').write_text('Exact bundled transport and real Electron/Chromium ports preserved a large Unicode/template payload.\n')
     finally:
+        watchdog.cancel()
         if p.poll() is None:p.kill()
