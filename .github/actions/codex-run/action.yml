@@ -7,7 +7,7 @@ inputs:
     required: false
     default: ""
   instructions-file:
-    description: Optional repository-relative file passed to Codex verbatim instead of instructions.
+    description: Instruction file within the workspace, absolute or workspace-relative, passed verbatim.
     required: false
     default: ""
   codex-auth:
@@ -18,7 +18,7 @@ inputs:
     required: false
     default: "0.153.4"
   working-directory:
-    description: Repository-relative directory used as the Codex working root.
+    description: Working directory within the workspace, absolute or workspace-relative.
     required: false
     default: "."
   sandbox:
@@ -29,6 +29,14 @@ inputs:
     description: Whether Codex may execute shell commands. Disable for attacker-controlled context.
     required: false
     default: "true"
+  network-access:
+    description: Allow network access for model-executed commands (not the Codex service connection).
+    required: false
+    default: "false"
+  passthrough-env:
+    description: Newline-separated environment variable names explicitly granted to commands, e.g. GH_TOKEN. CODEX_* is reserved.
+    required: false
+    default: ""
   timeout-minutes:
     description: Maximum duration of the Codex invocation; keep below the caller job timeout.
     required: false
@@ -42,11 +50,14 @@ inputs:
     required: false
     default: ""
   output-schema:
-    description: Optional repository-relative JSON Schema for the final response.
+    description: Optional JSON Schema within the workspace, absolute or workspace-relative.
     required: false
     default: ""
 
 outputs:
+  log-path:
+    description: Private file containing Codex stdout/stderr. The caller decides whether to publish it.
+    value: ${{ steps.prepare.outputs.log-path }}
   output-path:
     description: Absolute path to the final Codex message.
     value: ${{ steps.prepare.outputs.output-path }}
@@ -86,6 +97,8 @@ runs:
         WORKING_DIRECTORY_INPUT: ${{ inputs.working-directory }}
         SANDBOX_INPUT: ${{ inputs.sandbox }}
         ALLOW_SHELL_INPUT: ${{ inputs.allow-shell }}
+        NETWORK_ACCESS_INPUT: ${{ inputs.network-access }}
+        PASSTHROUGH_ENV_INPUT: ${{ inputs.passthrough-env }}
         TIMEOUT_MINUTES_INPUT: ${{ inputs.timeout-minutes }}
         OUTPUT_SCHEMA_INPUT: ${{ inputs.output-schema }}
       run: |
@@ -104,7 +117,8 @@ runs:
           exit 1
         fi
         case "$SANDBOX_INPUT" in
-          read-only|workspace-write) ;;
+          read-only) parent_profile=:read-only ;;
+          workspace-write) parent_profile=:workspace ;;
           *)
             echo "::error::sandbox must be read-only or workspace-write."
             exit 1
@@ -115,6 +129,31 @@ runs:
           echo "::error::allow-shell must be true or false."
           exit 1
         fi
+        network_access="${NETWORK_ACCESS_INPUT:-false}"
+        network_access="${network_access,,}"
+        if [[ "$network_access" != true && "$network_access" != false ]]; then
+          echo "::error::network-access must be true or false."
+          exit 1
+        fi
+        # Validate names before reading their values. Never grant the action's
+        # own OAuth/configuration variables through this caller capability.
+        env_names=()
+        env_seen=" "
+        while IFS= read -r env_name; do
+          env_name="${env_name%$'\r'}"
+          [[ -n "$env_name" ]] || continue
+          if [[ ! "$env_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ || "${env_name^^}" == CODEX* ]]; then
+            echo "::error::passthrough-env contains an invalid or reserved variable name."
+            exit 1
+          fi
+          if [[ ! -v "$env_name" ]]; then
+            echo "::error::Requested environment variable $env_name is not set."
+            exit 1
+          fi
+          [[ "$env_seen" != *" $env_name "* ]] || continue
+          env_seen+="$env_name "
+          env_names+=("$env_name")
+        done <<< "${PASSTHROUGH_ENV_INPUT:-}"
         if [[ ! "$TIMEOUT_MINUTES_INPUT" =~ ^[1-9][0-9]*$ ]]; then
           echo "::error::timeout-minutes must be a positive integer."
           exit 1
@@ -140,17 +179,21 @@ runs:
         credential_root="$RUNNER_TEMP/codex-action-state"
         mkdir -p "$credential_root"
         chmod 700 "$credential_root"
-        printf 'EXPOSED' > "$credential_root/visibility-probe.txt"
-        chmod 600 "$credential_root/visibility-probe.txt"
         codex_home="$(mktemp -d "$credential_root/home.XXXXXX")"
         chmod 700 "$codex_home"
         auth_path="$codex_home/auth.json"
         original_auth_path="$(mktemp "$credential_root/original.XXXXXX.json")"
         printf '%s' "$CODEX_AUTH_INPUT" > "$auth_path"
         chmod 600 "$auth_path"
-        jq -e 'type == "object" and (.auth_mode | type == "string")' "$auth_path" >/dev/null
+        if ! jq -e 'type == "object" and (.auth_mode | type == "string" and length > 0)' "$auth_path" >/dev/null 2>&1; then
+          echo "::error::CODEX_AUTH must contain valid auth.json with a nonempty auth_mode."
+          exit 1
+        fi
         cp "$auth_path" "$original_auth_path"
         chmod 600 "$original_auth_path"
+        log_path="$codex_home/exec.log"
+        touch "$log_path"
+        chmod 600 "$log_path"
 
         output_path="$(mktemp "$RUNNER_TEMP/codex-last-message.XXXXXX.md")"
         instructions_path="$(mktemp "$RUNNER_TEMP/codex-instructions.XXXXXX.txt")"
@@ -203,18 +246,25 @@ runs:
 
         profile_name=ci-action
         profile_path="$codex_home/$profile_name.config.toml"
-        case "$SANDBOX_INPUT" in
-          read-only) parent_profile=:read-only ;;
-          workspace-write) parent_profile=:workspace ;;
-        esac
         {
           printf 'default_permissions = "%s"\n\n' "$profile_name"
           printf '[shell_environment_policy]\n'
-          printf 'inherit = "core"\n\n'
+          printf 'inherit = "core"\n'
+          printf 'ignore_default_excludes = false\n\n'
+          printf '[shell_environment_policy.set]\n'
+          for env_name in "${env_names[@]}"; do
+            printf '"%s" = ' "$env_name"
+            # JSON quoted strings are valid TOML strings; never put the value
+            # in command arguments or print this profile into an Actions log.
+            jq -rn --arg name "$env_name" 'env[$name] | @json'
+          done
+          printf '\n'
           printf '[permissions.%s]\n' "$profile_name"
           printf 'extends = "%s"\n\n' "$parent_profile"
           printf '[permissions.%s.filesystem]\n' "$profile_name"
           printf '"%s" = "deny"\n' "$credential_root"
+          printf '\n[permissions.%s.network]\n' "$profile_name"
+          printf 'enabled = %s\n' "$network_access"
         } > "$profile_path"
         chmod 600 "$profile_path"
 
@@ -222,6 +272,7 @@ runs:
           echo "CODEX_HOME=$codex_home"
           echo "CODEX_ACTION_WORKDIR=$workdir"
           echo "CODEX_ACTION_OUTPUT=$output_path"
+          echo "CODEX_ACTION_LOG=$log_path"
           echo "CODEX_ACTION_INSTRUCTIONS=$instructions_path"
           echo "CODEX_ACTION_SCHEMA=$schema_path"
           echo "CODEX_ACTION_ALLOW_SHELL=$allow_shell"
@@ -230,6 +281,7 @@ runs:
         } >> "$GITHUB_ENV"
         {
           echo "output-path=$output_path"
+          echo "log-path=$log_path"
           echo "auth-path=$auth_path"
           echo "original-auth-path=$original_auth_path"
         } >> "$GITHUB_OUTPUT"
@@ -270,9 +322,17 @@ runs:
           sudo install -m 0644 "$profile_source" "$profile_target"
           sudo apparmor_parser -r "$profile_target"
           echo "Loaded the Bubblewrap AppArmor profile."
-        elif [[ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || true)" == "1" ]]; then
-          echo "::error::Bubblewrap requires an AppArmor profile on this restricted runner."
-          exit 1
+        else
+          echo "Bubblewrap AppArmor profile source is absent; checking the kernel restriction."
+          if restriction="$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null)"; then
+            if [[ "$restriction" == 1 ]]; then
+              echo "::error::Bubblewrap requires an AppArmor profile on this restricted runner."
+              exit 1
+            fi
+            echo "AppArmor user-namespace restriction: $restriction; the Codex sandbox preflight must still pass."
+          else
+            echo "::warning::Cannot read the AppArmor restriction; the Codex sandbox preflight will verify usability."
+          fi
         fi
 
         bwrap --version
@@ -295,8 +355,6 @@ runs:
       name: Run Codex
       shell: bash
       env:
-        INSTRUCTIONS_INPUT: ${{ inputs.instructions }}
-        SANDBOX_INPUT: ${{ inputs.sandbox }}
         MODEL_INPUT: ${{ inputs.model }}
         REASONING_EFFORT_INPUT: ${{ inputs.reasoning-effort }}
       run: |
@@ -308,6 +366,7 @@ runs:
           --strict-config
           -c apps._default.enabled=false
           --ephemeral
+          --json
           --color never
           --cd "$CODEX_ACTION_WORKDIR"
           --output-last-message "$CODEX_ACTION_OUTPUT"
@@ -329,27 +388,13 @@ runs:
         timeout --signal=TERM --kill-after=30s \
           "${CODEX_ACTION_TIMEOUT_MINUTES}m" \
           codex "${args[@]}" - \
-          < "$CODEX_ACTION_INSTRUCTIONS"
+          < "$CODEX_ACTION_INSTRUCTIONS" > "$CODEX_ACTION_LOG" 2>&1
         codex_status=$?
         set -e
-        if [[ "$codex_status" -eq 124 ]]; then
-          echo "::error::Codex exceeded the ${CODEX_ACTION_TIMEOUT_MINUTES}-minute invocation timeout."
-        fi
+        case "$codex_status" in
+          0) ;;
+          124) echo "::error::Codex exceeded the ${CODEX_ACTION_TIMEOUT_MINUTES}-minute invocation timeout; diagnostics are in log-path." ;;
+          137) echo "::error::Codex was killed by SIGKILL (timeout escalation or another kill); diagnostics are in log-path." ;;
+          *) echo "::error::Codex exited with status $codex_status; diagnostics are in log-path." ;;
+        esac
         exit "$codex_status"
-
-    - name: Show final Codex output
-      if: ${{ always() }}
-      shell: bash
-      run: |
-        if [[ ! -s "${CODEX_ACTION_OUTPUT:-}" ]]; then
-          echo "Codex did not produce a final message."
-          exit 0
-        fi
-        echo "::group::Codex final output"
-        sed 's/^/Codex | /' "$CODEX_ACTION_OUTPUT"
-        echo "::endgroup::"
-        {
-          echo "## Codex final output"
-          echo
-          cat "$CODEX_ACTION_OUTPUT"
-        } >> "$GITHUB_STEP_SUMMARY"

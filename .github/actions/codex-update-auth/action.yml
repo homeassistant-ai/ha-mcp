@@ -59,11 +59,6 @@ runs:
           echo "::error::Refusing to persist malformed Codex auth JSON."
           exit 1
         fi
-        refreshed_codex_home="$(dirname "$CODEX_AUTH_PATH")"
-        if ! CODEX_HOME="$refreshed_codex_home" codex login status >/dev/null; then
-          echo "::error::Refusing to persist auth rejected by the installed Codex CLI."
-          exit 1
-        fi
         force_update="${FORCE_UPDATE,,}"
         if [[ "$force_update" != "true" && "$force_update" != "false" ]]; then
           echo "::error::force-update must be true or false."
@@ -72,6 +67,12 @@ runs:
         if [[ "$force_update" == "false" ]] && cmp -s "$ORIGINAL_CODEX_AUTH" "$CODEX_AUTH_PATH"; then
           echo "Codex auth unchanged; no secret update needed."
           exit 0
+        fi
+
+        refreshed_codex_home="$(dirname "$CODEX_AUTH_PATH")"
+        if ! CODEX_HOME="$refreshed_codex_home" codex login status >/dev/null; then
+          echo "::error::Refusing to persist auth rejected by the installed Codex CLI."
+          exit 1
         fi
 
         gh secret set "$SECRET_NAME" \

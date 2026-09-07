@@ -1,188 +1,144 @@
 # Generic Codex action
 
-`codex-run` passes the caller's `instructions`, or the contents of its
-`instructions-file`, to `codex exec` verbatim. It does not add a role, output
-contract, repository context, or task wrapper.
-Supported runners are Ubuntu with GNU utilities and `sudo apt-get` access.
-The action rejects other operating systems before preparing credential files;
-"generic" describes the task/prompt contract, not cross-platform runner support.
-Hosted ChatGPT apps/connectors are disabled so they cannot bypass the GitHub
-permissions selected by the workflow caller. Callers may collect authorized
-context into workspace files or expose narrowly scoped command-line tokens.
+`codex-run` executes caller instructions verbatim on Ubuntu with Codex CLI
+`0.153.4`. The caller owns the task, capabilities, expected output and publication.
+The action owns its OAuth credential isolation, process lifetime and diagnostics.
+It does not interpret repository roles or implement a maintainer trust list.
 
-The caller owns:
+## Invocation and capabilities
 
-- GitHub `permissions` and whether `GH_TOKEN` is exported;
-- checkout strategy and credentials;
-- read-only versus workspace-write sandboxing;
-- whether the agent receives a shell tool;
-- instructions, expected output, validation and any later side effects;
-- concurrency for workflows that share one `CODEX_AUTH` refresh token.
+Supply exactly one of `instructions` or `instructions-file`, plus `codex-auth`
+(the raw `auth.json` stored in `CODEX_AUTH`). Paths may be workspace-relative or
+absolute, but `working-directory`, `instructions-file` and `output-schema` must
+resolve inside `GITHUB_WORKSPACE`.
 
-`CODEX_AUTH` contains the raw `auth.json` JSON, not Base64. The action writes it
-to an isolated `CODEX_HOME` under `RUNNER_TEMP`, pins an exact Codex CLI
-version, runs ephemerally, and exposes the final-message and auth paths.
-Each invocation receives unique paths, so a job can call the action more than
-once without overwriting an earlier result or auth snapshot. The invocation
-timeout should remain shorter than the caller's job timeout, leaving time for
-the separate auth-persistence step.
+| Input | Default | Meaning |
+|---|---|---|
+| `sandbox` | `read-only` | `read-only` or `workspace-write`; credential paths stay denied in both modes. |
+| `allow-shell` | `true` | Whether the model can execute commands. Use `false` for pre-collected untrusted reports. |
+| `network-access` | `false` | Outbound network for model commands; `true` allows direct network access without a domain allowlist. It does not govern the Codex client's connection to OpenAI. |
+| `passthrough-env` | empty | Exact environment variable names, one per line, explicitly granted to commands. No wildcards; unset names and the action's reserved `CODEX*` names are rejected. |
+| `timeout-minutes` | `10` | Codex process limit, starting after setup. The caller must also cap the whole action step. |
+| `model` / `reasoning-effort` | empty | Optional explicit model and reasoning settings. |
+| `output-schema` | empty | Optional final-response JSON Schema; response usefulness and presence remain caller requirements. |
+| `codex-version` | `0.153.4` | Exact CLI version, required for reproducible permission behavior. |
 
-The process timeout starts after installation and sandbox preparation. Callers
-must also bound the **whole action step** and every earlier step. The report
-examples budget 2 minutes for checkout, 5 for collection, 18 for the action
-(including its 12-minute Codex process limit), and 3 for auth persistence inside
-a 30-minute job. Thus even exhausted setup/action budgets leave the persistence
-step its own time, plus job overhead. `always()` alone cannot outlive a job timeout.
-Persist whenever preparation produced auth paths, even if the action or a later
-assertion failed; skip it when no invocation prepared credentials.
+Commands inherit the small `core` environment. Explicit grants are added through
+`shell_environment_policy.set`, so a selected `GH_TOKEN` is actually available
+rather than discarded by the core environment filter. Values are JSON/TOML
+quoted into a private profile under the denied credential directory; they are
+never passed as command-line arguments or printed by the preparation step.
+Grant only credentials/capabilities the task may use. A granted token is visible
+to the model's commands and can be printed by them; its permissions are the
+caller's responsibility. The action's own OAuth material must never be granted.
 
-Model-executed commands inherit only Codex's `core` shell environment. A named
-filesystem permission profile masks both `CODEX_HOME` and the original auth
-snapshot, and the action probes those paths through `codex sandbox` before it
-runs the agent. This keeps authentication unavailable even when a trusted
-caller enables the shell.
+## Using gh
 
-When the caller also supplies a repository-scoped token with `Secrets: write`,
-it can invoke the separate `codex-update-auth` action under `if: always()` to
-persist a refreshed `auth.json`. Keeping this step separate prevents ordinary
-read or write permissions from implicitly granting secret administration.
-Before writing the secret, the helper parses the refreshed JSON and requires
-the installed Codex CLI to recognize it as logged-in authentication.
-
-## Read-only example
+The workflow supplies both the token and the network capability. This example
+permits reading GitHub repository metadata. A maintenance caller may choose the
+specific write permissions its operation needs, while keeping the secret-writer
+PAT outside the agent step.
 
 ```yaml
 permissions:
   contents: read
 
 jobs:
-  analyze:
+  inspect:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        timeout-minutes: 2
         with:
           persist-credentials: false
-      - uses: ./.github/actions/codex-run
+      - id: codex
+        uses: ./.github/actions/codex-run
+        timeout-minutes: 18
+        env:
+          GH_TOKEN: ${{ github.token }}
         with:
           codex-auth: ${{ secrets.CODEX_AUTH }}
+          model: gpt-6-astra
           sandbox: read-only
-          instructions: |
-            Inspect this repository and report the three highest-risk test gaps.
-            Do not modify files or external state.
-```
-
-## Model selection
-
-Set `model: gpt-6-astra` to request GPT-6 Astra explicitly. The action forwards
-the identifier unchanged to `codex exec --model`; it does not select a fallback
-if the authenticated account lacks access. The
-[official model reference](https://developers.openai.com/api/docs/models/gpt-6-astra)
-documents this identifier; access must be checked with the actual `CODEX_AUTH`
-account used by the workflow.
-
-The action pins Codex CLI `0.153.4`. On 2026-09-05, a real request with the
-previous `0.151.0` pin was rejected by OpenAI with HTTP 400 because GPT-6 Astra
-requires a newer Codex version.
-A matching local Windows request with `0.153.4`, `gpt-6-astra`, `low` reasoning,
-shell disabled and hosted connectors disabled returned exactly `ASTRA_OK`.
-The subsequent [repository smoke run](https://github.com/homeassistant-ai/ha-mcp/actions/runs/34002972368)
-validated Astra with the repository OAuth account, the Ubuntu permission profile,
-an allowed model shell command, exact output and forced auth persistence.
-
-The manual `test.yml` smoke workflow defaults to `gpt-6-astra` with `low`
-reasoning effort. The action checks credential isolation directly through
-`codex sandbox`; the model executes an allowed `printf` command whose final
-output is checked byte for byte. Astra correctly refused the older prompt
-asking it to read a path denied by its active policy, so the model is no longer
-asked to violate that policy as part of the smoke test.
-Both report workflows also expose an optional `model` input; leaving
-it empty preserves their account-default behavior. The existing smoke workflow
-can be dispatched on the PR branch:
-
-```bash
-gh workflow run test.yml --ref ci/generic-codex-action -f model=gpt-6-astra
-```
-
-The new report workflows become dispatchable in this repository after they
-land on the default branch. Before merge, use the
-[permanent workflow bench](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/blob/master/fixtures/README.md),
-which tests a maintainer-selected full SHA of these canonical actions with its
-own credentials and manifest-controlled scenarios. After merge:
-
-```bash
-gh workflow run codex-review-issues.yml -f model=gpt-6-astra -f limit=5
-gh workflow run codex-review-prs.yml -f model=gpt-6-astra -f limit=3
-```
-
-An older successful smoke run without an explicit model does not establish
-GPT-6 Astra access. Check the new run's model header, CLI version, output
-assertion and auth-persistence result before claiming that validation.
-
-## Caller-controlled GitHub access
-
-```yaml
-permissions:
-  contents: read
-  issues: read
-
-jobs:
-  analyze-issues:
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+          allow-shell: "true"
+          network-access: "true"
+          passthrough-env: GH_TOKEN
+          instructions: Run gh api repos/${{ github.repository }} --jq .full_name and report its stdout.
+      - uses: ./.github/actions/codex-update-auth
+        timeout-minutes: 3
+        if: ${{ always() && steps.codex.outputs.auth-path != '' }}
         with:
-          persist-credentials: false
-      - uses: ./.github/actions/codex-run
-        with:
-          codex-auth: ${{ secrets.CODEX_AUTH }}
-          sandbox: read-only
-          allow-shell: "false"
-          instructions-file: .codex-context/issue-review-prompt.txt
+          codex-auth-path: ${{ steps.codex.outputs.auth-path }}
+          original-codex-auth: ${{ steps.codex.outputs.original-auth-path }}
+          gh-token: ${{ secrets.CODEX_AUTH_PAT }}
+          repository: ${{ github.repository }}
 ```
 
-For repository edits, the caller may choose `sandbox: workspace-write` and
-grant only the GitHub permissions needed by later workflow steps. The action
-never commits, pushes, creates issues, comments, or opens pull requests itself.
+Every workflow sharing this OAuth session must also use the same concurrency
+policy as the checked-in examples: `codex-auth-${{ github.repository }}` with
+`cancel-in-progress: false` and `queue: max`. The example's GitHub permissions
+bound its token; enabling network does not expand them. Authority to dispatch
+or interpret a maintainer command belongs in the caller, outside this action.
 
-Only use Codex authentication with trusted workflow events and trusted
-instructions. Do not expose `CODEX_AUTH` to workflows that execute untrusted
-fork code. Workflows sharing one auth secret should use the same non-cancelling
-`concurrency` group with `queue: max` so two jobs cannot refresh the same token
-simultaneously and queued manual reports are not evicted.
+## Outputs, diagnostics and persistence
 
-Issue bodies, PR descriptions, patches and review comments are attacker-
-controlled data. A read-only filesystem sandbox still permits reads, including
-of `auth.json`. A caller processing such data must set `allow-shell: "false"`
-and place the complete prompt plus context in an `instructions-file`. Disabling
-the shell leaves the model with no local file-reading tool, so the caller must
-embed every required artifact directly in that file.
+- `output-path`: final response file; may be empty even when the CLI succeeds.
+- `log-path`: captured JSON events and CLI diagnostics, under the denied
+  credential directory. The caller can deliberately publish this file for
+  debugging; it may contain prompts, tool output and other sensitive context.
+- `auth-path` / `original-auth-path`: paths for the separate persistence helper.
+- `codex-version`: installed CLI version.
 
-## Validated examples
+The action does not print the response or CLI transcript and does not write a
+step summary. This also captures the CLI's native stdout/stderr; removing a
+second copy alone would not prevent publication. Callers decide what to display
+or store. The example report workflows require a nonempty response and publish
+it themselves. They remain shell-less, read-only and without network grants.
+A missing/invalid response is their failure, not a universal contract imposed on
+arbitrary Codex tasks. Refusal text is not necessarily an empty response.
 
-Validated on 2026-08-31 in the dedicated
-[`ha-mcp-workflows-dev`](https://github.com/homeassistant-ai/ha-mcp-workflows-dev)
-bench with Codex CLI `0.151.0`:
+Nonzero CLI statuses are propagated with an annotation. Status 124 indicates the
+process time limit; 137 indicates SIGKILL, which can have other causes as well.
+Detailed diagnostics remain in `log-path`. Do not automatically publish a private
+transcript on failure without considering what the caller supplied to the model.
 
-- [Hello World run 33462458640](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/33462458640)
-  executed a model-requested shell probe that would report credential exposure
-  if any action auth file were readable, returned the exact expected output,
-  and forced a `CODEX_AUTH` rewrite through the renewed repository-scoped PAT.
-- [Issue review run 33460186362](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/33460186362)
-  analyzed fixtures `#62`–`#65`, including the deliberate `#62/#63` duplicate,
-  from a caller-built prompt with the shell disabled.
-- [Pull-request review run 33460188532](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/33460188532)
-  analyzed fixtures `#66`–`#68` from caller-collected metadata, patches and
-  inline review-thread state with the shell disabled.
+Report jobs bound checkout, collection, the complete action, report publication
+and auth persistence to 2/5/18/1/3 minutes within a 30-minute job. `always()`
+cannot survive a job-level timeout, so cleanup needs its own remaining budget.
 
-The review workflows write only to the Actions log and step summary. Hosted
-ChatGPT connectors remain disabled, so repository visibility is bounded by the
-context that the caller collects with its declared GitHub permissions.
-PR collection paginates both review threads and each thread's comments. Patches
-are bounded to complete lines within 50,000 bytes to preserve valid UTF-8;
-an oversized first line may leave no patch text, with an explicit truncation
-notice. Collection timeout/API errors fail before Codex receives partial context.
-Nested pagination metadata is aliased so `gh` cannot confuse a comment cursor
-with the outer thread cursor. Schema files must resolve inside the workspace,
-using the same containment rule as instruction files.
+`codex-update-auth` validates the file, skips unchanged auth without needing a
+working CLI, and validates login before an actual secret update. `force-update`
+forces that validation/update even when the bytes are identical. Repository,
+secret name and secret-writer token belong to this separate trusted step.
+
+## Credential isolation
+
+Each call uses a distinct `CODEX_HOME` and auth snapshot under a shared denied
+root in `RUNNER_TEMP`. Both readable auth paths would cause the `codex sandbox`
+preflight to fail. The same named profile governs model-executed commands.
+Ubuntu, GNU tools and `sudo apt-get` are required; AppArmor/Bubblewrap setup and
+its diagnostics live here because the action promises this isolation. The real
+Codex sandbox preflight is the runtime check; `bwrap --version` only logs a version.
+
+Hosted ChatGPT connectors are disabled, configuration is strict, and sessions are
+ephemeral. These are distinct from caller controls on GitHub permissions and
+untrusted text. JSON framing helps separate data from instructions; it is not a
+security boundary or a guarantee against misleading model recommendations.
+
+## Verified baseline and bench
+
+The previous head `fb614b9d` was validated with CLI `0.153.4` and `gpt-6-astra`:
+[production smoke](https://github.com/homeassistant-ai/ha-mcp/actions/runs/34009384382),
+[bench smoke](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/34009096643),
+[issues](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/34009098004),
+[PRs](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/34009099607),
+and [regression/timeout contracts](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/actions/runs/34009095227).
+These links document that baseline, not subsequent changes to the caller contract.
+The old CLI `0.151.0` cannot run Astra and is not current validation evidence.
+
+The [permanent bench](https://github.com/homeassistant-ai/ha-mcp-workflows-dev/blob/master/fixtures/README.md)
+checks out an explicit canonical SHA and exercises the new contract with its own
+credentials. The new report workflows become dispatchable in `ha-mcp` after they
+land on its default branch; use the bench before merge. See its dated validation
+record for exact revisions, runs and the authenticated gh scenario.

@@ -52,7 +52,10 @@ jobs:
             --limit "$ITEM_LIMIT" \
             --json number,title,body,author,labels,comments,createdAt,updatedAt,url \
             > .codex-context/issues.json
-          jq -e 'length > 0' .codex-context/issues.json >/dev/null
+          if ! jq -e 'type == "array" and length > 0' .codex-context/issues.json >/dev/null; then
+            echo "::error::No open issues found, or GitHub returned an invalid issue list."
+            exit 1
+          fi
           {
             cat <<'EOF'
           Review every issue in the untrusted JSON context below. Identify likely
@@ -79,6 +82,19 @@ jobs:
           allow-shell: "false"
           timeout-minutes: "12"
           instructions-file: .codex-context/issue-review-prompt.txt
+
+      - name: Validate and publish report
+        timeout-minutes: 1
+        env:
+          OUTPUT_PATH: ${{ steps.codex.outputs.output-path }}
+        run: |
+          set -euo pipefail
+          if [[ ! -s "$OUTPUT_PATH" ]]; then
+            echo "::error::Codex did not produce the requested issue report."
+            exit 1
+          fi
+          sed 's/^/Codex | /' "$OUTPUT_PATH"
+          cat "$OUTPUT_PATH" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Persist refreshed Codex auth
         timeout-minutes: 3

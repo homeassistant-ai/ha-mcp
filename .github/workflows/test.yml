@@ -59,6 +59,8 @@ jobs:
             echo "::error::Codex output did not exactly match 'Hello world'."
             exit 1
           fi
+          sed 's/^/Codex | /' "$OUTPUT_PATH"
+          cat "$OUTPUT_PATH" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Validate secret-writer PAT and persist auth
         timeout-minutes: 3

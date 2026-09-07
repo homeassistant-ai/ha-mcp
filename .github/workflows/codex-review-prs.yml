@@ -53,13 +53,15 @@ jobs:
           mkdir -p .codex-context/pull-requests
           owner="${GITHUB_REPOSITORY%%/*}"
           repository="${GITHUB_REPOSITORY#*/}"
-          mapfile -t numbers < <(
-            gh pr list \
+          if ! gh pr list \
               --state open \
               --limit "$ITEM_LIMIT" \
               --json number \
-              --jq '.[].number'
-          )
+              --jq '.[].number' > .codex-context/pull-requests/numbers.txt; then
+            echo "::error::Unable to collect open pull requests from GitHub."
+            exit 1
+          fi
+          mapfile -t numbers < .codex-context/pull-requests/numbers.txt
           if [[ "${#numbers[@]}" -eq 0 ]]; then
             echo "::error::No open pull requests found."
             exit 1
@@ -97,6 +99,7 @@ jobs:
                             createdAt
                             url
                           }
+                          # gh selects the first unaliased pageInfo: this one must not drive thread pagination.
                           commentPageInfo: pageInfo { hasNextPage endCursor }
                         }
                       }
@@ -106,15 +109,25 @@ jobs:
                 }
               }' \
               > ".codex-context/pull-requests/pr-$number-thread-pages.json"
+            if ! jq -e 'type == "array" and length > 0 and
+              all(.[]; .data.repository.pullRequest.reviewThreads |
+                (.nodes | type == "array") and (.pageInfo.hasNextPage | type == "boolean")) and
+              (.[-1].data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage == false)' \
+              ".codex-context/pull-requests/pr-$number-thread-pages.json" >/dev/null; then
+              echo "::error::Incomplete or malformed review-thread pages for PR $number."
+              exit 1
+            fi
             jq \
               '[.[].data.repository.pullRequest.reviewThreads.nodes[] |
                 .comments.pageInfo = .comments.commentPageInfo | del(.comments.commentPageInfo)]' \
               ".codex-context/pull-requests/pr-$number-thread-pages.json" \
               > ".codex-context/pull-requests/pr-$number-threads.json"
             threads=".codex-context/pull-requests/pr-$number-threads.json"
-            # gh --paginate advances one connection at a time. Finish each
-            # long comment connection independently of reviewThreads. Alias
-            # nested pageInfo above: gh otherwise takes that FIRST cursor.
+            # Materialize selectors: process substitution hides jq failures from set -e.
+            if ! jq -r '.[] | select(.comments.pageInfo.hasNextPage) | .id' "$threads" > "$threads.ids"; then
+              echo "::error::Unable to select review-thread cursors for PR $number."
+              exit 1
+            fi
             while IFS= read -r thread_id; do
               cursor="$(jq -r --arg id "$thread_id" '.[] | select(.id == $id) | .comments.pageInfo.endCursor' "$threads")"
               gh api graphql --paginate --slurp \
@@ -130,6 +143,14 @@ jobs:
                     }
                   }
                 }' > ".codex-context/pull-requests/pr-$number-comment-pages.json"
+              if ! jq -e 'type == "array" and length > 0 and
+                all(.[]; .data.node.comments |
+                  (.nodes | type == "array") and (.pageInfo.hasNextPage | type == "boolean")) and
+                (.[-1].data.node.comments.pageInfo.hasNextPage == false)' \
+                ".codex-context/pull-requests/pr-$number-comment-pages.json" >/dev/null; then
+                echo "::error::Incomplete or malformed comment pages for PR $number."
+                exit 1
+              fi
               jq --arg id "$thread_id" \
                 --slurpfile pages ".codex-context/pull-requests/pr-$number-comment-pages.json" \
                 'map(if .id == $id then
@@ -137,7 +158,15 @@ jobs:
                   .comments.pageInfo = $pages[0][-1].data.node.comments.pageInfo
                 else . end)' "$threads" > "$threads.tmp"
               mv "$threads.tmp" "$threads"
-            done < <(jq -r '.[] | select(.comments.pageInfo.hasNextPage) | .id' "$threads")
+            done < "$threads.ids"
+            # A null/missing pageInfo must fail too; // false would hide it.
+            if ! jq -e 'type == "array" and all(.[];
+              (.comments.nodes | type == "array") and
+              (.comments.pageInfo.hasNextPage | type == "boolean") and
+              (.comments.pageInfo.hasNextPage == false))' "$threads" >/dev/null; then
+              echo "::error::Review-thread context is incomplete for PR $number."
+              exit 1
+            fi
           done
 
           prompt=.codex-context/pr-review-prompt.txt
@@ -162,11 +191,14 @@ jobs:
               echo
               echo "</review_threads>"
               echo "<patch>"
-              LC_ALL=C awk 'length($0)+1+bytes > 50000 {exit} {print; bytes+=length($0)+1}' ".codex-context/pull-requests/pr-$number.patch"
-              if (( $(wc -c < ".codex-context/pull-requests/pr-$number.patch") > 50000 )); then
-                echo
-                echo "[patch truncated to complete lines within a 50000-byte budget]"
-              fi
+              # JSON is consistent framing, not an instruction-trust boundary.
+              {
+                LC_ALL=C awk 'length($0)+1+bytes > 50000 {exit} {print; bytes+=length($0)+1}' ".codex-context/pull-requests/pr-$number.patch"
+                if (( $(wc -c < ".codex-context/pull-requests/pr-$number.patch") > 50000 )); then
+                  echo
+                  echo "[patch truncated to complete lines within a 50000-byte budget]"
+                fi
+              } | jq -Rs .
               echo
               echo "</patch>"
               echo "</untrusted_pull_request>"
@@ -184,6 +216,19 @@ jobs:
           allow-shell: "false"
           timeout-minutes: "12"
           instructions-file: .codex-context/pr-review-prompt.txt
+
+      - name: Validate and publish report
+        timeout-minutes: 1
+        env:
+          OUTPUT_PATH: ${{ steps.codex.outputs.output-path }}
+        run: |
+          set -euo pipefail
+          if [[ ! -s "$OUTPUT_PATH" ]]; then
+            echo "::error::Codex did not produce the requested PR report."
+            exit 1
+          fi
+          sed 's/^/Codex | /' "$OUTPUT_PATH"
+          cat "$OUTPUT_PATH" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Persist refreshed Codex auth
         timeout-minutes: 3

@@ -469,7 +469,7 @@ jobs:
         echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
           > /etc/apt/apt.conf.d/keep-downloaded
         apt-get update -qq
-        apt-get install -y -qq git jq >/dev/null 2>&1
+        apt-get install -y -qq git jq >/dev/null
 
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
