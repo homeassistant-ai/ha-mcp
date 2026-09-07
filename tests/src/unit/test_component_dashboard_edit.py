@@ -14,10 +14,10 @@ import pytest
 from ha_mcp.utils.config_hash import compute_config_hash
 
 from .test_component_ws_search import (
+    _REAL_VOL,
     FakeHass,
     _FakeConnection,
     _FakeWSApi,
-    _REAL_VOL,
     _Unauthorized,
     wsapi,
 )
@@ -76,9 +76,11 @@ def edit(monkeypatch):
         SimpleNamespace(
             json_bytes=lambda value: json.dumps(
                 value,
-                default=lambda leaf: leaf.isoformat()
-                if isinstance(leaf, datetime)
-                else _unsupported_json(leaf),
+                default=lambda leaf: (
+                    leaf.isoformat()
+                    if isinstance(leaf, datetime)
+                    else _unsupported_json(leaf)
+                ),
                 allow_nan=False,
             ).encode()
         ),
@@ -109,7 +111,9 @@ def patch_request(body, patch=None, **kwargs):
 async def test_patch_saves_detached_config_and_returns_authoritative_hash(edit):
     original = {"title": "Before", "views": [{"cards": []}]}
     dashboard = LiveDashboard(original)
-    result = await edit.async_edit_dashboard(hass_for(dashboard), patch_request(original))
+    result = await edit.async_edit_dashboard(
+        hass_for(dashboard), patch_request(original)
+    )
     assert result["success"] is True
     assert result["write_committed"] is True
     assert result["post_write_verified"] is True
@@ -183,7 +187,11 @@ async def test_failed_later_patch_operation_leaves_live_nested_config_untouched(
         patch_request(
             original,
             [
-                {"op": "add", "path": "/views/0/cards/-", "value": {"type": "markdown"}},
+                {
+                    "op": "add",
+                    "path": "/views/0/cards/-",
+                    "value": {"type": "markdown"},
+                },
                 {"op": "remove", "path": "/missing"},
             ],
         ),
@@ -255,7 +263,9 @@ async def test_noop_patch_does_not_save_or_emit_event(edit):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("config", [{"views": []}, {"strategy": {"type": "original-states"}}])
+@pytest.mark.parametrize(
+    "config", [{"views": []}, {"strategy": {"type": "original-states"}}]
+)
 async def test_empty_storage_dashboard_allows_full_replacement(edit, config):
     dashboard = LiveDashboard(None)
     result = await edit.async_edit_dashboard(
@@ -331,7 +341,9 @@ async def test_unserializable_candidate_is_rejected_before_save(edit):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [RuntimeError("save failed"), asyncio.CancelledError()])
+@pytest.mark.parametrize(
+    "failure", [RuntimeError("save failed"), asyncio.CancelledError()]
+)
 async def test_save_exception_is_unknown_without_retry_or_rollback(edit, failure):
     dashboard = LiveDashboard({"title": "Before"})
 

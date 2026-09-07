@@ -31,7 +31,7 @@ jobs:
           git rev-parse HEAD > /tmp/dashboard-proof/source-sha.txt
       - name: Dashboard unit and component contract tests
         run: |
-          mapfile -t tests < <(rg --files tests/src/unit | rg '/[^/]*dashboard[^/]*\.py$' | sort)
+          tests=(tests/src/unit/*dashboard*.py)
           uv run pytest "${tests[@]}" tests/src/unit/test_component_ws_search.py -n auto --tb=short --junitxml=/tmp/dashboard-proof/junit.xml
       - name: Lint changed Python
         if: success() || failure()
