@@ -56,7 +56,7 @@ def desktop_haos_backend(bare_haos,ha_container_with_fresh_config):
 def server_env(info,folder):
     return {'HOMEASSISTANT_URL':info['base_url'],'HOMEASSISTANT_TOKEN':info['token'],
             'HA_MCP_CONFIG_DIR':str(folder),'HAMCP_ENV_FILE':'/tmp/repro-no-env-file',
-            'PATH':os.environ['PATH']}
+            'PATH':os.environ['PATH'],'ENABLE_STRICT_MANDATORY_BPS':'false'}
 
 
 class DesktopClient:
@@ -220,7 +220,7 @@ async def test_desktop_issue_2367(ha_container_with_fresh_config,protocol,dual,b
         async with DesktopClient(info,artifact_root/'reuse',dual,protocol) as writer:
             for iteration in range(30):
                 large=iteration%2==0
-                transform=EXACT_TRANSFORM if large else "config['views'][0]['sections'][1]['cards'][0]['icon'] = 'mdi:music-box'"
+                transform=EXACT_TRANSFORM if large else "config['views'][0]['sections'][1]['cards'][0]['icon'] = 'mdi:music-box-multiple'"
                 await attempt(writer,observer,baseline,transform,bps,label+f'/reuse/{iteration}',large)
         await call(observer,'ha_config_delete_dashboard',{'url_path':'dashboard-media'},label+'/cleanup')
     if standalone:
