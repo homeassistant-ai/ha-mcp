@@ -54,7 +54,10 @@ attaching skills to write responses remains controlled by MandatoryBPS.
 
 A separate manual Windows job runs the Windows bundle's extracted transport on
 stock Electron 42.10.0, with native Windows pipes and Chromium MessagePorts. Its
-echo preflight does not use HAOS or an authenticated Desktop chat session.
+echo preflight does not use HAOS or an authenticated Desktop chat session. The
+external test controller uses a loopback socket on Windows because the GUI
+process closes its console stdin; the extracted Desktop-to-child connection
+continues to use native Windows stdio pipes.
 
 ## Limits
 

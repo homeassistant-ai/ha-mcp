@@ -66,7 +66,8 @@ The original transport's message serialization and forwarding execute, but its
 application logger is replaced by test instrumentation; original Winston log
 files and toast UI are not reproduced. User login, cloud tool selection,
 Windows OS pipes, and the reporter's unspecified Desktop version are not tested
-by the Linux harness. Do not call this a complete logged-in Desktop reproduction.
+by the Linux harness. The separate Windows preflight below covers only a native
+pipe echo exchange. Do not call this a complete logged-in Desktop reproduction.
 
 The original sanitized dashboard is stored byte for byte in this directory.
 HAOS dashboard runs exercise omitted/false MandatoryBPS, two protocol versions,
@@ -94,17 +95,19 @@ shared portion; they do not equate either app's full lifecycle with the emulator
 
 ## Completed HAOS Desktop batches
 
-Neither batch reproduced the reported hang; neither identifies a cause or a fix.
+None of these batches reproduced the reported hang or identified a cause or a fix.
 
 | HA-hosted server | GitHub run / tested commit | Cases passed | Target writes | Slowest target write |
 | --- | --- | ---: | ---: | ---: |
 | App | [34155210859](https://github.com/homeassistant-ai/ha-mcp/actions/runs/34155210859), `34d82df1` | 8 | 264 | 141 ms |
 | Component | [34155593237](https://github.com/homeassistant-ai/ha-mcp/actions/runs/34155593237), `53e1b608` | 8 | 264 | 531 ms |
+| Standalone stdio | [34157268528](https://github.com/homeassistant-ai/ha-mcp/actions/runs/34157268528), `76d5457e` | 8 | 264 | 60 ms |
 
 Each batch also completed 264 restorations and eight initial dashboard creations,
 with 32 Desktop processes exiting cleanly. Each target write was preceded by a
 read through Desktop and independently checked afterward. The additional channel
-completed 220 dashboard reads in the app batch and 218 in the component batch.
+completed 220 dashboard reads in the app batch, 218 in the component batch, and
+100 in the standalone batch.
 Both protocol versions negotiated as requested. No cases were skipped. Artifacts
 include JUnit, source SHAs, request/result timings and transport traces.
 
@@ -124,3 +127,57 @@ stopped at a harness assertion that incorrectly required a hash change for the
 exact static edit. The supplied dashboard already has that icon. The corrected
 assertion checks the expected final icon and allows its hash to stay unchanged.
 This immediate assertion failure was not a timeout reproduction.
+
+The completed standalone batch passed all eight cases with zero skips, failures
+or errors (JUnit: 218.944 seconds). Offline removal recorded both MCP integration
+domains, and each case verified that HA had no loaded HA-MCP component or services
+and no app/component MCP endpoint. The Desktop-side uvx process supplied HA-MCP.
+All 32 Desktop processes exited with code zero. Its exact static edit was a
+verified no-change write against the supplied baseline; its large transform
+changed the section count from three to four and was restored afterward.
+
+Across the three completed Desktop/HAOS batches there were 792 successful target
+write calls and 792 preceding dashboard reads through Desktop, plus restorations,
+independent readbacks and the additional-channel reads above. These are short
+instrumented batches. The maintainer's prior Windows reproduction in #1644 was
+two hangs followed by hundreds of successful calls, so this count cannot exclude
+the reported intermittent failure.
+
+## Native Windows transport preflight
+
+[Run 34158113370](https://github.com/homeassistant-ai/ha-mcp/actions/runs/34158113370),
+commit `3e5409ec`, passed on a Windows GitHub runner. It extracted 430 declarations
+from official Windows Desktop 1.46388.4 and ran them in stock Electron 42.10.0
+(Node 24.18.1, Chromium 148.0.7778.280), matching the observed Linux runtime
+versions. The echo child used the runner's Python 3.12.10. This used Electron's
+Windows binary, not the complete Desktop executable or the reporter's Python
+installation.
+
+The 102,073-byte request preserved Unicode, percent signs and Jinja syntax. The
+response arrived over native Windows child-process stdout in chunks of 65,536
+and 44,539 bytes; its parsed JSON-RPC representation was 102,066 bytes. The extra
+raw wire size comes from JSON escaping and line endings. The test asserted exact
+payload equality and clean process exit. It was one echo round trip, not a
+Windows HAOS dashboard batch or an intermittent-failure stress result.
+
+The external test controller talks to the Windows GUI emulator over a loopback
+socket. Inside the emulator, requests still traverse real Chromium MessagePorts
+and the unchanged extracted Desktop stdio implementation to a Python child.
+The socket replaces only the test harness's console control connection, which
+closed on Windows; it does not replace the MCP subprocess pipes under test.
+
+Earlier Windows attempts failed in setup: an asar path-separator lookup error,
+startup that never reached ready (followed by path handling corrections), then
+closure of the harness's
+console input. These are emulator portability issues and are not evidence of the
+reported intermittent HA-MCP hang. An older unbounded startup attempt was left to
+its workflow timeout rather than cancelled. The current preflight has a 120-second
+watchdog and writes bootstrap diagnostics for future failures.
+
+The shared harness was rechecked on Linux after the Windows portability changes:
+[run 34158279894](https://github.com/homeassistant-ai/ha-mcp/actions/runs/34158279894),
+commit `3e5409ec`, passed the native large-message preflight and the SDK check
+(tool/resource discovery, resource read, large prompt and eight concurrent large
+tool calls). This is the final compatibility check, not another HAOS matrix run.
+The older startup attempt 34157397313 ended at its configured 15-minute workflow
+limit with GitHub's `cancelled` conclusion; no cancellation was requested.
