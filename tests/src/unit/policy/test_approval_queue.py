@@ -367,3 +367,47 @@ async def test_find_or_create_lock_blocks_concurrent_create_under_real_race():
     # Silence the slow_find reference so ruff doesn't complain about
     # the unused helper — kept in the source for future strengthening.
     _ = slow_find
+
+
+# --- Issue #2387: consumption is one-shot ---
+
+
+def test_consume_claims_the_entry_exactly_once():
+    """Two waiters woken by one ``decide()`` must not both consume it."""
+    q = ApprovalQueue()
+    entry = q.create("ha_x", "abc", {}, ttl_minutes=5)
+    entry.decide("approved")
+    assert q.consume_and_maybe_remember(entry, remember_minutes=0) is True
+    assert q.consume_and_maybe_remember(entry, remember_minutes=0) is False
+    assert q.get(entry.token) is None
+
+
+def test_swept_approved_entry_is_still_claimable_by_its_waiter():
+    """The claim lives on the entry, not on queue membership.
+
+    ``_sweep_expired`` drops entries by ``expires_at`` regardless of
+    decision and runs on every ``find``/``get``/``list_pending`` — which
+    the settings UI polls. A waiter holding its own reference to an
+    approved entry must still be able to consume it after such a sweep;
+    keying the claim on dict membership would turn a legitimate approval
+    into a spurious re-prompt.
+    """
+    q = ApprovalQueue()
+    entry = q.create("ha_x", "abc", {}, ttl_minutes=5)
+    entry.decide("approved")
+    entry.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    q._sweep_expired()
+    assert q.get(entry.token) is None
+    assert q.consume_and_maybe_remember(entry, remember_minutes=0) is True
+
+
+def test_consume_populates_remember_cache_only_for_the_winner():
+    """A losing claim must not extend or re-arm the remember window."""
+    q = ApprovalQueue()
+    entry = q.create("ha_x", "abc", {}, ttl_minutes=5)
+    entry.decide("approved")
+    assert q.consume_and_maybe_remember(entry, remember_minutes=10) is True
+    assert q.is_remembered("ha_x", "abc") is True
+    q.clear_remember_cache()
+    assert q.consume_and_maybe_remember(entry, remember_minutes=10) is False
+    assert q.is_remembered("ha_x", "abc") is False
