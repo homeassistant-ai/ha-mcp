@@ -103,8 +103,16 @@ process time limit; 137 indicates SIGKILL, which can have other causes as well.
 Detailed diagnostics remain in `log-path`. Do not automatically publish a private
 transcript on failure without considering what the caller supplied to the model.
 
-Report jobs bound checkout, collection, the complete action, report publication
-and auth persistence to 2/5/18/1/3 minutes within a 30-minute job. `always()`
+The supplied issue/PR reports and fixed Hello World smoke deliberately print
+`log-path` on failure, with every line prefixed to prevent log content from
+being interpreted as an Actions workflow command. Their context is public and
+they grant no extra environment variables. This preserves diagnostics in the
+Actions run log before the temporary runner disappears. Callers using private
+context or other capabilities must choose their own diagnostic publication policy.
+
+Report jobs bound checkout, collection, the complete action, report publication,
+failure diagnostics and auth persistence to 2/5/18/1/1/3 minutes within a
+32-minute job. `always()`
 cannot survive a job-level timeout, so cleanup needs its own remaining budget.
 
 `codex-update-auth` validates the file, skips unchanged auth without needing a

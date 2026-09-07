@@ -460,3 +460,28 @@ def test_report_workflows_keep_read_only_capabilities_and_require_a_report(
     )
     assert result.returncode != 0
     assert b"::error::" in result.stdout
+
+
+@pytest.mark.parametrize("name", ["test", "codex-review-issues", "codex-review-prs"])
+@pytest.mark.parametrize("available", [True, False])
+def test_callers_preserve_failure_diagnostics_without_executing_log_commands(
+    tmp_path, name, available
+):
+    job = next(iter(load(f".github/workflows/{name}.yml")["jobs"].values()))
+    step = next(
+        s for s in job["steps"] if s.get("name") == "Publish diagnostics on failure"
+    )
+    assert "failure()" in step["if"]
+    assert "steps.codex.outputs.log-path != ''" in step["if"]
+    assert step["env"]["LOG_PATH"] == "${{ steps.codex.outputs.log-path }}"
+    path = tmp_path / "exec.log"
+    if available:
+        path.write_text("fixture diagnostic\n::error::untrusted log command\n")
+    result = shell(step["run"], tmp_path, LOG_PATH=posix(path))
+    assert result.returncode == 0, result.stderr.decode()
+    if available:
+        assert b"Codex log | fixture diagnostic" in result.stdout
+        assert b"Codex log | ::error::untrusted log command" in result.stdout
+        assert b"\n::error::untrusted log command" not in result.stdout
+    else:
+        assert b"No Codex diagnostic log was produced" in result.stdout

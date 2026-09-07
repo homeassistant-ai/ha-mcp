@@ -20,7 +20,7 @@ concurrency:
 jobs:
   hello-world:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 27
     steps:
       - name: Checkout
         timeout-minutes: 2
@@ -61,6 +61,22 @@ jobs:
           fi
           sed 's/^/Codex | /' "$OUTPUT_PATH"
           cat "$OUTPUT_PATH" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish diagnostics on failure
+        # Deliberate caller policy for these public, fixed/unprivileged report prompts.
+        if: ${{ failure() && steps.codex.outputs.log-path != '' }}
+        timeout-minutes: 1
+        env:
+          LOG_PATH: ${{ steps.codex.outputs.log-path }}
+        run: |
+          set -euo pipefail
+          if [[ -s "$LOG_PATH" ]]; then
+            echo "::group::Codex failure diagnostics"
+            sed 's/^/Codex log | /' "$LOG_PATH"
+            echo "::endgroup::"
+          else
+            echo "No Codex diagnostic log was produced before the failure."
+          fi
 
       - name: Validate secret-writer PAT and persist auth
         timeout-minutes: 3
