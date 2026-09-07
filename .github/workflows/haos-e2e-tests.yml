@@ -47,9 +47,11 @@ jobs:
           sha256sum /tmp/claude.deb "$asar_path" > /tmp/desktop-inspection/checksums.txt
           npx --yes @electron/asar@3.4.1 extract "$asar_path" /tmp/claude-source
           python3 investigation/issue-2367/inspect_desktop.py /tmp/claude-source
-          npm install --prefix /tmp/desktop-analysis --no-audit --no-fund acorn@8.15.0 acorn-walk@8.3.4
+          npm install --prefix /tmp/desktop-analysis --no-audit --no-fund acorn@8.15.0 acorn-walk@8.3.4 eslint-scope@8.4.0
           node investigation/issue-2367/inspect_desktop_ast.cjs
-          find /tmp/claude-package -type f -name claude -exec sh -c 'ELECTRON_RUN_AS_NODE=1 "$1" -p "JSON.stringify(process.versions)"' sh {} \; > /tmp/desktop-inspection/runtime-versions.txt 2>&1 || true
+          node investigation/issue-2367/extract_desktop_transport.cjs
+          find /tmp/claude-package -maxdepth 5 -type f -executable > /tmp/desktop-inspection/executables.txt
+          find /tmp/claude-package -type f -name claude-desktop -exec sh -c 'ELECTRON_RUN_AS_NODE=1 "$1" -p "JSON.stringify(process.versions)"' sh {} \; > /tmp/desktop-inspection/runtime-versions.txt 2>&1 || true
       - name: Upload Desktop source analysis
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
