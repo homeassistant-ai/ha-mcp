@@ -102,32 +102,3 @@ def test_alignment_checks_both_versions_and_preserves_failures(
         "2026.8.0",
         "2026.9.1",
     }
-
-
-def test_hacs_minimum_embedded_install_is_part_of_required_e2e_gate():
-    workflow = yaml.safe_load((_ROOT / ".github/workflows/pr.yml").read_text())
-    jobs = workflow["jobs"]
-    embedded = jobs["e2e-validation-embedded"]
-    variants = embedded["strategy"]["matrix"]["include"]
-    assert {row["os"] for row in variants if not row.get("hacs_minimum")} == {
-        "ubuntu-latest",
-        "ubuntu-24.04-arm",
-    }
-    floor = [row for row in variants if row.get("hacs_minimum")]
-    assert len(floor) == 1
-    assert floor[0]["pytest_workers"] == 1
-    steps = embedded["steps"]
-    select = next(
-        step for step in steps if step.get("name") == "Select HACS minimum image"
-    )
-    assert "matrix.hacs_minimum" in select["if"]
-    assert "hacs.json" in select["run"]
-    assert "HA_IMAGE_GHCR=" in select["run"]
-    assert "HA_TEST_IMAGE=" in select["run"]
-    cache = next(step for step in steps if step.get("name") == "Cache HA Docker image")
-    assert steps.index(select) < steps.index(cache)
-    run = next(step for step in steps if "uv run pytest" in step.get("run", ""))
-    assert "test_embedded_no_stomp.py" in run["run"]
-    assert "test_connection.py" in run["run"]
-    assert run["env"]["E2E_BACKEND"] == "embedded"
-    assert "e2e-validation-embedded" in jobs["e2e-validation-gate"]["needs"]

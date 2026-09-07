@@ -87,17 +87,15 @@ When updating either library, coordinate the requirement and standalone lock
 with Core's pins. Never fix an embedded resolver failure by dropping HA's
 constraints or eagerly upgrading its shared packages.
 
-PR checks cover the current Core image and the `hacs.json` minimum:
+Fast Checks verifies direct dependency alignment against both the current
+Core image and the `hacs.json` minimum, without adding E2E lanes. Existing
+current-Core embedded E2E on x64/ARM64 covers transitive installation and
+preinstall/runtime replacement of HA-governed packages; nightly beta E2E
+provides advance notice of upcoming Core regressions.
 
-- Fast Checks verifies direct dependency alignment at both endpoints.
-- The current embedded lanes run the full suite on x64 and ARM64.
-- A focused x64 minimum-Core variant boots the real embedded server and runs
-  the connection and no-stomp tests, covering transitive installation and both
-  preinstall/runtime replacement of HA-governed packages.
-- Existing nightly beta E2E lanes detect upcoming Core regressions.
-
-These checks cover those versions and installation paths, not every intervening
-release, every installed third-party integration, or future API compatibility.
+The minimum-version check does not prove transitive installability or runtime
+behavior there. These checks also do not cover every intervening release,
+every installed third-party integration, or future API compatibility.
 Keep the HACS minimum honest; passing current-Core E2E alone does not justify
 raising a dependency floor past versions older supported Core releases need.
 
