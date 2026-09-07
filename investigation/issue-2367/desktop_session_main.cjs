@@ -41,7 +41,13 @@ Object.assign(services,{
  HWn:async()=>Object.keys(config.mcpServers),KZr:()=>{},Jge:()=>null,grt:()=>false,
 });
 console.info=logger.info;console.warn=logger.warn;console.error=logger.error;
-const prefix='$eipc_message$_720e1c5c-930a-4c0d-9628-82278fbf18cc_$_claude.web_$_';
+// The IPC namespace UUID is generated per Desktop build, including platform.
+const preloadSource=fs.readFileSync('/tmp/claude-source/.vite/build/mainView.js','utf8');
+const namespaces=[...new Set(preloadSource.match(/\$eipc_message\$_[a-f0-9-]{36}_\$_/g))];
+if(namespaces.length!==1)throw Error('Expected one Desktop preload IPC namespace');
+const ipcNamespace=namespaces[0];
+const prefix=ipcNamespace+'claude.web_$_';
+trace('preload_ipc_namespace',{namespace:ipcNamespace});
 let controllerReady;
 let rendererReady=new Promise(resolve=>{controllerReady=resolve});
 async function main(){
@@ -64,9 +70,9 @@ async function main(){
  lifecycle=require('/tmp/claude-source/.vite/build/repro-session.cjs')(services);
  ipcMain.handle('list-mcp-servers',lifecycle.listHandler());
  ipcMain.handle('connect-to-mcp-server',lifecycle.connectHandler(win));
- ipcMain.handle('$eipc_message$_720e1c5c-930a-4c0d-9628-82278fbf18cc_$_claude.buddy_$_BuddyBleTransport_$_reportState',()=>{});
+ ipcMain.handle(ipcNamespace+'claude.buddy_$_BuddyBleTransport_$_reportState',()=>{});
  ipcMain.handle('artifact-window-open-gate:state',()=>({active:false}));
- ipcMain.handle('$eipc_message$_720e1c5c-930a-4c0d-9628-82278fbf18cc_$_claude.telemetry_$_RendererMemoryReporter_$_report',()=>{});
+ ipcMain.handle(ipcNamespace+'claude.telemetry_$_RendererMemoryReporter_$_report',()=>{});
  ipcMain.handle(prefix+'Auth_$_prepareForSignedIn',()=>trace('simulated_signin_prepared'));
  ipcMain.handle(prefix+'Account_$_setAccountDetails',(_e,details)=>trace('simulated_account',{accountUuid:details.accountUuid}));
  win.webContents.on('preload-error',(_e,file,error)=>{trace('preload_error',{file,error:error.stack});emit({type:'fatal',error:error.stack})});
