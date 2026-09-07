@@ -221,7 +221,7 @@ async def test_desktop_issue_2367(ha_container_with_fresh_config,protocol,dual,b
             for iteration in range(30):
                 large=iteration%2==0
                 transform=EXACT_TRANSFORM if large else "config['views'][0]['sections'][1]['cards'][0]['icon'] = 'mdi:music-box-multiple'"
-                await attempt(writer,observer,baseline,transform,bps,label+f'/reuse/{iteration}',large)
+                await attempt(writer,observer,baseline,transform,bps,label+f'/reuse/{iteration}',large,small_icon='mdi:music-box-multiple')
         await call(observer,'ha_config_delete_dashboard',{'url_path':'dashboard-media'},label+'/cleanup')
     if standalone:
         from ha_mcp.stdio_settings_sidecar import retire_sidecar

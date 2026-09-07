@@ -102,7 +102,7 @@ async def heartbeat(client, label):
             record("heartbeat_error", label=label, exception=type(exc).__name__)
 
 
-async def attempt(writer, observer, baseline, transform, bps, label, large):
+async def attempt(writer, observer, baseline, transform, bps, label, large, small_icon="mdi:music-box"):
     before = await get_dashboard(writer, label + "/before")
     assert before["config"] == baseline["config"], "Baseline drift before write"
     args = {"url_path": DASHBOARD, "config_hash": before["config_hash"],
@@ -118,12 +118,13 @@ async def attempt(writer, observer, baseline, transform, bps, label, large):
             after = await get_dashboard(observer, label + "/after")
             record("readback", label=label, changed=after["config_hash"] != before["config_hash"],
                    sections=len(after["config"]["views"][1]["sections"]))
-        assert after["config_hash"] != before["config_hash"]
+        expected_change = large or baseline["config"]["views"][0]["sections"][1]["cards"][0]["icon"] != small_icon
+        assert (after["config_hash"] != before["config_hash"]) == expected_change
         if large:
             assert len(after["config"]["views"][1]["sections"]) == 4
             assert after["config"]["views"][1]["sections"][-1]["cards"][0]["heading"] == "Stresstest"
         else:
-            assert after["config"]["views"][0]["sections"][1]["cards"][0]["icon"] == "mdi:music-box"
+            assert after["config"]["views"][0]["sections"][1]["cards"][0]["icon"] == small_icon
         await call(writer, "ha_config_set_dashboard", {
             "url_path": DASHBOARD, "config_hash": after["config_hash"],
             "config": baseline["config"], "MandatoryBPS": False,
