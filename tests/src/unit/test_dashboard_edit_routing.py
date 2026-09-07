@@ -535,3 +535,19 @@ async def test_legacy_unchanged_patch_does_not_save(legacy_dashboard, patch):
     assert result["config_hash"] == original_hash
     assert "render_paths" in result
     assert [message["type"] for message in messages] == ["lovelace/config"]
+
+
+async def test_legacy_patch_boolean_to_number_is_a_change(legacy_dashboard):
+    client, document, messages = legacy_dashboard
+    document["counter"] = True
+    result = await DashboardConfigTools(client).ha_config_set_dashboard(
+        "test-dashboard",
+        patch=[{"op": "replace", "path": "/counter", "value": 1}],
+        config_hash=compute_config_hash(document),
+        MandatoryBPS=False,
+    )
+    assert document["counter"] == 1
+    assert document["counter"] is not True
+    assert result["write_committed"] is True
+    assert result.get("unchanged") is not True
+    assert sum(message["type"] == "lovelace/config/save" for message in messages) == 1

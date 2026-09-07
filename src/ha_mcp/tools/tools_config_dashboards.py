@@ -2998,7 +2998,8 @@ class DashboardConfigTools:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "Cannot use config, python_transform or patch simultaneously",
+                        "config, python_transform and patch are mutually exclusive "
+                        "and cannot be used simultaneously",
                         suggestions=[
                             "Use only ONE of: config, python_transform or patch",
                             "config: Full replacement",
@@ -3418,7 +3419,18 @@ class DashboardConfigTools:
                 replacement_config=updated,
                 action="patch",
             )
-            result = await self._save_dashboard_edit_legacy(url_path, updated)
+            # Compare JSON hashes rather than Python equality: true and 1 are
+            # different dashboard values even though Python considers them equal.
+            if compute_config_hash(updated) == config_hash:
+                result = {
+                    "config": current,
+                    "config_hash": config_hash,
+                    "write_committed": False,
+                    "post_write_verified": True,
+                    "unchanged": True,
+                }
+            else:
+                result = await self._save_dashboard_edit_legacy(url_path, updated)
         return await self._finish_dashboard_edit(
             url_path,
             result,
