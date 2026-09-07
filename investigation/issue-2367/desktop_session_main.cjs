@@ -43,10 +43,10 @@ Object.assign(services,{
 console.info=logger.info;console.warn=logger.warn;console.error=logger.error;
 // The IPC namespace UUID is generated per Desktop build, including platform.
 const preloadSource=fs.readFileSync('/tmp/claude-source/.vite/build/mainView.js','utf8');
-const namespaces=[...new Set(preloadSource.match(/\$eipc_message\$_[a-f0-9-]{36}_\$_/g))];
+const namespaces=[...new Set(preloadSource.match(/\$eipc_message\$_[a-f0-9-]{36}_\$_claude\.web_\$_/g))];
 if(namespaces.length!==1)throw Error('Expected one Desktop preload IPC namespace');
-const ipcNamespace=namespaces[0];
-const prefix=ipcNamespace+'claude.web_$_';
+const prefix=namespaces[0];
+const ipcNamespace=prefix.slice(0,-'claude.web_$_'.length);
 trace('preload_ipc_namespace',{namespace:ipcNamespace});
 let controllerReady;
 let rendererReady=new Promise(resolve=>{controllerReady=resolve});
