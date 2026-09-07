@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>Isolated MCP transport harness</title>
+<script>
+const {ipcRenderer}=require('electron');
+const ports=new Map();
+ipcRenderer.on('port',(event,{route,id})=>{
+  const port=event.ports[0];
+  port.onmessage=({data})=>ipcRenderer.send('reply',{route,...data});
+  port.start();ports.set(route,port);ipcRenderer.send('port-ready',id);
+});
+ipcRenderer.on('request',(_event,{route,message})=>ports.get(route).postMessage(message));
+</script>
