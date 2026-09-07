@@ -8,7 +8,7 @@ on:
       phase:
         description: Desktop source inspection or HAOS reproduction
         type: choice
-        options: [haos, inspect]
+        options: [haos, inspect, sdk]
         default: haos
       topology:
         description: Desktop launches standalone ha-mcp or a bridge to HA-hosted MCP
@@ -34,7 +34,7 @@ env:
 
 jobs:
   desktop-inspect:
-    if: inputs.phase == 'inspect'
+    if: inputs.phase == 'inspect' || inputs.phase == 'sdk'
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
@@ -45,6 +45,17 @@ jobs:
         run: |
           bash investigation/issue-2367/setup_desktop.sh
 
+      - name: Install uv for SDK compatibility check
+        if: inputs.phase == 'sdk'
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.12.7"
+      - name: Verify the existing SDK through Desktop
+        if: inputs.phase == 'sdk'
+        run: |
+          uv sync --all-extras --dev
+          uv run python investigation/issue-2367/desktop_sdk_preflight.py
+
       - name: Upload Desktop source analysis
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -53,7 +64,7 @@ jobs:
           path: /tmp/desktop-inspection/
           retention-days: 7
   haos-e2e-standalone:
-    if: inputs.phase != 'inspect'
+    if: inputs.phase == 'haos'
     name: Issue 2367 Desktop ${{ inputs.topology }} against HAOS
     runs-on: ubuntu-22.04
     # 60 (vs the external/inaddon lanes' 45): the embedded lane pays a per-worker

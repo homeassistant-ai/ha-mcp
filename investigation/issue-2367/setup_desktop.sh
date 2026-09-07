@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 mkdir -p /tmp/desktop-inspection
-curl -fL --retry 3 https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_1.46388.2_amd64.deb -o /tmp/claude.deb
+curl -fL --retry 3 --retry-all-errors --connect-timeout 30 --max-time 180 https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_1.46388.2_amd64.deb -o /tmp/claude.deb
 echo '98bf54e85e4916068c4281459b0f0431d8ff68034773f3ee98311d7206566ab1  /tmp/claude.deb' | sha256sum -c -
 dpkg-deb -x /tmp/claude.deb /tmp/claude-package
 asar_path=$(find /tmp/claude-package -name app.asar -print -quit)
@@ -13,7 +13,7 @@ npm install --prefix /tmp/desktop-analysis --no-audit --no-fund acorn@8.15.0 aco
 node investigation/issue-2367/inspect_desktop_ast.cjs
 node investigation/issue-2367/extract_desktop_transport.cjs
 # Public Windows release linked by Anthropic's official MSIX download redirect.
-curl -fL --retry 3 https://downloads.claude.ai/releases/win32/x64/1.46388.4/Claude-50e62f90a2c85243eef42913398f7c8f1534abef.msix -o /tmp/claude-windows.msix
+curl -fL --retry 3 --retry-all-errors --connect-timeout 30 --max-time 180 https://downloads.claude.ai/releases/win32/x64/1.46388.4/Claude-50e62f90a2c85243eef42913398f7c8f1534abef.msix -o /tmp/claude-windows.msix
 echo 'f3925248cf40b46c59043878b4c4f1835e7687082b5a52217bd72b73bfbf0b12  /tmp/claude-windows.msix' | sha256sum -c -
 sha256sum /tmp/claude-windows.msix >> /tmp/desktop-inspection/checksums.txt
 python3 - <<'EXTRACT_WINDOWS'
