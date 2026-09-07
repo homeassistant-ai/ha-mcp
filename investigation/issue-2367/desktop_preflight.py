@@ -13,7 +13,14 @@ env={**os.environ,'REPRO_DESKTOP_CONFIG':str(config),'REPRO_DESKTOP_LOG':str(out
 with (out/'electron-stderr.txt').open('w') as stderr:
     p=subprocess.Popen(['xvfb-run','-a','/tmp/claude-package/usr/lib/claude-desktop/claude-desktop','--no-sandbox'],env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=stderr,text=True)
     try:
-        ready=json.loads(p.stdout.readline())
+        with (out/'electron-stdout.txt').open('w') as startup:
+            for line in p.stdout:
+                startup.write(line);startup.flush()
+                if line.startswith('{'):
+                    ready=json.loads(line)
+                    break
+            else:
+                raise RuntimeError('Electron exited before ready')
         (out/'smoke-ready.json').write_text(json.dumps(ready,indent=2))
         assert ready['type']=='ready',ready
         value={'python_transform':"{% if something %} {{ states('sensor.test') }} % ü"*2000}
