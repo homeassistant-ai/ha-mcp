@@ -37,19 +37,6 @@ def test_ha_owned_requirements_allow_core_patch_updates(
         assert deps[name].extras == {"socks"}
 
 
-@pytest.mark.parametrize("name", ["pydantic", "httpx"])
-def test_dependabot_defers_version_updates_without_suppressing_security(name):
-    config = yaml.safe_load((_ROOT / ".github/dependabot.yml").read_text())
-    uv = next(item for item in config["updates"] if item["package-ecosystem"] == "uv")
-    rule = next(item for item in uv["ignore"] if item["dependency-name"] == name)
-    assert set(rule["update-types"]) == {
-        "version-update:semver-major",
-        "version-update:semver-minor",
-        "version-update:semver-patch",
-    }
-    assert "versions" not in rule
-
-
 @pytest.mark.parametrize(
     ("current_status", "floor_status", "expected"),
     [

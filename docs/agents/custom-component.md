@@ -74,18 +74,20 @@ live-test it promptly on the development server before the next stable cut.
 
 The embedded server installs into Home Assistant's Python environment using
 Core's `package_constraints.txt`. The standalone `uv.lock` is not the embedded
-installation contract. For HA-owned libraries, keep package requirements as
+installation contract. For libraries shared with HA, keep package requirements as
 bounded compatibility ranges that admit supported Core versions. Preserve the
 standalone lock's selected versions when widening a range; widen or raise a
 floor only with compatibility evidence. Pydantic follows its major-version
 boundary; HTTPX is pre-1.0, so its minor-version boundary remains capped.
 
-Dependabot defers routine Pydantic and HTTPX version updates. Its `update-types`
-ignore rules leave security updates enabled; those still need compatibility
-review. Renovate advances the Core E2E image, not these package requirements.
-When updating either library, coordinate the requirement and standalone lock
-with Core's pins. Never fix an embedded resolver failure by dropping HA's
-constraints or eagerly upgrading its shared packages.
+Dependabot continues updating Pydantic and HTTPX for standalone, Docker, and
+app installations. Their standalone lock versions may advance independently
+of Core's pins while the package requirements still admit those pins. Review
+requirement changes against supported Core versions; an incompatible floor
+must fail alignment checks rather than silently strand embedded users.
+Renovate advances the Core E2E image, not these package requirements. Never
+fix an embedded resolver failure by dropping HA's constraints or eagerly
+upgrading its shared packages.
 
 Fast Checks verifies direct dependency alignment against both the current
 Core image and the `hacs.json` minimum, without adding E2E lanes. Existing

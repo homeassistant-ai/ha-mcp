@@ -41,20 +41,6 @@ updates:
       prefix: "deps"
       include: "scope"
     ignore:
-      # HA owns these versions in the embedded process. Coordinate floor and
-      # lock updates with supported Core versions, not independent PyPI bumps
-      # (#2391). update-types suppresses VERSION updates only: security updates
-      # remain available and must pass the same compatibility/E2E gates.
-      - dependency-name: "pydantic"
-        update-types:
-          - "version-update:semver-major"
-          - "version-update:semver-minor"
-          - "version-update:semver-patch"
-      - dependency-name: "httpx"
-        update-types:
-          - "version-update:semver-major"
-          - "version-update:semver-minor"
-          - "version-update:semver-patch"
       # Held at the pin in pyproject.toml. pydantic-monty 0.0.19 replaced the
       # single-shot `Monty(code, ...)` + `run_async(external_functions=...)`
       # API with a subprocess worker pool (`AsyncMonty` -> `checkout()` ->

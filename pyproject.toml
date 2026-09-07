@@ -31,9 +31,9 @@ dependencies = [
     "fastmcp==3.4.7",
     # Shared with the embedded HA process: admit Core's versions, including
     # compatible updates, instead of requiring it to keep our exact pin.
-    # uv.lock retains the standalone versions; HA's own constraints select
+    # uv.lock selects standalone versions; HA's own constraints select
     # the embedded versions. Check both the HACS minimum and current Core
-    # before raising these floors. Dependabot defers routine updates for them.
+    # before raising these floors; standalone lock updates can move independently.
     "httpx[socks]>=0.28.1,<0.29",
     "pydantic>=2.13.4,<3",
     "python-dotenv==1.2.3",
