@@ -21,6 +21,18 @@ logger = logging.getLogger(__name__)
 class SystemOverviewMixin(_SearchBase):
     """``get_system_overview`` and its analysis/format/paginate helpers."""
 
+    async def _fetch_legacy_overview_slices(self) -> list[Any]:
+        """Fetch broad legacy slices in parallel after states succeeds."""
+        states = await self.client.get_states()
+        optional_results = await asyncio.gather(
+            self.client.get_services(),
+            self.client.send_websocket_message({"type": "config/area_registry/list"}),
+            self.client.send_websocket_message({"type": "config/entity_registry/list"}),
+            self.client.send_websocket_message({"type": "config/device_registry/list"}),
+            return_exceptions=True,
+        )
+        return [states, *optional_results]
+
     async def get_system_overview(
         self,
         detail_level: str = "standard",
@@ -76,29 +88,10 @@ class SystemOverviewMixin(_SearchBase):
                     prefetched_slices["device_registry"],
                 ]
             else:
-                # Fetch all data in parallel. return_exceptions=True so a degraded
-                # registry/service fetch doesn't abort the whole overview.
-                results = await asyncio.gather(
-                    self.client.get_states(),
-                    self.client.get_services(),
-                    self.client.send_websocket_message(
-                        {"type": "config/area_registry/list"}
-                    ),
-                    self.client.send_websocket_message(
-                        {"type": "config/entity_registry/list"}
-                    ),
-                    self.client.send_websocket_message(
-                        {"type": "config/device_registry/list"}
-                    ),
-                    return_exceptions=True,
-                )
+                # Fetch mandatory states first, then read optional slices in
+                # parallel; optional failures degrade independently below.
+                results = await self._fetch_legacy_overview_slices()
 
-            # Entities are mandatory — surface connection/auth errors immediately.
-            # Use BaseException so a cancelled states fetch propagates instead of
-            # being assigned to `entities` and crashing downstream iteration
-            # (mirrors get_entities_by_area / _fetch_search_entities).
-            if isinstance(results[0], BaseException):
-                raise results[0]
             entities = results[0]
             # A cancelled services/registry sub-task must propagate too, not be
             # silently degraded by the fail-open handlers below.

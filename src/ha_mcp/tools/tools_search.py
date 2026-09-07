@@ -1558,6 +1558,51 @@ class _OverviewSlices:
     repairs: dict[str, Any]
 
 
+# These disjoint sets partition every key documented by ha_get_overview's
+# fields parameter. Keep the manifest test in sync when the public schema changes.
+_OVERVIEW_INDEPENDENT_FIELDS = frozenset(
+    {
+        "success",
+        "system_info",
+        "notification_count",
+        "notifications",
+        "repair_count",
+        "dismissed_repair_count",
+        "repairs",
+        "repairs_error",
+        "tool_discovery",
+        "settings_url",
+        "settings_url_hint",
+        "read_only_mode",
+        "read_only_mode_hint",
+        "ha_mcp_update",
+    }
+)
+_OVERVIEW_NOTIFICATION_FIELDS = frozenset({"notification_count", "notifications"})
+_OVERVIEW_REPAIR_FIELDS = frozenset(
+    {
+        "repair_count",
+        "dismissed_repair_count",
+        "repairs",
+        "repairs_error",
+    }
+)
+_OVERVIEW_ENTITY_FIELDS = frozenset(
+    {
+        "system_summary",
+        "domain_stats",
+        "area_analysis",
+        "ai_insights",
+        "pagination",
+        "partial",
+        "warnings",
+        "device_types",
+        "service_availability",
+    }
+)
+_OVERVIEW_AVAILABLE_FIELDS = _OVERVIEW_INDEPENDENT_FIELDS | _OVERVIEW_ENTITY_FIELDS
+
+
 def _build_component_overview_request(inputs: _OverviewInputs) -> dict[str, Any]:
     """Translate resolved ha_get_overview inputs into an ``ha_mcp_tools/overview`` request.
 
@@ -4045,7 +4090,7 @@ class SearchTools:
                 default=None,
                 description=(
                     "Return only the specified top-level response keys to reduce "
-                    'response size (e.g. ["system_info", "domains"]). '
+                    'response size (e.g. ["system_info", "domain_stats"]). '
                     "None = full response (default). "
                     "Available keys: success, system_summary, domain_stats, "
                     "area_analysis, ai_insights, pagination, partial, warnings, "
@@ -4078,6 +4123,14 @@ class SearchTools:
         Use fields= to project the response to only the keys you need — a
         significantly smaller payload when fetching a single sub-section (e.g.
         fields=["system_info"] returns just that section instead of the full overview).
+        Requests composed only of system_info, notification, repair, or server
+        metadata fields also skip the unrelated state, service, and registry reads.
+
+        Do not use this tool to inspect a known entity or a narrow set of entities.
+        Use ha_get_state for one entity, ha_get_entity for registry metadata, or
+        ha_search with a domain or area filter. An unprojected overview collects
+        system-wide state, service, and registry data and can be expensive on large
+        Home Assistant installations.
 
         When (and only when) the ha-mcp settings-UI sidecar is running
         (stdio mode, e.g. Claude Desktop / Claude Code), the response
@@ -4126,19 +4179,32 @@ class SearchTools:
         except ValueError as exc:
             raise_tool_error(create_validation_error(str(exc), parameter="domains"))
 
-        result = await self._collect_overview(
-            _OverviewInputs(
+        requested_fields = set(parsed_fields or [])
+        recognized_fields = requested_fields & _OVERVIEW_INDEPENDENT_FIELDS
+        use_independent_collectors = (
+            parsed_fields is not None and not requested_fields & _OVERVIEW_ENTITY_FIELDS
+        )
+        if use_independent_collectors:
+            result = await self._collect_independent_overview(
+                requested_fields=recognized_fields,
                 detail_level=detail_level,
-                max_entities_per_domain=max_entities_per_domain,
-                include_state=include_state_bool,
-                include_entity_id=include_entity_id_bool,
-                domains_filter=parsed_domains,
-                limit=limit,
-                offset=offset,
                 include_notifications=include_notifications_bool,
                 include_dismissed_repairs=include_dismissed_repairs_bool,
             )
-        )
+        else:
+            result = await self._collect_overview(
+                _OverviewInputs(
+                    detail_level=detail_level,
+                    max_entities_per_domain=max_entities_per_domain,
+                    include_state=include_state_bool,
+                    include_entity_id=include_entity_id_bool,
+                    domains_filter=parsed_domains,
+                    limit=limit,
+                    offset=offset,
+                    include_notifications=include_notifications_bool,
+                    include_dismissed_repairs=include_dismissed_repairs_bool,
+                )
+            )
 
         settings = get_global_settings()
         if settings.enable_tool_search:
@@ -4170,7 +4236,11 @@ class SearchTools:
         # (issue #863).
         from ..stdio_settings_sidecar import read_sidecar_url
 
-        projected = project_fields(result, parsed_fields)
+        projected = project_fields(
+            result,
+            parsed_fields,
+            available_fields=_OVERVIEW_AVAILABLE_FIELDS,
+        )
         sidecar_url = read_sidecar_url()
         if sidecar_url:
             projected["settings_url"] = sidecar_url
@@ -4215,6 +4285,32 @@ class SearchTools:
 
         return projected
 
+    async def _collect_independent_overview(
+        self,
+        *,
+        requested_fields: set[str],
+        detail_level: str,
+        include_notifications: bool,
+        include_dismissed_repairs: bool,
+    ) -> dict[str, Any]:
+        """Collect requested independent sections with full-path error semantics."""
+        result: dict[str, Any] = {"success": True}
+        if "system_info" in requested_fields:
+            await self._fetch_system_info(result, detail_level)
+        if requested_fields & _OVERVIEW_NOTIFICATION_FIELDS:
+            if include_notifications:
+                await self._fetch_notifications(result)
+            else:
+                result.setdefault("warnings", []).append(
+                    "notifications omitted: include_notifications=False"
+                )
+        if requested_fields & _OVERVIEW_REPAIR_FIELDS:
+            await self._fetch_repairs(
+                result,
+                include_dismissed_repairs,
+            )
+        return result
+
     async def _fetch_system_info(
         self,
         result: dict[str, Any],
@@ -4222,7 +4318,7 @@ class SearchTools:
         *,
         prefetched_config: dict[str, Any] | None = None,
     ) -> None:
-        """Populate result['system_info'] from HA config; tolerates failure.
+        """Populate result['system_info'] from HA config, warning on failure.
 
         ``prefetched_config`` (the component's ``config`` slice, already the bare
         ``get_config()`` dict) is used verbatim when given, skipping the fetch.
@@ -4268,6 +4364,7 @@ class SearchTools:
             logger.warning(
                 "Failed to fetch system info for overview: %s", e, exc_info=True
             )
+            result.setdefault("warnings", []).append(f"system info unavailable: {e}")
             if "system_summary" in result:
                 result["system_summary"].setdefault("version", "unknown")
 
@@ -4277,7 +4374,7 @@ class SearchTools:
         *,
         prefetched_notifications: dict[str, Any] | None = None,
     ) -> None:
-        """Attach active persistent notifications to result.
+        """Attach active persistent notifications, warning on failure.
 
         ``prefetched_notifications`` (the component's ``notifications`` slice
         re-wrapped in the ``{success, result}`` envelope) is unwrapped by the same
@@ -4331,7 +4428,7 @@ class SearchTools:
         *,
         prefetched_repairs: dict[str, Any] | None = None,
     ) -> None:
-        """Attach active repairs issues to result.
+        """Attach active repairs issues, recording failures in repairs_error.
 
         ``prefetched_repairs`` (the component's ``repairs`` slice re-wrapped in the
         ``{success, result: {issues: [...]}}`` envelope) is unwrapped, filtered

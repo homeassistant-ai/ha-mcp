@@ -137,9 +137,8 @@ class TestHaGetOverviewFieldsProjection:
         smart.get_system_overview = AsyncMock(
             return_value={
                 "success": True,
-                "domains": {"light": {"count": 3}},
-                "entity_summary": [],
-                "total_entities": 3,
+                "domain_stats": {"light": {"count": 3}},
+                "area_analysis": {},
             }
         )
         return smart
@@ -155,7 +154,7 @@ class TestHaGetOverviewFieldsProjection:
         result = await overview_tool()
         assert "success" in result
         assert "system_info" in result
-        assert "domains" in result
+        assert "domain_stats" in result
 
     @pytest.mark.asyncio
     async def test_fields_single_key_projects_correctly(self, overview_tool):
@@ -165,22 +164,129 @@ class TestHaGetOverviewFieldsProjection:
         assert "system_info" in result
         assert result["system_info"]["version"] == "2026.5.0"
         # All other top-level keys must be absent.
-        for key in ("domains", "entity_summary", "total_entities", "repair_count"):
+        for key in (
+            "domain_stats",
+            "area_analysis",
+            "domains",
+            "entity_summary",
+            "total_entities",
+            "repair_count",
+        ):
             assert key not in result, f"unexpected key {key!r} survived projection"
 
     @pytest.mark.asyncio
+    async def test_system_info_projection_skips_full_overview_collection(
+        self, overview_tool, mock_client, mock_smart_tools
+    ):
+        """A narrow response must also produce a narrow HA-side workload."""
+        result = await overview_tool(fields=["system_info"])
+
+        assert result["system_info"]["version"] == "2026.5.0"
+        mock_client.get_config.assert_awaited_once()
+        mock_client.send_websocket_message.assert_not_awaited()
+        mock_smart_tools.get_system_overview.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_independent_sections_skip_full_overview_collection(
+        self, overview_tool, mock_client, mock_smart_tools
+    ):
+        """Config, notifications, and repairs use only their own collectors."""
+
+        async def dispatch(message):
+            if message["type"] == "persistent_notification/get":
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "notification_id": "test",
+                            "title": "Test",
+                            "message": "Body",
+                        }
+                    ],
+                }
+            if message["type"] == "repairs/list_issues":
+                return {"success": True, "result": {"issues": []}}
+            raise AssertionError(f"unexpected command: {message['type']}")
+
+        mock_client.send_websocket_message.side_effect = dispatch
+
+        result = await overview_tool(
+            fields=["system_info", "notifications", "repair_count"]
+        )
+
+        assert {
+            "success",
+            "system_info",
+            "notifications",
+            "repair_count",
+        } <= set(result)
+        mock_client.get_config.assert_awaited_once()
+        assert mock_client.send_websocket_message.await_count == 2
+        mock_smart_tools.get_system_overview.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_domain_projection_still_uses_full_overview(
+        self, overview_tool, mock_smart_tools
+    ):
+        """Documented entity-derived fields retain the full assembly path."""
+        result = await overview_tool(fields=["domain_stats"])
+
+        assert result["domain_stats"] == {"light": {"count": 3}}
+        mock_smart_tools.get_system_overview.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_fields_multiple_keys(self, overview_tool):
-        """fields=["system_info", "domains"] keeps exactly those two (+ success)."""
-        result = await overview_tool(fields=["system_info", "domains"])
+        """Mixed independent/entity fields use the full path before projection."""
+        result = await overview_tool(fields=["system_info", "domain_stats"])
         assert "system_info" in result
-        assert "domains" in result
-        assert "entity_summary" not in result
+        assert result["domain_stats"] == {"light": {"count": 3}}
+        assert "area_analysis" not in result
 
     @pytest.mark.asyncio
     async def test_fields_success_always_included(self, overview_tool):
         """success is always present even when the caller omits it from fields."""
-        result = await overview_tool(fields=["domains"])
+        result = await overview_tool(fields=["domain_stats"])
         assert "success" in result
+
+    @pytest.mark.asyncio
+    async def test_unsupported_domains_field_does_not_trigger_full_overview(
+        self, overview_tool, mock_smart_tools
+    ):
+        result = await overview_tool(fields=["domains"])
+
+        assert result["success"] is True
+        assert "domains" not in result
+        warning = result["warnings"][0]
+        assert "domains" in warning
+        assert "system_info" in warning
+        assert "notifications" in warning
+        assert "repairs" in warning
+        mock_smart_tools.get_system_overview.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_requested_notifications_warn_when_disabled(
+        self, overview_tool, mock_client, mock_smart_tools
+    ):
+        result = await overview_tool(
+            fields=["notifications"], include_notifications=False
+        )
+
+        assert result["success"] is True
+        assert "notifications" not in result
+        assert result["warnings"] == [
+            "notifications omitted: include_notifications=False"
+        ]
+        mock_client.send_websocket_message.assert_not_awaited()
+        mock_smart_tools.get_system_overview.assert_not_awaited()
+
+    @pytest.mark.parametrize("field", ["partial", "warnings"])
+    @pytest.mark.asyncio
+    async def test_diagnostic_projection_uses_full_overview(
+        self, field, overview_tool, mock_smart_tools
+    ):
+        await overview_tool(fields=[field])
+
+        mock_smart_tools.get_system_overview.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_fields_unknown_key_silently_absent(self, overview_tool):
@@ -188,6 +294,84 @@ class TestHaGetOverviewFieldsProjection:
         result = await overview_tool(fields=["nonexistent_key"])
         assert result["success"] is True
         assert "nonexistent_key" not in result
+
+    @pytest.mark.asyncio
+    async def test_unknown_key_does_not_trigger_full_overview(
+        self, overview_tool, mock_smart_tools
+    ):
+        result = await overview_tool(fields=["nonexistent_key"])
+
+        assert result["success"] is True
+        mock_smart_tools.get_system_overview.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_independent_system_info_failure_degrades_with_context(
+        self, overview_tool, mock_client, mock_smart_tools
+    ):
+        mock_client.get_config.side_effect = RuntimeError("config unavailable")
+
+        result = await overview_tool(fields=["system_info"])
+
+        assert result["success"] is True
+        assert "system_info" not in result
+        assert result["warnings"] == ["system info unavailable: config unavailable"]
+        mock_smart_tools.get_system_overview.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_later_collector_runs_after_system_info_failure(
+        self, overview_tool, mock_client, mock_smart_tools
+    ):
+        mock_client.get_config.side_effect = RuntimeError("config unavailable")
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"issues": []},
+        }
+
+        result = await overview_tool(fields=["system_info", "repair_count"])
+
+        assert result["success"] is True
+        assert result["repair_count"] == 0
+        assert result["warnings"] == ["system info unavailable: config unavailable"]
+        mock_client.send_websocket_message.assert_awaited_once_with(
+            {"type": "repairs/list_issues"}
+        )
+        mock_smart_tools.get_system_overview.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_notification_rejection_degrades_with_warning(
+        self, overview_tool, mock_client, mock_smart_tools
+    ):
+        mock_client.send_websocket_message.return_value = {
+            "success": False,
+            "error": {"message": "notifications disabled"},
+        }
+
+        result = await overview_tool(fields=["notifications"])
+
+        assert result["success"] is True
+        assert result["notifications"] == []
+        assert result["warnings"] == [
+            "notifications unavailable: notifications disabled"
+        ]
+        mock_smart_tools.get_system_overview.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_repairs_error_projection_returns_rejection(
+        self, overview_tool, mock_client, mock_smart_tools
+    ):
+        mock_client.send_websocket_message.return_value = {
+            "success": False,
+            "error": {"message": "repairs unavailable"},
+        }
+
+        result = await overview_tool(fields=["repairs_error"])
+
+        assert result["success"] is True
+        assert result["repairs_error"] == (
+            "Could not fetch repairs: repairs unavailable"
+        )
+        assert "warnings" not in result
+        mock_smart_tools.get_system_overview.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_bad_fields_integer_raises_tool_error(self, overview_tool):
