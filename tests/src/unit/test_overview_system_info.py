@@ -256,6 +256,11 @@ class TestHaGetOverviewFieldsProjection:
 
         assert result["success"] is True
         assert "domains" not in result
+        warning = result["warnings"][0]
+        assert "domains" in warning
+        assert "system_info" in warning
+        assert "notifications" in warning
+        assert "repairs" in warning
         mock_smart_tools.get_system_overview.assert_not_awaited()
 
     @pytest.mark.parametrize("field", ["partial", "warnings"])
@@ -284,35 +289,71 @@ class TestHaGetOverviewFieldsProjection:
         mock_smart_tools.get_system_overview.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_independent_collector_failure_is_structured(
+    async def test_independent_system_info_failure_degrades_with_context(
         self, overview_tool, mock_client, mock_smart_tools
     ):
-        import json
-
-        from fastmcp.exceptions import ToolError
-
         mock_client.get_config.side_effect = RuntimeError("config unavailable")
 
-        with pytest.raises(ToolError) as exc_info:
-            await overview_tool(fields=["system_info"])
+        result = await overview_tool(fields=["system_info"])
 
-        error = json.loads(str(exc_info.value))
-        assert error["error"]["code"] == "INTERNAL_ERROR"
-        assert error["operation"] == "collect requested overview fields"
+        assert result["success"] is True
+        assert "system_info" not in result
+        assert result["warnings"] == ["system info unavailable: config unavailable"]
         mock_smart_tools.get_system_overview.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_failure_contract_does_not_depend_on_collector_count(
+    async def test_later_collector_runs_after_system_info_failure(
         self, overview_tool, mock_client, mock_smart_tools
     ):
-        from fastmcp.exceptions import ToolError
-
         mock_client.get_config.side_effect = RuntimeError("config unavailable")
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"issues": []},
+        }
 
-        with pytest.raises(ToolError, match="config unavailable"):
-            await overview_tool(fields=["system_info", "repair_count"])
+        result = await overview_tool(fields=["system_info", "repair_count"])
 
-        mock_client.send_websocket_message.assert_not_awaited()
+        assert result["success"] is True
+        assert result["repair_count"] == 0
+        assert result["warnings"] == ["system info unavailable: config unavailable"]
+        mock_client.send_websocket_message.assert_awaited_once_with(
+            {"type": "repairs/list_issues"}
+        )
+        mock_smart_tools.get_system_overview.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_notification_rejection_degrades_with_warning(
+        self, overview_tool, mock_client, mock_smart_tools
+    ):
+        mock_client.send_websocket_message.return_value = {
+            "success": False,
+            "error": {"message": "notifications disabled"},
+        }
+
+        result = await overview_tool(fields=["notifications"])
+
+        assert result["success"] is True
+        assert result["notifications"] == []
+        assert result["warnings"] == [
+            "notifications unavailable: notifications disabled"
+        ]
+        mock_smart_tools.get_system_overview.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_repairs_error_projection_returns_rejection(
+        self, overview_tool, mock_client, mock_smart_tools
+    ):
+        mock_client.send_websocket_message.return_value = {
+            "success": False,
+            "error": {"message": "repairs unavailable"},
+        }
+
+        result = await overview_tool(fields=["repairs_error"])
+
+        assert result == {
+            "success": True,
+            "repairs_error": "Could not fetch repairs: repairs unavailable",
+        }
         mock_smart_tools.get_system_overview.assert_not_awaited()
 
     @pytest.mark.asyncio

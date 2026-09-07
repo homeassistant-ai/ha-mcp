@@ -88,16 +88,10 @@ class SystemOverviewMixin(_SearchBase):
                     prefetched_slices["device_registry"],
                 ]
             else:
-                # States remains fail-fast. Optional reads preserve the existing
-                # parallel full-overview behavior and degrade independently below.
+                # Fetch mandatory states first, then read optional slices in
+                # parallel; optional failures degrade independently below.
                 results = await self._fetch_legacy_overview_slices()
 
-            # Entities are mandatory — surface connection/auth errors immediately.
-            # Use BaseException so a cancelled states fetch propagates instead of
-            # being assigned to `entities` and crashing downstream iteration
-            # (mirrors get_entities_by_area / _fetch_search_entities).
-            if isinstance(results[0], BaseException):
-                raise results[0]
             entities = results[0]
             # A cancelled services/registry sub-task must propagate too, not be
             # silently degraded by the fail-open handlers below.

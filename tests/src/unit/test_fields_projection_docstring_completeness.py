@@ -651,6 +651,20 @@ def test_harvester_finds_dismissed_repair_count_in_ha_get_overview() -> None:
     )
 
 
+def test_overview_routing_sets_partition_every_documented_field() -> None:
+    """Every public overview key belongs to exactly one collection path."""
+    from ha_mcp.tools.tools_search import (
+        _OVERVIEW_AVAILABLE_FIELDS,
+        _OVERVIEW_ENTITY_FIELDS,
+        _OVERVIEW_INDEPENDENT_FIELDS,
+    )
+
+    documented = _extract_documented_keys("tools/tools_search.py", "ha_get_overview")
+
+    assert _OVERVIEW_INDEPENDENT_FIELDS.isdisjoint(_OVERVIEW_ENTITY_FIELDS)
+    assert documented == _OVERVIEW_AVAILABLE_FIELDS
+
+
 def test_tool_specs_covers_every_fields_using_tool() -> None:
     """Discover every tool with a ``fields`` parameter and assert TOOL_SPECS
     enumerates them all.

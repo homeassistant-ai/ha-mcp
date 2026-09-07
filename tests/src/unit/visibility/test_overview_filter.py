@@ -123,7 +123,7 @@ def test_overview_disabled_keeps_all(tmp_path, monkeypatch):
 
 
 def test_overview_fetches_states_before_parallel_optional_reads(tmp_path, monkeypatch):
-    """States fails fast before the four optional overview reads fan out."""
+    """Optional reads overlap only after the mandatory states fetch succeeds."""
 
     class SequencedClient(_OverviewClient):
         def __init__(self, states_started, release_states):
@@ -192,6 +192,8 @@ def test_overview_fetches_states_before_parallel_optional_reads(tmp_path, monkey
 
 
 def test_overview_stops_immediately_when_mandatory_states_fail(tmp_path, monkeypatch):
+    """A mandatory states failure prevents every optional overview read."""
+
     class StatesFailClient(_OverviewClient):
         def __init__(self):
             super().__init__([], {"success": True, "result": []})

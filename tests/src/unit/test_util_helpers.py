@@ -1632,3 +1632,21 @@ class TestProjectFieldsTypoGuard:
         result = project_fields(data, ["ghost_key"])
         # warnings must be in the output even though it was not in fields=
         assert "warnings" in result
+
+    def test_available_fields_override_drives_typo_diagnostic_only(self):
+        """A narrow payload reports its full schema without inventing values."""
+        from ha_mcp.tools.util_helpers import project_fields
+
+        result = project_fields(
+            {"success": True, "system_info": {}},
+            ["domains"],
+            available_fields=frozenset(
+                {"success", "system_info", "notifications", "repairs"}
+            ),
+        )
+
+        assert "notifications" not in result
+        assert "repairs" not in result
+        warning = result["warnings"][0]
+        assert "domains" in warning
+        assert "available keys: ['notifications', 'repairs', 'system_info']" in warning

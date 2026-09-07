@@ -390,6 +390,7 @@ def project_fields(
     fields: str | list[str] | None,
     *,
     extra_always_keep: frozenset[str] | None = None,
+    available_fields: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """Apply optional field projection to a response data dict.
 
@@ -400,6 +401,10 @@ def project_fields(
     ``extra_always_keep`` lets a caller extend the retained set with its own
     contract / diagnostic keys (e.g. the orchestrator's pagination + partial-
     state keys) without having to reimplement the projection logic.
+
+    ``available_fields`` supplies the complete response schema when *data* was
+    collected narrowly. It affects typo diagnostics only; projection still
+    returns only keys present in *data*.
 
     Typo guard: if any requested key does not exist in *data* (excluding the
     always-retained keys), a diagnostic is appended to ``result["warnings"]``
@@ -417,9 +422,10 @@ def project_fields(
     result = {k: v for k, v in data.items() if k in keep}
     # Typo guard — flag any requested keys that are absent from the response.
     # Exclude the always-retained sentinels so fields=["success"] never warns.
-    unknown = sorted(set(parsed) - set(data.keys()) - always_keep)
+    known_fields = set(available_fields) if available_fields is not None else set(data)
+    unknown = sorted(set(parsed) - known_fields - always_keep)
     if unknown:
-        available = sorted(k for k in data.keys() if k not in always_keep)
+        available = sorted(k for k in known_fields if k not in always_keep)
         result.setdefault("warnings", []).append(
             f"fields {unknown!r} not found in response — available keys: {available!r}"
         )

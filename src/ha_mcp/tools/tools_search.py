@@ -1558,6 +1558,8 @@ class _OverviewSlices:
     repairs: dict[str, Any]
 
 
+# These disjoint sets partition every key documented by ha_get_overview's
+# fields parameter. Keep the manifest test in sync when the public schema changes.
 _OVERVIEW_INDEPENDENT_FIELDS = frozenset(
     {
         "success",
@@ -1598,6 +1600,7 @@ _OVERVIEW_ENTITY_FIELDS = frozenset(
         "service_availability",
     }
 )
+_OVERVIEW_AVAILABLE_FIELDS = _OVERVIEW_INDEPENDENT_FIELDS | _OVERVIEW_ENTITY_FIELDS
 
 
 def _build_component_overview_request(inputs: _OverviewInputs) -> dict[str, Any]:
@@ -4233,7 +4236,11 @@ class SearchTools:
         # (issue #863).
         from ..stdio_settings_sidecar import read_sidecar_url
 
-        projected = project_fields(result, parsed_fields)
+        projected = project_fields(
+            result,
+            parsed_fields,
+            available_fields=_OVERVIEW_AVAILABLE_FIELDS,
+        )
         sidecar_url = read_sidecar_url()
         if sidecar_url:
             projected["settings_url"] = sidecar_url
@@ -4286,26 +4293,16 @@ class SearchTools:
         include_notifications: bool,
         include_dismissed_repairs: bool,
     ) -> dict[str, Any]:
-        """Collect only the independent HA sections requested by a projection."""
+        """Collect requested independent sections with full-path error semantics."""
         result: dict[str, Any] = {"success": True}
-        try:
-            if "system_info" in requested_fields:
-                await self._fetch_system_info(result, detail_level, raise_on_error=True)
-            if (
-                include_notifications
-                and requested_fields & _OVERVIEW_NOTIFICATION_FIELDS
-            ):
-                await self._fetch_notifications(result, raise_on_error=True)
-            if requested_fields & _OVERVIEW_REPAIR_FIELDS:
-                await self._fetch_repairs(
-                    result,
-                    include_dismissed_repairs,
-                    raise_on_error=True,
-                )
-        except Exception as exc:
-            exception_to_structured_error(
-                exc,
-                context={"operation": "collect requested overview fields"},
+        if "system_info" in requested_fields:
+            await self._fetch_system_info(result, detail_level)
+        if include_notifications and requested_fields & _OVERVIEW_NOTIFICATION_FIELDS:
+            await self._fetch_notifications(result)
+        if requested_fields & _OVERVIEW_REPAIR_FIELDS:
+            await self._fetch_repairs(
+                result,
+                include_dismissed_repairs,
             )
         return result
 
@@ -4315,9 +4312,8 @@ class SearchTools:
         detail_level: str,
         *,
         prefetched_config: dict[str, Any] | None = None,
-        raise_on_error: bool = False,
     ) -> None:
-        """Populate result['system_info'] from HA config; tolerates failure.
+        """Populate result['system_info'] from HA config, warning on failure.
 
         ``prefetched_config`` (the component's ``config`` slice, already the bare
         ``get_config()`` dict) is used verbatim when given, skipping the fetch.
@@ -4360,11 +4356,10 @@ class SearchTools:
             if "system_summary" in result:
                 result["system_summary"]["version"] = config.get("version") or "unknown"
         except Exception as e:
-            if raise_on_error:
-                raise
             logger.warning(
                 "Failed to fetch system info for overview: %s", e, exc_info=True
             )
+            result.setdefault("warnings", []).append(f"system info unavailable: {e}")
             if "system_summary" in result:
                 result["system_summary"].setdefault("version", "unknown")
 
@@ -4373,9 +4368,8 @@ class SearchTools:
         result: dict[str, Any],
         *,
         prefetched_notifications: dict[str, Any] | None = None,
-        raise_on_error: bool = False,
     ) -> None:
-        """Attach active persistent notifications to result.
+        """Attach active persistent notifications, warning on failure.
 
         ``prefetched_notifications`` (the component's ``notifications`` slice
         re-wrapped in the ``{success, result}`` envelope) is unwrapped by the same
@@ -4411,14 +4405,10 @@ class SearchTools:
                 err_msg = (
                     err.get("message") if isinstance(err, dict) else err
                 ) or "unknown error"
-                if raise_on_error:
-                    raise RuntimeError(f"notifications unavailable: {err_msg}")
                 result.setdefault("warnings", []).append(
                     f"notifications unavailable: {err_msg}"
                 )
         except Exception as e:
-            if raise_on_error:
-                raise
             logger.warning(
                 "Failed to fetch notifications for overview: %s", e, exc_info=True
             )
@@ -4432,9 +4422,8 @@ class SearchTools:
         include_dismissed_repairs_bool: bool,
         *,
         prefetched_repairs: dict[str, Any] | None = None,
-        raise_on_error: bool = False,
     ) -> None:
-        """Attach active repairs issues to result.
+        """Attach active repairs issues, recording failures in repairs_error.
 
         ``prefetched_repairs`` (the component's ``repairs`` slice re-wrapped in the
         ``{success, result: {issues: [...]}}`` envelope) is unwrapped, filtered
@@ -4480,15 +4469,11 @@ class SearchTools:
                 err_msg = (
                     err.get("message") if isinstance(err, dict) else str(err)
                 ) or "unknown error"
-                if raise_on_error:
-                    raise RuntimeError(f"repairs unavailable: {err_msg}")
                 logger.warning(
                     "repairs/list_issues returned success=false: %s", err_msg
                 )
                 result["repairs_error"] = f"Could not fetch repairs: {err_msg}"
         except Exception as e:
-            if raise_on_error:
-                raise
             logger.warning("Failed to fetch repairs for overview: %s", e, exc_info=True)
             result["repairs_error"] = f"Could not fetch repairs: {e}"
 
