@@ -2854,9 +2854,9 @@ class DashboardConfigTools:
         New dashboards require a hyphenated url_path (e.g., 'my-dashboard').
 
         WHEN TO USE WHICH MODE:
-        - patch: Target known paths with add/remove/replace/test operations and config_hash.
+        - patch: Edit known paths with literal values using add/remove/replace/test and config_hash.
           Example: patch=[{"op": "replace", "path": "/views/0/title", "value": "Home"}].
-        - python_transform: RECOMMENDED for edits. Surgical/pattern-based updates, works on all platforms.
+        - python_transform: Use loops or pattern-based changes across cards and views.
         - config: New dashboards only, or full restructure. Replaces everything.
 
         IMPORTANT: After delete/add operations, indices shift! Subsequent python_transform calls
@@ -2869,7 +2869,7 @@ class DashboardConfigTools:
         (beta feature); for visual re-checks after the write, use the dedicated
         ha_get_dashboard_screenshot tool instead of re-sending config.
 
-        PYTHON TRANSFORM EXAMPLES (RECOMMENDED):
+        PYTHON TRANSFORM EXAMPLES:
         - Update card icon: 'config["views"][0]["cards"][0]["icon"] = "mdi:thermometer"'
         - Add card: 'config["views"][0]["cards"].append({"type": "button", "entity": "light.bedroom"})'
         - Delete card: 'del config["views"][0]["cards"][2]'
@@ -2991,7 +2991,10 @@ class DashboardConfigTools:
                 pre_fetched_dashboards,
             ) = await self._resolve_set_dashboard_url_path(url_path)
 
-            if sum(value is not None for value in (config, python_transform, patch)) > 1:
+            if (
+                sum(value is not None for value in (config, python_transform, patch))
+                > 1
+            ):
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -2999,7 +3002,7 @@ class DashboardConfigTools:
                         suggestions=[
                             "Use only ONE of: config, python_transform or patch",
                             "config: Full replacement",
-                            "python_transform: Python-based edits (recommended)",
+                            "python_transform: Loops and pattern-based edits",
                         ],
                         context={"action": "set", "url_path": url_path},
                     )
@@ -3772,6 +3775,8 @@ class DashboardConfigTools:
         config: dict[str, Any] | str,
         config_hash: str | None,
         dashboard_exists: bool,
+        *,
+        metadata_updated: bool = False,
     ) -> tuple[bool, str | None, dict[str, Any], dict[str, Any] | None]:
         """Parse + validate ``config`` and save it as a full replacement.
 
@@ -3790,9 +3795,30 @@ class DashboardConfigTools:
                 )
             )
         config_dict = cast(dict[str, Any], parsed_config)
-        native_result = await edit_dashboard_via_component(
-            self._client, url_path, expected_hash=config_hash, config=config_dict
-        )
+        try:
+            native_result = await edit_dashboard_via_component(
+                self._client, url_path, expected_hash=config_hash, config=config_dict
+            )
+        except ToolError as exc:
+            if dashboard_exists and not metadata_updated:
+                raise
+            # The component's outcome describes only the config command. The
+            # preceding create/metadata call already succeeded, so preserve both
+            # outcomes instead of reporting the entire operation as unwritten.
+            error: dict[str, Any] = json.loads(str(exc))
+            error["config_write_committed"] = error["write_committed"]
+            error["write_committed"] = True
+            error["dashboard_created"] = not dashboard_exists
+            error["metadata_updated"] = metadata_updated
+            prior_change = (
+                "Dashboard metadata was updated"
+                if dashboard_exists
+                else "Dashboard was created"
+            )
+            error["error"]["message"] = (
+                f"{prior_change}; configuration update: {error['error']['message']}"
+            )
+            raise_tool_error(error)
         if native_result is not None:
             previous_size = native_result["previous_config_size"]
             native_warning = None
@@ -3874,7 +3900,11 @@ class DashboardConfigTools:
                 render_config,
                 native_result,
             ) = await self._apply_dashboard_config(
-                url_path, config, config_hash, dashboard_exists
+                url_path,
+                config,
+                config_hash,
+                dashboard_exists,
+                metadata_updated=metadata_updated,
             )
             if config_warning:
                 warnings.append(config_warning)

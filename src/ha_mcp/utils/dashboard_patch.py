@@ -54,7 +54,7 @@ def _json_equal(actual: Any, expected: Any) -> bool:
     if isinstance(actual, bool) or isinstance(expected, bool):
         return type(actual) is type(expected) and actual == expected
     if isinstance(actual, (int, float)) and isinstance(expected, (int, float)):
-        return actual == expected
+        return bool(actual == expected)
     if type(actual) is not type(expected):
         return False
     if isinstance(actual, dict):
@@ -66,7 +66,7 @@ def _json_equal(actual: Any, expected: Any) -> bool:
             _json_equal(left, right)
             for left, right in zip(actual, expected, strict=True)
         )
-    return actual == expected
+    return bool(actual == expected)
 
 
 def _validate_operation(operation: Any) -> tuple[str, list[str], Any]:

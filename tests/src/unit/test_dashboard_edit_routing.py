@@ -487,7 +487,9 @@ async def test_native_connection_failure_reports_dashboard_already_created(
 
     client.send_websocket_message.side_effect = send
     monkeypatch.setattr(
-        tools_config_dashboards, "fetch_dashboards_list", AsyncMock(return_value=dashboards)
+        tools_config_dashboards,
+        "fetch_dashboards_list",
+        AsyncMock(return_value=dashboards),
     )
     monkeypatch.setattr(
         component_dashboard_edit,

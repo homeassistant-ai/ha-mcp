@@ -15,14 +15,14 @@ runner or E2E fixture changes. No PR until branch validation. No merge. No #2367
 
 ## Tasks
 
-- [ ] Pure evaluator: `src/ha_mcp/utils/dashboard_patch.py` and identical component
+- [x] Pure evaluator: `src/ha_mcp/utils/dashboard_patch.py` and identical component
   `dashboard_patch.py`; `apply_dashboard_patch(config, patch) -> dict` or ValueError.
   Tests exercise output and unchanged input on failed later operations, pointer
   escapes, array append/index validity, null/literal strings, no-op and limits.
-- [ ] Component: `dashboard_edit.py` exposing async `async_edit_dashboard(hass,msg)`;
+- [x] Component: `dashboard_edit.py` exposing async `async_edit_dashboard(hass,msg)`;
   WS producer wrapper/schema and `dashboard_edit` capability. Test using Core-like
   live dict/cached save lifecycle; require unchanged config/events on rejected writes.
-- [ ] Server: `tools/component_dashboard_edit.py` for capability/error routing;
+- [x] Server: `tools/component_dashboard_edit.py` for capability/error routing;
   `tools_config_dashboards.py` patch parameter and native save/verification. Keep
   legacy fallback and Python code in existing sandbox. Tests check observable
   results, call counts, concurrent conflict and no duplicate write on lost response.
@@ -39,3 +39,14 @@ Base master: 3439bbb1a1f664d0b6b9b314b9c3f223b0799e64.
 Core dashboard.py/websocket.py/storage.py compared at 2026.8.3 and 2026.9.1;
 identical sources. Store catches some persistence errors, so no fsync/durable-commit claim.
 Explicit user approval in the conversation covers this implementation and post-proof PR.
+
+Core 2026.8.0 (minimum supported) also matches the reviewed dashboard and WebSocket
+sources. References: [Lovelace storage](https://github.com/home-assistant/core/blob/2026.9.1/homeassistant/components/lovelace/dashboard.py),
+[WebSocket lookup](https://github.com/home-assistant/core/blob/2026.9.1/homeassistant/components/lovelace/websocket.py),
+[Store persistence](https://github.com/home-assistant/core/blob/2026.9.1/homeassistant/helpers/storage.py),
+[Core JSON encoder](https://github.com/home-assistant/core/blob/2026.9.1/homeassistant/helpers/json.py).
+
+Branch runner 34164381729 passed 1,047 focused tests; two newly added metadata/create
+outcome tests failed before their implementation, as intended. Independent static
+reviews checked the pure evaluator, component lifecycle and server routing. The
+server review identified partial metadata/create outcomes, now covered by those tests.
