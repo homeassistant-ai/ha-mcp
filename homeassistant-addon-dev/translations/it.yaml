@@ -216,7 +216,7 @@ configuration:
     name: Home Assistant tool concurrency
     description: Optional limit on outer Home Assistant tool calls across all sessions.
       Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior.
+      unlimited behavior. A call waiting for capacity fails after 60 seconds.
   enable_filesystem_tools:
     name: Attiva gli strumenti per il filesystem (beta)
     description: 'Imposta HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Abilita l''accesso diretto

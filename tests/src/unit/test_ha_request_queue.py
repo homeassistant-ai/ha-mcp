@@ -309,7 +309,8 @@ async def test_approval_management_bypasses_outer_queue() -> None:
 @pytest.mark.parametrize("max_concurrency", [0, 33])
 def test_rejects_out_of_range_concurrency(max_concurrency: int) -> None:
     with pytest.raises(
-        ValueError, match="ha_tool_concurrency must be between 0 and 32"
+        ValueError,
+        match="ha_tool_concurrency middleware requires a value between 1 and 32",
     ):
         HomeAssistantRequestQueueMiddleware(max_concurrency=max_concurrency)
 

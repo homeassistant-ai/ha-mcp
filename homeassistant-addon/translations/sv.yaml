@@ -110,7 +110,7 @@ configuration:
     name: Home Assistant tool concurrency
     description: Optional limit on outer Home Assistant tool calls across all sessions.
       Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior.
+      unlimited behavior. A call waiting for capacity fails after 60 seconds.
   disabled_tools:
     name: Inaktiverade verktyg (kommaseparerade)
     description: Verktyg som listas här är tvingade att vara avstängda och låsta i

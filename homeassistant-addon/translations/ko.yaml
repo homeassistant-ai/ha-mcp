@@ -79,7 +79,7 @@ configuration:
     name: Home Assistant tool concurrency
     description: Optional limit on outer Home Assistant tool calls across all sessions.
       Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior.
+      unlimited behavior. A call waiting for capacity fails after 60 seconds.
   disabled_tools:
     name: 비활성화할 도구(쉼표로 구분)
     description: '여기에 나열한 도구는 강제로 꺼지고 웹 설정 UI(도구 탭)에서 잠깁니다. 이 옵션을 먼저 해제하지 않으면 거기서

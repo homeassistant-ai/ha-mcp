@@ -46,8 +46,8 @@ class HomeAssistantRequestQueueMiddleware(Middleware):
     def __init__(self, max_concurrency: int = 1) -> None:
         if not 1 <= max_concurrency <= 32:
             raise ValueError(
-                "ha_tool_concurrency must be between 0 and 32; "
-                "0 disables the queue middleware"
+                "ha_tool_concurrency middleware requires a value between 1 and 32; "
+                "0 is handled by not registering the middleware"
             )
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._depth: ContextVar[int] = ContextVar(
