@@ -9,11 +9,12 @@ test -n "$asar_path"
 sha256sum /tmp/claude.deb "$asar_path" > /tmp/desktop-inspection/checksums.txt
 npx --yes @electron/asar@3.4.1 extract "$asar_path" /tmp/claude-source
 python3 investigation/issue-2367/inspect_desktop.py /tmp/claude-source
-npm install --prefix /tmp/desktop-analysis --no-audit --no-fund acorn@8.15.0 acorn-walk@8.3.4 eslint-scope@8.4.0
+npm install --prefix /tmp/desktop-analysis --no-audit --no-fund acorn@8.15.0 acorn-walk@8.3.4 eslint-scope@8.4.0 @electron/asar@3.4.1
 node investigation/issue-2367/inspect_desktop_ast.cjs
 node investigation/issue-2367/extract_desktop_transport.cjs
 # Public Windows release linked by Anthropic's official MSIX download redirect.
 curl -fL --retry 3 https://downloads.claude.ai/releases/win32/x64/1.46388.4/Claude-50e62f90a2c85243eef42913398f7c8f1534abef.msix -o /tmp/claude-windows.msix
+echo 'f3925248cf40b46c59043878b4c4f1835e7687082b5a52217bd72b73bfbf0b12  /tmp/claude-windows.msix' | sha256sum -c -
 sha256sum /tmp/claude-windows.msix >> /tmp/desktop-inspection/checksums.txt
 python3 - <<'EXTRACT_WINDOWS'
 import zipfile
@@ -29,7 +30,19 @@ with zipfile.ZipFile('/tmp/claude-windows.msix') as z:
             target.parent.mkdir(parents=True,exist_ok=True)
             target.write_bytes(z.read(name))
 EXTRACT_WINDOWS
-npx --yes @electron/asar@3.4.1 extract /tmp/claude-windows.asar /tmp/claude-windows-source
+# Only JavaScript and package metadata are needed for static comparison.
+# The Windows archive references a native binding absent under that filename.
+node - <<'WINDOWS_SOURCE'
+const fs=require('node:fs'),path=require('node:path');
+const asar=require('/tmp/desktop-analysis/node_modules/@electron/asar');
+for(const entry of asar.listPackage('/tmp/claude-windows.asar')) {
+  const name=entry.replace(/^\//,'');
+  if(name!=='package.json'&&!(name.startsWith('.vite/build/')&&name.endsWith('.js')))continue;
+  const target=path.join('/tmp/claude-windows-source',name);
+  fs.mkdirSync(path.dirname(target),{recursive:true});
+  fs.writeFileSync(target,asar.extractFile('/tmp/claude-windows.asar',name));
+}
+WINDOWS_SOURCE
 node investigation/issue-2367/compare_desktop.cjs
 find /tmp/claude-package -maxdepth 5 -type f -executable > /tmp/desktop-inspection/executables.txt
 sudo apt-get update
