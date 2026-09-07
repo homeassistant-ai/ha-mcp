@@ -104,6 +104,11 @@ configuration:
       on, the ha_get_skill_guide tool is locked enabled — it is the only publisher
       of the acknowledgment key. Child of the "Attach best-practice skills on writes"
       option above and inert while that parent is off. Requires restart to take effect.'
+  ha_tool_concurrency:
+    name: Home Assistant tool concurrency
+    description: Optional limit on outer Home Assistant tool calls across all sessions.
+      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
+      unlimited behavior. A call waiting for capacity fails after 60 seconds.
   disabled_tools:
     name: Disabled tools (comma-separated)
     description: Tools listed here are forced off and locked in the web Settings UI

@@ -183,6 +183,12 @@ configuration:
       alternativet ”Bifoga bästa praxis-färdigheter vid skrivningar” ovan och inaktivt
       när det överordnade alternativet är avstängt. Kräver omstart för att träda i
       kraft.'
+  ha_tool_concurrency:
+    name: Samtidighet för Home Assistant-verktyg
+    description: Valfri gräns för yttre anrop av Home Assistant-verktyg över alla
+      sessioner. Intern samtidighet för REST, WebSocket och per-verktyg-grenar är
+      oförändrad. 0 behåller obegränsat beteende. Ett anrop som väntar på kapacitet
+      misslyckas efter 60 sekunder.
   enable_filesystem_tools:
     name: Aktivera filsystemverktyg (beta)
     description: 'Sätter HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Aktiverar direkt läs-/skrivåtkomst

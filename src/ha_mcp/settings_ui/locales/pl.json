@@ -251,7 +251,7 @@
     "backup.fields.auto_backup_retain_per_entity.label": "Zachowaj na encję",
     "backup.fields.auto_backup_retain_per_entity.help": "Maksymalna liczba migawek przechowywanych na encję (1–10000). Starsze są usuwane.",
     "backup.fields.auto_backup_dir.label": "Nadpisanie katalogu kopii zapasowych",
-    "backup.fields.auto_backup_dir.help": "Pozostaw puste, aby użyć domyślnego katalogu; w przeciwnym razie wprowadź ścieżkę absolutną.",
+    "backup.fields.auto_backup_dir.help": "Pozostaw puste, aby użyć domyślnej ścieżki: /data/ha_mcp_backups w aplikacji (dodatku), w przeciwnym razie podkatalogu backups/ katalogu danych ha-mcp; instalacja, która przechowuje już kopie zapasowe w ramach wcześniejszego domyślnego katalogu, nadal z niego korzysta. Używany katalog jest widoczny w stanie kopii zapasowej. Możesz też wpisać ścieżkę bezwzględną.",
     "backup.fields.auto_backup_calendar_lookahead_days.label": "Przewidywanie kalendarza (dni)",
     "backup.fields.auto_backup_calendar_lookahead_days.help": "Jak daleko w przyszłość wysyłać zapytania o zdarzenia kalendarza dla migawek przed edycją. Zakres 1–365.",
     "backup.fields.enable_snapshot_delete.label": "Zezwól na usuwanie migawek",
@@ -288,7 +288,7 @@
     "backup.bulk.confirm": "Usunąć wszystkie kopie zapasowe pasujące do: {filters}?",
     "backup.bulk.deleted": "Usunięto {count} kopii zapasowych",
     "filesystem.custom.title": "Niestandardowe ścieżki systemu plików (zaawansowane)",
-    "filesystem.custom.help": "Dodatkowe ścieżki (po jednej w linii), do których narzędzia plików mogą <strong>mieć dostęp do odczytu i zapisu</strong>. Obsługiwane są ścieżki względne konfiguracji, w tym dokładne nazwy plików, takie jak <code>sensor.yaml</code>, oraz ścieżki w katalogach <code>/share</code>, <code>/media</code>, <code>/ssl</code> i <code>/backup</code>. Każdy wpis zezwala na dostęp do tej ścieżki oraz wszystkiego, co się w niej znajduje. Możesz również zarządzać tymi ścieżkami w Home Assistant w sekcji Ustawienia → Urządzenia i usługi → HA-MCP Custom Component → HA-MCP File & YAML Tools → Konfiguruj; obie lokalizacje edytują to samo ustawienie i wprowadzają zmiany natychmiast.",
+    "filesystem.custom.help": "Dodatkowe ścieżki (po jednej w linii), które narzędzia plikowe mogą <strong>odczytywać i zapisywać</strong>. Obsługiwane są ścieżki względne względem konfiguracji, w tym dokładne nazwy plików, takie jak <code>sensor.yaml</code>, oraz ścieżki w katalogach <code>/share</code>, <code>/media</code>, <code>/ssl</code> i <code>/backup</code>. Każdy wpis zezwala na dostęp do tej ścieżki oraz wszystkiego, co się w niej znajduje. Wpisy są dopasowywane dosłownie; znaki wieloznaczne, takie jak <code>*</code>, nie są obsługiwane. Możesz również zarządzać tymi ścieżkami w Home Assistant w sekcji Ustawienia → Urządzenia i usługi → HA-MCP Custom Component → HA-MCP File & YAML Tools → Konfiguruj; obie lokalizacje edytują to samo ustawienie i natychmiast wprowadzają zmiany.",
     "filesystem.custom.blocked": "Zawsze blokowane: {paths}, przechodzenie po ścieżkach (<code>..</code>) oraz ścieżki bezwzględne poza dozwolonymi woluminami HAOS.",
     "filesystem.custom.enable_first": "Włącz funkcje beta i narzędzia systemu plików powyżej, aby edytować.",
     "filesystem.custom.unavailable": "Niestandardowe ścieżki są obecnie niedostępne.",
@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Limit czasu dla każdego pobierania konfiguracji automatyzacji/skryptu/sceny. Zakres 1–600. Wymagany restart.",
     "advanced.individual_fetch_batch_size.label": "Rozmiar partii pobierania konfiguracji",
     "advanced.individual_fetch_batch_size.help": "Równoczesne pobieranie konfiguracji dla każdego ID. Zmniejsz do 1 na szeregowych serwerach HA. Zakres 1–100. Wymagany restart.",
+    "advanced.ha_tool_concurrency.label": "Współbieżność narzędzi Home Assistant",
+    "advanced.ha_tool_concurrency.help": "Opcjonalny limit zewnętrznych wywołań narzędzi Home Assistant we wszystkich sesjach. Wewnętrzna współbieżność REST, WebSocket oraz rozgałęziania dla poszczególnych narzędzi pozostaje bez zmian. Wartość 0 zachowuje zachowanie bez limitu. Wywołanie oczekujące na wolne zasoby kończy się niepowodzeniem po 60 sekundach. Zakres 0–32. Wymagany restart.",
     "advanced.backup_hint.label": "Poziom podpowiedzi o kopii zapasowej",
     "advanced.backup_hint.help": "Kontroluje, jak silnie LLM jest zachęcany do wykonania pełnej migawki HA przed ryzykownymi zapisami.",
     "advanced.backup_hint.choices.strong": "Silny",
@@ -468,6 +470,8 @@
     "addon.pinned_tools.description": "Narzędzia wymienione tutaj są zablokowane jako przypięte — pojawiają się na górze zakładki „Narzędzia” i nie można ich odpiąć z interfejsu ustawień sieciowych bez wcześniejszego usunięcia tej opcji. Przydatne w połączeniu z wyszukiwaniem narzędzi. Nazwy narzędzi oddzielone przecinkami.",
     "addon.verify_ssl.name": "Weryfikuj certyfikat TLS",
     "addon.verify_ssl.description": "Zweryfikuj certyfikat TLS serwera Home Assistant. Aplikacja (dodatek) łączy się przez proxy Supervisora, więc zazwyczaj nie ma to wpływu i powinno pozostać włączone. Wyłącz tylko wtedy, gdy skonfigurowano aplikację (dodatek) tak, aby komunikowała się z HA przez publiczną nazwę hosta HTTPS z certyfikatem z podpisem własnym lub niedopasowaniem nazwy hosta. Wyłączenie osłabia bezpieczeństwo transportu — pozostaw włączone, chyba że wiesz, że tego potrzebujesz. Wymaga ponownego uruchomienia, aby zaczęło obowiązywać.",
+    "addon.ha_tool_concurrency.name": "Współbieżność narzędzi Home Assistant",
+    "addon.ha_tool_concurrency.description": "Opcjonalny limit zewnętrznych wywołań narzędzi Home Assistant we wszystkich sesjach. Wewnętrzna współbieżność REST, WebSocket oraz rozgałęziania dla poszczególnych narzędzi pozostaje bez zmian. Wartość 0 zachowuje zachowanie bez limitu. Wywołanie oczekujące na wolne zasoby kończy się niepowodzeniem po 60 sekundach.",
     "addon_stable.enable_tool_search.description": "Zastąp pełny katalog narzędzi wyszukiwaniem. Zmniejsza bezczynny kontekst o około 90%, do około 5K tokenów. ⚠️ NIE włączaj tego w klientach z własnym wbudowanym wyszukiwaniem narzędzi / odroczonymi narzędziami (claude.ai, Claude Desktop, Claude Code) — obie warstwy wyszukiwania będą w konflikcie, a wbudowane wyszukiwanie narzędzi klienta jest w tym przypadku lepszym wyborem; pozostaw to wyłączone. To, czy narzędzia są odraczane, zależy od kombinacji klienta i modelu: użyj tego, gdy konfiguracja ładowała pełny katalog na początku — modele bez natywnych odroczonych narzędzi (np. Gemini, modele lokalne kompatybilne z OpenAI, Claude Haiku), klienci, którzy wstawiają wszystkie schematy narzędzi niezależnie od modelu (np. GitHub Copilot CLI), lub mniejsze okna kontekstu. Niektóre modele Codex i ChatGPT również zawierają odroczone narzędzia — sprawdź bezpośrednio swojego klienta/model, aby potwierdzić jego funkcje, aby nie pozostawiać tego włączonego niepotrzebnie. Narzędzia są wyszukiwane przez ha_search_tools i wykonywane za pośrednictwem skategoryzowanych serwerów proxy (odczyt/zapis/usuwanie). Wymaga ponownego uruchomienia aplikacji (dodatku), aby zaczęło obowiązywać — następnie połącz się ponownie lub odśwież serwer MCP w kliencie AI, aby załadował listę narzędzi ponownie. Samo ponowne uruchomienie aplikacji (dodatku) NIE odświeża listy narzędzi w pamięci podręcznej klienta; dotyczy to zmiany dowolnego ustawienia tutaj."
   },
   "tools": {
@@ -631,10 +635,6 @@
       "title": "Pobierz ślady automatyzacji",
       "description": "Pobierz ślady wykonania dla automatyzacji i skryptów w celu debugowania problemów."
     },
-    "ha_get_blueprint": {
-      "title": "Pobierz schemat",
-      "description": "Pobierz informacje o schemacie - wyświetl wszystkie schematy lub pobierz szczegóły dla konkretnego."
-    },
     "ha_get_camera_image": {
       "title": "Pobierz obraz z kamery",
       "description": "Pobierz obraz migawki z encji kamery Home Assistant."
@@ -695,10 +695,6 @@
       "title": "Pobierz strefę",
       "description": "Pobierz informacje o strefie - wyświetl wszystkie strefy lub pobierz szczegóły dla konkretnej."
     },
-    "ha_import_blueprint": {
-      "title": "Importuj schemat",
-      "description": "Importuj schemat z adresu URL."
-    },
     "ha_list_files": {
       "title": "Wyświetl pliki",
       "description": "Wyświetl pliki w katalogu w konfiguracji Home Assistant."
@@ -718,6 +714,10 @@
     "ha_manage_backup": {
       "title": "Zarządzaj kopiami zapasowymi",
       "description": "Polimorficzne narzędzie do tworzenia kopii zapasowych. Zobacz opis narzędzia, aby uzyskać matrycę routingu."
+    },
+    "ha_manage_blueprints": {
+      "title": "Zarządzaj szablonami",
+      "description": "Zarządzaj szablonami Home Assistant — wyświetlaj listę, czytaj, importuj, zapisuj, usuwaj lub renderuj niezależną konfigurację."
     },
     "ha_manage_custom_tool": {
       "title": "Niestandardowe narzędzie",

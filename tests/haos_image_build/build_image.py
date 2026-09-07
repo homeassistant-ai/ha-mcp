@@ -36,12 +36,18 @@ from typing import Any
 
 LOG = logging.getLogger("haos_image_build")
 
-# Pin both the HAOS release and app set. Renovate watches the annotation below
-# for the HAOS bump; the app set is hand-curated to cover distinct E2E shapes
-# without unnecessarily inflating the cached image.
-#
+# Stable image inputs are Renovate-managed; changing any pin invalidates the
+# shared image cache. Beta lanes explicitly override all three at build time.
 # renovate: datasource=github-releases depName=home-assistant/operating-system
-HAOS_VERSION = "18.2"
+STABLE_HAOS_VERSION = "18.2"
+# renovate: datasource=custom.ha-supervisor-stable depName=home-assistant/supervisor
+STABLE_SUPERVISOR_VERSION = "2026.08.0"
+# renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
+STABLE_CORE_VERSION = "2026.9.1"
+
+HAOS_VERSION = os.environ.get("HAOS_BUILD_OS_VERSION", STABLE_HAOS_VERSION)
+if re.fullmatch(r"[0-9]+\.[0-9]+(?:\.rc[0-9]+)?", HAOS_VERSION) is None:
+    raise ValueError(f"Invalid HAOS version: {HAOS_VERSION!r}")
 HAOS_QCOW2_URL = (
     f"https://github.com/home-assistant/operating-system/releases/download/"
     f"{HAOS_VERSION}/haos_ova-{HAOS_VERSION}.qcow2.xz"
@@ -78,13 +84,13 @@ SSH_HOST_PORT = int(os.environ.get("HAOS_BUILD_SSH_PORT", "12222"))
 # Arch under /usr/share/edk2-ovmf).
 OVMF_CODE_PATH = os.environ.get("HAOS_BUILD_OVMF", "/usr/share/OVMF/OVMF_CODE.fd")
 
-# Optional image variant used by the Supervisor-beta E2E lanes. The normal
-# shared image leaves these settings unset and keeps following stable. Both
-# beta lanes resolve their Supervisor minimum and exact Core version from
-# beta.json; the in-app lane saves the shared cache.
-SUPERVISOR_CHANNEL = os.environ.get("HAOS_BUILD_SUPERVISOR_CHANNEL")
-SUPERVISOR_MIN_VERSION = os.environ.get("HAOS_BUILD_SUPERVISOR_MIN_VERSION")
-CORE_VERSION = os.environ.get("HAOS_BUILD_CORE_VERSION")
+# Stable uses the tracked Supervisor minimum and exact Core pin. Supervisor
+# may self-update past that minimum; beta lanes supply their channel's values.
+SUPERVISOR_CHANNEL = os.environ.get("HAOS_BUILD_SUPERVISOR_CHANNEL", "stable")
+SUPERVISOR_MIN_VERSION = os.environ.get(
+    "HAOS_BUILD_SUPERVISOR_MIN_VERSION", STABLE_SUPERVISOR_VERSION
+)
+CORE_VERSION = os.environ.get("HAOS_BUILD_CORE_VERSION", STABLE_CORE_VERSION)
 
 
 @dataclass(frozen=True)
@@ -2221,6 +2227,37 @@ def _apply_supervisor_image_update(
             time.sleep(min(5.0, remaining))
 
 
+def _request_core_image_update(ws: HAWebSocket, core_version: str) -> None:
+    """Retry only Core-job rejections, with a bounded admission deadline."""
+    deadline = time.monotonic() + 600.0
+    while True:
+        _remaining_deadline_budget(deadline, "Core job admission")
+        try:
+            ws.supervisor_api(
+                "/core/update",
+                method="post",
+                data={"version": core_version, "backup": False},
+                timeout=1800.0,
+            )
+        except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
+            # Supervisor's GROUP_REJECT guard raises before the update starts.
+            # Do not retry ambiguous transport failures or other semantic errors.
+            if (
+                isinstance(exc, WSCommandError)
+                and exc.code == "unknown_error"
+                and exc.supervisor_message
+                == "Another job is running for job group home_assistant_core"
+            ):
+                LOG.info("Core job busy during image setup; waiting to request update")
+                remaining = _remaining_deadline_budget(deadline, "Core job admission")
+                time.sleep(min(5.0, remaining))
+                continue
+            if not _is_transient_supervisor_error(exc):
+                raise
+            LOG.info("Core update outcome inconclusive; polling version: %r", exc)
+        return
+
+
 def _configure_core_image_variant(
     ws: HAWebSocket,
     *,
@@ -2230,32 +2267,21 @@ def _configure_core_image_variant(
     """Install and verify the requested Home Assistant Core version."""
     core_info = ws.supervisor_api("/core/info", method="get", timeout=30.0)
     if core_info.get("version") == core_version:
-        LOG.info("Core beta already installed: version=%s", core_version)
+        LOG.info("Requested Core already installed: version=%s", core_version)
         return
 
     LOG.info(
-        "Updating Core for beta image: %s -> %s",
+        "Updating Core for test image: %s -> %s",
         core_info.get("version"),
         core_version,
     )
-    try:
-        ws.supervisor_api(
-            "/core/update",
-            method="post",
-            data={"version": core_version, "backup": False},
-            timeout=1800.0,
-        )
-    except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as exc:
-        if not _is_transient_supervisor_error(exc):
-            raise
-        # Updating Core may close the transport or make Core's Supervisor bridge
-        # return a blank unknown_error after dispatch. Exact-version polling below
-        # establishes the actual outcome.
-        LOG.info("Core update outcome inconclusive; polling version: %r", exc)
+    _request_core_image_update(ws, core_version)
+    # Updating Core may close the transport after dispatch. Exact-version polling
+    # establishes the outcome without blindly retrying an accepted request.
 
     _wait_http_ok(f"{base_url}/manifest.json", timeout=600.0)
     _wait_core_version(ws, core_version, timeout=600.0)
-    LOG.info("Core beta installed: version=%s", core_version)
+    LOG.info("Requested Core installed: version=%s", core_version)
 
 
 def _configure_supervisor_image_variant(

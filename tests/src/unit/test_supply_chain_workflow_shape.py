@@ -290,13 +290,11 @@ def test_python_runtime_automation_is_digest_only() -> None:
         "a pre-lookup enabled=false rule cannot be overridden later for digest updates"
     )
     assert "asdf" not in config.get("enabledManagers", [])
-    assert not any(
-        "asdf" in rule.get("matchManagers", []) or "postUpgradeTasks" in rule
-        for rule in package_rules
-    ), (
+    assert not any("asdf" in rule.get("matchManagers", []) for rule in package_rules), (
         "Python minor-version changes span independent runtime contracts and must "
         "not be rewritten by the old dead asdf task"
     )
+    assert not any("postUpgradeTasks" in rule for rule in python_rules)
 
 
 def test_dev_release_tag_cleanup_uses_authenticated_github_api() -> None:

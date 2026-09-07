@@ -212,6 +212,12 @@ configuration:
       chiave di conferma. È figlia dell''opzione «Allega le skill di buone pratiche
       alle scritture» qui sopra e resta inerte finché quella è disattivata. Richiede
       il riavvio per avere effetto.'
+  ha_tool_concurrency:
+    name: Concorrenza degli strumenti di Home Assistant
+    description: Limite opzionale sulle chiamate esterne agli strumenti di Home Assistant
+      in tutte le sessioni. La concorrenza interna di REST, WebSocket e fan-out per
+      strumento rimane invariata. 0 mantiene il comportamento illimitato. Una chiamata
+      in attesa di capacità fallisce dopo 60 secondi.
   enable_filesystem_tools:
     name: Attiva gli strumenti per il filesystem (beta)
     description: 'Imposta HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Abilita l''accesso diretto

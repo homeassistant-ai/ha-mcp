@@ -7,7 +7,11 @@ Storage path resolution
 -----------------------
 ``Settings.auto_backup_dir`` overrides; otherwise defaults to
 ``/data/ha_mcp_backups`` in the add-on (SUPERVISOR_TOKEN set + ``/data``
-exists), else ``${XDG_DATA_HOME:-~/.local/share}/ha_mcp/backups``.
+exists), else ``<data dir>/backups`` where the data dir is what
+``utils.data_paths.get_data_dir`` resolves (``HA_MCP_CONFIG_DIR``,
+``~/.ha-mcp``, or the tmpdir fallback). Installs that still hold snapshots
+under the pre-#2372 default ``${XDG_DATA_HOME:-~/.local/share}/ha_mcp/backups``
+keep using that directory; see ``_resolve_default_dir``.
 
 File format
 -----------
@@ -55,6 +59,7 @@ import yaml  # type: ignore[import-untyped]
 from fastmcp.exceptions import ToolError
 
 from .client.rest_client import HomeAssistantConnectionError, HomeAssistantError
+from .utils.data_paths import get_data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -263,15 +268,58 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _resolve_default_dir() -> Path:
-    """Pick a sane default backup directory for the current deployment mode."""
-    # Addon detection: Supervisor sets SUPERVISOR_TOKEN AND /data exists.
-    if os.environ.get("SUPERVISOR_TOKEN") and Path("/data").is_dir():
-        return Path("/data/ha_mcp_backups")
+# Add-on default. Named in the add-on option descriptions, so it stays put.
+_ADDON_BACKUP_DIR = Path("/data/ha_mcp_backups")
+
+
+def _legacy_default_dir() -> Path:
+    """The non-add-on default before #2372: XDG user-data, outside the data dir."""
     xdg = os.environ.get("XDG_DATA_HOME")
     if xdg:
         return Path(xdg) / "ha_mcp" / "backups"
     return (Path.home() / ".local" / "share" / "ha_mcp" / "backups").resolve()
+
+
+def _holds_files(path: Path) -> bool:
+    """Whether ``path`` is a directory with at least one entry.
+
+    An unreadable or missing directory counts as empty: nothing in it can be
+    listed or restored from, so there is nothing to keep using.
+    """
+    try:
+        return any(path.iterdir())
+    except OSError:
+        return False
+
+
+def _resolve_default_dir() -> Path:
+    """Pick a sane default backup directory for the current deployment mode.
+
+    Add-on (Supervisor sets ``SUPERVISOR_TOKEN`` and ``/data`` exists):
+    ``/data/ha_mcp_backups``. Otherwise ``backups/`` inside the data dir, the
+    directory that already holds the settings and that every documented
+    Docker recipe persists as the ``ha-mcp-data`` volume. The previous default,
+    ``${XDG_DATA_HOME:-~/.local/share}/ha_mcp/backups``, sat outside that
+    volume: under a ``read_only`` root it was EROFS, which fails the mandatory
+    pre-write snapshots closed, and on a writable root the snapshots were
+    discarded with the container (#2372).
+
+    An install that already holds snapshots under the previous default keeps
+    using it so its restore points stay listed and rotation keeps counting
+    them; only installs with nothing there move to the data dir.
+    """
+    if os.environ.get("SUPERVISOR_TOKEN") and _ADDON_BACKUP_DIR.parent.is_dir():
+        return _ADDON_BACKUP_DIR
+    legacy = _legacy_default_dir()
+    if _holds_files(legacy):
+        logger.info(
+            "Auto-backup: keeping existing backup dir %s (new installs default "
+            "to %s; set HAMCP_BACKUP_DIR to choose explicitly)",
+            legacy,
+            get_data_dir() / "backups",
+        )
+        return legacy
+    return get_data_dir() / "backups"
 
 
 # Sentinel returned by ``BackupManager._fetch_config_for_snapshot`` when there

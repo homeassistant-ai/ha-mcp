@@ -251,7 +251,7 @@
     "backup.fields.auto_backup_retain_per_entity.label": "Conserver par entité",
     "backup.fields.auto_backup_retain_per_entity.help": "Nombre maximum d'instantanés conservés par entité (1–10000). Les plus anciens sont retirés.",
     "backup.fields.auto_backup_dir.label": "Remplacement du répertoire de sauvegarde",
-    "backup.fields.auto_backup_dir.help": "Laissez vide pour utiliser le répertoire par défaut ; sinon entrez un chemin absolu.",
+    "backup.fields.auto_backup_dir.help": "Laissez vide pour la valeur par défaut : /data/ha_mcp_backups dans l'App (add-on), sinon le sous-répertoire backups/ du répertoire de données ha-mcp ; une installation qui contient déjà des instantanés sous l'ancienne valeur par défaut continue de l'utiliser. Le répertoire utilisé est affiché dans l'état des sauvegardes. Ou entrez un chemin absolu.",
     "backup.fields.auto_backup_calendar_lookahead_days.label": "Prévision du calendrier (jours)",
     "backup.fields.auto_backup_calendar_lookahead_days.help": "Jusqu'où interroger les événements du calendrier pour les instantanés pré-édition. Plage 1–365.",
     "backup.fields.enable_snapshot_delete.label": "Autoriser la suppression d'instantanés",
@@ -288,7 +288,7 @@
     "backup.bulk.confirm": "Supprimer toutes les sauvegardes correspondant à : {filters} ?",
     "backup.bulk.deleted": "{count} sauvegarde(s) supprimée(s)",
     "filesystem.custom.title": "Chemins de fichiers personnalisés (avancé)",
-    "filesystem.custom.help": "Chemins supplémentaires (un par ligne) que les outils de fichiers sont autorisés à <strong>lire et écrire</strong>. Les chemins relatifs à la configuration, y compris les noms de fichiers exacts tels que <code>sensor.yaml</code>, ainsi que les chemins sous <code>/share</code>, <code>/media</code>, <code>/ssl</code> et <code>/backup</code> sont pris en charge. Chaque entrée autorise ce chemin ainsi que tout ce qui s'y trouve en dessous. Vous pouvez également gérer ces chemins dans Home Assistant sous Paramètres → Appareils et services → HA-MCP Custom Component → HA-MCP File & YAML Tools → Configurer ; les deux emplacements modifient le même paramètre et appliquent les modifications immédiatement.",
+    "filesystem.custom.help": "Chemins supplémentaires (un par ligne) que les outils de fichiers peuvent <strong>lire et écrire</strong>. Les chemins relatifs à la configuration, y compris les noms de fichiers exacts tels que <code>sensor.yaml</code>, et les chemins sous <code>/share</code>, <code>/media</code>, <code>/ssl</code> et <code>/backup</code> sont pris en charge. Chaque entrée autorise ce chemin et tout ce qui se trouve en dessous. Les entrées sont comparées littéralement ; les caractères génériques tels que <code>*</code> ne sont pas pris en charge. Vous pouvez également gérer ces chemins dans Home Assistant sous Paramètres → Appareils et services → HA-MCP Custom Component → HA-MCP File & YAML Tools → Configurer ; les deux emplacements modifient le même paramètre et appliquent les modifications immédiatement.",
     "filesystem.custom.blocked": "Toujours bloqués : {paths}, les traversées de chemin (<code>..</code>) et les chemins absolus en dehors des volumes HAOS autorisés.",
     "filesystem.custom.enable_first": "Activez d'abord les fonctionnalités bêta et les outils de système de fichiers ci-dessus pour modifier.",
     "filesystem.custom.unavailable": "Les chemins personnalisés sont actuellement indisponibles.",
@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Délai d'attente pour chaque récupération de configuration d'automatisation/script/scène. Plage 1–600. Redémarrage requis.",
     "advanced.individual_fetch_batch_size.label": "Taille du lot de récupération de configuration",
     "advanced.individual_fetch_batch_size.help": "Récupérations simultanées de configuration par ID. Diminue vers 1 sur les serveurs HA série. Plage 1–100. Redémarrage requis.",
+    "advanced.ha_tool_concurrency.label": "Concurrence des outils Home Assistant",
+    "advanced.ha_tool_concurrency.help": "Limite optionnelle sur les appels d'outils Home Assistant externes pour toutes les sessions. La concurrence interne pour REST, WebSocket et par outil reste inchangée. 0 conserve un comportement illimité. Un appel en attente de capacité échoue après 60 secondes. Plage de 0 à 32. Redémarrage requis.",
     "advanced.backup_hint.label": "Niveau d'indication de sauvegarde",
     "advanced.backup_hint.help": "Contrôle la force avec laquelle le LLM est invité à effectuer un instantané HA complet avant les écritures risquées.",
     "advanced.backup_hint.choices.strong": "Fort",
@@ -468,6 +470,8 @@
     "addon.pinned_tools.description": "Les outils listés ici sont verrouillés épinglés — ils apparaissent en haut de l'onglet Outils et ne peuvent pas être retirés de l'interface Web des paramètres sans d'abord supprimer cette option. Utile en combinaison avec la recherche d'outils. Noms d'outils séparés par des virgules.",
     "addon.verify_ssl.name": "Vérifier le certificat TLS",
     "addon.verify_ssl.description": "Vérifier le certificat TLS du serveur Home Assistant. L'application (add-on) se connecte via le proxy du Supervisor, cela n'a donc normalement aucun effet et doit rester activé. Désactivez uniquement si vous avez reconfiguré l'application (add-on) pour communiquer avec HA via un nom d'hôte HTTPS public avec un certificat auto-signé ou une non-correspondance de nom d'hôte. La désactivation affaiblit la sécurité du transport — laissez activé sauf si vous savez que vous en avez besoin. Nécessite un redémarrage pour prendre effet.",
+    "addon.ha_tool_concurrency.name": "Concurrence des outils Home Assistant",
+    "addon.ha_tool_concurrency.description": "Limite optionnelle sur les appels d'outils Home Assistant externes pour toutes les sessions. La concurrence interne pour REST, WebSocket et par outil reste inchangée. 0 conserve un comportement illimité. Un appel en attente de capacité échoue après 60 secondes.",
     "addon_stable.enable_tool_search.description": "Remplacer le catalogue complet d'outils par une découverte basée sur la recherche. Réduit le contexte inactif d'environ 90 %, à environ 5K jetons. ⚠️ N'activez PAS cette option dans les clients disposant de leur propre recherche d'outils intégrée / d'outils différés (claude.ai, Claude Desktop, Claude Code) — les deux couches de recherche entrent en conflit, et la recherche d'outils intégrée du client constitue le meilleur choix dans ce cas ; laissez cette option désactivée. Le fait que les outils soient différés dépend de votre association client et modèle : utilisez cette option lorsque votre configuration charge le catalogue complet au départ — modèles sans outils différés natifs (par ex. Gemini, modèles locaux compatibles OpenAI, Claude Haiku), clients qui intègrent tous les schémas d'outils quel que soit le modèle (par ex. GitHub Copilot CLI), ou fenêtres de contexte plus petites. Certains modèles Codex et ChatGPT incluent également des outils différés — vérifiez directement votre client/modèle pour confirmer ses fonctionnalités afin de ne pas laisser cette option activée inutilement. Les outils sont trouvés via ha_search_tools et exécutés via des proxys catégorisés (lecture/écriture/suppression). Nécessite un redémarrage de l'application (add-on) pour prendre effet — puis reconnectez ou actualisez le serveur MCP dans votre client IA afin qu'il recharge la liste des outils. Le seul redémarrage de l'application (add-on) ne met PAS à jour la liste des outils mise en cache par un client ; cela s'applique après la modification de n'importe quel paramètre ici."
   },
   "tool_groups": {
@@ -662,10 +666,6 @@
       "title": "Obtenir les traces",
       "description": "Récupère les traces d'exécution des automatisations et scripts pour le diagnostic."
     },
-    "ha_get_blueprint": {
-      "title": "Obtenir le blueprint",
-      "description": "Affiche la liste des blueprints ou les détails d'un blueprint spécifique."
-    },
     "ha_get_camera_image": {
       "title": "Obtenir l'image de la caméra",
       "description": "Récupère l'image fixe actuelle d'une caméra Home Assistant."
@@ -726,10 +726,6 @@
       "title": "Obtenir les zones",
       "description": "Affiche toutes les zones géographiques ou les détails d'une zone."
     },
-    "ha_import_blueprint": {
-      "title": "Importer un blueprint",
-      "description": "Importe un blueprint depuis une URL dans Home Assistant."
-    },
     "ha_list_files": {
       "title": "Lister les fichiers",
       "description": "Affiche les fichiers dans un répertoire de configuration autorisé."
@@ -749,6 +745,10 @@
     "ha_manage_backup": {
       "title": "Gérer les sauvegardes",
       "description": "Crée, affiche, restaure et supprime les sauvegardes."
+    },
+    "ha_manage_blueprints": {
+      "title": "Gérer les blueprints",
+      "description": "Gérer les blueprints Home Assistant — lister, lire, importer, enregistrer, supprimer ou rendre une configuration autonome."
     },
     "ha_manage_custom_tool": {
       "title": "Outil personnalisé",

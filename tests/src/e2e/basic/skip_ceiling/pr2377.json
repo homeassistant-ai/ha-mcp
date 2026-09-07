@@ -1,0 +1,9 @@
+{
+  "reason": "#2377 adds one requires_tools_entry test (tests/src/e2e/tools/test_logbook.py::test_logs_fault_log_source_reads_seeded_crash): ha_get_logs(source='fault_log') reads home-assistant.log.fault through the File & YAML Tools entry's read_file service, so it skips at collection on each of the four no-tools lanes and runs everywhere else.",
+  "deltas": {
+    "container_no_tools": 1,
+    "embedded_no_tools": 1,
+    "haos_embedded_no_tools": 1,
+    "haos_inaddon_no_tools": 1
+  }
+}

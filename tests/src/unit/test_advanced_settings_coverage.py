@@ -202,7 +202,7 @@ ENV_ONLY: dict[str, str] = {
     "SUPERVISOR_BASE_URL": "Supervisor API base; bootstrap before any settings exist",
     "HAMCP_ENV_FILE": "Selects which .env file to load — read before Settings is built",
     "HA_MCP_CONFIG_DIR": "Resolves the data dir that *holds* the override files (path)",
-    "XDG_DATA_HOME": "Data-dir fallback root (path)",
+    "XDG_DATA_HOME": "Root of the pre-#2372 auto-backup default; honoured only while snapshots remain there (path)",
     "HA_MCP_BUILD_VERSION": "Build metadata stamped at image build (bootstrap)",
     "HA_MCP_DISABLE_SETTINGS_UI": "Kill-switch for the settings sidecar itself (chicken-and-egg)",
     "MCP_HOST": "HTTP listener bind address — configured before the server is up",

@@ -251,7 +251,7 @@
     "backup.fields.auto_backup_retain_per_entity.label": "每实体保留数",
     "backup.fields.auto_backup_retain_per_entity.help": "每个实体保留的最大快照数（1–10000）。较旧的会轮转出去。",
     "backup.fields.auto_backup_dir.label": "备份目录覆盖",
-    "backup.fields.auto_backup_dir.help": "留空使用默认目录；否则输入绝对路径。",
+    "backup.fields.auto_backup_dir.help": "留空则使用默认值：App（加载项）中为 /data/ha_mcp_backups，否则为 ha-mcp 数据目录下的 backups/ 子目录；若先前已在旧默认路径下保存过快照，则继续使用该路径。当前正在使用的目录会显示在备份状态中。或者输入绝对路径。",
     "backup.fields.auto_backup_calendar_lookahead_days.label": "日历前瞻（天）",
     "backup.fields.auto_backup_calendar_lookahead_days.help": "为编辑前快照查询日历事件的前瞻天数。范围 1–365。",
     "backup.fields.enable_snapshot_delete.label": "允许删除快照",
@@ -288,7 +288,7 @@
     "backup.bulk.confirm": "删除所有匹配以下条件的备份：{filters}？",
     "backup.bulk.deleted": "已删除 {count} 个备份",
     "filesystem.custom.title": "自定义文件系统路径（高级）",
-    "filesystem.custom.help": "文件工具可以<strong>读取和写入</strong>的额外路径（每行一个）。支持相对于配置的路径（包括诸如 <code>sensor.yaml</code> 的精确文件名）以及 <code>/share</code>、<code>/media</code>、<code>/ssl</code> 和 <code>/backup</code> 下的路径。每个条目允许访问该路径及其下的所有内容。您也可以在 Home Assistant 的“设置”→“设备与服务”→“HA-MCP Custom Component”→“HA-MCP File & YAML Tools”→“配置”中管理这些路径；两个位置编辑的是同一设置并会立即生效。",
+    "filesystem.custom.help": "文件工具可<strong>读取和写入</strong>的额外路径（每行一个）。支持配置相对路径（包括诸如 <code>sensor.yaml</code> 的确切文件名）以及 <code>/share</code>、<code>/media</code>、<code>/ssl</code> 和 <code>/backup</code> 下的路径。每个条目允许访问该路径及其下方的所有内容。条目按字面量匹配，不支持诸如 <code>*</code> 的通配符。您也可以在 Home Assistant 的“设置”→“设备与服务”→“HA-MCP 自定义组件”→“HA-MCP 文件与 YAML 工具”→“配置”中管理这些路径；两处位置修改的是同一项设置，并且都会立即生效。",
     "filesystem.custom.blocked": "始终被阻止：{paths}、路径穿越（<code>..</code>）以及允许 HAOS 卷之外的绝对路径。",
     "filesystem.custom.enable_first": "请先在上方启用测试版功能和文件系统工具才能编辑。",
     "filesystem.custom.unavailable": "自定义路径当前不可用。",
@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "每次自动化/脚本/场景配置获取的超时。范围 1–600。需重启。",
     "advanced.individual_fetch_batch_size.label": "配置获取批大小",
     "advanced.individual_fetch_batch_size.help": "并发的按 ID 配置获取数。在串行 HA 服务器上向 1 靠拢。范围 1–100。需重启。",
+    "advanced.ha_tool_concurrency.label": "Home Assistant 工具并发数",
+    "advanced.ha_tool_concurrency.help": "对所有会话中外部 Home Assistant 工具调用的可选限制。内部的 REST、WebSocket 以及每个工具的扇出并发保持不变。设置为 0 则保持无限制。等待容量的调用将在 60 秒后失败。范围 0–32。需要重启。",
     "advanced.backup_hint.label": "备份提示级别",
     "advanced.backup_hint.help": "控制 LLM 被提示在进行高风险写入前做完整 HA 快照的强度。",
     "advanced.backup_hint.choices.strong": "强",
@@ -468,6 +470,8 @@
     "addon.pinned_tools.description": "此处列出的工具会被锁定为固定——它们显示在“工具”选项卡顶部，且在取消此选项之前无法从网页设置界面取消固定。与工具搜索搭配使用时很有用。以逗号分隔的工具名称。",
     "addon.verify_ssl.name": "验证 TLS 证书",
     "addon.verify_ssl.description": "验证 Home Assistant 服务器的 TLS 证书。应用（add-on）通过 Supervisor 代理连接，因此此设置通常无效，应保持启用状态。仅当您重新配置了应用（add-on），使其通过具有自签名证书或主机名不匹配的公共 HTTPS 主机名与 HA 通信时，才可以禁用。禁用会削弱传输安全性 — 除非您确有需要，否则请保持开启。需要重启才能生效。",
+    "addon.ha_tool_concurrency.name": "Home Assistant 工具并发数",
+    "addon.ha_tool_concurrency.description": "对所有会话中外部 Home Assistant 工具调用的可选限制。内部的 REST、WebSocket 以及每个工具的扇出并发保持不变。设置为 0 则保持无限制。等待容量的调用将在 60 秒后失败。",
     "addon_stable.enable_tool_search.description": "将完整的工具目录替换为基于搜索的发现。可将空闲上下文减少约 90%，至大约 5K 个 token。⚠️ 请勿在具有内置工具搜索/延迟工具功能的客户端（claude.ai、Claude Desktop、Claude Code）中启用此功能 — 两个搜索层会发生冲突，而客户端的内置工具搜索在此类情况下是更好的选择；请将其关闭。工具是否延迟加载取决于您的客户端和模型组合：在您的设置会预先加载完整目录时使用此功能 — 不支持原生延迟工具的模型（例如 Gemini、OpenAI 兼容的本地模型、Claude Haiku）、无论模型如何都内联所有工具架构的客户端（例如 GitHub Copilot CLI），或较小的上下文窗口。某些 Codex 模型和 ChatGPT 也包含延迟工具 — 请直接检查您的客户端/模型以确认其功能，以免不必要地启用此功能。通过 ha_search_tools 查找工具，并通过分类代理（读/写/删除）执行。需要重启应用（add-on）才能生效 — 然后在您的 AI 客户端中重新连接或刷新 MCP 服务器以重新加载工具列表。仅重启应用（add-on）并不会刷新客户端缓存的工具列表；这在更改此处的任何设置后适用。"
   },
   "tool_groups": {
@@ -662,10 +666,6 @@
       "title": "获取自动化追踪",
       "description": "获取自动化与脚本的执行追踪以排查问题。"
     },
-    "ha_get_blueprint": {
-      "title": "获取蓝图",
-      "description": "获取蓝图信息——列出所有蓝图或查看某一个的详情。"
-    },
     "ha_get_camera_image": {
       "title": "获取摄像头画面",
       "description": "从 Home Assistant 摄像头实体获取快照画面。"
@@ -726,10 +726,6 @@
       "title": "获取区域",
       "description": "获取区域信息——列出所有区域或查看某一个的详情。"
     },
-    "ha_import_blueprint": {
-      "title": "导入蓝图",
-      "description": "从 URL 导入蓝图。"
-    },
     "ha_list_files": {
       "title": "列出文件",
       "description": "列出 Home Assistant 配置目录中某个目录下的文件。"
@@ -749,6 +745,10 @@
     "ha_manage_backup": {
       "title": "管理备份",
       "description": "多态备份工具。详见工具描述中的路由矩阵。"
+    },
+    "ha_manage_blueprints": {
+      "title": "管理蓝图",
+      "description": "管理 Home Assistant 蓝图 — 列出、读取、导入、保存、删除或渲染独立配置。"
     },
     "ha_manage_custom_tool": {
       "title": "自定义工具",

@@ -1,0 +1,133 @@
+name: Renovate configuration
+
+on:
+  pull_request:
+    paths:
+      - renovate.json
+      - .github/workflows/renovate*.yml
+      - tests/haos_image_build/**
+      - tests/src/unit/test_renovate_configuration.py
+      - tests/src/unit/test_renovate_vendoring.py
+      - tests/src/unit/test_renovate_auto_merge.py
+      - scripts/vendor_websockets.py
+      - tests/renovate/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Renovate configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Validate with the same engine used by the scanner
+        id: validate
+        # No credentials are passed to the container; validation cannot write
+        # dependency PRs or process the live dashboard's checked requests.
+        run: |
+          engine=$(sed -n 's/^ *renovate-version: \([0-9.]*\)$/\1/p' .github/workflows/renovate.yml)
+          if ! [[ "$engine" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Missing or invalid Renovate engine pin"
+            exit 1
+          fi
+          echo "engine=$engine" >> "$GITHUB_OUTPUT"
+          docker run --rm \
+            -v "$PWD/renovate.json:/config/renovate.json:ro" \
+            "ghcr.io/renovatebot/renovate:$engine" \
+            renovate-config-validator --no-global /config/renovate.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Exercise release policy and dashboard/PR event decisions
+        env:
+          ENGINE: ${{ steps.validate.outputs.engine }}
+        run: |
+          # The slim Renovate image bundles Node, but not npm. Prepare the
+          # expression evaluator on the runner and mount it read-only.
+          mkdir -p "$RUNNER_TEMP/expression-tests"
+          cp tests/renovate/package.json tests/renovate/package-lock.json \
+            "$RUNNER_TEMP/expression-tests/"
+          npm ci --prefix "$RUNNER_TEMP/expression-tests" --ignore-scripts \
+            --no-audit --no-fund
+          docker run --rm -v "$PWD:/source:ro" \
+            -v "$RUNNER_TEMP/expression-tests:/tmp/expression-tests:ro" \
+            --entrypoint bash "ghcr.io/renovatebot/renovate:$ENGINE" -c '
+              set -euo pipefail
+              # The CLI is a containerbase wrapper, not a symlink to its JS entry.
+              RENOVATE_TEST_ROOT=/usr/local/renovate
+              test -f "$RENOVATE_TEST_ROOT/package.json"
+              test -f "$RENOVATE_TEST_ROOT/dist/config/defaults.js"
+              export RENOVATE_TEST_ROOT
+              node /source/tests/renovate/policy.mjs
+              node /source/tests/renovate/dashboard-events.mjs
+              node /source/tests/renovate/auto-merge.mjs
+            '
+      - name: Verify vendored updates with the scanner's executor
+        env:
+          ENGINE: ${{ steps.validate.outputs.engine }}
+        # No GitHub credentials. The fixture updates a disposable local repo.
+        # Keep the image entrypoint: it loads the containerbase environment and
+        # initializes tools before Node exercises the dynamic-install executor.
+        run: |
+          docker run --rm -v "$PWD:/source:ro" \
+            -e RENOVATE_TEST_ROOT=/usr/local/renovate \
+            "ghcr.io/renovatebot/renovate:$ENGINE" node \
+            /source/tests/renovate/vendoring.mjs
+      - name: Verify promoted Supervisor lookup produces an update
+        if: ${{ !cancelled() && steps.validate.outcome == 'success' }}
+        # Local-platform lookup has no GitHub writer. Work on a disposable copy
+        # with an old fixture pin, never on the checkout or live dashboard.
+        env:
+          ENGINE: ${{ steps.validate.outputs.engine }}
+        run: |
+          docker run --rm \
+            -v "$PWD:/source:ro" \
+            -e RENOVATE_PLATFORM=local \
+            -e RENOVATE_DRY_RUN=lookup \
+            -e RENOVATE_ONBOARDING=false \
+            -e 'RENOVATE_INCLUDE_PATHS=["tests/haos_image_build/build_image.py"]' \
+            -e 'RENOVATE_IGNORE_DEPS=["ghcr.io/home-assistant/home-assistant","home-assistant/operating-system"]' \
+            -e LOG_LEVEL=debug -e LOG_FORMAT=json \
+            --entrypoint bash "ghcr.io/renovatebot/renovate:$ENGINE" -c '
+              set -euo pipefail
+              cp -R /source /tmp/ha-renovate
+              cd /tmp/ha-renovate
+              sed -i "s/^STABLE_SUPERVISOR_VERSION = .*/STABLE_SUPERVISOR_VERSION = \"2020.1.0\"/" \
+                tests/haos_image_build/build_image.py
+              if ! renovate > /tmp/lookup.jsonl; then
+                tail -n 100 /tmp/lookup.jsonl
+                exit 1
+              fi
+              # Node is bundled with the pinned image; do not assume Python is.
+              node --input-type=module <<"JS"
+          import assert from "node:assert/strict";
+          import { readFileSync } from "node:fs";
+
+          const records = readFileSync("/tmp/lookup.jsonl", "utf8").split("\n")
+            .filter(line => line.startsWith("{")).map(line => JSON.parse(line));
+
+          function* dependencies(value) {
+            if (value && typeof value === "object") {
+              if (value.depName === "home-assistant/supervisor" && "updates" in value) {
+                yield value;
+              }
+              for (const item of Object.values(value)) {
+                yield* dependencies(item);
+              }
+            }
+          }
+
+          const candidates = records.flatMap(record => [...dependencies(record)])
+            .filter(dep => dep.currentValue === "2020.1.0" && dep.updates?.length);
+          assert.ok(candidates.length,
+            "Supervisor stable datasource produced no update candidate: "
+            + JSON.stringify(records.slice(-10), null, 2));
+          console.log("Promoted Supervisor update is discoverable from the stable datasource.");
+          JS
+            '

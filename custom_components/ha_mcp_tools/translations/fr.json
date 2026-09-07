@@ -33,7 +33,7 @@
           "extra_yaml_keys": "Clés d'écriture YAML supplémentaires"
         },
         "data_description": {
-          "allowed_dirs": "Chemins relatifs au répertoire de configuration, incluant les noms de fichiers exacts tels que sensor.yaml, ou les chemins sous /share, /media, /ssl et /backup. Chaque entrée bénéficie d'un accès en lecture et en écriture pour ce chemin et tout ce qu'il contient ; saisissez chaque chemin comme un élément de liste séparé. Les parcours de répertoires (traversal) et autres chemins non autorisés sont ignorés.",
+          "allowed_dirs": "Chemins relatifs au répertoire de configuration, y compris les noms de fichiers exacts tels que sensor.yaml, ou les chemins sous /share, /media, /ssl et /backup. Chaque entrée se voit accorder un accès en lecture et en écriture pour ce chemin et tout ce qui se trouve en dessous ; entrez chaque chemin comme un élément de liste séparé. Les entrées sont comparées littéralement ; les caractères génériques tels que * ne sont pas pris en charge. Les traversées de répertoires et autres chemins non autorisés sont ignorés.",
           "extra_yaml_keys": "Clés de premier niveau que ha_config_set_yaml peut écrire en plus de celles intégrées, pour les intégrations YAML-first de cette installation (ex. alert2). Les clés de limite de confiance sont ignorées."
         }
       },

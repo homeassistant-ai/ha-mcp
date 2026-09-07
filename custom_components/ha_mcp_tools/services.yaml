@@ -83,7 +83,8 @@ read_file:
       description: >-
         Relative path from config directory. Allowed paths include
         configuration.yaml, automations.yaml, scripts.yaml, scenes.yaml,
-        secrets.yaml (values masked), home-assistant.log, www/**, themes/**,
+        secrets.yaml (values masked), home-assistant.log,
+        home-assistant.log.fault, www/**, themes/**,
         custom_templates/**, dashboards/**, blueprints/**, packages/*.yaml,
         custom_components/**/*.py
       required: true

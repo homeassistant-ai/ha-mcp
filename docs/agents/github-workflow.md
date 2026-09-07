@@ -170,9 +170,12 @@ summary only when the pull request actually reaches that state.
 | Workflow | Trigger | Purpose |
 |---|---|---|
 | `pr.yml` | Pull request | Fast checks and validation orchestration. |
+| `renovate.yml` | Hourly, human dashboard/PR checkbox edit, or manual | Refresh dependency discovery and process eligible updates. |
+| `renovate-validation.yml` | Relevant pull request or manual | Validate configuration with the scanner’s pinned Renovate engine, without credentials. |
+| `renovate-auto-merge.yml` | Renovate enables auto-merge or updates its PR | Approve the verified current head with the separate maintainer account; GitHub enforces merge requirements. |
 | `e2e-tests.yml` | Push to `master` touching code, or manual | Full container-backend E2E validation on the pinned stable Core image. |
 | `haos-e2e-tests.yml` | Pull request or manual | Six HAOS lanes against a baked qcow2; required status checks. |
-| `haos-e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The inaddon and embedded HAOS lanes against the current beta Supervisor and Core; skipped on push and nightly when beta equals stable. |
+| `haos-e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The inaddon and embedded HAOS lanes against the current beta OS, Supervisor, and Core; skipped on push and nightly only when all three equal stable. |
 | `e2e-beta-tests.yml` | Push to `master`, nightly, or manual | The container-backend E2E jobs against the current beta Core image; skipped on push and nightly when beta equals the stable lane's pin. |
 | `publish-dev.yml` | Push to `master` | Development `.devN` release. |
 | `notify-dev-channel.yml` | Push to `master` touching `src/` | Development-testing notices. |
@@ -194,6 +197,68 @@ The fast-check order in `pr.yml` is security-sensitive. HACS and Hassfest run
 before anything that executes pull-request-controlled code. The AGENTS size
 check may precede them because it only reads a text file. Do not insert another
 step ahead of those validators without preserving that invariant.
+
+## Dependency scans and release policy
+
+Renovate scans the whole repository hourly, at minute 17 UTC. Scanning refreshes
+the dependency dashboard even when a package is not eligible for a PR.
+Ordinary dependencies retain the Tuesday-after-15:00-UTC window and seven-day
+release-age policy (including the existing timestamp-optional and vulnerability
+exceptions). `updateNotScheduled: false` also prevents ordinary branch updates
+outside that window.
+
+Stable Home Assistant Core, Supervisor, and HAOS are exact-name exceptions:
+no release-age delay, any-time scheduling, immediate PR creation, and no
+ordinary PR rate/concurrency cap. Core pins include the container lanes and
+HAOS builder; Supervisor's minimum comes from `stable.json`; HAOS tracks
+stable OS releases. Changes to these builder inputs invalidate the stable
+HAOS image cache. Supervisor still self-updates within its configured channel.
+
+Human checked requests on the Renovate-authored dependency dashboard trigger a
+scan promptly. Checking the native rebase/retry box on an open, same-repository
+Renovate PR targeting master also starts a scan via `pull_request_target: edited`.
+The PR guard requires a human body edit that changes the rebase box from not
+checked to checked; bot edits, unrelated PRs, and edits leaving it checked do not
+start the scanner. Checkout uses trusted default-branch code, never PR code.
+Renovate itself consumes the checkbox and applies its native override semantics;
+the workflow does not rebase branches or force dependency policy globally.
+Manual workflow dispatch likewise starts an ordinary scan. Runs serialize
+without cancelling an active writer. GitHub's scheduled events are best-effort
+and may be delayed or dropped; checkbox events avoid waiting for the hourly scan.
+See [GitHub's event documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)
+and [Renovate's native rebase documentation](https://docs.renovatebot.com/updating-rebasing/#manual-rebasing).
+
+The action must discover `renovate.json` as repository configuration only.
+Passing the same file as action-global `configurationFile` as well duplicates
+custom managers and dependency-dashboard entries.
+
+The private websockets pin has a narrowly scoped post-upgrade task. Renovate
+installs Python 3.13, runs `python3 -I scripts/vendor_websockets.py`, and includes
+only `src/ha_mcp/_vendor/websockets/**` as generated artifacts alongside the pin.
+The scanner allows only that exact command, with shell execution disabled.
+This dependency retains the ordinary schedule and release-age policy. Source,
+license, manifest, drift, and API checks still gate the update; a failed
+generator is an artifact error, not an accepted pin-only update.
+The credential-free vendoring fixture exercises the pinned Renovate executor.
+
+Renovate enables GitHub-native squash auto-merge for minor, patch, and digest
+updates, and for its ungrouped vulnerability-alert fixes. Ordinary major
+upgrades remain manual. This does not bypass creation schedules or release-age
+gates. Once eligible PRs exist, GitHub merges only when the repository's required
+checks and reviews are satisfied, including required E2E checks.
+
+The approval workflow mirrors Dependabot's separate-account, exact-head
+approval boundary: Renovate's app token enables auto-merge, and the existing
+`ghhamcp` maintainers-team account approves with the Actions secret
+`GH_TOKEN_CODEX_COMMENT`. That token must grant pull-request write access;
+`DEPENDABOT_APPROVAL_TOKEN` remains in Dependabot's separate secret store.
+The workflow executes no checkout or PR code, re-reads the PR, verifies that
+Renovate enabled squash auto-merge and the event head is still current, checks
+the approval token's identity, and skips an existing approval on that head.
+Renovate pushes trigger fresh approval after stale reviews are dismissed.
+Human-enabled auto-merge and human pushes do not issue new automated approvals.
+Toggling auto-merge does not revoke an existing approval of unchanged content.
+No workflow grants a bypass or performs an admin merge.
 
 ## Releases
 

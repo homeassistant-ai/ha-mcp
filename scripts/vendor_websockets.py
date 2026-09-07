@@ -12,8 +12,9 @@ version production runs.
 
 The pin lives in ``src/ha_mcp/_vendor/requirements.txt`` (a standard
 requirements file so renovate bumps it and dependency scanners read it).
-This script downloads that version's sdist and refreshes the vendored
-tree; ``tests/src/unit/test_vendored_websockets.py`` fails whenever the
+Renovate runs this script before committing a websockets pin update.
+It downloads that version's sdist and refreshes the vendored tree;
+``tests/src/unit/test_vendored_websockets.py`` fails whenever the
 vendored copy drifts from the pin, so a renovate bump that forgets to
 regenerate cannot merge.
 

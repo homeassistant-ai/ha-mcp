@@ -251,7 +251,7 @@
     "backup.fields.auto_backup_retain_per_entity.label": "Zachovat na entitu",
     "backup.fields.auto_backup_retain_per_entity.help": "Maximální počet snímků uchovávaných na entitu (1–10000). Starší se postupně odstraňují.",
     "backup.fields.auto_backup_dir.label": "Přepsání adresáře záloh",
-    "backup.fields.auto_backup_dir.help": "Ponechte prázdné pro použití výchozího adresáře; jinak zadejte absolutní cestu.",
+    "backup.fields.auto_backup_dir.help": "Ponechte prázdné pro výchozí hodnotu: /data/ha_mcp_backups v aplikaci (doplňku), jinak podadresář backups datového adresáře ha-mcp; instalace, která již obsahuje zálohy pod dřívějším výchozím nastavením, jej nadále používá. Používaný adresář se zobrazuje ve stavu zálohy. Nebo zadejte absolutní cestu.",
     "backup.fields.auto_backup_calendar_lookahead_days.label": "Předstih kalendáře (dny)",
     "backup.fields.auto_backup_calendar_lookahead_days.help": "Jak daleko dopředu se mají dotazovat události kalendáře pro snímky před úpravou. Rozsah 1–365.",
     "backup.fields.enable_snapshot_delete.label": "Povolit smazání snímků",
@@ -288,7 +288,7 @@
     "backup.bulk.confirm": "Smazat všechny zálohy odpovídající: {filters}?",
     "backup.bulk.deleted": "Smazáno {count} záloh",
     "filesystem.custom.title": "Vlastní cesty k souborům (pokročilé)",
-    "filesystem.custom.help": "Další cesty (jedna na řádek), které nástroje pro práci se soubory mohou <strong>číst a zapisovat</strong>. Jsou podporovány cesty relativní ke konfiguraci, včetně přesných názvů souborů, jako je <code>sensor.yaml</code>, a cesty pod adresáři <code>/share</code>, <code>/media</code>, <code>/ssl</code> a <code>/backup</code>. Každá položka povolená tato cesta cokoliv pod ní. Tyto cesty můžete také spravovat v Home Assistant v části Nastavení → Zařízení a služby → HA-MCP Custom Component → HA-MCP File & YAML Tools → Konfigurovat; obě umístění upravují stejné nastavení a změny se projeví okamžitě.",
+    "filesystem.custom.help": "Další cesty (jedna na řádek), které mohou souborové nástroje <strong>číst a zapisovat</strong>. Jsou podporovány cesty relativní ke konfiguraci včetně přesných názvů souborů, jako je <code>sensor.yaml</code>, a cesty pod <code>/share</code>, <code>/media</code>, <code>/ssl</code> a <code>/backup</code>. Každá položka povolenou cestu a vše pod ní. Položky se porovnávají doslovně; zástupné znaky jako <code>*</code> nejsou podporovány. Tyto cesty můžete také spravovat v Home Assistant v části Nastavení → Zařízení a služby → HA-MCP Custom Component → HA-MCP File & YAML Tools → Konfigurovat; obě umístění upravují stejné nastavení a změny se projeví okamžitě.",
     "filesystem.custom.blocked": "Vždy blokováno: {paths}, procházení cest (<code>..</code>) a absolutní cesty mimo povolené svazky HAOS.",
     "filesystem.custom.enable_first": "Povolte beta funkce a nástroje souborového systému výše pro úpravy.",
     "filesystem.custom.unavailable": "Vlastní cesty jsou aktuálně nedostupné.",
@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Časový limit pro každé načtení konfigurace automatizace/skriptu/scény. Rozsah 1–600. Vyžadován restart.",
     "advanced.individual_fetch_batch_size.label": "Velikost dávky načítání konfigurace",
     "advanced.individual_fetch_batch_size.help": "Souběžné načítání konfigurací podle ID. Snižte směrem k 1 na sériových HA serverech. Rozsah 1–100. Vyžadován restart.",
+    "advanced.ha_tool_concurrency.label": "Souběžnost nástrojů Home Assistant",
+    "advanced.ha_tool_concurrency.help": "Volitelný limit pro vnější volání nástrojů Home Assistant napříč všemi relacemi. Vnitřní souběžnost REST, WebSocket a distribuce pro jednotlivé nástroje zůstává nezměněna. Hodnota 0 zachovává neomezené chování. Volání čekající na kapacitu selže po 60 sekundách. Rozsah 0–32. Vyžadován restart.",
     "advanced.backup_hint.label": "Úroveň nápovědy k zálohování",
     "advanced.backup_hint.help": "Určuje, jak silně je LLM vyzváno k vytvoření úplného snímku HA před rizikovými zápisy.",
     "advanced.backup_hint.choices.strong": "Silná",
@@ -468,6 +470,8 @@
     "addon.pinned_tools.description": "Nástroje zde uvedené jsou uzamčeny jako připnuté — zobrazují se v horní části karty Nástroje a nelze je odepnout z webového uživatelského rozhraní Nastavení, aniž byste nejprve zrušili toto nastavení. Užitečné v kombinaci s vyhledáváním nástrojů. Názvy nástrojů oddělené čárkami.",
     "addon.verify_ssl.name": "Ověřit certifikát TLS",
     "addon.verify_ssl.description": "Ověřit TLS certifikát serveru Home Assistant. Aplikace (doplněk) se připojuje přes proxy Supervisor, takže to obvykle nemá žádný vliv a mělo by to zůstat zapnuté. Zakazujte pouze v případě, že jste přenastavili aplikaci (doplněk) tak, aby komunikovala s HA přes veřejný HTTPS hostname s The self-signed certifikátem nebo neshodou hostname. Vypnutí oslabuje zabezpečení přenosu – nechte zapnuté, pokud víte, že to potřebujete. Vyžaduje restart, aby se projevilo.",
+    "addon.ha_tool_concurrency.name": "Souběžnost nástrojů Home Assistant",
+    "addon.ha_tool_concurrency.description": "Volitelný limit pro vnější volání nástrojů Home Assistant napříč všemi relacemi. Vnitřní souběžnost REST, WebSocket a distribuce pro jednotlivé nástroje zůstává nezměněna. Hodnota 0 zachovává neomezené chování. Volání čekající na kapacitu selže po 60 sekundách.",
     "addon_stable.enable_tool_search.description": "Nahradit úplný katalog nástrojů vyhledáváním. Snižuje klidový kontext přibližně o 90 %, na asi 5 tisíc tokenů. ⚠️ NEZAPÍNEJTE toto v klientech s vlastním vestavěným vyhledáváním nástrojů / odloženými nástroji (claude.ai, Claude Desktop, Claude Code) – obě vrstvy vyhledávání se střetávají a vestavěné vyhledávání nástrojů v klientovi je zde lepší volbou; nechte to vypnuté. Zda jsou nástroje odloženy, závisí na kombinaci vašeho klienta a modelu: použijte toto, když vaše nastavení načítá celý katalog předem – modely bez nativních odložených nástrojů (např. Gemini, lokální modely kompatibilní s OpenAI, Claude Haiku), klienti, kteří vkládají všechna schémata nástrojů bez ohledu na model (např. GitHub Copilot CLI), nebo menší kontextová okna. Některé modely Codex a ChatGPT také obsahují odložené nástroje – ověřte si funkce přímo u svého klienta/modelu, abyste to nenechávali zbytečně zapnuté. Nástroje se vyhledávají přes ha_search_tools a spouštějí se přes kategorizované proxy (read/write/delete). Vyžaduje restart aplikace (doplněku), aby se projevila změna – poté znovu připojte nebo obnovte MCP server ve svém AI klientovi, aby se znovu načetl seznam nástrojů. Samotný restart aplikace (doplněku) NEAKTUALIZUJE mezipaměť seznamu nástrojů klienta; toto platí po změně jakéhokoli nastavení zde."
   },
   "tools": {
@@ -631,10 +635,6 @@
       "title": "Získat trasování automatizací",
       "description": "Načíst trasování spuštění pro automatizace a skripty k ladění problémů."
     },
-    "ha_get_blueprint": {
-      "title": "Získat blueprint",
-      "description": "Získat informace o blueprintu – vypsat všechny blueprinty nebo získat podrobnosti o konkrétním."
-    },
     "ha_get_camera_image": {
       "title": "Získat obraz z kamery",
       "description": "Načíst snímek obrazu z entity kamery Home Assistant."
@@ -695,10 +695,6 @@
       "title": "Získat zónu",
       "description": "Získat informace o zóně – vypsat všechny zóny nebo získat podrobnosti o konkrétní."
     },
-    "ha_import_blueprint": {
-      "title": "Importovat blueprint",
-      "description": "Importovat blueprint z URL."
-    },
     "ha_list_files": {
       "title": "Vypsat soubory",
       "description": "Vypsat soubory v adresáři v rámci konfigurace Home Assistant."
@@ -718,6 +714,10 @@
     "ha_manage_backup": {
       "title": "Spravovat zálohy",
       "description": "Polymorfní nástroj pro zálohování. Viz popis nástroje pro směrovací matici."
+    },
+    "ha_manage_blueprints": {
+      "title": "Správa šablon",
+      "description": "Správa šablon Home Assistant — výpis, čtení, import, uložení, smazání nebo vykreslení samostatné konfigurace."
     },
     "ha_manage_custom_tool": {
       "title": "Vlastní nástroj",

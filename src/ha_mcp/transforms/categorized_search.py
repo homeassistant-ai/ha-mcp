@@ -9,6 +9,12 @@ Tools are categorized by their existing MCP annotations:
 - readOnlyHint=True → "read" category
 - destructiveHint=True with remove/delete in name → "delete" category
 - destructiveHint=True (other) → "write" category
+
+A ``manage`` tool combines several operations behind one name, so it is
+reachable from every proxy — read-approved calls only on the read proxy,
+the whole tool on the write and delete proxies (see ``_admits``) — and
+search results point each kind of action at its own proxy. In Read Only
+Mode only the read proxy is listed.
 """
 
 from __future__ import annotations
@@ -84,6 +90,12 @@ DEFAULT_PINNED_TOOLS: tuple[str, ...] = (
 
 # Tool name patterns that indicate delete/remove operations
 _DELETE_PATTERNS = ("_remove_", "_delete_")
+
+# ``manage`` names one interface that intentionally combines several
+# operations (.gemini/styleguide.md, Tool Naming Convention). Such a tool is
+# categorised by its annotations like any other, but every call proxy can
+# reach it — see ``_admits``.
+_MANAGE_PATTERNS = ("_manage_",)
 
 # Capability tier a tool falls into — shared by the call-proxy routing and
 # the settings-UI capability badges. See ``categorize_capability``.
@@ -192,27 +204,99 @@ def categorize_capability(
     return "write"
 
 
+def _is_manage_tool(name: str) -> bool:
+    """Whether *name* follows the ``manage`` convention for a multi-operation tool."""
+    return any(pattern in name for pattern in _MANAGE_PATTERNS)
+
+
 def _is_read_call_on_write_tool(name: str, arguments: dict[str, Any] | None) -> bool:
     """Whether this call on a non-read-category tool is one of its read actions.
 
     A mixed read/write tool (``ha_manage_backup``, ``ha_manage_updates``,
-    ``ha_manage_blueprints``, ...) is categorised ``write`` by its annotations,
-    which is where it stays: it is advertised under the write proxy and appears
-    in no other category set. But refusing its list/get actions on the read
-    proxy would strip real read surface from a client that only holds that
-    proxy — for blueprints, folding the old read tool into the merged one would
-    otherwise have removed listing entirely (#2329).
+    ``ha_manage_blueprints``, ...) is categorised ``write`` by its annotations
+    and lives in that category set only. But refusing its list/get actions on
+    the read proxy would strip real read surface from a client that only holds
+    that proxy — for blueprints, folding the old read tool into the merged one
+    would otherwise have removed listing entirely (#2329).
 
-    So membership decides advertisement, and this decides admission: read-only
-    mode already enumerates, per call, which invocations of such a tool are
-    reads (``READ_ONLY_EXEMPT_TOOLS``), and the read proxy reuses that verdict
-    so the two surfaces cannot disagree about what counts as a read. A call
-    that changes state is still refused here.
+    Read-only mode already enumerates, per call, which invocations of such a
+    tool are reads (``READ_ONLY_EXEMPT_TOOLS``), and the proxies reuse that
+    verdict so the two surfaces cannot disagree about what counts as a read.
+    The verdict fails closed: a tool without an exemption entry, or a missing
+    or unknown action, is never a read.
     """
     from ..read_only import READ_ONLY_EXEMPT_TOOLS
 
     exemption = READ_ONLY_EXEMPT_TOOLS.get(name)
     return exemption is not None and exemption.blocked_write(arguments or {}) is None
+
+
+def _has_read_actions(name: str) -> bool:
+    """Whether a write-category tool has read actions the read proxy can approve."""
+    from ..read_only import READ_ONLY_EXEMPT_TOOLS
+
+    return name in READ_ONLY_EXEMPT_TOOLS
+
+
+def _admits(
+    transform: CategorizedSearchTransform,
+    category: Capability,
+    name: str,
+    arguments: dict[str, Any] | None,
+) -> bool:
+    """Whether the *category* proxy may dispatch this call.
+
+    Membership in the category set is the rule. A ``manage`` tool (#2358) is
+    the exception: it is reachable from every proxy. The read proxy is the
+    one hard boundary — it carries ``readOnlyHint`` — so it admits only a
+    call the read-only predicate approves. The write and delete proxies both
+    carry ``destructiveHint`` and run the whole tool: its delete actions are
+    not statically enumerable (``ha_manage_radio`` and ``ha_manage_updates``
+    take a free-form ``action``), so neither proxy pretends to carve them out.
+    """
+    if category == "read":
+        return name in transform._read_tools or (
+            name in transform._write_tools
+            and _is_read_call_on_write_tool(name, arguments)
+        )
+    if category == "write":
+        return name in transform._write_tools
+    return name in transform._delete_tools or (
+        name in transform._write_tools and _is_manage_tool(name)
+    )
+
+
+def _execute_via(proxy: str, tool_name: str) -> str:
+    """Render the call form a search result advertises for *tool_name*."""
+    return (
+        f'client.{proxy}(name="{tool_name}", arguments={{...}}) '
+        f'or {proxy}(name="{tool_name}", arguments={{...}})'
+    )
+
+
+def _read_only_mode() -> bool:
+    """Whether Read Only Mode is on — consulted per request, like its filter."""
+    from ..config import get_global_settings
+
+    return bool(get_global_settings().read_only_mode)
+
+
+def _advertised_routes(name: str, category: Capability) -> list[Capability]:
+    """Proxies a search result points at for *name*, in listing order.
+
+    A manage tool lists every proxy it is reachable through (see
+    ``_admits``); the read route exists only when the read-only predicate can
+    approve calls to it. In Read Only Mode the destructive proxies are not
+    listed, so only the read route remains. The ``["write", "delete"]`` case
+    cannot occur in that mode: ``ReadOnlyToolsTransform`` drops every
+    non-exempt write tool from the catalog before the search index is built,
+    and every exempt tool has read actions.
+    """
+    if category != "write" or not _is_manage_tool(name):
+        return [category]
+    if _has_read_actions(name):
+        return ["read"] if _read_only_mode() else ["read", "write", "delete"]
+    return ["write", "delete"]
 
 
 def _categorize_tool(tool: Tool) -> Capability:
@@ -443,11 +527,15 @@ class CategorizedSearchTransform(BM25SearchTransform):
         results = []
         for tool in tools:
             data = tool.to_mcp_tool().model_dump(mode="json", exclude_none=True)
-            proxy = proxy_map[_categorize_tool(tool)]
-            data["execute_via"] = (
-                f'client.{proxy}(name="{tool.name}", arguments={{...}}) '
-                f'or {proxy}(name="{tool.name}", arguments={{...}})'
-            )
+            routes = _advertised_routes(tool.name, _categorize_tool(tool))
+            if len(routes) == 1:
+                data["execute_via"] = _execute_via(proxy_map[routes[0]], tool.name)
+            else:
+                hint = "; ".join(
+                    f"{route} actions: {_execute_via(proxy_map[route], tool.name)}"
+                    for route in routes
+                )
+                data["execute_via"] = hint[:1].upper() + hint[1:]
             results.append(data)
         return results
 
@@ -486,14 +574,6 @@ class CategorizedSearchTransform(BM25SearchTransform):
             # A retired name folded into an action-dispatched tool (#2329)
             # needs the action its old signature never carried.
             arguments = adapt_retired_arguments(requested, arguments)
-
-            # Determine which category set to check
-            if category == "read":
-                allowed = transform._read_tools
-            elif category == "delete":
-                allowed = transform._delete_tools
-            else:
-                allowed = transform._write_tools
 
             # Detect and unwrap double-wrapped arguments where the LLM
             # accidentally nested name/arguments inside the arguments param
@@ -540,11 +620,7 @@ class CategorizedSearchTransform(BM25SearchTransform):
                         _raise_non_object_arguments(nested, proxy_name, inner_name)
                     arguments = adapt_retired_arguments(requested_inner, nested or {})
 
-            # Membership is the advertised category; a mixed tool's read
-            # actions are additionally admitted here (see the helper).
-            if name not in allowed and not (
-                category == "read" and _is_read_call_on_write_tool(name, arguments)
-            ):
+            if not _admits(transform, category, name, arguments):
                 _raise_wrong_category_error(name, transform, proxy_name)
 
             return await ctx.fastmcp.call_tool(name, arguments)
@@ -590,6 +666,16 @@ class CategorizedSearchTransform(BM25SearchTransform):
             description=self._proxy_descs["delete"],
         )
 
+        if _read_only_mode():
+            # ReadOnlyToolsTransform runs before this one and never sees the
+            # proxies synthesised here; with every write blocked at call time
+            # the destructive proxies would only advertise dead ends. They
+            # stay resolvable by name so a client holding a stale catalog gets
+            # the proxy's own structured answer (ReadOnlyMiddleware blocks a
+            # write before the proxy is even resolved) rather than a bare
+            # not-found that ToolSearchHintMiddleware declines to explain
+            # while tool search is on.
+            return [*pinned, search_tool, call_read]
         return [*pinned, search_tool, call_read, call_write, call_delete]
 
     async def get_tool(

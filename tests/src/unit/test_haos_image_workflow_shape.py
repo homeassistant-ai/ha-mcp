@@ -261,7 +261,7 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
     assert "version.home-assistant.io/stable.json" in compare["run"]
     assert '["supervisor"]' in compare["run"]
     assert '["homeassistant"]["qemux86-64"]' in compare["run"]
-    assert compare["run"].count("|| exit 1") == 4
+    assert compare["run"].count("|| exit 1") == 6
     assert "::error::" in compare["run"]
     skip_guard = (
         "github.event_name == 'workflow_dispatch' || "
@@ -291,7 +291,8 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
         resolve = next(
             step
             for step in steps
-            if step.get("name") == "Resolve current beta Supervisor and Core versions"
+            if step.get("name")
+            == "Resolve current beta OS, Supervisor, and Core versions"
         )
         assert "version.home-assistant.io/beta.json" in resolve["run"]
         assert '["supervisor"]' in resolve["run"]
@@ -305,6 +306,7 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
         assert "haos-beta-image-" in cache_script
         assert "steps.versions.outputs.supervisor_version" in cache_script
         assert "steps.versions.outputs.core_version" in cache_script
+        assert "steps.versions.outputs.os_version" in cache_script
         beta_cache_keys.append(cache_script)
 
         build = next(
@@ -313,6 +315,7 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
             if step.get("name") == "Build image locally (cache miss or forced rebuild)"
         )
         assert build["env"] == {
+            "HAOS_BUILD_OS_VERSION": "${{ steps.versions.outputs.os_version }}",
             "HAOS_BUILD_SUPERVISOR_CHANNEL": "beta",
             "HAOS_BUILD_SUPERVISOR_MIN_VERSION": (
                 "${{ steps.versions.outputs.supervisor_version }}"
@@ -331,6 +334,9 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
         run_env = run_step["env"]
         assert run_env["HAOS_TEST_MODE"] == mode
         assert run_env["HAOS_TEST_IMAGE_PATH"] == "/tmp/haos-beta-test-image.qcow2"
+        assert run_env["HAOS_EXPECTED_OS_VERSION"] == (
+            "${{ steps.versions.outputs.os_version }}"
+        )
         assert run_env["HAOS_EXPECTED_SUPERVISOR_CHANNEL"] == "beta"
         assert run_env["HAOS_EXPECTED_SUPERVISOR_MIN_VERSION"] == (
             "${{ steps.versions.outputs.supervisor_version }}"

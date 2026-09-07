@@ -11,8 +11,7 @@ from typing import Any, Callable, Literal
 
 import trio
 
-from ..asyncio.client import process_exception
-from ..client import ClientProtocol, backoff
+from ..client import ClientProtocol, backoff, process_exception
 from ..datastructures import Headers, HeadersLike
 from ..exceptions import (
     InvalidProxyMessage,
@@ -28,7 +27,7 @@ from ..http11 import USER_AGENT, Response
 from ..protocol import CONNECTING, Event
 from ..proxy import Proxy, get_proxy, parse_proxy, prepare_connect_request
 from ..streams import StreamReader
-from ..typing import LoggerLike, Origin, Subprotocol
+from ..typing import LoggerLike, Origin, PathLike, Subprotocol
 from ..uri import WebSocketURI, parse_uri
 from .connection import Connection
 from .utils import race_events
@@ -135,10 +134,9 @@ class connect:
     """
     Connect to the WebSocket server at ``uri``.
 
-    This coroutine returns a :class:`ClientConnection` instance, which you can
-    use to send and receive messages.
-
-    :func:`connect` may be used as an asynchronous context manager::
+    :func:`connect` should be treated as an asynchronous context manager
+    yielding a :class:`ClientConnection`, which can then receive and send
+    messages::
 
         from websockets.trio.client import connect
 
@@ -147,8 +145,8 @@ class connect:
 
     The connection is closed automatically when exiting the context.
 
-    :func:`connect` can be used as an infinite asynchronous iterator to
-    reconnect automatically on errors::
+    :func:`connect` can also be treated as an infinite asynchronous iterator
+    to reconnect automatically on errors::
 
         async for websocket in connect(...):
             try:
@@ -161,6 +159,10 @@ class connect:
     raised, breaking out of the loop.
 
     The connection is closed automatically after each iteration of the loop.
+
+    :func:`connect` cannot be awaited directly. This is because it runs a task
+    to manage the connection and Trio doesn't support spawning tasks without a
+    context that ensures completion.
 
     Args:
         uri: URI of the WebSocket server.
@@ -192,7 +194,8 @@ class connect:
             ``proxy_server_hostname`` overrides the host name from ``proxy``.
         process_exception: When reconnecting automatically, tell whether an
             error is transient or fatal. The default behavior is defined by
-            :func:`process_exception`. Refer to its documentation for details.
+            :func:`~websockets.client.process_exception`. Refer to its
+            documentation for details.
         open_timeout: Timeout for opening the connection in seconds.
             :obj:`None` disables the timeout.
         ping_interval: Interval between keepalive pings in seconds.
@@ -220,6 +223,10 @@ class connect:
             connection handling.
 
     Any other keyword arguments are passed to :func:`~trio.open_tcp_stream`.
+    For example, you can set ``host`` and ``port`` to connect to a different
+    host and port from those found in ``uri``. This only changes the destination
+    of the TCP connection. The host name from ``uri`` is still used in the TLS
+    handshake for secure connections and in the ``Host`` header.
 
     Raises:
         InvalidURI: If ``uri`` isn't a valid WebSocket URI.
@@ -319,15 +326,16 @@ class connect:
     async def open_tcp_stream(self) -> trio.abc.Stream:
         """Open a TCP or Unix connection to the server, possibly through a proxy."""
         kwargs = self.open_tcp_stream_kwargs.copy()
+        unix = kwargs.pop("unix", False)
 
         proxy = self.proxy
-        if kwargs.get("unix", False):
+        if unix:
             proxy = None
         if proxy is True:
             proxy = get_proxy(self.ws_uri)
 
-        if kwargs.pop("unix", False):
-            return await trio.open_unix_socket(kwargs["path"])
+        if unix:
+            return await trio.open_unix_socket(kwargs.pop("path"))
 
         elif proxy is not None:
             proxy_parsed = parse_proxy(proxy)
@@ -384,7 +392,6 @@ class connect:
 
     async def open_connection(self, nursery: trio.Nursery) -> ClientConnection:
         """Create a WebSocket connection."""
-        # TCP connection is already established.
         if self.stream is None:
             stream = await self.open_tcp_stream()
         else:
@@ -412,8 +419,6 @@ class connect:
                 self.user_agent_header,
             )
 
-            return connection
-
         except trio.Cancelled:
             await trio.aclose_forcefully(stream)
             # The nursery running this coroutine was canceled.
@@ -426,6 +431,8 @@ class connect:
             # TCP/TLS connection with initializing the WebSocket protocol.
             await trio.aclose_forcefully(stream)
             raise
+
+        return connection
 
     def process_redirect(self, exc: Exception) -> Exception | str:
         """
@@ -475,6 +482,7 @@ class connect:
                     f"cannot follow cross-origin redirect to {new_uri} "
                     f"with a Unix socket"
                 )
+
             # Cross-origin redirects when host and port are overridden are ill-defined.
             if (
                 self.open_tcp_stream_kwargs.get("host") is not None
@@ -532,7 +540,7 @@ class connect:
             # Re-raise exception with an informative error message.
             raise TimeoutError("timed out during opening handshake") from exc
 
-    # Do not define __await__ for... = await nursery.start(connect, ...)
+    # Do not define __await__ for ... = await nursery.start(connect, ...)
     # because it doesn't look idiomatic in Trio.
 
     # async with connect(...) as ...: ...
@@ -633,7 +641,7 @@ class connect:
 
 
 def unix_connect(
-    path: str | None = None,
+    path: PathLike | None = None,
     uri: str | None = None,
     **kwargs: Any,
 ) -> connect:
@@ -653,11 +661,18 @@ def unix_connect(
             ``wss://localhost/``.
 
     """
+    stream = kwargs.get("stream")
+    if path is None and stream is None:
+        raise ValueError("missing path argument")
+    elif path is not None and stream is not None:
+        raise ValueError("path is incompatible with stream")
+
     if uri is None:
         if kwargs.get("ssl") is None:
             uri = "ws://localhost/"
         else:
             uri = "wss://localhost/"
+
     return connect(uri=uri, unix=True, path=path, **kwargs)
 
 

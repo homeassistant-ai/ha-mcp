@@ -712,13 +712,15 @@ class FilesystemTools:
         Reads files from allowed paths within the config directory. Some files
         have special handling:
         - `secrets.yaml`: Values are masked for security
-        - `home-assistant.log`: Limited to tail (last N lines) by default
+        - `home-assistant.log` / `home-assistant.log.fault`: Limited to tail
+          (last N lines) by default. Prefer ha_get_logs(source='error_log') and
+          ha_get_logs(source='fault_log') over reading these directly.
 
         **Allowed Read Paths:**
         - `configuration.yaml`, `automations.yaml`, `scripts.yaml`, `scenes.yaml`
         - `secrets.yaml` (values masked)
         - `packages/*.yaml`
-        - `home-assistant.log` (tail only)
+        - `home-assistant.log`, `home-assistant.log.fault` (tail only)
         - `www/**`, `themes/**`, `custom_templates/**`, `dashboards/**`, `blueprints/**`
         - `custom_components/**/*.py` (read-only)
         - Plus any custom directories OR HAOS sibling volumes (`/share`,

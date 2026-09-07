@@ -289,6 +289,15 @@ class HomeAssistantSmartMCPServer:
         # wraps the final tool surface (including the search proxies).
         self._apply_tool_security_policies()
 
+        # Constrained installs can opt into cross-session tool queuing. This
+        # sits after approval gates so a call awaiting approval holds no slot.
+        if self.settings.ha_tool_concurrency:
+            from .ha_request_queue import HomeAssistantRequestQueueMiddleware
+
+            self.mcp.add_middleware(
+                HomeAssistantRequestQueueMiddleware(self.settings.ha_tool_concurrency)
+            )
+
         # Known-secret-value scrub (#2157) — registered just before the
         # visibility outbound half so that half stays innermost (its scan
         # must see truly raw output; a secret value could embed a hidden

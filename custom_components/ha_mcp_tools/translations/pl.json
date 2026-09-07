@@ -33,7 +33,7 @@
           "extra_yaml_keys": "Dodatkowe klucze zapisu YAML"
         },
         "data_description": {
-          "allowed_dirs": "Ścieżki względne do katalogu konfiguracyjnego, w tym dokładne nazwy plików, takie jak sensor.yaml, lub ścieżki w katalogach /share, /media, /ssl i /backup. Każdy wpis otrzymuje uprawnienia do odczytu i zapisu dla danej ścieżki oraz wszystkiego, co się w niej znajduje; wpisz każdą ścieżkę jako oddzielny element listy. Przechodzenie w górę drzewa katalogów (traversal) i inne niedozwolone ścieżki są odrzucane.",
+          "allowed_dirs": "Ścieżki względem katalogu konfiguracyjnego, w tym dokładne nazwy plików, takie jak sensor.yaml, lub ścieżki w katalogach /share, /media, /ssl i /backup. Każdy wpis otrzymuje uprawnienia do odczytu i zapisu dla tej ścieżki oraz wszystkiego, co się w niej znajduje; wpisz każdą ścieżkę jako osobny element listy. Wpisy są dopasowywane dosłownie; symbole wieloznaczne, takie jak *, nie są obsługiwane. Przechodzenie w górę drzewa katalogów (traversal) i inne niedozwolone ścieżki są odrzucane.",
           "extra_yaml_keys": "Klucze najwyższego poziomu, które ha_config_set_yaml może zapisywać oprócz wbudowanych, dla integracji opartych na YAML w tej instalacji (np. alert2). Klucze graniczne zaufania są odrzucane."
         }
       },

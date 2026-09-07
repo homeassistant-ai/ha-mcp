@@ -374,6 +374,7 @@ def pytest_collection_modifyitems(config, items):
     beta_haos = any(
         os.environ.get(name)
         for name in (
+            "HAOS_EXPECTED_OS_VERSION",
             "HAOS_EXPECTED_SUPERVISOR_CHANNEL",
             "HAOS_EXPECTED_SUPERVISOR_MIN_VERSION",
             "HAOS_EXPECTED_CORE_VERSION",

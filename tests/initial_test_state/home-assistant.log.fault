@@ -1,0 +1,24 @@
+Fatal Python error: Segmentation fault
+
+Thread 0x00007f3a1c7fe6c0 (most recent call first):
+  File "/config/custom_components/e2e_fake_fault/__init__.py", line 41 in poll_native_bridge
+  File "/usr/local/lib/python3.13/concurrent/futures/thread.py", line 59 in run
+  File "/usr/local/lib/python3.13/concurrent/futures/thread.py", line 86 in _worker
+  File "/usr/local/lib/python3.13/threading.py", line 992 in run
+  File "/usr/local/lib/python3.13/threading.py", line 1041 in _bootstrap_inner
+  File "/usr/local/lib/python3.13/threading.py", line 1012 in _bootstrap
+
+Current thread 0x00007f3a2e8f4740 (most recent call first):
+  File "/usr/src/homeassistant/homeassistant/core.py", line 1470 in _run_event_loop
+  File "/usr/src/homeassistant/homeassistant/runner.py", line 149 in run
+  File "/usr/src/homeassistant/homeassistant/__main__.py", line 212 in main
+  File "/usr/src/homeassistant/homeassistant/__main__.py", line 227 in <module>
+
+Fatal Python error: Aborted
+
+Current thread 0x00007f3a2e8f4740 (most recent call first):
+  File "/config/custom_components/e2e_fake_fault/__init__.py", line 77 in e2e_fake_fault_abort_marker
+  File "/usr/src/homeassistant/homeassistant/core.py", line 1470 in _run_event_loop
+  File "/usr/src/homeassistant/homeassistant/runner.py", line 149 in run
+  File "/usr/src/homeassistant/homeassistant/__main__.py", line 212 in main
+  File "/usr/src/homeassistant/homeassistant/__main__.py", line 227 in <module>

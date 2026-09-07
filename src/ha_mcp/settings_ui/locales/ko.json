@@ -251,7 +251,7 @@
     "backup.fields.auto_backup_retain_per_entity.label": "엔티티당 보관 개수",
     "backup.fields.auto_backup_retain_per_entity.help": "엔티티당 보관하는 최대 스냅숏 수(1~10000)입니다. 오래된 것부터 밀려납니다.",
     "backup.fields.auto_backup_dir.label": "백업 디렉터리 재정의",
-    "backup.fields.auto_backup_dir.help": "기본 디렉터리를 쓰려면 비워 두고, 그렇지 않으면 절대 경로를 입력하세요.",
+    "backup.fields.auto_backup_dir.help": "기본값을 사용하려면 비워 두세요. 앱(애드온)의 경우 /data/ha_mcp_backups가 사용되며, 그 외에는 ha-mcp 데이터 디렉터리 내의 backups/ 하위 디렉터리가 사용됩니다. 이전 기본값에 이미 스냅샷이 있는 설치 건은 계속 해당 경로를 사용합니다. 현재 사용 중인 디렉터리는 백업 상태에 표시됩니다. 또는 절대 경로를 입력할 수도 있습니다.",
     "backup.fields.auto_backup_calendar_lookahead_days.label": "캘린더 조회 기간(일)",
     "backup.fields.auto_backup_calendar_lookahead_days.help": "편집 전 스냅숏을 위해 캘린더 이벤트를 얼마나 앞까지 조회할지 정합니다. 범위 1~365.",
     "backup.fields.enable_snapshot_delete.label": "스냅숏 삭제 허용",
@@ -288,7 +288,7 @@
     "backup.bulk.confirm": "다음 조건에 맞는 백업을 모두 삭제할까요? {filters}",
     "backup.bulk.deleted": "백업 {count}개를 삭제했습니다",
     "filesystem.custom.title": "사용자 지정 파일 시스템 경로 (고급)",
-    "filesystem.custom.help": "파일 도구가 <strong>읽고 쓸 수 있는</strong> 추가 경로입니다(줄당 하나씩). 설정 상대 경로(<code>sensor.yaml</code> 같은 정확한 파일 이름 포함) 및 <code>/share</code>, <code>/media</code>, <code>/ssl</code>, <code>/backup</code> 하위 경로가 지원됩니다. 각 항목은 해당 경로 및 그 하위의 모든 항목을 허용합니다. Home Assistant의 설정 → 기기 및 서비스 → HA-MCP Custom Component → HA-MCP File & YAML Tools → 구성에서도 이러한 경로를 관리할 수 있습니다. 두 위치 모두 동일한 설정을 편집하며 즉시 변경 사항이 적용됩니다.",
+    "filesystem.custom.help": "파일 도구가 <strong>읽고 쓸 수 있는</strong> 추가 경로입니다(줄당 하나씩 입력). 정확한 파일 이름(<code>sensor.yaml</code> 등)을 포함한 설정 상대 경로와 <code>/share</code>, <code>/media</code>, <code>/ssl</code>, <code>/backup</code> 하위 경로가 지원됩니다. 각 항목은 해당 경로와 그 하위의 모든 항목을 허용합니다. 항목은 문자 그대로 일치하며 <code>*</code> 같은 와일드카드는 지원되지 않습니다. 홈 아시스턴트의 설정 → 기기 및 서비스 → HA-MCP 사용자 정의 구성 요소 → HA-MCP 파일 및 YAML 도구 → 구성에서도 이 경로들을 관리할 수 있으며, 두 위치 모두 동일한 설정을 편집하고 즉시 변경 사항이 적용됩니다.",
     "filesystem.custom.blocked": "항상 차단됨: {paths}, 경로 탈출(<code>..</code>), 허용된 HAOS 볼륨 밖의 절대 경로.",
     "filesystem.custom.enable_first": "편집하려면 위에서 베타 기능과 파일 시스템 도구를 켜세요.",
     "filesystem.custom.unavailable": "현재 사용자 지정 경로를 사용할 수 없습니다.",
@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "자동화/스크립트/장면 설정을 각각 가져올 때의 제한 시간입니다. 범위 1~600. 다시 시작해야 합니다.",
     "advanced.individual_fetch_batch_size.label": "설정 조회 배치 크기",
     "advanced.individual_fetch_batch_size.help": "ID별 설정 조회를 동시에 몇 건까지 할지 정합니다. 직렬 처리에 가까운 HA 서버에서는 1에 가깝게 낮추세요. 범위 1~100. 다시 시작해야 합니다.",
+    "advanced.ha_tool_concurrency.label": "Home Assistant 도구 동시성",
+    "advanced.ha_tool_concurrency.help": "모든 세션에 걸친 외부 Home Assistant 도구 호출에 대한 선택적 제한입니다. 내부 REST, WebSocket 및 도구별 팬아웃 동시성은 변경되지 않습니다. 0은 무제한 동작을 유지합니다. 용량을 기다리는 호출은 60초 후에 실패합니다. 범위는 0~32입니다. 다시 시작이 필요합니다.",
     "advanced.backup_hint.label": "백업 권유 강도",
     "advanced.backup_hint.help": "위험한 쓰기 작업 전에 HA 전체 스냅숏을 만들도록 LLM에 얼마나 강하게 권유할지 정합니다.",
     "advanced.backup_hint.choices.strong": "강하게",
@@ -468,6 +470,8 @@
     "addon.pinned_tools.description": "여기에 나열한 도구는 고정 상태로 잠깁니다. 도구 탭 맨 위에 표시되며, 이 옵션을 먼저 해제하지 않으면 웹 설정 UI에서 고정을 해제할 수 없습니다. 도구 검색과 함께 쓰면 유용합니다. 도구 이름을 쉼표로 구분해 입력하세요.",
     "addon.verify_ssl.name": "TLS 인증서 검증",
     "addon.verify_ssl.description": "Home Assistant 서버의 TLS 인증서를 검증합니다. 앱(애드온)은 Supervisor 프록시를 통해 연결하므로 보통 아무 영향이 없으며 켜 두는 것이 좋습니다. 자체 서명 인증서나 호스트 이름이 일치하지 않는 공개 HTTPS 호스트 이름으로 HA에 접속하도록 앱(애드온)을 다시 구성한 경우에만 끄세요. 끄면 전송 구간 보안이 약해지므로, 반드시 필요한 경우가 아니면 켜 두세요. 적용하려면 다시 시작해야 합니다.",
+    "addon.ha_tool_concurrency.name": "Home Assistant 도구 동시성",
+    "addon.ha_tool_concurrency.description": "모든 세션에 걸친 외부 Home Assistant 도구 호출에 대한 선택적 제한입니다. 내부 REST, WebSocket 및 도구별 팬아웃 동시성은 변경되지 않습니다. 0은 무제한 동작을 유지합니다. 용량을 기다리는 호출은 60초 후에 실패합니다.",
     "addon_stable.enable_tool_search.description": "전체 도구 카탈로그 대신 검색 기반 탐색을 사용합니다. 대기 상태 컨텍스트를 약 90% 줄여 약 5K 토큰 수준으로 낮춥니다. ⚠️ 자체 도구 검색이나 지연 로딩 도구 기능을 갖춘 클라이언트(claude.ai, Claude Desktop, Claude Code)에서는 켜지 마세요. 두 검색 계층이 충돌하며, 그런 환경에서는 클라이언트 내장 도구 검색이 더 낫습니다. 도구가 지연 로딩되는지는 클라이언트와 모델 조합에 따라 다릅니다. 전체 카탈로그를 처음부터 모두 불러오는 환경(네이티브 지연 로딩 도구가 없는 모델(예: Gemini, OpenAI 호환 로컬 모델, Claude Haiku), 모델과 무관하게 모든 도구 스키마를 인라인으로 넣는 클라이언트(예: GitHub Copilot CLI), 컨텍스트 창이 작은 경우)에서 사용하세요. 일부 Codex 모델과 ChatGPT도 지연 로딩 도구를 지원하므로, 불필요하게 켜 두지 않도록 사용 중인 클라이언트/모델의 기능을 직접 확인하세요. 도구는 ha_search_tools로 찾고 범주별 프록시(읽기/쓰기/삭제)를 통해 실행됩니다. 적용하려면 앱(애드온)을 다시 시작한 뒤, AI 클라이언트에서 MCP 서버에 다시 연결하거나 새로 고쳐 도구 목록을 다시 불러오게 하세요. 앱(애드온)만 다시 시작해서는 클라이언트에 캐시된 도구 목록이 갱신되지 않으며, 이는 여기의 어떤 설정을 바꾸든 마찬가지입니다."
   },
   "tool_groups": {
@@ -662,10 +666,6 @@
       "title": "자동화 추적 기록 조회",
       "description": "문제를 진단할 수 있도록 자동화와 스크립트의 실행 추적 기록을 가져옵니다."
     },
-    "ha_get_blueprint": {
-      "title": "블루프린트 조회",
-      "description": "블루프린트 정보를 가져옵니다. 전체 목록을 보거나 특정 블루프린트의 상세 정보를 확인합니다."
-    },
     "ha_get_camera_image": {
       "title": "카메라 이미지 조회",
       "description": "Home Assistant 카메라 엔티티에서 스냅숏 이미지를 가져옵니다."
@@ -726,10 +726,6 @@
       "title": "구역 조회",
       "description": "구역 정보를 가져옵니다. 전체 구역을 나열하거나 특정 구역의 상세 정보를 확인합니다."
     },
-    "ha_import_blueprint": {
-      "title": "블루프린트 가져오기",
-      "description": "URL에서 블루프린트를 가져옵니다."
-    },
     "ha_list_files": {
       "title": "파일 목록",
       "description": "Home Assistant 설정 디렉터리 안의 디렉터리에서 파일을 나열합니다."
@@ -749,6 +745,10 @@
     "ha_manage_backup": {
       "title": "백업 관리",
       "description": "여러 역할을 겸하는 백업 도구입니다. 라우팅 표는 도구 설명을 참고하세요."
+    },
+    "ha_manage_blueprints": {
+      "title": "블루프린트 관리",
+      "description": "홈 아시스턴트 블루프린트를 관리합니다 — 목록 조회, 읽기, 가져오기, 저장, 삭제 또는 독립형 설정 렌더링."
     },
     "ha_manage_custom_tool": {
       "title": "사용자 지정 도구",

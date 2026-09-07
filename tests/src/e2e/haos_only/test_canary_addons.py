@@ -126,9 +126,23 @@ async def test_beta_image_versions_match_manifest(ha_client: Any) -> None:
     expected_channel = os.environ.get("HAOS_EXPECTED_SUPERVISOR_CHANNEL")
     expected_supervisor = os.environ.get("HAOS_EXPECTED_SUPERVISOR_MIN_VERSION")
     expected_core = os.environ.get("HAOS_EXPECTED_CORE_VERSION")
+    expected_os = os.environ.get("HAOS_EXPECTED_OS_VERSION")
     assert expected_channel is not None
     assert expected_supervisor is not None
     assert expected_core is not None
+    assert expected_os is not None
+
+    os_response = await ha_client.send_websocket_message(
+        {"type": "supervisor/api", "endpoint": "/os/info", "method": "GET"}
+    )
+    assert os_response.get("success"), (
+        f"Supervisor integration OS query failed: {os_response}"
+    )
+    os_info = os_response.get("result", {})
+    assert isinstance(os_info, dict), f"Invalid OS info: {os_info!r}"
+    assert os_info.get("version") == expected_os, (
+        f"Expected HAOS {expected_os!r}, got {os_info.get('version')!r}"
+    )
 
     supervisor_response = await ha_client.send_websocket_message(
         {

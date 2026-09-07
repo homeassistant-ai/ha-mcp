@@ -1438,7 +1438,7 @@ const BACKUP_FIELD_LABELS = {
   },
   auto_backup_dir: {
     label: 'Backup directory override',
-    help: 'Empty = default (/data/ha_mcp_backups in the App (add-on), $XDG_DATA_HOME/ha_mcp/backups otherwise). Override with an absolute path.',
+    help: 'Leave empty for the default: /data/ha_mcp_backups in the App (add-on), otherwise the backups/ subdirectory of the ha-mcp data directory; an install that already holds snapshots under the earlier default keeps using it. The directory in use is shown in the backup status. Or enter an absolute path.',
   },
   auto_backup_calendar_lookahead_days: {
     label: 'Calendar lookahead (days)',
@@ -3868,6 +3868,7 @@ const ADVANCED_FIELD_META = {
   timeout:             { label: "HA request timeout (s)",      help: "Per-request HTTP timeout. Range 1–600. Restart required." },
   max_retries:         { label: "HA request max retries",      help: "Retry budget per failed REST call. Range 0–20. Restart required." },
   verify_ssl:          { label: "Verify SSL certificates",     help: "Skip TLS verification only on trusted networks (self-signed certs, hostname mismatch). Restart required." },
+  ha_tool_concurrency: { label: "Home Assistant tool concurrency", help: "Optional limit on outer Home Assistant tool calls across all MCP sessions. Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps unlimited behavior. A call waiting for capacity fails after 60 seconds. Range 0–32. Restart required." },
   fuzzy_threshold:     { label: "Fuzzy-search threshold",      help: "Lower = looser entity match. Range 0–100." },
   automation_config_time_budget: { label: "Automation config time budget (s)", help: "Max seconds deep search spends fetching automation configs before returning a partial result. Raise on instances with many automations. Range 1–600. Restart required." },
   script_config_time_budget:     { label: "Script config time budget (s)",     help: "Max seconds deep search spends fetching script configs before returning a partial result. Range 1–600. Restart required." },
@@ -3903,6 +3904,7 @@ const ADVANCED_FIELD_META = {
 // is per-request.
 const ADVANCED_RESTART_REQUIRED = new Set([
   "timeout", "max_retries", "verify_ssl",
+  "ha_tool_concurrency",
   "enabled_tool_modules", "enable_websocket",
   "log_level", "debug",
   "mcp_server_name", "mcp_server_version", "environment",

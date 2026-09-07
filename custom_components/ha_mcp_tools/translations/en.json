@@ -33,7 +33,7 @@
                     "extra_yaml_keys": "Extra YAML write keys"
                 },
                 "data_description": {
-                    "allowed_dirs": "Paths relative to the config directory, including exact filenames such as sensor.yaml, or paths under /share, /media, /ssl, and /backup. Each entry is granted read and write for that path and anything below it; enter every path as a separate list item. Traversal and other disallowed paths are dropped.",
+                    "allowed_dirs": "Paths relative to the config directory, including exact filenames such as sensor.yaml, or paths under /share, /media, /ssl, and /backup. Each entry is granted read and write for that path and anything below it; enter every path as a separate list item. Entries are matched literally; wildcards such as * are not supported. Traversal and other disallowed paths are dropped.",
                     "extra_yaml_keys": "Top-level keys ha_config_set_yaml may write in addition to the built-in ones, for YAML-first integrations on this install (e.g. alert2). Trust-boundary keys are dropped."
                 }
             },
