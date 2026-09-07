@@ -530,6 +530,7 @@ BLOCKED_WS_WRITE_COMMANDS: frozenset[str] = frozenset(
     {
         "config/core/update",
         "lovelace/config/save",
+        "ha_mcp_tools/dashboard_edit",
         "lovelace/dashboards/create",
         "lovelace/dashboards/delete",
         "lovelace/dashboards/update",
