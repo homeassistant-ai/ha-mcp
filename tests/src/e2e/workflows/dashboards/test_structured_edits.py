@@ -123,15 +123,16 @@ async def test_native_dashboard_backend_measurements(
     from ha_mcp.utils.config_hash import compute_config_hash
 
     info = await ha_client.send_websocket_message({"type": "ha_mcp_tools/info"})
-    if not component_surface_available():
-        assert info.get("success") is False, info
+    if info.get("success") is not True:
+        assert not component_surface_available(), info
         # Component-absent lanes exercise the public fallback in the test above.
         record_property(
             "dashboard_backend_measurement",
             "component absent; public fallback tested separately",
         )
         return
-    assert info.get("success") is True, info
+    # Other HAOS tests can briefly load a server entry. Core retains its shared
+    # WS handlers after unload, so exercise any available native capability.
     assert "dashboard_edit" in info["result"]["capabilities"], info
 
     baseline = YAML(typ="safe").load((FIXTURES / "reporter-media.yaml").read_text())
