@@ -4,6 +4,9 @@ const {app, BrowserWindow, MessageChannelMain, ipcMain} = require('electron');
 const fs = require('node:fs');
 const readline = require('node:readline');
 const assert = require('node:assert/strict');
+const diagnostic=message=>fs.appendFileSync(process.env.REPRO_DESKTOP_LOG+'.startup',message+'\n');
+process.on('uncaughtException',error=>{diagnostic(error.stack||String(error));process.exit(1)});
+diagnostic('bootstrap '+process.platform+' cwd='+process.cwd());
 let T;
 try {T=require('/tmp/claude-source/.vite/build/repro-transport.cjs')}
 catch(error){process.stdout.write(JSON.stringify({type:'fatal',error:error.stack})+'\n');process.exit(1)}
@@ -13,7 +16,8 @@ const emit = msg => process.stdout.write(JSON.stringify(msg)+'\n');
 const trace = (event,fields={})=>fs.appendFileSync(logPath,JSON.stringify({time:Date.now(),event,...fields})+'\n');
 const logger={info:()=>{},warn:(...a)=>trace('warning',{message:String(a[0])}),error:(...a)=>trace('error',{message:String(a[0])})};
 console.info=(...a)=>logger.info(...a);console.warn=(...a)=>logger.warn(...a);console.error=(...a)=>logger.error(...a);
-app.setPath('userData',process.env.REPRO_DESKTOP_PROFILE);
+app.setPath('userData',require('node:path').resolve(process.env.REPRO_DESKTOP_PROFILE));
+diagnostic('profile configured');
 app.disableHardwareAcceleration();
 let win;
 const transports=[];
@@ -50,8 +54,10 @@ async function open(route) {
 }
 async function main(){
   await app.whenReady();
+  diagnostic('app ready');
   win=new BrowserWindow({show:false,webPreferences:{nodeIntegration:true,contextIsolation:false}});
   await win.loadFile('/tmp/desktop-harness/renderer.html');
+  diagnostic('renderer loaded');
   for(const route of Object.keys(config.mcpServers))await open(route);
   emit({type:'ready',versions:process.versions,desktop:process.env.REPRO_PLATFORM==='win32'?'1.46388.4':'1.46388.2',routes:Object.keys(config.mcpServers)});
   const input=readline.createInterface({input:process.stdin});
