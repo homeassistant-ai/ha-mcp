@@ -18,7 +18,7 @@ for p in sorted(root.rglob('*')):
     relative=str(p.relative_to(root))
     copied=('preload' in p.name.lower() or 'contextBridge' in hits or 'rendererMessagePort' in hits or ('mcp:' in hits) or ('mcp-' in hits))
     if copied:
-        dst=out/relative
+        dst=out/relative.replace('.vite/','vite/',1)
         dst.parent.mkdir(parents=True,exist_ok=True)
         shutil.copyfile(p,dst)
     manifest.append({'file':relative,'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'hits':hits,'copied':copied})
