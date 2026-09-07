@@ -9,9 +9,8 @@ from uuid import uuid4
 import pytest
 from ruamel.yaml import YAML
 
-from ...utilities.topology import component_surface_available
-
 from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.topology import component_surface_available
 
 FIXTURES = Path(__file__).with_name("fixtures")
 
