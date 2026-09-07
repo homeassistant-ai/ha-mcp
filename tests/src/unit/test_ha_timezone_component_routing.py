@@ -1,4 +1,4 @@
-"""Routing tests for ``_fetch_ha_timezone`` over the ``ha_mcp_tools`` info handshake.
+"""Routing tests for ``fetch_ha_timezone`` over the ``ha_mcp_tools`` info handshake.
 
 ``ha_get_history`` and the logbook-source ``ha_get_logs`` both localize
 timestamps via ``add_timezone_metadata``, which previously issued a fresh
@@ -20,11 +20,11 @@ import pytest
 
 from ha_mcp.client.rest_client import HomeAssistantCommandError
 from ha_mcp.tools import component_api
-from ha_mcp.tools.util_helpers import _fetch_ha_timezone
+from ha_mcp.tools.util_helpers import fetch_ha_timezone
 
 from ._component_routing_helpers import make_ws, patch_ws
 
-# _fetch_ha_timezone never sends a second component command — it only consults
+# fetch_ha_timezone never sends a second component command — it only consults
 # the cached info probe — so this placeholder is never actually dispatched.
 _UNUSED_COMMAND = "ha_mcp_tools/__unused__"
 
@@ -68,7 +68,7 @@ async def test_caps_with_timezone_serves_directly_no_rest_call() -> None:
     client = RoutingClient()
 
     with patch_ws(ws, component_api):
-        result = await _fetch_ha_timezone(client)
+        result = await fetch_ha_timezone(client)
 
     assert result == ("Europe/London", False)
     assert client.get_config_calls == 0
@@ -81,7 +81,7 @@ async def test_caps_without_timezone_field_falls_back_to_legacy() -> None:
     client = RoutingClient()
 
     with patch_ws(ws, component_api):
-        result = await _fetch_ha_timezone(client)
+        result = await fetch_ha_timezone(client)
 
     assert result == ("UTC", False)
     assert client.get_config_calls == 1
@@ -97,7 +97,7 @@ async def test_no_component_falls_back_to_legacy() -> None:
     client = RoutingClient()
 
     with patch_ws(ws, component_api):
-        result = await _fetch_ha_timezone(client)
+        result = await fetch_ha_timezone(client)
 
     assert result == ("UTC", False)
     assert client.get_config_calls == 1
@@ -110,7 +110,7 @@ async def test_empty_string_timezone_falls_back_to_legacy() -> None:
     client = RoutingClient()
 
     with patch_ws(ws, component_api):
-        result = await _fetch_ha_timezone(client)
+        result = await fetch_ha_timezone(client)
 
     assert result == ("UTC", False)
     assert client.get_config_calls == 1

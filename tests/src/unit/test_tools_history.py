@@ -10,7 +10,11 @@ from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools import tools_history
-from ha_mcp.tools.tools_history import HistoryTools, _statistics_scan_window
+from ha_mcp.tools.tools_history import (
+    HistoryTools,
+    _next_month_start,
+    _statistics_scan_window,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -19,7 +23,7 @@ def _no_real_caps_probe():
 
     The mock clients here carry a real-looking ``base_url``/``token`` but
     never patch ``get_websocket_client``, so ``get_component_caps`` (invoked
-    by ``add_timezone_metadata`` -> ``_fetch_ha_timezone`` for every test that
+    by ``add_timezone_metadata`` -> ``fetch_ha_timezone`` for every test that
     completes ``ha_get_history`` successfully) would otherwise attempt a real
     WS connection and pay its full failure latency per test. Forcing a
     ``HomeAssistantConnectionError`` reproduces the "component absent" outcome
@@ -124,7 +128,7 @@ class TestHaGetHistoryWorkloadGuardrails:
                 return_value=MagicMock(enable_history_query_guardrails=True),
             ),
             patch(
-                "ha_mcp.tools.tools_history._fetch_ha_timezone",
+                "ha_mcp.tools.tools_history.fetch_ha_timezone",
                 new=timezone_lookup,
             ),
             pytest.raises(ToolError) as exc_info,
@@ -156,12 +160,12 @@ class TestHaGetHistoryWorkloadGuardrails:
             await history_tool(
                 entity_ids=["sensor.one", "sensor.two"],
                 start_time="2026-01-01T00:00:00Z",
-                end_time="2026-01-05T00:00:00Z",
+                end_time="2026-01-07T00:00:00Z",
             )
 
         response = json.loads(str(exc_info.value))
         assert response["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
-        assert response["estimated_entity_hours"] == 192.0
+        assert response["estimated_entity_hours"] == 288.0
         mock_client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -210,6 +214,9 @@ class TestHaGetHistoryWorkloadGuardrails:
         response = json.loads(str(exc_info.value))
         assert response["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert response["estimated_rows"] > 10000
+        suggestions = response["error"]["suggestions"]
+        assert any("period='hour'" in item for item in suggestions)
+        assert not any("coarser" in item for item in suggestions)
         mock_client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -222,13 +229,13 @@ class TestHaGetHistoryWorkloadGuardrails:
                 return_value=MagicMock(enable_history_query_guardrails=True),
             ),
             patch(
-                "ha_mcp.tools.tools_history._fetch_ha_timezone",
+                "ha_mcp.tools.tools_history.fetch_ha_timezone",
                 new=AsyncMock(return_value=("UTC", False)),
             ),
             pytest.raises(ToolError) as exc_info,
         ):
             await history_tool(
-                entity_ids=[f"sensor.test_{index}" for index in range(8)],
+                entity_ids=[f"sensor.test_{index}" for index in range(15)],
                 source="statistics",
                 start_time="2026-01-31T23:59:00Z",
                 end_time="2026-02-01T00:01:00Z",
@@ -236,7 +243,7 @@ class TestHaGetHistoryWorkloadGuardrails:
             )
 
         response = json.loads(str(exc_info.value))
-        assert response["estimated_rows"] == 8 * 59 * 24
+        assert response["estimated_rows"] == 15 * 59 * 24
         assert response["scan_granularity_minutes"] == 60
         assert response["scan_start_time"] == "2026-01-01T00:00:00+00:00"
         assert response["scan_end_time"] == "2026-03-01T00:00:00+00:00"
@@ -252,7 +259,7 @@ class TestHaGetHistoryWorkloadGuardrails:
                 return_value=MagicMock(enable_history_query_guardrails=True),
             ),
             patch(
-                "ha_mcp.tools.tools_history._fetch_ha_timezone",
+                "ha_mcp.tools.tools_history.fetch_ha_timezone",
                 new=AsyncMock(return_value=("UTC", False)),
             ),
             pytest.raises(ToolError) as exc_info,
@@ -261,14 +268,15 @@ class TestHaGetHistoryWorkloadGuardrails:
                 entity_ids="sensor.test",
                 source="statistics",
                 start_time="2025-12-31T23:59:00Z",
-                end_time="2026-01-01T00:01:00Z",
+                end_time="2027-01-01T00:01:00Z",
                 period="year",
             )
 
         response = json.loads(str(exc_info.value))
-        assert response["estimated_rows"] == (365 + 365) * 24
+        assert response["estimated_rows"] == (365 + 365 + 365) * 24
         assert response["scan_start_time"] == "2025-01-01T00:00:00+00:00"
-        assert response["scan_end_time"] == "2027-01-01T00:00:00+00:00"
+        assert response["scan_end_time"] == "2028-01-01T00:00:00+00:00"
+        assert not any("period" in item for item in response["error"]["suggestions"])
         mock_client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -281,7 +289,7 @@ class TestHaGetHistoryWorkloadGuardrails:
                 return_value=MagicMock(enable_history_query_guardrails=True),
             ),
             patch(
-                "ha_mcp.tools.tools_history._fetch_ha_timezone",
+                "ha_mcp.tools.tools_history.fetch_ha_timezone",
                 new=AsyncMock(return_value=("UTC", True)),
             ),
             pytest.raises(ToolError) as exc_info,
@@ -307,6 +315,22 @@ class TestHaGetHistoryWorkloadGuardrails:
         )
 
         assert (scan_end - scan_start).total_seconds() == 23 * 60 * 60
+
+    def test_week_period_aligns_to_complete_local_weeks(self):
+        scan_start, scan_end = _statistics_scan_window(
+            datetime(2026, 1, 7, 12, tzinfo=UTC),
+            datetime(2026, 1, 8, 12, tzinfo=UTC),
+            "week",
+            UTC,
+        )
+
+        assert scan_start == datetime(2026, 1, 5, tzinfo=UTC)
+        assert scan_end == datetime(2026, 1, 12, tzinfo=UTC)
+
+    def test_next_month_start_advances_december_year(self):
+        result = _next_month_start(datetime(2026, 12, 15, 12, tzinfo=UTC))
+
+        assert result == datetime(2027, 1, 1, tzinfo=UTC)
 
     @pytest.mark.asyncio
     async def test_guardrails_disabled_by_default_preserves_large_queries(
@@ -374,24 +398,240 @@ class TestHaGetHistoryWorkloadGuardrails:
         mock_client.send_websocket_message.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_reversed_range_rejected_when_guardrails_disabled(
+    async def test_zero_window_preserved_when_guardrails_disabled(
         self, history_tool, mock_client
     ):
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"sensor.temp": []},
+        }
         with (
             patch(
                 "ha_mcp.tools.tools_history.get_global_settings",
                 return_value=MagicMock(enable_history_query_guardrails=False),
             ),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _client, data: data,
+            ),
+        ):
+            result = await history_tool(
+                entity_ids="sensor.temp",
+                start_time="0h",
+            )
+
+        assert result["success"] is True
+        mock_client.send_websocket_message.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_history_rejection_explains_detail_flags(
+        self, history_tool, mock_client
+    ):
+        with (
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=True),
+            ),
             pytest.raises(ToolError) as exc_info,
         ):
             await history_tool(
                 entity_ids="sensor.temp",
-                start_time="2026-01-02T00:00:00Z",
-                end_time="2026-01-01T00:00:00Z",
+                start_time="2026-01-01T00:00:00Z",
+                end_time="2026-01-03T00:00:00Z",
+                minimal_response=False,
+                significant_changes_only=False,
+            )
+
+        response = json.loads(str(exc_info.value))
+        assert response["detail_weight"] == 8
+        assert response["minimal_response"] is False
+        assert response["significant_changes_only"] is False
+        suggestions = response["error"]["suggestions"]
+        assert any("minimal_response=true" in item for item in suggestions)
+        assert any("significant_changes_only=true" in item for item in suggestions)
+
+    @pytest.mark.asyncio
+    async def test_history_entity_ceiling_is_reachable_and_enforced(
+        self, history_tool, mock_client
+    ):
+        with (
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=True),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await history_tool(
+                entity_ids=[f"sensor.test_{index}" for index in range(11)],
+                start_time="1h",
+            )
+
+        response = json.loads(str(exc_info.value))
+        assert response["entity_count"] == 11
+        assert response["max_entities"] == 10
+
+    @pytest.mark.asyncio
+    async def test_statistics_entity_ceiling_is_enforced(
+        self, history_tool, mock_client
+    ):
+        with (
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=True),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await history_tool(
+                entity_ids=[f"sensor.test_{index}" for index in range(26)],
+                source="statistics",
+                start_time="1h",
+                period="hour",
+            )
+
+        response = json.loads(str(exc_info.value))
+        assert response["entity_count"] == 26
+        assert response["max_entities"] == 25
+
+    @pytest.mark.asyncio
+    async def test_two_calendar_years_of_yearly_statistics_are_allowed(
+        self, history_tool, mock_client
+    ):
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {},
+        }
+        with (
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=True),
+            ),
+            patch(
+                "ha_mcp.tools.tools_history.fetch_ha_timezone",
+                new=AsyncMock(return_value=("UTC", False)),
+            ),
+            patch(
+                "ha_mcp.tools.tools_history.add_timezone_metadata",
+                side_effect=lambda _client, data: data,
+            ),
+        ):
+            result = await history_tool(
+                entity_ids="sensor.test",
+                source="statistics",
+                start_time="2026-01-01T00:00:00Z",
+                end_time="2027-01-01T00:00:00Z",
+                period="year",
+            )
+
+        assert result["success"] is True
+        mock_client.send_websocket_message.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_non_utc_timezone_reaches_calendar_scan(
+        self, history_tool, mock_client
+    ):
+        with (
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=True),
+            ),
+            patch(
+                "ha_mcp.tools.tools_history.fetch_ha_timezone",
+                new=AsyncMock(return_value=("America/New_York", False)),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await history_tool(
+                entity_ids=[f"sensor.test_{index}" for index in range(20)],
+                source="statistics",
+                start_time="2026-03-08T12:00:00Z",
+                end_time="2026-05-08T12:00:00Z",
+                period="month",
+            )
+
+        response = json.loads(str(exc_info.value))
+        assert response["scan_start_time"] == "2026-03-01T05:00:00+00:00"
+        assert response["scan_end_time"] == "2026-06-01T04:00:00+00:00"
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_ha_timezone_is_not_connection_failure(
+        self, history_tool, mock_client
+    ):
+        with (
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=True),
+            ),
+            patch(
+                "ha_mcp.tools.tools_history.fetch_ha_timezone",
+                new=AsyncMock(return_value=("Mars/Olympus", False)),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await history_tool(
+                entity_ids="sensor.test",
+                source="statistics",
+                start_time="1d",
+                period="day",
             )
 
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_future_start_without_end_names_start_time(
+        self, history_tool, mock_client
+    ):
+        with (
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=True),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await history_tool(entity_ids="sensor.test", start_time="9998-01-01")
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert "start_time" in error["message"]
+        assert "end_time" not in error["suggestion"]
+
+    @pytest.mark.asyncio
+    async def test_calendar_boundary_year_rejected_before_timezone_lookup(
+        self, history_tool, mock_client
+    ):
+        timezone_lookup = AsyncMock(return_value=("UTC", False))
+        with (
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=True),
+            ),
+            patch(
+                "ha_mcp.tools.tools_history.fetch_ha_timezone",
+                new=timezone_lookup,
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await history_tool(
+                entity_ids="sensor.test",
+                source="statistics",
+                start_time="9999-12-30T00:00:00Z",
+                end_time="9999-12-31T00:00:00Z",
+                period="day",
+            )
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        timezone_lookup.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_overflowing_relative_time_is_validation_error(
+        self, history_tool, mock_client
+    ):
+        with pytest.raises(ToolError) as exc_info:
+            await history_tool(entity_ids="sensor.test", start_time="99999999d")
+
+        response = json.loads(str(exc_info.value))
+        assert response["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert response["parameter"] == "start_time"
         mock_client.send_websocket_message.assert_not_awaited()
 
 

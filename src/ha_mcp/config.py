@@ -899,6 +899,7 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
         "search",
         True,
     ),
+    # Operations.
     AdvancedField(
         "enable_history_query_guardrails",
         "HAMCP_ENABLE_HISTORY_QUERY_GUARDRAILS",
@@ -906,7 +907,6 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
         "operations",
         True,
     ),
-    # Operations.
     AdvancedField(
         "ha_tool_concurrency", "HA_TOOL_CONCURRENCY", int, "operations", True
     ),

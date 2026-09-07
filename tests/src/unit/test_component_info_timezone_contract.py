@@ -2,7 +2,7 @@
 
 Pipes the REAL component ``_do_info()`` (driven by a real ``FakeHass``/
 ``FakeConfig`` carrying a ``time_zone``) through the real server-side
-``get_component_caps`` negotiation and ``_fetch_ha_timezone`` /
+``get_component_caps`` negotiation and ``fetch_ha_timezone`` /
 ``add_timezone_metadata`` — so a vocabulary/shape drift between the
 component's additive ``timezone`` field and the server's ``ComponentCaps``
 parsing fails here, mirroring ``test_component_readapi_contract.py``'s bridge

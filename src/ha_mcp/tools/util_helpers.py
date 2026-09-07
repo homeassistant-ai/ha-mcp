@@ -706,7 +706,7 @@ _TIMESTAMP_METADATA_FIELDS = {
 }
 
 
-async def _fetch_ha_timezone(client: Any) -> tuple[str, bool]:
+async def fetch_ha_timezone(client: Any) -> tuple[str, bool]:
     """Fetch the HA timezone, preferring the ``ha_mcp_tools`` component's cached
     ``info`` handshake over a fresh ``/api/config`` REST call.
 
@@ -751,7 +751,7 @@ async def _fetch_ha_timezone(client: Any) -> tuple[str, bool]:
         return "UTC", True
 
 
-def _resolve_local_timezone(ha_timezone: str) -> tuple[_TZInfo, str]:
+def resolve_local_timezone(ha_timezone: str) -> tuple[_TZInfo, str]:
     """Resolve *ha_timezone* to a ``ZoneInfo``, falling back to UTC if unknown.
 
     Returns ``(local_tz, ha_timezone)``. ``ha_timezone`` is normalized to
@@ -799,7 +799,7 @@ async def add_timezone_metadata(
 ) -> dict[str, Any]:
     """Add Home Assistant timezone to tool responses and convert timestamps to local time.
 
-    Resolves the Home Assistant time zone via ``_fetch_ha_timezone`` (which
+    Resolves the Home Assistant time zone via ``fetch_ha_timezone`` (which
     prefers the ``ha_mcp_tools`` component's cached handshake and falls back to
     ``/api/config``), converts every ``last_changed``, ``last_updated``,
     ``last_reported``, ``when``, and ``last_triggered`` field found anywhere in
@@ -818,7 +818,7 @@ async def add_timezone_metadata(
     if not include_metadata:
         return data
 
-    ha_timezone, fetch_failed = await _fetch_ha_timezone(client)
+    ha_timezone, fetch_failed = await fetch_ha_timezone(client)
 
     if fetch_failed:
         return {
@@ -830,7 +830,7 @@ async def add_timezone_metadata(
             },
         }
 
-    local_tz, ha_timezone = _resolve_local_timezone(ha_timezone)
+    local_tz, ha_timezone = resolve_local_timezone(ha_timezone)
     converted_data = _convert_timestamp_fields(data, local_tz)
 
     return {
