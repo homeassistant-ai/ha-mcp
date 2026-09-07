@@ -91,3 +91,36 @@ selection, process specification, and buffer limit match. The application-level
 startup coordinator also differs and is not part of the extracted transport
 harness. Package dependency declarations match. These observations narrow the
 shared portion; they do not equate either app's full lifecycle with the emulator.
+
+## Completed HAOS Desktop batches
+
+Neither batch reproduced the reported hang; neither identifies a cause or a fix.
+
+| HA-hosted server | GitHub run / tested commit | Cases passed | Target writes | Slowest target write |
+| --- | --- | ---: | ---: | ---: |
+| App | [34155210859](https://github.com/homeassistant-ai/ha-mcp/actions/runs/34155210859), `34d82df1` | 8 | 264 | 141 ms |
+| Component | [34155593237](https://github.com/homeassistant-ai/ha-mcp/actions/runs/34155593237), `53e1b608` | 8 | 264 | 531 ms |
+
+Each batch also completed 264 restorations and eight initial dashboard creations,
+with 32 Desktop processes exiting cleanly. Each target write was preceded by a
+read through Desktop and independently checked afterward. The additional channel
+completed 220 dashboard reads in the app batch and 218 in the component batch.
+Both protocol versions negotiated as requested. No cases were skipped. Artifacts
+include JUnit, source SHAs, request/result timings and transport traces.
+
+These runs used the exact large transform and attached dashboard. The small-edit
+variant assigned `mdi:music-box`, differing from the reporter's final string
+`mdi:music-box-multiple`; later standalone attempts use the exact latter value.
+The two strings exercise the same one-key shape, but are not byte-identical.
+
+Standalone setup attempts initially exposed harness mistakes, not the reported
+hang: run 34155208417 removed integrations too late; run 34156353394 successfully
+booted bare HA but received an immediate BPS_ACKNOWLEDGMENT_REQUIRED during initial
+dashboard creation. The experiment now orders removal before boot and explicitly
+sets ENABLE_STRICT_MANDATORY_BPS=false in every standalone child environment.
+
+Run 34157052181 progressed through standalone Desktop reads and writes, then
+stopped at a harness assertion that incorrectly required a hash change for the
+exact static edit. The supplied dashboard already has that icon. The corrected
+assertion checks the expected final icon and allows its hash to stay unchanged.
+This immediate assertion failure was not a timeout reproduction.
