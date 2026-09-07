@@ -33,6 +33,7 @@ class PendingApproval:
     expires_at: datetime
     _decision: Decision = "pending"
     _event: anyio.Event = field(default_factory=anyio.Event)
+    _claimed: bool = False
 
     @property
     def decision(self) -> Decision:
@@ -50,6 +51,26 @@ class PendingApproval:
         """Block until decided; return the final Decision."""
         await self._event.wait()
         return self._decision
+
+    def claim(self) -> bool:
+        """Take exclusive ownership of this approval. False if already taken.
+
+        ``decide()`` wakes every waiter sharing this entry, and each one
+        would otherwise consume it and dispatch — one click authorizing N
+        executions (issue #2387). This is the same one-shot transition
+        ``decide()`` uses, and for the same reason: exactly one caller may
+        act on a given decision.
+
+        The flag lives on the entry rather than on queue membership
+        because ``_sweep_expired`` can drop an approved row (it ignores
+        ``decision``) while a waiter still holds this reference and is
+        legitimately entitled to consume it. There is no ``await`` here,
+        so the check-and-set cannot interleave with another task.
+        """
+        if self._claimed:
+            return False
+        self._claimed = True
+        return True
 
     def __post_init__(self) -> None:
         if self.expires_at <= self.created_at:
@@ -221,10 +242,18 @@ class ApprovalQueue:
 
     def consume_and_maybe_remember(
         self, entry: PendingApproval, *, remember_minutes: int
-    ) -> None:
+    ) -> bool:
+        """Consume one approval. False when another waiter already did.
+
+        A losing caller must not dispatch on this entry, and must not
+        arm the remember-cache from a decision it did not consume.
+        """
+        if not entry.claim():
+            return False
         self.remove(entry.token)
         if remember_minutes > 0:
             self.remember(entry.tool_name, entry.args_hash, minutes=remember_minutes)
+        return True
 
     def _sweep_expired(self) -> None:
         now = datetime.now(UTC)

@@ -56,7 +56,12 @@ class PolicyMiddleware(Middleware):
 
         Loads the policy, evaluates the call, and -- when approval is
         required -- finds or creates a pending queue entry and waits up to
-        the configured window for a decision. A dynamic selector call
+        the configured window for a decision. Identical static calls share
+        one queue entry so the user sees a single approval row, but the
+        approval itself is consumed exactly once
+        (``PendingApproval.claim``): a second waiter woken by the same
+        decision gets its own pending row instead of riding the first
+        call's click. A dynamic selector call
         (``has_dynamic_selector_targets``) never shares or reuses another
         call's pending entry, and is never reissued on TTL eviction: see
         the inline comments above the ``existing =``, ``pending =``, and
@@ -167,36 +172,16 @@ class PolicyMiddleware(Middleware):
         # The accepted cost is that a retry never silently rides an earlier
         # approval: each blocked call gets its own approval row, and only
         # approving the row for the CURRENTLY-blocked call has any effect.
-        existing = None if dynamic_targets else self._queue.find(name, args_hash)
-        if existing and existing.decision == "approved":
-            self._queue.consume_and_maybe_remember(
-                existing,
-                remember_minutes=remember_minutes,
-            )
+        if self._resolve_already_decided(
+            name,
+            args_hash,
+            dynamic_targets=dynamic_targets,
+            remember_minutes=remember_minutes,
+        ):
             return await call_next(context)
-        if existing and existing.decision == "denied":
-            self._queue.remove(existing.token)
-            self._raise_denied_error()
 
-        # find_or_create serialises the create — two concurrent calls with
-        # the same args_hash share one pending entry, so the user only sees
-        # one approval row and approving it releases every waiter. Dynamic
-        # selector calls must NOT share a pending entry: two concurrent
-        # identical calls can still resolve to different (or overlapping)
-        # target sets by the time each one dispatches, so folding them onto
-        # one approval would let a single click authorize more executions
-        # than the user saw. Skip the sharing and always mint a fresh entry.
-        pending = (
-            self._queue.create(
-                name, args_hash, args, ttl_minutes=policy.approval_ttl_minutes
-            )
-            if dynamic_targets
-            else await self._queue.find_or_create(
-                name,
-                args_hash,
-                args,
-                ttl_minutes=policy.approval_ttl_minutes,
-            )
+        pending = await self._new_pending(
+            name, args_hash, args, policy=policy, dynamic_targets=dynamic_targets
         )
 
         wait = (
@@ -207,11 +192,20 @@ class PolicyMiddleware(Middleware):
         await self._wait_for_decision(context, pending, wait)
 
         if pending.decision == "approved":
-            self._queue.consume_and_maybe_remember(
-                pending,
-                remember_minutes=remember_minutes,
+            if self._claim_approval(
+                pending, name, args_hash, remember_minutes=remember_minutes
+            ):
+                return await call_next(context)
+            # Another waiter on this shared entry consumed the approval
+            # first. This call has none of its own, so it must not ride
+            # that click: mint a fresh row and tell the caller to get it
+            # approved. Its wait budget is already spent, so it does not
+            # wait again here -- re-waiting would also let a steady
+            # stream of identical calls starve one another.
+            pending = await self._new_pending(
+                name, args_hash, args, policy=policy, dynamic_targets=dynamic_targets
             )
-            return await call_next(context)
+            self._raise_pending_error(pending, rule, dynamic_targets=dynamic_targets)
         if pending.decision == "denied":
             self._queue.remove(pending.token)
             self._raise_denied_error()
@@ -221,6 +215,98 @@ class PolicyMiddleware(Middleware):
         )
         self._raise_pending_error(pending, rule, dynamic_targets=dynamic_targets)
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
+
+    def _resolve_already_decided(
+        self,
+        name: str,
+        args_hash: str,
+        *,
+        dynamic_targets: bool,
+        remember_minutes: int,
+    ) -> bool:
+        """Act on an entry this call did not create. True means dispatch now.
+
+        A dynamic selector call must never consume an entry it did not
+        itself create and is not itself still waiting on, so it skips this
+        lookup entirely -- see the creator-only binding rationale above the
+        call site in ``on_call_tool``.
+
+        The claim cannot currently fail on this path: consuming an entry
+        also removes it, and there is no ``await`` between the ``find()``
+        and the claim, so no other task can interleave. It is checked
+        anyway so that adding an await to this stretch degrades into an
+        extra approval prompt rather than silently restoring the double
+        dispatch the claim exists to stop.
+        """
+        if dynamic_targets:
+            return False
+        existing = self._queue.find(name, args_hash)
+        if existing is None:
+            return False
+        if existing.decision == "approved":
+            return self._claim_approval(
+                existing, name, args_hash, remember_minutes=remember_minutes
+            )
+        if existing.decision == "denied":
+            self._queue.remove(existing.token)
+            self._raise_denied_error()
+        return False
+
+    def _claim_approval(
+        self,
+        entry: PendingApproval,
+        name: str,
+        args_hash: str,
+        *,
+        remember_minutes: int,
+    ) -> bool:
+        """Consume an approved entry for this invocation.
+
+        Exactly one caller may act on a given approval (see
+        ``PendingApproval.claim``). A caller that loses the claim still
+        proceeds when the winner's ``remember_minutes`` armed a
+        remember-cache entry covering this exact call: that window is the
+        user saying "stop asking for this", so re-prompting would
+        contradict the rule they configured. The ``is_remembered`` gate
+        earlier in ``on_call_tool`` ran before the approval existed, which
+        is why it has to be re-checked here rather than relied upon.
+        """
+        if self._queue.consume_and_maybe_remember(
+            entry, remember_minutes=remember_minutes
+        ):
+            return True
+        return self._queue.is_remembered(name, args_hash)
+
+    async def _new_pending(
+        self,
+        name: str,
+        args_hash: str,
+        args: dict[str, Any],
+        *,
+        policy: Policy,
+        dynamic_targets: bool,
+    ) -> PendingApproval:
+        """Mint the pending entry this invocation will wait on.
+
+        ``find_or_create`` serialises the create -- two concurrent calls
+        with the same args_hash share one pending entry, so the user only
+        sees one approval row. Sharing the row is safe; sharing the
+        *decision* is not, which is what ``_claim_approval`` enforces.
+
+        Dynamic selector calls must NOT share a pending entry at all: two
+        concurrent identical calls can still resolve to different (or
+        overlapping) target sets by the time each one dispatches, so
+        folding them onto one approval would let a single click authorize
+        a broader effect than the user saw. Skip the sharing and always
+        mint a fresh entry.
+        """
+        if dynamic_targets:
+            return self._queue.create(
+                name, args_hash, args, ttl_minutes=policy.approval_ttl_minutes
+            )
+        return await self._queue.find_or_create(
+            name, args_hash, args, ttl_minutes=policy.approval_ttl_minutes
+        )
 
     def _finalize_timed_out_pending(
         self,

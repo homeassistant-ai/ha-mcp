@@ -882,3 +882,132 @@ class TestApprovalManagementExemptionMiddleware:
         body = json.loads(ei.value.args[0])
         assert body["error"]["code"] == "USER_APPROVAL_REQUIRED"
         call_next.assert_not_called()
+
+
+# --- Issue #2387: one approval must authorize exactly one execution ---
+
+
+async def _attach_counting_find_or_create(queue, monkeypatch, counter: list[int]):
+    """Wrap ``queue.find_or_create`` so a test can tell when both calls
+    have attached to the shared pending entry.
+
+    Approving on a timer instead would be racy: the approval could land
+    before the second call reached ``find_or_create``, in which case it
+    would take the already-approved fast path rather than the
+    two-waiters-on-one-entry path these tests exist to cover.
+    """
+    real = queue.find_or_create
+
+    async def counting(*args, **kwargs):
+        entry = await real(*args, **kwargs)
+        counter.append(1)
+        return entry
+
+    monkeypatch.setattr(queue, "find_or_create", counting)
+
+
+async def _wait_until_both_attached(counter: list[int]) -> None:
+    for _ in range(500):
+        if len(counter) >= 2:
+            return
+        await anyio.sleep(0.01)
+    raise AssertionError("both calls never attached to the shared pending entry")
+
+
+@pytest.mark.anyio
+async def test_concurrent_static_calls_consume_one_approval_once(
+    queue, monkeypatch: pytest.MonkeyPatch
+):
+    """Two concurrent identical static calls share one row; one click runs one call.
+
+    Regression for #2387. ``find_or_create`` deliberately folds identical
+    static calls onto a single approval row so the user sees one prompt.
+    Before the claim check, ``decide()`` woke every waiter and each one
+    consumed the same entry and dispatched — one click, N executions, for
+    a non-idempotent call such as ``button.press`` or ``script.turn_on``.
+    """
+    args = {"domain": "lock", "service": "unlock"}
+    policy = Policy(rules=[Rule(tool_name="ha_call_service")])
+    mw = PolicyMiddleware(policy_provider=lambda: policy, queue=queue, wait_seconds=5)
+    call_next = AsyncMock(return_value="ok")
+    attached: list[int] = []
+    outcomes: list[object] = []
+    codes: list[str] = []
+    approved_token: list[str] = []
+
+    await _attach_counting_find_or_create(queue, monkeypatch, attached)
+
+    async def call():
+        try:
+            outcomes.append(
+                await mw.on_call_tool(
+                    make_context("ha_call_service", dict(args)), call_next
+                )
+            )
+        except ToolError as exc:
+            codes.append(json.loads(exc.args[0])["error"]["code"])
+            outcomes.append("error")
+
+    async def approve_the_shared_row():
+        await _wait_until_both_attached(attached)
+        pending = queue.list_pending()
+        assert len(pending) == 1, "identical static calls must share one row"
+        approved_token.append(pending[0].token)
+        queue.approve(pending[0].token)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(call)
+        tg.start_soon(call)
+        tg.start_soon(approve_the_shared_row)
+
+    call_next.assert_awaited_once()
+    assert sorted(str(o) for o in outcomes) == ["error", "ok"]
+    assert codes == ["USER_APPROVAL_REQUIRED"]
+    # The loser gets its own approval to wait on rather than silently
+    # riding the winner's click.
+    leftover = queue.list_pending()
+    assert len(leftover) == 1
+    assert leftover[0].token != approved_token[0]
+
+
+@pytest.mark.anyio
+async def test_remembered_window_lets_the_losing_waiter_proceed(
+    queue, monkeypatch: pytest.MonkeyPatch
+):
+    """A positive ``remember_minutes`` still authorizes every identical call.
+
+    The claim check must not re-prompt here: the winner's consumption
+    populates the remember-cache, and that window is exactly the user
+    saying "don't ask me again for this call" — so the losing waiter
+    proceeds instead of minting a second row.
+    """
+    args = {"domain": "lock", "service": "unlock"}
+    policy = Policy(rules=[Rule(tool_name="ha_call_service", remember_minutes=10)])
+    mw = PolicyMiddleware(policy_provider=lambda: policy, queue=queue, wait_seconds=5)
+    call_next = AsyncMock(return_value="ok")
+    attached: list[int] = []
+    outcomes: list[object] = []
+
+    await _attach_counting_find_or_create(queue, monkeypatch, attached)
+
+    async def call():
+        outcomes.append(
+            await mw.on_call_tool(
+                make_context("ha_call_service", dict(args)), call_next
+            )
+        )
+
+    async def approve_the_shared_row():
+        await _wait_until_both_attached(attached)
+        pending = queue.list_pending()
+        assert len(pending) == 1
+        queue.approve(pending[0].token)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(call)
+        tg.start_soon(call)
+        tg.start_soon(approve_the_shared_row)
+
+    assert outcomes == ["ok", "ok"]
+    assert call_next.await_count == 2
+    assert queue.list_pending() == []
