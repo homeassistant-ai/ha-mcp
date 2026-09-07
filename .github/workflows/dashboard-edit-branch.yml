@@ -32,7 +32,7 @@ jobs:
       - name: Dashboard unit and component contract tests
         run: |
           tests=(tests/src/unit/*dashboard*.py)
-          uv run pytest "${tests[@]}" tests/src/unit/test_component_ws_search.py -n auto --tb=short --junitxml=/tmp/dashboard-proof/junit.xml
+          uv run pytest "${tests[@]}" tests/src/unit/test_component_ws_search.py -n auto --maxfail=0 --tb=short --junitxml=/tmp/dashboard-proof/junit.xml
       - name: Lint changed Python
         if: success() || failure()
         run: |
