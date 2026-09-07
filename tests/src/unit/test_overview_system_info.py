@@ -350,10 +350,11 @@ class TestHaGetOverviewFieldsProjection:
 
         result = await overview_tool(fields=["repairs_error"])
 
-        assert result == {
-            "success": True,
-            "repairs_error": "Could not fetch repairs: repairs unavailable",
-        }
+        assert result["success"] is True
+        assert result["repairs_error"] == (
+            "Could not fetch repairs: repairs unavailable"
+        )
+        assert "warnings" not in result
         mock_smart_tools.get_system_overview.assert_not_awaited()
 
     @pytest.mark.asyncio
