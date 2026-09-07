@@ -188,6 +188,11 @@ configuration:
       la sola eldonanto de la agnoska ŝlosilo. Infano de la opcio „Aligi plejbonajn
       praktikajn kapablojn ĉe skriboj” supre kaj inerta dum tiu gepatro estas malŝaltita.
       Postulas restartigon por ekvalidi.'
+  ha_tool_concurrency:
+    name: Home Assistant tool concurrency
+    description: Optional limit on outer Home Assistant tool calls across all sessions.
+      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
+      unlimited behavior. A call waiting for capacity fails after 60 seconds.
   enable_filesystem_tools:
     name: Ebligi dosiersistemajn ilojn (beta)
     description: 'Agordas HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Ebligas rektan dosier-leg/skriban

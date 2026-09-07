@@ -227,6 +227,18 @@ def resolve_bool_option(config: dict[str, Any], key: str, default: bool) -> bool
     return default
 
 
+def resolve_ha_tool_concurrency(config: dict[str, Any]) -> int:
+    """Read the outer tool-call limit, warning before falling back to unlimited."""
+    raw = config.get("ha_tool_concurrency", 0)
+    if isinstance(raw, int) and not isinstance(raw, bool) and 0 <= raw <= 32:
+        return raw
+    log_warning(
+        f"addon option 'ha_tool_concurrency' has invalid value {raw!r} "
+        "(expected an integer from 0 through 32); applying 0 (unlimited)."
+    )
+    return 0
+
+
 def resolve_effective_log_level() -> int:
     """Return the root log level from ha-mcp's effective settings.
 
@@ -564,6 +576,7 @@ def main() -> int:
     # Strict best-practices mode (issue #1779). Non-beta, default-ON child
     # of enable_mandatory_bps; runtime-gated off whenever the parent is off.
     enable_strict_mandatory_bps = True  # default
+    ha_tool_concurrency = 0  # default — preserve unlimited tool concurrency
     # Master beta toggle: present only in the dev addon's schema.
     # Default to False (stable behaviour); when
     # the dev schema-default merges in, ``beta_master_in_config``
@@ -608,6 +621,7 @@ def main() -> int:
             enable_security_policy_tool = resolve_bool_option(
                 config, "enable_security_policy_tool", False
             )
+            ha_tool_concurrency = resolve_ha_tool_concurrency(config)
             # Beta sub-flag presence tracking. On stable-addon, the 5
             # beta keys are NOT in config.yaml
             # schema — options.json carries none of them. If we wrote
@@ -794,6 +808,7 @@ def main() -> int:
     # is also written unconditionally. It is runtime-gated off by the server
     # whenever ENABLE_MANDATORY_BPS is off (parent dependency, issue #1779).
     os.environ["ENABLE_STRICT_MANDATORY_BPS"] = str(enable_strict_mandatory_bps).lower()
+    os.environ["HA_TOOL_CONCURRENCY"] = str(ha_tool_concurrency)
     # Beta sub-flags: only write env vars when the key is actually in
     # the addon's options.json. On stable addon,
     # none of these keys are in schema, so config.get(...) returned

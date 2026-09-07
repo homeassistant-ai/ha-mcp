@@ -62,8 +62,8 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 
 from ..errors import ErrorCode, create_entity_not_found_error, create_error_response
-from ..policy.middleware import CALL_PROXY_META_TOOLS
 from ..renamed_tools import current_tool_name
+from ..tool_dispatch import CALL_PROXY_META_TOOLS
 from ..tools.helpers import raise_tool_error
 from . import resolver
 from .model import VisibilityConfig
