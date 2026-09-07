@@ -83,10 +83,40 @@ def _validate_message(msg: dict[str, Any]) -> None:
     if "patch" in msg:
         if not isinstance(msg["patch"], list) or not isinstance(expected_hash, str):
             raise _EditError(
-                "validation_failed", "patch requires an operation list and expected_hash"
+                "validation_failed",
+                "patch requires an operation list and expected_hash",
             )
     elif not isinstance(msg["config"], dict):
         raise _EditError("validation_failed", "config must be an object")
+
+
+def _prepare_edit(
+    current: dict[str, Any] | None, msg: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any], str, int]:
+    """Compare the loaded config and validate detached candidates without yielding."""
+    current_plain = _normalize(current) if current is not None else {}
+    current_hash = _config_hash(current_plain)
+    if msg.get("expected_hash") is not None and msg["expected_hash"] != current_hash:
+        raise _EditError("conflict", "Dashboard modified since last read (conflict)")
+    previous_config_size = len(json.dumps(current_plain))
+    try:
+        candidate = (
+            apply_dashboard_patch(current_plain, msg["patch"])
+            if "patch" in msg
+            else msg["config"]
+        )
+        candidate = _normalize(candidate)
+        # Save owns candidate after the call; keep a detached fallback for a
+        # failed readback, and finish serialization checks BEFORE saving.
+        fallback = _normalize(candidate)
+    except (TypeError, ValueError, OverflowError) as err:
+        raise _EditError("validation_failed", str(err)) from err
+    if "strategy" in current_plain and "strategy" not in candidate:
+        raise _EditError(
+            "validation_failed",
+            "Strategy dashboards cannot be converted to custom dashboards via this tool",
+        )
+    return candidate, fallback, current_hash, previous_config_size
 
 
 async def async_edit_dashboard(
@@ -113,29 +143,9 @@ async def async_edit_dashboard(
         if _resolve_dashboard(hass, url_path) is not dashboard:
             raise _EditError("conflict", "Dashboard changed while loading its config")
         _require_storage(dashboard)
-        current_plain = _normalize(current) if current is not None else {}
-        current_hash = _config_hash(current_plain)
-        if msg.get("expected_hash") is not None and msg["expected_hash"] != current_hash:
-            raise _EditError("conflict", "Dashboard modified since last read (conflict)")
-        previous_config_size = len(json.dumps(current_plain))
-
-        try:
-            candidate = (
-                apply_dashboard_patch(current_plain, msg["patch"])
-                if "patch" in msg
-                else msg["config"]
-            )
-            candidate = _normalize(candidate)
-            # Save owns candidate after the call; keep a detached fallback for a
-            # failed readback, and finish serialization checks BEFORE saving.
-            fallback = _normalize(candidate)
-        except (TypeError, ValueError, OverflowError) as err:
-            raise _EditError("validation_failed", str(err)) from err
-        if "strategy" in current_plain and "strategy" not in candidate:
-            raise _EditError(
-                "validation_failed",
-                "Strategy dashboards cannot be converted to custom dashboards via this tool",
-            )
+        candidate, fallback, current_hash, previous_config_size = _prepare_edit(
+            current, msg
+        )
 
         if "patch" in msg and _config_hash(candidate) == current_hash:
             return {

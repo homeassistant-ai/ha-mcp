@@ -146,7 +146,9 @@ async def test_native_modes_use_authoritative_result_without_extra_read(
     # A full replacement still resolves the registry and preserves metadata.
     tools = DashboardConfigTools(client)
     monkeypatch.setattr(
-        tools, "_ensure_dashboard_exists", AsyncMock(return_value=(True, "id", False, None))
+        tools,
+        "_ensure_dashboard_exists",
+        AsyncMock(return_value=(True, "id", False, None)),
     )
     final_config = {"views": [{"title": "Authoritative", "path": "home"}]}
     native_socket.send_command.return_value = _success(final_config)
@@ -200,7 +202,9 @@ async def test_unknown_command_falls_back_once(legacy_dashboard, native_socket):
     result = await DashboardConfigTools(client).ha_config_set_dashboard(
         "test-dashboard",
         config_hash=compute_config_hash(document),
-        patch=[{"op": "replace", "path": "/views/0/cards/0/icon", "value": "mdi:music"}],
+        patch=[
+            {"op": "replace", "path": "/views/0/cards/0/icon", "value": "mdi:music"}
+        ],
         MandatoryBPS=False,
     )
     assert result["success"] is True
@@ -263,7 +267,9 @@ async def test_native_transport_errors_do_not_duplicate_write(
     native_socket.send_command.assert_awaited_once()
 
 
-async def test_native_hash_conflict_does_not_save_again(legacy_dashboard, native_socket):
+async def test_native_hash_conflict_does_not_save_again(
+    legacy_dashboard, native_socket
+):
     client, document, messages = legacy_dashboard
     native_socket.send_command.return_value = {
         "success": True,
@@ -334,7 +340,9 @@ async def test_native_unverified_save_preserves_warning_without_readback(
     )
     tools = DashboardConfigTools(client)
     monkeypatch.setattr(
-        tools, "_ensure_dashboard_exists", AsyncMock(return_value=(True, "id", False, None))
+        tools,
+        "_ensure_dashboard_exists",
+        AsyncMock(return_value=(True, "id", False, None)),
     )
     result = await tools.ha_config_set_dashboard(
         "test-dashboard", config={"views": []}, MandatoryBPS=False
@@ -377,7 +385,9 @@ async def test_native_replacement_preserves_large_config_warning(
     )
     tools = DashboardConfigTools(client)
     monkeypatch.setattr(
-        tools, "_ensure_dashboard_exists", AsyncMock(return_value=(True, "id", False, None))
+        tools,
+        "_ensure_dashboard_exists",
+        AsyncMock(return_value=(True, "id", False, None)),
     )
     result = await tools.ha_config_set_dashboard(
         "test-dashboard", config={"views": []}, MandatoryBPS=False
@@ -404,4 +414,95 @@ async def test_socket_acquisition_failure_is_known_not_written(
         )
     assert json.loads(str(caught.value))["write_committed"] is False
     assert messages == []
+    native_socket.send_command.assert_not_awaited()
+
+
+async def test_native_conflict_reports_metadata_already_updated(
+    legacy_dashboard, native_socket, monkeypatch
+):
+    client, document, messages = legacy_dashboard
+    dashboard = {
+        "id": "test_dashboard",
+        "url_path": "test-dashboard",
+        "title": "Before",
+        "mode": "storage",
+    }
+    original_send = client.send_websocket_message.side_effect
+
+    async def send(message):
+        if message["type"] == "lovelace/dashboards/update":
+            messages.append(deepcopy(message))
+            dashboard["title"] = message["title"]
+            return {"success": True, "result": deepcopy(dashboard)}
+        return await original_send(message)
+
+    client.send_websocket_message.side_effect = send
+    monkeypatch.setattr(
+        tools_config_dashboards,
+        "fetch_dashboards_list",
+        AsyncMock(return_value=[dashboard]),
+    )
+    native_socket.send_command.return_value = {
+        "success": True,
+        "result": {
+            "success": False,
+            "error": {"code": "conflict", "message": "Dashboard changed (conflict)"},
+            "write_committed": False,
+        },
+    }
+    before = deepcopy(document)
+    with pytest.raises(ToolError, match="conflict") as caught:
+        await DashboardConfigTools(client).ha_config_set_dashboard(
+            "test-dashboard",
+            title="After",
+            config={"views": []},
+            config_hash="stale",
+            MandatoryBPS=False,
+        )
+    error = json.loads(str(caught.value))
+    assert dashboard["title"] == "After"
+    assert document == before
+    assert error["metadata_updated"] is True
+    assert error["dashboard_created"] is False
+    assert error["write_committed"] is True
+    assert error["config_write_committed"] is False
+    assert [message["type"] for message in messages] == ["lovelace/dashboards/update"]
+    native_socket.send_command.assert_awaited_once()
+
+
+async def test_native_connection_failure_reports_dashboard_already_created(
+    legacy_dashboard, native_socket, monkeypatch
+):
+    client, _, messages = legacy_dashboard
+    dashboards = []
+    original_send = client.send_websocket_message.side_effect
+
+    async def send(message):
+        if message["type"] == "lovelace/dashboards/create":
+            messages.append(deepcopy(message))
+            dashboard = {**message, "id": "new_dashboard", "mode": "storage"}
+            dashboards.append(dashboard)
+            return {"success": True, "result": deepcopy(dashboard)}
+        return await original_send(message)
+
+    client.send_websocket_message.side_effect = send
+    monkeypatch.setattr(
+        tools_config_dashboards, "fetch_dashboards_list", AsyncMock(return_value=dashboards)
+    )
+    monkeypatch.setattr(
+        component_dashboard_edit,
+        "get_websocket_client",
+        AsyncMock(side_effect=ConnectionError("unavailable")),
+    )
+    with pytest.raises(ToolError) as caught:
+        await DashboardConfigTools(client).ha_config_set_dashboard(
+            "new-dashboard", config={"views": []}, MandatoryBPS=False
+        )
+    error = json.loads(str(caught.value))
+    assert dashboards[0]["url_path"] == "new-dashboard"
+    assert error["dashboard_created"] is True
+    assert error["metadata_updated"] is False
+    assert error["write_committed"] is True
+    assert error["config_write_committed"] is False
+    assert [message["type"] for message in messages] == ["lovelace/dashboards/create"]
     native_socket.send_command.assert_not_awaited()
