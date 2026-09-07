@@ -43,7 +43,7 @@ Object.assign(services,{
 console.info=logger.info;console.warn=logger.warn;console.error=logger.error;
 const prefix='$eipc_message$_720e1c5c-930a-4c0d-9628-82278fbf18cc_$_claude.web_$_';
 let controllerReady;
-const rendererReady=new Promise(resolve=>{controllerReady=resolve});
+let rendererReady=new Promise(resolve=>{controllerReady=resolve});
 async function main(){
  await app.whenReady();
  // Entire chat fixture is local; no request reaches claude.ai or uses real auth.
@@ -64,6 +64,9 @@ async function main(){
  lifecycle=require('/tmp/claude-source/.vite/build/repro-session.cjs')(services);
  ipcMain.handle('list-mcp-servers',lifecycle.listHandler());
  ipcMain.handle('connect-to-mcp-server',lifecycle.connectHandler(win));
+ ipcMain.handle('$eipc_message$_720e1c5c-930a-4c0d-9628-82278fbf18cc_$_claude.buddy_$_BuddyBleTransport_$_reportState',()=>{});
+ ipcMain.handle('artifact-window-open-gate:state',()=>({active:false}));
+ ipcMain.handle('$eipc_message$_720e1c5c-930a-4c0d-9628-82278fbf18cc_$_claude.telemetry_$_RendererMemoryReporter_$_report',()=>{});
  ipcMain.handle(prefix+'Auth_$_prepareForSignedIn',()=>trace('simulated_signin_prepared'));
  ipcMain.handle(prefix+'Account_$_setAccountDetails',(_e,details)=>trace('simulated_account',{accountUuid:details.accountUuid}));
  win.webContents.on('preload-error',(_e,file,error)=>{trace('preload_error',{file,error:error.stack});emit({type:'fatal',error:error.stack})});
@@ -75,7 +78,18 @@ async function main(){
  if(process.env.REPRO_CONTROL_FILE){input=output=await new Promise(resolve=>{const server=require('node:net').createServer(s=>{server.close();resolve(s)});server.listen(0,'127.0.0.1',()=>fs.writeFileSync(process.env.REPRO_CONTROL_FILE,JSON.stringify({port:server.address().port})))})}
  emit({type:'ready',versions:process.versions,desktop:'1.46388.2',session_mode:true,routes:Object.keys(config.mcpServers)});
  const rl=readline.createInterface({input});
- rl.on('line',line=>{const message=JSON.parse(line);trace('driver_request',{route:message.route||'primary',id:message.id,method:message.method});win.webContents.executeJavaScript('window.__repro.receive('+JSON.stringify(message)+')').catch(e=>emit({type:'fatal',error:e.stack}))});
+ async function dispatch(message){
+   trace('driver_request',{route:message.route||'primary',id:message.id,method:message.method});
+   if(message.method==='repro/reload'){
+     const before=[...lifecycle.connections.keys()];
+     rendererReady=new Promise(resolve=>{controllerReady=resolve});
+     win.webContents.reload();
+     await rendererReady;
+     trace('renderer_reloaded',{servers:before});
+     emit({jsonrpc:'2.0',id:message.id,result:{reloaded:true,servers:before}});
+   }else await win.webContents.executeJavaScript('window.__repro.receive('+JSON.stringify(message)+')');
+ }
+ rl.on('line',line=>dispatch(JSON.parse(line)).catch(e=>emit({type:'fatal',error:e.stack})));
  rl.on('close',async()=>{await lifecycle.shutdownAll(false);app.exit(0)});
 }
 main().catch(error=>{trace('fatal',{error:error.stack});emit({type:'fatal',error:error.stack});app.exit(1)});

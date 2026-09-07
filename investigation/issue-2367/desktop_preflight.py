@@ -52,6 +52,15 @@ with (out/'electron-stderr.txt').open('w') as stderr, (out/'electron-native-stdo
         writer.write(json.dumps({'jsonrpc':'2.0','id':1,'method':'echo','params':value})+'\n');writer.flush()
         result=json.loads(reader.readline())
         assert result['result']['echo']==value,result
+        if env.get('REPRO_SESSION_MODE')=='true':
+            for ident,method in [(2,'repro/conversation'),(3,'echo'),(4,'repro/reload'),(5,'echo')]:
+                writer.write(json.dumps({'jsonrpc':'2.0','id':ident,'method':method,'params':value if method=='echo' else {}})+'\n');writer.flush()
+                reply=json.loads(reader.readline())
+                assert reply['id']==ident,reply
+                if method=='echo':assert reply['result']['echo']==value,reply
+                elif method=='repro/reload':assert reply['result']['reloaded'],reply
+                else:assert reply['result']['pending']==0,reply
+            (out/'session-pass.txt').write_text('Real chat preload, original connection lifecycle, conversation change and renderer reload preserved large round trips.\n')
         writer.close()
         if control:
             control.shutdown(socket.SHUT_WR)

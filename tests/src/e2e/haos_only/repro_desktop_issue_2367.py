@@ -69,6 +69,7 @@ class DesktopClient:
         self.sequence=0
         self.secondary_reads=0
         self.background=None
+        self.pause_secondary=False
 
     async def __aenter__(self):
         try:
@@ -106,16 +107,33 @@ class DesktopClient:
             ready=await self.ready
         record('desktop_ready',folder=self.folder.name,dual=self.dual,versions=ready['versions'])
         for route in ['primary']+(['secondary'] if self.dual else []):
-            result=await self._rpc('initialize',{'protocolVersion':self.protocol,
-                'capabilities':{'roots':{'listChanged':True}},
-                'clientInfo':{'name':'desktop-transport-reproduction','version':'1.46388.2'}},route)
-            record('desktop_initialized',route=route,requested=self.protocol,negotiated=result['protocolVersion'])
-            self.proc.stdin.write((json.dumps({'route':route,'jsonrpc':'2.0','method':'notifications/initialized'})+'\n').encode())
-            await self.proc.stdin.drain()
-            tools=await self._rpc('tools/list',{},route)
-            assert any(t['name']=='ha_config_set_dashboard' for t in tools['tools'])
+            await self._initialize(route)
         self.background=asyncio.create_task(self._secondary()) if self.dual else None
         return self
+
+    async def _initialize(self,route):
+        result=await self._rpc('initialize',{'protocolVersion':self.protocol,
+            'capabilities':{'roots':{'listChanged':True}},
+            'clientInfo':{'name':'desktop-transport-reproduction','version':'1.46388.2'}},route)
+        record('desktop_initialized',route=route,requested=self.protocol,negotiated=result['protocolVersion'])
+        self.proc.stdin.write((json.dumps({'route':route,'jsonrpc':'2.0','method':'notifications/initialized'})+'\n').encode())
+        await self.proc.stdin.drain()
+        tools=await self._rpc('tools/list',{},route)
+        assert any(t['name']=='ha_config_set_dashboard' for t in tools['tools'])
+
+    async def session_transition(self,reload=False):
+        if self.background:
+            self.pause_secondary=True
+            await self.background
+            self.background=None
+        result=await self._rpc('repro/reload' if reload else 'repro/conversation',{})
+        if reload:
+            assert result['reloaded']
+            for route in ['primary']+(['secondary'] if self.dual else []):await self._initialize(route)
+        else:assert result['pending']==0
+        record('desktop_session_transition',folder=self.folder.name,reload=reload,result=result)
+        self.pause_secondary=False
+        if self.dual:self.background=asyncio.create_task(self._secondary())
 
     async def _read(self):
         try:
@@ -159,7 +177,7 @@ class DesktopClient:
             structured_content=result.get('structuredContent'),is_error=result.get('isError',False))
 
     async def _secondary(self):
-        while True:
+        while not self.pause_secondary:
             result=await self._rpc('tools/call',{'name':'ha_config_get_dashboard','arguments':{'url_path':'dashboard-media'}},'secondary')
             assert not result.get('isError'),result
             self.secondary_reads+=1
@@ -219,6 +237,8 @@ async def test_desktop_issue_2367(ha_container_with_fresh_config,protocol,dual,b
                 await attempt(writer,observer,baseline,EXACT_TRANSFORM,bps,label+f'/fresh/{session}',True)
         async with DesktopClient(info,artifact_root/'reuse',dual,protocol) as writer:
             for iteration in range(30):
+                if os.environ.get('REPRO_SESSION_MODE')=='true' and iteration in (10,20):
+                    await writer.session_transition(reload=iteration==20)
                 large=iteration%2==0
                 transform=EXACT_TRANSFORM if large else "config['views'][0]['sections'][1]['cards'][0]['icon'] = 'mdi:music-box-multiple'"
                 await attempt(writer,observer,baseline,transform,bps,label+f'/reuse/{iteration}',large,small_icon='mdi:music-box-multiple')

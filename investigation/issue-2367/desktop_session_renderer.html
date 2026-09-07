@@ -16,6 +16,11 @@ window.addEventListener('message',event=>{
 });
 window.__repro={receive(message){
  const {route='primary',...rpc}=message;
+ if(rpc.method==='repro/conversation'){
+   history.pushState({},'', '/chat/'+crypto.randomUUID());
+   report({route,jsonrpc:'2.0',id:rpc.id,result:{conversation:location.pathname,pending:pending.size}});
+   return;
+ }
  if('id' in rpc){const key=route+':'+rpc.id;if(pending.has(key))throw Error('Duplicate in-flight request '+key);pending.set(key,{conversation:location.pathname,sent:performance.now()})}
  ports.get(route).postMessage(rpc);
 }};
