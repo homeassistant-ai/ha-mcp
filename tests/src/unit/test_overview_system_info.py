@@ -263,6 +263,22 @@ class TestHaGetOverviewFieldsProjection:
         assert "repairs" in warning
         mock_smart_tools.get_system_overview.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_requested_notifications_warn_when_disabled(
+        self, overview_tool, mock_client, mock_smart_tools
+    ):
+        result = await overview_tool(
+            fields=["notifications"], include_notifications=False
+        )
+
+        assert result["success"] is True
+        assert "notifications" not in result
+        assert result["warnings"] == [
+            "notifications omitted: include_notifications=False"
+        ]
+        mock_client.send_websocket_message.assert_not_awaited()
+        mock_smart_tools.get_system_overview.assert_not_awaited()
+
     @pytest.mark.parametrize("field", ["partial", "warnings"])
     @pytest.mark.asyncio
     async def test_diagnostic_projection_uses_full_overview(

@@ -4297,8 +4297,13 @@ class SearchTools:
         result: dict[str, Any] = {"success": True}
         if "system_info" in requested_fields:
             await self._fetch_system_info(result, detail_level)
-        if include_notifications and requested_fields & _OVERVIEW_NOTIFICATION_FIELDS:
-            await self._fetch_notifications(result)
+        if requested_fields & _OVERVIEW_NOTIFICATION_FIELDS:
+            if include_notifications:
+                await self._fetch_notifications(result)
+            else:
+                result.setdefault("warnings", []).append(
+                    "notifications omitted: include_notifications=False"
+                )
         if requested_fields & _OVERVIEW_REPAIR_FIELDS:
             await self._fetch_repairs(
                 result,
