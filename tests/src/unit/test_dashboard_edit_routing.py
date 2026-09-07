@@ -508,3 +508,30 @@ async def test_native_connection_failure_reports_dashboard_already_created(
     assert error["config_write_committed"] is False
     assert [message["type"] for message in messages] == ["lovelace/dashboards/create"]
     native_socket.send_command.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        [],
+        [{"op": "test", "path": "/views/0/cards/0/icon", "value": "mdi:lamp"}],
+        [{"op": "replace", "path": "/views/0/cards/0/icon", "value": "mdi:lamp"}],
+    ],
+)
+async def test_legacy_unchanged_patch_does_not_save(legacy_dashboard, patch):
+    client, document, messages = legacy_dashboard
+    original = deepcopy(document)
+    original_hash = compute_config_hash(document)
+    result = await DashboardConfigTools(client).ha_config_set_dashboard(
+        "test-dashboard",
+        patch=patch,
+        config_hash=original_hash,
+        MandatoryBPS=False,
+    )
+    assert document == original
+    assert result["write_committed"] is False
+    assert result["post_write_verified"] is True
+    assert result["unchanged"] is True
+    assert result["config_hash"] == original_hash
+    assert "render_paths" in result
+    assert [message["type"] for message in messages] == ["lovelace/config"]
