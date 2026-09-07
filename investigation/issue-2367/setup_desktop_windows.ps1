@@ -32,9 +32,17 @@ $env:REPRO_PLATFORM='win32'
 # Keep script resolution on C: alongside the extracted dependency tree.
 Copy-Item "$reproRepo/investigation/issue-2367/extract_desktop_transport.cjs" C:/tmp/extract-transport.cjs
 node C:/tmp/extract-transport.cjs
+if ($env:REPRO_SESSION_MODE -eq 'true') {
+  Copy-Item "$reproRepo/investigation/issue-2367/source_shapes.cjs" C:/tmp/source_shapes.cjs
+  Copy-Item "$reproRepo/investigation/issue-2367/extract_session_windows.cjs" C:/tmp/extract-session.cjs
+  node C:/tmp/extract-session.cjs
+}
 Fetch-Pinned 'https://github.com/electron/electron/releases/download/v42.10.0/electron-v42.10.0-win32-x64.zip' 'C:/tmp/electron.zip' '6988553dc944800c127f6600133b9dd7810a83a82b9b68d2faa07dbb10ef5071'
 Expand-Archive C:/tmp/electron.zip C:/tmp/electron
-Copy-Item "$reproRepo/investigation/issue-2367/desktop_main.cjs" C:/tmp/desktop-harness/main.cjs
+Copy-Item "$reproRepo/investigation/issue-2367/desktop_main.cjs" C:/tmp/desktop-harness/transport-main.cjs
+Copy-Item "$reproRepo/investigation/issue-2367/desktop_session_main.cjs" C:/tmp/desktop-harness/session-main.cjs
+Copy-Item "$reproRepo/investigation/issue-2367/desktop_session_renderer.html" C:/tmp/desktop-harness/session-renderer.html
+'require(process.env.REPRO_SESSION_MODE==="true"?"./session-main.cjs":"./transport-main.cjs");' | Set-Content -Encoding utf8 C:/tmp/desktop-harness/main.cjs
 Copy-Item "$reproRepo/investigation/issue-2367/desktop_renderer.html" C:/tmp/desktop-harness/renderer.html
 '{"name":"issue-2367-windows-transport","version":"1.0.0","main":"main.cjs"}' | Set-Content -Encoding utf8 C:/tmp/desktop-harness/package.json
 & C:/tmp/desktop-analysis/node_modules/.bin/asar.cmd pack C:/tmp/desktop-harness C:/tmp/electron/resources/app.asar

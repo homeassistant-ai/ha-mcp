@@ -76,7 +76,7 @@ async function main(){
  await rendererReady;
  let input=process.stdin;
  if(process.env.REPRO_CONTROL_FILE){input=output=await new Promise(resolve=>{const server=require('node:net').createServer(s=>{server.close();resolve(s)});server.listen(0,'127.0.0.1',()=>fs.writeFileSync(process.env.REPRO_CONTROL_FILE,JSON.stringify({port:server.address().port})))})}
- emit({type:'ready',versions:process.versions,desktop:'1.46388.2',session_mode:true,routes:Object.keys(config.mcpServers)});
+ emit({type:'ready',versions:process.versions,desktop:process.platform==='win32'?'1.46388.4':'1.46388.2',session_mode:true,routes:Object.keys(config.mcpServers)});
  const rl=readline.createInterface({input});
  async function dispatch(message){
    trace('driver_request',{route:message.route||'primary',id:message.id,method:message.method});
