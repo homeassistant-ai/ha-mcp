@@ -335,6 +335,7 @@ WS_ENTITY_LOOKUP = f"{WS_API_PREFIX}/entity_lookup"
 WS_BACKUP_PREP = f"{WS_API_PREFIX}/backup_prep"
 WS_REGISTRIES = f"{WS_API_PREFIX}/registries"
 WS_DASHBOARDS = f"{WS_API_PREFIX}/dashboards"
+WS_DASHBOARD_EDIT = f"{WS_API_PREFIX}/dashboard_edit"
 WS_SERVICES_LIST = f"{WS_API_PREFIX}/services_list"
 WS_REFERENCE_DATA = f"{WS_API_PREFIX}/reference_data"
 WS_SERVER_ENTRY = f"{WS_API_PREFIX}/server_entry"
@@ -382,6 +383,7 @@ CAPABILITIES: list[str] = [
     "backup_prep",
     "registries",
     "dashboards",
+    "dashboard_edit",
     # A flag, not a standalone command: gates the additive whole-document
     # search-result keys on ``ha_mcp_tools/dashboards`` mode=search
     # (``document_matches`` + ``yaml_skipped`` + ``load_failed``, issue #2008).
@@ -618,6 +620,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_backup_prep_schema(), _do_backup_prep, None),
         (_registries_schema(), _do_registries, None),
         (_dashboards_schema(), _do_dashboards, _dashboards_prep),
+        (_dashboard_edit_schema(), _do_dashboard_edit, _dashboard_edit_prep),
         (_services_list_schema(), _do_services_list, _services_list_prep),
         (_reference_data_schema(), _do_reference_data, None),
         (_server_entry_schema(), _do_server_entry, None),
@@ -6829,3 +6832,29 @@ def _dispatched_unconfirmed_bulk_result(
         "dispatched": sum(1 for r in op_results if r["dispatched"]),
         "failed": sum(1 for r in op_results if r.get("error") is not None),
     }
+
+
+def _dashboard_edit_schema() -> dict[Any, Any]:
+    """The additive edit command; cross-field validation precedes any save."""
+    return {
+        vol.Required("type"): WS_DASHBOARD_EDIT,
+        vol.Optional("url_path"): vol.Any(str, None),
+        vol.Optional("expected_hash"): vol.Any(str, None),
+        vol.Optional("config"): dict,
+        vol.Optional("patch"): list,
+    }
+
+
+async def _dashboard_edit_prep(
+    hass: HomeAssistant, msg: dict[str, Any]
+) -> dict[str, Any]:
+    from .dashboard_edit import async_edit_dashboard
+
+    return {"result": await async_edit_dashboard(hass, msg)}
+
+
+def _do_dashboard_edit(
+    hass: HomeAssistant, msg: dict[str, Any], *, result: dict[str, Any]
+) -> dict[str, Any]:
+    """Preserve the write outcome assembled by the async edit lifecycle."""
+    return result

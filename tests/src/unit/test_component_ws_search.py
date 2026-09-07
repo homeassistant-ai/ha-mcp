@@ -839,6 +839,7 @@ class TestInfo:
             "backup_prep",
             "registries",
             "dashboards",
+            "dashboard_edit",
             "dashboards_doc_search",
             "services_list",
             "reference_data",
@@ -1997,6 +1998,7 @@ class TestRegistrationAndAdminGate:
             # Task-3 async-prep commands; their admin-gate/probe coverage lives in
             # test_component_ws_phase2_async.py (this set only guards drift).
             wsapi.WS_DASHBOARDS,
+            wsapi.WS_DASHBOARD_EDIT,
             wsapi.WS_SERVICES_LIST,
             wsapi.WS_REFERENCE_DATA,
             wsapi.WS_SERVER_ENTRY,

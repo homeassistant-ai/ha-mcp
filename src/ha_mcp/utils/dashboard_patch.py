@@ -19,7 +19,9 @@ def _pointer_tokens(path: Any) -> list[str]:
         return []
     if not path.startswith("/") or re.search(r"~(?:[^01]|$)", path):
         raise ValueError("invalid JSON pointer")
-    return [token.replace("~1", "/").replace("~0", "~") for token in path[1:].split("/")]
+    return [
+        token.replace("~1", "/").replace("~0", "~") for token in path[1:].split("/")
+    ]
 
 
 def _array_index(token: str, length: int, *, adding: bool = False) -> int:
@@ -61,7 +63,8 @@ def _json_equal(actual: Any, expected: Any) -> bool:
         )
     if isinstance(actual, list):
         return len(actual) == len(expected) and all(
-            _json_equal(left, right) for left, right in zip(actual, expected, strict=True)
+            _json_equal(left, right)
+            for left, right in zip(actual, expected, strict=True)
         )
     return actual == expected
 

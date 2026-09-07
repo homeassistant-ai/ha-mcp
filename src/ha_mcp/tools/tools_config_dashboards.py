@@ -43,6 +43,7 @@ from ..dashboard_screenshot.paths import (
 from ..errors import ErrorCode, create_error_response, get_error_code, get_error_message
 from ..strict_bps import BestPracticeKeyParam
 from ..utils.config_hash import compute_config_hash
+from ..utils.dashboard_patch import apply_dashboard_patch
 from ..utils.python_sandbox import (
     PythonSandboxError,
     PythonSandboxExecutionError,
@@ -57,6 +58,7 @@ from .component_api import (
     invalidate_caps,
     is_unknown_command,
 )
+from .component_dashboard_edit import edit_dashboard_via_component
 from .helpers import (
     exception_to_structured_error,
     extract_tool_error_message,
@@ -2753,14 +2755,14 @@ class DashboardConfigTools:
             Field(
                 description="Dashboard configuration with views and cards. "
                 "Omit or set to None to create dashboard without initial config. "
-                "Mutually exclusive with python_transform."
+                "Mutually exclusive with python_transform and patch."
             ),
         ] = None,
         python_transform: Annotated[
             str | None,
             Field(
                 description="Python expression to transform existing dashboard config. "
-                "Mutually exclusive with config. "
+                "Mutually exclusive with config and patch. "
                 "Requires config_hash for validation. "
                 "See PYTHON TRANSFORM SECURITY below for allowed operations. "
                 "Examples: "
@@ -2774,7 +2776,7 @@ class DashboardConfigTools:
             str | None,
             Field(
                 description="Config hash from ha_config_get_dashboard for optimistic locking. "
-                "REQUIRED for python_transform (validates dashboard unchanged). "
+                "REQUIRED for python_transform and patch (validates dashboard unchanged). "
                 "Optional for config (validates before full replacement if provided)."
             ),
         ] = None,
@@ -2829,6 +2831,16 @@ class DashboardConfigTools:
                 "views[].path to render."
             ),
         ] = None,
+        patch: Annotated[
+            list[dict[str, Any]] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description="Structured dashboard edits: up to 100 JSON Patch "
+                "add, remove, replace or test operations using RFC 6901 paths. "
+                "Requires config_hash. Mutually exclusive with config and "
+                "python_transform. Strings in value are preserved literally."
+            ),
+        ] = None,
     ) -> "dict[str, Any] | ToolResult":
         """
         Create or update a Home Assistant dashboard.
@@ -2836,12 +2848,14 @@ class DashboardConfigTools:
         MUST call ha_get_skill_guide OR refer to your locally installed skills first.
 
         Creates a new dashboard or updates an existing one with the provided configuration.
-        Supports two modes: full config replacement OR Python transformation.
+        Supports full config replacement, Python transformation, or structured patch edits.
 
         Use 'default' or 'lovelace' to target the built-in default dashboard.
         New dashboards require a hyphenated url_path (e.g., 'my-dashboard').
 
         WHEN TO USE WHICH MODE:
+        - patch: Target known paths with add/remove/replace/test operations and config_hash.
+          Example: patch=[{"op": "replace", "path": "/views/0/title", "value": "Home"}].
         - python_transform: RECOMMENDED for edits. Surgical/pattern-based updates, works on all platforms.
         - config: New dashboards only, or full restructure. Replaces everything.
 
@@ -2977,19 +2991,29 @@ class DashboardConfigTools:
                 pre_fetched_dashboards,
             ) = await self._resolve_set_dashboard_url_path(url_path)
 
-            # Validate mutual exclusivity of config and python_transform
-            if config is not None and python_transform is not None:
+            if sum(value is not None for value in (config, python_transform, patch)) > 1:
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "Cannot use both config and python_transform simultaneously",
+                        "Cannot use config, python_transform or patch simultaneously",
                         suggestions=[
-                            "Use only ONE of: config or python_transform",
+                            "Use only ONE of: config, python_transform or patch",
                             "config: Full replacement",
                             "python_transform: Python-based edits (recommended)",
                         ],
                         context={"action": "set", "url_path": url_path},
                     )
+                )
+
+            if patch is not None:
+                return await self._run_dashboard_patch(
+                    url_path,
+                    config_hash,
+                    patch,
+                    pre_resolved_from,
+                    MandatoryBPS,
+                    return_screenshot=return_screenshot,
+                    screenshot_options=screenshot_options,
                 )
 
             if python_transform is not None:
@@ -3132,12 +3156,12 @@ class DashboardConfigTools:
         return url_path, pre_resolved_from, pre_fetched_dashboards
 
     async def _fetch_and_verify_dashboard_hash(
-        self, url_path: str, config_hash: str
+        self, url_path: str, config_hash: str, *, action: str = "python_transform"
     ) -> dict[str, Any]:
         """Fetch current dashboard config and verify ``config_hash`` (optimistic locking).
 
         Re-wraps the shared fetch helper's generic error with
-        python_transform-specific UX suggestions, and raises on a hash
+        edit-specific UX suggestions, and raises on a hash
         mismatch (concurrent edit since the caller's last read).
         """
         try:
@@ -3150,11 +3174,11 @@ class DashboardConfigTools:
                     ErrorCode.SERVICE_CALL_FAILED,
                     f"Dashboard not found or inaccessible: {extract_tool_error_message(e)}",
                     suggestions=[
-                        "python_transform requires an existing dashboard",
+                        f"{action} requires an existing dashboard",
                         "Use 'config' parameter to create a new dashboard",
                         "Verify dashboard exists with ha_config_get_dashboard(list_only=True)",
                     ],
-                    context={"action": "python_transform", "url_path": url_path},
+                    context={"action": action, "url_path": url_path},
                 )
             )
 
@@ -3167,7 +3191,7 @@ class DashboardConfigTools:
                         "Call ha_config_get_dashboard() again",
                         "Use the fresh config_hash from that response",
                     ],
-                    context={"action": "python_transform", "url_path": url_path},
+                    context={"action": action, "url_path": url_path},
                 )
             )
         return current_config
@@ -3298,35 +3322,151 @@ class DashboardConfigTools:
         transformed_config = self._apply_dashboard_python_transform(
             url_path, python_transform, current_config
         )
-        (
-            post_save_config,
-            new_config_hash,
-            post_save_warning,
-        ) = await self._save_dashboard_python_transform(url_path, transformed_config)
+        native_result = await edit_dashboard_via_component(
+            self._client,
+            url_path,
+            expected_hash=config_hash,
+            config=transformed_config,
+        )
+        if native_result is None:
+            native_result = await self._save_dashboard_edit_legacy(
+                url_path, transformed_config
+            )
+        return await self._finish_dashboard_edit(
+            url_path,
+            native_result,
+            "python_transform",
+            pre_resolved_from,
+            MandatoryBPS,
+            python_transform=python_transform,
+            return_screenshot=return_screenshot,
+            screenshot_options=screenshot_options,
+        )
 
-        transform_result: dict[str, Any] = {
-            "success": True,
-            "action": "python_transform",
-            "url_path": url_path,
-            "config_hash": new_config_hash,
+    async def _save_dashboard_edit_legacy(
+        self, url_path: str, config: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Adapt the existing save/readback path to the shared result contract."""
+        post_config, config_hash, warning = await self._save_dashboard_python_transform(
+            url_path, config
+        )
+        return {
+            "config": post_config,
+            "config_hash": config_hash,
             "write_committed": True,
-            "post_write_verified": post_save_warning is None,
-            "python_expression": python_transform,
-            "message": f"Dashboard {url_path} updated via Python transform",
+            "post_write_verified": warning is None,
+            "warnings": [warning] if warning else [],
         }
+
+    async def _run_dashboard_patch(
+        self,
+        url_path: str,
+        config_hash: str | None,
+        patch: list[dict[str, Any]] | str,
+        pre_resolved_from: str | None,
+        MandatoryBPS: bool,
+        *,
+        return_screenshot: bool,
+        screenshot_options: _DashboardScreenshotOptions,
+    ) -> "dict[str, Any] | ToolResult":
+        """Apply structured edits in Core, or use the existing legacy save path."""
+        if config_hash is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "config_hash is required for patch",
+                    suggestions=["Read the dashboard first and use its config_hash"],
+                    context={"action": "patch", "url_path": url_path},
+                )
+            )
+        try:
+            parsed_patch = parse_json_param(patch, "patch")
+            if not isinstance(parsed_patch, list):
+                raise ValueError("patch must be a list of operations")
+        except ValueError as exc:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    str(exc),
+                    context={"action": "patch", "url_path": url_path},
+                )
+            )
+        result = await edit_dashboard_via_component(
+            self._client, url_path, expected_hash=config_hash, patch=parsed_patch
+        )
+        if result is None:
+            current = await self._fetch_and_verify_dashboard_hash(
+                url_path, config_hash, action="patch"
+            )
+
+            try:
+                updated = apply_dashboard_patch(current, parsed_patch)
+            except ValueError as exc:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_FAILED,
+                        str(exc),
+                        context={"action": "patch", "url_path": url_path},
+                    )
+                )
+            self._validate_strategy_dashboard_replacement(
+                url_path,
+                was_strategy_dashboard="strategy" in current,
+                replacement_config=updated,
+                action="patch",
+            )
+            result = await self._save_dashboard_edit_legacy(url_path, updated)
+        return await self._finish_dashboard_edit(
+            url_path,
+            result,
+            "patch",
+            pre_resolved_from,
+            MandatoryBPS,
+            return_screenshot=return_screenshot,
+            screenshot_options=screenshot_options,
+        )
+
+    async def _finish_dashboard_edit(
+        self,
+        url_path: str,
+        edit: dict[str, Any],
+        action: str,
+        pre_resolved_from: str | None,
+        MandatoryBPS: bool,
+        *,
+        return_screenshot: bool,
+        screenshot_options: _DashboardScreenshotOptions,
+        python_transform: str | None = None,
+    ) -> "dict[str, Any] | ToolResult":
+        """Preserve public edit fields, authoritative paths, BPS and screenshots."""
+        result: dict[str, Any] = {
+            "success": True,
+            "action": action,
+            "url_path": url_path,
+            "config_hash": edit["config_hash"],
+            "write_committed": edit["write_committed"],
+            "post_write_verified": edit["post_write_verified"],
+            "message": f"Dashboard {url_path} updated via "
+            + ("Python transform" if action == "python_transform" else "patch"),
+        }
+        if python_transform is not None:
+            result["python_expression"] = python_transform
         if pre_resolved_from is not None:
-            transform_result["resolved_from"] = pre_resolved_from
-        if post_save_warning is not None:
-            transform_result["warnings"] = [post_save_warning]
-        if post_save_warning is None:
-            _attach_dashboard_render_paths(transform_result, url_path, post_save_config)
-        _attach_dashboard_skill(transform_result, MandatoryBPS)
+            result["resolved_from"] = pre_resolved_from
+        if edit.get("warnings"):
+            result["warnings"] = list(edit["warnings"])
+        if edit.get("unchanged"):
+            result["unchanged"] = True
+            result["message"] = f"Dashboard {url_path} unchanged"
+        if edit["post_write_verified"]:
+            _attach_dashboard_render_paths(result, url_path, edit["config"])
+        _attach_dashboard_skill(result, MandatoryBPS)
         return await _maybe_attach_screenshot(
-            transform_result,
+            result,
             url_path,
             return_screenshot,
             client=self._client,
-            config=post_save_config,
+            config=edit["config"],
             options=screenshot_options,
         )
 
@@ -3632,10 +3772,10 @@ class DashboardConfigTools:
         config: dict[str, Any] | str,
         config_hash: str | None,
         dashboard_exists: bool,
-    ) -> tuple[bool, str | None, dict[str, Any]]:
+    ) -> tuple[bool, str | None, dict[str, Any], dict[str, Any] | None]:
         """Parse + validate ``config`` and save it as a full replacement.
 
-        Returns ``(config_updated, warning, saved_config)``.
+        Returns ``(config_updated, warning, saved_config, native_result)``.
         """
         parsed_config = parse_json_param(config, "config")
         if parsed_config is None or not isinstance(parsed_config, dict):
@@ -3650,6 +3790,18 @@ class DashboardConfigTools:
                 )
             )
         config_dict = cast(dict[str, Any], parsed_config)
+        native_result = await edit_dashboard_via_component(
+            self._client, url_path, expected_hash=config_hash, config=config_dict
+        )
+        if native_result is not None:
+            previous_size = native_result["previous_config_size"]
+            native_warning = None
+            if previous_size >= 10000:
+                native_warning = (
+                    f"Replaced large config ({previous_size:,} bytes). "
+                    "Consider python_transform for targeted edits."
+                )
+            return True, native_warning, native_result["config"], native_result
 
         warning: str | None = None
         if dashboard_exists:
@@ -3658,7 +3810,27 @@ class DashboardConfigTools:
             )
 
         await self._save_dashboard_config(url_path, config_dict)
-        return True, warning, config_dict
+        return True, warning, config_dict, None
+
+    async def _attach_dashboard_write_result(
+        self,
+        result: dict[str, Any],
+        url_path: str,
+        render_config: dict[str, Any] | None,
+        native_result: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """Reuse native verification without another dashboard fetch."""
+        if native_result is None:
+            return await _attach_dashboard_render_paths_after_write(
+                self._client, result, url_path, render_config
+            )
+        for key in ("config_hash", "write_committed", "post_write_verified"):
+            result[key] = native_result[key]
+        if native_result.get("warnings"):
+            result.setdefault("warnings", []).extend(native_result["warnings"])
+        if native_result["post_write_verified"]:
+            _attach_dashboard_render_paths(result, url_path, native_result["config"])
+        return cast(dict[str, Any], native_result["config"])
 
     async def _run_dashboard_config_update(
         self,
@@ -3692,6 +3864,7 @@ class DashboardConfigTools:
         )
 
         config_updated = False
+        native_result: dict[str, Any] | None = None
         render_config: dict[str, Any] | None = None
         warnings: list[str] = []
         if config is not None:
@@ -3699,6 +3872,7 @@ class DashboardConfigTools:
                 config_updated,
                 config_warning,
                 render_config,
+                native_result,
             ) = await self._apply_dashboard_config(
                 url_path, config, config_hash, dashboard_exists
             )
@@ -3756,8 +3930,8 @@ class DashboardConfigTools:
             # whether the create-or-update operation updated an existing target.
             result_dict["resolved_from"] = pre_resolved_from
 
-        render_config = await _attach_dashboard_render_paths_after_write(
-            self._client, result_dict, url_path, render_config
+        render_config = await self._attach_dashboard_write_result(
+            result_dict, url_path, render_config, native_result
         )
         _attach_dashboard_skill(result_dict, MandatoryBPS)
         return await _maybe_attach_screenshot(

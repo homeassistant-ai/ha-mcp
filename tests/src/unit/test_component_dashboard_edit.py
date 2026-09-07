@@ -421,3 +421,67 @@ def test_new_command_is_registered_and_admin_gated(edit, monkeypatch):
     handler(hass_for(dashboard), connection, msg)
     assert connection.results[1]["success"] is True
     assert dashboard.body == {"title": "After"}
+
+
+@pytest.mark.asyncio
+async def test_identical_full_replacement_still_saves(edit):
+    original = {"title": "Before"}
+    dashboard = LiveDashboard(original)
+    result = await edit.async_edit_dashboard(
+        hass_for(dashboard),
+        {"url_path": "home-dashboard", "config": original},
+    )
+    assert result["success"] is True
+    assert result["write_committed"] is True
+    assert result["previous_config_size"] == len(json.dumps(original))
+    assert len(dashboard.saves) == 1
+    assert dashboard.body is not original
+
+
+@pytest.mark.asyncio
+async def test_patch_cannot_remove_strategy(edit):
+    original = {"strategy": {"type": "original-states"}}
+    dashboard = LiveDashboard(original)
+    result = await edit.async_edit_dashboard(
+        hass_for(dashboard),
+        patch_request(original, [{"op": "remove", "path": "/strategy"}]),
+    )
+    assert result["error"]["code"] == "validation_failed"
+    assert result["write_committed"] is False
+    assert dashboard.body is original
+    assert dashboard.saves == []
+
+
+@pytest.mark.asyncio
+async def test_hash_required_replacement_cannot_initialize_empty_storage(edit):
+    dashboard = LiveDashboard(None)
+    result = await edit.async_edit_dashboard(
+        hass_for(dashboard),
+        {
+            "url_path": "home-dashboard",
+            "config": {"views": []},
+            "expected_hash": compute_config_hash({}),
+        },
+    )
+    assert result["error"]["code"] == "not_found"
+    assert result["write_committed"] is False
+    assert dashboard.saves == []
+
+
+@pytest.mark.asyncio
+async def test_readback_replacement_with_yaml_never_loads_yaml(edit):
+    dashboard = LiveDashboard({"title": "Before"})
+    yaml_dashboard = LiveDashboard({"secret": "must-not-read"})
+    yaml_dashboard.mode = "yaml"
+    hass = hass_for(dashboard)
+
+    async def replace_dashboard(_dashboard):
+        hass.data["lovelace"].dashboards["home-dashboard"] = yaml_dashboard
+
+    dashboard.on_persist = replace_dashboard
+    result = await edit.async_edit_dashboard(hass, patch_request(dashboard.body))
+    assert result["write_committed"] is True
+    assert result["post_write_verified"] is False
+    assert result["config_hash"] is None
+    assert result["config"] == {"title": "After"}
+    assert yaml_dashboard.loads == 0
