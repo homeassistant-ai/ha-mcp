@@ -22,6 +22,12 @@ with zipfile.ZipFile('/tmp/claude-windows.msix') as z:
     names=[n for n in z.namelist() if n.endswith('/resources/app.asar')]
     assert len(names)==1,names
     Path('/tmp/claude-windows.asar').write_bytes(z.read(names[0]))
+    prefix=names[0]+'.unpacked/'
+    for name in z.namelist():
+        if name.startswith(prefix) and not name.endswith('/'):
+            target=Path('/tmp/claude-windows.asar.unpacked')/name[len(prefix):]
+            target.parent.mkdir(parents=True,exist_ok=True)
+            target.write_bytes(z.read(name))
 EXTRACT_WINDOWS
 npx --yes @electron/asar@3.4.1 extract /tmp/claude-windows.asar /tmp/claude-windows-source
 node investigation/issue-2367/compare_desktop.cjs

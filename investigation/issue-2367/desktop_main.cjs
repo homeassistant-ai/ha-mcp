@@ -4,7 +4,9 @@ const {app, BrowserWindow, MessageChannelMain, ipcMain} = require('electron');
 const fs = require('node:fs');
 const readline = require('node:readline');
 const assert = require('node:assert/strict');
-const T = require('/tmp/claude-source/.vite/build/repro-transport.cjs');
+let T;
+try {T=require('/tmp/claude-source/.vite/build/repro-transport.cjs')}
+catch(error){process.stdout.write(JSON.stringify({type:'fatal',error:error.stack})+'\n');process.exit(1)}
 const config = JSON.parse(fs.readFileSync(process.env.REPRO_DESKTOP_CONFIG, 'utf8'));
 const logPath=process.env.REPRO_DESKTOP_LOG;
 const emit = msg => process.stdout.write(JSON.stringify(msg)+'\n');

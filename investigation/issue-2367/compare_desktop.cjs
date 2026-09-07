@@ -20,6 +20,7 @@ function canonical(node){
  const names=new Map();
  const rename=name=>{if(!names.has(name))names.set(name,'id'+names.size);return names.get(name)};
  function visit(n,parent,key){
+  if(typeof n==='bigint')return {bigint:String(n)};
   if(n===null||typeof n!=='object')return n;
   if(Array.isArray(n))return n.map(x=>visit(x,parent,key));
   if(n.type==='Identifier'){
