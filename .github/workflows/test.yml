@@ -72,8 +72,12 @@ jobs:
           set -euo pipefail
           if [[ -s "$LOG_PATH" ]]; then
             echo "::group::Codex failure diagnostics"
+            # The runner also recognizes legacy ##[...] commands mid-line.
+            # Generate the resume token after Codex exits; it is not in the log.
+            pause_token="$(node -e 'process.stdout.write(require("node:crypto").randomUUID())')"
+            trap 'printf "::%s::\n::endgroup::\n" "$pause_token"' EXIT
+            printf '::stop-commands::%s\n' "$pause_token"
             sed 's/^/Codex log | /' "$LOG_PATH"
-            echo "::endgroup::"
           else
             echo "No Codex diagnostic log was produced before the failure."
           fi

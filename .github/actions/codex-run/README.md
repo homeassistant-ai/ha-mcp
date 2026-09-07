@@ -104,11 +104,14 @@ Detailed diagnostics remain in `log-path`. Do not automatically publish a privat
 transcript on failure without considering what the caller supplied to the model.
 
 The supplied issue/PR reports and fixed Hello World smoke deliberately print
-`log-path` on failure, with every line prefixed to prevent log content from
-being interpreted as an Actions workflow command. Their context is public and
+`log-path` on failure. Workflow-command interpretation is suspended with a fresh
+resume token while printing, then restored on exit; a prefix alone would not
+neutralize legacy commands. Lines are prefixed for readability. Their context is public and
 they grant no extra environment variables. This preserves diagnostics in the
 Actions run log before the temporary runner disappears. Callers using private
 context or other capabilities must choose their own diagnostic publication policy.
+The report callers use the same command suspension when displaying a successful
+model response; writing Markdown to the summary file does not execute commands.
 
 Report jobs bound checkout, collection, the complete action, report publication,
 failure diagnostics and auth persistence to 2/5/18/1/1/3 minutes within a

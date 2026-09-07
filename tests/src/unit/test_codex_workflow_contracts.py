@@ -321,6 +321,32 @@ def test_bad_environment_grants_are_rejected(tmp_path, name):
     assert b"::error::" in result.stdout
 
 
+@pytest.mark.parametrize("name", ["codex-review-issues", "codex-review-prs"])
+def test_report_publication_treats_legacy_commands_as_data(tmp_path, name):
+    job = next(iter(load(f".github/workflows/{name}.yml")["jobs"].values()))
+    step = next(
+        s for s in job["steps"] if s.get("name") == "Validate and publish report"
+    )
+    output = tmp_path / "report"
+    payload = "Report\n##[warning]untrusted success text\n"
+    output.write_text(payload)
+    summary = tmp_path / "summary"
+    result = shell(
+        step["run"],
+        tmp_path,
+        OUTPUT_PATH=posix(output),
+        GITHUB_STEP_SUMMARY=posix(summary),
+    )
+    assert result.returncode == 0
+    pause = re.search(rb"::stop-commands::([0-9a-f-]{36})", result.stdout)
+    assert pause
+    resume = b"::" + pause[1] + b"::"
+    assert (
+        pause.end() < result.stdout.index(b"##[warning]") < result.stdout.index(resume)
+    )
+    assert summary.read_text() == payload
+
+
 def test_malformed_auth_has_a_safe_annotation(tmp_path):
     result = prepare(tmp_path, CODEX_AUTH_INPUT="not-json-sensitive-fixture")
     assert result.returncode != 0
@@ -476,12 +502,24 @@ def test_callers_preserve_failure_diagnostics_without_executing_log_commands(
     assert step["env"]["LOG_PATH"] == "${{ steps.codex.outputs.log-path }}"
     path = tmp_path / "exec.log"
     if available:
-        path.write_text("fixture diagnostic\n::error::untrusted log command\n")
+        path.write_text(
+            "fixture diagnostic\n::error::untrusted log command\n##[warning]untrusted legacy log command\n"
+        )
     result = shell(step["run"], tmp_path, LOG_PATH=posix(path))
     assert result.returncode == 0, result.stderr.decode()
     if available:
         assert b"Codex log | fixture diagnostic" in result.stdout
         assert b"Codex log | ::error::untrusted log command" in result.stdout
         assert b"\n::error::untrusted log command" not in result.stdout
+        # Prefixing blocks v2 commands, but the runner searches for legacy
+        # ##[...] commands anywhere in a line. Suspend both parsers explicitly.
+        pause = re.search(rb"::stop-commands::([0-9a-f-]{36})", result.stdout)
+        assert pause, result.stdout
+        resume = b"::" + pause[1] + b"::"
+        assert (
+            pause.end()
+            < result.stdout.index(b"##[warning]")
+            < result.stdout.index(resume)
+        )
     else:
         assert b"No Codex diagnostic log was produced" in result.stdout
