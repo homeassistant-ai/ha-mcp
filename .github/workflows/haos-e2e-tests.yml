@@ -10,6 +10,11 @@ on:
         type: choice
         options: [haos, inspect, sdk]
         default: haos
+      windows_version:
+        description: Windows bundle to compare with the pinned Linux Desktop
+        type: choice
+        options: ["1.46388.4", "1.44121.2"]
+        default: "1.46388.4"
       topology:
         description: Desktop launches standalone ha-mcp or a bridge to HA-hosted MCP
         type: choice
@@ -31,6 +36,7 @@ env:
   PYTHON_VERSION: "3.13"
   UV_CACHE_DIR: /tmp/.uv-cache
   LIBGUESTFS_BACKEND: direct
+  WINDOWS_VERSION: ${{ inputs.windows_version }}
 
 jobs:
   desktop-inspect:

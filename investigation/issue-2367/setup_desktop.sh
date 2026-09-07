@@ -12,9 +12,20 @@ python3 investigation/issue-2367/inspect_desktop.py /tmp/claude-source
 npm install --prefix /tmp/desktop-analysis --no-audit --no-fund acorn@8.15.0 acorn-walk@8.3.4 eslint-scope@8.4.0 @electron/asar@3.4.1
 node investigation/issue-2367/inspect_desktop_ast.cjs
 node investigation/issue-2367/extract_desktop_transport.cjs
-# Public Windows release linked by Anthropic's official MSIX download redirect.
-curl -fL --retry 3 --retry-all-errors --connect-timeout 30 --max-time 180 https://downloads.claude.ai/releases/win32/x64/1.46388.4/Claude-50e62f90a2c85243eef42913398f7c8f1534abef.msix -o /tmp/claude-windows.msix
-echo 'f3925248cf40b46c59043878b4c4f1835e7687082b5a52217bd72b73bfbf0b12  /tmp/claude-windows.msix' | sha256sum -c -
+# Official current MSIX, or the Sep 2 release preceding the issue report.
+case "${WINDOWS_VERSION:-1.46388.4}" in
+  1.46388.4)
+    desktop_windows_url=https://downloads.claude.ai/releases/win32/x64/1.46388.4/Claude-50e62f90a2c85243eef42913398f7c8f1534abef.msix
+    desktop_windows_sha=f3925248cf40b46c59043878b4c4f1835e7687082b5a52217bd72b73bfbf0b12
+    ;;
+  1.44121.2)
+    desktop_windows_url=https://downloads.claude.ai/releases/win32/x64/1.44121.2/Claude-817a7b4563855a33d4b678faefc71f87554445d8.msix
+    desktop_windows_sha=38aa4ebd4a2a91a64c696a89a3d4011955a0555007046050ef73b6fba3b007d6
+    ;;
+  *) echo 'Unknown Windows version' >&2; exit 1 ;;
+esac
+curl -fL --retry 3 --retry-all-errors --connect-timeout 30 --max-time 180 "$desktop_windows_url" -o /tmp/claude-windows.msix
+echo "$desktop_windows_sha  /tmp/claude-windows.msix" | sha256sum -c -
 sha256sum /tmp/claude-windows.msix >> /tmp/desktop-inspection/checksums.txt
 python3 - <<'EXTRACT_WINDOWS'
 import zipfile
