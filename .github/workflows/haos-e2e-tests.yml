@@ -119,7 +119,8 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: /tmp/haos-test-image.qcow2
-          key: ${{ steps.key.outputs.cache-key }}
+          key: issue-2367-${{ steps.key.outputs.cache-key }}
+          restore-keys: ${{ steps.key.outputs.cache-key }}
 
       - name: Report image-acquisition path
         run: |
@@ -146,7 +147,7 @@ jobs:
         # preinstalled tooling the bake does not use. Keep /opt/hostedtoolcache:
         # Python from there is on PATH for build_image.py. See the haos-e2e job
         # above for the full rationale.
-        if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
+        if: steps.restore-cache.outputs.cache-matched-key == '' || github.event.inputs.force_local_build == 'true'
         run: |
           df -h /
           sudo rm -rf /usr/share/dotnet /usr/share/swift /opt/ghc \
@@ -156,27 +157,21 @@ jobs:
           df -h /
 
       - name: Install build-script Python deps (cache miss or forced rebuild)
-        if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
+        if: steps.restore-cache.outputs.cache-matched-key == '' || github.event.inputs.force_local_build == 'true'
         run: pip install -r tests/haos_image_build/requirements.txt
 
       - name: Build image locally (cache miss or forced rebuild)
-        if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
+        if: steps.restore-cache.outputs.cache-matched-key == '' || github.event.inputs.force_local_build == 'true'
         run: |
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-test-image.qcow2
 
-      # No cache-save step here on purpose. The external lane (``haos-e2e``)
-      # computes the same cache key (#1407) and is the SOLE saver of the
-      # shared qcow2; the other five lanes only restore from that shared
-      # key. All six lanes start in parallel on the same PR
-      # push, so having only one saver avoids the "another job may be creating
-      # this cache" race + the wasted tar+zstd write of a 12 GB image. The
-      # shared-key bet is safe because all six consume the SAME byte-identical
-      # base: the key hashes bake-input paths only, and every PR-level source /
-      # feature-flag override happens in-VM at test time on each worker's overlay
-      # (see stage_embedded_server_wheel_in_qcow2 /
-      # stage_embedded_server_feature_flags_in_qcow2 / refresh_recorder_in_qcow2
-      # in conftest.py) — never on the cached base.
+      - name: Cache pristine image for this investigation branch
+        if: steps.restore-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: /tmp/haos-test-image.qcow2
+          key: issue-2367-${{ steps.key.outputs.cache-key }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
