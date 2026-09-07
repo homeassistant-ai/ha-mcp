@@ -73,6 +73,9 @@ jobs:
           # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
 
+      - name: Prepare actual Desktop transport on GitHub
+        run: bash investigation/issue-2367/setup_desktop.sh
+
       - name: Compute image cache key
         id: key
         # Shared with every other HAOS lane in this file (``haos-e2e``,
@@ -172,9 +175,6 @@ jobs:
 
       - name: Confirm image present
         run: ls -lh /tmp/haos-test-image.qcow2
-
-      - name: Prepare actual Desktop transport on GitHub
-        run: bash investigation/issue-2367/setup_desktop.sh
 
       - name: Build standalone HA-MCP wheel on GitHub
         run: |

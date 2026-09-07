@@ -57,7 +57,19 @@ for(const name of requested){
 }
 const selected=JSON.parse(fs.readFileSync('/tmp/desktop-inspection/extraction.json','utf8')).selected.filter(n=>n!=='N');
 const dependencies=selected.map(name=>({linux_symbol:name,windows_matches:winByShape.get(hash(canonical(linux.defs.get(name))))||[]}));
+const helperPath=linux.defs.get('e').init.arguments[0].value;
+const helperSource=fs.readFileSync(path.resolve(path.dirname(linux.filename),helperPath),'utf8');
+const helperAst=acorn.parse(helperSource,{ecmaVersion:'latest',sourceType:'script'});
+const helperShape=hash(canonical(helperAst));
+const helperMatches=[];
+for(const file of fs.readdirSync(path.dirname(win.filename)).filter(f=>f.endsWith('.js'))){
+ const candidate=fs.readFileSync(path.join(path.dirname(win.filename),file),'utf8');
+ if(candidate.length>helperSource.length*2||candidate.length<helperSource.length/2)continue;
+ if(hash(canonical(acorn.parse(candidate,{ecmaVersion:'latest',sourceType:'script'})))===helperShape)helperMatches.push({file,byte_identical:candidate===helperSource});
+}
+const imported_helper={linux_file:helperPath,windows_matches:helperMatches};
+fs.writeFileSync('/tmp/desktop-inspection/imported-helper.txt',helperSource);
 const metadata=x=>({file:x.filename,bundle_sha256:hash(x.source),version:x.package.version,dependencies:x.package.dependencies});
-fs.writeFileSync('/tmp/desktop-inspection/platform-comparison.json',JSON.stringify({linux:metadata(linux),windows:metadata(win),note:'Identifier-normalized syntax equality is not proof of identical dependencies or operating-system behavior.',symbols:rows,dependency_comparison:dependencies},null,2));
+fs.writeFileSync('/tmp/desktop-inspection/platform-comparison.json',JSON.stringify({linux:metadata(linux),windows:metadata(win),note:'Identifier-normalized syntax equality is not proof of identical dependencies or operating-system behavior.',symbols:rows,dependency_comparison:dependencies,imported_helper},null,2));
 fs.writeFileSync('/tmp/desktop-inspection/platform-transport-source.txt',snippets);
 console.log('Platform comparison',linux.package.version,win.package.version,rows.map(r=>[r.linux_symbol,r.windows_matches]));

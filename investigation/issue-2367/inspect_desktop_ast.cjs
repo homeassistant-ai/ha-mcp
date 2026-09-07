@@ -11,7 +11,7 @@ for(const node of ast.body) {
   if(node.type==='FunctionDeclaration' || node.type==='ClassDeclaration') definitions.set(node.id.name, node);
   if(node.type==='VariableDeclaration') for(const d of node.declarations) if(d.id.type==='Identifier') definitions.set(d.id.name, d);
 }
-const selected = new Set(['BW','brt','Mp','vrt','Dp','wrt','xHn','Ap','pqe','Tqe','Srt','Dqe','dqe','ub','dHn','SHn','jHn','THn','CHn','DHn','EHn','AHn','gUn']);
+const selected = new Set(['BW','_Hn','zW','brt','Mp','vrt','Dp','wrt','xHn','Ap','pqe','Tqe','Srt','Dqe','dqe','ub','dHn','SHn','jHn','THn','CHn','DHn','EHn','AHn','gUn']);
 for(const [name,node] of definitions) {
   const text = source.slice(node.start,node.end);
   if(text.includes('StdioClientTransport already started') || text.includes('ReadBuffer exceeded maximum') || text.includes('function tUe(')) selected.add(name);
