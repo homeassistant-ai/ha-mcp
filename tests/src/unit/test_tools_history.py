@@ -106,7 +106,13 @@ class TestHaGetHistoryWorkloadGuardrails:
 
     @pytest.mark.asyncio
     async def test_rejects_reversed_time_range(self, history_tool, mock_client):
-        with pytest.raises(ToolError) as exc_info:
+        with (
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=True),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
             await history_tool(
                 entity_ids="sensor.temp",
                 start_time="2026-01-02T00:00:00Z",
