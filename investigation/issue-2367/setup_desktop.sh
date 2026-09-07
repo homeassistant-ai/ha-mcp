@@ -10,6 +10,7 @@ sha256sum /tmp/claude.deb "$asar_path" > /tmp/desktop-inspection/checksums.txt
 npx --yes @electron/asar@3.4.1 extract "$asar_path" /tmp/claude-source
 python3 investigation/issue-2367/inspect_desktop.py /tmp/claude-source
 npm install --prefix /tmp/desktop-analysis --no-audit --no-fund acorn@8.15.0 acorn-walk@8.3.4 eslint-scope@8.4.0 @electron/asar@3.4.1
+python3 investigation/issue-2367/inspect_session.py
 node investigation/issue-2367/inspect_desktop_ast.cjs
 node investigation/issue-2367/extract_desktop_transport.cjs
 # Official current MSIX, or the Sep 2 release preceding the issue report.
