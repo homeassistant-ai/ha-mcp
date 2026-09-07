@@ -9,6 +9,8 @@ from uuid import uuid4
 import pytest
 from ruamel.yaml import YAML
 
+from ...utilities.topology import component_surface_available
+
 from ...utilities.assertions import MCPAssertions, safe_call_tool
 
 FIXTURES = Path(__file__).with_name("fixtures")
@@ -122,13 +124,16 @@ async def test_native_dashboard_backend_measurements(
     from ha_mcp.utils.config_hash import compute_config_hash
 
     info = await ha_client.send_websocket_message({"type": "ha_mcp_tools/info"})
-    if "dashboard_edit" not in (info.get("result") or {}).get("capabilities", []):
+    if not component_surface_available():
+        assert info.get("success") is False, info
         # Component-absent lanes exercise the public fallback in the test above.
         record_property(
             "dashboard_backend_measurement",
             "component absent; public fallback tested separately",
         )
         return
+    assert info.get("success") is True, info
+    assert "dashboard_edit" in info["result"]["capabilities"], info
 
     baseline = YAML(typ="safe").load((FIXTURES / "reporter-media.yaml").read_text())
     path = "edit-bench-" + uuid4().hex[:10]
