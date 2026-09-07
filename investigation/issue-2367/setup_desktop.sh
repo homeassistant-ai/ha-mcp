@@ -13,6 +13,7 @@ npm install --prefix /tmp/desktop-analysis --no-audit --no-fund acorn@8.15.0 aco
 python3 investigation/issue-2367/inspect_session.py
 node investigation/issue-2367/inspect_desktop_ast.cjs
 node investigation/issue-2367/extract_desktop_transport.cjs
+node investigation/issue-2367/extract_session.cjs
 # Official current MSIX, or the Sep 2 release preceding the issue report.
 case "${WINDOWS_VERSION:-1.46388.4}" in
   1.46388.4)
@@ -60,7 +61,10 @@ find /tmp/claude-package -maxdepth 5 -type f -executable > /tmp/desktop-inspecti
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends xvfb
 mkdir -p /tmp/desktop-harness
-cp investigation/issue-2367/desktop_main.cjs /tmp/desktop-harness/main.cjs
+cp investigation/issue-2367/desktop_main.cjs /tmp/desktop-harness/transport-main.cjs
+cp investigation/issue-2367/desktop_session_main.cjs /tmp/desktop-harness/session-main.cjs
+cp investigation/issue-2367/desktop_session_renderer.html /tmp/desktop-harness/session-renderer.html
+printf '%s\n' 'require(process.env.REPRO_SESSION_MODE==="true"?"./session-main.cjs":"./transport-main.cjs");' > /tmp/desktop-harness/main.cjs
 cp investigation/issue-2367/desktop_renderer.html /tmp/desktop-harness/renderer.html
 echo '{"name":"issue-2367-transport-harness","version":"1.0.0","main":"main.cjs"}' > /tmp/desktop-harness/package.json
 npx --yes @electron/asar@3.4.1 pack /tmp/desktop-harness "$asar_path"

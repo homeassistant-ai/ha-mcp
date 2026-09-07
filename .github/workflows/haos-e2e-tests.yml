@@ -10,6 +10,10 @@ on:
         type: choice
         options: [haos, inspect, sdk, windows]
         default: haos
+      session_mode:
+        description: Use the real chat preload and Desktop connection lifecycle
+        type: boolean
+        default: false
       windows_version:
         description: Windows bundle to compare with the pinned Linux Desktop
         type: choice
@@ -37,6 +41,7 @@ env:
   UV_CACHE_DIR: /tmp/.uv-cache
   LIBGUESTFS_BACKEND: direct
   WINDOWS_VERSION: ${{ inputs.windows_version }}
+  REPRO_SESSION_MODE: ${{ inputs.session_mode }}
 
 jobs:
   desktop-windows:
