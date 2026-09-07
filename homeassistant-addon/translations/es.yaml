@@ -127,10 +127,11 @@ configuration:
       skills de buenas prácticas en las escrituras" de arriba y es inerte mientras
       esa opción principal esté desactivada. Requiere reiniciar para que surta efecto.'
   ha_tool_concurrency:
-    name: Home Assistant tool concurrency
-    description: Optional limit on outer Home Assistant tool calls across all sessions.
-      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior. A call waiting for capacity fails after 60 seconds.
+    name: Concurrencia de herramientas de Home Assistant
+    description: Límite opcional en las llamadas externas a herramientas de Home Assistant
+      en todas las sesiones. La concurrencia interna de REST, WebSocket y de distribución
+      por herramienta no se modifica. 0 mantiene el comportamiento ilimitado. Una
+      llamada que espera capacidad falla después de 60 segundos.
   disabled_tools:
     name: Herramientas desactivadas (separadas por comas)
     description: 'Las herramientas indicadas aquí quedan forzadas a desactivadas y

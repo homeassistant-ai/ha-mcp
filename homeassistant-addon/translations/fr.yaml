@@ -124,10 +124,11 @@ configuration:
       compétences de bonnes pratiques aux écritures » ci-dessus et inerte lorsque
       ce parent est désactivé. Nécessite un redémarrage pour prendre effet.'
   ha_tool_concurrency:
-    name: Home Assistant tool concurrency
-    description: Optional limit on outer Home Assistant tool calls across all sessions.
-      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior. A call waiting for capacity fails after 60 seconds.
+    name: Concurrence des outils Home Assistant
+    description: Limite optionnelle sur les appels d'outils Home Assistant externes
+      pour toutes les sessions. La concurrence interne pour REST, WebSocket et par
+      outil reste inchangée. 0 conserve un comportement illimité. Un appel en attente
+      de capacité échoue après 60 secondes.
   disabled_tools:
     name: Outils désactivés (séparés par des virgules)
     description: Les outils listés ici sont forcément désactivés et verrouillés dans

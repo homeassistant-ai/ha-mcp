@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "每次自动化/脚本/场景配置获取的超时。范围 1–600。需重启。",
     "advanced.individual_fetch_batch_size.label": "配置获取批大小",
     "advanced.individual_fetch_batch_size.help": "并发的按 ID 配置获取数。在串行 HA 服务器上向 1 靠拢。范围 1–100。需重启。",
+    "advanced.ha_tool_concurrency.label": "Home Assistant 工具并发数",
+    "advanced.ha_tool_concurrency.help": "对所有会话中外部 Home Assistant 工具调用的可选限制。内部的 REST、WebSocket 以及每个工具的扇出并发保持不变。设置为 0 则保持无限制。等待容量的调用将在 60 秒后失败。范围 0–32。需要重启。",
     "advanced.backup_hint.label": "备份提示级别",
     "advanced.backup_hint.help": "控制 LLM 被提示在进行高风险写入前做完整 HA 快照的强度。",
     "advanced.backup_hint.choices.strong": "强",
@@ -468,6 +470,8 @@
     "addon.pinned_tools.description": "此处列出的工具会被锁定为固定——它们显示在“工具”选项卡顶部，且在取消此选项之前无法从网页设置界面取消固定。与工具搜索搭配使用时很有用。以逗号分隔的工具名称。",
     "addon.verify_ssl.name": "验证 TLS 证书",
     "addon.verify_ssl.description": "验证 Home Assistant 服务器的 TLS 证书。应用（add-on）通过 Supervisor 代理连接，因此此设置通常无效，应保持启用状态。仅当您重新配置了应用（add-on），使其通过具有自签名证书或主机名不匹配的公共 HTTPS 主机名与 HA 通信时，才可以禁用。禁用会削弱传输安全性 — 除非您确有需要，否则请保持开启。需要重启才能生效。",
+    "addon.ha_tool_concurrency.name": "Home Assistant 工具并发数",
+    "addon.ha_tool_concurrency.description": "对所有会话中外部 Home Assistant 工具调用的可选限制。内部的 REST、WebSocket 以及每个工具的扇出并发保持不变。设置为 0 则保持无限制。等待容量的调用将在 60 秒后失败。",
     "addon_stable.enable_tool_search.description": "将完整的工具目录替换为基于搜索的发现。可将空闲上下文减少约 90%，至大约 5K 个 token。⚠️ 请勿在具有内置工具搜索/延迟工具功能的客户端（claude.ai、Claude Desktop、Claude Code）中启用此功能 — 两个搜索层会发生冲突，而客户端的内置工具搜索在此类情况下是更好的选择；请将其关闭。工具是否延迟加载取决于您的客户端和模型组合：在您的设置会预先加载完整目录时使用此功能 — 不支持原生延迟工具的模型（例如 Gemini、OpenAI 兼容的本地模型、Claude Haiku）、无论模型如何都内联所有工具架构的客户端（例如 GitHub Copilot CLI），或较小的上下文窗口。某些 Codex 模型和 ChatGPT 也包含延迟工具 — 请直接检查您的客户端/模型以确认其功能，以免不必要地启用此功能。通过 ha_search_tools 查找工具，并通过分类代理（读/写/删除）执行。需要重启应用（add-on）才能生效 — 然后在您的 AI 客户端中重新连接或刷新 MCP 服务器以重新加载工具列表。仅重启应用（add-on）并不会刷新客户端缓存的工具列表；这在更改此处的任何设置后适用。"
   },
   "tool_groups": {

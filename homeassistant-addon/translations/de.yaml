@@ -119,10 +119,11 @@ configuration:
       bei Schreibvorgängen anhängen oben und inert, während dieser Elternteil ausgeschaltet
       ist. Erfordert Neustart, um wirksam zu werden.'
   ha_tool_concurrency:
-    name: Home Assistant tool concurrency
-    description: Optional limit on outer Home Assistant tool calls across all sessions.
-      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior. A call waiting for capacity fails after 60 seconds.
+    name: Home-Assistant-Tool-Gleichzeitigkeit
+    description: Optionales Limit für äußere Home-Assistant-Tool-Aufrufe über alle
+      Sitzungen hinweg. Interne REST-, WebSocket- und tool-spezifische Fan-Out-Gleichzeitigkeit
+      bleibt unverändert. 0 behält das unbegrenzte Verhalten bei. Ein auf Kapazität
+      wartender Aufruf schlägt nach 60 Sekunden fehl.
   disabled_tools:
     name: Deaktivierte Tools (kommagetrennt)
     description: Hier aufgelistete Tools sind zwangsweise aus und im Web-Settings-UI

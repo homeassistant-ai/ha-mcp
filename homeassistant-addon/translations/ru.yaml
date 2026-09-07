@@ -119,10 +119,11 @@ configuration:
       при записи», который не действует, пока родительский параметр выключен. Для
       применения требуется перезапуск.'
   ha_tool_concurrency:
-    name: Home Assistant tool concurrency
-    description: Optional limit on outer Home Assistant tool calls across all sessions.
-      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior. A call waiting for capacity fails after 60 seconds.
+    name: Параллелизм инструментов Home Assistant
+    description: Необязательный лимит внешних вызовов инструментов Home Assistant
+      во всех сеансах. Внутренний параллелизм REST, WebSocket и вентирования по инструментам
+      остается неизменным. 0 сохраняет неограниченное поведение. Вызов, ожидающий
+      свободных ресурсов, завершается ошибкой через 60 секунд.
   disabled_tools:
     name: Отключённые инструменты (через запятую)
     description: 'Перечисленные здесь инструменты принудительно отключаются и блокируются

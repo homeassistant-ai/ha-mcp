@@ -191,10 +191,11 @@ configuration:
       dovednosti osvědčených postupů při zápisu“ a je neaktivní, pokud je tato nadřazená
       možnost vypnuta. Vyžaduje restart, aby se projevilo.'
   ha_tool_concurrency:
-    name: Home Assistant tool concurrency
-    description: Optional limit on outer Home Assistant tool calls across all sessions.
-      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior. A call waiting for capacity fails after 60 seconds.
+    name: Souběžnost nástrojů Home Assistant
+    description: Volitelný limit pro vnější volání nástrojů Home Assistant napříč
+      všemi relacemi. Vnitřní souběžnost REST, WebSocket a distribuce pro jednotlivé
+      nástroje zůstává nezměněna. Hodnota 0 zachovává neomezené chování. Volání čekající
+      na kapacitu selže po 60 sekundách.
   enable_filesystem_tools:
     name: Povolit nástroje souborového systému (beta)
     description: 'Nastaví HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Povoluje přímý přístup

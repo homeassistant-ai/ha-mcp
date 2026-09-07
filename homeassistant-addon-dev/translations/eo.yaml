@@ -189,10 +189,11 @@ configuration:
       praktikajn kapablojn ĉe skriboj” supre kaj inerta dum tiu gepatro estas malŝaltita.
       Postulas restartigon por ekvalidi.'
   ha_tool_concurrency:
-    name: Home Assistant tool concurrency
-    description: Optional limit on outer Home Assistant tool calls across all sessions.
-      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior. A call waiting for capacity fails after 60 seconds.
+    name: Konkureco de hejmaŭtomatigaj iloj de Home Assistant
+    description: Laŭvola limo pri eksteraj vokoj al Home Assistant-iloj tra ĉiuj sesioj.
+      Interna REST-, WebSocket-, kaj perila disbranĉiĝa konkureco restas neŝanĝita.
+      0 tenas la senliman konduton. Voko atendanta je kapablo malsukcesas post 60
+      sekundoj.
   enable_filesystem_tools:
     name: Ebligi dosiersistemajn ilojn (beta)
     description: 'Agordas HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Ebligas rektan dosier-leg/skriban

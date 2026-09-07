@@ -121,9 +121,10 @@ configuration:
       is. Vereist een herstart om van kracht te worden.'
   ha_tool_concurrency:
     name: Home Assistant tool concurrency
-    description: Optional limit on outer Home Assistant tool calls across all sessions.
-      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior. A call waiting for capacity fails after 60 seconds.
+    description: Optionele limiet voor uiterste Home Assistant-toolaanroepen over
+      alle sessies. Interne REST-, WebSocket- en per-tool fan-out gelijktijdigheid
+      blijft ongewijzigd. 0 behoudt onbeperkt gedrag. Een aanroep die wacht op capaciteit
+      mislukt na 60 seconden.
   disabled_tools:
     name: Uitgeschakelde tools (komma-gescheiden)
     description: Tools die hier worden vermeld, zijn geforceerd uitgeschakeld en vergrendeld
