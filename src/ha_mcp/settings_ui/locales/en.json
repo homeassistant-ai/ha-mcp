@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Timeout for each automation/script/scene config fetch. Range 1–600. Restart required.",
     "advanced.individual_fetch_batch_size.label": "Config fetch batch size",
     "advanced.individual_fetch_batch_size.help": "Concurrent per-ID config fetches. Lower toward 1 on serial HA servers. Range 1–100. Restart required.",
+    "advanced.enable_history_query_guardrails.label": "History query guardrails",
+    "advanced.enable_history_query_guardrails.help": "Reject recorder queries that exceed conservative entity and time-range budgets. Disabled by default.",
     "advanced.ha_tool_concurrency.label": "Home Assistant tool concurrency",
     "advanced.ha_tool_concurrency.help": "Optional limit on outer Home Assistant tool calls across all sessions. Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps unlimited behavior. A call waiting for capacity fails after 60 seconds. Range 0–32. Restart required.",
     "advanced.backup_hint.label": "Backup-hint level",

@@ -116,6 +116,11 @@ class TestParseRelativeTime:
         expected = datetime.now(UTC) - timedelta(hours=168)
         assert abs((result - expected).total_seconds()) < 1
 
+    @pytest.mark.parametrize("value", ["99999999d", "100000000m"])
+    def test_overflowing_relative_value_raises_validation_error(self, value):
+        with pytest.raises(ValueError, match="Invalid time format"):
+            parse_relative_time(value)
+
 
 class TestConvertTimestamp:
     """Test _convert_timestamp function for issue #447 regression."""

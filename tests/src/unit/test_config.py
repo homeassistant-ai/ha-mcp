@@ -15,6 +15,24 @@ def test_tool_security_policies_disabled_by_default():
     assert Settings().enable_tool_security_policies is False
 
 
+def test_history_query_guardrails_disabled_by_default():
+    """Recorder workload budgets preserve existing behavior unless opted in."""
+    from ha_mcp.config import Settings
+
+    assert Settings().enable_history_query_guardrails is False
+
+
+@pytest.mark.parametrize(("env_value", "expected"), [("true", True), ("false", False)])
+def test_history_query_guardrails_env_var(env_value, expected):
+    from ha_mcp.config import Settings
+
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        HAMCP_ENABLE_HISTORY_QUERY_GUARDRAILS=env_value,
+    )
+    assert settings.enable_history_query_guardrails is expected
+
+
 def test_enable_mandatory_bps_default_on():
     """ENABLE_MANDATORY_BPS defaults to True — feature is on unless the
     operator explicitly disables (issue #1182 master switch)."""

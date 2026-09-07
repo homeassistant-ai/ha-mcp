@@ -10,8 +10,9 @@ ha_get_history -- Retrieve historical data with source-selectable mode:
 """
 
 import logging
+import math
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Annotated, Any, Literal
 
 from fastmcp import Context
@@ -19,6 +20,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response, create_validation_error
 from .helpers import (
     exception_to_structured_error,
@@ -32,12 +34,21 @@ from .util_helpers import (
     JSON_STRING_COERCION,
     add_timezone_metadata,
     build_pagination_metadata,
+    fetch_ha_timezone,
     is_connection_error_message,
     parse_string_list_param,
     project_fields,
+    resolve_local_timezone,
 )
 
 logger = logging.getLogger(__name__)
+
+_RELATIVE_TIME_UNIT_SECONDS = {
+    "h": 60 * 60,
+    "d": 24 * 60 * 60,
+    "w": 7 * 24 * 60 * 60,
+    "m": 30 * 24 * 60 * 60,
+}
 
 
 def _convert_timestamp(value: Any) -> str | None:
@@ -61,19 +72,27 @@ def _convert_timestamp(value: Any) -> str | None:
     return None
 
 
-def parse_relative_time(time_str: str | None, default_hours: int = 24) -> datetime:
+def parse_relative_time(
+    time_str: str | None,
+    default_hours: int = 24,
+    *,
+    reference_time: datetime | None = None,
+) -> datetime:
     """
     Parse a time string that can be either ISO format or relative (e.g., '24h', '7d').
 
     Args:
         time_str: Time string in ISO format or relative format (e.g., "24h", "7d", "2w", "1m" where 1m = 30 days)
         default_hours: Default hours to go back if time_str is None
+        reference_time: Reference datetime for relative values and defaults.
 
     Returns:
-        datetime object in UTC
+        A datetime with the parsed value's timezone, or ``reference_time``'s
+        timezone for relative values.
     """
+    now = reference_time or datetime.now(UTC)
     if time_str is None:
-        return datetime.now(UTC) - timedelta(hours=default_hours)
+        return now - timedelta(hours=default_hours)
 
     # Check for relative time format
     relative_pattern = r"^(\d+)([hdwm])$"
@@ -82,16 +101,12 @@ def parse_relative_time(time_str: str | None, default_hours: int = 24) -> dateti
     if match:
         value = int(match.group(1))
         unit = match.group(2)
-
-        if unit == "h":
-            return datetime.now(UTC) - timedelta(hours=value)
-        elif unit == "d":
-            return datetime.now(UTC) - timedelta(days=value)
-        elif unit == "w":
-            return datetime.now(UTC) - timedelta(weeks=value)
-        elif unit == "m":
-            # Approximate month as 30 days
-            return datetime.now(UTC) - timedelta(days=value * 30)
+        try:
+            return now - timedelta(seconds=value * _RELATIVE_TIME_UNIT_SECONDS[unit])
+        except OverflowError as exc:
+            raise ValueError(
+                f"Invalid time format: {time_str} is out of range"
+            ) from exc
 
     # Try parsing as ISO format
     try:
@@ -103,7 +118,7 @@ def parse_relative_time(time_str: str | None, default_hours: int = 24) -> dateti
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=UTC)
         return dt
-    except ValueError as e:
+    except (ValueError, OverflowError) as e:
         raise ValueError(
             f"Invalid time format: {time_str}. Use ISO format or relative (e.g., '24h', '7d', '2w', '1m')"
         ) from e
@@ -115,6 +130,74 @@ _DEFAULT_START_HOURS_BY_SOURCE: dict[str, int] = {"history": 24, "statistics": 3
 # Default and maximum limits for history entries
 _DEFAULT_HISTORY_LIMIT = 100
 _MAX_HISTORY_LIMIT = 1000
+
+# Home Assistant's recorder WebSocket APIs have no server-side row limit. These
+# estimated safety budgets bound recorder scan work; they are not measured HA
+# limits and deliberately favor ordinary default-window requests.
+_MAX_HISTORY_ENTITIES = 10
+_MAX_HISTORY_ENTITY_HOURS = 240.0
+_MAX_STATISTICS_ENTITIES = 25
+_MAX_SHORT_TERM_STATISTICS_ROWS = 10_000
+_MAX_LONG_TERM_STATISTICS_ROWS = 20_000
+_CALENDAR_STATISTICS_PERIODS = frozenset({"day", "week", "month", "year"})
+_VALID_STATISTICS_PERIODS = frozenset(
+    {"5minute", "hour", *_CALENDAR_STATISTICS_PERIODS}
+)
+
+
+async def _get_statistics_timezone(client: Any) -> tzinfo:
+    """Resolve HA's timezone without accepting an unsafe UTC fallback."""
+    timezone_name, fetch_failed = await fetch_ha_timezone(client)
+    if fetch_failed:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.CONNECTION_FAILED,
+                "Could not fetch the Home Assistant timezone required for safe calendar statistics estimation",
+                suggestions=[
+                    "Check the Home Assistant connection, then retry.",
+                    "Use period='hour' or period='5minute', which do not require calendar alignment.",
+                ],
+            )
+        )
+    timezone, resolved_timezone_name = resolve_local_timezone(timezone_name)
+    if resolved_timezone_name != timezone_name:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Home Assistant reports a timezone that could not be resolved for safe calendar statistics estimation",
+                context={"home_assistant_timezone": timezone_name},
+                suggestions=[
+                    "Configure a valid Home Assistant timezone, then retry.",
+                    "Use period='hour' or period='5minute', which do not require calendar alignment.",
+                ],
+            )
+        )
+    return timezone
+
+
+async def _prepare_guardrail_query(
+    client: Any,
+    *,
+    enabled: bool,
+    source: str,
+    period: str,
+    start_dt: datetime,
+    end_dt: datetime,
+    end_time_was_provided: bool,
+) -> tzinfo:
+    """Validate guarded ranges and resolve calendar statistics timezone."""
+    _validate_time_range(
+        start_dt,
+        end_dt,
+        end_time_was_provided=end_time_was_provided,
+        reject_zero_length=enabled,
+    )
+    if not enabled:
+        return UTC
+    if source != "statistics" or period not in _CALENDAR_STATISTICS_PERIODS:
+        return UTC
+    _validate_calendar_statistics_range(start_dt, end_dt, period)
+    return await _get_statistics_timezone(client)
 
 
 class HistoryTools:
@@ -243,7 +326,7 @@ class HistoryTools:
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         """
-        Retrieve historical data from Home Assistant's recorder.
+        Get historical data from Home Assistant's recorder.
 
         **Sources:**
         - "history" (default): Raw state changes, ~10 day retention, full resolution
@@ -269,11 +352,16 @@ class HistoryTools:
         All data is fetched from HA before slicing; limit/offset are client-side.
         With multiple entity_ids, offset must be 0 — use a single entity_id for offset > 0.
         Use has_more and next_offset from the response to paginate.
+        Administrators can optionally enable recorder workload guardrails in Advanced
+        settings. When enabled, oversized entity/time workloads are rejected before the
+        recorder query is issued; narrow the time range or entity list to stay within
+        the budget. Calendar statistics may first read HA's configured timezone so the
+        estimate follows local calendar boundaries.
 
         **Example -- history (default):**
         ```python
         ha_get_history(entity_ids="sensor.bedroom_temperature", start_time="24h")
-        ha_get_history(entity_ids=["sensor.temperature", "sensor.humidity"], start_time="7d", limit=500)
+        ha_get_history(entity_ids=["sensor.temperature", "sensor.humidity"], start_time="3d", limit=500)
         # Default order="desc" returns newest states first.
         # To paginate oldest-first, use order="asc":
         ha_get_history(entity_ids="sensor.temperature", start_time="7d", limit=100, offset=100, order="asc")
@@ -321,6 +409,27 @@ class HistoryTools:
 
             # Parse time parameters
             start_dt, end_dt = _parse_time_range(start_time, end_time, default_hours)
+            query_settings = get_global_settings()
+            statistics_timezone = await _prepare_guardrail_query(
+                self._client,
+                enabled=query_settings.enable_history_query_guardrails,
+                source=source,
+                period=period,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                end_time_was_provided=end_time is not None,
+            )
+            _validate_query_workload(
+                source=source,
+                entity_ids=entity_id_list,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                minimal_response=minimal_response,
+                significant_changes_only=significant_changes_only,
+                period=period,
+                enforce_budget=query_settings.enable_history_query_guardrails,
+                statistics_timezone=statistics_timezone,
+            )
 
             await safe_info(
                 ctx,
@@ -459,9 +568,14 @@ def _parse_time_range(
     default_hours: int,
 ) -> tuple[datetime, datetime]:
     """Parse start_time and end_time into datetime objects."""
+    reference_time = datetime.now(UTC)
     try:
-        start_dt = parse_relative_time(start_time, default_hours=default_hours)
-    except ValueError as e:
+        start_dt = parse_relative_time(
+            start_time,
+            default_hours=default_hours,
+            reference_time=reference_time,
+        )
+    except (ValueError, OverflowError) as e:
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -476,8 +590,12 @@ def _parse_time_range(
 
     if end_time:
         try:
-            end_dt = parse_relative_time(end_time, default_hours=0)
-        except ValueError as e:
+            end_dt = parse_relative_time(
+                end_time,
+                default_hours=0,
+                reference_time=reference_time,
+            )
+        except (ValueError, OverflowError) as e:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -487,9 +605,275 @@ def _parse_time_range(
                 )
             )
     else:
-        end_dt = datetime.now(UTC)
+        end_dt = reference_time
 
     return start_dt, end_dt
+
+
+def _validate_time_range(
+    start_dt: datetime,
+    end_dt: datetime,
+    *,
+    end_time_was_provided: bool = True,
+    reject_zero_length: bool = True,
+) -> None:
+    """Reject reversed ranges and, when requested, zero-length ranges."""
+    if end_dt < start_dt or (reject_zero_length and end_dt == start_dt):
+        if not end_time_was_provided and start_dt > end_dt:
+            message = "start_time must not be in the future when end_time is omitted"
+            suggestions = ["Choose a start_time at or before the current time."]
+        else:
+            message = "end_time must be later than start_time"
+            suggestions = ["Choose an end_time later than start_time."]
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                message,
+                context={
+                    "start_time": start_dt.isoformat(),
+                    "end_time": end_dt.isoformat(),
+                },
+                suggestions=suggestions,
+            )
+        )
+
+
+def _validate_calendar_statistics_range(
+    start_dt: datetime, end_dt: datetime, period: str
+) -> None:
+    """Reject boundary years that calendar alignment cannot advance safely."""
+    if start_dt.year <= datetime.min.year or end_dt.year >= datetime.max.year:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Time range is outside the safe calendar alignment bounds for period='{period}'",
+                context={
+                    "start_time": start_dt.isoformat(),
+                    "end_time": end_dt.isoformat(),
+                    "period": period,
+                },
+                suggestions=[
+                    "Choose start_time and end_time between years 2 and 9998."
+                ],
+            )
+        )
+
+
+def _validate_query_workload(
+    *,
+    source: str,
+    entity_ids: list[str],
+    start_dt: datetime,
+    end_dt: datetime,
+    minimal_response: bool,
+    significant_changes_only: bool,
+    period: str,
+    enforce_budget: bool,
+    statistics_timezone: tzinfo = UTC,
+) -> None:
+    """Reject recorder requests likely to monopolize Home Assistant resources."""
+    if not enforce_budget:
+        return
+
+    _validate_time_range(start_dt, end_dt)
+    if source == "history":
+        violation = _history_workload_violation(
+            entity_ids,
+            start_dt,
+            end_dt,
+            minimal_response,
+            significant_changes_only,
+        )
+    else:
+        violation = _statistics_workload_violation(
+            entity_ids, start_dt, end_dt, period, statistics_timezone
+        )
+
+    if violation is None:
+        return
+    context, suggestions = violation
+
+    suggestions.append(
+        "An administrator can disable history query guardrails in Advanced settings after evaluating the workload risk."
+    )
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            "Recorder query exceeds the safe workload budget",
+            context=context,
+            suggestions=suggestions,
+        )
+    )
+
+
+def _history_workload_violation(
+    entity_ids: list[str],
+    start_dt: datetime,
+    end_dt: datetime,
+    minimal_response: bool,
+    significant_changes_only: bool,
+) -> tuple[dict[str, Any], list[str]] | None:
+    """Return raw-history violation details, or None when within budget."""
+    # Estimated multipliers account for the larger recorder payload when
+    # filtering and attribute minimization are disabled; they are not measured
+    # row counts.
+    detail_weight = 1
+    if not significant_changes_only:
+        detail_weight *= 4
+    if not minimal_response:
+        detail_weight *= 2
+    entity_count = len(entity_ids)
+    estimated_entity_hours = (
+        (end_dt - start_dt).total_seconds() / 3600 * entity_count * detail_weight
+    )
+    if (
+        entity_count <= _MAX_HISTORY_ENTITIES
+        and estimated_entity_hours <= _MAX_HISTORY_ENTITY_HOURS
+    ):
+        return None
+    context = {
+        "entity_count": entity_count,
+        "max_entities": _MAX_HISTORY_ENTITIES,
+        "estimated_entity_hours": round(estimated_entity_hours, 2),
+        "max_entity_hours": _MAX_HISTORY_ENTITY_HOURS,
+        "detail_weight": detail_weight,
+        "minimal_response": minimal_response,
+        "significant_changes_only": significant_changes_only,
+    }
+    suggestions = ["Query fewer entities or use a shorter time range."]
+    if not significant_changes_only:
+        suggestions.append("Set significant_changes_only=true to reduce recorder work.")
+    if not minimal_response:
+        suggestions.append("Set minimal_response=true to omit full state attributes.")
+    suggestions.append(
+        "Use source='statistics' for long ranges when the entities support long-term statistics."
+    )
+    return context, suggestions
+
+
+def _statistics_workload_violation(
+    entity_ids: list[str],
+    start_dt: datetime,
+    end_dt: datetime,
+    period: str,
+    statistics_timezone: tzinfo,
+) -> tuple[dict[str, Any], list[str]] | None:
+    """Return statistics violation details, or None when within budget."""
+    if period not in _VALID_STATISTICS_PERIODS:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"Invalid statistics period: {period}",
+                context={"period": period},
+                suggestions=[
+                    "Use one of: '5minute', 'hour', 'day', 'week', 'month', 'year'."
+                ],
+            )
+        )
+    scan_start, scan_end = _statistics_scan_window(
+        start_dt, end_dt, period, statistics_timezone
+    )
+    scan_granularity_seconds = 300 if period == "5minute" else 3600
+    max_statistics_rows = (
+        _MAX_SHORT_TERM_STATISTICS_ROWS
+        if period == "5minute"
+        else _MAX_LONG_TERM_STATISTICS_ROWS
+    )
+    entity_count = len(entity_ids)
+    estimated_rows = (
+        math.ceil((scan_end - scan_start).total_seconds() / scan_granularity_seconds)
+        * entity_count
+    )
+    if (
+        entity_count <= _MAX_STATISTICS_ENTITIES
+        and estimated_rows <= max_statistics_rows
+    ):
+        return None
+    context = {
+        "entity_count": entity_count,
+        "max_entities": _MAX_STATISTICS_ENTITIES,
+        "estimated_rows": estimated_rows,
+        "max_estimated_rows": max_statistics_rows,
+        "period": period,
+        "scan_granularity_minutes": scan_granularity_seconds // 60,
+        "scan_start_time": scan_start.isoformat(),
+        "scan_end_time": scan_end.isoformat(),
+    }
+    suggestions = ["Query fewer entities or use a shorter time range."]
+    if period == "5minute":
+        suggestions.append("Use period='hour' to scan the long-term statistics table.")
+    return context, suggestions
+
+
+def _statistics_scan_window(
+    start_dt: datetime,
+    end_dt: datetime,
+    period: str,
+    local_timezone: tzinfo,
+) -> tuple[datetime, datetime]:
+    """Mirror Core's calendar alignment before its statistics table query."""
+    if period not in _CALENDAR_STATISTICS_PERIODS:
+        return start_dt, end_dt
+
+    local_start = start_dt.astimezone(local_timezone)
+    local_end = end_dt.astimezone(local_timezone)
+
+    if period == "day":
+        scan_start = local_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        scan_end = local_end.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) + timedelta(days=1)
+    elif period == "week":
+        scan_start = local_start.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(days=local_start.weekday())
+        scan_end = (
+            local_end.replace(hour=0, minute=0, second=0, microsecond=0)
+            - timedelta(days=local_end.weekday())
+            + timedelta(days=7)
+        )
+    elif period == "month":
+        scan_start = local_start.replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        scan_end = _next_month_start(local_end)
+    else:
+        scan_start = local_start.replace(
+            month=1, day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        scan_end = local_end.replace(
+            year=local_end.year + 1,
+            month=1,
+            day=1,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+
+    return scan_start.astimezone(UTC), scan_end.astimezone(UTC)
+
+
+def _next_month_start(value: datetime) -> datetime:
+    """Return local midnight on the first day of the following month."""
+    if value.month == 12:
+        return value.replace(
+            year=value.year + 1,
+            month=1,
+            day=1,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+    return value.replace(
+        month=value.month + 1,
+        day=1,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
 
 
 def _raise_recorder_ws_failure(
