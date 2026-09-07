@@ -186,13 +186,14 @@ async def _prepare_guardrail_query(
     end_time_was_provided: bool,
 ) -> tzinfo:
     """Validate guarded ranges and resolve calendar statistics timezone."""
-    if not enabled:
-        return UTC
     _validate_time_range(
         start_dt,
         end_dt,
         end_time_was_provided=end_time_was_provided,
+        reject_zero_length=enabled,
     )
+    if not enabled:
+        return UTC
     if source != "statistics" or period not in _CALENDAR_STATISTICS_PERIODS:
         return UTC
     _validate_calendar_statistics_range(start_dt, end_dt, period)
@@ -614,9 +615,10 @@ def _validate_time_range(
     end_dt: datetime,
     *,
     end_time_was_provided: bool = True,
+    reject_zero_length: bool = True,
 ) -> None:
-    """Require a strictly increasing query range before any HA access."""
-    if end_dt <= start_dt:
+    """Reject reversed ranges and, when requested, zero-length ranges."""
+    if end_dt < start_dt or (reject_zero_length and end_dt == start_dt):
         if not end_time_was_provided and start_dt > end_dt:
             message = "start_time must not be in the future when end_time is omitted"
             suggestions = ["Choose a start_time at or before the current time."]

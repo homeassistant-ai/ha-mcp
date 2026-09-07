@@ -124,6 +124,27 @@ class TestHaGetHistoryWorkloadGuardrails:
         mock_client.send_websocket_message.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_rejects_reversed_time_range_when_guardrails_disabled(
+        self, history_tool, mock_client
+    ):
+        with (
+            patch(
+                "ha_mcp.tools.tools_history.get_global_settings",
+                return_value=MagicMock(enable_history_query_guardrails=False),
+            ),
+            pytest.raises(ToolError) as exc_info,
+        ):
+            await history_tool(
+                entity_ids="sensor.temp",
+                start_time="2026-01-02T00:00:00Z",
+                end_time="2026-01-01T00:00:00Z",
+            )
+
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "VALIDATION_INVALID_PARAMETER"
+        mock_client.send_websocket_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_reversed_calendar_range_rejected_before_timezone_lookup(
         self, history_tool, mock_client
     ):
