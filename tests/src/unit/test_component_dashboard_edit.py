@@ -155,7 +155,7 @@ async def test_default_prefers_lovelace_key_over_none(edit):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "request",
+    "message",
     [
         {"patch": []},
         {"config": {}, "patch": [], "expected_hash": "any"},
@@ -165,11 +165,11 @@ async def test_default_prefers_lovelace_key_over_none(edit):
         {"patch": "[]", "expected_hash": "any"},
     ],
 )
-async def test_invalid_requests_never_write(edit, request):
+async def test_invalid_requests_never_write(edit, message):
     original = {"title": "Before"}
     dashboard = LiveDashboard(original)
     result = await edit.async_edit_dashboard(
-        hass_for(dashboard), {"url_path": "home-dashboard", **request}
+        hass_for(dashboard), {"url_path": "home-dashboard", **message}
     )
     assert result["success"] is False
     assert result["write_committed"] is False
