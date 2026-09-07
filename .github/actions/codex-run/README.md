@@ -108,7 +108,9 @@ The supplied issue/PR reports and fixed Hello World smoke deliberately print
 resume token while printing, then restored on exit; a prefix alone would not
 neutralize legacy commands. Lines are prefixed for readability. Their context is public and
 they grant no extra environment variables. This preserves diagnostics in the
-Actions run log before the temporary runner disappears. Callers using private
+Actions run log before the temporary runner disappears. Publication keeps the
+last 256 KiB and at most 1,000 log lines, marking either truncation, so the
+failure-reporting step stays bounded. Callers using private
 context or other capabilities must choose their own diagnostic publication policy.
 The report callers use the same command suspension when displaying a successful
 model response; writing Markdown to the summary file does not execute commands.

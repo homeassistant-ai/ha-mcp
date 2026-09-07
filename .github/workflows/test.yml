@@ -77,7 +77,18 @@ jobs:
             pause_token="$(node -e 'process.stdout.write(require("node:crypto").randomUUID())')"
             trap 'printf "::%s::\n::endgroup::\n" "$pause_token"' EXIT
             printf '::stop-commands::%s\n' "$pause_token"
-            sed 's/^/Codex log | /' "$LOG_PATH"
+            if (( $(wc -c < "$LOG_PATH") > 262144 )); then
+              echo 'Codex log | [truncated to the last 256 KiB]'
+            fi
+            # Bound bytes before decoding; Node emits valid UTF-8 even if the
+            # tail starts within a multibyte character. Then bound line count.
+            tail -c 262144 "$LOG_PATH" | node -e '
+              const fs = require("node:fs");
+              const lines = fs.readFileSync(0, "utf8").split(/\r?\n/);
+              if (lines[lines.length - 1] === "") lines.pop();
+              if (lines.length > 1000) console.log("Codex log | [truncated to the last 1000 lines]");
+              for (const line of lines.slice(-1000)) console.log("Codex log | " + line);
+            '
           else
             echo "No Codex diagnostic log was produced before the failure."
           fi

@@ -523,3 +523,27 @@ def test_callers_preserve_failure_diagnostics_without_executing_log_commands(
         )
     else:
         assert b"No Codex diagnostic log was produced" in result.stdout
+
+
+@pytest.mark.parametrize("name", ["test", "codex-review-issues", "codex-review-prs"])
+@pytest.mark.parametrize("width", [1, 300])
+def test_failure_diagnostics_keep_a_bounded_recent_tail(tmp_path, name, width):
+    job = next(iter(load(f".github/workflows/{name}.yml")["jobs"].values()))
+    step = next(
+        s for s in job["steps"] if s.get("name") == "Publish diagnostics on failure"
+    )
+    path = tmp_path / "large.log"
+    path.write_text(
+        "old diagnostic header\n"
+        + ("é" * width + "\n") * 2000
+        + "latest failure detail\n",
+        encoding="utf-8",
+    )
+    result = shell(step["run"], tmp_path, LOG_PATH=posix(path))
+    assert result.returncode == 0, result.stderr.decode()
+    text = result.stdout.decode("utf-8")
+    assert "old diagnostic header" not in text
+    assert "latest failure detail" in text
+    assert "truncated" in text
+    assert len(result.stdout) < 800000
+    assert len(text.splitlines()) <= 1010
