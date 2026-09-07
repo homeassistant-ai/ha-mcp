@@ -26,7 +26,7 @@ runner or E2E fixture changes. No PR until branch validation. No merge. No #2367
   `tools_config_dashboards.py` patch parameter and native save/verification. Keep
   legacy fallback and Python code in existing sandbox. Tests check observable
   results, call counts, concurrent conflict and no duplicate write on lost response.
-- [ ] Validation: add cross-topology E2E cases alongside existing dashboard suites;
+- [x] Validation: add cross-topology E2E cases alongside existing dashboard suites;
   run existing unit/container/HAOS workflows unchanged using workflow_dispatch.
   Compare reporter-fixture results and request volume. Run formatting remotely.
 - [ ] Review: source-backed Core semantics, functional parity, errors and schema;
@@ -50,3 +50,18 @@ Branch runner 34164381729 passed 1,047 focused tests; two newly added metadata/c
 outcome tests failed before their implementation, as intended. Independent static
 reviews checked the pure evaluator, component lifecycle and server routing. The
 server review identified partial metadata/create outcomes, now covered by those tests.
+
+Pre-PR branch proof completed on `ffea33e09ff86011642057f890cf715885b64660`:
+[full validation](https://github.com/homeassistant-ai/ha-mcp/actions/runs/34165925665)
+and [all six full HAOS lanes](https://github.com/homeassistant-ai/ha-mcp/actions/runs/34165928221)
+passed. Unit coverage: 12,872 tests plus 673 add-on structure tests. All seven
+container E2E jobs passed. Focused dashboard/component tests: 1,053 passed.
+The existing workflow, runner, image-builder and shared-fixture diff is empty.
+[Draft PR #2403](https://github.com/homeassistant-ai/ha-mcp/pull/2403) was opened
+after that proof. The final independent source review has no remaining findings;
+normal PR checks and automated reviews follow on the draft.
+
+Eight paired backend measurements using the reporter fixture reduced commands
+from 3 to 1 and median serialized JSON from 22,322 to 7,743 bytes (65%). Median
+backend latency was 3.97 to 3.53 ms; an earlier sample was 13.12 to 10.89 ms.
+These small CI samples exclude MCP/backup overhead and are not latency guarantees.

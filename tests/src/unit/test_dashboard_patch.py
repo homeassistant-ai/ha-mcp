@@ -44,8 +44,6 @@ def test_operations_apply_in_order_without_mutating_inputs(apply_patch) -> None:
     original_config, original_patch = deepcopy(config), deepcopy(patch)
     result = apply_patch(config, patch)
     assert result == {"title": "After", "views": [{"cards": [{"type": "markdown"}]}]}
-    assert config == original_config
-    assert patch == original_patch
     result["views"][0]["cards"][0]["type"] = "entities"
     assert config == original_config
     assert patch == original_patch
