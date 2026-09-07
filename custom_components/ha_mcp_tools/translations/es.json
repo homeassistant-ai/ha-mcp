@@ -33,7 +33,7 @@
           "extra_yaml_keys": "Claves YAML de escritura adicionales"
         },
         "data_description": {
-          "allowed_dirs": "Rutas relativas al directorio de configuración, incluidos nombres de archivo exactos como sensor.yaml, o rutas bajo /share, /media, /ssl y /backup. A cada entrada se le concede lectura y escritura para esa ruta y todo lo que esté debajo de ella; introduce cada ruta como un elemento de lista separado. Se descartarán los recorridos de directorios y otras rutas no permitidas.",
+          "allowed_dirs": "Rutas relativas al directorio de configuración, incluidos nombres de archivo exactos como sensor.yaml, o rutas bajo /share, /media, /ssl y /backup. A cada entrada se le concede lectura y escritura para esa ruta y todo lo que esté debajo de ella; introduce cada entrada como un elemento de lista separado. Las entradas se comparan literalmente; no se admiten comodines como *. Se omiten las rutas con recorrido de directorios y otras no permitidas.",
           "extra_yaml_keys": "Claves de primer nivel que ha_config_set_yaml puede escribir además de las integradas, para integraciones basadas en YAML de esta instalación (p. ej. alert2). Las claves de la frontera de confianza se descartan."
         }
       },

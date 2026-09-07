@@ -828,30 +828,30 @@ class TestApprovalManagementExemption:
     """
 
     def test_queue_management_actions_exempt(self):
-        from ha_mcp.policy.middleware import _is_approval_management
+        from ha_mcp.tool_dispatch import is_approval_management_call
 
         for action in ("list_pending", "approve", "deny"):
-            assert _is_approval_management(
+            assert is_approval_management_call(
                 "ha_dev_manage_server", {"action": action, "token": "t"}
             )
 
     def test_other_actions_and_tools_not_exempt(self):
-        from ha_mcp.policy.middleware import _is_approval_management
+        from ha_mcp.tool_dispatch import is_approval_management_call
 
         for action in ("info", "update_source", "restart"):
-            assert not _is_approval_management(
+            assert not is_approval_management_call(
                 "ha_dev_manage_server", {"action": action}
             )
-        assert not _is_approval_management(
+        assert not is_approval_management_call(
             "ha_dev_manage_settings", {"action": "approve"}
         )
-        assert not _is_approval_management("ha_call_service", {"action": "approve"})
-        assert not _is_approval_management("ha_dev_manage_server", {})
+        assert not is_approval_management_call("ha_call_service", {"action": "approve"})
+        assert not is_approval_management_call("ha_dev_manage_server", {})
 
 
 class TestApprovalManagementExemptionMiddleware:
     """Drive the exemption through ``on_call_tool`` itself, not just the pure
-    ``_is_approval_management`` helper. Under a wildcard policy the queue-
+    ``is_approval_management_call`` helper. Under a wildcard policy the queue-
     management actions must reach ``call_next`` (so an MCP-only approval flow
     can decide the first pending entry), while the high-stakes actions on the
     same tool stay gated (Codex #1993 P1)."""

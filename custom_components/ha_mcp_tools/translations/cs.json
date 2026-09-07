@@ -33,7 +33,7 @@
           "extra_yaml_keys": "Další klíče pro zápis YAML"
         },
         "data_description": {
-          "allowed_dirs": "Cesty relativní k adresáři konfigurace, včetně přesných názvů souborů, jako je sensor.yaml, nebo cesty pod /share, /media, /ssl a /backup. Každá položka má uděleno oprávnění pro čtení a zápis pro danou cestu a vše pod ní; každou cestu zadejte jako samostatnou položku seznamu. Adresářový posun (traversal) a jiné nepovolené cesty budou ignorovány.",
+          "allowed_dirs": "Cesty relativní ke složce konfigurační složky, včetně přesných názvů souborů jako sensor.yaml, nebo cesty pod /share, /media, /ssl a /backup. Každá položka má uděleno právo čtení i zápisu pro danou cestu a vše pod ní; zadejte každou cestu jako samostatnou položku seznamu. Položky se porovnávají doslovně; zástupné znaky jako * nejsou podporovány. Průchod adresářovou strukturou a jiné nepovolené cesty jsou zahazovány.",
           "extra_yaml_keys": "Klíče nejvyšší úrovně, které ha_config_set_yaml může zapisovat navíc k vestavěným, pro integrace s prioritou YAML v této instalaci (např. alert2). Klíče hranice důvěry jsou zahozeny."
         }
       },

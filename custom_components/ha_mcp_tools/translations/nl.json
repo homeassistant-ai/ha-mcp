@@ -33,7 +33,7 @@
           "extra_yaml_keys": "Extra YAML-schrijfsleutels"
         },
         "data_description": {
-          "allowed_dirs": "Paden relatief ten opzichte van deconfiguratiemap, inclusief exacte bestandsnamen zoals sensor.yaml, of paden onder /share, /media, /ssl en /backup. Elk opgegeven pad en alles daaronder krijgt lees- en schrijfrechten; voer elk pad in als een apart lijstitem. Padtraversatie en andere niet-toegestane paden worden genegeerd.",
+          "allowed_dirs": "Paden relatief ten opzichte van de config-directory, inclusief exacte bestandsnamen zoals sensor.yaml, of paden onder /share, /media, /ssl en /backup. Aan elk item wordt lees- en schrijftoegang verleend voor dat pad en alles daaronder; voer elk pad in als een apart lijstitem. Items worden letterlijk gematcht; jokers zoals * worden niet ondersteund. Directory-traversal en andere niet-toegestane paden worden geweigerd.",
           "extra_yaml_keys": "Top-level sleutels die ha_config_set_yaml mag schrijven naast de ingebouwde, voor YAML-first integraties op deze installatie (bijv. alert2). Trust-boundary sleutels worden genegeerd."
         }
       },

@@ -39,8 +39,8 @@ from fastmcp.tools import Tool
 
 from .config import get_global_settings
 from .errors import ErrorCode, create_error_response
-from .policy.middleware import CALL_PROXY_META_TOOLS
 from .renamed_tools import current_tool_name
+from .tool_dispatch import CALL_PROXY_META_TOOLS
 from .tools.helpers import raise_tool_error
 
 if TYPE_CHECKING:

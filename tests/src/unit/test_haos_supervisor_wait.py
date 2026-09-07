@@ -1,7 +1,7 @@
 """Unit tests for HAOS Supervisor/Core image-variant readiness helpers.
 
-HAOS pins only the OS version; the bundled Supervisor self-updates to the
-channel head after boot. Until that finishes ``need_update`` is True and store
+The image pins stable OS/Core and a Supervisor minimum; Supervisor self-updates
+to the channel head after boot. Until that finishes ``need_update`` is True and store
 operations are blocked by ``JobCondition.SUPERVISOR_UPDATED``. The helpers wait
 for readiness, select the requested channel, and install an exact Core version.
 These tests mock the WebSocket so they need no booted HAOS; ``time.sleep`` is
@@ -23,6 +23,7 @@ from tests.haos_image_build.build_image import (
     OAuthCredentials,
     WSCommandError,
     _apply_supervisor_image_update,
+    _configure_core_image_variant,
     _configure_supervisor_image_variant,
     _reconnect_during_supervisor_update,
     _SupervisorReadinessTimeout,
@@ -1334,6 +1335,92 @@ def test_configure_beta_variant_installs_exact_core_version() -> None:
     assert ws.supervisor_api.call_args_list[-1] == call(
         "/core/info", method="get", timeout=30.0
     )
+
+
+def test_core_variant_retries_rejected_bootstrap_job() -> None:
+    """A first-boot Core job rejects the update before it starts; retry it."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        {"version": "2026.9.1"},
+        WSCommandError(
+            "Core job busy",
+            code="unknown_error",
+            supervisor_message="Another job is running for job group home_assistant_core",
+        ),
+        {},
+    ]
+    with (
+        patch("tests.haos_image_build.build_image.time.sleep") as sleep,
+        patch("tests.haos_image_build.build_image._wait_http_ok"),
+        patch("tests.haos_image_build.build_image._wait_core_version") as wait_version,
+    ):
+        _configure_core_image_variant(ws, base_url="http://ha", core_version="2026.9.0")
+
+    updates = [
+        args
+        for args in ws.supervisor_api.call_args_list
+        if args.args[0] == "/core/update"
+    ]
+    assert len(updates) == 2
+    assert updates[0] == updates[1]
+    assert updates[0].kwargs["data"] == {"version": "2026.9.0", "backup": False}
+    sleep.assert_called_once_with(5.0)
+    wait_version.assert_called_once_with(ws, "2026.9.0", timeout=600.0)
+
+
+def test_core_variant_busy_job_has_bounded_admission_wait() -> None:
+    """A stuck bootstrap job must time out without a request at the deadline."""
+    ws = Mock()
+    busy = WSCommandError(
+        "Core job busy",
+        code="unknown_error",
+        supervisor_message="Another job is running for job group home_assistant_core",
+    )
+    ws.supervisor_api.side_effect = [{"version": "2026.9.1"}, busy]
+    elapsed = [0.0]
+
+    def expire(_delay: float) -> None:
+        elapsed[0] = 600.0
+
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=lambda: elapsed[0],
+        ),
+        patch("tests.haos_image_build.build_image.time.sleep", side_effect=expire),
+        patch("tests.haos_image_build.build_image._wait_core_version") as wait_version,
+        pytest.raises(TimeoutError, match="Core job admission"),
+    ):
+        _configure_core_image_variant(ws, base_url="http://ha", core_version="2026.9.0")
+
+    assert ws.supervisor_api.call_count == 2
+    wait_version.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        ("unknown_error", "Another job is running for job group supervisor"),
+        ("unknown_error", "Core update blocked because system is unhealthy"),
+        ("unauthorized", "Another job is running for job group home_assistant_core"),
+    ],
+)
+def test_core_variant_does_not_retry_other_command_failures(
+    code: str, message: str
+) -> None:
+    """The bootstrap exception must not swallow auth or other semantic errors."""
+    ws = Mock()
+    failure = WSCommandError("Rejected", code=code, supervisor_message=message)
+    ws.supervisor_api.side_effect = [{"version": "2026.9.1"}, failure]
+    with (
+        patch("tests.haos_image_build.build_image.time.sleep") as sleep,
+        pytest.raises(WSCommandError) as raised,
+    ):
+        _configure_core_image_variant(ws, base_url="http://ha", core_version="2026.9.0")
+
+    assert raised.value is failure
+    assert ws.supervisor_api.call_count == 2
+    sleep.assert_not_called()
 
 
 def test_wait_core_version_reports_non_convergence() -> None:

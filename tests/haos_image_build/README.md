@@ -35,10 +35,30 @@ from that cache and falls back to a local build on a miss.
 
 ## Version pinning
 
-`HAOS_VERSION` in `build_image.py` is the single source of truth. Renovate
-watches the `home-assistant/operating-system` releases via the annotation
-comment above the constant and opens a bump PR when HAOS releases. The
-image-build workflow runs on that PR (uploading the new qcow2 as a workflow
-artifact so reviewers can sanity-check). Merging the PR triggers the
-master-only cache-prime; the E2E lanes then restore the new image from the
-shared cache automatically.
+`build_image.py` has three Renovate-managed stable inputs:
+
+- `STABLE_HAOS_VERSION`: the stable operating-system release.
+- `STABLE_SUPERVISOR_VERSION`: the promoted Supervisor version from
+  `https://version.home-assistant.io/stable.json`, used as a minimum.
+- `STABLE_CORE_VERSION`: the exact Core version, updated together with the
+  container E2E pins.
+
+All three dependencies bypass Renovate's ordinary seven-day age gate and
+Tuesday window. The scanner runs hourly. A builder-input change invalidates
+the stable image cache; the PR's HAOS E2E lanes build on a miss. Merging the PR
+also triggers the master image-cache prime. Supervisor can still self-update
+past its recorded minimum within the selected channel.
+
+Beta lanes independently read `beta.json`: `hassos.ova`, `supervisor`, and
+`homeassistant.qemux86-64`. They set `HAOS_BUILD_OS_VERSION`,
+`HAOS_BUILD_SUPERVISOR_CHANNEL=beta`, `HAOS_BUILD_SUPERVISOR_MIN_VERSION`, and
+`HAOS_BUILD_CORE_VERSION`. These environment overrides also remain available
+for explicit local builds. OS prerelease versions such as `18.2.rc1` select
+the corresponding release qcow2 instead of the stable OS pin.
+
+The shared beta cache key includes all three resolved versions plus repository
+bake inputs. Only the in-app beta lane writes that cache; the embedded beta
+lane restores it or builds on a miss. Automatic beta runs skip only when all
+three channel versions equal stable, so an OS-only beta release still runs.
+Manual dispatch always runs, and the beta canary checks the booted VM's OS,
+Supervisor channel/minimum, and exact Core version.

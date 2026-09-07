@@ -33,7 +33,7 @@
           "extra_yaml_keys": "Extra YAML-skrivnycklar"
         },
         "data_description": {
-          "allowed_dirs": "Sökvägar relativt konfigurationskatalogen, inklusive exakta filnamn som sensor.yaml, eller sökvägar under /share, /media, /ssl och /backup. Varje post ges läs- och skrivbehörighet för den sökvägen och allt under den; ange varje sökväg som ett separat listobjekt. Sökordsbläddring (traversal) och andra otillåtna sökvägar tas bort.",
+          "allowed_dirs": "Sökvägar relativa till konfigurationskatalogen, inklusive exakta filnamn som sensor.yaml, eller sökvägar under /share, /media, /ssl och /backup. Varje post ges läs- och skrivbehörighet för den sökvägen och allt under den; ange varje sökväg som ett separat listobjekt. Poster matchas bokstavligt; jokertecken som * stöds inte. Sökvägsöverskridningar och andra otillåtna sökvägar ignoreras.",
           "extra_yaml_keys": "Toppnivånycklar som ha_config_set_yaml får skriva utöver de inbyggda, för YAML-först-integrationer på denna installation (t.ex. alert2). Nycklar för förtroendegränser ignoreras."
         }
       },

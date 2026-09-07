@@ -311,6 +311,76 @@ async def test_logbook_empty_result(mcp_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.requires_tools_entry
+async def test_logs_fault_log_source_reads_seeded_crash(mcp_client):
+    """source='fault_log' reads faulthandler's dump via the tools entry (#2373).
+
+    ``tests/initial_test_state/home-assistant.log.fault`` ships two fake
+    faulthandler blocks (a segfault, then an abort). HA Core opens the file in
+    append mode at start, so the seed survives boot on every backend. The
+    checks pin block ordering (newest block first, lines inside a block in
+    their original order), search, and offset paging.
+    """
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_data = await mcp.call_tool_success("ha_get_logs", {"source": "fault_log"})
+    data = get_logbook_data(raw_data)
+
+    assert data["success"] is True
+    assert data["source"] == "fault_log"
+    assert data["path"] == "home-assistant.log.fault"
+    assert data["crash_recorded"] is True
+    assert data["fatal_error_blocks_in_window"] == 2
+    lines = data["log"].split("\n")
+    # Newest block first, still opening with its header and reading top-down.
+    assert lines[0] == "Fatal Python error: Aborted"
+    abort_at = lines.index("Fatal Python error: Aborted")
+    segv_at = lines.index("Fatal Python error: Segmentation fault")
+    marker_at = next(
+        i for i, ln in enumerate(lines) if "e2e_fake_fault_abort_marker" in ln
+    )
+    assert abort_at < marker_at < segv_at
+    assert data["has_more"] is False
+
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_oldest = await mcp.call_tool_success(
+            "ha_get_logs", {"source": "fault_log", "order": "oldest"}
+        )
+    oldest = get_logbook_data(raw_oldest)
+    assert oldest["log"].split("\n")[0] == "Fatal Python error: Segmentation fault"
+
+    # Search selects whole blocks: only the abort block carries the marker,
+    # and it comes back intact with its header first.
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_search = await mcp.call_tool_success(
+            "ha_get_logs",
+            {"source": "fault_log", "search": "e2e_fake_fault_abort_marker"},
+        )
+    searched = get_logbook_data(raw_search)
+    assert searched["filters_applied"] == {"search": "e2e_fake_fault_abort_marker"}
+    assert searched["matched_blocks"] == 1
+    searched_lines = searched["log"].split("\n")
+    assert searched_lines[0] == "Fatal Python error: Aborted"
+    assert any("e2e_fake_fault_abort_marker" in ln for ln in searched_lines)
+    assert "Fatal Python error: Segmentation fault" not in searched_lines
+
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_page = await mcp.call_tool_success(
+            "ha_get_logs", {"source": "fault_log", "limit": 3}
+        )
+    page = get_logbook_data(raw_page)
+    assert page["returned_lines"] == 3
+    assert page["log"].split("\n") == lines[:3]
+    assert page["has_more"] is True
+    assert page["next_offset"] == 3
+
+    async with MCPAssertions(mcp_client) as mcp:
+        raw_next = await mcp.call_tool_success(
+            "ha_get_logs", {"source": "fault_log", "limit": 3, "offset": 3}
+        )
+    assert get_logbook_data(raw_next)["log"].split("\n") == lines[3:6]
+
+
+@pytest.mark.asyncio
 async def test_logs_system_source(mcp_client):
     """Test system log retrieval via source='system'."""
     logger.info("Testing system log source")

@@ -33,7 +33,7 @@
           "extra_yaml_keys": "Chiavi YAML scrivibili aggiuntive"
         },
         "data_description": {
-          "allowed_dirs": "Percorsi relativi alla directory di configurazione, inclusi nomi di file esatti come sensor.yaml, o percorsi sotto /share, /media, /ssl e /backup. A ciascuna voce viene concesso l'accesso in lettura e scrittura per quel percorso e per tutto ciò che si trova al di sotto; inserisci ogni percorso come elemento di elenco separato. I percorsi di attraversamento e altri non consentiti vengono scartati.",
+          "allowed_dirs": "Percorsi relativi alla directory di configurazione, inclusi nomi file esatti come sensor.yaml, o percorsi sotto /share, /media, /ssl e /backup. A ogni voce vengono concessi i permessi di lettura e scrittura per quel percorso e per tutto ciò che si trova al di sotto di esso; inserisci ogni percorso come elemento di elenco separato. Le voci vengono confrontate letteralmente; i caratteri jolly come * non sono supportati. I percorsi di attraversamento e altri percorsi non consentiti vengono scartati.",
           "extra_yaml_keys": "Chiavi di primo livello che ha_config_set_yaml può scrivere oltre a quelle integrate, per le integrazioni basate su YAML di questa installazione (per esempio alert2). Le chiavi del confine di fiducia vengono scartate."
         }
       },

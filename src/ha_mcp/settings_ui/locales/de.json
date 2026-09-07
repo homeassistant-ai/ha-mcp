@@ -251,7 +251,7 @@
     "backup.fields.auto_backup_retain_per_entity.label": "Behalten pro Entität",
     "backup.fields.auto_backup_retain_per_entity.help": "Maximale Snapshots, die pro Entität behalten werden (1-10000). Ältere rotieren heraus.",
     "backup.fields.auto_backup_dir.label": "Backup-Verzeichnis-Überschreibung",
-    "backup.fields.auto_backup_dir.help": "Lasse leer, um das Standardverzeichnis zu verwenden; gib andernfalls einen absoluten Pfad ein.",
+    "backup.fields.auto_backup_dir.help": "Leer lassen für den Standard: /data/ha_mcp_backups im Add-on, ansonsten das Unterverzeichnis backups/ des ha-mcp-Datenverzeichnisses; eine Installation, die bereits Schnappschüsse unter dem früheren Standard speichert, verwendet diesen weiterhin. Das verwendete Verzeichnis wird im Backup-Status angezeigt. Oder gib einen absoluten Pfad ein.",
     "backup.fields.auto_backup_calendar_lookahead_days.label": "Kalender-Vorschau (Tage)",
     "backup.fields.auto_backup_calendar_lookahead_days.help": "Wie weit voraus Kalenderereignisse für Pre-Edit-Snapshots abgefragt werden. Bereich 1-365.",
     "backup.fields.enable_snapshot_delete.label": "Snapshot-Löschung erlauben",
@@ -288,7 +288,7 @@
     "backup.bulk.confirm": "Alle Backups löschen, die übereinstimmen: {filters}?",
     "backup.bulk.deleted": "Gelöschte Backups: {count}",
     "filesystem.custom.title": "Benutzerdefinierte Dateisystempfade (fortgeschritten)",
-    "filesystem.custom.help": "Zusätzliche Pfade (einer pro Zeile), die von Dateitools <strong>gelesen und beschrieben</strong> werden dürfen. Konfigurationsrelative Pfade, einschließlich exakter Dateinamen wie <code>sensor.yaml</code> sowie Pfade unter <code>/share</code>, <code>/media</code>, <code>/ssl</code> und <code>/backup</code> werden unterstützt. Jeder Eintrag erlaubt diesen Pfad und alles darunter. Du kannst diese Pfade auch in Home Assistant unter Einstellungen → Geräte & Dienste → HA-MCP Custom Component → HA-MCP File & YAML Tools → Konfigurieren verwalten; beide Orte bearbeiten dieselbe Einstellung und übernehmen Änderungen sofort.",
+    "filesystem.custom.help": "Zusätzliche Pfade (einer pro Zeile), die Dateitools <strong>lesen und beschreiben</strong> dürfen. Konfigurationsrelative Pfade, einschließlich exakter Dateinamen wie <code>sensor.yaml</code>, sowie Pfade unter <code>/share</code>, <code>/media</code>, <code>/ssl</code> und <code>/backup</code> werden unterstützt. Jeder Eintrag erlaubt diesen Pfad und alles darunter. Einträge werden wörtlich abgeglichen; Platzhalter wie <code>*</code> werden nicht unterstützt. Du kannst diese Pfade auch in Home Assistant unter Einstellungen → Geräte & Dienste → HA-MCP Custom Component → HA-MCP File & YAML Tools → Konfigurieren verwalten; beide Orte bearbeiten dieselbe Einstellung und wenden Änderungen sofort an.",
     "filesystem.custom.blocked": "Immer blockiert: {paths}, Pfad-Traversierung (<code>..</code>) und absolute Pfade außerhalb erlaubter HAOS-Volumes.",
     "filesystem.custom.enable_first": "Aktiviere zuerst Beta-Funktionen und Dateisystem-Tools oben zum Bearbeiten.",
     "filesystem.custom.unavailable": "Benutzerdefinierte Pfade sind derzeit nicht verfügbar.",
@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Timeout für jeden Automatisierungs-/Skript-/Szenen-Konfigurations-Abruf. Bereich 1-600. Neustart erforderlich.",
     "advanced.individual_fetch_batch_size.label": "Konfigurations-Abruf-Batch-Größe",
     "advanced.individual_fetch_batch_size.help": "Gleichzeitige Pro-ID-Konfigurations-Abrufe. Senke auf 1 bei seriellen HA-Servern. Bereich 1-100. Neustart erforderlich.",
+    "advanced.ha_tool_concurrency.label": "Home-Assistant-Tool-Gleichzeitigkeit",
+    "advanced.ha_tool_concurrency.help": "Optionales Limit für äußere Home-Assistant-Tool-Aufrufe über alle Sitzungen hinweg. Interne REST-, WebSocket- und tool-spezifische Fan-Out-Gleichzeitigkeit bleibt unverändert. 0 behält das unbegrenzte Verhalten bei. Ein auf Kapazität wartender Aufruf schlägt nach 60 Sekunden fehl. Bereich 0–32. Neustart erforderlich.",
     "advanced.backup_hint.label": "Backup-Hinweis-Level",
     "advanced.backup_hint.help": "Steuert, wie stark das LLM aufgefordert wird, einen vollständigen HA-Snapshot vor riskanten Schreibvorgängen zu erstellen.",
     "advanced.backup_hint.choices.strong": "Stark",
@@ -468,6 +470,8 @@
     "addon.pinned_tools.description": "Hier aufgelistete Tools sind gesperrt angeheftet – sie erscheinen oben im Tools-Tab und können nicht vom Web-Settings-UI entfernt werden, ohne diese Option zuerst zu entfernen. Nützlich in Kombination mit Tool Search. Kommagetrennte Tool-Namen.",
     "addon.verify_ssl.name": "TLS-Zertifikat verifizieren",
     "addon.verify_ssl.description": "Überprüfe das TLS-Zertifikat des Home Assistant-Servers. Die App (das Add-on) verbindet sich über den Supervisor-Proxy, daher hat dies normalerweise keine Auswirkungen und sollte aktiviert bleiben. Deaktiviere es nur, wenn du die App (das Add-on) so rekonfiguriert hast, dass sie über einen öffentlichen HTTPS-Hostnamen mit einem selbstsignierten Zertifikat oder einem Hostnamen-Mismatch mit HA kommuniziert. Das Deaktivieren schwächt die Transportsicherheit — lasse es eingeschaltet, es sei denn, du weißt, dass du es brauchst. Erfordert einen Neustart, um wirksam zu werden.",
+    "addon.ha_tool_concurrency.name": "Home-Assistant-Tool-Gleichzeitigkeit",
+    "addon.ha_tool_concurrency.description": "Optionales Limit für äußere Home-Assistant-Tool-Aufrufe über alle Sitzungen hinweg. Interne REST-, WebSocket- und tool-spezifische Fan-Out-Gleichzeitigkeit bleibt unverändert. 0 behält das unbegrenzte Verhalten bei. Ein auf Kapazität wartender Aufruf schlägt nach 60 Sekunden fehl.",
     "addon_stable.enable_tool_search.description": "Ersetze den vollständigen Tool-Katalog durch eine suchend basierte Erkennung. Reduziert den Leerlaufkontext um etwa 90 % auf ca. 5K Token. ⚠️ Aktiviere dies NICHT in Clients mit eigener integrierter Tool-Suche / verzögerten Tools (claude.ai, Claude Desktop, Claude Code) — die beiden Suchschichten kollidieren, und die integrierte Tool-Suche des Clients ist dort die bessere Wahl; lasse dies ausgeschaltet. Ob Tools verzögert werden, hängt von deiner Client- und Modellkombination ab: Verwende dies, wenn dein Setup den vollständigen Katalog im Voraus lädt — Modelle ohne native verzögerte Tools (z. B. Gemini, OpenAI-kompatible lokale Modelle, Claude Haiku), Clients, die alle Tool-Schemas unabhängig vom Modell einbetten (z. B. GitHub Copilot CLI), oder kleinere Kontextfenster. Einige Codex-Modelle und ChatGPT beinhalten ebenfalls verzögerte Tools — überprüfe deinen Client bzw. dein Modell direkt, um dessen Funktionen zu bestätigen, damit du dies nicht unnötig aktiviert lässt. Tools werden über ha_search_tools gefunden und über kategorisierte Proxys (lesen/schreiben/löschen) ausgeführt. Erfordert einen App-(Add-on-)Neustart, um wirksam zu werden — verbinde dich danach neu oder aktualisiere den MCP-Server in deinem KI-Client, damit dieser die Tool-Liste neu lädt. Das alleinige Neustarten der App (des Add-ons) aktualisiert die zwischengespeicherte Tool-Liste eines Clients NICHT; dies gilt nach jeder Änderung einer Einstellung hier."
   },
   "tool_groups": {
@@ -662,10 +666,6 @@
       "title": "Traces abrufen",
       "description": "Ruft Ausführungstraces von Automatisierungen und Skripten zur Diagnose ab."
     },
-    "ha_get_blueprint": {
-      "title": "Blueprint abrufen",
-      "description": "Zeigt die Liste der Blueprints oder Details zu einem bestimmten Blueprint."
-    },
     "ha_get_camera_image": {
       "title": "Kamerabild abrufen",
       "description": "Ruft das aktuelle Standbild von einer Home-Assistant-Kamera ab."
@@ -726,10 +726,6 @@
       "title": "Zonen abrufen",
       "description": "Zeigt alle geografischen Zonen oder Details zu einer Zone."
     },
-    "ha_import_blueprint": {
-      "title": "Blueprint importieren",
-      "description": "Importiert einen Blueprint aus einer URL in Home Assistant."
-    },
     "ha_list_files": {
       "title": "Dateien auflisten",
       "description": "Zeigt Dateien in einem erlaubten Konfigurationsverzeichnis."
@@ -749,6 +745,10 @@
     "ha_manage_backup": {
       "title": "Backups verwalten",
       "description": "Erstellt, zeigt, stellt wieder her und löscht Backups."
+    },
+    "ha_manage_blueprints": {
+      "title": "Blueprints verwalten",
+      "description": "Home Assistant Blueprints verwalten — auflisten, lesen, importieren, speichern, löschen oder eine eigenständige Konfiguration rendern."
     },
     "ha_manage_custom_tool": {
       "title": "Benutzerdefiniertes Tool",

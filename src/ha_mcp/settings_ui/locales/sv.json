@@ -251,7 +251,7 @@
     "backup.fields.auto_backup_retain_per_entity.label": "Behåll per entitet",
     "backup.fields.auto_backup_retain_per_entity.help": "Maximalt antal ögonblicksbilder som behålls per entitet (1–10000). Äldre roteras ut.",
     "backup.fields.auto_backup_dir.label": "Åsidosätt säkerhetskopieringskatalog",
-    "backup.fields.auto_backup_dir.help": "Lämna tom för att använda standardkatalogen; annars ange en absolut sökväg.",
+    "backup.fields.auto_backup_dir.help": "Lämna tom för standardvärdet: /data/ha_mcp_backups i tillägget (add-on), annars underkatalogen backups/ i ha-mcp:s datakatalog; eninstallation som redan sparar säkerhetskopior under det tidigare standardvärdet fortsätter att använda det. Katalogen som används visas i statusen för säkerhetskopiering. Eller ange en absolut sökväg.",
     "backup.fields.auto_backup_calendar_lookahead_days.label": "Kalenderframåtblick (dagar)",
     "backup.fields.auto_backup_calendar_lookahead_days.help": "Hur långt framåt kalenderhändelser ska efterfrågas för ögonblicksbilder före redigering. Område 1–365.",
     "backup.fields.enable_snapshot_delete.label": "Tillåt borttagning av ögonblicksbilder",
@@ -288,7 +288,7 @@
     "backup.bulk.confirm": "Ta bort alla säkerhetskopior som matchar: {filters}?",
     "backup.bulk.deleted": "Tog bort {count} säkerhetskopia(or)",
     "filesystem.custom.title": "Anpassade filsystemssökvägar (avancerat)",
-    "filesystem.custom.help": "Extra sökvägar (en per rad) som filverktyg får <strong>läsa och skriva till</strong>. Konfigurationsrelaterade sökvägar, inklusive exakta filnamn som <code>sensor.yaml</code>, samt sökvägar under <code>/share</code>, <code>/media</code>, <code>/ssl</code> och <code>/backup</code> stöds. Varje post tillåter den sökvägen och allt under den. Du kan också hantera dessa sökvägar i Home Assistant under Inställningar → Enheter och tjänster → HA-MCP Custom Component → HA-MCP File & YAML Tools → Konfigurera; båda platserna redigerar samma inställning och tillämpar ändringar omedelbart.",
+    "filesystem.custom.help": "Extra sökvägar (en per rad) som filverktyg kan <strong>läsa och skriva</strong> till. Konfigurationsrelaterade sökvägar, inklusive exakta filnamn som <code>sensor.yaml</code>, samt sökvägar under <code>/share</code>, <code>/media</code>, <code>/ssl</code> och <code>/backup</code> stöds. Varje post tillåter den sökvägen och allt under den. Posterna matchas bokstavligen; jokertecken som <code>*</code> stöds inte. Du kan också hantera dessa sökvägar i Home Assistant under Inställningar → Enheter och tjänster → HA-MCP Custom Component → HA-MCP File & YAML Tools → Konfigurera; båda platserna redigerar samma inställning och tillämpar ändringar omedelbart.",
     "filesystem.custom.blocked": "Alltid blockerad: {paths}, sökvägsgenomgång (<code>..</code>), och absoluta sökvägar utanför tillåtna HAOS-volymer.",
     "filesystem.custom.enable_first": "Aktivera beta-funktioner och filsystemverktyg ovan för att redigera.",
     "filesystem.custom.unavailable": "Anpassade sökvägar är för närvarande inte tillgängliga.",
@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Timeout för varje hämtning av automatiserings-/skript-/scenkonfiguration. Område 1–600. Omstart krävs.",
     "advanced.individual_fetch_batch_size.label": "Batchstorlek för konfigurationshämtning",
     "advanced.individual_fetch_batch_size.help": "Samtidiga konfigurationshämtningar per ID. Sänk mot 1 på seriella HA-servrar. Område 1–100. Omstart krävs.",
+    "advanced.ha_tool_concurrency.label": "Samtidighet för Home Assistant-verktyg",
+    "advanced.ha_tool_concurrency.help": "Valfri gräns för yttre anrop av Home Assistant-verktyg över alla sessioner. Intern samtidighet för REST, WebSocket och per-verktyg-grenar är oförändrad. 0 behåller obegränsat beteende. Ett anrop som väntar på kapacitet misslyckas efter 60 sekunder. Intervall 0–32. Omstart krävs.",
     "advanced.backup_hint.label": "Nivå för säkerhetskopieringshint",
     "advanced.backup_hint.help": "Styr hur starkt LLM uppmanas att ta en fullständig HA-ögonblicksbild före riskfyllda skrivningar.",
     "advanced.backup_hint.choices.strong": "Stark",
@@ -468,6 +470,8 @@
     "addon.pinned_tools.description": "Verktyg som listas här är låsta som fästa – de visas överst på fliken Verktyg och kan inte lossas från webbinställningsgränssnittet utan att först avmarkera detta alternativ. Användbart i kombination med Verktygssökning. Kommaseparerade verktygsnamn.",
     "addon.verify_ssl.name": "Verifiera TLS-certifikat",
     "addon.verify_ssl.description": "Verifiera Home Assistant-serverns TLS-certifikat. Appen (tillägget) ansluter via Supervisor-proxyn, så detta har normalt ingen effekt och bör förbli aktiverat. Inaktivera endast om du har konfigurerat om appen (tillägget) för att kommunicera med HA över ett offentligt HTTPS-värdnamn med ett självsignerat certifikat eller matchningsfel för värdnamn. Inaktivering försvagar transportsäkerheten – lämna på om du inte vet att du behöver det. Kräver omstart för att träda i kraft.",
+    "addon.ha_tool_concurrency.name": "Samtidighet för Home Assistant-verktyg",
+    "addon.ha_tool_concurrency.description": "Valfri gräns för yttre anrop av Home Assistant-verktyg över alla sessioner. Intern samtidighet för REST, WebSocket och per-verktyg-grenar är oförändrad. 0 behåller obegränsat beteende. Ett anrop som väntar på kapacitet misslyckas efter 60 sekunder.",
     "addon_stable.enable_tool_search.description": "Ersätt hela verktygskatalogen med sökbaserad upptäckt. Minskar inaktiv kontext med ungefär 90 %, till cirka 5K tokens. ⚠️ Aktivera INTE detta i klienter med inbyggd verktygssökning / uppskjutna verktyg (claude.ai, Claude Desktop, Claude Code) – de två söklagren krockar, och klientens inbyggda verktygssökning är det bättre valet där; lämna denna avstängd. Huruvida verktyg skjuts upp beror på din klient- och modellkombination: använd detta när din konfiguration läser in hela katalogen i förväg – modeller utan inbyggda uppskjutna verktyg (t.ex. Gemini, OpenAI-kompatibla lokala modeller, Claude Haiku), klienter som infogar alla verktygsscheman oavsett modell (t.ex. GitHub Copilot CLI), eller mindre kontextfönster. Vissa Codex-modeller och ChatGPT inkluderar också uppskjutna verktyg – kontrollera din klient/modell direkt för att bekräfta dess funktioner så att du inte lämnar detta aktiverat i onödan. Verktyg hittas via ha_search_tools och exekveras via kategoriserade proxyservrar (läs/skriv/ta bort). Kräver omstart av appen (tillägget) för att träda i kraft – återanslut eller uppdatera sedan MCP-servern i din AI-klient så att den läser om verktygslistan. Enbart omstart av appen (tillägget) uppdaterar INTE en klients cachade verktygslista; detta gäller efter att du har ändrat någon inställning här."
   },
   "tools": {
@@ -631,10 +635,6 @@
       "title": "Hämta Automatiseringsspårningar",
       "description": "Hämta exekveringsspårningar för automatiseringar och skript för att felsöka problem."
     },
-    "ha_get_blueprint": {
-      "title": "Hämta Blueprint",
-      "description": "Hämta blueprint-information - lista alla blueprints eller hämta detaljer för en specifik."
-    },
     "ha_get_camera_image": {
       "title": "Hämta Kamerabild",
       "description": "Hämta en ögonblicksbild från en Home Assistant-kameraentitet."
@@ -695,10 +695,6 @@
       "title": "Hämta Zon",
       "description": "Hämta zoninformation - lista alla zoner eller hämta detaljer för en specifik."
     },
-    "ha_import_blueprint": {
-      "title": "Importera Blueprint",
-      "description": "Importera en blueprint från en URL."
-    },
     "ha_list_files": {
       "title": "Lista Filer",
       "description": "Lista filer i en katalog inom Home Assistant-konfigurationen."
@@ -718,6 +714,10 @@
     "ha_manage_backup": {
       "title": "Hantera säkerhetskopior",
       "description": "Polymorft säkerhetskopieringsverktyg. Se verktygsbeskrivningen för routingmatrisen."
+    },
+    "ha_manage_blueprints": {
+      "title": "Hantera blåkopior",
+      "description": "Hantera Home Assistant-blåkopior — lista, läs, importera, spara, ta bort eller rendera en fristående konfiguration."
     },
     "ha_manage_custom_tool": {
       "title": "Anpassat verktyg",

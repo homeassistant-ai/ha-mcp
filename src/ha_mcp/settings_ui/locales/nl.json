@@ -251,7 +251,7 @@
     "backup.fields.auto_backup_retain_per_entity.label": "Behouden per entiteit",
     "backup.fields.auto_backup_retain_per_entity.help": "Maximaal aantal momentopnamen per entiteit (1–10000). Oudere worden verwijderd.",
     "backup.fields.auto_backup_dir.label": "Backupmap overschrijven",
-    "backup.fields.auto_backup_dir.help": "Laat leeg om de standaardmap te gebruiken; anders voer een absoluut pad in.",
+    "backup.fields.auto_backup_dir.help": "Laat leeg voor de standaard: /data/ha_mcp_backups in de app (add-on), anders de submap backups/ van de ha-mcp-datamap; een installatie die al snapshots bevat onder de eerdere standaard blijft deze gebruiken. De map die in gebruik is, wordt weergegeven in de backupstatus. Of voer een absoluut pad in.",
     "backup.fields.auto_backup_calendar_lookahead_days.label": "Agenda vooruitblik (dagen)",
     "backup.fields.auto_backup_calendar_lookahead_days.help": "Hoe ver vooruit agenda-evenementen moeten worden opgevraagd voor momentopnamen vóór bewerking. Bereik 1–365.",
     "backup.fields.enable_snapshot_delete.label": "Momentopname verwijdering toestaan",
@@ -288,7 +288,7 @@
     "backup.bulk.confirm": "Alle backups verwijderen die overeenkomen met: {filters}?",
     "backup.bulk.deleted": "{count} backup(s) verwijderd",
     "filesystem.custom.title": "Aangepaste bestandssysteempaden (geavanceerd)",
-    "filesystem.custom.help": "Extra paden (één per regel) die bestandstools mogen <strong>lezen en schrijven</strong>. Config-relatieve paden, inclusief exacte bestandsnamen zoals <code>sensor.yaml</code>, en paden onder <code>/share</code>, <code>/media</code>, <code>/ssl</code> en <code>/backup</code> worden ondersteund. Elke invoer geeft toegang tot dat pad en alles daaronder. Je kunt deze paden ook beheren in Home Assistant onder Instellingen → Apparaten en diensten → HA-MCP Custom Component → HA-MCP File & YAML Tools → Configureren; beide locaties bewerken dezelfde instelling en passen wijzigingen direct toe.",
+    "filesystem.custom.help": "Extra paden (één per regel) die bestandstools mogen <strong>lezen en schrijven</strong>. Config-relatieve paden, inclusief exacte bestandsnamen zoals <code>sensor.yaml</code>, en paden onder <code>/share</code>, <code>/media</code>, <code>/ssl</code> en <code>/backup</code> worden ondersteund. Elke invoer staat dat pad en alles daaronder toe. Vermeldingen worden letterlijk gematcht; jokers zoals <code>*</code> worden niet ondersteund. Je kunt deze paden ook beheren in Home Assistant onder Instellingen → Apparaten & Diensten → HA-MCP Custom Component → HA-MCP File & YAML Tools → Configureer; beide locaties bewerken dezelfde instelling en passen wijzigingen direct toe.",
     "filesystem.custom.blocked": "Altijd geblokkeerd: {paths}, padtraversal (<code>..</code>), en absolute paden buiten toegestane HAOS-volumes.",
     "filesystem.custom.enable_first": "Schakel bètafuncties en bestandssysteemtools hierboven in om te bewerken.",
     "filesystem.custom.unavailable": "Aangepaste paden zijn momenteel niet beschikbaar.",
@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Time-out voor elke automatisering/script/scène configuratie-ophalen. Bereik 1–600. Herstart vereist.",
     "advanced.individual_fetch_batch_size.label": "Batchgrootte voor configuratie-ophalen",
     "advanced.individual_fetch_batch_size.help": "Gelijktijdige configuratie-ophalingen per ID. Verlaag naar 1 op seriële HA-servers. Bereik 1–100. Herstart vereist.",
+    "advanced.ha_tool_concurrency.label": "Home Assistant-toolgelijktijdigheid",
+    "advanced.ha_tool_concurrency.help": "Optionele limiet voor uiterste Home Assistant-toolaanroepen over alle sessies. Interne REST-, WebSocket- en per-tool fan-out gelijktijdigheid blijft ongewijzigd. 0 behoudt onbeperkt gedrag. Een aanroep die wacht op capaciteit mislukt na 60 seconden. Bereik 0–32. Herstart vereist.",
     "advanced.backup_hint.label": "Back-up hintniveau",
     "advanced.backup_hint.help": "Bepaalt hoe sterk de LLM wordt aangemoedigd om een volledige HA-snapshot te maken vóór risicovolle schrijfbewerkingen.",
     "advanced.backup_hint.choices.strong": "Sterk",
@@ -468,6 +470,8 @@
     "addon.pinned_tools.description": "Tools die hier worden vermeld, zijn vastgezet — ze verschijnen bovenaan het tabblad 'Tools' en kunnen niet worden losgemaakt vanuit de webinstellingen-UI zonder eerst deze optie ongedaan te maken. Handig in combinatie met Tool Search. Door komma's gescheiden toolnamen.",
     "addon.verify_ssl.name": "TLS-certificaat verifiëren",
     "addon.verify_ssl.description": "Verifieer het TLS-certificaat van de Home Assistant-server. De app (add-on) maakt verbinding via de Supervisor-proxy, dus dit heeft normaal gesproken geen effect en moet ingeschakeld blijven. Schakel dit alleen uit als je de app (add-on) zo hebt geconfigureerd dat deze via een openbare HTTPS-hostnaam met een zelfondertekend certificaat of een niet-overeenkomende hostnaam met HA communiceert. Uitschakelen verzwakt de transportbeveiliging — laat ingeschakeld tenzij je zeker weet dat je het nodig hebt. Vereist een herstart om van kracht te worden.",
+    "addon.ha_tool_concurrency.name": "Home Assistant tool concurrency",
+    "addon.ha_tool_concurrency.description": "Optionele limiet voor uiterste Home Assistant-toolaanroepen over alle sessies. Interne REST-, WebSocket- en per-tool fan-out gelijktijdigheid blijft ongewijzigd. 0 behoudt onbeperkt gedrag. Een aanroep die wacht op capaciteit mislukt na 60 seconden.",
     "addon_stable.enable_tool_search.description": "Vervang de volledige toolcatalogus door zoekgebaseerde ontdekking. Vermindert inactieve context met ongeveer 90%, tot ongeveer 5K tokens. ⚠️ Schakel dit NIET in bij clients met een ingebouwde toolzoekfunctie / uitgestelde tools (claude.ai, Claude Desktop, Claude Code) — de twee zoeklagen conflicteren en de ingebouwde toolzoekfunctie van de client heeft daar de voorkeur; laat dit uitgeschakeld. Of tools worden uitgesteld hangt af van je client- en modelcombinatie: gebruik dit wanneer je opstelling de volledige catalogus vooraf laadt — modellen zonder native uitgestelde tools (bijv. Gemini, OpenAI-compatibele lokale modellen, Claude Haiku), clients die alle toolschema's inline opnemen ongeacht het model (bijv. GitHub Copilot CLI), of kleinere contextvensters. Sommige Codex-modellen en ChatGPT bevatten ook uitgestelde tools — controleer je client/model direct om de functies te bevestigen zodat je dit niet onnodig ingeschakeld laat. Tools worden gevonden via ha_search_tools en uitgevoerd via gecategoriseerde proxy's (lezen/schrijven/verwijderen). Vereist een herstart van de app (add-on) om van kracht te worden — maak daarna opnieuw verbinding of vernieuw de MCP-server in je AI-client zodat deze de toollijst opnieuw laadt. Alleen de app (add-on) herstarten vernieuwt de gecached toollijst van een client NIET; dit is van toepassing na het wijzigen van een instelling hier."
   },
   "tools": {
@@ -631,10 +635,6 @@
       "title": "Haal Automatiseringstraceringen op",
       "description": "Haal uitvoeringstraceringen op voor automatiseringen en scripts om problemen op te sporen."
     },
-    "ha_get_blueprint": {
-      "title": "Haal Blueprint op",
-      "description": "Haal blueprintinformatie op - lijst alle blueprints of haal details op voor een specifieke."
-    },
     "ha_get_camera_image": {
       "title": "Haal Camerabeeld op",
       "description": "Haal een momentopname van een afbeelding op van een Home Assistant-camera-entiteit."
@@ -695,10 +695,6 @@
       "title": "Haal Zone op",
       "description": "Haal zone-informatie op - lijst alle zones of haal details op voor een specifieke."
     },
-    "ha_import_blueprint": {
-      "title": "Importeer Blueprint",
-      "description": "Importeer een blueprint van een URL."
-    },
     "ha_list_files": {
       "title": "Lijst Bestanden",
       "description": "Lijst bestanden in een map binnen de Home Assistant-configuratie."
@@ -718,6 +714,10 @@
     "ha_manage_backup": {
       "title": "Back-ups Beheren",
       "description": "Polymorfe back-uptool. Zie de toolbeschrijving voor de routeringsmatrix."
+    },
+    "ha_manage_blueprints": {
+      "title": "Blauwdrukken beheren",
+      "description": "Beheer Home Assistant-blauwdrukken — weergeven, lezen, importeren, opslaan, verwijderen of een losse configuratie renderen."
     },
     "ha_manage_custom_tool": {
       "title": "Aangepaste Tool",

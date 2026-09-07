@@ -33,7 +33,7 @@
           "extra_yaml_keys": "额外的 YAML 可写键"
         },
         "data_description": {
-          "allowed_dirs": "相对于配置目录的路径，包括诸如 sensor.yaml 的确切文件名，或 /share、/media、/ssl 和 /backup 下的路径。每个条目均被授予对该路径及其中所有内容的读写权限；每个路径请作为一个单独的列表项输入。将丢弃目录遍历及其他不允许的路径。",
+          "allowed_dirs": "相对于 config 目录的路径，包括诸如 sensor.yaml 的准确文件名，或 /share、/media、/ssl 和 /backup 下的路径。每个条目都会被授予对该路径及其中任何内容的读写权限；请输入每个路径作为单独的列表项。条目按字面量匹配，不支持诸如 * 的通配符。路径遍历和其他不允许的路径将被丢弃。",
           "extra_yaml_keys": "除内置键外，ha_config_set_yaml 还可写入的顶层键，适用于本安装中以 YAML 为主的集成（例如 alert2）。信任边界键会被丢弃。"
         }
       },

@@ -2,7 +2,7 @@ name: HAOS E2E Tests (beta)
 
 # Both beta HAOS lanes live in this file (#2292 / #2302). They keep their
 # existing job ids, names, steps, and shared ``haos-beta-image-*`` cache key
-# for a qcow2 baked with the current beta Supervisor and Home Assistant Core.
+# for a qcow2 baked with the current beta OS, Supervisor, and Core.
 # `haos-e2e-inaddon-beta` is the sole writer of that cache;
 # `haos-e2e-embedded-beta` restores only (and can build locally on a miss).
 #
@@ -11,7 +11,7 @@ name: HAOS E2E Tests (beta)
 # lane so a cache miss does not start two identical image builds.
 
 on:
-  # Test committed ha-mcp code against upcoming beta Supervisor and Core
+  # Test committed ha-mcp code against upcoming beta OS, Supervisor, and Core
   # releases. Run on each user-originated master update so regressions from our
   # changes surface after merge, and nightly so deliberate upstream beta
   # changes that require an ha-mcp adaptation surface before stable release.
@@ -58,10 +58,10 @@ env:
 
 jobs:
   # Decide once whether beta is currently distinct from stable. The gate checks
-  # one thing: whether beta.json and stable.json name the same Supervisor and
-  # Core. When they do, the stable HAOS lanes' image (baked from the stable
-  # channel, so it follows the current stable release as of its last bake;
-  # keyed on the bake inputs, so it is rebaked whenever those change and
+  # one thing: whether beta.json and stable.json name the same OS, Supervisor,
+  # and Core. When they do, the stable HAOS lanes' image (baked from
+  # Renovate-managed stable pins; keyed on the bake inputs, so it is rebaked
+  # whenever those change and
   # otherwise lives until cache eviction) is taken to cover it, and
   # both lanes below are skipped on push and schedule; a manual dispatch
   # always runs. Each lane still resolves the versions itself for its cache
@@ -85,6 +85,7 @@ jobs:
           # the job. A ``read`` over a failed substitution would leave the
           # variables empty, make the comparison below trivially true, and skip
           # both lanes silently; the fail-safe direction here is to run them.
+          os_re='^[0-9]+\.[0-9]+([.]rc[0-9]+)?$'
           supervisor_re='^[0-9]{4}\.[0-9]{1,2}\.[0-9]+([.]dev[0-9]+)?$'
           core_re='^[0-9]{4}\.[0-9]{1,2}\.[0-9]+([.]dev[0-9]+|b[0-9]+)?$'
           check() {
@@ -109,14 +110,22 @@ jobs:
           stable_core=$(python3 -c \
             'import json, sys; print(json.load(sys.stdin)["homeassistant"]["qemux86-64"])' \
             <<<"$stable") || exit 1
+          beta_os=$(python3 -c \
+            'import json, sys; print(json.load(sys.stdin)["hassos"]["ova"])' \
+            <<<"$beta") || exit 1
+          stable_os=$(python3 -c \
+            'import json, sys; print(json.load(sys.stdin)["hassos"]["ova"])' \
+            <<<"$stable") || exit 1
+          check "beta OS" "$beta_os" "$os_re"
+          check "stable OS" "$stable_os" "$os_re"
           check "beta Supervisor" "$beta_supervisor" "$supervisor_re"
           check "beta Core" "$beta_core" "$core_re"
           check "stable Supervisor" "$stable_supervisor" "$supervisor_re"
           check "stable Core" "$stable_core" "$core_re"
           superfluous=false
-          if [ "$beta_supervisor" = "$stable_supervisor" ] && [ "$beta_core" = "$stable_core" ]; then
+          if [ "$beta_os" = "$stable_os" ] && [ "$beta_supervisor" = "$stable_supervisor" ] && [ "$beta_core" = "$stable_core" ]; then
             superfluous=true
-            echo "::notice::Beta (Supervisor $beta_supervisor, Core $beta_core) equals stable; skipping the beta lanes"
+            echo "::notice::Beta (OS $beta_os, Supervisor $beta_supervisor, Core $beta_core) equals stable; skipping the beta lanes"
           fi
           echo "superfluous=$superfluous" >> "$GITHUB_OUTPUT"
 
@@ -135,7 +144,7 @@ jobs:
           # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
 
-      - name: Resolve current beta Supervisor and Core versions
+      - name: Resolve current beta OS, Supervisor, and Core versions
         id: versions
         run: |
           metadata=$(curl --fail --silent --show-error \
@@ -154,12 +163,20 @@ jobs:
             echo "::error::Unexpected beta Core version: $core_version"
             exit 1
           fi
+          os_version=$(python3 -c \
+            'import json, sys; print(json.load(sys.stdin)["hassos"]["ova"])' \
+            <<<"$metadata")
+          if ! [[ "$os_version" =~ ^[0-9]+\.[0-9]+([.]rc[0-9]+)?$ ]]; then
+            echo "::error::Unexpected beta OS version: $os_version"
+            exit 1
+          fi
+          echo "os_version=$os_version" >> "$GITHUB_OUTPUT"
           echo "supervisor_version=$supervisor_version" >> "$GITHUB_OUTPUT"
           echo "core_version=$core_version" >> "$GITHUB_OUTPUT"
 
       - name: Compute beta image cache key
         id: key
-        # Both beta lanes restore this byte-identical image. The two upstream
+        # Both beta lanes restore this byte-identical image. The three upstream
         # versions prevent an older beta image from satisfying a newer run;
         # the hash invalidates it when any hashed repository bake input changes.
         run: |
@@ -169,7 +186,7 @@ jobs:
             custom_components/ha_mcp_tools \
             homeassistant-addon-webhook-proxy \
             | sha256sum | cut -d' ' -f1 | head -c16)
-          echo "cache-key=haos-beta-image-${{ steps.versions.outputs.supervisor_version }}-${{ steps.versions.outputs.core_version }}-$hash" >> "$GITHUB_OUTPUT"
+          echo "cache-key=haos-beta-image-${{ steps.versions.outputs.os_version }}-${{ steps.versions.outputs.supervisor_version }}-${{ steps.versions.outputs.core_version }}-$hash" >> "$GITHUB_OUTPUT"
 
       - name: Restore image from cache
         id: restore-cache
@@ -221,6 +238,7 @@ jobs:
       - name: Build image locally (cache miss or forced rebuild)
         if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
         env:
+          HAOS_BUILD_OS_VERSION: ${{ steps.versions.outputs.os_version }}
           HAOS_BUILD_SUPERVISOR_CHANNEL: beta
           HAOS_BUILD_SUPERVISOR_MIN_VERSION: ${{ steps.versions.outputs.supervisor_version }}
           HAOS_BUILD_CORE_VERSION: ${{ steps.versions.outputs.core_version }}
@@ -299,6 +317,7 @@ jobs:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-beta-test-image.qcow2
           HAOS_TEST_MODE: inaddon
+          HAOS_EXPECTED_OS_VERSION: ${{ steps.versions.outputs.os_version }}
           HAOS_EXPECTED_SUPERVISOR_CHANNEL: beta
           HAOS_EXPECTED_SUPERVISOR_MIN_VERSION: ${{ steps.versions.outputs.supervisor_version }}
           PYTEST_PATHS: ${{ github.event.inputs.pytest_paths || 'src/e2e/' }}
@@ -421,7 +440,7 @@ jobs:
           # Full history so merge-ref git operations resolve cleanly.
           fetch-depth: 0
 
-      - name: Resolve current beta Supervisor and Core versions
+      - name: Resolve current beta OS, Supervisor, and Core versions
         id: versions
         run: |
           metadata=$(curl --fail --silent --show-error \
@@ -440,12 +459,20 @@ jobs:
             echo "::error::Unexpected beta Core version: $core_version"
             exit 1
           fi
+          os_version=$(python3 -c \
+            'import json, sys; print(json.load(sys.stdin)["hassos"]["ova"])' \
+            <<<"$metadata")
+          if ! [[ "$os_version" =~ ^[0-9]+\.[0-9]+([.]rc[0-9]+)?$ ]]; then
+            echo "::error::Unexpected beta OS version: $os_version"
+            exit 1
+          fi
+          echo "os_version=$os_version" >> "$GITHUB_OUTPUT"
           echo "supervisor_version=$supervisor_version" >> "$GITHUB_OUTPUT"
           echo "core_version=$core_version" >> "$GITHUB_OUTPUT"
 
       - name: Compute beta image cache key
         id: key
-        # Both beta lanes restore this byte-identical image. The two upstream
+        # Both beta lanes restore this byte-identical image. The three upstream
         # versions prevent an older beta image from satisfying a newer run;
         # the hash invalidates it when any hashed repository bake input changes.
         run: |
@@ -455,7 +482,7 @@ jobs:
             custom_components/ha_mcp_tools \
             homeassistant-addon-webhook-proxy \
             | sha256sum | cut -d' ' -f1 | head -c16)
-          echo "cache-key=haos-beta-image-${{ steps.versions.outputs.supervisor_version }}-${{ steps.versions.outputs.core_version }}-$hash" >> "$GITHUB_OUTPUT"
+          echo "cache-key=haos-beta-image-${{ steps.versions.outputs.os_version }}-${{ steps.versions.outputs.supervisor_version }}-${{ steps.versions.outputs.core_version }}-$hash" >> "$GITHUB_OUTPUT"
 
       - name: Restore image from cache
         id: restore-cache
@@ -507,6 +534,7 @@ jobs:
       - name: Build image locally (cache miss or forced rebuild)
         if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
         env:
+          HAOS_BUILD_OS_VERSION: ${{ steps.versions.outputs.os_version }}
           HAOS_BUILD_SUPERVISOR_CHANNEL: beta
           HAOS_BUILD_SUPERVISOR_MIN_VERSION: ${{ steps.versions.outputs.supervisor_version }}
           HAOS_BUILD_CORE_VERSION: ${{ steps.versions.outputs.core_version }}
@@ -555,6 +583,7 @@ jobs:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-beta-test-image.qcow2
           HAOS_TEST_MODE: embedded
+          HAOS_EXPECTED_OS_VERSION: ${{ steps.versions.outputs.os_version }}
           HAOS_EXPECTED_SUPERVISOR_CHANNEL: beta
           HAOS_EXPECTED_SUPERVISOR_MIN_VERSION: ${{ steps.versions.outputs.supervisor_version }}
           HAOS_EXPECTED_CORE_VERSION: ${{ steps.versions.outputs.core_version }}

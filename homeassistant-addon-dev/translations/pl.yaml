@@ -198,6 +198,13 @@ configuration:
       podrzędna opcji „Dołącz umiejętności najlepszych praktyk przy zapisach” powyżej
       i nieaktywna, gdy opcja nadrzędna jest wyłączona. Wymaga ponownego uruchomienia,
       aby zmiany weszły w życie.'
+  ha_tool_concurrency:
+    name: Współbieżność narzędzi Home Assistant
+    description: Opcjonalny limit zewnętrznych wywołań narzędzi Home Assistant we
+      wszystkich sesjach. Wewnętrzna współbieżność REST, WebSocket oraz rozgałęziania
+      dla poszczególnych narzędzi pozostaje bez zmian. Wartość 0 zachowuje zachowanie
+      bez limitu. Wywołanie oczekujące na wolne zasoby kończy się niepowodzeniem po
+      60 sekundach.
   enable_filesystem_tools:
     name: Włącz narzędzia systemu plików (beta)
     description: 'Ustawia HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Umożliwia bezpośredni

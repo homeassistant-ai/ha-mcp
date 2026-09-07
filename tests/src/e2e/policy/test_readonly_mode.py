@@ -9,7 +9,8 @@ against the testcontainer HA (function-scoped — the session-scoped
 - exempt mixed read/write tools stay listed, their read actions work,
   and their write actions return the structured READ_ONLY_MODE error;
 - direct calls to hidden write tools return the same error;
-- with tool search enabled, proxy-dispatched writes are blocked too;
+- with tool search enabled, proxy-dispatched writes are blocked too, and
+  only the read proxy is listed;
 - ``ha_get_overview`` reports the mode to the LLM;
 - the real catalog satisfies the invariant that every mandatory tool is
   either read-safe or exempt (a unit test cannot see the real registered
@@ -411,6 +412,68 @@ async def test_string_envelope_proxy_write_blocked(readonly_toolsearch_mcp):
         {"name": inner_name, "arguments": inner_args},
     )
     assert body.get("tool_name") == inner_name, body
+
+
+@pytest.mark.asyncio
+async def test_tool_search_lists_only_the_read_proxy(readonly_toolsearch_mcp):
+    """The read-only filter runs before the search transform and never sees
+    the proxies it synthesises, so the transform leaves the write and delete
+    proxies out itself; a manage tool's read action still works through the
+    read proxy, and its search hint points only there (#2358)."""
+    client, _server = readonly_toolsearch_mcp
+    names = {t.name for t in await client.list_tools()}
+    assert "ha_search_tools" in names
+    assert "ha_call_read_tool" in names
+    assert "ha_call_write_tool" not in names, sorted(names)
+    assert "ha_call_delete_tool" not in names, sorted(names)
+
+    read = parse_mcp_result(
+        await client.call_tool(
+            "ha_call_read_tool",
+            {"name": "ha_manage_energy_prefs", "arguments": {"mode": "get"}},
+        )
+    )
+    assert read.get("success") is True, read
+
+    body = parse_mcp_result(
+        await client.call_tool(
+            "ha_search_tools", {"query": "energy dashboard preferences"}
+        )
+    )
+    entries: list = body if isinstance(body, list) else []
+    if isinstance(body, dict):
+        for key in ("tools", "results", "matches"):
+            entries.extend(body.get(key) or [])
+    hints = {
+        e["name"]: e.get("execute_via", "")
+        for e in entries
+        if isinstance(e, dict) and isinstance(e.get("name"), str)
+    }
+    assert "ha_manage_energy_prefs" in hints, sorted(hints)
+    hint = hints["ha_manage_energy_prefs"]
+    assert "ha_call_read_tool" in hint, hint
+    assert "ha_call_write_tool" not in hint, hint
+    assert "ha_call_delete_tool" not in hint, hint
+
+
+@pytest.mark.asyncio
+async def test_unlisted_write_proxy_still_runs_a_manage_tools_read_action(
+    readonly_toolsearch_mcp,
+):
+    """Unlisted is not unresolvable. A client holding ``ha_call_write_tool``
+    in a cached tool list must still reach the proxy: the middleware lets an
+    exempt read action through, and the search transform resolves the name
+    even though the read-only catalog filter would hide it. This exercises
+    transform registration order, the catalog filter and the middleware
+    together, which only the real server composes."""
+    client, _server = readonly_toolsearch_mcp
+    body = parse_mcp_result(
+        await client.call_tool(
+            "ha_call_write_tool",
+            {"name": "ha_manage_energy_prefs", "arguments": {"mode": "get"}},
+        )
+    )
+    assert body.get("success") is True, body
 
 
 @pytest.mark.asyncio

@@ -25,7 +25,7 @@ NON_ADMIN_TEST_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIzNzkyOTc
 # lane (.github/workflows/e2e-beta-tests.yml) points it at the current
 # beta Core image resolved at run time.
 # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-_DEFAULT_HA_TEST_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.9.0"
+_DEFAULT_HA_TEST_IMAGE = "ghcr.io/home-assistant/home-assistant:2026.9.1"
 HA_TEST_IMAGE = os.environ.get("HA_TEST_IMAGE", _DEFAULT_HA_TEST_IMAGE)
 
 # Test user credentials (for UI access)

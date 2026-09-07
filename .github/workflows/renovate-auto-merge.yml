@@ -1,0 +1,64 @@
+name: Renovate auto-merge approval
+
+# Renovate's own token enables native auto-merge according to renovate.json.
+# A separate maintainer account supplies the required, exact-head approval.
+on:
+  pull_request_target:
+    types: [auto_merge_enabled, synchronize]
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: renovate-approval-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  approve:
+    if: >-
+      github.actor == 'ha-mcp-renovate[bot]' &&
+      github.event.pull_request.user.login == 'ha-mcp-renovate[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == 'master' &&
+      github.event.pull_request.state == 'open' &&
+      startsWith(github.event.pull_request.head.ref, 'renovate/')
+    runs-on: ubuntu-latest
+    steps:
+      # No checkout and no PR-controlled code. Read current API state again to
+      # reject obsolete events and human-enabled auto-merge before approving.
+      - name: Approve Renovate-enabled auto-merge at the current head
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          # Existing ghhamcp maintainer account's Actions token. The separate
+          # DEPENDABOT_APPROVAL_TOKEN secret remains scoped to Dependabot.
+          github-token: ${{ secrets.GH_TOKEN_CODEX_COMMENT }}
+          script: |
+            const bot = 'ha-mcp-renovate[bot]';
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
+            if (pr.state !== 'open' || pr.draft || pr.user.login !== bot ||
+                pr.head.repo?.full_name !== `${owner}/${repo}` ||
+                !pr.head.ref.startsWith('renovate/') || pr.base.ref !== 'master' ||
+                pr.head.sha !== context.payload.pull_request.head.sha ||
+                pr.auto_merge?.enabled_by?.login !== bot ||
+                pr.auto_merge?.merge_method !== 'squash') {
+              core.info('Skipping: stale event or no eligible Renovate-enabled auto-merge.');
+              return;
+            }
+            const { data: account } = await github.rest.users.getAuthenticated();
+            if (account.login !== 'ghhamcp') {
+              throw new Error('Renovate approval requires the ghhamcp maintainer token.');
+            }
+            const reviews = await github.paginate(github.rest.pulls.listReviews,
+              { owner, repo, pull_number, per_page: 100 });
+            if (reviews.some(review => review.user?.login === account.login &&
+                review.commit_id === pr.head.sha && review.state === 'APPROVED')) {
+              core.info('Current head already has the automated approval.');
+              return;
+            }
+            await github.rest.pulls.createReview({
+              owner, repo, pull_number, event: 'APPROVE', commit_id: pr.head.sha,
+              body: 'Automated approval: Renovate enabled auto-merge for this update; required checks remain authoritative.',
+            });

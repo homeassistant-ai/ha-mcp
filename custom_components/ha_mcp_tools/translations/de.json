@@ -33,7 +33,7 @@
           "extra_yaml_keys": "Zusätzliche YAML-Schreib-Keys"
         },
         "data_description": {
-          "allowed_dirs": "Pfade relativ zum Konfigurationsverzeichnis, einschließlich genauer Dateinamen wie sensor.yaml, oder Pfade unter /share, /media, /ssl und /backup. Jedem Eintrag wird Lese- und Schreibzugriff für diesen Pfad und alles darunter gewährt; gib jeden Pfad als separaten Listeneintrag an. Verzeichnistraversierung und andere nicht erlaubte Pfade werden verworfen.",
+          "allowed_dirs": "Pfade relativ zum Konfigurationsverzeichnis, einschließlich exakter Dateinamen wie sensor.yaml, oder Pfade unter /share, /media, /ssl und /backup. Jedem Eintrag wird Lese- und Schreibzugriff für diesen Pfad und alles darunter gewährt; gib jeden Pfad als separates Listenelement ein. Einträge werden wörtlich abgeglichen; Platzhalter wie * werden nicht unterstützt. Pfadtraversierung und andere unzulässige Pfade werden verworfen.",
           "extra_yaml_keys": "Top-Level-Keys, die ha_config_set_yaml zusätzlich zu den eingebauten schreiben darf, für YAML-first-Integrationen auf dieser Installation (z. B. alert2). Vertrauensgrenzen-Keys werden verworfen."
         }
       },

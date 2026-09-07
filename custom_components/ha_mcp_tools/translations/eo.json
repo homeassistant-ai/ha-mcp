@@ -33,7 +33,7 @@
           "extra_yaml_keys": "Ekstraj YAML-skribaj ŝlosiloj"
         },
         "data_description": {
-          "allowed_dirs": "Vojoj relative al la agorda dosierujo, inkluzive de ekzakta dosiernomo kiel sensor.yaml, aŭ vojoj sub /share, /media, /ssl, kaj /backup. Ĉiu eniro ricevas leg- kaj skrib-permeson por tiu vojo kaj ĉio sub ĝi; enigu ĉiun vojon kiel apartan listan eron. Trairado kaj aliaj nepermesitaj vojoj estas forigitaj.",
+          "allowed_dirs": "Poj do la agorda dosierujo, inkluzive de ekzakta dosiernomo kiel sensor.yaml, aŭ vojoj sub /share, /media, /ssl, kaj /backup. Ĉiu eniro ricevas leg- kaj skrib-permeson por tiu vojo kaj ĉio sub ĝi; enigu ĉiun vojon kiel apartan listan eron. Eniroj estas kongruigataj laŭlitere; sovaĝaj signoj kiel * ne estas subtenataj. Trapasado kaj aliaj nepermesitaj vojoj estas forĵetitaj.",
           "extra_yaml_keys": "Ĉefnivelaj ŝlosiloj, kiujn ha_config_set_yaml povas skribi krom la enkonstruitaj, por YAML-unuaj integriĝoj en ĉi tiu instalaĵo (ekz. alert2). Fid-limaj ŝlosiloj estas forĵetitaj."
         }
       },

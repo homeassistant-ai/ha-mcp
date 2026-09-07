@@ -19,7 +19,7 @@ before adding a gate:
 | Marker | Runs on |
 |---|---|
 | `haos_only` | HAOS backends only (`HAOS_TEST_IMAGE_PATH` set). **Auto-applied** to everything under `src/e2e/haos_only/` — no marker needed there |
-| `beta_haos_only` | HAOS beta-image lanes where Supervisor/Core version expectations are configured. If any expectation is set, the test runs so partial configuration fails visibly |
+| `beta_haos_only` | HAOS beta-image lanes where OS/Supervisor/Core version expectations are configured. If any expectation is set, the test runs so partial configuration fails visibly |
 | `container_only` | the testcontainer backend only (includes the container-embedded lane) |
 | `embedded_only` | the embedded testcontainer backend only (`E2E_BACKEND=embedded`) — the one lane whose session container has ha-mcp installed inside the HA image. Skips everywhere else, including `haos_embedded` |
 | `external_only` | anywhere the server-under-test runs IN the pytest process: plain testcontainer and HAOS external. Skips stdio, inaddon, container-embedded and HAOS-embedded, which cannot be reconfigured via test-process env / monkeypatch or reach an in-process mock. The name is historical — it does NOT mean "HAOS external only" |
