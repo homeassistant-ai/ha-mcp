@@ -20,15 +20,26 @@ for(const node of ast.body) {
 // process IO, forwarding, message-port handling and shutdown source unchanged.
 const substitutes = new Map([['N','const N = console;']]);
 const selected = new Set();
-const references = scopes.scopes.flatMap(s=>s.references);
+const references = scopes.scopes.flatMap(s=>s.references).sort((a,b)=>a.identifier.start-b.identifier.start);
+function isTop(target) {
+  return target && target.defs.some(d=>d.name && defs.has(d.name.name) && defs.get(d.name.name).start<=d.name.start && d.name.end<=defs.get(d.name.name).end);
+}
+const refCache=new Map();
+function refsWithin(node) {
+  if(refCache.has(node))return refCache.get(node);
+  let lo=0,hi=references.length;
+  while(lo<hi){const mid=(lo+hi)>>>1;if(references[mid].identifier.start<node.start)lo=mid+1;else hi=mid;}
+  const found=[];
+  for(let i=lo;i<references.length&&references[i].identifier.start<node.end;i++)if(references[i].identifier.end<=node.end)found.push(references[i]);
+  refCache.set(node,found);return found;
+}
 function include(name) {
   if(selected.has(name)) return;
   selected.add(name);
   if(substitutes.has(name))return;
   const node=defs.get(name);
   if(!node)throw Error('No top-level declaration for '+name);
-  for(const ref of references) {
-    if(ref.identifier.start<node.start || ref.identifier.end>node.end)continue;
+  for(const ref of refsWithin(node)) {
     const target=ref.resolved;
     if(target && target.defs.some(d=> d.name && defs.has(d.name.name) && defs.get(d.name.name).start <= d.name.start && d.name.end <= defs.get(d.name.name).end)) include(target.name);
   }
@@ -43,16 +54,15 @@ for(const node of ast.body) if(node.type==='ExpressionStatement') {
   else effects.push(node.expression);
 }
 const usedEffects=new Set();
-function refsWithin(node) {return references.filter(r=>r.identifier.start>=node.start&&r.identifier.end<=node.end)}
 function touchesSelected(node) {
-  return refsWithin(node).some(r=>r.resolved&&selected.has(r.resolved.name)&&r.resolved.defs.some(d=>defs.get(d.name?.name)?.start<=d.name.start));
+  return refsWithin(node).some(r=>isTop(r.resolved)&&selected.has(r.resolved.name));
 }
 let changed=true;
 while(changed) {
   changed=false;
   for(const node of effects) {
     if(usedEffects.has(node))continue;
-    let needed=refsWithin(node).some(r=>r.isWrite()&&r.resolved&&selected.has(r.resolved.name));
+    let needed=refsWithin(node).some(r=>r.isWrite()&&isTop(r.resolved)&&selected.has(r.resolved.name));
     walk.simple(node,{AssignmentExpression(n){if(n.left.type==='MemberExpression'&&touchesSelected(n.left))needed=true}});
     if(!needed)continue;
     usedEffects.add(node);changed=true;
@@ -69,5 +79,6 @@ for(const {node}of nodes)output+=(node.type==='VariableDeclarator'?'var ':'')+so
 fs.writeFileSync('/tmp/desktop-inspection/initializers.txt',[...usedEffects].map(n=>source.slice(n.start,n.end)).join('\n'));
 output+='module.exports={StdioTransport:Op,PortTransport:SHn,bridge:jHn,GroupTransport:brt,spawnSpec:Mp,maxBufferSize:vrt};\n';
 fs.writeFileSync(path.join(dir,'repro-transport.cjs'),output);
+fs.writeFileSync('/tmp/desktop-inspection/extracted-transport.txt',output);
 fs.writeFileSync('/tmp/desktop-inspection/extraction.json',JSON.stringify({source:filename,selected:[...selected],bytes:output.length,source_sha256:crypto.createHash('sha256').update(source).digest('hex'),extracted_sha256:crypto.createHash('sha256').update(output).digest('hex')},null,2));
 console.log('Extracted',picked.length,'declarations',output.length,'bytes');

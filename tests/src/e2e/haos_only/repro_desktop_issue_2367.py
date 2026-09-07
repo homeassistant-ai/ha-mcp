@@ -4,37 +4,73 @@ import contextlib
 import json
 import os
 import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from ruamel.yaml import YAML
+from fastmcp import Client
+from fastmcp.client.transports import StdioTransport
 
 from .repro_issue_2367 import (
-    DATA, EXACT_TRANSFORM, attempt, call, get_dashboard, make_client, record,
+    DATA, EXACT_TRANSFORM, attempt, call, get_dashboard, record,
 )
 
-pytestmark=[pytest.mark.haos_embedded_only,pytest.mark.timeout(1200)]
+pytestmark=[pytest.mark.haos_stdio_only,pytest.mark.timeout(1200)]
+
+
+@pytest.fixture(scope='session',autouse=True)
+def bare_haos():
+    """Remove baked MCP integrations before boot; never install a server in HA."""
+    from .. import conftest as suite
+    def remove(image):
+        with tempfile.TemporaryDirectory() as folder:
+            prefix=['guestfish','--rw','-a',str(image),'run',':','mount','/dev/sda8','/',':']
+            storage='/supervisor/homeassistant/.storage/'
+            subprocess.run(prefix+['copy-out',storage+'core.config_entries',folder],check=True,capture_output=True,timeout=180)
+            target=Path(folder)/'core.config_entries'
+            doc=json.loads(target.read_text())
+            removed=[e for e in doc['data']['entries'] if e['domain'] in ('ha_mcp_tools','mcp_proxy')]
+            assert any(e['domain']=='ha_mcp_tools' for e in removed)
+            doc['data']['entries']=[e for e in doc['data']['entries'] if e not in removed]
+            target.write_text(json.dumps(doc))
+            subprocess.run(prefix+['copy-in',str(target),storage,':','rm-rf','/supervisor/homeassistant/custom_components/ha_mcp_tools',':','rm-rf','/supervisor/homeassistant/custom_components/mcp_proxy'],check=True,capture_output=True,timeout=180)
+            record('bare_haos_prepared',removed_domains=[e['domain'] for e in removed])
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(suite,'remove_tools_entry_in_qcow2',remove)
+        patch.setattr(suite,'stage_embedded_server_wheel_in_qcow2',lambda image:None)
+        yield
+
+
+def server_env(info,folder):
+    return {'HOMEASSISTANT_URL':info['base_url'],'HOMEASSISTANT_TOKEN':info['token'],
+            'HA_MCP_CONFIG_DIR':str(folder),'HAMCP_ENV_FILE':'/tmp/repro-no-env-file',
+            'PATH':os.environ['PATH']}
 
 
 class DesktopClient:
-    def __init__(self,url,folder,dual,protocol):
-        self.url=url
+    def __init__(self,info,folder,dual,protocol):
+        self.info=info
         self.folder=folder
         self.dual=dual
         self.protocol=protocol
         self.pending={}
         self.sequence=0
         self.secondary_reads=0
+        self.background=None
 
     async def __aenter__(self):
         self.folder.mkdir(parents=True)
         uvx=shutil.which('uvx')
         assert uvx
-        server={'command':uvx,'args':['--from','fastmcp-remote==4.0.3','fastmcp-remote',self.url,'--auth','none'],
-                'env':{'PATH':os.environ['PATH']}}
+        spec=os.environ['REPRO_HAMCP_SPEC']
+        servers={route:{'command':uvx,'args':['--from',spec,'ha-mcp'],
+                       'env':server_env(self.info,self.folder/('server-'+route))}
+                 for route in ['primary']+(['secondary'] if self.dual else [])}
         config=self.folder/'config.json'
-        config.write_text(json.dumps({'mcpServers':{'primary':server,**({'secondary':server} if self.dual else {})}}))
+        config.write_text(json.dumps({'mcpServers':servers}))
         self.stderr=(self.folder/'electron-stderr.txt').open('w')
         env={**os.environ,'REPRO_DESKTOP_CONFIG':str(config),
              'REPRO_DESKTOP_LOG':str(self.folder/'transport.jsonl'),
@@ -115,7 +151,10 @@ class DesktopClient:
             await self.proc.wait()
         await self.reader
         self.stderr.close()
-        # Config includes the VM-only webhook URL; artifacts need only timings.
+        from ha_mcp.stdio_settings_sidecar import retire_sidecar
+        for route in ['primary']+(['secondary'] if self.dual else []):
+            await asyncio.to_thread(retire_sidecar,self.folder/('server-'+route))
+        # Config includes the disposable VM token; upload only transport metrics.
         (self.folder/'config.json').unlink(missing_ok=True)
         record('desktop_closed',folder=self.folder.name,secondary_reads=self.secondary_reads,returncode=self.proc.returncode)
         assert self.proc.returncode==0
@@ -126,19 +165,30 @@ class DesktopClient:
 @pytest.mark.parametrize('bps',['default','false'])
 async def test_desktop_issue_2367(ha_container_with_fresh_config,protocol,dual,bps):
     info=ha_container_with_fresh_config
-    assert info['backend']=='haos_embedded'
-    url=info['embedded_webhook_url']
+    assert info['backend']=='haos_stdio'
+    assert info['embedded_webhook_url'] is None
+    assert info['addon_mcp_url'] is None
+    import httpx
+    async with httpx.AsyncClient() as rest:
+        headers={'Authorization':'Bearer '+info['token']}
+        services=await rest.get(info['base_url']+'/api/services',headers=headers)
+        services.raise_for_status()
+        assert not any(s['domain'] in ('ha_mcp_tools','mcp_proxy') for s in services.json())
+        config=await rest.get(info['base_url']+'/api/config',headers=headers)
+        config.raise_for_status()
+        assert 'ha_mcp_tools' not in config.json()['components']
+        record('standalone_topology',ha_version=config.json()['version'],ha_mcp_component_loaded=False,server_spec=os.environ['REPRO_HAMCP_SPEC'])
     baseline_config=YAML(typ='safe').load((DATA/'dashboard-media-sanitized.yaml').read_text())
     label=f'desktop/{protocol}/{dual}/{bps}'
     artifact_root=Path('/tmp/desktop-measurements')/label
-    async with make_client(url,False) as observer:
+    async with Client(StdioTransport(command='ha-mcp',args=[],env=server_env(info,artifact_root/'observer'),keep_alive=False),timeout=240) as observer:
         await call(observer,'ha_config_set_dashboard',{'url_path':'dashboard-media','config':baseline_config,'MandatoryBPS':False},label+'/setup')
         baseline=await get_dashboard(observer,label+'/baseline')
         assert baseline['config']==baseline_config
         for session in range(3):
-            async with DesktopClient(url,artifact_root/f'fresh-{session}',dual,protocol) as writer:
+            async with DesktopClient(info,artifact_root/f'fresh-{session}',dual,protocol) as writer:
                 await attempt(writer,observer,baseline,EXACT_TRANSFORM,bps,label+f'/fresh/{session}',True)
-        async with DesktopClient(url,artifact_root/'reuse',dual,protocol) as writer:
+        async with DesktopClient(info,artifact_root/'reuse',dual,protocol) as writer:
             for iteration in range(30):
                 large=iteration%2==0
                 transform=EXACT_TRANSFORM if large else "config['views'][0]['sections'][1]['cards'][0]['icon'] = 'mdi:music-box'"

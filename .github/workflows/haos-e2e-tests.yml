@@ -38,27 +38,7 @@ jobs:
           persist-credentials: false
       - name: Extract pinned official Claude Desktop on GitHub
         run: |
-          mkdir -p /tmp/desktop-inspection
-          curl -fL --retry 3 https://downloads.claude.ai/claude-desktop/apt/stable/pool/main/c/claude-desktop/claude-desktop_1.46388.2_amd64.deb -o /tmp/claude.deb
-          echo '98bf54e85e4916068c4281459b0f0431d8ff68034773f3ee98311d7206566ab1  /tmp/claude.deb' | sha256sum -c -
-          dpkg-deb -x /tmp/claude.deb /tmp/claude-package
-          asar_path=$(find /tmp/claude-package -name app.asar -print -quit)
-          test -n "$asar_path"
-          sha256sum /tmp/claude.deb "$asar_path" > /tmp/desktop-inspection/checksums.txt
-          npx --yes @electron/asar@3.4.1 extract "$asar_path" /tmp/claude-source
-          python3 investigation/issue-2367/inspect_desktop.py /tmp/claude-source
-          npm install --prefix /tmp/desktop-analysis --no-audit --no-fund acorn@8.15.0 acorn-walk@8.3.4 eslint-scope@8.4.0
-          node investigation/issue-2367/inspect_desktop_ast.cjs
-          node investigation/issue-2367/extract_desktop_transport.cjs
-          find /tmp/claude-package -maxdepth 5 -type f -executable > /tmp/desktop-inspection/executables.txt
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb
-          mkdir -p /tmp/desktop-harness
-          cp investigation/issue-2367/desktop_main.cjs /tmp/desktop-harness/main.cjs
-          cp investigation/issue-2367/desktop_renderer.html /tmp/desktop-harness/renderer.html
-          echo '{"name":"issue-2367-transport-harness","version":"1.0.0","main":"main.cjs"}' > /tmp/desktop-harness/package.json
-          npx --yes @electron/asar@3.4.1 pack /tmp/desktop-harness "$asar_path"
-          timeout 90 python3 investigation/issue-2367/desktop_preflight.py
+          bash investigation/issue-2367/setup_desktop.sh
 
       - name: Upload Desktop source analysis
         if: always()
@@ -67,9 +47,9 @@ jobs:
           name: desktop-inspection
           path: /tmp/desktop-inspection/
           retention-days: 7
-  haos-e2e-embedded:
+  haos-e2e-standalone:
     if: inputs.phase != 'inspect'
-    name: Issue 2367 HAOS embedded reproduction
+    name: Issue 2367 Desktop standalone against HAOS
     runs-on: ubuntu-22.04
     # 60 (vs the external/inaddon lanes' 45): the embedded lane pays a per-worker
     # session-setup cost the others don't — enabling the entry kicks off a runtime
@@ -188,27 +168,28 @@ jobs:
       - name: Confirm image present
         run: ls -lh /tmp/haos-test-image.qcow2
 
-      - name: Install isolated fastmcp-remote bridge
+      - name: Prepare actual Desktop transport on GitHub
+        run: bash investigation/issue-2367/setup_desktop.sh
+
+      - name: Build standalone HA-MCP wheel on GitHub
         run: |
-          uv tool install fastmcp-remote==4.0.3
-          uv pip freeze --python /tmp/repro-tools/fastmcp-remote/bin/python > /tmp/bridge-packages.txt
-        env:
-          UV_TOOL_DIR: /tmp/repro-tools
-          UV_TOOL_BIN_DIR: /tmp/repro-bin
+          uv build --wheel --out-dir /tmp/repro-wheel
+          wheel=$(find /tmp/repro-wheel -name '*.whl' -print -quit)
+          echo "REPRO_HAMCP_SPEC=$wheel" >> "$GITHUB_ENV"
+          uvx --from "$wheel" ha-mcp --version
 
       - name: Reproduce issue 2367 on HAOS
         run: |
           mkdir -p /tmp/issue-2367
-          cp /tmp/bridge-packages.txt /tmp/issue-2367/
           git rev-parse HEAD > /tmp/issue-2367/source-sha.txt
           uv pip freeze > /tmp/issue-2367/client-packages.txt
           cd tests
-          uv run pytest src/e2e/haos_only/repro_issue_2367.py \
+          uv run pytest src/e2e/haos_only/repro_desktop_issue_2367.py \
             -n0 -v -s --tb=short --maxfail=1 --junitxml=/tmp/issue-2367/junit.xml
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2
-          HAOS_TEST_MODE: embedded
+          HAOS_TEST_MODE: stdio
           E2E_NO_TOOLS_ENTRY: "1"
           # Feeds conftest's HACS token injection (qcow2 pre-boot edit) so HACS
           # repo adds don't hit the unauthenticated shared-IP GitHub rate limit —
@@ -295,4 +276,15 @@ jobs:
         with:
           name: issue-2367-measurements
           path: /tmp/issue-2367/
+          retention-days: 7
+
+      - name: Upload Desktop transport measurements
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: desktop-transport-measurements
+          path: |
+            /tmp/desktop-inspection/
+            /tmp/desktop-measurements/**/transport.jsonl
+            /tmp/desktop-measurements/**/electron-stderr.txt
           retention-days: 7
