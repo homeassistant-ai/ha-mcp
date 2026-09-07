@@ -126,5 +126,3 @@ async def test_one_approval_dispatches_only_one_overlapping_static_call(
     assert_approval_required(next(result for result in results if result.is_error))
     assert len(queue.list_pending()) == 1
     assert queue.list_pending()[0].token != pending[0].token
-
-
