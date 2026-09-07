@@ -70,6 +70,37 @@ caller and does not know to demand the new component.
 A component path cannot be fully exercised by pre-merge CI. After merge,
 live-test it promptly on the development server before the next stable cut.
 
+## Dependencies shared with Core
+
+The embedded server installs into Home Assistant's Python environment using
+Core's `package_constraints.txt`. The standalone `uv.lock` is not the embedded
+installation contract. For HA-owned libraries, keep package requirements as
+bounded compatibility ranges that admit supported Core versions. Preserve the
+standalone lock's selected versions when widening a range; widen or raise a
+floor only with compatibility evidence. Pydantic follows its major-version
+boundary; HTTPX is pre-1.0, so its minor-version boundary remains capped.
+
+Dependabot defers routine Pydantic and HTTPX version updates. Its `update-types`
+ignore rules leave security updates enabled; those still need compatibility
+review. Renovate advances the Core E2E image, not these package requirements.
+When updating either library, coordinate the requirement and standalone lock
+with Core's pins. Never fix an embedded resolver failure by dropping HA's
+constraints or eagerly upgrading its shared packages.
+
+PR checks cover the current Core image and the `hacs.json` minimum:
+
+- Fast Checks verifies direct dependency alignment at both endpoints.
+- The current embedded lanes run the full suite on x64 and ARM64.
+- A focused x64 minimum-Core variant boots the real embedded server and runs
+  the connection and no-stomp tests, covering transitive installation and both
+  preinstall/runtime replacement of HA-governed packages.
+- Existing nightly beta E2E lanes detect upcoming Core regressions.
+
+These checks cover those versions and installation paths, not every intervening
+release, every installed third-party integration, or future API compatibility.
+Keep the HACS minimum honest; passing current-Core E2E alone does not justify
+raising a dependency floor past versions older supported Core releases need.
+
 ## Two entries, one command surface
 
 The integration has two config-entry types:
