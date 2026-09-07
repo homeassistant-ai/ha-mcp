@@ -54,7 +54,7 @@ const effects=[];
 for(const node of ast.body) if(node.type==='ExpressionStatement') {
   if(node.expression.type==='SequenceExpression') effects.push(...node.expression.expressions);
   else effects.push(node.expression);
-}
+} else if(!['VariableDeclaration','FunctionDeclaration','ClassDeclaration','EmptyStatement'].includes(node.type))effects.push(node);
 const usedEffects=new Set();
 function touchesSelected(node) {
   return refsWithin(node).some(r=>isTop(r.resolved)&&selected.has(r.resolved.name));
@@ -82,6 +82,7 @@ const picked=[...selected].filter(n=>!substitutes.has(n)).map(n=>[n,defs.get(n)]
 const nodes=[...picked.map(([name,node])=>({name,node})),...[...usedEffects].map(node=>({node}))].sort((a,b)=>a.node.start-b.node.start);
 let output='"use strict";\n'+[...substitutes.values()].join('\n')+'\n';
 for(const {node}of nodes)output+=(node.type==='VariableDeclarator'?'var ':'')+source.slice(node.start,node.end)+';\n';
+fs.writeFileSync('/tmp/desktop-inspection/global-init-source.txt',[...globalMembers].map(key=>{const pos=source.indexOf('globalThis.'+key);return source.slice(Math.max(0,pos-150),pos+500)}).join('\n'));
 fs.writeFileSync('/tmp/desktop-inspection/initializers.txt',[...usedEffects].map(n=>source.slice(n.start,n.end)).join('\n'));
 output+='module.exports={StdioTransport:Op,PortTransport:SHn,bridge:jHn,GroupTransport:brt,spawnSpec:Mp,maxBufferSize:vrt};\n';
 fs.writeFileSync(path.join(dir,'repro-transport.cjs'),output);
