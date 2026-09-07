@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const acorn = require('/tmp/desktop-analysis/node_modules/acorn');
+const walk = require('/tmp/desktop-analysis/node_modules/acorn-walk');
 const scope = require('/tmp/desktop-analysis/node_modules/eslint-scope');
 const dir = '/tmp/claude-source/.vite/build';
 const filename = path.join(dir, 'index.chunk-DrnJEXHK.js');
@@ -33,13 +34,39 @@ function include(name) {
   }
 }
 for(const name of ['Op','SHn','jHn','brt','Srt','Dqe','Mp','Tqe','vrt'])include(name);
-const picked=[...selected].filter(n=>!substitutes.has(n)).map(n=>[n,defs.get(n)]).sort((a,b)=>a[1].start-b[1].start);
-let output='"use strict";\n'+[...substitutes.values()].join('\n')+'\n';
-for(const [name,node]of picked) {
-  output+=(node.type==='VariableDeclarator'?'var ':'')+source.slice(node.start,node.end)+';\n';
-  // Bundler normalizes Node imports with a following namespace assignment.
-  if(node.type==='VariableDeclarator' && node.init?.type==='CallExpression' && node.init.callee.name==='require' && node.init.arguments[0]?.type==='Literal' && !String(node.init.arguments[0].value).startsWith('.')) output+=`if (${name} && !${name}.default) ${name} = Object.assign({default:${name}}, ${name});\n`;
+// Declarations alone omit bundle initialization such as globalThis[zodKey]
+// ??= {} and enum IIFEs. Retain writes to selected bindings/objects in their
+// original order, then close over their dependencies too.
+const effects=[];
+for(const node of ast.body) if(node.type==='ExpressionStatement') {
+  if(node.expression.type==='SequenceExpression') effects.push(...node.expression.expressions);
+  else effects.push(node.expression);
 }
+const usedEffects=new Set();
+function refsWithin(node) {return references.filter(r=>r.identifier.start>=node.start&&r.identifier.end<=node.end)}
+function touchesSelected(node) {
+  return refsWithin(node).some(r=>r.resolved&&selected.has(r.resolved.name)&&r.resolved.defs.some(d=>defs.get(d.name?.name)?.start<=d.name.start));
+}
+let changed=true;
+while(changed) {
+  changed=false;
+  for(const node of effects) {
+    if(usedEffects.has(node))continue;
+    let needed=refsWithin(node).some(r=>r.isWrite()&&r.resolved&&selected.has(r.resolved.name));
+    walk.simple(node,{AssignmentExpression(n){if(n.left.type==='MemberExpression'&&touchesSelected(n.left))needed=true}});
+    if(!needed)continue;
+    usedEffects.add(node);changed=true;
+    for(const ref of refsWithin(node)) {
+      const target=ref.resolved;
+      if(target&&target.defs.some(d=>d.name&&defs.has(d.name.name)&&defs.get(d.name.name).start<=d.name.start&&d.name.end<=defs.get(d.name.name).end))include(target.name);
+    }
+  }
+}
+const picked=[...selected].filter(n=>!substitutes.has(n)).map(n=>[n,defs.get(n)]);
+const nodes=[...picked.map(([name,node])=>({name,node})),...[...usedEffects].map(node=>({node}))].sort((a,b)=>a.node.start-b.node.start);
+let output='"use strict";\n'+[...substitutes.values()].join('\n')+'\n';
+for(const {node}of nodes)output+=(node.type==='VariableDeclarator'?'var ':'')+source.slice(node.start,node.end)+';\n';
+fs.writeFileSync('/tmp/desktop-inspection/initializers.txt',[...usedEffects].map(n=>source.slice(n.start,n.end)).join('\n'));
 output+='module.exports={StdioTransport:Op,PortTransport:SHn,bridge:jHn,GroupTransport:brt,spawnSpec:Mp,maxBufferSize:vrt};\n';
 fs.writeFileSync(path.join(dir,'repro-transport.cjs'),output);
 fs.writeFileSync('/tmp/desktop-inspection/extraction.json',JSON.stringify({source:filename,selected:[...selected],bytes:output.length,source_sha256:crypto.createHash('sha256').update(source).digest('hex'),extracted_sha256:crypto.createHash('sha256').update(output).digest('hex')},null,2));
