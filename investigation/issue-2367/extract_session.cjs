@@ -44,3 +44,27 @@ fs.writeFileSync(path.join(root,'repro-session.cjs'),output);
 fs.writeFileSync('/tmp/desktop-inspection/session-lifecycle.txt',output);
 fs.writeFileSync('/tmp/desktop-inspection/session-extraction.json',JSON.stringify({source:file,source_sha256:hash(source),retained:names,application_bindings:[...free],output_sha256:hash(output)},null,2));
 console.log('Session lifecycle:',names.length,'declarations; external services:',[...free].join(','));
+// Export syntax hashes and reference locations, not proprietary source, so the
+// Windows runner can identify its own exact declarations and service bindings.
+const {canonical}=require('./source_shapes.cjs');
+const references=new Map(scopes.scopes.flatMap(s=>s.references).map(r=>[r.identifier.start,r]));
+const specifications=[];
+for(const [name,node] of [...names.map(n=>[n,defs.get(n)]),...Object.entries(callbacks)]){
+ const refs=[];
+ function scan(n,keys=[]){
+  if(n===null||typeof n!=='object')return;
+  if(n.type==='Identifier'){
+   const ref=references.get(n.start),target=ref?.resolved;
+   if(target&&!target.defs.some(d=>d.name.start>=node.start&&d.name.end<=node.end)){
+    if(retained.has(target.name)||free.has(target.name))refs.push({path:keys,name:target.name});
+    else if(Object.hasOwn(callbacks,name)&&target.name==='t')refs.push({path:keys,name:'$mainView'});
+   }
+  }
+  for(const [key,value] of Object.entries(n))if(!['start','end','range','loc'].includes(key)){
+   if(Array.isArray(value))value.forEach((v,i)=>scan(v,[...keys,key,i]));else if(value&&typeof value==='object')scan(value,[...keys,key]);
+  }
+ }
+ scan(node);
+ specifications.push({name,kind:Object.hasOwn(callbacks,name)?'callback':'declaration',shape_sha256:hash(canonical(node)),references:refs});
+}
+fs.writeFileSync('/tmp/desktop-inspection/session-shapes.json',JSON.stringify({linux_sha256:hash(source),bindings:[...free],specifications},null,2));
