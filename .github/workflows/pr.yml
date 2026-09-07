@@ -324,9 +324,11 @@ jobs:
       # where HA pins a shared dependency exactly, ha-mcp must admit the pin;
       # where HA is loose, ha-mcp must not pin exactly (an exact pin forces
       # pip to replace the image-shipped copy in place — the torn-install
-      # window). Checked against the same HA version the e2e lanes run
-      # (HA_IMAGE_GHCR, renovate-managed), so drift on either side fails the
-      # PR that introduces it. Rules unit-tested offline in
+      # window). Check the current E2E image AND the HACS minimum: a Core
+      # image update must not silently strand users on the supported floor.
+      # This is direct-dependency coverage at the endpoints. Existing current
+      # Core/beta E2E lanes cover actual installs and runtime compatibility.
+      # Rules unit-tested offline in
       # tests/src/unit/test_ha_constraint_alignment.py.
       #
       # Exit codes are load-bearing: 1 is a real drift violation and fails
@@ -339,17 +341,21 @@ jobs:
       # problems, and failing open on them would leave this gate green
       # forever while it checked nothing.
       run: |
-        set +e
-        uv run --no-project --with packaging python \
-          scripts/check_ha_constraint_alignment.py \
-          --ha-version "${HA_IMAGE_GHCR##*:}"
-        status=$?
-        set -e
-        if [ "$status" -eq 78 ]; then
-          echo "::warning::could not reach HA's package_constraints.txt - skipping the alignment check (the e2e no-stomp guard still covers the real install)"
-          exit 0
-        fi
-        exit "$status"
+        minimum=$(python3 -c 'import json; print(json.load(open("hacs.json"))["homeassistant"])')
+        [[ "$minimum" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]+$ ]]
+        failed=0
+        for ha_version in "${HA_IMAGE_GHCR##*:}" "$minimum"; do
+          status=0
+          uv run --no-project --with packaging python \
+            scripts/check_ha_constraint_alignment.py \
+            --ha-version "$ha_version" || status=$?
+          if [ "$status" -eq 78 ]; then
+            echo "::warning::could not reach HA ${ha_version} constraints - dependency alignment for this version was not verified"
+          elif [ "$status" -ne 0 ]; then
+            failed=1
+          fi
+        done
+        exit "$failed"
 
     - name: Install dependencies
       # One install for ruff, ast-grep and mypy. The three folded jobs each ran
