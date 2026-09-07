@@ -12,7 +12,8 @@ try {T=require('/tmp/claude-source/.vite/build/repro-transport.cjs')}
 catch(error){process.stdout.write(JSON.stringify({type:'fatal',error:error.stack})+'\n');process.exit(1)}
 const config = JSON.parse(fs.readFileSync(process.env.REPRO_DESKTOP_CONFIG, 'utf8'));
 const logPath=process.env.REPRO_DESKTOP_LOG;
-const emit = msg => process.stdout.write(JSON.stringify(msg)+'\n');
+let controlOutput=process.stdout;
+const emit = msg => controlOutput.write(JSON.stringify(msg)+'\n');
 const trace = (event,fields={})=>fs.appendFileSync(logPath,JSON.stringify({time:Date.now(),event,...fields})+'\n');
 const logger={info:()=>{},warn:(...a)=>trace('warning',{message:String(a[0])}),error:(...a)=>trace('error',{message:String(a[0])})};
 console.info=(...a)=>logger.info(...a);console.warn=(...a)=>logger.warn(...a);console.error=(...a)=>logger.error(...a);
@@ -59,8 +60,16 @@ async function main(){
   await win.loadFile('/tmp/desktop-harness/renderer.html');
   diagnostic('renderer loaded');
   for(const route of Object.keys(config.mcpServers))await open(route);
+  let controlInput=process.stdin;
+  if(process.env.REPRO_CONTROL_FILE){
+    const net=require('node:net');
+    controlInput=controlOutput=await new Promise(resolve=>{
+      const server=net.createServer(socket=>{server.close();resolve(socket)});
+      server.listen(0,'127.0.0.1',()=>fs.writeFileSync(process.env.REPRO_CONTROL_FILE,JSON.stringify({port:server.address().port})));
+    });
+  }
   emit({type:'ready',versions:process.versions,desktop:process.env.REPRO_PLATFORM==='win32'?'1.46388.4':'1.46388.2',routes:Object.keys(config.mcpServers)});
-  const input=readline.createInterface({input:process.stdin});
+  const input=readline.createInterface({input:controlInput});
   input.on('line',line=>{
     const {route='primary',...message}=JSON.parse(line);
     trace('driver_request',{route,id:message.id,method:message.method});
