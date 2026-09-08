@@ -3870,6 +3870,8 @@ class DashboardConfigTools:
                 f"{prior_change}; configuration update: {error['error']['message']}"
             )
             raise_tool_error(error)
+        # CodeQL does not infer the shared helper's NoReturn contract.
+        raise AssertionError("unreachable: raise_tool_error always raises")
 
     async def _prepare_and_save_dashboard_config(
         self,

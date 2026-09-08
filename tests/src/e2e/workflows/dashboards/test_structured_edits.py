@@ -83,9 +83,14 @@ async def test_reporter_dashboard_edits_and_conflicts(
             registry = await mcp.call_tool_success(
                 "ha_config_get_dashboard", {"list_only": True}
             )
-            assert next(
-                row["title"] for row in registry["dashboards"] if row["url_path"] == path
-            ) == "Metadata survives config conflict"
+            assert (
+                next(
+                    row["title"]
+                    for row in registry["dashboards"]
+                    if row["url_path"] == path
+                )
+                == "Metadata survives config conflict"
+            )
         for _ in range(3):
             before = await mcp.call_tool_success(
                 "ha_config_get_dashboard", {"url_path": path}
