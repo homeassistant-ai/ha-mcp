@@ -1,0 +1,36 @@
+<!doctype html><meta charset="utf-8"><title>Simulated signed-in Desktop chat</title>
+<script>
+const ports=new Map(),pending=new Map();
+const report=message=>fetch('/__repro/reply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(message)});
+window.addEventListener('error',e=>report({type:'fatal',error:String(e.error||e.message)}));
+window.addEventListener('unhandledrejection',e=>report({type:'fatal',error:String(e.reason)}));
+window.addEventListener('message',event=>{
+ if(event.source!==window||event.data?.type!=='mcp-server-connected')return;
+ const name=event.data.serverName,port=event.ports[0];
+ if(!port)throw Error('Desktop preload did not transfer a MessagePort');
+ port.onmessage=({data})=>{
+   if('id' in data){const key=name+':'+data.id;if(!pending.has(key))throw Error('Unexpected response '+key);pending.delete(key)}
+   report({route:name,...data});
+ };
+ port.start();ports.set(name,port);
+});
+window.__repro={receive(message){
+ const {route='primary',...rpc}=message;
+ if(rpc.method==='repro/conversation'){
+   history.pushState({},'', '/chat/'+crypto.randomUUID());
+   report({route,jsonrpc:'2.0',id:rpc.id,result:{conversation:location.pathname,pending:pending.size}});
+   return;
+ }
+ if('id' in rpc){const key=route+':'+rpc.id;if(pending.has(key))throw Error('Duplicate in-flight request '+key);pending.set(key,{conversation:location.pathname,sent:performance.now()})}
+ ports.get(route).postMessage(rpc);
+}};
+(async()=>{
+ if(typeof require!=='undefined')throw Error('Page unexpectedly has Node access');
+ await window['claude.web'].Auth.prepareForSignedIn();
+ await window['claude.web'].Account.setAccountDetails({accountUuid:'00000000-0000-4000-8000-000000002367',email:'runner@example.invalid',organizationUuid:'00000000-0000-4000-8000-000000002368'});
+ const servers=await window.claudeAppBindings.listMcpServers();
+ for(const name of servers){await window.claudeAppBindings.connectToMcpServer(name);const deadline=performance.now()+30000;while(!ports.has(name)){if(performance.now()>deadline)throw Error('Port transfer timed out: '+name);await new Promise(r=>setTimeout(r,10))}}
+ history.pushState({},'', '/chat/00000000-0000-4000-8000-000000002367');
+ await report({type:'session_ready',servers,origin:location.origin,conversation:location.pathname,node_access:typeof require});
+})().catch(error=>report({type:'fatal',error:String(error.stack||error)}));
+</script>

@@ -1,0 +1,310 @@
+# Sanitized dashboard config - ha-mcp issue #2367 / #1644
+#
+# Sanitization applied:
+#   - user UUIDs in view.visible replaced with <USER_A> / <USER_B>
+#   - add-on slug in navigation_path replaced with <ADDON_SLUG>
+# Everything else is verbatim: structure, nesting, templates, custom cards,
+# entity ids, size. config_size_bytes: 7420
+#
+# The timing-out python_transform targets views[1].sections (the "Bla" view),
+# appending one grid section. That view is the second one below.
+
+views:
+  - type: sections
+    title: Radio
+    icon: mdi:radio
+    path: radio
+    max_columns: 4
+    cards: []
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Player
+            heading_style: title
+
+          - type: custom:mediocre-multi-media-player-card
+            entity_id: media_player.shield_2
+            mode: card
+            size: large
+            options:
+              default_tab: search
+            media_players:
+              - entity_id: media_player.vsx_832
+                search: []
+                media_browser: []
+              - entity_id: media_player.shield_2
+                ma_entity_id: media_player.shield_2
+                media_browser:
+                  - entity_id: media_player.shield_2
+                    name: Music Assistant
+                can_be_grouped: true
+                custom_buttons:
+                  - icon: mdi:music-box-multiple
+                    name: Music Assistant
+                    tap_action:
+                      action: navigate
+                      navigation_path: /app/<ADDON_SLUG>
+              - entity_id: media_player.samsung_7_series_75
+                ma_entity_id: media_player.samsung_7_series_75
+                media_browser:
+                  - entity_id: media_player.samsung_7_series_75
+                    name: Music Assistant
+                can_be_grouped: true
+                custom_buttons:
+                  - icon: mdi:music-box-multiple
+                    name: Music Assistant
+                    tap_action:
+                      action: navigate
+                      navigation_path: /app/<ADDON_SLUG>
+              - entity_id: media_player.pioneer_avr_2
+                ma_entity_id: media_player.pioneer_avr_2
+                media_browser:
+                  - entity_id: media_player.pioneer_avr_2
+                    name: Music Assistant
+                can_be_grouped: true
+                custom_buttons:
+                  - icon: mdi:music-box-multiple
+                    name: Music Assistant
+                    tap_action:
+                      action: navigate
+                      navigation_path: /app/<ADDON_SLUG>
+
+          - type: tile
+            grid_options:
+              rows: auto
+              columns: full
+            entity: media_player.vsx_832
+            name: AVR Lautstärke
+            icon: mdi:volume-high
+            hide_state: true
+            vertical: false
+            features:
+              - type: media-player-volume-slider
+            features_position: bottom
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Music Assistant
+            heading_style: title
+            icon: mdi:music-box-multiple
+
+          - type: tile
+            entity: input_select.radio_zielplayer
+            features:
+              - type: select-options
+
+          - type: tile
+            entity: input_select.radio_sender
+            features:
+              - type: select-options
+
+          - type: custom:mushroom-template-card
+            primary: Abspielen
+            icon: >-
+              {% if is_state('script.radio_play','on') %}mdi:timer-sand{% else
+              %}mdi:play-circle{% endif %}
+            icon_color: >-
+              {% if is_state('script.radio_play','on') %}amber{% else %}green{%
+              endif %}
+            secondary: >-
+              {% if is_state('script.radio_play','on') %}wird gestartet{% else
+              %}{{ states('input_select.radio_sender') }}{% endif %}
+            tap_action:
+              action: perform-action
+              perform_action: script.radio_play_auswahl
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Echo (Alexa)
+            heading_style: title
+            icon: mdi:speaker-wireless
+            badges:
+              - type: entity
+                entity: input_select.radio_ziel
+                show_name: false
+                show_state: true
+                show_icon: true
+                tap_action:
+                  action: more-info
+
+          - type: tile
+            entity: input_select.radio_ziel
+            features:
+              - type: select-options
+
+          - type: custom:mushroom-chips-card
+            alignment: start
+            chips:
+              - type: template
+                content: Katzenpuff
+                icon: mdi:cat
+                icon_color: >-
+                  {% set p = states('sensor.radio_ziel_player') %}{% if
+                  is_state(p,'playing') and 'katzenpuff' in
+                  (state_attr(p,'media_title') or '') | lower %}pink{% endif %}
+                tap_action:
+                  action: perform-action
+                  perform_action: script.radio_start
+                  data:
+                    sender: Katzenpuff
+                    quelle: laut.fm
+              - type: template
+                content: Hirschmilch
+                icon: mdi:music-note
+                icon_color: >-
+                  {% if 'hirschmilch' in
+                  (state_attr(states('sensor.radio_ziel_player'),'media_title')
+                  or '')|lower %}pink{% endif %}
+                tap_action:
+                  action: perform-action
+                  perform_action: script.radio_start
+                  data:
+                    sender: Hirschmilch
+                    quelle: TuneIn
+              - type: template
+                content: Bremen Eins
+                icon: mdi:radio-tower
+                icon_color: >-
+                  {% if 'bremen' in
+                  (state_attr(states('sensor.radio_ziel_player'),'media_title')
+                  or '')|lower %}pink{% endif %}
+                tap_action:
+                  action: perform-action
+                  perform_action: script.radio_start
+                  data:
+                    sender: Bremen Eins
+
+          - type: custom:mushroom-chips-card
+            alignment: end
+            chips:
+              - type: template
+                icon: mdi:volume-medium
+                content: >-
+                  {{
+                  (state_attr(states('sensor.radio_ziel_player'),'volume_level')|float(0)*100)|round(0)
+                  }} %
+                tap_action:
+                  action: none
+              - type: template
+                icon: mdi:volume-plus
+                tap_action:
+                  action: perform-action
+                  perform_action: script.radio_lautstaerke
+                  data:
+                    schritt: 5
+              - type: template
+                content: Stop
+                icon: mdi:stop
+                icon_color: >-
+                  {% if is_state(states('sensor.radio_ziel_player'),'playing')
+                  %}red{% endif %}
+                tap_action:
+                  action: perform-action
+                  perform_action: script.radio_stop
+              - type: template
+                icon: mdi:volume-minus
+                tap_action:
+                  action: perform-action
+                  perform_action: script.radio_lautstaerke
+                  data:
+                    schritt: -5
+
+  # >>> This is views[1] - the target of the timing-out python_transform.
+  - type: sections
+    title: Bla
+    path: bla
+    max_columns: 4
+    dense_section_placement: false
+    cards: []
+    visible:
+      - user: <USER_A>
+      - user: <USER_B>
+    sections:
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Echos
+            heading_style: title
+          - type: custom:mediocre-media-player-card
+            entity_id: media_player.wohnzimmer_echo_2
+            name: null
+            use_art_colors: true
+            tap_opens_popup: true
+            speaker_group:
+              entity_id: media_player.badezimmer_dot_2
+              entities:
+                - media_player.gastezimmer_dot
+                - media_player.kuche_dot_2
+                - media_player.schlafzimmer_echo_2
+                - media_player.wohnzimmer_echo_2
+                - media_player.flur_dot_2
+                - media_player.uberall_2
+                - media_player.oben_2
+                - media_player.unten_2
+            options:
+              always_show_power_button: true
+              show_volume_step_buttons: true
+          - type: button
+            entity: script.radio_start
+            name: Katzenpuff
+            icon: mdi:radio
+            show_state: false
+            grid_options:
+              columns: full
+            tap_action:
+              action: perform-action
+              perform_action: script.radio_start
+              data:
+                sender: Katzenpuff
+                quelle: laut.fm
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Fernbedienung
+            heading_style: title
+          - type: tile
+            grid_options:
+              columns: full
+            entity: select.elite_aktivitaten
+            name: Elite
+            icon: mdi:remote
+            show_entity_picture: true
+            hide_state: true
+            vertical: false
+            features:
+              - type: select-options
+            features_position: bottom
+          - type: tile
+            grid_options:
+              columns: full
+            entity: select.ultimate_aktivitaten
+            name: Ultimate
+            show_entity_picture: true
+            hide_state: true
+            vertical: false
+            features:
+              - type: select-options
+            features_position: bottom
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Cast
+            heading_style: title
+          - type: media-control
+            entity: media_player.samsung_tv
+          - type: media-control
+            entity: media_player.shield
+          - type: media-control
+            entity: media_player.vsx_832
+          - type: vertical-stack
+            cards:
+              - type: media-control
+                entity: media_player.schlafzimmer_fire_tv_4k_sz
+              - type: custom:mushroom-media-player-card
+                entity: media_player.schlafzimmer_fire_tv_4k_sz
