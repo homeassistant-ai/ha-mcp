@@ -140,7 +140,7 @@ async def edit_dashboard_via_component(
     except (asyncio.CancelledError, Exception) as exc:
         # Cancellation during send/response wait cannot prove HA did not save.
         # Convert only at this write boundary; pre-dispatch cancellation propagates.
-        if is_unknown_command(exc):
+        if isinstance(exc, Exception) and is_unknown_command(exc):
             invalidate_caps(client)
             return None
         _raise_edit_error(
