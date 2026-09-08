@@ -735,3 +735,121 @@ async def test_legacy_config_failure_preserves_prior_write(
     assert native_socket.send_command.await_count == (
         1 if backend == "unknown_command" and failure != "invalid" else 0
     )
+
+
+@pytest.mark.parametrize("prior_change", ["metadata", "create", "none"])
+@pytest.mark.parametrize("stage", ["probe", "socket", "legacy_save"])
+async def test_config_cancellation_preserves_prior_registry_write(
+    legacy_dashboard, native_socket, monkeypatch, prior_change, stage
+):
+    client, document, messages = legacy_dashboard
+    tools = DashboardConfigTools(client)
+    monkeypatch.setattr(
+        tools,
+        "_ensure_dashboard_exists",
+        AsyncMock(return_value=(prior_change != "create", "id", prior_change == "metadata", None)),
+    )
+    if stage == "legacy_save":
+        monkeypatch.setattr(
+            component_dashboard_edit, "get_component_caps", AsyncMock(return_value=None)
+        )
+        original_send = client.send_websocket_message.side_effect
+
+        async def send(message):
+            if message["type"] == "lovelace/config/save":
+                messages.append(deepcopy(message))
+                document.clear()
+                document.update(deepcopy(message["config"]))
+                raise asyncio.CancelledError
+            return await original_send(message)
+
+        client.send_websocket_message.side_effect = send
+    else:
+        monkeypatch.setattr(
+            component_dashboard_edit,
+            "get_component_caps" if stage == "probe" else "get_websocket_client",
+            AsyncMock(side_effect=asyncio.CancelledError),
+        )
+    if prior_change == "none" and stage != "legacy_save":
+        with pytest.raises(asyncio.CancelledError):
+            await tools.ha_config_set_dashboard(
+                "test-dashboard", config={"views": []}, MandatoryBPS=False
+            )
+    else:
+        with pytest.raises(ToolError) as caught:
+            await tools.ha_config_set_dashboard(
+                "test-dashboard", config={"views": []}, MandatoryBPS=False
+            )
+        error = json.loads(str(caught.value))
+        if prior_change != "none":
+            assert error["write_committed"] is True
+            assert error["dashboard_created"] is (prior_change == "create")
+            assert error["metadata_updated"] is (prior_change == "metadata")
+            assert error["config_write_committed"] is (
+                None if stage == "legacy_save" else False
+            )
+        else:
+            assert error["write_committed"] is None
+    assert len([m for m in messages if m["type"] == "lovelace/config/save"]) == (
+        1 if stage == "legacy_save" else 0
+    )
+    native_socket.send_command.assert_not_awaited()
+
+
+@pytest.mark.parametrize("mode", ["patch", "python_transform"])
+@pytest.mark.parametrize("backend", ["absent", "unknown_command"])
+@pytest.mark.parametrize("failure", ["timeout", "disconnected", "cancelled", "not_sent", "rejected"])
+async def test_legacy_edit_save_failure_reports_outcome_without_retry(
+    legacy_dashboard, native_socket, monkeypatch, mode, backend, failure
+):
+    client, document, messages = legacy_dashboard
+    if backend == "absent":
+        monkeypatch.setattr(
+            component_dashboard_edit, "get_component_caps", AsyncMock(return_value=None)
+        )
+    else:
+        native_socket.send_command.side_effect = HomeAssistantCommandError(
+            "Unknown command", "unknown_command"
+        )
+    before = deepcopy(document)
+    original_send = client.send_websocket_message.side_effect
+
+    async def send(message):
+        if message["type"] != "lovelace/config/save":
+            return await original_send(message)
+        messages.append(deepcopy(message))
+        if failure == "not_sent":
+            raise HomeAssistantCommandNotSent("not authenticated")
+        if failure == "rejected":
+            return {"success": False, "error": {"message": "Save rejected"}}
+        document.clear()
+        document.update(deepcopy(message["config"]))
+        if failure == "cancelled":
+            raise asyncio.CancelledError
+        if failure == "timeout":
+            raise HomeAssistantCommandTimeout("timeout after save")
+        raise ConnectionError("connection lost after save")
+
+    client.send_websocket_message.side_effect = send
+    edit = (
+        [{"op": "remove", "path": "/views/0"}]
+        if mode == "patch"
+        else "config['views'] = []"
+    )
+    with pytest.raises(ToolError) as caught:
+        await DashboardConfigTools(client).ha_config_set_dashboard(
+            "test-dashboard",
+            config_hash=compute_config_hash(document),
+            MandatoryBPS=False,
+            **{mode: edit},
+        )
+    error = json.loads(str(caught.value))
+    known_unwritten = failure in {"not_sent", "rejected"}
+    assert error["write_committed"] is (False if known_unwritten else None)
+    if not known_unwritten:
+        assert error["reason"] == "write_outcome_unknown"
+        assert document == {"views": []}
+    else:
+        assert document == before
+    assert sum(m["type"] == "lovelace/config/save" for m in messages) == 1
+    assert native_socket.send_command.await_count == (backend == "unknown_command")
