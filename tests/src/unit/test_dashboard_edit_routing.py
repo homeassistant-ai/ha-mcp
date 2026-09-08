@@ -1361,3 +1361,57 @@ async def test_creation_ignores_hash_but_existing_empty_dashboard_keeps_guard(
     if backend != "absent":
         command_kwargs = native_socket.send_command.call_args.kwargs
         assert ("expected_hash" in command_kwargs) is dashboard_exists
+
+
+@pytest.mark.parametrize("backend", ["native", "absent", "unknown_command"])
+@pytest.mark.parametrize("mode", ["config", "patch", "python_transform"])
+async def test_strategy_conversion_failure_preserves_action_for_every_mode(
+    legacy_dashboard, native_socket, monkeypatch, backend, mode
+):
+    client, document, messages = legacy_dashboard
+    document.clear()
+    document["strategy"] = {"type": "original-states"}
+    tools = DashboardConfigTools(client)
+    monkeypatch.setattr(
+        tools,
+        "_ensure_dashboard_exists",
+        AsyncMock(return_value=(True, "id", False, None)),
+    )
+    native_socket.send_command.return_value = {
+        "success": True,
+        "result": {
+            "success": False,
+            "error": {
+                "code": "strategy_conversion",
+                "message": "Cannot convert strategy dashboard",
+            },
+            "write_committed": False,
+        },
+    }
+    if backend == "absent":
+        monkeypatch.setattr(
+            component_dashboard_edit, "get_component_caps", AsyncMock(return_value=None)
+        )
+    elif backend == "unknown_command":
+        native_socket.send_command.side_effect = HomeAssistantCommandError(
+            "Unknown command", "unknown_command"
+        )
+    edits = {
+        "config": {"views": []},
+        "patch": [{"op": "remove", "path": "/strategy"}],
+        "python_transform": "del config['strategy']; config['views'] = []",
+    }
+    with pytest.raises(ToolError) as caught:
+        await tools.ha_config_set_dashboard(
+            "test-dashboard",
+            config_hash=compute_config_hash(document),
+            MandatoryBPS=False,
+            **{mode: edits[mode]},
+        )
+    error = json.loads(str(caught.value))
+    assert error["action"] == ("set" if mode == "config" else mode)
+    assert error["error"]["code"] == "VALIDATION_FAILED"
+    assert error["write_committed"] is False
+    assert "Take Control" in error["error"]["suggestion"]
+    assert document == {"strategy": {"type": "original-states"}}
+    assert not any(m["type"] == "lovelace/config/save" for m in messages)

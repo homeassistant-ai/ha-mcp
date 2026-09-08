@@ -29,8 +29,9 @@ before saving. Values, including card templates and JavaScript strings, stay
 literal. `move` and `copy` are not supported.
 
 Use patches for known locations and Python transforms for loops or pattern-based
-changes. Supply exactly one of `patch`, `python_transform`, or `config`. Patches
-and Python transforms require a hash; full replacements retain their optional
+changes. Supply at most one of `patch`, `python_transform`, or `config`: choose
+one for dashboard-content changes, and omit all three for metadata-only calls.
+Patches and Python transforms require a hash; full replacements retain their optional
 hash check for an existing dashboard. When creating a new dashboard, a supplied
 hash is ignored because no prior config exists; this matches legacy behavior.
 An existing dashboard with no saved config still rejects a supplied hash.

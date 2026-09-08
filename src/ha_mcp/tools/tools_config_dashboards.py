@@ -3733,7 +3733,7 @@ class DashboardConfigTools:
             url_path,
             was_strategy_dashboard="strategy" in existing_config,
             replacement_config=replacement_config,
-            action="config",
+            action="set",
         )
 
         return _large_dashboard_replacement_warning(existing_config_size)
