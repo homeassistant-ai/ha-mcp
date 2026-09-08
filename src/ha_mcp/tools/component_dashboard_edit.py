@@ -137,18 +137,16 @@ async def edit_dashboard_via_component(
         raw = await ws.send_command(WS_DASHBOARD_EDIT, **kwargs)
     except HomeAssistantCommandNotSent as exc:
         _raise_edit_error(url_path, "load_failed", str(exc), False)
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, Exception) as exc:
         # Cancellation during send/response wait cannot prove HA did not save.
         # Convert only at this write boundary; pre-dispatch cancellation propagates.
-        _raise_edit_error(
-            url_path,
-            "write_outcome_unknown",
-            "Request cancelled while sending or awaiting the dashboard edit response",
-            None,
-        )
-    except Exception as exc:
         if is_unknown_command(exc):
             invalidate_caps(client)
             return None
-        _raise_edit_error(url_path, "write_outcome_unknown", str(exc), None)
+        _raise_edit_error(
+            url_path,
+            "write_outcome_unknown",
+            str(exc) or "Dashboard edit interrupted before its response was received",
+            None,
+        )
     return _validate_edit_result(raw, url_path)
