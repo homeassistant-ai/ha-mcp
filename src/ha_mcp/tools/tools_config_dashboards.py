@@ -2982,9 +2982,9 @@ class DashboardConfigTools:
             }
         )
 
-        Note: When updating an existing dashboard, title/icon/require_admin/show_in_sidebar
-        are also updated if explicitly provided alongside (or instead of) a config change.
-        With patch, update this metadata in a separate call; combining them is rejected.
+        Note: title/icon/require_admin/show_in_sidebar can be updated in metadata-only
+        calls or alongside a full config replacement. For python_transform or patch,
+        update metadata in a separate call; combining it with patch is rejected.
 
         STORAGE-MODE vs YAML-MODE DASHBOARDS:
         This tool only manages storage-mode dashboards (created via UI/API and stored in
@@ -3838,23 +3838,14 @@ class DashboardConfigTools:
             error_msg = save_result.get("error", {})
             if isinstance(error_msg, dict):
                 error_msg = error_msg.get("message", str(error_msg))
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to save {'transformed' if action == 'python_transform' else 'dashboard'} config: {error_msg}",
-                    suggestions=[
-                        "Verify config format is valid Lovelace JSON",
-                        "Check that you have admin permissions",
-                        "Ensure all entity IDs in config exist",
-                    ],
-                    context={
-                        "action": action,
-                        "url_path": url_path,
-                        "reason": "save_rejected",
-                        "write_committed": False,
-                        "post_write_verified": False,
-                    },
-                )
+            # Core may update the live config before persistence raises. An
+            # unrecognized error response cannot establish an unwritten edit.
+            raise_dashboard_edit_error(
+                url_path,
+                "write_outcome_unknown",
+                f"Failed to save {'transformed' if action == 'python_transform' else 'dashboard'} config: {error_msg}",
+                None,
+                action,
             )
 
     async def _apply_dashboard_config(

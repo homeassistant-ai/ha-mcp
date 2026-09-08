@@ -652,7 +652,9 @@ async def test_native_cancellation_before_dispatch_propagates(
 
 @pytest.mark.parametrize("backend", ["absent", "unknown_command"])
 @pytest.mark.parametrize("prior_change", ["metadata", "create"])
-@pytest.mark.parametrize("failure", ["conflict", "rejected", "disconnected", "invalid"])
+@pytest.mark.parametrize(
+    "failure", ["conflict", "rejected", "disconnected", "invalid", "unknown_error"]
+)
 async def test_legacy_config_failure_preserves_prior_write(
     legacy_dashboard, native_socket, monkeypatch, backend, prior_change, failure
 ):
@@ -689,11 +691,20 @@ async def test_legacy_config_failure_preserves_prior_write(
             return {"success": True, "result": deepcopy(dashboard)}
         if command == "lovelace/config/save":
             messages.append(deepcopy(message))
-            if failure == "disconnected":
+            if failure in {"disconnected", "unknown_error"}:
                 document.clear()
                 document.update(deepcopy(message["config"]))
+                if failure == "unknown_error":
+                    return {
+                        "success": False,
+                        "error": "Command failed: Unknown error",
+                        "error_code": "unknown_error",
+                    }
                 raise ConnectionError("connection lost after save")
-            return {"success": False, "error": {"message": "Save rejected"}}
+            return {
+                "success": False,
+                "error": {"code": "invalid_format", "message": "Save rejected"},
+            }
         return await original_send(message)
 
     client.send_websocket_message.side_effect = send
@@ -704,6 +715,7 @@ async def test_legacy_config_failure_preserves_prior_write(
     expected_error = {
         "invalid": "dict/object",
         "disconnected": "connection lost",
+        "unknown_error": "outcome unknown",
         "rejected": "Save rejected",
         "conflict": "conflict" if prior_change == "metadata" else "Save rejected",
     }[failure]
@@ -721,9 +733,9 @@ async def test_legacy_config_failure_preserves_prior_write(
     assert error["metadata_updated"] is (prior_change == "metadata")
     assert error["write_committed"] is True
     assert error["config_write_committed"] is (
-        None if failure == "disconnected" else False
+        None if failure in {"disconnected", "unknown_error"} else False
     )
-    if failure == "disconnected":
+    if failure in {"disconnected", "unknown_error"}:
         assert document == {"views": []}
     else:
         assert document == before
@@ -808,7 +820,8 @@ async def test_config_cancellation_preserves_prior_registry_write(
 @pytest.mark.parametrize("mode", ["patch", "python_transform"])
 @pytest.mark.parametrize("backend", ["absent", "unknown_command"])
 @pytest.mark.parametrize(
-    "failure", ["timeout", "disconnected", "cancelled", "not_sent", "rejected"]
+    "failure",
+    ["timeout", "disconnected", "cancelled", "not_sent", "rejected", "unknown_error"],
 )
 async def test_legacy_edit_save_failure_reports_outcome_without_retry(
     legacy_dashboard, native_socket, monkeypatch, mode, backend, failure
@@ -832,9 +845,18 @@ async def test_legacy_edit_save_failure_reports_outcome_without_retry(
         if failure == "not_sent":
             raise HomeAssistantCommandNotSent("not authenticated")
         if failure == "rejected":
-            return {"success": False, "error": {"message": "Save rejected"}}
+            return {
+                "success": False,
+                "error": {"code": "invalid_format", "message": "Save rejected"},
+            }
         document.clear()
         document.update(deepcopy(message["config"]))
+        if failure == "unknown_error":
+            return {
+                "success": False,
+                "error": "Command failed: Unknown error",
+                "error_code": "unknown_error",
+            }
         if failure == "cancelled":
             raise asyncio.CancelledError
         if failure == "timeout":
@@ -856,14 +878,9 @@ async def test_legacy_edit_save_failure_reports_outcome_without_retry(
         )
     error = json.loads(str(caught.value))
     assert error["action"] == mode
-    if failure == "rejected":
-        assert error["reason"] == "save_rejected"
-        assert ("transformed config" in str(caught.value)) is (
-            mode == "python_transform"
-        )
     assert error["reason"] == {
         "not_sent": "write_not_sent",
-        "rejected": "save_rejected",
+        "rejected": "invalid_format",
     }.get(failure, "write_outcome_unknown")
     known_unwritten = failure in {"not_sent", "rejected"}
     assert error["write_committed"] is (False if known_unwritten else None)
@@ -1588,3 +1605,66 @@ async def test_native_replacement_race_only_suggests_omitting_a_sent_hash(
         "expected_hash" in native_socket.send_command.call_args.kwargs
     ) is hash_supplied
     assert not any(m["type"] == "lovelace/config/save" for m in messages)
+
+
+@pytest.mark.parametrize("mode", ["patch", "python_transform", "config"])
+@pytest.mark.parametrize("cached_by_read", [False, True])
+@pytest.mark.parametrize(
+    "failure",
+    ["connection", "timeout", "command", "unexpected", "malformed", "malformed_caps"],
+)
+async def test_real_failed_discovery_never_downgrades_dashboard_write(
+    legacy_dashboard, monkeypatch, mode, cached_by_read, failure
+):
+    """Exercise the actual probe and cache, including negatives populated by reads."""
+    from ha_mcp.client.rest_client import HomeAssistantConnectionError
+    from ha_mcp.tools import component_api
+
+    client, document, messages = legacy_dashboard
+    exceptions = {
+        "connection": HomeAssistantConnectionError("connection lost"),
+        "timeout": HomeAssistantCommandTimeout("probe timed out"),
+        "command": HomeAssistantCommandError("info handler failed", "unknown_error"),
+        "unexpected": RuntimeError("probe failed"),
+    }
+    reply = {"success": True, "result": None}
+    if failure == "malformed_caps":
+        reply["result"] = {"schema_version": 1, "capabilities": "dashboard_edit"}
+    ws = SimpleNamespace(
+        send_command=AsyncMock(return_value=reply, side_effect=exceptions.get(failure))
+    )
+    monkeypatch.setattr(
+        component_api, "get_websocket_client", AsyncMock(return_value=ws)
+    )
+    monkeypatch.setattr(
+        component_dashboard_edit, "get_component_caps", component_api.get_component_caps
+    )
+    native_connection = AsyncMock()
+    monkeypatch.setattr(
+        component_dashboard_edit, "get_websocket_client", native_connection
+    )
+    if cached_by_read:
+        await component_api.get_component_caps(client)
+    before = deepcopy(document)
+    edit = {
+        "patch": [{"op": "remove", "path": "/views/0"}],
+        "python_transform": "config['views'] = []",
+        "config": {"views": []},
+    }[mode]
+    # A repeat must preserve the failure cached by either a strict writer or read.
+    for _ in range(2):
+        with pytest.raises(ToolError) as caught:
+            await DashboardConfigTools(client).ha_config_set_dashboard(
+                "test-dashboard",
+                config_hash=compute_config_hash(document),
+                MandatoryBPS=False,
+                **{mode: edit},
+            )
+        error = json.loads(str(caught.value))
+        assert error["reason"] == "load_failed"
+        assert error.get("config_write_committed", error["write_committed"]) is False
+        assert error["post_write_verified"] is False
+    assert document == before
+    assert not any(m["type"] == "lovelace/config/save" for m in messages)
+    ws.send_command.assert_awaited_once_with("ha_mcp_tools/info")
+    native_connection.assert_not_awaited()

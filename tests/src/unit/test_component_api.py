@@ -412,3 +412,64 @@ def test_is_unknown_command_keys_off_code_not_message() -> None:
         HomeAssistantCommandError("Command failed: bad", "invalid_format")
     )
     assert not is_unknown_command(ValueError("boom"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure", ["connection", "command", "malformed", "malformed_caps"]
+)
+async def test_strict_discovery_recovers_after_cached_failure_expires(
+    monkeypatch, failure
+):
+    """Strict writers re-probe failed discovery rather than keeping a permanent veto."""
+    clock = _clock()
+    monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
+    client = _client()
+    ws = _make_ws(
+        info_exc={
+            "connection": HomeAssistantConnectionError("down"),
+            "command": HomeAssistantCommandError("broken info", "unknown_error"),
+        }.get(failure),
+        info_result={**_INFO_OK, "capabilities": "search"}
+        if failure == "malformed_caps"
+        else None,
+    )
+    with _patch_ws(ws):
+        await get_component_caps(client)
+        with pytest.raises(component_api.ComponentDiscoveryError):
+            await get_component_caps(client, strict=True)
+        assert ws.send_command.await_count == 1
+        clock[0] += component_api._NEGATIVE_CACHE_TTL_S + 1
+        ws.send_command.side_effect = None
+        ws.send_command.return_value = {"success": True, "result": _INFO_OK}
+        assert component_supports(
+            await get_component_caps(client, strict=True), "search"
+        )
+        assert component_supports(
+            await get_component_caps(client, strict=True), "search"
+        )
+        assert ws.send_command.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "absence", ["unknown_command", "old_capabilities", "unsupported_schema"]
+)
+async def test_strict_discovery_accepts_definitive_capability_absence(absence):
+    """Confirmed incompatible or absent capability remains a valid fallback."""
+    ws = _make_ws(
+        info_exc=HomeAssistantCommandError("absent", "unknown_command")
+        if absence == "unknown_command"
+        else None,
+        info_result={
+            **_INFO_OK,
+            "schema_version": 2 if absence == "unsupported_schema" else 1,
+        },
+    )
+    client = _client()
+    with _patch_ws(ws):
+        for _ in range(2):
+            assert not component_supports(
+                await get_component_caps(client, strict=True), "dashboard_edit"
+            )
+    assert ws.send_command.await_count == 1

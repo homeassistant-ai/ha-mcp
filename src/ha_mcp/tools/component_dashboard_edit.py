@@ -127,15 +127,16 @@ async def edit_dashboard_via_component(
 ) -> dict[str, Any] | None:
     """Return an authoritative edit result, or None for an unavailable command.
 
-    Only capability absence or HA's definitive unknown_command permits legacy
-    fallback. Never use the REST client's retrying WebSocket bridge for a write.
+    Legacy fallback requires confirmed absence of a compatible capability or
+    HA's definitive unknown_command. Never use the REST client's retrying
+    WebSocket bridge for a native write.
     ``action`` labels local error responses only; it is not a command argument.
     """
     # Clients without connection credentials cannot probe the component.
     if not getattr(client, "base_url", None) or not getattr(client, "token", None):
         return None
     try:
-        caps = await get_component_caps(client)
+        caps = await get_component_caps(client, strict=True)
         if not component_supports(caps, "dashboard_edit"):
             return None
         ws = await get_websocket_client(

@@ -67,11 +67,12 @@ DEVICE_REGISTRY_CHILD_SEMANTICS = "device_registry_child_semantics"
 # time, so a component installed / upgraded mid-session is re-probed and
 # adopted instead of being pinned to "absent" for the whole process lifetime
 # (the cache key is the process-lifetime REST client — see ``_CAPS_CACHE``).
-# Positive entries never expire on this timer; they are dropped only by
+# Valid positive entries never expire on this timer; they are dropped only by
 # ``invalidate_caps`` (a supposedly-supported command coming back
 # ``unknown_command``). This ABSENT-negative window covers a definitive
 # "component responded, no usable surface" verdict (``unknown_command`` /
-# malformed / unsupported schema_version).
+# malformed / unsupported schema_version). Malformed snapshots retained by
+# permissive parsing also expire on this timer so strict callers can recover.
 _NEGATIVE_CACHE_TTL_S = 300.0
 
 # A separate, much SHORTER window for a TRANSIENT negative: the probe couldn't
@@ -121,7 +122,7 @@ class ComponentCaps:
 # Weak-keyed by client so the negotiated caps self-evict when the client is
 # garbage-collected. The key is the process-lifetime REST client, NOT the WS
 # connection: an HA restart drops the socket but reuses the same pooled client,
-# so a positive entry persists for the whole process (dropped only by
+# so a valid positive entry persists for the whole process (dropped only by
 # ``invalidate_caps`` on an ``unknown_command``). A ``None`` value is a cached
 # *negative* ("probed, no usable WS surface"); absence means "not yet probed".
 # A negative carries an expiry in EXACTLY ONE of the two timestamp maps below —
@@ -132,7 +133,7 @@ _CAPS_CACHE: weakref.WeakKeyDictionary[Any, ComponentCaps | None] = (
     weakref.WeakKeyDictionary()
 )
 # Monotonic timestamp a definitive ABSENT-negative was stored, keyed by the same
-# client. Only populated for ``None`` values; positive entries never appear here.
+# client. Also expires malformed snapshots rejected by strict callers.
 _NEGATIVE_CACHE_TS: weakref.WeakKeyDictionary[Any, float] = weakref.WeakKeyDictionary()
 # Monotonic timestamp a TRANSIENT (transport-failure) negative was stored. Kept
 # separate from ``_NEGATIVE_CACHE_TS`` so the two negative kinds carry different
@@ -141,7 +142,24 @@ _NEGATIVE_CACHE_TS: weakref.WeakKeyDictionary[Any, float] = weakref.WeakKeyDicti
 _TRANSIENT_NEGATIVE_TS: weakref.WeakKeyDictionary[Any, float] = (
     weakref.WeakKeyDictionary()
 )
+# Preserve failed discovery separately so write callers can refuse a downgrade
+# even when a best-effort read populated the negative cache first. Store only
+# text, not exceptions whose traceback would retain clients through weak keys.
+_PROBE_FAILURES: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
 _CAPS_LOCKS: weakref.WeakKeyDictionary[Any, asyncio.Lock] = weakref.WeakKeyDictionary()
+
+
+class ComponentDiscoveryError(RuntimeError):
+    """Discovery failed without establishing which component commands are usable."""
+
+
+def _checked_caps(
+    client: Any, caps: ComponentCaps | None, strict: bool
+) -> ComponentCaps | None:
+    """Keep read fallbacks while exposing failed discovery to write callers."""
+    if strict and (failure := _PROBE_FAILURES.get(client)):
+        raise ComponentDiscoveryError(failure)
+    return caps
 
 
 def _get_caps_lock(client: Any) -> asyncio.Lock:
@@ -156,7 +174,8 @@ def _get_caps_lock(client: Any) -> asyncio.Lock:
 def _live_cache_entry(client: Any) -> tuple[bool, ComponentCaps | None]:
     """Return ``(hit, caps)`` for a still-valid cache entry, else ``(False, None)``.
 
-    A positive entry is a hit for the process lifetime. A negative (``None``)
+    A valid positive entry is a hit for the process lifetime. Malformed replies
+    retained for permissive readers expire like absent negatives. A negative (``None``)
     entry is a hit only within its window of when it was stored (monotonic clock):
     ``_NEGATIVE_CACHE_TTL_S`` for a definitive absent-negative, the shorter
     ``_TRANSIENT_NEGATIVE_CACHE_TTL_S`` for a transport-failure negative. Once the
@@ -167,6 +186,10 @@ def _live_cache_entry(client: Any) -> tuple[bool, ComponentCaps | None]:
         return False, None
     cached = _CAPS_CACHE[client]
     if cached is not None:
+        if client in _PROBE_FAILURES:
+            stored_at = _NEGATIVE_CACHE_TS.get(client)
+            if stored_at is None or _monotonic() - stored_at >= _NEGATIVE_CACHE_TTL_S:
+                return False, None
         return True, cached
     now = _monotonic()
     stored_at = _NEGATIVE_CACHE_TS.get(client)
@@ -188,6 +211,7 @@ def _store_caps(client: Any, caps: ComponentCaps | None) -> None:
     ``unknown_command`` / malformed / unsupported schema). Clears any prior
     transient-negative stamp so a client never carries both negative kinds.
     """
+    _PROBE_FAILURES.pop(client, None)
     _CAPS_CACHE[client] = caps
     _TRANSIENT_NEGATIVE_TS.pop(client, None)
     if caps is None:
@@ -249,11 +273,19 @@ def _parse_caps(response: Any) -> ComponentCaps | None:
     )
 
 
-async def get_component_caps(client: Any) -> ComponentCaps | None:
+async def get_component_caps(
+    client: Any, *, strict: bool = False
+) -> ComponentCaps | None:
     """Return the cached (or freshly probed) capabilities of the component.
 
     One ``ha_mcp_tools/info`` probe per client, cached. ``None`` means "no
     usable component WS surface" — the caller falls back to its legacy path.
+
+    With ``strict=True``, failed or malformed discovery raises
+    ``ComponentDiscoveryError``, including failures cached by earlier read tools.
+    A definitive unknown command, unsupported schema, or valid capability list
+    without the requested command still permits legacy routing. The default
+    retains best-effort read behavior and its existing cache windows.
 
     Cache-on-failure semantics follow the error taxonomy:
 
@@ -281,12 +313,12 @@ async def get_component_caps(client: Any) -> ComponentCaps | None:
     """
     hit, caps = _live_cache_entry(client)
     if hit:
-        return caps
+        return _checked_caps(client, caps, strict)
 
     async with _get_caps_lock(client):
         hit, caps = _live_cache_entry(client)
         if hit:
-            return caps
+            return _checked_caps(client, caps, strict)
 
         base_url = getattr(client, "base_url", None)
         token = getattr(client, "token", None)
@@ -305,23 +337,27 @@ async def get_component_caps(client: Any) -> ComponentCaps | None:
                 url=base_url, token=token, verify_ssl=verify_ssl
             )
             response = await ws.send_command(INFO_COMMAND)
-        except HomeAssistantCommandError:
-            # Old component (unknown_command) or an info handler bug: the
-            # component can't serve WS commands. Cache the negative.
+        except HomeAssistantCommandError as exc:
             _store_caps(client, None)
-            return None
+            if not is_unknown_command(exc):
+                _PROBE_FAILURES[client] = f"{INFO_COMMAND} failed: {exc}"
+            return _checked_caps(client, None, strict)
         except (HomeAssistantConnectionError, HomeAssistantCommandTimeout):
             logger.debug(
                 "%s probe skipped: WS unavailable", INFO_COMMAND, exc_info=True
             )
             _store_transient_negative(client)
-            return None
+            _PROBE_FAILURES[client] = (
+                f"{INFO_COMMAND} probe could not reach Home Assistant"
+            )
+            return _checked_caps(client, None, strict)
         except Exception:
-            # Broad on purpose: the probe must never promote an unexpected
-            # fault into a tool failure. Short transient cache, self-healing.
+            # Read callers retain best-effort fallback; strict write callers
+            # must not confuse an unexpected fault with capability absence.
             logger.debug("%s probe failed unexpectedly", INFO_COMMAND, exc_info=True)
             _store_transient_negative(client)
-            return None
+            _PROBE_FAILURES[client] = f"{INFO_COMMAND} probe failed unexpectedly"
+            return _checked_caps(client, None, strict)
 
         caps = _parse_caps(response)
         if caps is not None and caps.schema_version != SUPPORTED_SCHEMA_VERSION:
@@ -333,7 +369,20 @@ async def get_component_caps(client: Any) -> ComponentCaps | None:
             )
             caps = None
         _store_caps(client, caps)
-        return caps
+        result = response.get("result") if isinstance(response, dict) else None
+        if (
+            not isinstance(response, dict)
+            or response.get("success") is not True
+            or not isinstance(result, dict)
+            or type(result.get("schema_version")) is not int
+            or not isinstance(result.get("capabilities"), list)
+            or not all(isinstance(cap, str) for cap in result["capabilities"])
+        ):
+            # Keep permissive parsing for existing read callers, but expire
+            # malformed positive snapshots too so strict callers can recover.
+            _PROBE_FAILURES[client] = f"Malformed {INFO_COMMAND} response"
+            _NEGATIVE_CACHE_TS[client] = _monotonic()
+        return _checked_caps(client, caps, strict)
 
 
 def component_supports(caps: ComponentCaps | None, capability: str) -> bool:
@@ -358,6 +407,7 @@ def invalidate_caps(client: Any) -> None:
     ``unknown_command`` (e.g. the component was downgraded mid-session), so the
     stale positive doesn't keep routing to a dead command.
     """
+    _PROBE_FAILURES.pop(client, None)
     _CAPS_CACHE.pop(client, None)
     _NEGATIVE_CACHE_TS.pop(client, None)
     _TRANSIENT_NEGATIVE_TS.pop(client, None)

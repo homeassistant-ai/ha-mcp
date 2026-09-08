@@ -1,5 +1,6 @@
 """Dashboard edits preserve the reporter's exact data on every existing backend."""
 
+import asyncio
 import hashlib
 import json
 import time
@@ -7,9 +8,17 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from fastmcp.exceptions import ToolError
 from ruamel.yaml import YAML
 
-from ...utilities.assertions import MCPAssertions, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    assert_mcp_failure,
+    assert_mcp_success,
+    parse_mcp_result,
+    safe_call_tool,
+    tool_error_to_result,
+)
 from ...utilities.topology import component_surface_available
 
 FIXTURES = Path(__file__).with_name("fixtures")
@@ -264,6 +273,82 @@ async def test_native_dashboard_backend_measurements(
         )
         record_property("dashboard_backend_measurements", json.dumps(measurements))
         print("DASHBOARD_BACKEND_MEASUREMENTS " + json.dumps(measurements), flush=True)
+    finally:
+        await safe_call_tool(
+            mcp_client, "ha_config_delete_dashboard", {"url_path": path}
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["patch", "config"])
+async def test_native_concurrent_dashboard_edits_have_one_winner(
+    mcp_client, ha_client, mode
+):
+    """Competing MCP edits exercise Core's real cache/save lifecycle in each topology."""
+    info = await ha_client.send_websocket_message({"type": "ha_mcp_tools/info"})
+    if info.get("success") is not True:
+        assert not component_surface_available(), info
+        return
+    assert "dashboard_edit" in info["result"]["capabilities"], info
+    path = "edit-race-" + uuid4().hex[:10]
+    mcp = MCPAssertions(mcp_client)
+    baseline = {"views": [{"title": "Before", "cards": []}]}
+
+    async def edit(title, config_hash):
+        params = {
+            "url_path": path,
+            "config_hash": config_hash,
+            "MandatoryBPS": False,
+        }
+        if mode == "patch":
+            params["patch"] = [
+                {"op": "replace", "path": "/views/0/title", "value": title}
+            ]
+        else:
+            params["config"] = {"views": [{"title": title, "cards": []}]}
+        try:
+            raw = await mcp_client.call_tool("ha_config_set_dashboard", params)
+            return parse_mcp_result(raw)
+        except ToolError as exc:
+            return tool_error_to_result(exc)
+
+    try:
+        await mcp.call_tool_success(
+            "ha_config_set_dashboard",
+            {
+                "url_path": path,
+                "config": baseline,
+                "MandatoryBPS": False,
+            },
+        )
+        for attempt in range(3):
+            before = await mcp.call_tool_success(
+                "ha_config_get_dashboard", {"url_path": path}
+            )
+            titles = [f"Writer A {attempt}", f"Writer B {attempt}"]
+            results = await asyncio.gather(
+                *(edit(title, before["config_hash"]) for title in titles)
+            )
+            winners = [
+                i for i, result in enumerate(results) if result.get("success") is True
+            ]
+            assert len(winners) == 1, results
+            winner = winners[0]
+            saved = assert_mcp_success(results[winner])
+            rejected = assert_mcp_failure(
+                results[1 - winner], expected_error="conflict"
+            )
+            assert saved["write_committed"] is True
+            assert saved["post_write_verified"] is True
+            assert rejected["reason"] == "conflict"
+            assert rejected["write_committed"] is False
+            after = await mcp.call_tool_success(
+                "ha_config_get_dashboard", {"url_path": path}
+            )
+            assert after["config"] == {
+                "views": [{"title": titles[winner], "cards": []}]
+            }
+            assert after["config_hash"] == saved["config_hash"] != before["config_hash"]
     finally:
         await safe_call_tool(
             mcp_client, "ha_config_delete_dashboard", {"url_path": path}

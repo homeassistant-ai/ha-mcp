@@ -51,16 +51,19 @@ loading, hash comparison, editing, saving, and readback in one WebSocket command
 Python continues to run in HA-MCP's existing sandbox; its final comparison, save,
 and readback use the same native command. Component-less and older-component
 installations use the existing WebSocket path, including for structured patches.
-No File & YAML services permission is needed for this capability.
+No File & YAML services permission is needed for this capability. A failed or
+malformed capability probe stops the config edit before saving; it does not
+establish that the component is absent. Retry after discovery recovers.
 
 The native command compares the loaded configuration and begins Core's save
 without yielding between them. It preserves Core's cache invalidation and update
 event. A later dashboard editor can still overwrite that change. Readback returns
 the current configuration hash, which can reflect such a later edit.
 
-A save interrupted after dispatch reports an unknown outcome and is never
-retried automatically. Read the dashboard to determine whether the change took
-effect. `write_committed` describes the overall tool call: `true` means at least
+The native command never automatically retries an ambiguous dispatched write.
+An interrupted save or an unrecognized legacy save error reports an unknown
+outcome. Read the dashboard to determine whether the change took effect.
+`write_committed` describes the overall tool call: `true` means at least
 one write was acknowledged, `false` means no write was made, and `null` means
 the outcome is unknown. `post_write_verified` indicates whether the dashboard
 configuration was read back successfully; `config_hash` is null when it was not.
