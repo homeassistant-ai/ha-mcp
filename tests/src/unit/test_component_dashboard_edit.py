@@ -485,7 +485,7 @@ async def test_hash_required_replacement_cannot_initialize_empty_storage(edit):
             "expected_hash": compute_config_hash({}),
         },
     )
-    assert result["error"]["code"] == "not_found"
+    assert result["error"]["code"] == "conflict"
     assert result["write_committed"] is False
     assert dashboard.saves == []
 
