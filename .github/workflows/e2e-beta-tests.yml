@@ -150,7 +150,7 @@ jobs:
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.12.8"
+        version: "0.12.9"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -241,7 +241,7 @@ jobs:
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.12.8"
+        version: "0.12.9"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -346,7 +346,7 @@ jobs:
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.12.8"
+        version: "0.12.9"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -438,7 +438,7 @@ jobs:
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.12.8"
+        version: "0.12.9"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -549,7 +549,7 @@ jobs:
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.12.8"
+        version: "0.12.9"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
