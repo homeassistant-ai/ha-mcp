@@ -176,6 +176,7 @@ async def test_native_modes_use_authoritative_result_without_extra_read(
     assert args == ("ha_mcp_tools/dashboard_edit",)
     assert kwargs["expected_hash"] == expected_hash
     assert "python_transform" not in kwargs
+    assert "action" not in kwargs
     if mode == "python_transform":
         assert kwargs["config"]["views"][0]["title"] == "New"
     else:
@@ -853,6 +854,11 @@ async def test_legacy_edit_save_failure_reports_outcome_without_retry(
             **{mode: edit},
         )
     error = json.loads(str(caught.value))
+    assert error["action"] == mode
+    if failure == "rejected":
+        assert ("transformed config" in str(caught.value)) is (
+            mode == "python_transform"
+        )
     known_unwritten = failure in {"not_sent", "rejected"}
     assert error["write_committed"] is (False if known_unwritten else None)
     if not known_unwritten:
@@ -862,3 +868,79 @@ async def test_legacy_edit_save_failure_reports_outcome_without_retry(
         assert document == before
     assert sum(m["type"] == "lovelace/config/save" for m in messages) == 1
     assert native_socket.send_command.await_count == (backend == "unknown_command")
+
+
+@pytest.mark.parametrize("mode", ["patch", "python_transform", "config"])
+@pytest.mark.parametrize("failure", ["rejected", "malformed", "timeout", "not_sent", "probe"])
+async def test_native_edit_failure_preserves_caller_action(
+    legacy_dashboard, native_socket, monkeypatch, mode, failure
+):
+    client, document, messages = legacy_dashboard
+    tools = DashboardConfigTools(client)
+    monkeypatch.setattr(
+        tools,
+        "_ensure_dashboard_exists",
+        AsyncMock(return_value=(True, "id", False, None)),
+    )
+    native_socket.send_command.return_value = {
+        "success": True,
+        "result": {
+            "success": False,
+            "error": {"code": "validation_failed", "message": "Edit rejected"},
+            "write_committed": False,
+        },
+    }
+    if failure == "malformed":
+        native_socket.send_command.return_value = {"success": True, "result": {}}
+    elif failure == "timeout":
+        native_socket.send_command.side_effect = HomeAssistantCommandTimeout("timeout")
+    elif failure == "not_sent":
+        native_socket.send_command.side_effect = HomeAssistantCommandNotSent("offline")
+    elif failure == "probe":
+        monkeypatch.setattr(
+            component_dashboard_edit,
+            "get_component_caps",
+            AsyncMock(side_effect=ConnectionError("offline")),
+        )
+    edits = {
+        "patch": [{"op": "remove", "path": "/views/0"}],
+        "python_transform": "config['views'] = []",
+        "config": {"views": []},
+    }
+    with pytest.raises(ToolError) as caught:
+        await tools.ha_config_set_dashboard(
+            "test-dashboard",
+            config_hash=compute_config_hash(document),
+            MandatoryBPS=False,
+            **{mode: edits[mode]},
+        )
+    error = json.loads(str(caught.value))
+    assert error["action"] == ("set" if mode == "config" else mode)
+    assert error["write_committed"] is (
+        None if failure in {"timeout", "malformed"} else False
+    )
+    assert not any(m["type"] == "lovelace/config/save" for m in messages)
+    assert native_socket.send_command.await_count == (failure != "probe")
+
+
+@pytest.mark.parametrize("failure", ["metadata", "url_path", "view_path", "read"])
+async def test_patch_preparation_failure_preserves_action(legacy_dashboard, failure):
+    client, document, messages = legacy_dashboard
+    kwargs = {"url_path": "test-dashboard"}
+    if failure == "metadata":
+        kwargs["title"] = "Invalid with patch"
+    elif failure == "url_path":
+        kwargs["url_path"] = "bad/path"
+    elif failure == "view_path":
+        kwargs.update(return_screenshot=True, view_path=" ")
+    else:
+        client.send_websocket_message.side_effect = ConnectionError("offline")
+    with pytest.raises(ToolError) as caught:
+        await DashboardConfigTools(client).ha_config_set_dashboard(
+            config_hash=compute_config_hash(document),
+            patch=[{"op": "remove", "path": "/views/0"}],
+            MandatoryBPS=False,
+            **kwargs,
+        )
+    assert json.loads(str(caught.value))["action"] == "patch"
+    assert not any(m["type"] == "lovelace/config/save" for m in messages)

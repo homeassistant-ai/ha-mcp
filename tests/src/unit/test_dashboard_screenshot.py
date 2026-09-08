@@ -1998,8 +1998,9 @@ async def test_python_transform_can_return_screenshot_from_post_save_config(
         return transformed
 
     async def save_transform(
-        _url_path: str, _config: dict[str, Any]
+        _url_path: str, _config: dict[str, Any], *, action: str
     ) -> tuple[dict[str, Any], str, str | None]:
+        assert action == "python_transform"
         return transformed, "new-hash", None
 
     async def attach(
@@ -2060,8 +2061,9 @@ async def test_python_transform_post_save_read_failure_reports_committed_write(
         return transformed
 
     async def save_transform(
-        _url_path: str, _config: dict[str, Any]
+        _url_path: str, _config: dict[str, Any], *, action: str
     ) -> tuple[dict[str, Any], str | None, str | None]:
+        assert action == "python_transform"
         return transformed, None, "authoritative reload failed"
 
     monkeypatch.setattr(tools, "_fetch_and_verify_dashboard_hash", fetch_and_verify)

@@ -2975,6 +2975,9 @@ class DashboardConfigTools:
         entry in configuration.yaml but does NOT touch the dashboard
         body in the referenced .yaml file.
         """
+        action = "patch" if patch is not None else (
+            "python_transform" if python_transform is not None else "set"
+        )
         screenshot_options = _DashboardScreenshotOptions(view_path=view_path)
         try:
             # Reject an invalid view_path BEFORE committing the write. On the
@@ -2986,14 +2989,14 @@ class DashboardConfigTools:
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         "view_path cannot be empty.",
-                        context={"view_path": view_path},
+                        context={"action": action, "view_path": view_path},
                     )
                 )
             (
                 url_path,
                 pre_resolved_from,
                 pre_fetched_dashboards,
-            ) = await self._resolve_set_dashboard_url_path(url_path)
+            ) = await self._resolve_set_dashboard_url_path(url_path, action=action)
 
             if (
                 sum(value is not None for value in (config, python_transform, patch))
@@ -3009,7 +3012,7 @@ class DashboardConfigTools:
                             "config: Full replacement",
                             "python_transform: Loops and pattern-based edits",
                         ],
-                        context={"action": "set", "url_path": url_path},
+                        context={"action": action, "url_path": url_path},
                     )
                 )
 
@@ -3027,7 +3030,7 @@ class DashboardConfigTools:
                             "without patch, config or python_transform",
                         ],
                         context={
-                            "action": "set",
+                            "action": action,
                             "url_path": url_path,
                             "write_committed": False,
                         },
@@ -3076,7 +3079,7 @@ class DashboardConfigTools:
         except Exception as e:
             error = exception_to_structured_error(
                 e,
-                context={"action": "set", "url_path": url_path},
+                context={"action": action, "url_path": url_path},
                 suggestions=[
                     "Ensure url_path is unique (not already in use for different dashboard type)",
                     "New dashboards require a hyphenated url_path",
@@ -3090,7 +3093,7 @@ class DashboardConfigTools:
             return None
 
     async def _resolve_set_dashboard_url_path(
-        self, url_path: str
+        self, url_path: str, *, action: str = "set"
     ) -> tuple[str, str | None, list[dict[str, Any]] | None]:
         """Validate the set target and canonicalize supported dashboard identifiers.
 
@@ -3122,7 +3125,7 @@ class DashboardConfigTools:
                 "Pass a dashboard URL path (e.g. 'my-dashboard')",
                 "Use 'default' or 'lovelace' for the default dashboard",
             ],
-            context={"action": "set"},
+            context={"action": action},
         )
         # Handle "default" as alias for the default dashboard
         # (matches ha_config_get_dashboard behavior)
@@ -3148,7 +3151,7 @@ class DashboardConfigTools:
         if "-" not in url_path and url_path != "lovelace":
             resolved, dashboards = await _resolve_dashboard(self._client, url_path)
             if dashboards is None:
-                _raise_dashboard_registry_read_error(action="set", url_path=url_path)
+                _raise_dashboard_registry_read_error(action=action, url_path=url_path)
             if resolved is not None and resolved["url_path"]:
                 exact_url_path_exists = resolved["url_path"] == url_path
                 pre_fetched_dashboards = dashboards
@@ -3178,7 +3181,7 @@ class DashboardConfigTools:
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     "url_path must contain a hyphen (-)",
                     suggestions=suggestions,
-                    context={"action": "set", "url_path": url_path},
+                    context={"action": action, "url_path": url_path},
                 )
             )
 
@@ -3265,11 +3268,15 @@ class DashboardConfigTools:
         return transformed_config
 
     async def _save_dashboard_python_transform(
-        self, url_path: str, transformed_config: dict[str, Any]
+        self,
+        url_path: str,
+        transformed_config: dict[str, Any],
+        *,
+        action: str = "python_transform",
     ) -> tuple[dict[str, Any], str | None, str | None]:
         """Save transformed config and best-effort reload its authoritative form."""
         await self._save_dashboard_config(
-            url_path, transformed_config, action="python_transform"
+            url_path, transformed_config, action=action
         )
 
         # HA may normalize after save, so prefer an authoritative re-fetch. The
@@ -3287,8 +3294,9 @@ class DashboardConfigTools:
             return transformed_config, None, warning
         except Exception as exc:
             logger.warning(
-                "Could not reload dashboard %s after Python transform: %s",
+                "Could not reload dashboard %s after %s: %s",
                 url_path,
+                action,
                 exc,
                 exc_info=True,
             )
@@ -3335,6 +3343,7 @@ class DashboardConfigTools:
             url_path,
             expected_hash=config_hash,
             config=transformed_config,
+            action="python_transform",
         )
         if native_result is None:
             native_result = await self._save_dashboard_edit_legacy(
@@ -3352,11 +3361,15 @@ class DashboardConfigTools:
         )
 
     async def _save_dashboard_edit_legacy(
-        self, url_path: str, config: dict[str, Any]
+        self,
+        url_path: str,
+        config: dict[str, Any],
+        *,
+        action: str = "python_transform",
     ) -> dict[str, Any]:
         """Adapt the existing save/readback path to the shared result contract."""
         post_config, config_hash, warning = await self._save_dashboard_python_transform(
-            url_path, config
+            url_path, config, action=action
         )
         return {
             "config": post_config,
@@ -3400,7 +3413,11 @@ class DashboardConfigTools:
                 )
             )
         result = await edit_dashboard_via_component(
-            self._client, url_path, expected_hash=config_hash, patch=parsed_patch
+            self._client,
+            url_path,
+            expected_hash=config_hash,
+            patch=parsed_patch,
+            action="patch",
         )
         if result is None:
             current = await self._fetch_and_verify_dashboard_hash(
@@ -3434,7 +3451,9 @@ class DashboardConfigTools:
                     "unchanged": True,
                 }
             else:
-                result = await self._save_dashboard_edit_legacy(url_path, updated)
+                result = await self._save_dashboard_edit_legacy(
+                    url_path, updated, action="patch"
+                )
         return await self._finish_dashboard_edit(
             url_path,
             result,

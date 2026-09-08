@@ -24,6 +24,7 @@ def _raise_edit_error(
     code: str,
     message: str,
     write_committed: bool | None,
+    action: str,
 ) -> NoReturn:
     """Keep outcome information in the existing structured ToolError envelope."""
     error_code = {
@@ -44,7 +45,7 @@ def _raise_edit_error(
             message,
             suggestions=suggestions,
             context={
-                "action": "set",
+                "action": action,
                 "url_path": url_path,
                 "reason": code,
                 "write_committed": write_committed,
@@ -76,11 +77,15 @@ def _valid_success(result: dict[str, Any]) -> bool:
     )
 
 
-def _validate_edit_result(raw: Any, url_path: str | None) -> dict[str, Any]:
+def _validate_edit_result(
+    raw: Any, url_path: str | None, action: str
+) -> dict[str, Any]:
     """An incomplete response cannot establish whether the write happened."""
     result = raw.get("result") if isinstance(raw, dict) else None
     if not isinstance(result, dict) or raw.get("success") is not True:
-        _raise_edit_error(url_path, "write_outcome_unknown", "Malformed response", None)
+        _raise_edit_error(
+            url_path, "write_outcome_unknown", "Malformed response", None, action
+        )
     if result.get("success") is False:
         error = result.get("error")
         if isinstance(error, dict) and isinstance(error.get("code"), str):
@@ -91,10 +96,15 @@ def _validate_edit_result(raw: Any, url_path: str | None) -> dict[str, Any]:
                     error["code"],
                     str(error.get("message", error["code"])),
                     committed,
+                    action,
                 )
-        _raise_edit_error(url_path, "write_outcome_unknown", "Malformed error", None)
+        _raise_edit_error(
+            url_path, "write_outcome_unknown", "Malformed error", None, action
+        )
     if not _valid_success(result):
-        _raise_edit_error(url_path, "write_outcome_unknown", "Malformed response", None)
+        _raise_edit_error(
+            url_path, "write_outcome_unknown", "Malformed response", None, action
+        )
     return result
 
 
@@ -102,6 +112,7 @@ async def edit_dashboard_via_component(
     client: Any,
     url_path: str | None,
     *,
+    action: str = "set",
     expected_hash: str | None = None,
     config: dict[str, Any] | None = None,
     patch: list[dict[str, Any]] | None = None,
@@ -124,7 +135,7 @@ async def edit_dashboard_via_component(
             verify_ssl=getattr(client, "verify_ssl", None),
         )
     except Exception as exc:
-        _raise_edit_error(url_path, "load_failed", str(exc), False)
+        _raise_edit_error(url_path, "load_failed", str(exc), False, action)
 
     kwargs: dict[str, Any] = {"url_path": url_path}
     if expected_hash is not None:
@@ -136,7 +147,7 @@ async def edit_dashboard_via_component(
     try:
         raw = await ws.send_command(WS_DASHBOARD_EDIT, **kwargs)
     except HomeAssistantCommandNotSent as exc:
-        _raise_edit_error(url_path, "load_failed", str(exc), False)
+        _raise_edit_error(url_path, "load_failed", str(exc), False, action)
     except (asyncio.CancelledError, Exception) as exc:
         # Cancellation during send/response wait cannot prove HA did not save.
         # Convert only at this write boundary; pre-dispatch cancellation propagates.
@@ -148,5 +159,6 @@ async def edit_dashboard_via_component(
             "write_outcome_unknown",
             str(exc) or "Dashboard edit interrupted before its response was received",
             None,
+            action,
         )
-    return _validate_edit_result(raw, url_path)
+    return _validate_edit_result(raw, url_path, action)
