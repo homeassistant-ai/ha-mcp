@@ -1355,7 +1355,7 @@ async def test_creation_ignores_hash_but_existing_empty_dashboard_keeps_guard(
         assert error["reason"] == "conflict"
         assert error["write_committed"] is False
         assert error["post_write_verified"] is False
-        assert "omit config_hash" in error["error"]["suggestion"]
+        assert "omit config_hash" in " ".join(error["error"]["suggestions"])
         assert not saved
         assert document == {}
     else:
@@ -1472,6 +1472,8 @@ async def test_hash_conflict_outcome_and_force_advice_are_mode_specific(
     assert error["action"] == ("set" if mode == "config" else mode)
     assert error["write_committed"] is False
     assert error["post_write_verified"] is False
-    assert ("omit config_hash" in error["error"]["suggestion"]) is (mode == "config")
+    assert ("omit config_hash" in " ".join(error["error"]["suggestions"])) is (
+        mode == "config"
+    )
     assert document == before
     assert not any(m["type"] == "lovelace/config/save" for m in messages)
