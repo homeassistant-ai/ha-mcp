@@ -1,5 +1,6 @@
 """Native edit routing preserves results and never repeats an ambiguous write."""
 
+import asyncio
 import json
 from copy import deepcopy
 from types import SimpleNamespace
@@ -551,3 +552,97 @@ async def test_legacy_patch_boolean_to_number_is_a_change(legacy_dashboard):
     assert result["write_committed"] is True
     assert result.get("unchanged") is not True
     assert sum(message["type"] == "lovelace/config/save" for message in messages) == 1
+
+
+@pytest.mark.parametrize("backend", ["native", "legacy"])
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"title": "Renamed"},
+        {"icon": "mdi:home"},
+        {"require_admin": True},
+        {"require_admin": False},
+        {"show_in_sidebar": True},
+        {"show_in_sidebar": False},
+    ],
+)
+async def test_patch_metadata_is_rejected_before_edit(
+    legacy_dashboard, native_socket, monkeypatch, backend, metadata
+):
+    client, document, messages = legacy_dashboard
+    if backend == "legacy":
+        monkeypatch.setattr(
+            component_dashboard_edit,
+            "get_component_caps",
+            AsyncMock(return_value=None),
+        )
+    native_socket.send_command.return_value = _success({"views": []})
+    before = deepcopy(document)
+    with pytest.raises(ToolError, match="metadata") as caught:
+        await DashboardConfigTools(client).ha_config_set_dashboard(
+            "test-dashboard",
+            patch=[{"op": "remove", "path": "/views/0"}],
+            config_hash=compute_config_hash(document),
+            MandatoryBPS=False,
+            **metadata,
+        )
+    assert json.loads(str(caught.value))["write_committed"] is False
+    assert document == before
+    assert messages == []
+    native_socket.send_command.assert_not_awaited()
+
+
+async def test_native_cancellation_after_dispatch_reports_unknown_without_retry(
+    legacy_dashboard, native_socket
+):
+    client, document, messages = legacy_dashboard
+    dispatched = asyncio.Event()
+
+    async def send(*args, **kwargs):
+        # HA commits the edit, but the response has not reached the caller.
+        document["views"] = []
+        dispatched.set()
+        await asyncio.Event().wait()
+
+    native_socket.send_command.side_effect = send
+    task = asyncio.create_task(
+        DashboardConfigTools(client).ha_config_set_dashboard(
+            "test-dashboard",
+            patch=[{"op": "remove", "path": "/views/0"}],
+            config_hash=compute_config_hash(document),
+            MandatoryBPS=False,
+        )
+    )
+    try:
+        await asyncio.wait_for(dispatched.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(ToolError, match="unknown") as caught:
+            await task
+        error = json.loads(str(caught.value))
+        assert error["reason"] == "write_outcome_unknown"
+        assert error["write_committed"] is None
+        assert error["post_write_verified"] is False
+        assert document["views"] == []
+        assert messages == []
+        native_socket.send_command.assert_awaited_once()
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("stage", ["get_component_caps", "get_websocket_client"])
+async def test_native_cancellation_before_dispatch_propagates(
+    legacy_dashboard, native_socket, monkeypatch, stage
+):
+    client, document, messages = legacy_dashboard
+    monkeypatch.setattr(
+        component_dashboard_edit, stage, AsyncMock(side_effect=asyncio.CancelledError)
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await component_dashboard_edit.edit_dashboard_via_component(
+            client, "test-dashboard", config={"views": []}
+        )
+    assert document["views"]
+    assert messages == []
+    native_socket.send_command.assert_not_awaited()

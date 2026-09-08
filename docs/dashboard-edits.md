@@ -34,6 +34,11 @@ and Python transforms require a hash; full replacements retain their optional
 hash check. A stale hash rejects the configuration change. Read again before
 retrying. An unchanged patch does not save or emit a dashboard update.
 
+Patch requests cannot include sidebar metadata (`title`, `icon`, `require_admin`,
+`show_in_sidebar`); that combination is rejected before editing the dashboard.
+Update metadata in a separate `ha_config_set_dashboard` call without `patch`,
+`config`, or `python_transform`.
+
 ## Native Home Assistant support
 
 When HA MCP Tools advertises the `dashboard_edit` capability, storage dashboard

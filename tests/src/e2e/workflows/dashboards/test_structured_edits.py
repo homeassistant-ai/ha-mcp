@@ -41,6 +41,30 @@ async def test_reporter_dashboard_edits_and_conflicts(
             "ha_config_get_dashboard", {"url_path": path}
         )
         assert len(original["config"]["views"][1]["sections"]) == 3
+        if mode == "patch":
+            for metadata in (
+                {"title": "Must not rename"},
+                {"icon": "mdi:home"},
+                {"require_admin": False},
+                {"show_in_sidebar": False},
+            ):
+                rejected = await mcp.call_tool_failure(
+                    "ha_config_set_dashboard",
+                    {
+                        "url_path": path,
+                        "config_hash": original["config_hash"],
+                        "patch": [{"op": "remove", "path": "/views/0"}],
+                        "MandatoryBPS": False,
+                        **metadata,
+                    },
+                    expected_error="metadata",
+                )
+                assert rejected["write_committed"] is False
+            untouched = await mcp.call_tool_success(
+                "ha_config_get_dashboard", {"url_path": path}
+            )
+            assert untouched["config"] == original["config"]
+            assert untouched["config_hash"] == original["config_hash"]
         for _ in range(3):
             before = await mcp.call_tool_success(
                 "ha_config_get_dashboard", {"url_path": path}
