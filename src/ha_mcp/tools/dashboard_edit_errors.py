@@ -41,6 +41,9 @@ _EDIT_SUGGESTIONS = {
         "Read the dashboard again with ha_config_get_dashboard",
         "Use its fresh config_hash and rebase the edit on the current config",
     ],
+    "recovery_mode": [
+        "Resolve Home Assistant recovery mode before retrying the dashboard edit",
+    ],
     "write_not_sent": [
         "Reconnect to Home Assistant, then retry the dashboard config edit",
         "The config write was not sent; its edit parameters can be reused",
@@ -144,3 +147,10 @@ def raise_known_dashboard_save_rejection(
             False,
             action,
         )
+    if (
+        code == "error"
+        and message.removeprefix("Command failed: ")
+        == "Saving not supported in recovery mode"
+    ):
+        # LovelaceStorage checks recovery mode before changing its live config.
+        raise_dashboard_edit_error(url_path, "recovery_mode", message, False, action)

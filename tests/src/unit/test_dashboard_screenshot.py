@@ -2272,7 +2272,7 @@ class TestPublicScreenshotOptionForwarding:
         dashboard_config = {
             "views": [{"title": "Home", "path": "home"}],
         }
-        client = MagicMock()
+        client = MagicMock(base_url=None, token=None)
         client.send_websocket_message = AsyncMock(
             side_effect=[
                 {"result": [{"url_path": "wall-panel", "id": "wall_panel"}]},

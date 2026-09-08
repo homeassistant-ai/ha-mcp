@@ -15,7 +15,7 @@ class TestSetDashboardMetadataUpdate:
 
     @pytest.fixture
     def mock_client(self):
-        client = MagicMock()
+        client = MagicMock(base_url=None, token=None)
         client.send_websocket_message = AsyncMock()
         return client
 
@@ -231,7 +231,7 @@ class TestSetDashboardListCallDedup:
 
     @pytest.fixture
     def mock_client(self):
-        client = MagicMock()
+        client = MagicMock(base_url=None, token=None)
         client.send_websocket_message = AsyncMock()
         return client
 
@@ -347,7 +347,7 @@ class TestSetDashboardUrlPathCreationContract:
 
     @pytest.fixture
     def mock_client(self):
-        client = MagicMock()
+        client = MagicMock(base_url=None, token=None)
         client.send_websocket_message = AsyncMock()
         return client
 
