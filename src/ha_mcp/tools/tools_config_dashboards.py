@@ -4,6 +4,7 @@ Configuration management tools for Home Assistant Lovelace dashboards.
 This module provides tools for managing dashboard metadata and content.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -3267,30 +3268,9 @@ class DashboardConfigTools:
         self, url_path: str, transformed_config: dict[str, Any]
     ) -> tuple[dict[str, Any], str | None, str | None]:
         """Save transformed config and best-effort reload its authoritative form."""
-        save_data: dict[str, Any] = {
-            "type": "lovelace/config/save",
-            "config": transformed_config,
-        }
-        if url_path:
-            save_data["url_path"] = url_path
-
-        save_result = await self._client.send_websocket_message(save_data)
-
-        if isinstance(save_result, dict) and not save_result.get("success", True):
-            error_msg = save_result.get("error", {})
-            if isinstance(error_msg, dict):
-                error_msg = error_msg.get("message", str(error_msg))
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to save transformed config: {error_msg}",
-                    suggestions=[
-                        "Expression may have produced invalid dashboard structure",
-                        "Verify config format is valid Lovelace JSON",
-                    ],
-                    context={"action": "python_transform", "url_path": url_path},
-                )
-            )
+        await self._save_dashboard_config(
+            url_path, transformed_config, action="python_transform"
+        )
 
         # HA may normalize after save, so prefer an authoritative re-fetch. The
         # mutation has already committed at this point: a follow-up read failure
@@ -3777,9 +3757,13 @@ class DashboardConfigTools:
         )
 
     async def _save_dashboard_config(
-        self, url_path: str, config_dict: dict[str, Any]
+        self,
+        url_path: str,
+        config_dict: dict[str, Any],
+        *,
+        action: str = "set",
     ) -> None:
-        """Save ``config_dict`` as the full dashboard config replacement."""
+        """Save through the legacy API with a consistent outcome for every edit mode."""
         config_save_data: dict[str, Any] = {
             "type": "lovelace/config/save",
             "config": config_dict,
@@ -3790,14 +3774,36 @@ class DashboardConfigTools:
             save_result = await self._client.send_websocket_message(config_save_data)
         except ToolError:
             raise
+        except asyncio.CancelledError:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Dashboard write outcome unknown: save request was cancelled",
+                    suggestions=[
+                        "Read the dashboard before retrying to check whether the save applied"
+                    ],
+                    context={
+                        "action": action,
+                        "url_path": url_path,
+                        "reason": "write_outcome_unknown",
+                        "write_committed": None,
+                        "post_write_verified": False,
+                    },
+                )
+            )
         except Exception as exc:
             exception_to_structured_error(
                 exc,
                 context={
-                    "action": "set",
+                    "action": action,
                     "url_path": url_path,
                     "write_committed": (
                         False if isinstance(exc, HomeAssistantCommandNotSent) else None
+                    ),
+                    "reason": (
+                        "load_failed"
+                        if isinstance(exc, HomeAssistantCommandNotSent)
+                        else "write_outcome_unknown"
                     ),
                     "post_write_verified": False,
                 },
@@ -3813,14 +3819,14 @@ class DashboardConfigTools:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to save dashboard config: {error_msg}",
+                    f"Failed to save {'transformed' if action == 'python_transform' else 'dashboard'} config: {error_msg}",
                     suggestions=[
                         "Verify config format is valid Lovelace JSON",
                         "Check that you have admin permissions",
                         "Ensure all entity IDs in config exist",
                     ],
                     context={
-                        "action": "set",
+                        "action": action,
                         "url_path": url_path,
                         "write_committed": False,
                     },
@@ -3841,20 +3847,26 @@ class DashboardConfigTools:
             return await self._prepare_and_save_dashboard_config(
                 url_path, config, config_hash, dashboard_exists
             )
-        except Exception as exc:
+        except (asyncio.CancelledError, Exception) as exc:
             if dashboard_exists and not metadata_updated:
                 raise
             # Native and legacy outcomes describe only the config command. A
             # preceding create/metadata call already succeeded in either case.
-            error = (
-                json.loads(str(exc))
-                if isinstance(exc, ToolError)
-                else exception_to_structured_error(
+            if isinstance(exc, asyncio.CancelledError):
+                error = create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Configuration update cancelled before saving",
+                    context={"action": "set", "url_path": url_path},
+                    suggestions=["Read the dashboard before deciding whether to retry"],
+                )
+            elif isinstance(exc, ToolError):
+                error = json.loads(str(exc))
+            else:
+                error = exception_to_structured_error(
                     exc,
                     context={"action": "set", "url_path": url_path},
                     raise_error=False,
                 )
-            )
             # Validation/read failures precede saving. Save helpers attach an
             # explicit None when they cannot determine the configuration outcome.
             error["config_write_committed"] = error.get("write_committed", False)
