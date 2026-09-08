@@ -216,7 +216,8 @@ async def test_stale_hash_rejects_without_saving(edit):
 
 
 @pytest.mark.asyncio
-async def test_dashboard_replaced_during_initial_load_rejects(edit):
+@pytest.mark.parametrize("mode", ["patch", "guarded_config", "unguarded_config"])
+async def test_dashboard_replaced_during_initial_load_rejects(edit, mode):
     dashboard = LiveDashboard({"title": "Before"})
     replacement = LiveDashboard({"title": "Before"})
     hass = hass_for(dashboard)
@@ -225,8 +226,15 @@ async def test_dashboard_replaced_during_initial_load_rejects(edit):
         hass.data["lovelace"].dashboards["home-dashboard"] = replacement
 
     dashboard.on_load = swap
-    result = await edit.async_edit_dashboard(hass, patch_request(dashboard.body))
+    request = patch_request(dashboard.body)
+    if mode != "patch":
+        request.pop("patch")
+        request["config"] = {"title": "After"}
+    if mode == "unguarded_config":
+        request.pop("expected_hash")
+    result = await edit.async_edit_dashboard(hass, request)
     assert result["error"]["code"] == "conflict"
+    assert result["error"]["message"] == "Dashboard changed while loading its config"
     assert dashboard.saves == replacement.saves == []
 
 

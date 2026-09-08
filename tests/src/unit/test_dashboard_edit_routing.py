@@ -1361,6 +1361,7 @@ async def test_creation_ignores_hash_but_existing_empty_dashboard_keeps_guard(
             await tools.ha_config_set_dashboard(**kwargs)
         error = json.loads(str(caught.value))
         assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert error["error"]["message"] == "Dashboard has no saved config"
         assert error["reason"] == "conflict"
         assert error["write_committed"] is False
         assert error["post_write_verified"] is False
@@ -1485,4 +1486,105 @@ async def test_hash_conflict_outcome_and_force_advice_are_mode_specific(
         mode == "config"
     )
     assert document == before
+    assert not any(m["type"] == "lovelace/config/save" for m in messages)
+
+
+@pytest.mark.parametrize("backend", ["native", "absent", "unknown_command"])
+@pytest.mark.parametrize("mode", ["config", "patch", "python_transform"])
+async def test_unsent_write_has_consistent_reconnect_and_retry_guidance(
+    legacy_dashboard, native_socket, monkeypatch, backend, mode
+):
+    client, document, messages = legacy_dashboard
+    tools = DashboardConfigTools(client)
+    monkeypatch.setattr(
+        tools,
+        "_ensure_dashboard_exists",
+        AsyncMock(return_value=(True, "id", False, None)),
+    )
+    native_socket.send_command.side_effect = HomeAssistantCommandNotSent("offline")
+    if backend == "absent":
+        monkeypatch.setattr(
+            component_dashboard_edit, "get_component_caps", AsyncMock(return_value=None)
+        )
+    elif backend == "unknown_command":
+        native_socket.send_command.side_effect = HomeAssistantCommandError(
+            "Unknown command", "unknown_command"
+        )
+    before = deepcopy(document)
+    original_send = client.send_websocket_message.side_effect
+
+    async def send(message):
+        if message["type"] == "lovelace/config/save":
+            messages.append(deepcopy(message))
+            raise HomeAssistantCommandNotSent("offline")
+        return await original_send(message)
+
+    client.send_websocket_message.side_effect = send
+    edits = {
+        "config": {"views": []},
+        "patch": [{"op": "remove", "path": "/views/0"}],
+        "python_transform": "config['views'] = []",
+    }
+    with pytest.raises(ToolError) as caught:
+        await tools.ha_config_set_dashboard(
+            "test-dashboard",
+            config_hash=compute_config_hash(document),
+            MandatoryBPS=False,
+            **{mode: edits[mode]},
+        )
+    error = json.loads(str(caught.value))
+    assert error["error"]["code"] == "CONNECTION_FAILED"
+    assert error["reason"] == "write_not_sent"
+    assert error["action"] == ("set" if mode == "config" else mode)
+    assert error["write_committed"] is False
+    assert error["post_write_verified"] is False
+    advice = " ".join(error["error"]["suggestions"])
+    assert "Reconnect to Home Assistant" in advice
+    assert "retry" in advice
+    assert "not sent" in advice
+    assert "check whether" not in advice
+    assert document == before
+    assert sum(m["type"] == "lovelace/config/save" for m in messages) == (
+        backend != "native"
+    )
+    assert native_socket.send_command.await_count == (backend != "absent")
+
+
+@pytest.mark.parametrize("hash_supplied", [False, True])
+async def test_native_replacement_race_only_suggests_omitting_a_sent_hash(
+    legacy_dashboard, native_socket, monkeypatch, hash_supplied
+):
+    client, document, messages = legacy_dashboard
+    tools = DashboardConfigTools(client)
+    monkeypatch.setattr(
+        tools,
+        "_ensure_dashboard_exists",
+        AsyncMock(return_value=(True, "id", False, None)),
+    )
+    native_socket.send_command.return_value = {
+        "success": True,
+        "result": {
+            "success": False,
+            "error": {
+                "code": "conflict",
+                "message": "Dashboard changed while loading its config",
+            },
+            "write_committed": False,
+        },
+    }
+    with pytest.raises(ToolError) as caught:
+        await tools.ha_config_set_dashboard(
+            "test-dashboard",
+            config={"views": []},
+            config_hash=compute_config_hash(document) if hash_supplied else None,
+            MandatoryBPS=False,
+        )
+    error = json.loads(str(caught.value))
+    assert error["reason"] == "conflict"
+    assert error["write_committed"] is False
+    advice = " ".join(error["error"]["suggestions"])
+    assert ("omit config_hash" in advice) is hash_supplied
+    assert (
+        "expected_hash" in native_socket.send_command.call_args.kwargs
+    ) is hash_supplied
     assert not any(m["type"] == "lovelace/config/save" for m in messages)

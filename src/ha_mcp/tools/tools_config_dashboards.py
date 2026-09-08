@@ -3711,7 +3711,9 @@ class DashboardConfigTools:
             if _is_no_stored_dashboard_config_error(exc):
                 if config_hash is None:
                     return None
-                self._raise_dashboard_hash_conflict(url_path)
+                self._raise_dashboard_hash_conflict(
+                    url_path, message="Dashboard has no saved config"
+                )
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
@@ -3745,14 +3747,17 @@ class DashboardConfigTools:
         return _large_dashboard_replacement_warning(existing_config_size)
 
     @staticmethod
-    def _raise_dashboard_hash_conflict(url_path: str) -> NoReturn:
+    def _raise_dashboard_hash_conflict(
+        url_path: str, *, message: str = "Dashboard modified since last read (conflict)"
+    ) -> NoReturn:
         """Raise the shared optimistic-lock conflict for a full replacement."""
         raise_dashboard_edit_error(
             url_path,
             "conflict",
-            "Dashboard modified since last read (conflict)",
+            message,
             False,
             "set",
+            hash_supplied=True,
         )
 
     @staticmethod
@@ -3809,20 +3814,18 @@ class DashboardConfigTools:
                     },
                 )
             )
+        except HomeAssistantCommandNotSent as exc:
+            raise_dashboard_edit_error(
+                url_path, "write_not_sent", str(exc), False, action
+            )
         except Exception as exc:
             exception_to_structured_error(
                 exc,
                 context={
                     "action": action,
                     "url_path": url_path,
-                    "write_committed": (
-                        False if isinstance(exc, HomeAssistantCommandNotSent) else None
-                    ),
-                    "reason": (
-                        "write_not_sent"
-                        if isinstance(exc, HomeAssistantCommandNotSent)
-                        else "write_outcome_unknown"
-                    ),
+                    "write_committed": None,
+                    "reason": "write_outcome_unknown",
                     "post_write_verified": False,
                 },
                 suggestions=[

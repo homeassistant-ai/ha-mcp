@@ -41,6 +41,10 @@ _EDIT_SUGGESTIONS = {
         "Read the dashboard again with ha_config_get_dashboard",
         "Use its fresh config_hash and rebase the edit on the current config",
     ],
+    "write_not_sent": [
+        "Reconnect to Home Assistant, then retry the dashboard config edit",
+        "The config write was not sent; its edit parameters can be reused",
+    ],
     "write_outcome_unknown": [
         "Read the dashboard with ha_config_get_dashboard before retrying",
         "Use its fresh config_hash and check whether the requested changes already applied",
@@ -54,6 +58,8 @@ def raise_dashboard_edit_error(
     message: str,
     write_committed: bool | None,
     action: str,
+    *,
+    hash_supplied: bool = False,
 ) -> NoReturn:
     """Preserve the operation and outcome while suggesting a relevant next step."""
     error_code = {
@@ -64,6 +70,7 @@ def raise_dashboard_edit_error(
         "not_found": ErrorCode.RESOURCE_NOT_FOUND,
         "unauthorized": ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
         "invalid_format": ErrorCode.VALIDATION_FAILED,
+        "write_not_sent": ErrorCode.CONNECTION_FAILED,
     }.get(code, ErrorCode.SERVICE_CALL_FAILED)
     suggestions = _EDIT_SUGGESTIONS.get(
         code,
@@ -72,7 +79,7 @@ def raise_dashboard_edit_error(
             "Check Home Assistant logs for the reported error before retrying",
         ],
     )
-    if code == "conflict" and action == "set":
+    if code == "conflict" and action == "set" and hash_supplied:
         suggestions = [
             *suggestions,
             "For a full replacement, omit config_hash to force replace",

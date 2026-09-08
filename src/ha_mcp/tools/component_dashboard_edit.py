@@ -59,7 +59,7 @@ def _raise_malformed_reply(
 
 
 def _validate_edit_result(
-    raw: Any, url_path: str | None, action: str
+    raw: Any, url_path: str | None, action: str, *, hash_supplied: bool = False
 ) -> dict[str, Any]:
     """An incomplete response cannot establish whether the write happened."""
     if not isinstance(raw, dict):
@@ -82,6 +82,7 @@ def _validate_edit_result(
             str(error.get("message", error["code"])),
             committed,
             action,
+            hash_supplied=hash_supplied,
         )
     invalid_fields = _invalid_success_fields(result)
     if invalid_fields:
@@ -162,4 +163,6 @@ async def edit_dashboard_via_component(
         # establish whether Core saved unless an explicit rejection says so.
         _handle_command_failure(exc, client, url_path, action)
         return None
-    return _validate_edit_result(raw, url_path, action)
+    return _validate_edit_result(
+        raw, url_path, action, hash_supplied=expected_hash is not None
+    )
