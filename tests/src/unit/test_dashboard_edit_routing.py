@@ -1621,6 +1621,11 @@ async def test_real_failed_discovery_never_downgrades_dashboard_write(
     from ha_mcp.tools import component_api
 
     client, document, messages = legacy_dashboard
+    monkeypatch.setattr(
+        tools_config_dashboards,
+        "fetch_dashboards_list",
+        AsyncMock(return_value=[{"id": "test-id", "url_path": "test-dashboard"}]),
+    )
     exceptions = {
         "connection": HomeAssistantConnectionError("connection lost"),
         "timeout": HomeAssistantCommandTimeout("probe timed out"),
