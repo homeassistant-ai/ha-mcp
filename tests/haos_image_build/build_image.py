@@ -41,7 +41,7 @@ LOG = logging.getLogger("haos_image_build")
 # renovate: datasource=github-releases depName=home-assistant/operating-system
 STABLE_HAOS_VERSION = "18.2"
 # renovate: datasource=custom.ha-supervisor-stable depName=home-assistant/supervisor
-STABLE_SUPERVISOR_VERSION = "2026.08.0"
+STABLE_SUPERVISOR_VERSION = "2026.09.0"
 # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
 STABLE_CORE_VERSION = "2026.9.1"
 
