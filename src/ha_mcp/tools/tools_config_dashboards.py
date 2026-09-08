@@ -3721,7 +3721,13 @@ class DashboardConfigTools:
                         "Retry the operation",
                         "Read the dashboard with ha_config_get_dashboard first",
                     ],
-                    context={"action": "set", "url_path": url_path},
+                    context={
+                        "action": "set",
+                        "url_path": url_path,
+                        "reason": "load_failed",
+                        "write_committed": False,
+                        "post_write_verified": False,
+                    },
                 )
             )
 
@@ -3741,16 +3747,12 @@ class DashboardConfigTools:
     @staticmethod
     def _raise_dashboard_hash_conflict(url_path: str) -> NoReturn:
         """Raise the shared optimistic-lock conflict for a full replacement."""
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Dashboard modified since last read (conflict)",
-                suggestions=[
-                    "Call ha_config_get_dashboard() again",
-                    "Use the fresh config_hash, or omit config_hash to force replace",
-                ],
-                context={"action": "set", "url_path": url_path},
-            )
+        raise_dashboard_edit_error(
+            url_path,
+            "conflict",
+            "Dashboard modified since last read (conflict)",
+            False,
+            "set",
         )
 
     @staticmethod
@@ -3845,7 +3847,9 @@ class DashboardConfigTools:
                     context={
                         "action": action,
                         "url_path": url_path,
+                        "reason": "save_rejected",
                         "write_committed": False,
+                        "post_write_verified": False,
                     },
                 )
             )

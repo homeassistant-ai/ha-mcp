@@ -633,6 +633,9 @@ class TestSetDashboardUrlPathCreationContract:
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "Cannot verify" in body["error"]["message"]
         assert read_error in body["error"]["details"]
+        assert body["reason"] == "load_failed"
+        assert body["write_committed"] is False
+        assert body["post_write_verified"] is False
         assert body["url_path"] == "map"
         assert mock_client.send_websocket_message.call_count == 2
 

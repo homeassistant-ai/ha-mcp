@@ -857,11 +857,13 @@ async def test_legacy_edit_save_failure_reports_outcome_without_retry(
     error = json.loads(str(caught.value))
     assert error["action"] == mode
     if failure == "rejected":
+        assert error["reason"] == "save_rejected"
         assert ("transformed config" in str(caught.value)) is (
             mode == "python_transform"
         )
     known_unwritten = failure in {"not_sent", "rejected"}
     assert error["write_committed"] is (False if known_unwritten else None)
+    assert error["post_write_verified"] is False
     if not known_unwritten:
         assert error["reason"] == "write_outcome_unknown"
         assert document == {"views": []}
@@ -1309,7 +1311,7 @@ async def test_creation_ignores_hash_but_existing_empty_dashboard_keeps_guard(
                 "result": {
                     "success": False,
                     "error": {
-                        "code": "not_found",
+                        "code": "conflict",
                         "message": "Dashboard has no saved config",
                     },
                     "write_committed": False,
@@ -1346,8 +1348,14 @@ async def test_creation_ignores_hash_but_existing_empty_dashboard_keeps_guard(
         "MandatoryBPS": False,
     }
     if dashboard_exists:
-        with pytest.raises(ToolError):
+        with pytest.raises(ToolError) as caught:
             await tools.ha_config_set_dashboard(**kwargs)
+        error = json.loads(str(caught.value))
+        assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert error["reason"] == "conflict"
+        assert error["write_committed"] is False
+        assert error["post_write_verified"] is False
+        assert "omit config_hash" in error["error"]["suggestion"]
         assert not saved
         assert document == {}
     else:
@@ -1414,4 +1422,56 @@ async def test_strategy_conversion_failure_preserves_action_for_every_mode(
     assert error["write_committed"] is False
     assert "Take Control" in error["error"]["suggestion"]
     assert document == {"strategy": {"type": "original-states"}}
+    assert not any(m["type"] == "lovelace/config/save" for m in messages)
+
+
+@pytest.mark.parametrize("backend", ["native", "absent", "unknown_command"])
+@pytest.mark.parametrize("mode", ["config", "patch", "python_transform"])
+async def test_hash_conflict_outcome_and_force_advice_are_mode_specific(
+    legacy_dashboard, native_socket, monkeypatch, backend, mode
+):
+    client, document, messages = legacy_dashboard
+    tools = DashboardConfigTools(client)
+    monkeypatch.setattr(
+        tools,
+        "_ensure_dashboard_exists",
+        AsyncMock(return_value=(True, "id", False, None)),
+    )
+    native_socket.send_command.return_value = {
+        "success": True,
+        "result": {
+            "success": False,
+            "error": {"code": "conflict", "message": "Stale hash"},
+            "write_committed": False,
+        },
+    }
+    if backend == "absent":
+        monkeypatch.setattr(
+            component_dashboard_edit, "get_component_caps", AsyncMock(return_value=None)
+        )
+    elif backend == "unknown_command":
+        native_socket.send_command.side_effect = HomeAssistantCommandError(
+            "Unknown command", "unknown_command"
+        )
+    before = deepcopy(document)
+    edits = {
+        "config": {"views": []},
+        "patch": [{"op": "remove", "path": "/views/0"}],
+        "python_transform": "config['views'] = []",
+    }
+    with pytest.raises(ToolError) as caught:
+        await tools.ha_config_set_dashboard(
+            "test-dashboard",
+            config_hash="stale",
+            MandatoryBPS=False,
+            **{mode: edits[mode]},
+        )
+    error = json.loads(str(caught.value))
+    assert error["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert error["reason"] == "conflict"
+    assert error["action"] == ("set" if mode == "config" else mode)
+    assert error["write_committed"] is False
+    assert error["post_write_verified"] is False
+    assert ("omit config_hash" in error["error"]["suggestion"]) is (mode == "config")
+    assert document == before
     assert not any(m["type"] == "lovelace/config/save" for m in messages)

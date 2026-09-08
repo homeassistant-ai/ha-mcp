@@ -139,7 +139,11 @@ async def async_edit_dashboard(
             current = await dashboard.async_load(False)
         except ConfigNotFound:
             if "config" not in msg or msg.get("expected_hash") is not None:
-                raise _EditError("not_found", "Dashboard has no saved config") from None
+                # A supplied replacement hash cannot match an absent saved config.
+                raise _EditError(
+                    "conflict" if "config" in msg else "not_found",
+                    "Dashboard has no saved config",
+                ) from None
             current = None
 
         # Preloading can yield. A deleted/replaced dashboard must not be written

@@ -276,6 +276,28 @@ async def test_empty_storage_dashboard_allows_full_replacement(edit, config):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["config", "patch"])
+@pytest.mark.parametrize("missing", [False, True])
+async def test_empty_config_hash_conflicts_only_for_existing_full_replacement(
+    edit, mode, missing
+):
+    dashboard = LiveDashboard(None)
+    result = await edit.async_edit_dashboard(
+        FakeHass() if missing else hass_for(dashboard),
+        {
+            "url_path": "home-dashboard",
+            "expected_hash": "stale",
+            mode: {"views": []} if mode == "config" else [],
+        },
+    )
+    assert result["error"]["code"] == (
+        "conflict" if mode == "config" and not missing else "not_found"
+    )
+    assert result["write_committed"] is False
+    assert dashboard.saves == dashboard.events == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("keep_strategy", [False, True])
 async def test_strategy_dashboard_policy_matches_existing_tool(edit, keep_strategy):
     original = {"strategy": {"type": "original-states"}}

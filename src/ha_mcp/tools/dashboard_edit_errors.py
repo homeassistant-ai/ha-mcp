@@ -72,6 +72,11 @@ def raise_dashboard_edit_error(
             "Check Home Assistant logs for the reported error before retrying",
         ],
     )
+    if code == "conflict" and action == "set":
+        suggestions = [
+            *suggestions,
+            "For a full replacement, omit config_hash to force replace",
+        ]
     if code == "write_outcome_unknown":
         message = f"Dashboard write outcome unknown: {message}"
     raise_tool_error(
