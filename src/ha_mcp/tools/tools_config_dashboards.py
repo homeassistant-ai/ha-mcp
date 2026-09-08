@@ -2838,7 +2838,8 @@ class DashboardConfigTools:
                 description="Structured dashboard edits: up to 100 JSON Patch "
                 "add, remove, replace or test operations using RFC 6901 paths. "
                 "Requires config_hash. Mutually exclusive with config and "
-                "python_transform. Strings in value are preserved literally."
+                "python_transform. Update title/icon/require_admin/show_in_sidebar "
+                "in a separate call. Strings in value are preserved literally."
             ),
         ] = None,
     ) -> "dict[str, Any] | ToolResult":
@@ -2956,6 +2957,7 @@ class DashboardConfigTools:
 
         Note: When updating an existing dashboard, title/icon/require_admin/show_in_sidebar
         are also updated if explicitly provided alongside (or instead of) a config change.
+        With patch, update this metadata in a separate call; combining them is rejected.
 
         STORAGE-MODE vs YAML-MODE DASHBOARDS:
         This tool only manages storage-mode dashboards (created via UI/API and stored in
@@ -3006,6 +3008,27 @@ class DashboardConfigTools:
                             "python_transform: Loops and pattern-based edits",
                         ],
                         context={"action": "set", "url_path": url_path},
+                    )
+                )
+
+            if patch is not None and any(
+                value is not None
+                for value in (title, icon, require_admin, show_in_sidebar)
+            ):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "patch cannot be combined with dashboard metadata "
+                        "(title, icon, require_admin, show_in_sidebar)",
+                        suggestions=[
+                            "Update metadata in a separate ha_config_set_dashboard call "
+                            "without patch, config or python_transform",
+                        ],
+                        context={
+                            "action": "set",
+                            "url_path": url_path,
+                            "write_committed": False,
+                        },
                     )
                 )
 
