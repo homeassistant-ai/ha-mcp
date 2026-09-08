@@ -1,0 +1,51 @@
+name: Dashboard cache recovery proof
+on:
+  push:
+    branches: [test/dashboard-cache-proof]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  dashboard-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.12.7"
+      - run: uv python install 3.13
+      - run: uv sync --all-extras --dev
+      - name: Format changed Python and record patch
+        run: |
+          mkdir -p /tmp/dashboard-proof
+          mapfile -t files < <(git diff --name-only --diff-filter=ACMR origin/master...HEAD -- '*.py')
+          if ((${#files[@]})); then
+            uv run ruff check --fix "${files[@]}" || true
+            uv run ruff format "${files[@]}"
+          fi
+          git diff > /tmp/dashboard-proof/format.patch
+          git rev-parse HEAD > /tmp/dashboard-proof/source-sha.txt
+      - name: Dashboard unit and component contract tests
+        run: |
+          tests=(tests/src/unit/*dashboard*.py)
+          uv run pytest "${tests[@]}" tests/src/unit/test_component_ws_search.py tests/src/unit/test_component_api.py -n auto --maxfail=0 --tb=short --junitxml=/tmp/dashboard-proof/junit.xml
+      - name: Lint changed Python
+        if: success() || failure()
+        run: |
+          mapfile -t files < <(git diff --name-only --diff-filter=ACMR origin/master...HEAD -- '*.py')
+          if ((${#files[@]})); then
+            uv run ruff check "${files[@]}"
+          fi
+      - name: Type check server
+        run: uv run mypy src/
+      - name: Upload branch proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: dashboard-branch-proof
+          path: /tmp/dashboard-proof/
+          retention-days: 7
