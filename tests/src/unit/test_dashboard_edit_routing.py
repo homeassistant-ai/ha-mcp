@@ -747,7 +747,14 @@ async def test_config_cancellation_preserves_prior_registry_write(
     monkeypatch.setattr(
         tools,
         "_ensure_dashboard_exists",
-        AsyncMock(return_value=(prior_change != "create", "id", prior_change == "metadata", None)),
+        AsyncMock(
+            return_value=(
+                prior_change != "create",
+                "id",
+                prior_change == "metadata",
+                None,
+            )
+        ),
     )
     if stage == "legacy_save":
         monkeypatch.setattr(
@@ -798,7 +805,9 @@ async def test_config_cancellation_preserves_prior_registry_write(
 
 @pytest.mark.parametrize("mode", ["patch", "python_transform"])
 @pytest.mark.parametrize("backend", ["absent", "unknown_command"])
-@pytest.mark.parametrize("failure", ["timeout", "disconnected", "cancelled", "not_sent", "rejected"])
+@pytest.mark.parametrize(
+    "failure", ["timeout", "disconnected", "cancelled", "not_sent", "rejected"]
+)
 async def test_legacy_edit_save_failure_reports_outcome_without_retry(
     legacy_dashboard, native_socket, monkeypatch, mode, backend, failure
 ):
