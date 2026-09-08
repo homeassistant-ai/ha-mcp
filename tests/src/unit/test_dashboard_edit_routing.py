@@ -861,6 +861,10 @@ async def test_legacy_edit_save_failure_reports_outcome_without_retry(
         assert ("transformed config" in str(caught.value)) is (
             mode == "python_transform"
         )
+    assert error["reason"] == {
+        "not_sent": "write_not_sent",
+        "rejected": "save_rejected",
+    }.get(failure, "write_outcome_unknown")
     known_unwritten = failure in {"not_sent", "rejected"}
     assert error["write_committed"] is (False if known_unwritten else None)
     assert error["post_write_verified"] is False
@@ -925,6 +929,11 @@ async def test_native_edit_failure_preserves_caller_action(
         None if failure in {"timeout", "malformed"} else False
     )
     assert not any(m["type"] == "lovelace/config/save" for m in messages)
+    assert error["reason"] == {
+        "not_sent": "write_not_sent",
+        "rejected": "validation_failed",
+        "probe": "load_failed",
+    }.get(failure, "write_outcome_unknown")
     assert native_socket.send_command.await_count == (failure != "probe")
 
 

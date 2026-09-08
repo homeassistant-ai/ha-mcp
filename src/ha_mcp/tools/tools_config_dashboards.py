@@ -3819,7 +3819,7 @@ class DashboardConfigTools:
                         False if isinstance(exc, HomeAssistantCommandNotSent) else None
                     ),
                     "reason": (
-                        "load_failed"
+                        "write_not_sent"
                         if isinstance(exc, HomeAssistantCommandNotSent)
                         else "write_outcome_unknown"
                     ),

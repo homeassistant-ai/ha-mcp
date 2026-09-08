@@ -94,7 +94,7 @@ def _handle_command_failure(
 ) -> None:
     """Only a missing command allows fallback; other failures terminate the edit."""
     if isinstance(exc, HomeAssistantCommandNotSent):
-        raise_dashboard_edit_error(url_path, "load_failed", str(exc), False, action)
+        raise_dashboard_edit_error(url_path, "write_not_sent", str(exc), False, action)
     if isinstance(exc, Exception) and is_unknown_command(exc):
         invalidate_caps(client)
         return
