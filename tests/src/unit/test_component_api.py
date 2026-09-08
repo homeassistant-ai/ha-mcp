@@ -274,7 +274,7 @@ async def test_malformed_info_result_caches_none() -> None:
 
     assert first is None
     assert second is None
-    # A responding-but-malformed component is a stable negative → probed once.
+    # Repeated reads inside the failure cooldown reuse the cached fallback.
     assert ws.send_command.await_count == 1
 
 
