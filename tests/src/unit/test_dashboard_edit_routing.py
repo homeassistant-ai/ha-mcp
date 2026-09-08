@@ -1281,3 +1281,83 @@ async def test_legacy_full_replacement_reports_verified_write_outcome(
         assert "render_paths" not in result
     assert sum(m["type"] == "lovelace/config/save" for m in messages) == 1
     assert client.send_websocket_message.await_count == 3
+
+
+@pytest.mark.parametrize("backend", ["native", "absent", "unknown_command"])
+@pytest.mark.parametrize("dashboard_exists", [False, True])
+async def test_creation_ignores_hash_but_existing_empty_dashboard_keeps_guard(
+    legacy_dashboard, native_socket, monkeypatch, backend, dashboard_exists
+):
+    client, document, messages = legacy_dashboard
+    document.clear()  # Registry entry has no saved config before this request.
+    config = {"views": [{"title": "First config"}]}
+    saved = False
+    tools = DashboardConfigTools(client)
+    monkeypatch.setattr(
+        tools,
+        "_ensure_dashboard_exists",
+        AsyncMock(return_value=(dashboard_exists, "id", False, None)),
+    )
+
+    async def native_send(command, **kwargs):
+        nonlocal saved
+        if backend == "unknown_command":
+            raise HomeAssistantCommandError("Unknown command", "unknown_command")
+        if "expected_hash" in kwargs:
+            return {
+                "success": True,
+                "result": {
+                    "success": False,
+                    "error": {
+                        "code": "not_found",
+                        "message": "Dashboard has no saved config",
+                    },
+                    "write_committed": False,
+                },
+            }
+        saved = True
+        document.update(deepcopy(kwargs["config"]))
+        return _success(deepcopy(document))
+
+    native_socket.send_command.side_effect = native_send
+    if backend == "absent":
+        monkeypatch.setattr(
+            component_dashboard_edit, "get_component_caps", AsyncMock(return_value=None)
+        )
+    original_send = client.send_websocket_message.side_effect
+
+    async def legacy_send(message):
+        nonlocal saved
+        if message["type"] == "lovelace/config" and not saved:
+            messages.append(deepcopy(message))
+            return {
+                "success": False,
+                "error": {"code": "config_not_found", "message": "No config found."},
+            }
+        if message["type"] == "lovelace/config/save":
+            saved = True
+        return await original_send(message)
+
+    client.send_websocket_message.side_effect = legacy_send
+    kwargs = {
+        "url_path": "test-dashboard",
+        "config": config,
+        "config_hash": "hash-from-another-dashboard",
+        "MandatoryBPS": False,
+    }
+    if dashboard_exists:
+        with pytest.raises(ToolError):
+            await tools.ha_config_set_dashboard(**kwargs)
+        assert not saved
+        assert document == {}
+    else:
+        result = await tools.ha_config_set_dashboard(**kwargs)
+        assert result["dashboard_created"] is True
+        assert result["config_updated"] is True
+        assert result["write_committed"] is True
+        assert result["config_hash"] == compute_config_hash(config)
+        assert saved
+        assert document == config
+    if backend != "absent":
+        command_kwargs = native_socket.send_command.call_args.kwargs
+        assert ("expected_hash" in command_kwargs) is dashboard_exists

@@ -3923,8 +3923,13 @@ class DashboardConfigTools:
                 )
             )
         config_dict = cast(dict[str, Any], parsed_config)
+        # Creation has no previous config to compare. Match the legacy create
+        # path, which ignores a supplied hash; existing entries retain the guard.
         native_result = await edit_dashboard_via_component(
-            self._client, url_path, expected_hash=config_hash, config=config_dict
+            self._client,
+            url_path,
+            expected_hash=config_hash if dashboard_exists else None,
+            config=config_dict,
         )
         if native_result is not None:
             native_warning = _large_dashboard_replacement_warning(
