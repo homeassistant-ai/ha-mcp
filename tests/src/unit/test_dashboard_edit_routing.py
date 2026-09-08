@@ -871,7 +871,9 @@ async def test_legacy_edit_save_failure_reports_outcome_without_retry(
 
 
 @pytest.mark.parametrize("mode", ["patch", "python_transform", "config"])
-@pytest.mark.parametrize("failure", ["rejected", "malformed", "timeout", "not_sent", "probe"])
+@pytest.mark.parametrize(
+    "failure", ["rejected", "malformed", "timeout", "not_sent", "probe"]
+)
 async def test_native_edit_failure_preserves_caller_action(
     legacy_dashboard, native_socket, monkeypatch, mode, failure
 ):
@@ -943,4 +945,225 @@ async def test_patch_preparation_failure_preserves_action(legacy_dashboard, fail
             **kwargs,
         )
     assert json.loads(str(caught.value))["action"] == "patch"
+    assert not any(m["type"] == "lovelace/config/save" for m in messages)
+
+
+@pytest.mark.parametrize("backend", ["native", "absent", "unknown_command"])
+@pytest.mark.parametrize(
+    "case", ["missing", "no_saved_config", "strategy", "yaml", "invalid_patch"]
+)
+async def test_dashboard_edit_rejection_has_backend_independent_guidance(
+    legacy_dashboard, native_socket, monkeypatch, backend, case
+):
+    client, document, messages = legacy_dashboard
+    if case == "strategy":
+        document.clear()
+        document["strategy"] = {"type": "original-states"}
+    before = deepcopy(document)
+    native_reason = {
+        "missing": "not_found",
+        "no_saved_config": "not_found",
+        "strategy": "strategy_conversion",
+        "yaml": "yaml_not_supported",
+        "invalid_patch": "validation_failed",
+    }[case]
+    native_socket.send_command.return_value = {
+        "success": True,
+        "result": {
+            "success": False,
+            "error": {"code": native_reason, "message": "Edit rejected"},
+            "write_committed": False,
+        },
+    }
+    if backend == "absent":
+        monkeypatch.setattr(
+            component_dashboard_edit, "get_component_caps", AsyncMock(return_value=None)
+        )
+    elif backend == "unknown_command":
+        native_socket.send_command.side_effect = HomeAssistantCommandError(
+            "Unknown command", "unknown_command"
+        )
+    original_send = client.send_websocket_message.side_effect
+
+    async def send(message):
+        if message["type"] == "lovelace/config" and case in {
+            "missing",
+            "no_saved_config",
+        }:
+            messages.append(deepcopy(message))
+            return {
+                "success": False,
+                "error": {
+                    "code": "config_not_found",
+                    "message": (
+                        "Unknown config specified: test-dashboard"
+                        if case == "missing"
+                        else "No config found."
+                    ),
+                },
+            }
+        if message["type"] == "lovelace/config/save" and case == "yaml":
+            messages.append(deepcopy(message))
+            return {
+                "success": False,
+                "error": {"code": "error", "message": "Not supported"},
+            }
+        return await original_send(message)
+
+    client.send_websocket_message.side_effect = send
+    patch_path = {
+        "strategy": "/strategy",
+        "invalid_patch": "/missing-key",
+    }.get(case, "/views/0")
+    with pytest.raises(ToolError) as caught:
+        await DashboardConfigTools(client).ha_config_set_dashboard(
+            "test-dashboard",
+            config_hash=compute_config_hash(document),
+            patch=[{"op": "remove", "path": patch_path}],
+            MandatoryBPS=False,
+        )
+    error = json.loads(str(caught.value))
+    assert error["error"]["code"] == (
+        "RESOURCE_NOT_FOUND"
+        if case in {"missing", "no_saved_config"}
+        else "VALIDATION_FAILED"
+    )
+    advice = " ".join(error["error"]["suggestions"])
+    if case in {"missing", "no_saved_config"}:
+        assert "list_only=True" in advice
+        assert "'config'" in advice
+    elif case == "strategy":
+        assert "Take Control" in advice
+    elif case == "invalid_patch":
+        assert "patch" in advice
+        assert "JSON Pointer" in advice
+    else:
+        assert "YAML" in advice
+        assert "storage-mode" in advice
+    assert "fresh config_hash" not in advice
+    assert error["action"] == "patch"
+    assert error["write_committed"] is False
+    assert error["post_write_verified"] is False
+    assert document == before
+    assert sum(m["type"] == "lovelace/config/save" for m in messages) == (
+        backend != "native" and case == "yaml"
+    )
+
+
+@pytest.mark.parametrize(
+    ("reason", "advice_fragment", "committed"),
+    [
+        ("validation_failed", "patch", False),
+        ("unsupported_mode", "storage-mode", False),
+        ("conflict", "fresh config_hash", False),
+        ("load_failed", "connection", False),
+        ("write_outcome_unknown", "already applied", None),
+    ],
+)
+async def test_native_error_guidance_matches_failure_reason(
+    legacy_dashboard, native_socket, reason, advice_fragment, committed
+):
+    client, document, messages = legacy_dashboard
+    native_socket.send_command.return_value = {
+        "success": True,
+        "result": {
+            "success": False,
+            "error": {"code": reason, "message": "Edit rejected"},
+            "write_committed": committed,
+        },
+    }
+    with pytest.raises(ToolError) as caught:
+        await DashboardConfigTools(client).ha_config_set_dashboard(
+            "test-dashboard",
+            config_hash=compute_config_hash(document),
+            patch=[{"op": "remove", "path": "/views/0"}],
+            MandatoryBPS=False,
+        )
+    error = json.loads(str(caught.value))
+    advice = " ".join(error["error"]["suggestions"])
+    assert advice_fragment in advice
+    assert ("already applied" in advice) is (reason == "write_outcome_unknown")
+    assert error["write_committed"] is committed
+    assert error["action"] == "patch"
+    assert not any(m["type"] == "lovelace/config/save" for m in messages)
+
+
+@pytest.mark.parametrize("wire_shape", ["nested", "flat"])
+@pytest.mark.parametrize(
+    ("ha_code", "message", "expected_code"),
+    [
+        ("error", "Not supported", "VALIDATION_FAILED"),
+        (
+            "config_not_found",
+            "Unknown config specified: test-dashboard",
+            "RESOURCE_NOT_FOUND",
+        ),
+        ("unauthorized", "Not supported", "SERVICE_CALL_FAILED"),
+        ("error", "Saving not supported in recovery mode", "SERVICE_CALL_FAILED"),
+    ],
+)
+async def test_legacy_save_classifies_only_definitive_core_rejections(
+    legacy_dashboard, wire_shape, ha_code, message, expected_code
+):
+    client, document, messages = legacy_dashboard
+    original_send = client.send_websocket_message.side_effect
+
+    async def send(request):
+        if request["type"] == "lovelace/config/save":
+            messages.append(deepcopy(request))
+            if wire_shape == "flat":
+                return {
+                    "success": False,
+                    "error_code": ha_code,
+                    "error": f"Command failed: {message}",
+                }
+            return {"success": False, "error": {"code": ha_code, "message": message}}
+        return await original_send(request)
+
+    client.send_websocket_message.side_effect = send
+    with pytest.raises(ToolError) as caught:
+        await DashboardConfigTools(client).ha_config_set_dashboard(
+            "test-dashboard",
+            config_hash=compute_config_hash(document),
+            patch=[{"op": "remove", "path": "/views/0"}],
+            MandatoryBPS=False,
+        )
+    error = json.loads(str(caught.value))
+    assert error["error"]["code"] == expected_code
+    assert error["write_committed"] is False
+    assert error["action"] == "patch"
+    assert sum(m["type"] == "lovelace/config/save" for m in messages) == 1
+
+
+@pytest.mark.parametrize("wire_shape", ["nested", "flat"])
+@pytest.mark.parametrize("ha_code", ["config_not_found", "unauthorized", "error"])
+async def test_legacy_edit_fetch_distinguishes_missing_from_inaccessible(
+    legacy_dashboard, wire_shape, ha_code
+):
+    client, document, messages = legacy_dashboard
+    response = (
+        {
+            "success": False,
+            "error_code": ha_code,
+            "error": "Command failed: No config found.",
+        }
+        if wire_shape == "flat"
+        else {"success": False, "error": {"code": ha_code, "message": "No config found."}}
+    )
+    client.send_websocket_message.return_value = response
+    client.send_websocket_message.side_effect = None
+    with pytest.raises(ToolError) as caught:
+        await DashboardConfigTools(client).ha_config_set_dashboard(
+            "test-dashboard",
+            config_hash=compute_config_hash(document),
+            patch=[{"op": "remove", "path": "/views/0"}],
+            MandatoryBPS=False,
+        )
+    error = json.loads(str(caught.value))
+    assert error["error"]["code"] == (
+        "RESOURCE_NOT_FOUND" if ha_code == "config_not_found" else "SERVICE_CALL_FAILED"
+    )
+    advice = " ".join(error["error"]["suggestions"])
+    assert ("'config'" in advice) is (ha_code == "config_not_found")
+    assert error["write_committed"] is False
     assert not any(m["type"] == "lovelace/config/save" for m in messages)

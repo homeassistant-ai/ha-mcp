@@ -61,6 +61,11 @@ from .component_api import (
     is_unknown_command,
 )
 from .component_dashboard_edit import edit_dashboard_via_component
+from .dashboard_edit_errors import (
+    raise_dashboard_edit_error,
+    raise_dashboard_edit_fetch_error,
+    raise_known_dashboard_save_rejection,
+)
 from .helpers import (
     exception_to_structured_error,
     extract_tool_error_message,
@@ -2975,8 +2980,10 @@ class DashboardConfigTools:
         entry in configuration.yaml but does NOT touch the dashboard
         body in the referenced .yaml file.
         """
-        action = "patch" if patch is not None else (
-            "python_transform" if python_transform is not None else "set"
+        action = (
+            "patch"
+            if patch is not None
+            else ("python_transform" if python_transform is not None else "set")
         )
         screenshot_options = _DashboardScreenshotOptions(view_path=view_path)
         try:
@@ -3201,30 +3208,15 @@ class DashboardConfigTools:
                 self._client, url_path
             )
         except ToolError as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Dashboard not found or inaccessible: {extract_tool_error_message(e)}",
-                    suggestions=[
-                        f"{action} requires an existing dashboard",
-                        "Use 'config' parameter to create a new dashboard",
-                        "Verify dashboard exists with ha_config_get_dashboard(list_only=True)",
-                    ],
-                    context={"action": action, "url_path": url_path},
-                )
-            )
+            raise_dashboard_edit_fetch_error(e, url_path, action)
 
         if current_hash != config_hash:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Dashboard modified since last read (conflict)",
-                    suggestions=[
-                        "Call ha_config_get_dashboard() again",
-                        "Use the fresh config_hash from that response",
-                    ],
-                    context={"action": action, "url_path": url_path},
-                )
+            raise_dashboard_edit_error(
+                url_path,
+                "conflict",
+                "Dashboard modified since last read (conflict)",
+                False,
+                action,
             )
         return current_config
 
@@ -3427,12 +3419,8 @@ class DashboardConfigTools:
             try:
                 updated = apply_dashboard_patch(current, parsed_patch)
             except ValueError as exc:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_FAILED,
-                        str(exc),
-                        context={"action": "patch", "url_path": url_path},
-                    )
+                raise_dashboard_edit_error(
+                    url_path, "validation_failed", str(exc), False, "patch"
                 )
             self._validate_strategy_dashboard_replacement(
                 url_path,
@@ -3763,16 +3751,12 @@ class DashboardConfigTools:
         """Prevent this tool from taking control of a strategy dashboard."""
         if not was_strategy_dashboard or "strategy" in replacement_config:
             return
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_FAILED,
-                "Strategy dashboards cannot be converted to custom dashboards via this tool",
-                suggestions=[
-                    "Use 'Take Control' in the Home Assistant interface to convert it",
-                    "Keep a strategy configuration when updating this dashboard",
-                ],
-                context={"action": action, "url_path": url_path},
-            )
+        raise_dashboard_edit_error(
+            url_path,
+            "strategy_conversion",
+            "Strategy dashboards cannot be converted to custom dashboards via this tool",
+            False,
+            action,
         )
 
     async def _save_dashboard_config(
@@ -3832,6 +3816,7 @@ class DashboardConfigTools:
             )
 
         if isinstance(save_result, dict) and not save_result.get("success", True):
+            raise_known_dashboard_save_rejection(save_result, url_path, action)
             error_msg = save_result.get("error", {})
             if isinstance(error_msg, dict):
                 error_msg = error_msg.get("message", str(error_msg))

@@ -113,7 +113,7 @@ def _prepare_edit(
         raise _EditError("validation_failed", str(err)) from err
     if "strategy" in current_plain and "strategy" not in candidate:
         raise _EditError(
-            "validation_failed",
+            "strategy_conversion",
             "Strategy dashboards cannot be converted to custom dashboards via this tool",
         )
     return candidate, fallback, current_hash, previous_config_size

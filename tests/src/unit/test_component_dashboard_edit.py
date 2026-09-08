@@ -288,7 +288,7 @@ async def test_strategy_dashboard_policy_matches_existing_tool(edit, keep_strate
     )
     assert result["success"] is keep_strategy
     if not keep_strategy:
-        assert result["error"]["code"] == "validation_failed"
+        assert result["error"]["code"] == "strategy_conversion"
         assert dashboard.body is original
         assert dashboard.saves == []
 
@@ -446,7 +446,7 @@ async def test_patch_cannot_remove_strategy(edit):
         hass_for(dashboard),
         patch_request(original, [{"op": "remove", "path": "/strategy"}]),
     )
-    assert result["error"]["code"] == "validation_failed"
+    assert result["error"]["code"] == "strategy_conversion"
     assert result["write_committed"] is False
     assert dashboard.body is original
     assert dashboard.saves == []
