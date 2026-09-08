@@ -1162,7 +1162,7 @@ async def test_legacy_save_classifies_only_definitive_core_rejections(
     assert error["write_committed"] is False
     if message == "Saving not supported in recovery mode":
         assert error["reason"] == "recovery_mode"
-        assert "recovery mode" in error["error"]["suggestion"]
+        assert "recovery mode" in " ".join(error["error"]["suggestions"])
     assert error["action"] == "patch"
     assert sum(m["type"] == "lovelace/config/save" for m in messages) == 1
 

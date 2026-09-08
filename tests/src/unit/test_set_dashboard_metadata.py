@@ -546,7 +546,9 @@ class TestSetDashboardUrlPathCreationContract:
 
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert "conflict" in body["error"]["message"]
+        assert body["error"]["message"] == "Dashboard has no saved config"
+        assert body["reason"] == "conflict"
+        assert body["write_committed"] is False
         assert body["url_path"] == "no-config"
         assert mock_client.send_websocket_message.call_count == 2
 
