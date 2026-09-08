@@ -17,6 +17,7 @@ import pytest
 
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools import component_api
@@ -273,7 +274,7 @@ async def test_malformed_info_result_caches_none() -> None:
 
     assert first is None
     assert second is None
-    # A responding-but-malformed component is a stable negative → probed once.
+    # Repeated reads inside the failure cooldown reuse the cached fallback.
     assert ws.send_command.await_count == 1
 
 
@@ -416,32 +417,47 @@ def test_is_unknown_command_keys_off_code_not_message() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "failure", ["connection", "command", "malformed", "malformed_caps"]
+    "failure",
+    ["connection", "timeout", "command", "unexpected", "malformed", "malformed_caps"],
 )
+@pytest.mark.parametrize("strict_first", [False, True])
 async def test_strict_discovery_recovers_after_cached_failure_expires(
-    monkeypatch, failure
+    monkeypatch, failure, strict_first
 ):
-    """Strict writers re-probe failed discovery rather than keeping a permanent veto."""
+    """Failed probes hold for 30 seconds, preserving reads, then allow recovery."""
     clock = _clock()
     monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
     client = _client()
     ws = _make_ws(
         info_exc={
             "connection": HomeAssistantConnectionError("down"),
+            "timeout": HomeAssistantCommandTimeout("slow info"),
             "command": HomeAssistantCommandError("broken info", "unknown_error"),
+            "unexpected": RuntimeError("broken probe"),
         }.get(failure),
-        info_result={**_INFO_OK, "capabilities": "search"}
+        info_result={**_INFO_OK, "capabilities": ["search", 17]}
         if failure == "malformed_caps"
         else None,
     )
     with _patch_ws(ws):
-        await get_component_caps(client)
+        if strict_first:
+            with pytest.raises(component_api.ComponentDiscoveryError):
+                await get_component_caps(client, strict=True)
+        first_read = await get_component_caps(client)
+        assert component_supports(first_read, "search") is (failure == "malformed_caps")
         with pytest.raises(component_api.ComponentDiscoveryError):
             await get_component_caps(client, strict=True)
         assert ws.send_command.await_count == 1
-        clock[0] += component_api._NEGATIVE_CACHE_TTL_S + 1
+        # Discovery has recovered, but callers still honor the short cooldown.
         ws.send_command.side_effect = None
         ws.send_command.return_value = {"success": True, "result": _INFO_OK}
+        clock[0] += 29
+        assert await get_component_caps(client) is first_read
+        with pytest.raises(component_api.ComponentDiscoveryError):
+            await get_component_caps(client, strict=True)
+        assert ws.send_command.await_count == 1
+        # Pin the recovery time, not whichever TTL the implementation uses.
+        clock[0] += 1
         assert component_supports(
             await get_component_caps(client, strict=True), "search"
         )

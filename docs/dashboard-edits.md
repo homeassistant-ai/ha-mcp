@@ -53,7 +53,10 @@ and readback use the same native command. Component-less and older-component
 installations use the existing WebSocket path, including for structured patches.
 No File & YAML services permission is needed for this capability. A failed or
 malformed capability probe stops the config edit before saving; it does not
-establish that the component is absent. Retry after discovery recovers.
+establish that the component is absent. Failed discovery is cached for 30 seconds;
+the next call after that window probes again. Retry after discovery recovers.
+A confirmed missing `info` command or an unsupported component schema is cached
+for five minutes and permits legacy routing during that window.
 
 The native command compares the loaded configuration and begins Core's save
 without yielding between them. It preserves Core's cache invalidation and update
