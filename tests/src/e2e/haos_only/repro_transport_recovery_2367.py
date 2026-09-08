@@ -88,7 +88,7 @@ class FaultProxy:
             async with self.session.request(request.method, self.upstream, data=body,
                                             headers=headers, allow_redirects=False) as upstream:
                 response = web.StreamResponse(status=upstream.status,
-                    headers={k: v for k, v in upstream.headers.items() if k.lower() not in HOP_HEADERS})
+                    headers={k: v for k, v in upstream.headers.items() if k.lower() not in HOP_HEADERS - {"content-encoding"}})
                 await response.prepare(request)
                 received = 0
                 async for chunk in upstream.content.iter_any():
@@ -171,7 +171,8 @@ async def probe(writer, observer, baseline, transform, label):
     after = await get_dashboard(observer, label + "/independent-after")
     changed = after["config_hash"] != before["config_hash"]
     if result["ok"]:
-        assert changed, "Successful write did not change the reporter dashboard"
+        expected_change = transform == EXACT_TRANSFORM or baseline["config"]["views"][0]["sections"][1]["cards"][0]["icon"] != "mdi:music-box-multiple"
+        assert changed == expected_change, "Saved dashboard does not match expected change"
         if transform == EXACT_TRANSFORM:
             assert len(after["config"]["views"][1]["sections"]) == 4
             assert after["config"]["views"][1]["sections"][-1]["cards"][0]["heading"] == "Stresstest"

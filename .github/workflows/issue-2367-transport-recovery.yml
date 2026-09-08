@@ -164,7 +164,7 @@ jobs:
           uv pip freeze > /tmp/issue-2367/client-packages.txt
           cd tests
           uv run pytest src/e2e/haos_only/repro_transport_recovery_2367.py \
-            -n0 -v -s --tb=short --junitxml=/tmp/issue-2367/junit.xml
+            -n0 -v -s --tb=short --maxfail=0 --junitxml=/tmp/issue-2367/junit.xml
         env:
           HAMCP_ENV_FILE: "tests/.env.test"
           HAOS_TEST_IMAGE_PATH: /tmp/haos-test-image.qcow2

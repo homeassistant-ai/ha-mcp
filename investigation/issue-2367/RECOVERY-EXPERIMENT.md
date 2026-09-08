@@ -27,7 +27,7 @@ After a successful control write on the reporter's exact dashboard, inject:
 First three cases repeat three times, each with four post-fault writes.
 Restart runs once with four post-restart writes. Both the exact large transform
 and one-key icon edit are used. Keep Desktop and its bridge alive throughout
- each case; traces reveal automatic reconnects.
+each case; traces reveal automatic reconnects.
 
 Each recovery write gets same-Desktop and independent MCP read probes, during
 its pending interval if it takes over two seconds. Writes retain a 240-second
@@ -41,3 +41,8 @@ signature. Ordinary 502s, global disconnections, and failed boots are separate.
 Retain JSONL timings and proxy boundaries, Desktop IPC/pipe traces, JUnit,
 HA diagnostics, package versions, source SHA, and fixture/transform checksums.
 No local execution or live-home access is involved.
+
+The supplied fixture already has the small edit target icon. That exact call is
+a valid no-op; verify its resulting value and unchanged hash. The large edits
+must change the hash and append the expected section. The first attempt stopped
+on an incorrect unconditional changed-hash assertion, corrected before rerun.
