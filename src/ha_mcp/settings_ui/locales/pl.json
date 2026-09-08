@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Limit czasu dla każdego pobierania konfiguracji automatyzacji/skryptu/sceny. Zakres 1–600. Wymagany restart.",
     "advanced.individual_fetch_batch_size.label": "Rozmiar partii pobierania konfiguracji",
     "advanced.individual_fetch_batch_size.help": "Równoczesne pobieranie konfiguracji dla każdego ID. Zmniejsz do 1 na szeregowych serwerach HA. Zakres 1–100. Wymagany restart.",
+    "advanced.enable_history_query_guardrails.label": "Zabezpieczenia zapytań historycznych",
+    "advanced.enable_history_query_guardrails.help": "Odrzucaj zapytania rejestratora przekraczające zachowawcze limity encji i zakresu czasu. Domyślnie wyłączone.",
     "advanced.ha_tool_concurrency.label": "Współbieżność narzędzi Home Assistant",
     "advanced.ha_tool_concurrency.help": "Opcjonalny limit zewnętrznych wywołań narzędzi Home Assistant we wszystkich sesjach. Wewnętrzna współbieżność REST, WebSocket oraz rozgałęziania dla poszczególnych narzędzi pozostaje bez zmian. Wartość 0 zachowuje zachowanie bez limitu. Wywołanie oczekujące na wolne zasoby kończy się niepowodzeniem po 60 sekundach. Zakres 0–32. Wymagany restart.",
     "advanced.backup_hint.label": "Poziom podpowiedzi o kopii zapasowej",

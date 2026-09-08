@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Timeout för varje hämtning av automatiserings-/skript-/scenkonfiguration. Område 1–600. Omstart krävs.",
     "advanced.individual_fetch_batch_size.label": "Batchstorlek för konfigurationshämtning",
     "advanced.individual_fetch_batch_size.help": "Samtidiga konfigurationshämtningar per ID. Sänk mot 1 på seriella HA-servrar. Område 1–100. Omstart krävs.",
+    "advanced.enable_history_query_guardrails.label": "Skyddsregler för historikfrågor",
+    "advanced.enable_history_query_guardrails.help": "Avvisa recorder-frågor som överskrider konservativa budgetar för entiteter och tidsintervall. Inaktiverat som standard.",
     "advanced.ha_tool_concurrency.label": "Samtidighet för Home Assistant-verktyg",
     "advanced.ha_tool_concurrency.help": "Valfri gräns för yttre anrop av Home Assistant-verktyg över alla sessioner. Intern samtidighet för REST, WebSocket och per-verktyg-grenar är oförändrad. 0 behåller obegränsat beteende. Ett anrop som väntar på kapacitet misslyckas efter 60 sekunder. Intervall 0–32. Omstart krävs.",
     "advanced.backup_hint.label": "Nivå för säkerhetskopieringshint",
@@ -661,7 +663,7 @@
     },
     "ha_get_history": {
       "title": "Hämta Entitetshistorik eller Statistik",
-      "description": "Hämta historisk data från Home Assistants inspelare."
+      "description": "Hämta historisk data från Home Assistants recorder."
     },
     "ha_get_integration": {
       "title": "Hämta Integration",

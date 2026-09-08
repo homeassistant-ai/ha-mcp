@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "每次自动化/脚本/场景配置获取的超时。范围 1–600。需重启。",
     "advanced.individual_fetch_batch_size.label": "配置获取批大小",
     "advanced.individual_fetch_batch_size.help": "并发的按 ID 配置获取数。在串行 HA 服务器上向 1 靠拢。范围 1–100。需重启。",
+    "advanced.enable_history_query_guardrails.label": "历史查询安全保护",
+    "advanced.enable_history_query_guardrails.help": "拒绝超过保守的实体和时间范围预算的 recorder 查询。默认禁用。",
     "advanced.ha_tool_concurrency.label": "Home Assistant 工具并发数",
     "advanced.ha_tool_concurrency.help": "对所有会话中外部 Home Assistant 工具调用的可选限制。内部的 REST、WebSocket 以及每个工具的扇出并发保持不变。设置为 0 则保持无限制。等待容量的调用将在 60 秒后失败。范围 0–32。需要重启。",
     "advanced.backup_hint.label": "备份提示级别",
@@ -692,7 +694,7 @@
     },
     "ha_get_history": {
       "title": "获取实体历史或统计",
-      "description": "从 Home Assistant 的 recorder 获取历史数据。"
+      "description": "从 Home Assistant 的 recorder 中获取历史数据。"
     },
     "ha_get_integration": {
       "title": "获取集成",

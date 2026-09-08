@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Timeout di ogni recupero di configurazione di automazione, script o scena. Intervallo 1–600. È necessario il riavvio.",
     "advanced.individual_fetch_batch_size.label": "Dimensione del lotto di recupero delle configurazioni",
     "advanced.individual_fetch_batch_size.help": "Recuperi di configurazione per singolo ID eseguiti in parallelo. Avvicinati a 1 sui server HA che lavorano in sequenza. Intervallo 1–100. È necessario il riavvio.",
+    "advanced.enable_history_query_guardrails.label": "Protezioni per le query sulla cronologia",
+    "advanced.enable_history_query_guardrails.help": "Rifiuta le query del recorder che superano i limiti conservativi di entità e intervallo di tempo. Disabilitato per impostazione predefinita.",
     "advanced.ha_tool_concurrency.label": "Concorrenza degli strumenti di Home Assistant",
     "advanced.ha_tool_concurrency.help": "Limite opzionale sulle chiamate esterne agli strumenti di Home Assistant in tutte le sessioni. La concorrenza interna di REST, WebSocket e fan-out per strumento rimane invariata. 0 mantiene il comportamento illimitato. Una chiamata in attesa di capacità fallisce dopo 60 secondi. Intervallo 0–32. Riavvio necessario.",
     "advanced.backup_hint.label": "Livello del suggerimento di backup",
@@ -692,7 +694,7 @@
     },
     "ha_get_history": {
       "title": "Ottieni la cronologia o le statistiche di un'entità",
-      "description": "Recupera i dati storici dal recorder di Home Assistant."
+      "description": "Ottieni dati storici dal recorder di Home Assistant."
     },
     "ha_get_integration": {
       "title": "Ottieni un'integrazione",

@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Timeout für jeden Automatisierungs-/Skript-/Szenen-Konfigurations-Abruf. Bereich 1-600. Neustart erforderlich.",
     "advanced.individual_fetch_batch_size.label": "Konfigurations-Abruf-Batch-Größe",
     "advanced.individual_fetch_batch_size.help": "Gleichzeitige Pro-ID-Konfigurations-Abrufe. Senke auf 1 bei seriellen HA-Servern. Bereich 1-100. Neustart erforderlich.",
+    "advanced.enable_history_query_guardrails.label": "Verlauf-Abfrage-Schutzplanken",
+    "advanced.enable_history_query_guardrails.help": "Recorder-Abfragen ablehnen, die konservative Entitäts- und Zeitbereichsbudgets überschreiten. Standardmäßig deaktiviert.",
     "advanced.ha_tool_concurrency.label": "Home-Assistant-Tool-Gleichzeitigkeit",
     "advanced.ha_tool_concurrency.help": "Optionales Limit für äußere Home-Assistant-Tool-Aufrufe über alle Sitzungen hinweg. Interne REST-, WebSocket- und tool-spezifische Fan-Out-Gleichzeitigkeit bleibt unverändert. 0 behält das unbegrenzte Verhalten bei. Ein auf Kapazität wartender Aufruf schlägt nach 60 Sekunden fehl. Bereich 0–32. Neustart erforderlich.",
     "advanced.backup_hint.label": "Backup-Hinweis-Level",
@@ -692,7 +694,7 @@
     },
     "ha_get_history": {
       "title": "Verlauf oder Statistiken abrufen",
-      "description": "Ruft historische Daten aus dem Home-Assistant-Speicher ab."
+      "description": "Historische Daten aus dem Recorder von Home Assistant abrufen."
     },
     "ha_get_integration": {
       "title": "Integration abrufen",

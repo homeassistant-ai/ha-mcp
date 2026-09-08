@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Délai d'attente pour chaque récupération de configuration d'automatisation/script/scène. Plage 1–600. Redémarrage requis.",
     "advanced.individual_fetch_batch_size.label": "Taille du lot de récupération de configuration",
     "advanced.individual_fetch_batch_size.help": "Récupérations simultanées de configuration par ID. Diminue vers 1 sur les serveurs HA série. Plage 1–100. Redémarrage requis.",
+    "advanced.enable_history_query_guardrails.label": "Limites de requêtes d'historique",
+    "advanced.enable_history_query_guardrails.help": "Rejette les requêtes d'historique qui dépassent les budgets prudents d'entités et de plages horaires. Désactivé par défaut.",
     "advanced.ha_tool_concurrency.label": "Concurrence des outils Home Assistant",
     "advanced.ha_tool_concurrency.help": "Limite optionnelle sur les appels d'outils Home Assistant externes pour toutes les sessions. La concurrence interne pour REST, WebSocket et par outil reste inchangée. 0 conserve un comportement illimité. Un appel en attente de capacité échoue après 60 secondes. Plage de 0 à 32. Redémarrage requis.",
     "advanced.backup_hint.label": "Niveau d'indication de sauvegarde",
@@ -692,7 +694,7 @@
     },
     "ha_get_history": {
       "title": "Obtenir l'historique ou les statistiques",
-      "description": "Récupère les données historiques du stockage Home Assistant."
+      "description": "Obtenir des données historiques à partir de l'enregistreur de Home Assistant."
     },
     "ha_get_integration": {
       "title": "Obtenir l'intégration",

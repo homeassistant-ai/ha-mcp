@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Tiempo de espera de cada obtención de configuración de automatización, script o escena. Rango 1–600. Hay que reiniciar.",
     "advanced.individual_fetch_batch_size.label": "Tamaño del lote de obtención de configuraciones",
     "advanced.individual_fetch_batch_size.help": "Obtenciones de configuración por ID en paralelo. Bájalo hacia 1 en servidores HA que responden en serie. Rango 1–100. Hay que reiniciar.",
+    "advanced.enable_history_query_guardrails.label": "Protecciones de consultas del historial",
+    "advanced.enable_history_query_guardrails.help": "Rechazar consultas del registrador que superen los límites conservadores de entidades y rangos de tiempo. Desactivado por defecto.",
     "advanced.ha_tool_concurrency.label": "Concurrencia de herramientas de Home Assistant",
     "advanced.ha_tool_concurrency.help": "Límite opcional en las llamadas externas a herramientas de Home Assistant en todas las sesiones. La concurrencia interna de REST, WebSocket y de distribución por herramienta no se modifica. 0 mantiene el comportamiento ilimitado. Una llamada que espera capacidad falla después de 60 segundos. Rango de 0 a 32. Requiere reinicio.",
     "advanced.backup_hint.label": "Nivel de la indicación de copia de seguridad",
@@ -692,7 +694,7 @@
     },
     "ha_get_history": {
       "title": "Obtener historial o estadísticas de entidades",
-      "description": "Consulta datos históricos del registrador de Home Assistant."
+      "description": "Obtener datos históricos del registrador de Home Assistant."
     },
     "ha_get_integration": {
       "title": "Obtener integración",

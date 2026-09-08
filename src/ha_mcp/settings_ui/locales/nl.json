@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Time-out voor elke automatisering/script/scène configuratie-ophalen. Bereik 1–600. Herstart vereist.",
     "advanced.individual_fetch_batch_size.label": "Batchgrootte voor configuratie-ophalen",
     "advanced.individual_fetch_batch_size.help": "Gelijktijdige configuratie-ophalingen per ID. Verlaag naar 1 op seriële HA-servers. Bereik 1–100. Herstart vereist.",
+    "advanced.enable_history_query_guardrails.label": "Beveiligingen voor geschiedenisquery's",
+    "advanced.enable_history_query_guardrails.help": "Wijs recorderquery's af die de conservatieve budgetten voor entiteiten en tijdsbereik overschrijden. Standaard uitgeschakeld.",
     "advanced.ha_tool_concurrency.label": "Home Assistant-toolgelijktijdigheid",
     "advanced.ha_tool_concurrency.help": "Optionele limiet voor uiterste Home Assistant-toolaanroepen over alle sessies. Interne REST-, WebSocket- en per-tool fan-out gelijktijdigheid blijft ongewijzigd. 0 behoudt onbeperkt gedrag. Een aanroep die wacht op capaciteit mislukt na 60 seconden. Bereik 0–32. Herstart vereist.",
     "advanced.backup_hint.label": "Back-up hintniveau",
@@ -661,7 +663,7 @@
     },
     "ha_get_history": {
       "title": "Haal Entiteitsgeschiedenis of Statistieken op",
-      "description": "Haal historische gegevens op van de recorder van Home Assistant."
+      "description": "Haal historische gegevens op uit de recorder van Home Assistant."
     },
     "ha_get_integration": {
       "title": "Haal Integratie op",

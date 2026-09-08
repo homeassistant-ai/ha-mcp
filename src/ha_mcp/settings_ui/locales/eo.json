@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Limtempo por ĉiu akirado de aŭtomatiga/skripta/scena agordo. Gamo 1–600. Restartigo necesas.",
     "advanced.individual_fetch_batch_size.label": "Grandeco de agorda akira aro",
     "advanced.individual_fetch_batch_size.help": "Samtempaj agordaj akiroj por ĉiu ID. Malaltigu al 1 ĉe seriaj HA-serviloj. Gamo 1–100. Restartigo necesas.",
+    "advanced.enable_history_query_guardrails.label": "Protektaj gvidlinioj por historikurioj",
+    "advanced.enable_history_query_guardrails.help": "Malakcepti registrilajn kuriojn, kiuj superas konservativajn entajn kaj tempintervalajn buĝetojn. Malŝaltite defaŭlte.",
     "advanced.ha_tool_concurrency.label": "Konkureco de hejmaŭtomatigaj iloj de Home Assistant",
     "advanced.ha_tool_concurrency.help": "Laŭvola limo pri eksteraj vokoj al Home Assistant-iloj tra ĉiuj sesioj. Interna REST-, WebSocket-, kaj perila disbranĉiĝa konkureco restas neŝanĝita. 0 tenas la senliman konduton. Voko atendanta je kapablo malsukcesas post 60 sekundoj. Intervalo 0–32. Postiĝas restartigo.",
     "advanced.backup_hint.label": "Nivelo de rezerva sugesto",
@@ -661,7 +663,7 @@
     },
     "ha_get_history": {
       "title": "Akiri Entan Historion aŭ Statistikojn",
-      "description": "Reakiru historiajn datumojn de la registrilo de Home Assistant."
+      "description": "Akiri historiajn datumojn el la registrilo de Home Assistant."
     },
     "ha_get_integration": {
       "title": "Akiri Integriĝon",

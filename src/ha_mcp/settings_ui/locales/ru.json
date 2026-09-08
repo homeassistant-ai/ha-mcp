@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Тайм-аут каждой загрузки автоматизации, скрипта или сцены. 1–600. Нужен перезапуск.",
     "advanced.individual_fetch_batch_size.label": "Размер пакета загрузки конфигураций",
     "advanced.individual_fetch_batch_size.help": "Число параллельных загрузок. Для последовательных серверов HA снижайте к 1. 1–100. Нужен перезапуск.",
+    "advanced.enable_history_query_guardrails.label": "Защита запросов истории",
+    "advanced.enable_history_query_guardrails.help": "Отклонять запросы к истории, превышающие консервативные лимиты по объектам и временным диапазонам. Отключено по умолчанию.",
     "advanced.ha_tool_concurrency.label": "Параллелизм инструментов Home Assistant",
     "advanced.ha_tool_concurrency.help": "Необязательный лимит внешних вызовов инструментов Home Assistant во всех сеансах. Внутренний параллелизм REST, WebSocket и вентирования по инструментам остается неизменным. 0 сохраняет неограниченное поведение. Вызов, ожидающий свободных ресурсов, завершается ошибкой через 60 секунд. Диапазон 0–32. Требуется перезапуск.",
     "advanced.backup_hint.label": "Уровень напоминания о резервной копии",
@@ -692,7 +694,7 @@
     },
     "ha_get_history": {
       "title": "Получить историю или статистику",
-      "description": "Получить исторические данные из хранилища Home Assistant."
+      "description": "Получить исторические данные из службы записи Home Assistant."
     },
     "ha_get_integration": {
       "title": "Получить интеграцию",

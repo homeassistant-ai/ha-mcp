@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "Časový limit pro každé načtení konfigurace automatizace/skriptu/scény. Rozsah 1–600. Vyžadován restart.",
     "advanced.individual_fetch_batch_size.label": "Velikost dávky načítání konfigurace",
     "advanced.individual_fetch_batch_size.help": "Souběžné načítání konfigurací podle ID. Snižte směrem k 1 na sériových HA serverech. Rozsah 1–100. Vyžadován restart.",
+    "advanced.enable_history_query_guardrails.label": "Ochrana historických dotazů",
+    "advanced.enable_history_query_guardrails.help": "Zamítat dotazy do záznamu (recorder), které překračují konzervativní limity entit a časového rozsahu. Ve výchozím nastavení vypnuto.",
     "advanced.ha_tool_concurrency.label": "Souběžnost nástrojů Home Assistant",
     "advanced.ha_tool_concurrency.help": "Volitelný limit pro vnější volání nástrojů Home Assistant napříč všemi relacemi. Vnitřní souběžnost REST, WebSocket a distribuce pro jednotlivé nástroje zůstává nezměněna. Hodnota 0 zachovává neomezené chování. Volání čekající na kapacitu selže po 60 sekundách. Rozsah 0–32. Vyžadován restart.",
     "advanced.backup_hint.label": "Úroveň nápovědy k zálohování",
@@ -661,7 +663,7 @@
     },
     "ha_get_history": {
       "title": "Získat historii nebo statistiky entity",
-      "description": "Načíst historická data z rekordéru Home Assistant."
+      "description": "Získat historická data ze záznamu (recorder) v Home Assistant."
     },
     "ha_get_integration": {
       "title": "Získat integraci",

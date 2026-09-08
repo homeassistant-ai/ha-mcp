@@ -404,6 +404,8 @@
     "advanced.individual_config_timeout.help": "자동화/스크립트/장면 설정을 각각 가져올 때의 제한 시간입니다. 범위 1~600. 다시 시작해야 합니다.",
     "advanced.individual_fetch_batch_size.label": "설정 조회 배치 크기",
     "advanced.individual_fetch_batch_size.help": "ID별 설정 조회를 동시에 몇 건까지 할지 정합니다. 직렬 처리에 가까운 HA 서버에서는 1에 가깝게 낮추세요. 범위 1~100. 다시 시작해야 합니다.",
+    "advanced.enable_history_query_guardrails.label": "기록 쿼리 안전장치",
+    "advanced.enable_history_query_guardrails.help": "보수적인 엔티티 및 시간 범위 예산을 초과하는 recorder 쿼리를 거부합니다. 기본적으로 비활성화되어 있습니다.",
     "advanced.ha_tool_concurrency.label": "Home Assistant 도구 동시성",
     "advanced.ha_tool_concurrency.help": "모든 세션에 걸친 외부 Home Assistant 도구 호출에 대한 선택적 제한입니다. 내부 REST, WebSocket 및 도구별 팬아웃 동시성은 변경되지 않습니다. 0은 무제한 동작을 유지합니다. 용량을 기다리는 호출은 60초 후에 실패합니다. 범위는 0~32입니다. 다시 시작이 필요합니다.",
     "advanced.backup_hint.label": "백업 권유 강도",
@@ -692,7 +694,7 @@
     },
     "ha_get_history": {
       "title": "엔티티 기록 또는 통계 조회",
-      "description": "Home Assistant recorder에서 과거 데이터를 가져옵니다."
+      "description": "Home Assistant의 recorder에서 과거 데이터를 가져옵니다."
     },
     "ha_get_integration": {
       "title": "통합 구성요소 조회",
