@@ -7,6 +7,7 @@ _yaml). Behaviour exercised here applies uniformly to all six call sites.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -293,6 +294,32 @@ class TestDegradedPaths:
         # No skill_content delivered when bp_warnings has no referenced_files.
         assert "skill_content" not in error
         assert "skill_content_hint" not in error
+
+    @pytest.mark.parametrize(
+        "guidance", [["Resolve recovery mode"], ["Reconnect", "Retry"]]
+    )
+    def test_augment_preserves_factory_recovery_guidance(self, guidance):
+        """Single-suggestion errors must retain their fix after write-tool wrapping."""
+        from fastmcp.exceptions import ToolError
+
+        from ha_mcp.errors import ErrorCode, create_error_response
+
+        original = create_error_response(
+            ErrorCode.SERVICE_CALL_FAILED,
+            "Save rejected",
+            suggestions=guidance,
+            context={"write_committed": False},
+        )
+        error = ToolError(json.dumps(original))
+        for _ in range(2):
+            error = augment_tool_error_with_skill_content(error)
+        body = json.loads(str(error))
+        assert body["error"]["suggestions"] == [
+            *guidance,
+            _WRITE_TOOL_BP_HINT_SUGGESTION,
+        ]
+        assert body["error"]["suggestion"] == guidance[0]
+        assert body["write_committed"] is False
 
     def test_augment_error_idempotent_on_re_raise(self):
         """The hint must not double-append when augment runs twice
