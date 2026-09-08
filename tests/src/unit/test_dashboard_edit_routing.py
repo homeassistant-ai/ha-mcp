@@ -617,7 +617,7 @@ async def test_native_cancellation_after_dispatch_reports_unknown_without_retry(
         await asyncio.wait_for(dispatched.wait(), timeout=5)
         task.cancel()
         with pytest.raises(ToolError, match="unknown") as caught:
-            await task
+            await asyncio.gather(task)
         error = json.loads(str(caught.value))
         assert error["reason"] == "write_outcome_unknown"
         assert error["write_committed"] is None
@@ -646,3 +646,92 @@ async def test_native_cancellation_before_dispatch_propagates(
     assert document["views"]
     assert messages == []
     native_socket.send_command.assert_not_awaited()
+
+
+@pytest.mark.parametrize("backend", ["absent", "unknown_command"])
+@pytest.mark.parametrize("prior_change", ["metadata", "create"])
+@pytest.mark.parametrize("failure", ["conflict", "rejected", "disconnected", "invalid"])
+async def test_legacy_config_failure_preserves_prior_write(
+    legacy_dashboard, native_socket, monkeypatch, backend, prior_change, failure
+):
+    client, document, messages = legacy_dashboard
+    dashboard = {
+        "id": "test_dashboard",
+        "url_path": "test-dashboard",
+        "title": "Before",
+        "mode": "storage",
+    }
+    dashboards = [dashboard] if prior_change == "metadata" else []
+    monkeypatch.setattr(
+        tools_config_dashboards,
+        "fetch_dashboards_list",
+        AsyncMock(return_value=dashboards),
+    )
+    if backend == "absent":
+        monkeypatch.setattr(
+            component_dashboard_edit,
+            "get_component_caps",
+            AsyncMock(return_value=None),
+        )
+    else:
+        native_socket.send_command.side_effect = HomeAssistantCommandError(
+            "Unknown command", "unknown_command"
+        )
+    original_send = client.send_websocket_message.side_effect
+
+    async def send(message):
+        command = message["type"]
+        if command in {"lovelace/dashboards/create", "lovelace/dashboards/update"}:
+            messages.append(deepcopy(message))
+            dashboard.update(message)
+            return {"success": True, "result": deepcopy(dashboard)}
+        if command == "lovelace/config/save":
+            messages.append(deepcopy(message))
+            if failure == "disconnected":
+                document.clear()
+                document.update(deepcopy(message["config"]))
+                raise ConnectionError("connection lost after save")
+            return {"success": False, "error": {"message": "Save rejected"}}
+        return await original_send(message)
+
+    client.send_websocket_message.side_effect = send
+    before = deepcopy(document)
+    config = "[]" if failure == "invalid" else {"views": []}
+    # A newly created dashboard has no prior config to hash-check; exercise
+    # that topology's save rejection instead of inventing a conflict there.
+    expected_error = {
+        "invalid": "dict/object",
+        "disconnected": "connection lost",
+        "rejected": "Save rejected",
+        "conflict": "conflict" if prior_change == "metadata" else "Save rejected",
+    }[failure]
+    with pytest.raises(ToolError, match=expected_error) as caught:
+        await DashboardConfigTools(client).ha_config_set_dashboard(
+            "test-dashboard",
+            title="After",
+            config=config,
+            config_hash="stale" if failure == "conflict" else None,
+            MandatoryBPS=False,
+        )
+    error = json.loads(str(caught.value))
+    assert dashboard["title"] == "After"
+    assert error["dashboard_created"] is (prior_change == "create")
+    assert error["metadata_updated"] is (prior_change == "metadata")
+    assert error["write_committed"] is True
+    assert error["config_write_committed"] is (
+        None if failure == "disconnected" else False
+    )
+    if failure == "disconnected":
+        assert document == {"views": []}
+    else:
+        assert document == before
+    saves = [m for m in messages if m["type"] == "lovelace/config/save"]
+    assert len(saves) == (
+        0
+        if failure == "invalid"
+        or (failure == "conflict" and prior_change == "metadata")
+        else 1
+    )
+    assert native_socket.send_command.await_count == (
+        1 if backend == "unknown_command" and failure != "invalid" else 0
+    )

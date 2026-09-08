@@ -58,7 +58,8 @@ A save interrupted after dispatch reports an unknown outcome and is never
 retried automatically. Read the dashboard to determine whether the change took
 effect. `write_committed` describes the observed write outcome, and
 `post_write_verified` indicates whether readback succeeded. If a full replacement
-fails after dashboard creation or a metadata update, the error reports that prior
+fails on either backend after dashboard creation or a metadata update, the error
+reports that prior
 change separately and preserves the configuration outcome in
 `config_write_committed`. A successful API save
 is not a guarantee of durable disk storage: Core logs some persistence errors.

@@ -65,6 +65,32 @@ async def test_reporter_dashboard_edits_and_conflicts(
             )
             assert untouched["config"] == original["config"]
             assert untouched["config_hash"] == original["config_hash"]
+            partial = await mcp.call_tool_failure(
+                "ha_config_set_dashboard",
+                {
+                    "url_path": path,
+                    "title": "Metadata survives config conflict",
+                    "config": baseline,
+                    "config_hash": "stale",
+                    "MandatoryBPS": False,
+                },
+                expected_error="conflict",
+            )
+            assert partial["metadata_updated"] is True
+            assert partial["dashboard_created"] is False
+            assert partial["write_committed"] is True
+            assert partial["config_write_committed"] is False
+            registry = await mcp.call_tool_success(
+                "ha_config_get_dashboard", {"list_only": True}
+            )
+            assert (
+                next(
+                    row["title"]
+                    for row in registry["dashboards"]
+                    if row["url_path"] == path
+                )
+                == "Metadata survives config conflict"
+            )
         for _ in range(3):
             before = await mcp.call_tool_success(
                 "ha_config_get_dashboard", {"url_path": path}
