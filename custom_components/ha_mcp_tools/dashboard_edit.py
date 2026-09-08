@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 from typing import TYPE_CHECKING, Any
 
 from .dashboard_patch import apply_dashboard_patch
@@ -19,8 +20,11 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 
+_LOGGER = logging.getLogger(__name__)
+
+
 class _EditError(Exception):
-    """A rejected edit for which no save has started."""
+    """A dashboard validation/load error; its phase determines the write outcome."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -166,6 +170,7 @@ async def async_edit_dashboard(
         await dashboard.async_save(candidate)
     except (Exception, asyncio.CancelledError) as err:
         if save_started:
+            _LOGGER.warning("Dashboard save did not complete normally", exc_info=True)
             return _failure(
                 "write_outcome_unknown",
                 "Dashboard save did not complete normally; read its current config before retrying",
@@ -173,6 +178,7 @@ async def async_edit_dashboard(
             )
         if isinstance(err, _EditError):
             return _failure(err.code, str(err))
+        _LOGGER.warning("Unable to prepare the dashboard edit", exc_info=True)
         return _failure("load_failed", "Unable to prepare the dashboard edit")
 
     try:
@@ -186,6 +192,7 @@ async def async_edit_dashboard(
             raise _EditError("conflict", "Dashboard changed during verification")
         config_hash = _config_hash(config)
     except (Exception, asyncio.CancelledError):
+        _LOGGER.warning("Unable to verify the saved dashboard config", exc_info=True)
         return {
             "success": True,
             "config": fallback,

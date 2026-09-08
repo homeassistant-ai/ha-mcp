@@ -395,6 +395,7 @@ async def test_native_replacement_preserves_large_config_warning(
         "test-dashboard", config={"views": []}, MandatoryBPS=False
     )
     assert any("12,000 bytes" in warning for warning in result["warnings"])
+    assert any("patch for known paths" in warning for warning in result["warnings"])
     assert messages == []
 
 
@@ -1098,7 +1099,7 @@ async def test_native_error_guidance_matches_failure_reason(
             "Unknown config specified: test-dashboard",
             "RESOURCE_NOT_FOUND",
         ),
-        ("unauthorized", "Not supported", "SERVICE_CALL_FAILED"),
+        ("unauthorized", "Not supported", "AUTH_INSUFFICIENT_PERMISSIONS"),
         ("error", "Saving not supported in recovery mode", "SERVICE_CALL_FAILED"),
     ],
 )
@@ -1148,7 +1149,10 @@ async def test_legacy_edit_fetch_distinguishes_missing_from_inaccessible(
             "error": "Command failed: No config found.",
         }
         if wire_shape == "flat"
-        else {"success": False, "error": {"code": ha_code, "message": "No config found."}}
+        else {
+            "success": False,
+            "error": {"code": ha_code, "message": "No config found."},
+        }
     )
     client.send_websocket_message.return_value = response
     client.send_websocket_message.side_effect = None
@@ -1167,3 +1171,113 @@ async def test_legacy_edit_fetch_distinguishes_missing_from_inaccessible(
     assert ("'config'" in advice) is (ha_code == "config_not_found")
     assert error["write_committed"] is False
     assert not any(m["type"] == "lovelace/config/save" for m in messages)
+
+
+@pytest.mark.parametrize(
+    ("code", "write_committed"),
+    [
+        ("unauthorized", False),
+        ("invalid_format", False),
+        ("unknown_error", None),
+        ("error", None),
+    ],
+)
+async def test_native_command_error_preserves_definitive_rejection(
+    legacy_dashboard, native_socket, code, write_committed
+):
+    client, document, messages = legacy_dashboard
+    native_socket.send_command.side_effect = HomeAssistantCommandError("Rejected", code)
+    with pytest.raises(ToolError) as caught:
+        await DashboardConfigTools(client).ha_config_set_dashboard(
+            "test-dashboard",
+            config_hash=compute_config_hash(document),
+            patch=[{"op": "remove", "path": "/views/0"}],
+            MandatoryBPS=False,
+        )
+    error = json.loads(str(caught.value))
+    assert error["write_committed"] is write_committed
+    assert error["reason"] == (
+        code if write_committed is False else "write_outcome_unknown"
+    )
+    assert error["action"] == "patch"
+    assert messages == []
+    native_socket.send_command.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("config", []),
+        ("config_hash", None),
+        ("write_committed", "yes"),
+        ("post_write_verified", 1),
+        ("previous_config_size", True),
+        ("warnings", [12]),
+        ("unchanged", "yes"),
+    ],
+)
+async def test_malformed_native_success_reports_field_without_logging_config(
+    legacy_dashboard, native_socket, caplog, field, value
+):
+    client, document, messages = legacy_dashboard
+    secret_config = {"views": [], "private_content": "never-log-this-dashboard-body"}
+    response = _success(secret_config)
+    response["result"][field] = value
+    native_socket.send_command.return_value = response
+    with pytest.raises(ToolError) as caught:
+        await DashboardConfigTools(client).ha_config_set_dashboard(
+            "test-dashboard",
+            config_hash=compute_config_hash(document),
+            patch=[{"op": "remove", "path": "/views/0"}],
+            MandatoryBPS=False,
+        )
+    assert field in str(caught.value)
+    assert field in caplog.text
+    assert "never-log-this-dashboard-body" not in caplog.text
+    assert "never-log-this-dashboard-body" not in str(caught.value)
+    assert json.loads(str(caught.value))["write_committed"] is None
+    assert messages == []
+    native_socket.send_command.assert_awaited_once()
+
+
+@pytest.mark.parametrize("readback", ["success", "rejected", "disconnected"])
+async def test_legacy_full_replacement_reports_verified_write_outcome(
+    legacy_dashboard, monkeypatch, readback
+):
+    client, document, messages = legacy_dashboard
+    tools = DashboardConfigTools(client)
+    monkeypatch.setattr(
+        tools,
+        "_ensure_dashboard_exists",
+        AsyncMock(return_value=(True, "id", False, None)),
+    )
+    original_send = client.send_websocket_message.side_effect
+
+    async def send(message):
+        if message["type"] == "lovelace/config" and any(
+            m["type"] == "lovelace/config/save" for m in messages
+        ):
+            if readback == "disconnected":
+                raise ConnectionError("Readback disconnected")
+            if readback == "rejected":
+                return {"success": False, "error": {"message": "Readback rejected"}}
+            # Model a concurrent edit or normalization after the acknowledged save.
+            document["title"] = "Authoritative"
+        return await original_send(message)
+
+    client.send_websocket_message.side_effect = send
+    result = await tools.ha_config_set_dashboard(
+        "test-dashboard",
+        config={"views": []},
+        MandatoryBPS=False,
+    )
+    assert result["write_committed"] is True
+    assert result["post_write_verified"] is (readback == "success")
+    assert result["config_hash"] == (
+        compute_config_hash(document) if readback == "success" else None
+    )
+    if readback != "success":
+        assert result["warnings"]
+        assert "render_paths" not in result
+    assert sum(m["type"] == "lovelace/config/save" for m in messages) == 1
+    assert client.send_websocket_message.await_count == 3

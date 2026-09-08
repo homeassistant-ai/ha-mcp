@@ -485,3 +485,32 @@ async def test_readback_replacement_with_yaml_never_loads_yaml(edit):
     assert result["config_hash"] is None
     assert result["config"] == {"title": "After"}
     assert yaml_dashboard.loads == 0
+
+
+@pytest.mark.parametrize("phase", ["prepare", "save", "verify"])
+async def test_unexpected_edit_failure_logs_traceback(edit, caplog, phase):
+    dashboard = LiveDashboard({"views": []})
+
+    async def fail_load(current):
+        if phase == "prepare" or current.loads > 1:
+            raise ImportError("Core API moved")
+
+    async def fail_save(current):
+        raise RuntimeError("Persistence failed")
+
+    if phase == "save":
+        dashboard.on_persist = fail_save
+    else:
+        dashboard.on_load = fail_load
+    result = await edit.async_edit_dashboard(
+        hass_for(dashboard), {"url_path": "home-dashboard", "config": {"views": []}}
+    )
+    records = [r for r in caplog.records if r.name == edit.__name__]
+    assert len(records) == 1
+    assert records[0].exc_info is not None
+    assert (
+        result["write_committed"]
+        is ({"prepare": False, "save": None, "verify": True}[phase])
+    )
+    assert "Core API moved" not in str(result)
+    assert "Persistence failed" not in str(result)

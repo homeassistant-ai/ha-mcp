@@ -84,6 +84,18 @@ from .util_helpers import (
 
 logger = logging.getLogger(__name__)
 
+_LARGE_DASHBOARD_CONFIG_SIZE = 10000
+
+
+def _large_dashboard_replacement_warning(size: int) -> str | None:
+    """Keep the full-replacement guidance identical on both backends."""
+    if size < _LARGE_DASHBOARD_CONFIG_SIZE:
+        return None
+    return (
+        f"Replaced large config ({size:,} bytes). "
+        "Consider patch for known paths or python_transform for pattern-based edits."
+    )
+
 
 @dataclass(frozen=True, slots=True)
 class _DashboardScreenshotOptions:
@@ -1491,8 +1503,11 @@ async def _attach_dashboard_render_paths_after_write(
     back before claiming canonical render paths. The submitted config remains a
     screenshot-targeting fallback only when that readback fails.
     """
+    result.update(config_hash=None, write_committed=True, post_write_verified=False)
     try:
-        authoritative_config, _ = await _get_dashboard_config_internal(client, url_path)
+        authoritative_config, config_hash = await _get_dashboard_config_internal(
+            client, url_path
+        )
     except ToolError as exc:
         result.setdefault("warnings", []).append(
             "Canonical render paths unavailable after the dashboard write: "
@@ -1513,6 +1528,7 @@ async def _attach_dashboard_render_paths_after_write(
             f"Canonical render paths unavailable after the dashboard write: {exc}"
         )
         return fallback_config
+    result.update(config_hash=config_hash, post_write_verified=True)
     _attach_dashboard_render_paths(result, url_path, authoritative_config)
     return authoritative_config
 
@@ -2844,6 +2860,7 @@ class DashboardConfigTools:
             Field(
                 description="Structured dashboard edits: up to 100 JSON Patch "
                 "add, remove, replace or test operations using RFC 6901 paths. "
+                "Use /- to append to an array; escape ~ as ~0 and / as ~1 in keys. "
                 "Requires config_hash. Mutually exclusive with config and "
                 "python_transform. Update title/icon/require_admin/show_in_sidebar "
                 "in a separate call. Strings in value are preserved literally."
@@ -2864,6 +2881,9 @@ class DashboardConfigTools:
         WHEN TO USE WHICH MODE:
         - patch: Edit known paths with literal values using add/remove/replace/test and config_hash.
           Example: patch=[{"op": "replace", "path": "/views/0/title", "value": "Home"}].
+          Append with /views/0/cards/-; escape ~ as ~0 and / as ~1 in path keys.
+          move/copy are unsupported. See the full patch guide:
+          https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/dashboard-edits.md
         - python_transform: Use loops or pattern-based changes across cards and views.
         - config: New dashboards only, or full restructure. Replaces everything.
 
@@ -3267,9 +3287,7 @@ class DashboardConfigTools:
         action: str = "python_transform",
     ) -> tuple[dict[str, Any], str | None, str | None]:
         """Save transformed config and best-effort reload its authoritative form."""
-        await self._save_dashboard_config(
-            url_path, transformed_config, action=action
-        )
+        await self._save_dashboard_config(url_path, transformed_config, action=action)
 
         # HA may normalize after save, so prefer an authoritative re-fetch. The
         # mutation has already committed at this point: a follow-up read failure
@@ -3718,12 +3736,7 @@ class DashboardConfigTools:
             action="config",
         )
 
-        if existing_config_size >= 10000:
-            return (
-                f"Replaced large config ({existing_config_size:,} bytes). "
-                "Consider python_transform for targeted edits."
-            )
-        return None
+        return _large_dashboard_replacement_warning(existing_config_size)
 
     @staticmethod
     def _raise_dashboard_hash_conflict(url_path: str) -> NoReturn:
@@ -3914,13 +3927,9 @@ class DashboardConfigTools:
             self._client, url_path, expected_hash=config_hash, config=config_dict
         )
         if native_result is not None:
-            previous_size = native_result["previous_config_size"]
-            native_warning = None
-            if previous_size >= 10000:
-                native_warning = (
-                    f"Replaced large config ({previous_size:,} bytes). "
-                    "Consider python_transform for targeted edits."
-                )
+            native_warning = _large_dashboard_replacement_warning(
+                native_result["previous_config_size"]
+            )
             return True, native_warning, native_result["config"], native_result
 
         warning: str | None = None
@@ -4022,7 +4031,7 @@ class DashboardConfigTools:
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     "No dashboard changes were requested",
                     suggestions=[
-                        "Provide config or python_transform to change dashboard content",
+                        "Provide config, patch or python_transform to change dashboard content",
                         "Provide a metadata field such as title or icon",
                         "Use ha_config_get_dashboard to read a dashboard without changing it",
                     ],

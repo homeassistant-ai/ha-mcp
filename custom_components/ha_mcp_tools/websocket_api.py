@@ -577,9 +577,12 @@ def async_register_commands(hass: HomeAssistant) -> None:
     HA-core state rather than anything the unloaded entry cached, HA core
     authenticates the connection, and ``@require_admin`` gates each command — so
     a caller reaching it can already do the same through HA's own WS API. The
-    write commands are no exception: their D1 domain block refuses
-    ``domain == "ha_mcp_tools"`` unconditionally, so the leftover surface can
-    never reach the privileged filesystem/YAML services, which
+    service-dispatching writes enforce D1: they refuse
+    ``domain == "ha_mcp_tools"`` unconditionally. Dashboard edits do not dispatch
+    services: they use Core's Lovelace storage API under the same admin gate as
+    ``lovelace/config/save``. Server-entry updates retain their own live-entry
+    and option validation. These commands do not grant access to the privileged
+    filesystem/YAML services, which
     :func:`~custom_components.ha_mcp_tools._async_unload_tools_entry` does remove
     on unload. Admin-gated commands answering from live core state until the
     next restart is the trade this makes.
@@ -633,7 +636,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
             _do_server_entry_update,
             _server_entry_update_prep,
         ),
-        # The first WRITE command: the dispatch + the bounded confirmation wait are
+        # The service WRITE command: dispatch + the bounded confirmation wait are
         # inherently async, so ALL of the work lives in the ``_call_service_prep``
         # async pre-step and ``_do_call_service`` is a pure response formatter.
         (_call_service_schema(), _do_call_service, _call_service_prep),

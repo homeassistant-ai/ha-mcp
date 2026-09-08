@@ -56,11 +56,22 @@ the current configuration hash, which can reflect such a later edit.
 
 A save interrupted after dispatch reports an unknown outcome and is never
 retried automatically. Read the dashboard to determine whether the change took
-effect. `write_committed` describes the observed write outcome, and
-`post_write_verified` indicates whether readback succeeded. If a full replacement
-fails on either backend after dashboard creation or a metadata update, the error
-reports that prior
-change separately and preserves the configuration outcome in
-`config_write_committed`. A successful API save
-is not a guarantee of durable disk storage: Core logs some persistence errors.
+effect. `write_committed` describes the overall tool call: `true` means at least
+one write was acknowledged, `false` means no write was made, and `null` means
+the outcome is unknown. `post_write_verified` indicates whether the dashboard
+configuration was read back successfully; `config_hash` is null when it was not.
+These fields are returned for successful full replacements on either backend.
+
+A full replacement can update sidebar metadata or create a dashboard before
+saving its config. If the config phase fails after that earlier write,
+`write_committed` remains `true`, while `dashboard_created`/`metadata_updated`
+identify what already succeeded. `config_write_committed` separately records
+whether the config write succeeded (`true`), did not happen (`false`), or has an
+unknown outcome (`null`). In this case `reason` describes the config failure;
+`reason="write_outcome_unknown"` with `write_committed=true` and
+`config_write_committed=null` means the earlier registry write succeeded but
+the config outcome is unknown. Read the dashboard before retrying either part.
+
+A successful API save is not a guarantee of durable disk storage: Core logs
+some persistence errors.
 YAML dashboards and conversion away from a strategy dashboard remain protected.

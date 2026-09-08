@@ -17,6 +17,14 @@ _MODE_SUGGESTIONS = [
 _EDIT_SUGGESTIONS = {
     "yaml_not_supported": _MODE_SUGGESTIONS,
     "unsupported_mode": _MODE_SUGGESTIONS,
+    "unauthorized": [
+        "Connect using a Home Assistant admin session to edit dashboards",
+        "Check the permissions of the Home Assistant user behind this session",
+    ],
+    "invalid_format": [
+        "Check the dashboard edit parameters against the reported schema error",
+        "Check that HA-MCP and the custom component support the same command format",
+    ],
     "strategy_conversion": [
         "Use 'Take Control' in the Home Assistant interface to convert it",
         "Keep a strategy configuration when updating this dashboard",
@@ -54,6 +62,8 @@ def raise_dashboard_edit_error(
         "unsupported_mode": ErrorCode.VALIDATION_FAILED,
         "strategy_conversion": ErrorCode.VALIDATION_FAILED,
         "not_found": ErrorCode.RESOURCE_NOT_FOUND,
+        "unauthorized": ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+        "invalid_format": ErrorCode.VALIDATION_FAILED,
     }.get(code, ErrorCode.SERVICE_CALL_FAILED)
     suggestions = _EDIT_SUGGESTIONS.get(
         code,
@@ -110,6 +120,8 @@ def raise_known_dashboard_save_rejection(
     """
     code = response.get("error_code") or get_error_code(response)
     message = get_error_message(response) or "Dashboard save rejected"
+    if code in {"unauthorized", "invalid_format"}:
+        raise_dashboard_edit_error(url_path, code, message, False, action)
     if code == "config_not_found":
         raise_dashboard_edit_error(url_path, "not_found", message, False, action)
     if code == "error" and message.removeprefix("Command failed: ") == "Not supported":
