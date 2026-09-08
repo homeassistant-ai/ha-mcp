@@ -727,7 +727,10 @@ async def test_legacy_config_failure_preserves_prior_write(
         assert document == before
     saves = [m for m in messages if m["type"] == "lovelace/config/save"]
     assert len(saves) == (
-        0 if failure == "invalid" or (failure == "conflict" and prior_change == "metadata") else 1
+        0
+        if failure == "invalid"
+        or (failure == "conflict" and prior_change == "metadata")
+        else 1
     )
     assert native_socket.send_command.await_count == (
         1 if backend == "unknown_command" and failure != "invalid" else 0

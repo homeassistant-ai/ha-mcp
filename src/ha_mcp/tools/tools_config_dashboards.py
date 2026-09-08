@@ -17,6 +17,7 @@ from pydantic import Field
 
 from ..client.rest_client import (
     HomeAssistantCommandError,
+    HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
 )
 from ..client.websocket_client import get_websocket_client
@@ -3785,7 +3786,25 @@ class DashboardConfigTools:
         }
         if url_path:
             config_save_data["url_path"] = url_path
-        save_result = await self._client.send_websocket_message(config_save_data)
+        try:
+            save_result = await self._client.send_websocket_message(config_save_data)
+        except ToolError:
+            raise
+        except Exception as exc:
+            exception_to_structured_error(
+                exc,
+                context={
+                    "action": "set",
+                    "url_path": url_path,
+                    "write_committed": (
+                        False if isinstance(exc, HomeAssistantCommandNotSent) else None
+                    ),
+                    "post_write_verified": False,
+                },
+                suggestions=[
+                    "Read the dashboard before retrying to check whether the save applied",
+                ],
+            )
 
         if isinstance(save_result, dict) and not save_result.get("success", True):
             error_msg = save_result.get("error", {})
@@ -3800,7 +3819,11 @@ class DashboardConfigTools:
                         "Check that you have admin permissions",
                         "Ensure all entity IDs in config exist",
                     ],
-                    context={"action": "set", "url_path": url_path},
+                    context={
+                        "action": "set",
+                        "url_path": url_path,
+                        "write_committed": False,
+                    },
                 )
             )
 
@@ -3813,10 +3836,49 @@ class DashboardConfigTools:
         *,
         metadata_updated: bool = False,
     ) -> tuple[bool, str | None, dict[str, Any], dict[str, Any] | None]:
-        """Parse + validate ``config`` and save it as a full replacement.
+        """Preserve prior registry writes on any configuration-update failure."""
+        try:
+            return await self._prepare_and_save_dashboard_config(
+                url_path, config, config_hash, dashboard_exists
+            )
+        except Exception as exc:
+            if dashboard_exists and not metadata_updated:
+                raise
+            # Native and legacy outcomes describe only the config command. A
+            # preceding create/metadata call already succeeded in either case.
+            error = (
+                json.loads(str(exc))
+                if isinstance(exc, ToolError)
+                else exception_to_structured_error(
+                    exc,
+                    context={"action": "set", "url_path": url_path},
+                    raise_error=False,
+                )
+            )
+            # Validation/read failures precede saving. Save helpers attach an
+            # explicit None when they cannot determine the configuration outcome.
+            error["config_write_committed"] = error.get("write_committed", False)
+            error["write_committed"] = True
+            error["dashboard_created"] = not dashboard_exists
+            error["metadata_updated"] = metadata_updated
+            prior_change = (
+                "Dashboard metadata was updated"
+                if dashboard_exists
+                else "Dashboard was created"
+            )
+            error["error"]["message"] = (
+                f"{prior_change}; configuration update: {error['error']['message']}"
+            )
+            raise_tool_error(error)
 
-        Returns ``(config_updated, warning, saved_config, native_result)``.
-        """
+    async def _prepare_and_save_dashboard_config(
+        self,
+        url_path: str,
+        config: dict[str, Any] | str,
+        config_hash: str | None,
+        dashboard_exists: bool,
+    ) -> tuple[bool, str | None, dict[str, Any], dict[str, Any] | None]:
+        """Return (updated, warning, saved config, native result) for either backend."""
         parsed_config = parse_json_param(config, "config")
         if parsed_config is None or not isinstance(parsed_config, dict):
             raise_tool_error(
@@ -3830,30 +3892,9 @@ class DashboardConfigTools:
                 )
             )
         config_dict = cast(dict[str, Any], parsed_config)
-        try:
-            native_result = await edit_dashboard_via_component(
-                self._client, url_path, expected_hash=config_hash, config=config_dict
-            )
-        except ToolError as exc:
-            if dashboard_exists and not metadata_updated:
-                raise
-            # The component's outcome describes only the config command. The
-            # preceding create/metadata call already succeeded, so preserve both
-            # outcomes instead of reporting the entire operation as unwritten.
-            error: dict[str, Any] = json.loads(str(exc))
-            error["config_write_committed"] = error["write_committed"]
-            error["write_committed"] = True
-            error["dashboard_created"] = not dashboard_exists
-            error["metadata_updated"] = metadata_updated
-            prior_change = (
-                "Dashboard metadata was updated"
-                if dashboard_exists
-                else "Dashboard was created"
-            )
-            error["error"]["message"] = (
-                f"{prior_change}; configuration update: {error['error']['message']}"
-            )
-            raise_tool_error(error)
+        native_result = await edit_dashboard_via_component(
+            self._client, url_path, expected_hash=config_hash, config=config_dict
+        )
         if native_result is not None:
             previous_size = native_result["previous_config_size"]
             native_warning = None
