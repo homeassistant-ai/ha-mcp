@@ -370,8 +370,6 @@ class TestDegradedPaths:
         augmentation (generic hint + section embed), re-encodes into a
         new ToolError. Without this test the wrapper itself was
         unverified — only the dict variant was covered."""
-        import json
-
         from fastmcp.exceptions import ToolError
 
         class _BP:
