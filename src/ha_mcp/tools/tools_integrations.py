@@ -71,6 +71,24 @@ from .util_helpers import (
 
 logger = logging.getLogger(__name__)
 
+
+async def _resolve_config_entry_backup_domain(
+    client: Any, kwargs: dict[str, Any], domain: str, entry_id: str
+) -> str:
+    """Capture Template options for generic options edits and entry deletion."""
+    if domain != "integration" or "." in entry_id:
+        return domain
+    edits_options = kwargs.get("config") is not None and kwargs.get("enabled") is None
+    deletes_entry = (
+        kwargs.get("target") is not None and kwargs.get("helper_type") is None
+    )
+    if not (edits_options or deletes_entry):
+        # Enable/disable restores must retain the integration's disabled flag.
+        return domain
+    entry = await client.get_config_entry(entry_id)
+    return "helper_template" if entry.get("domain") == "template" else domain
+
+
 # The ``ha_mcp_tools`` component command that serves config entries (identity +
 # already-materialized ``options`` + ``subentries``) from HA's live registry in
 # one in-process frame, replacing the REST list-all + OptionsFlow start/abort
@@ -1797,6 +1815,7 @@ class IntegrationTools:
     @with_auto_backup(
         domain="integration",
         id_param="entry_id",
+        domain_resolver=_resolve_config_entry_backup_domain,
         # Every reconfigure request validates the entry and confirmation before
         # the inner apply helper captures the normal edit snapshot.
         skip_fn=lambda kwargs: bool(kwargs.get("reconfigure")),
@@ -2169,6 +2188,7 @@ class IntegrationTools:
             f"helper_{kw['helper_type']}" if kw.get("helper_type") else "integration"
         ),
         id_param="target",
+        domain_resolver=_resolve_config_entry_backup_domain,
         # The flow-removal owner resolves aliases through Core before capture.
         skip_fn=lambda kw: (
             kw.get("helper_type") == "template" and "." in str(kw.get("target", ""))

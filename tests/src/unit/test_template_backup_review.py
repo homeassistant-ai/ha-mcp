@@ -33,6 +33,25 @@ def _config(state="saved", entry_id="template-entry"):
     }
 
 
+def _registry():
+    return [
+        {
+            "entity_id": "sensor.renamed_example",
+            "unique_id": "template-entry",
+            "config_entry_id": "template-entry",
+            "name": None,
+            "original_name": "Example",
+        }
+    ]
+
+
+async def _capture_response(_client, message):
+    if message["type"] == "config/entity_registry/list":
+        return _registry()
+    assert message["type"] == "ha_mcp_tools/helpers_list"
+    return _response()
+
+
 @pytest.mark.parametrize("mandatory", [False, True])
 async def test_degraded_scrub_never_writes_snapshot(manager, monkeypatch, mandatory):
     response = {**_response(), "secret_scrub_degraded": True}
@@ -51,13 +70,14 @@ async def test_degraded_safety_capture_blocks_restore(manager, monkeypatch):
     source = manager._write_snapshot(
         "helper_template", "template-entry", _config(), "test"
     )
-    monkeypatch.setattr(
-        bm,
-        "_ws_send",
-        AsyncMock(
-            side_effect=[_response(), {**_response(), "secret_scrub_degraded": True}]
-        ),
+    send = AsyncMock(
+        side_effect=[
+            _response(),
+            _registry(),
+            {**_response(), "secret_scrub_degraded": True},
+        ]
     )
+    monkeypatch.setattr(bm, "_ws_send", send)
     restore = AsyncMock(return_value={"success": True})
     manager.register(
         bm.DomainHandler("helper_template", bm._fetch_template_helper, restore)
@@ -66,6 +86,7 @@ async def test_degraded_safety_capture_blocks_restore(manager, monkeypatch):
         await manager.restore_snapshot(source.name)
     assert caught.value.outcome["apply_status"] == "not_applied"
     assert caught.value.outcome["safety_backup"] is None
+    assert send.await_count == 3
     restore.assert_not_awaited()
     assert list(manager.backup_dir.glob("*.yaml")) == [source]
 
@@ -80,7 +101,7 @@ async def test_degraded_safety_capture_blocks_restore(manager, monkeypatch):
 async def test_alias_capture_uses_stable_header_and_shared_throttle(
     manager, monkeypatch, first_target, second_target
 ):
-    monkeypatch.setattr(bm, "_ws_send", AsyncMock(return_value=_response()))
+    monkeypatch.setattr(bm, "_ws_send", AsyncMock(side_effect=_capture_response))
     first = await manager.maybe_snapshot("helper_template", first_target)
     assert first is not None
     assert manager.read_snapshot(first.name)["entity_id"] == "template-entry"
@@ -94,7 +115,10 @@ async def test_alias_capture_refetches_after_canonical_lock(manager, monkeypatch
     resolved = asyncio.Event()
     current = _record()
 
-    async def send(*_):
+    async def send(_client, message):
+        if message["type"] == "config/entity_registry/list":
+            return _registry()
+        assert message["type"] == "ha_mcp_tools/helpers_list"
         result = deepcopy(_response(current))
         resolved.set()
         return result
@@ -116,7 +140,7 @@ async def test_alias_capture_refetches_after_canonical_lock(manager, monkeypatch
 async def test_capture_response_identity_round_trips_to_history(manager, monkeypatch):
     from ha_mcp.tools.backup import _edits_create
 
-    monkeypatch.setattr(bm, "_ws_send", AsyncMock(return_value=_response()))
+    monkeypatch.setattr(bm, "_ws_send", AsyncMock(side_effect=_capture_response))
     result = await _edits_create(
         manager, "edits", "create", "helper_template", "sensor.renamed_example"
     )
@@ -170,7 +194,7 @@ async def test_legacy_alias_history_rotates_with_canonical_captures(
     other = manager._write_snapshot(
         "helper_template", "sensor.reused", _config(entry_id="other-entry"), "test"
     )
-    monkeypatch.setattr(bm, "_ws_send", AsyncMock(return_value=_response()))
+    monkeypatch.setattr(bm, "_ws_send", AsyncMock(side_effect=_capture_response))
     latest = await manager.maybe_snapshot(
         "helper_template", "template-entry", force=True
     )

@@ -128,7 +128,9 @@ async def test_failure_before_options_flow_keeps_not_applied_knowledge(
         AsyncMock(
             side_effect=[
                 response,
+                [],  # Registry metadata during manager preflight.
                 response,
+                [],  # Registry metadata during the mandatory safety capture.
                 bm.HomeAssistantError("offline before starting the options flow"),
             ]
         ),

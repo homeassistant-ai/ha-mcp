@@ -1638,7 +1638,7 @@ def register_backup_tools(
 | `edits` | `list` | List per-entity auto-backups (lightweight). Filter by `domain` and/or `entity_id`. |
 | `edits` | `view` | Read one auto-backup file by name; returns YAML and parsed `config`. |
 | `edits` | `diff` | Compare one auto-backup against the entity's current config. RFC 6902 JSON-Patch + add/remove/replace counts; bounded output. Read-only — fetches the live config, makes no changes. |
-| `edits` | `restore` | Re-apply one auto-backup. Creates a fresh safety snapshot first. **No HA restart.** |
+| `edits` | `restore` | Re-apply one auto-backup, taking a fresh safety snapshot for an existing target. A deleted Template helper is recreated with a new config-entry ID; its saved entity ID is restored if unoccupied. **No HA restart.** |
 | `edits` | `delete` | Delete one auto-backup by `backup_name`, or bulk-delete by filter. |
 
 **When to use which scope:**
@@ -2068,7 +2068,7 @@ async def _edits_restore(
     action: str,
     backup_name: str | None,
 ) -> dict[str, Any]:
-    """(edits, restore) Re-apply one auto-backup (with a fresh safety snapshot)."""
+    """Re-apply an edit backup, or recreate a deleted Template helper."""
     bname = _require("backup_name", backup_name, scope, action)
     try:
         result = await mgr.restore_snapshot(bname)

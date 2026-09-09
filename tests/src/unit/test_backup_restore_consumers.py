@@ -265,6 +265,27 @@ def template_runtime(tmp_path, monkeypatch):
     )
 
     async def send(_client, command):
+        if command["type"] == "config/entity_registry/list":
+            entries = [
+                {
+                    "entity_id": state.alias,
+                    "config_entry_id": "original-entry",
+                    "unique_id": "original-entry",
+                    "name": None,
+                    "original_name": "Example",
+                }
+            ]
+            if state.replacement:
+                entries.append(
+                    {
+                        "entity_id": "sensor.example",
+                        "config_entry_id": "replacement-entry",
+                        "unique_id": "replacement-entry",
+                        "name": None,
+                        "original_name": "Replacement",
+                    }
+                )
+            return entries
         assert command["type"] == "ha_mcp_tools/helpers_list"
         if state.mode == "safety_failure":
             state.restore_reads += 1
@@ -375,3 +396,145 @@ async def test_manager_settings_preview_follows_original_entry_after_alias_reuse
     assert "current:original-entry" in payload["diff"]
     assert "99" in payload["diff"]
     assert "999" not in payload["diff"]
+
+
+@pytest.mark.parametrize("consumer", ["settings", "mcp"])
+@pytest.mark.asyncio
+async def test_restore_refusal_retains_actionable_reason(
+    template_runtime, settings_script, monkeypatch, consumer
+):
+    runtime = template_runtime
+    runtime.state.options["unit_of_measurement"] = "secret-marker-unit"
+    runtime.state.options["secret_marker_key"] = "secret-marker-value"
+    snapshot = await runtime.manager.maybe_snapshot(
+        "helper_template", "sensor.example", force=True
+    )
+    assert snapshot is not None
+    runtime.state.options["state"] = "{{ 99 }}"
+
+    if consumer == "settings":
+        response = response_for(monkeypatch, runtime.manager, snapshot.name)
+        assert response.status_code == 409
+        payload = response.json()
+    else:
+        monkeypatch.setattr(
+            "ha_mcp.tools.backup.get_backup_manager", lambda *args: runtime.manager
+        )
+        monkeypatch.setattr("ha_mcp.tools.backup.get_global_settings", SimpleNamespace)
+        with pytest.raises(ToolError) as caught:
+            await _dispatcher()(
+                scope="edits", action="restore", backup_name=snapshot.name
+            )
+        payload = json.loads(str(caught.value))
+
+    assert payload["success"] is False
+    assert payload["data"]["apply_status"] == "not_applied"
+    assert payload["data"]["verification_status"] == "not_run"
+    assert payload["data"]["reason"] == "unsupported_fields"
+    assert payload["data"]["fields"] == ["unit_of_measurement"]
+    assert "unit_of_measurement" in payload["error"]["message"]
+    assert "secret-marker" not in json.dumps(payload)
+    assert "secret_marker_key" not in json.dumps(payload)
+    assert runtime.state.options["state"] == "{{ 99 }}"
+    assert not runtime.state.committed
+    runtime.client.submit_options_flow_step.assert_not_awaited()
+    runtime.client.abort_options_flow.assert_awaited_once_with("offline-options")
+
+    if consumer == "settings":
+        rendered = run_restore(
+            settings_script, {"status": response.status_code, "json": payload}
+        )
+        assert "Nothing was changed" in rendered.alerts[0]
+        assert "unit_of_measurement" in rendered.alerts[0]
+        assert "not accepted" in rendered.alerts[0]
+        assert "secret-marker" not in rendered.alerts[0]
+
+
+@pytest.mark.parametrize("has_mapping", [True, False])
+def test_settings_recreation_success_exposes_new_identity_and_mapping(
+    settings_script, monkeypatch, has_mapping
+):
+    result = {
+        "entry_id": "new-entry",
+        "entity_ids_restored": has_mapping,
+        "entity_id_mapping": (
+            {
+                "created_entity_id": "sensor.generated",
+                "restored_entity_id": "sensor.example",
+            }
+            if has_mapping
+            else {}
+        ),
+    }
+    if not has_mapping:
+        result["warnings"] = [
+            "This snapshot has no entity mapping; the recreated helper may have a new entity ID."
+        ]
+    outcome = {
+        "restore_mode": "recreated",
+        "original_entry_id": "original-entry",
+        "entity_id": "new-entry",
+        "apply_status": "applied",
+        "verification_status": "matched",
+        "safety_backup": None,
+        "result": result,
+    }
+    manager = SimpleNamespace(restore_snapshot=AsyncMock(return_value=outcome))
+    response = response_for(monkeypatch, manager)
+    rendered = run_restore(
+        settings_script, {"status": response.status_code, "json": response.json()}
+    )
+
+    assert "new-entry" in rendered.alerts[0]
+    assert "verified" in rendered.alerts[0]
+    if has_mapping:
+        assert "sensor.generated" in rendered.alerts[0]
+        assert "sensor.example" in rendered.alerts[0]
+    else:
+        assert "may have a new entity ID" in rendered.alerts[0]
+    assert "Safety backup: (none)" not in rendered.alerts[0]
+    assert "if it exists" in rendered.confirms[0]
+    assert len(rendered.fetches_to("/backups?")) == 1
+
+
+@pytest.mark.parametrize(
+    "reason", ["entity_id_collision", "entity_rename_outcome_unknown"]
+)
+def test_settings_partial_recreation_retains_identity_for_manual_recovery(
+    settings_script, monkeypatch, reason
+):
+    detail = (
+        {"conflicting_entity_id": "sensor.example"}
+        if reason == "entity_id_collision"
+        else {
+            "entity_id_mapping": {
+                "created_entity_id": "sensor.generated",
+                "target_entity_id": "sensor.example",
+            }
+        }
+    )
+    error = BackupRestoreError(
+        "Recovery is incomplete; inspect the new entry before retrying",
+        apply_status="applied",
+        verification_status="unavailable",
+        restore_mode="recreated",
+        original_entry_id="original-entry",
+        entry_id="new-entry",
+        entity_id="new-entry",
+        reason=reason,
+        **detail,
+    )
+    manager = SimpleNamespace(restore_snapshot=AsyncMock(side_effect=error))
+    response = response_for(monkeypatch, manager)
+    rendered = run_restore(
+        settings_script, {"status": response.status_code, "json": response.json()}
+    )
+
+    assert "new-entry" in rendered.alerts[0]
+    assert "sensor.example" in rendered.alerts[0]
+    assert "before retrying" in rendered.alerts[0]
+    assert "Nothing was changed" not in rendered.alerts[0]
+    if reason == "entity_rename_outcome_unknown":
+        assert "sensor.generated" in rendered.alerts[0]
+        assert "could not be confirmed" in rendered.alerts[0]
+    assert len(rendered.fetches_to("/backups?")) == 1

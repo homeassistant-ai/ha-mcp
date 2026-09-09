@@ -1833,6 +1833,37 @@ function backupRestoreOutcomeMessage(outcome = {}) {
   } else {
     message = t('backup.restore.unknown', {}, 'Whether this restore changed Home Assistant could not be confirmed. Inspect the current configuration and backup list before retrying.');
   }
+  const reasons = {
+    unsupported_form: t('backup.restore.reason.unsupported_form', {}, 'Home Assistant did not provide an options form suitable for this restore.'),
+    unsupported_fields: t('backup.restore.reason.unsupported_fields', {}, 'Some snapshot fields are not accepted by the current options form.'),
+    validation_failed: t('backup.restore.reason.validation_failed', {}, 'Home Assistant rejected the restored options as invalid.'),
+    flow_aborted: t('backup.restore.reason.flow_aborted', {}, 'Home Assistant aborted the options restore.'),
+  };
+  if (Object.hasOwn(reasons, outcome.reason)) {
+    message += '\n\n' + reasons[outcome.reason];
+    if (Array.isArray(outcome.fields) && outcome.fields.length) {
+      message += '\n' + t('backup.restore.fields', {fields: outcome.fields.join(', ')}, 'Fields: ' + outcome.fields.join(', '));
+    }
+  }
+  if (outcome.restore_mode === 'recreated') {
+    const result = outcome.result || outcome;
+    const entryId = outcome.entry_id || result.entry_id;
+    if (entryId) {
+      message += '\n\n' + t('backup.restore.recreated_entry', {entry_id: entryId}, 'Recreated config entry: ' + entryId);
+    }
+    const mapping = outcome.entity_id_mapping || result.entity_id_mapping || {};
+    if (mapping.restored_entity_id) {
+      message += '\n' + t('backup.restore.entity_mapping', {created: mapping.created_entity_id, restored: mapping.restored_entity_id}, 'Entity ID: ' + mapping.created_entity_id + ' → ' + mapping.restored_entity_id);
+    } else if (mapping.target_entity_id) {
+      message += '\n' + t('backup.restore.entity_mapping_unknown', {created: mapping.created_entity_id, target: mapping.target_entity_id}, 'Entity rename could not be confirmed: ' + mapping.created_entity_id + ' → ' + mapping.target_entity_id + '. Inspect the new entry before retrying.');
+    }
+    if (result.entity_ids_restored === false) {
+      message += '\n' + t('backup.restore.mapping_unavailable', {}, 'This snapshot has no entity mapping; the recreated helper may have a new entity ID.');
+    }
+  }
+  if (outcome.conflicting_entity_id) {
+    message += '\n' + t('backup.restore.entity_collision', {entity_id: outcome.conflicting_entity_id}, 'The saved entity ID ' + outcome.conflicting_entity_id + ' is already in use and was not overwritten.');
+  }
   if (outcome.safety_backup) {
     message += '\n\n' + t('backup.restore.safety', {name: outcome.safety_backup}, 'Safety backup: ' + outcome.safety_backup + '. Inspect the current configuration before restoring this safety backup to recover the previous state.');
   }
@@ -1870,7 +1901,7 @@ async function backupAction(act, name) {
       showToast(t('backup.errors.diff', {name, message: String(err)}, 'Could not diff backup "' + name + '": ' + String(err)), {isError: true});
     }
   } else if (act === 'restore') {
-    if (!confirm(t('backup.confirm.restore', {name}, 'Restore ' + name + '?\n\nThis will overwrite the current entity state. A safety backup of the current state is taken first.'))) return;
+    if (!confirm(t('backup.confirm.restore', {name}, 'Restore ' + name + '?\n\nThis overwrites existing configuration or recreates a deleted Template helper. The current configuration is backed up first if it exists.'))) return;
     try {
       const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name) + '/restore', {method: 'POST'});
       const data = await resp.json();
@@ -1879,11 +1910,13 @@ async function backupAction(act, name) {
         let message = backupRestoreOutcomeMessage(outcome);
         if (data.error?.message) message += '\n\n' + data.error.message;
         alert(message);
-        if (outcome.safety_backup || !outcome.apply_status || outcome.apply_status === 'unknown') await loadBackups();
+        if (outcome.safety_backup || outcome.apply_status !== 'not_applied') await loadBackups();
         return;
       }
       const safetyBackup = data.data && data.data.safety_backup ? data.data.safety_backup : t('common.none', {}, '(none)');
-      alert(t('backup.restored', {name: safetyBackup}, 'Restored. Safety backup: ' + safetyBackup));
+      alert(data.data?.restore_mode === 'recreated'
+        ? backupRestoreOutcomeMessage(data.data)
+        : t('backup.restored', {name: safetyBackup}, 'Restored. Safety backup: ' + safetyBackup));
       await loadBackups();
     } catch (err) {
       const message = backupRestoreOutcomeMessage();

@@ -1050,18 +1050,19 @@ class BackupManager:
         }
         apply_status: Literal["not_applied", "unknown", "applied"] = "not_applied"
         try:
-            if domain == "helper_template":
-                current = await handler.fetch(self._client, entity_id)
-                _template_restore_options(config, current)
-            if take_safety_backup:
+            needs_safety = await self._restore_needs_safety(handler, entity_id, config)
+            if take_safety_backup and needs_safety:
                 safety_path = await self._capture_restore_safety(domain, entity_id)
                 if safety_path is not None:
                     self._protect_snapshot(safety_path.name)
                     outcome["safety_backup"] = safety_path.name
             apply_status = "unknown"
-            result = await handler.restore(self._client, entity_id, config)
+            # Commit to the absent-target branch: if an entry reappeared since
+            # preflight, recreation refuses instead of editing it without safety.
+            restore = handler.restore if needs_safety else _recreate_template_helper
+            result = await restore(self._client, entity_id, config)
         except BackupRestoreError as err:
-            err.outcome.update(outcome)
+            err.outcome = {**outcome, **err.outcome}
             raise
         except _RESTORE_ERRORS as err:
             if domain == "helper_template":
@@ -1079,7 +1080,19 @@ class BackupManager:
                 self._unprotect_snapshot(safety_path.name)
         if domain == "helper_template":
             outcome.update(apply_status="applied", verification_status="matched")
+            outcome.update(_template_recreated_outcome(result, entity_id))
         return {**outcome, "result": result}
+
+    async def _restore_needs_safety(
+        self, handler: DomainHandler, entity_id: str, config: Any
+    ) -> bool:
+        if handler.domain != "helper_template":
+            return True
+        current = await handler.fetch(self._client, entity_id)
+        if current is None:
+            return False  # No existing entry to snapshot; recreation rechecks absence.
+        _template_restore_options(config, current)
+        return True
 
     async def _capture_restore_safety(self, domain: str, entity_id: str) -> Path | None:
         """Template restore requires a fresh recovery point for its stable entry."""
@@ -1152,6 +1165,11 @@ class BackupManager:
                 counts=_summarize_patch_counts([]),
                 truncated=False,
             )
+        if domain == "helper_template":
+            # Entity metadata is used only for recreation. For an existing
+            # entry the restore applies options, so the preview must agree.
+            stored = {key: stored[key] for key in ("entry_id", "options")}
+            current = {key: current[key] for key in ("entry_id", "options")}
         patch: list[dict[str, Any]] = []
         truncated = _compute_json_patch(stored, current, _MAX_PATCH_OPS, patch)
         return _build_diff_response(
@@ -2776,20 +2794,57 @@ async def _fetch_template_helper(client: Any, entity_id: str) -> Any:
             "The component cannot authoritatively read template helpers"
         )
     records = _require_list(result.get("helpers"), "ha_mcp_tools/helpers_list.helpers")
+    templates: dict[str, dict[str, Any]] = {}
     for raw_record in records:
         record = _require_dict(raw_record, "helpers_list helper record")
         if record.get("kind") != "flow" or record.get("helper_type") != "template":
             continue
-        if entity_id not in (record.get("entry_id"), record.get("entity_id")):
-            continue
         entry_id = record.get("entry_id")
-        if not isinstance(entry_id, str) or not entry_id:
-            raise HomeAssistantError("Template helper has no config-entry identity")
+        if not isinstance(entry_id, str) or not entry_id or entry_id in templates:
+            raise HomeAssistantError("Template helper listing has ambiguous identities")
+        templates[entry_id] = record
+    matches = [
+        record
+        for record in templates.values()
+        if entity_id in (record["entry_id"], record.get("entity_id"))
+    ]
+    if len(matches) > 1:
+        raise HomeAssistantError("Template helper target is ambiguous")
+    if matches:
+        record = matches[0]
+        entry_id = record["entry_id"]
+        registry = await _template_entity_registry(client)
         return {
             "entry_id": entry_id,
             "options": _template_options(record.get("options")),
+            "entities": [
+                {
+                    key: row.get(key)
+                    for key in ("entity_id", "unique_id", "name", "original_name")
+                }
+                for row in registry
+                if row.get("config_entry_id") == entry_id
+            ],
         }
     return None
+
+
+async def _template_entity_registry(client: Any) -> list[dict[str, Any]]:
+    """Read the native registry, refusing partial or malformed identity data."""
+    rows = _require_list(
+        await _ws_send(client, {"type": "config/entity_registry/list"}),
+        "entity registry",
+    )
+    seen: set[str] = set()
+    result = []
+    for raw_row in rows:
+        row = _require_dict(raw_row, "entity registry row")
+        entity_id = row.get("entity_id")
+        if not isinstance(entity_id, str) or "." not in entity_id or entity_id in seen:
+            raise HomeAssistantError("Entity registry has ambiguous identities")
+        seen.add(entity_id)
+        result.append(row)
+    return result
 
 
 def _template_entry_id(entity_id: str, config: Any) -> str:
@@ -2846,17 +2901,24 @@ async def _verify_template_restore(
             restored = await _fetch_template_helper(client, entry_id)
     except _CAPTURE_TRANSIENT_ERRORS:
         return "unavailable"
-    return "matched" if _snapshot_configs_match(expected, restored) else "mismatched"
+    actual = (
+        {"entry_id": restored["entry_id"], "options": restored["options"]}
+        if restored is not None
+        else None
+    )
+    return "matched" if _snapshot_configs_match(expected, actual) else "mismatched"
 
 
 async def _restore_template_helper(client: Any, entity_id: str, config: Any) -> Any:
-    """Restore existing options, retaining apply knowledge separately from readback."""
+    """Restore options or recreate an authoritatively absent Template helper."""
     from .tools.config_entry_flow import OptionsFlowError, update_config_entry_options
 
     snapshot = _require_dict(config, "template helper snapshot")
     entry_id = _template_entry_id(entity_id, snapshot)
     try:
         current = await _fetch_template_helper(client, entry_id)
+        if current is None:
+            return await _recreate_template_helper(client, entry_id, snapshot)
         editable = _template_restore_options(snapshot, current)
     except BackupRestoreError:
         raise
@@ -2880,7 +2942,11 @@ async def _restore_template_helper(client: Any, entity_id: str, config: Any) -> 
     except OptionsFlowError as err:
         if err.apply_status == "not_applied":
             raise BackupRestoreError(
-                "Template helper options flow refused the restore; no options were applied"
+                str(err)
+                if err.reason
+                else "Template helper options flow refused the restore; no options were applied",
+                reason=err.reason,
+                fields=list(err.fields),
             ) from err
         verification = await _verify_template_restore(client, entry_id, expected)
         raise BackupRestoreError(
@@ -2902,6 +2968,221 @@ async def _restore_template_helper(client: Any, entity_id: str, config: Any) -> 
             verification_status=verification,
         )
     return result
+
+
+def _template_recreated_outcome(result: Any, original_entry_id: str) -> dict[str, Any]:
+    if result.get("restore_mode") != "recreated":
+        return {}
+    return {
+        "restore_mode": "recreated",
+        "original_entry_id": original_entry_id,
+        "entity_id": result["entry_id"],
+    }
+
+
+def _template_saved_entity(snapshot: dict[str, Any]) -> dict[str, Any] | None:
+    """Core creates one Template entity with the config-entry ID as unique ID."""
+    entities = snapshot.get("entities")
+    if entities is None or entities == []:
+        return None  # Older snapshots captured options without registry metadata.
+    rows = _require_list(entities, "Template snapshot entities")
+    if len(rows) != 1:
+        raise BackupRestoreError("Template snapshot has ambiguous entity mapping")
+    row = _require_dict(rows[0], "Template snapshot entity")
+    entity_id = row.get("entity_id")
+    if (
+        not isinstance(entity_id, str)
+        or not re.fullmatch(r"[a-z_]+\.[a-z0-9_]+", entity_id)
+        or entity_id.split(".")[0] != snapshot["options"]["template_type"]
+        or row.get("unique_id") != snapshot["entry_id"]
+        or any(
+            row.get(key) is not None and not isinstance(row[key], str)
+            for key in ("name", "original_name")
+        )
+    ):
+        raise BackupRestoreError("Template snapshot has an unsupported entity mapping")
+    return row
+
+
+async def _template_recreation_preflight(
+    client: Any, entry_id: str, snapshot: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Confirm absence independently, then reject collisions before creating."""
+    _template_options(snapshot.get("options"))
+    saved = _template_saved_entity(snapshot)
+    # list_config_entries() drops malformed rows. Absence must be established
+    # from the complete native response before a restore can create an entry.
+    entries = _require_list(
+        await client._request("GET", "/config/config_entries/entry"), "config entries"
+    )
+    for raw_entry in entries:
+        entry = _require_dict(raw_entry, "config entry")
+        if not isinstance(entry.get("entry_id"), str) or not entry["entry_id"]:
+            raise BackupRestoreError("Config-entry listing is incomplete")
+        if entry["entry_id"] == entry_id:
+            raise BackupRestoreError(
+                "Template config entry still exists; recreation was not attempted",
+                reason="entry_still_exists",
+            )
+    if saved is not None:
+        await _check_template_entity_collision(client, saved["entity_id"])
+    return saved
+
+
+async def _check_template_entity_collision(
+    client: Any, target: str, *, owned_entry_id: str | None = None
+) -> None:
+    """Check both registered and state-only occupants; never take another ID."""
+    registry = await _template_entity_registry(client)
+    owned_ids = {
+        row["entity_id"]
+        for row in registry
+        if owned_entry_id is not None and row.get("config_entry_id") == owned_entry_id
+    }
+    states = _require_list(await client.get_states(), "entity states")
+    state_ids = {_require_dict(row, "entity state").get("entity_id") for row in states}
+    occupied = {row["entity_id"] for row in registry} | state_ids
+    if target in occupied and target not in owned_ids:
+        raise BackupRestoreError(
+            "The saved entity ID is occupied; it will not be overwritten",
+            reason="entity_id_collision",
+            conflicting_entity_id=target,
+        )
+
+
+async def _created_template_entity(client: Any, entry_id: str) -> dict[str, Any]:
+    """Wait for the one native Template registry entity after flow completion."""
+    async with asyncio.timeout(5):
+        while True:
+            rows = [
+                row
+                for row in await _template_entity_registry(client)
+                if row.get("config_entry_id") == entry_id
+            ]
+            if rows:
+                if len(rows) != 1 or rows[0].get("unique_id") != entry_id:
+                    raise HomeAssistantError(
+                        "Recreated Template entity mapping is ambiguous"
+                    )
+                return rows[0]
+            await asyncio.sleep(0.1)
+
+
+async def _restore_template_entity_id(
+    client: Any, entry_id: str, saved: dict[str, Any]
+) -> dict[str, str]:
+    """Restore only the newly created entity's ID/name, guarded by ownership."""
+    row = await _created_template_entity(client, entry_id)
+    source, target = row["entity_id"], saved["entity_id"]
+    if source.split(".")[0] != target.split(".")[0]:
+        raise HomeAssistantError("Recreated Template entity has an unexpected domain")
+    await _check_template_entity_collision(client, target, owned_entry_id=entry_id)
+    update: dict[str, Any] = {
+        "type": "config/entity_registry/update",
+        "entity_id": source,
+    }
+    if source != target:
+        update["new_entity_id"] = target
+    if row.get("name") != saved.get("name"):
+        update["name"] = saved.get("name")
+    if len(update) > 2:
+        try:
+            await _ws_send(client, update)
+        except _CAPTURE_TRANSIENT_ERRORS as err:
+            raise BackupRestoreError(
+                "The recreated helper's entity rename outcome is unknown",
+                reason="entity_rename_outcome_unknown",
+                entity_id_mapping={
+                    "created_entity_id": source,
+                    "target_entity_id": target,
+                },
+                verification_status="unavailable",
+            ) from err
+    actual = await _created_template_entity(client, entry_id)
+    if actual["entity_id"] != target or actual.get("name") != saved.get("name"):
+        raise HomeAssistantError("Recreated Template entity identity did not match")
+    return {"created_entity_id": source, "restored_entity_id": target}
+
+
+async def _recreate_template_helper(
+    client: Any, entry_id: str, snapshot: dict[str, Any]
+) -> dict[str, Any]:
+    """Create through the ordinary helper flow; never retry uncertain writes."""
+    from .tools.config_entry_flow import create_flow_helper
+
+    try:
+        saved = await _template_recreation_preflight(client, entry_id, snapshot)
+    except BackupRestoreError:
+        raise
+    except _CAPTURE_TRANSIENT_ERRORS as err:
+        raise BackupRestoreError(
+            "Template helper absence and entity IDs could not be verified; recreation was not attempted",
+            reason="recreation_preflight_unavailable",
+        ) from err
+    try:
+        # Persisted template_type identifies the entry's entity platform; the
+        # create flow selects that platform through its initial menu instead.
+        create_config = {
+            key: value
+            for key, value in snapshot["options"].items()
+            if key != "template_type"
+        }
+        create_config["next_step_id"] = snapshot["options"]["template_type"]
+        result = await create_flow_helper(client, "template", create_config)
+    except _CAPTURE_TRANSIENT_ERRORS as err:
+        raise BackupRestoreError(
+            "Template helper creation outcome is unknown; inspect helpers before retrying",
+            apply_status="unknown",
+            reason="creation_outcome_unknown",
+            restore_mode="recreated",
+            original_entry_id=entry_id,
+        ) from err
+    new_entry_id = result.get("entry_id")
+    if (
+        not isinstance(new_entry_id, str)
+        or not new_entry_id
+        or new_entry_id == entry_id
+    ):
+        raise BackupRestoreError(
+            "Template helper creation returned no new identity; inspect helpers before retrying",
+            apply_status="unknown",
+            reason="creation_outcome_unknown",
+            original_entry_id=entry_id,
+        )
+    outcome = {
+        "entry_id": new_entry_id,
+        "entity_id": new_entry_id,
+        "original_entry_id": entry_id,
+        "restore_mode": "recreated",
+    }
+    expected = {"entry_id": new_entry_id, "options": snapshot["options"]}
+    mapping: dict[str, str] = {}
+    try:
+        if saved is not None:
+            mapping = await _restore_template_entity_id(client, new_entry_id, saved)
+        verification = await _verify_template_restore(client, new_entry_id, expected)
+        if verification != "matched":
+            raise BackupRestoreError(
+                "Template helper was recreated but its options could not be verified",
+                verification_status=verification,
+            )
+    except _CAPTURE_TRANSIENT_ERRORS as err:
+        detail = err.outcome if isinstance(err, BackupRestoreError) else {}
+        raise BackupRestoreError(
+            "Template helper was recreated but recovery is incomplete; inspect the new entry before retrying",
+            **{**detail, **outcome, "apply_status": "applied"},
+        ) from err
+    response = {
+        **result,
+        **outcome,
+        "entity_ids_restored": saved is not None,
+        "entity_id_mapping": mapping,
+    }
+    if saved is None:
+        response["warnings"] = [
+            "This snapshot has no entity mapping; the recreated helper may have a new entity ID."
+        ]
+    return response
 
 
 def _make_helper_handler(helper_type: str) -> DomainHandler:

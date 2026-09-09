@@ -154,6 +154,8 @@ def with_auto_backup(
     client: Any = None,
     mandatory: bool = False,
     skip_fn: Callable[[dict[str, Any]], bool] | None = None,
+    domain_resolver: Callable[[Any, dict[str, Any], str, str], Awaitable[str]]
+    | None = None,
 ) -> Callable[..., Any]:
     """Decorate a write/destructive tool with pre-write auto-backup capture.
 
@@ -175,6 +177,10 @@ def with_auto_backup(
     the ``mandatory`` gate — for calls it identifies as unable to write
     (e.g. a yaml-edit confirm-flow preview): no snapshot, no refusal, the
     wrapped tool runs directly.
+
+    ``domain_resolver`` optionally refines the capture domain from HA metadata.
+    It receives the client, tool kwargs, initial domain and entity ID inside
+    the write guard, before capture. Its failures follow the capture policy.
 
     ``mandatory=True`` makes auto-backup a precondition (file/YAML writes,
     #1579 — those formerly kept their own private backups). It fails the
@@ -263,6 +269,7 @@ def with_auto_backup(
                         id_param=id_param,
                         id_fn=id_fn,
                         mandatory=mandatory,
+                        domain_resolver=domain_resolver,
                     )
                 return await func(*args, **kwargs)
 
@@ -333,6 +340,7 @@ async def _capture_pre_write_snapshot(
     id_param: str | None,
     id_fn: Callable[[dict[str, Any]], str] | None,
     mandatory: bool,
+    domain_resolver: Callable[[Any, dict[str, Any], str, str], Awaitable[str]] | None,
 ) -> None:
     """Resolve the snapshot target and capture a pre-write backup.
 
@@ -348,6 +356,10 @@ async def _capture_pre_write_snapshot(
     if entity_id:
         try:
             if client_obj is not None:
+                if domain_resolver is not None:
+                    snap_domain = await domain_resolver(
+                        client_obj, kwargs, snap_domain, entity_id
+                    )
                 mgr = get_backup_manager(client_obj, settings)
                 await mgr.maybe_snapshot(
                     snap_domain,

@@ -39,6 +39,13 @@ def manager(tmp_path):
     return bm.get_backup_manager(SimpleNamespace(), settings)
 
 
+@pytest.fixture(autouse=True)
+def empty_entity_registry(monkeypatch):
+    # Registry capture and recreation have dedicated coverage in
+    # test_template_deleted_recovery; these cases exercise options restoration.
+    monkeypatch.setattr(bm, "_template_entity_registry", AsyncMock(return_value=[]))
+
+
 @pytest.mark.parametrize("target", ["template-entry", "sensor.renamed_example"])
 async def test_capture_complete_options_without_opening_flow(
     manager, monkeypatch, target
@@ -53,6 +60,7 @@ async def test_capture_complete_options_without_opening_flow(
     assert snapshot["config"] == {
         "entry_id": "template-entry",
         "options": _record()["options"],
+        "entities": [],
     }
     assert snapshot["entity_id"] == "template-entry"
     assert send.await_count == (2 if "." in target else 1)
@@ -288,21 +296,16 @@ async def test_restore_clears_nested_optional_section(manager, monkeypatch):
     )
 
 
-@pytest.mark.parametrize(
-    "current", [None, {"entry_id": "template-entry", "options": _record()["options"]}]
-)
-async def test_deleted_entry_and_target_mismatch_never_start_restore(
-    manager, monkeypatch, current
-):
+async def test_target_mismatch_never_starts_restore(manager, monkeypatch):
+    current = {"entry_id": "template-entry", "options": _record()["options"]}
     monkeypatch.setattr(bm, "_fetch_template_helper", AsyncMock(return_value=current))
     client = SimpleNamespace(start_options_flow=AsyncMock())
     handler = manager.handler_for("helper_template")
     assert handler is not None
-    target = "template-entry" if current is None else "different-entry"
     with pytest.raises(HomeAssistantError):
         await handler.restore(
             client,
-            target,
+            "different-entry",
             {"entry_id": "template-entry", "options": _record()["options"]},
         )
     client.start_options_flow.assert_not_awaited()

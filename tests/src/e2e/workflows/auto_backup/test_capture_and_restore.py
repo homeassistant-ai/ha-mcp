@@ -954,10 +954,12 @@ class TestTemplateHelperCaptureRestore:
                 {"scope": "edits", "action": "view", "backup_name": name},
             )
             assert viewed.get("success") is True, viewed
-            assert viewed["data"]["config"] == {
-                "entry_id": entry_id,
-                "options": original,
-            }
+            snapshot = viewed["data"]["config"]
+            assert snapshot["entry_id"] == entry_id
+            assert snapshot["options"] == original
+            assert len(snapshot["entities"]) == 1
+            assert snapshot["entities"][0]["entity_id"] == entity_id
+            assert snapshot["entities"][0]["unique_id"] == entry_id
             # Only testcontainers expose a disposable mounted config directory;
             # HAOS still exercises the API-only capture and restore assertions.
             if config_path := ha_container_with_fresh_config.get("config_path"):

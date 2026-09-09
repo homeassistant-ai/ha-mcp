@@ -55,6 +55,32 @@ from .helpers import raise_tool_error
 logger = logging.getLogger(__name__)
 
 
+OptionsRestoreReason = Literal[
+    "unsupported_form", "unsupported_fields", "validation_failed", "flow_aborted"
+]
+_RESTORE_REASON_MESSAGES: dict[OptionsRestoreReason, str] = {
+    "unsupported_form": "Options restore requires an authoritative options form",
+    "unsupported_fields": "Snapshot fields are not accepted by the options form",
+    "validation_failed": "Home Assistant rejected the restored options as invalid",
+    "flow_aborted": "Home Assistant aborted the options restore",
+}
+# These are diagnostic labels, not an allowlist of restorable fields. Arbitrary
+# snapshot keys and HA error payloads may contain values and must not be echoed.
+_SAFE_RESTORE_FIELD_NAMES = frozenset(
+    {
+        "availability",
+        "availability_template",
+        "device_class",
+        "icon",
+        "name",
+        "state",
+        "state_class",
+        "template_type",
+        "unit_of_measurement",
+    }
+)
+
+
 class OptionsFlowError(HomeAssistantError):
     """Complete-restore failure with submission knowledge for reconciliation."""
 
@@ -65,7 +91,15 @@ class OptionsFlowError(HomeAssistantError):
         apply_status: Literal["not_applied", "unknown", "applied"],
         entry_id: str,
         flow_id: str | None = None,
+        reason: OptionsRestoreReason | None = None,
+        fields: tuple[str, ...] = (),
     ) -> None:
+        self.reason = reason
+        self.fields = tuple(sorted(set(fields) & _SAFE_RESTORE_FIELD_NAMES))
+        if reason is not None:
+            message = _RESTORE_REASON_MESSAGES[reason]
+            if self.fields:
+                message += ": " + ", ".join(self.fields)
         super().__init__(message)
         self.apply_status = apply_status
         self.entry_id = entry_id
@@ -79,6 +113,8 @@ class _OptionsFlowProgress:
     entry_id: str
     flow_id: str | None = None
     apply_status: Literal["not_applied", "unknown", "applied"] = "not_applied"
+    reason: OptionsRestoreReason | None = None
+    fields: tuple[str, ...] = ()
 
     def failure(self) -> OptionsFlowError:
         messages = {
@@ -91,6 +127,8 @@ class _OptionsFlowProgress:
             apply_status=self.apply_status,
             entry_id=self.entry_id,
             flow_id=self.flow_id,
+            reason=self.reason,
+            fields=self.fields,
         )
 
     async def submit(
@@ -110,11 +148,15 @@ class _OptionsFlowProgress:
             raise
         if result.get("type") == _FlowType.CREATE_ENTRY:
             self.apply_status = "applied"
-        elif result.get("type") == _FlowType.ABORT or (
-            result.get("type") == _FlowType.FORM and result.get("errors")
-        ):
+        elif result.get("type") == _FlowType.ABORT:
+            self.apply_status = "not_applied"
+            self.reason = "flow_aborted"
+        elif result.get("type") == _FlowType.FORM and result.get("errors"):
             # Template's single options form has not committed on rejection.
             self.apply_status = "not_applied"
+            self.reason = "validation_failed"
+            if isinstance(result["errors"], dict):
+                self.fields = tuple(result["errors"])
         else:
             # A complete snapshot cannot safely populate an unexpected next step.
             raise self.failure()
@@ -146,19 +188,26 @@ def _preflight_options_restore(
 ) -> None:
     """Reject unsupported complete-snapshot fields before a Template submit."""
     schema = step.get("data_schema")
+    reason: OptionsRestoreReason
+    fields: tuple[str, ...] = ()
     if step.get("type") != _FlowType.FORM or not isinstance(schema, list):
-        message = "Options restore requires an authoritative options form"
+        reason = "unsupported_form"
     elif unknown := _unknown_snapshot_fields(schema, config):
-        message = "Snapshot fields are not accepted by the options form: " + ", ".join(
-            sorted(unknown)
-        )
+        reason = "unsupported_fields"
+        fields = tuple(unknown)
+    elif step.get("errors"):
+        reason = "validation_failed"
+        if isinstance(step["errors"], dict):
+            fields = tuple(step["errors"])
     else:
         return
     raise OptionsFlowError(
-        message,
+        _RESTORE_REASON_MESSAGES[reason],
         apply_status=progress.apply_status,
         entry_id=progress.entry_id,
         flow_id=progress.flow_id,
+        reason=reason,
+        fields=fields,
     )
 
 

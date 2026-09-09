@@ -34,6 +34,7 @@ def snapshot(manager, state="old", target="template-entry"):
 async def test_refusal_keeps_selected_source_at_retention_one(manager, monkeypatch):
     manager._settings.auto_backup_retain_per_entity = 1
     source = snapshot(manager)
+    monkeypatch.setattr(bm, "_template_entity_registry", AsyncMock(return_value=[]))
     monkeypatch.setattr(
         bm,
         "_ws_send",
@@ -41,7 +42,7 @@ async def test_refusal_keeps_selected_source_at_retention_one(manager, monkeypat
             return_value=_response(_record({**_record()["options"], "name": "Changed"}))
         ),
     )
-    with pytest.raises(bm.BackupRestoreError) as caught:
+    with pytest.raises(bm.BackupRestoreError, match="identity changed") as caught:
         await manager.restore_snapshot(source.name)
     assert source.exists()
     assert caught.value.outcome["apply_status"] == "not_applied"
