@@ -530,6 +530,7 @@ BLOCKED_WS_WRITE_COMMANDS: frozenset[str] = frozenset(
     {
         "config/core/update",
         "lovelace/config/save",
+        "ha_mcp_tools/dashboard_edit",
         "lovelace/dashboards/create",
         "lovelace/dashboards/delete",
         "lovelace/dashboards/update",
@@ -2362,6 +2363,11 @@ def augment_error_dict_with_skill_content(
     if not isinstance(err, dict):
         return
     suggestions = err.setdefault("suggestions", [])
+    # create_error_response emits only the singular field for one suggestion.
+    # Preserve that recovery advice before appending the generic skill hint.
+    primary = err.get("suggestion")
+    if not suggestions and isinstance(primary, str) and primary:
+        suggestions.append(primary)
     if _WRITE_TOOL_BP_HINT_SUGGESTION not in suggestions:
         suggestions.append(_WRITE_TOOL_BP_HINT_SUGGESTION)
     if suggestions:

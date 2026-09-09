@@ -791,3 +791,19 @@ def _tool_response_has_field(tool_name: str, field: str) -> bool:
                 if _dict_with_field_in_scope(node):
                     return True
     return False
+
+
+@pytest.mark.parametrize(
+    "tool_name", ["ha_config_get_dashboard", "ha_config_set_dashboard"]
+)
+def test_lite_dashboard_descriptions_expose_patch(tool_name):
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    description = HomeAssistantSmartMCPServer._resolve_lite_docstrings()[tool_name]
+    assert "patch" in description
+    assert "config_hash" in description
+    assert "python_transform" in description
+    if tool_name == "ha_config_set_dashboard":
+        assert "JSON Pointer" in description
+        assert "append" in description
+        assert "two modes" not in description
