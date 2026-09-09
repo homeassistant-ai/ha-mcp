@@ -1906,6 +1906,9 @@ async def _edits_create(
                 ],
             )
         )
+    if dom == "helper_template":
+        snapshot = await asyncio.to_thread(mgr.read_snapshot, path.name)
+        eid = snapshot["entity_id"]
     return {
         "success": True,
         "data": {

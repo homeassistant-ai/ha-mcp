@@ -2169,6 +2169,10 @@ class IntegrationTools:
             f"helper_{kw['helper_type']}" if kw.get("helper_type") else "integration"
         ),
         id_param="target",
+        # The flow-removal owner resolves aliases through Core before capture.
+        skip_fn=lambda kw: (
+            kw.get("helper_type") == "template" and "." in str(kw.get("target", ""))
+        ),
     )
     @log_tool_usage
     async def ha_remove_helpers_integrations(
@@ -2489,65 +2493,14 @@ class IntegrationTools:
             if entry_id is None:
                 self._raise_flow_helper_lookup_error(reason, helper_type, target)
 
-            # Step 2: collect sub-entity IDs for the wait phase
-            sub_entities = await _get_entities_for_config_entry(
-                client, entry_id, warnings
+            result: dict[str, Any] = await self._delete_resolved_flow_helper(
+                helper_type=helper_type,
+                target=target,
+                entry_id=entry_id,
+                wait_bool=wait_bool,
+                warnings=warnings,
             )
-            entity_ids = [e["entity_id"] for e in sub_entities if "entity_id" in e]
-
-            # Step 3: delete the config entry
-            delete_result = await self._delete_flow_config_entry(
-                entry_id, target, helper_type
-            )
-
-            require_restart = bool(
-                isinstance(delete_result, dict)
-                and delete_result.get("require_restart", False)
-            )
-
-            # Step 4: wait for all sub-entities to be removed in parallel
-            response: dict[str, Any] = {
-                "success": True,
-                "action": "delete",
-                "target": target,
-                "helper_type": helper_type,
-                "method": "config_flow_delete",
-                "entry_id": entry_id,
-                "entity_ids": entity_ids,
-                "require_restart": require_restart,
-                "message": (
-                    f"Successfully deleted {helper_type} (entry: {entry_id}, "
-                    f"{len(entity_ids)} sub-entities)."
-                ),
-            }
-            if wait_bool and entity_ids:
-                results = await asyncio.gather(
-                    *[wait_for_entity_removed(client, eid) for eid in entity_ids],
-                    return_exceptions=True,
-                )
-                # Auth/connection errors during polling must surface as
-                # tool errors — wait_for_entity_removed re-raises these
-                # deliberately. Re-raise the first one we find so the
-                # outer except chain converts it to a structured error.
-                for res in results:
-                    if isinstance(
-                        res, HomeAssistantConnectionError | HomeAssistantAuthError
-                    ):
-                        raise res
-                not_removed = [
-                    eid
-                    for eid, res in zip(entity_ids, results, strict=True)
-                    if res is not True
-                ]
-                if not_removed:
-                    response.setdefault("warnings", []).append(
-                        f"Deletion confirmed but the following entities "
-                        f"are still present after the wait window: "
-                        f"{not_removed}"
-                    )
-            if warnings:
-                response.setdefault("warnings", []).extend(warnings)
-            return response
+            return result
 
         except ToolError:
             raise
@@ -2565,6 +2518,80 @@ class IntegrationTools:
                 ],
             )
             return None  # unreachable: exception_to_structured_error raises
+
+    @with_auto_backup(
+        domain="helper_template",
+        id_param="entry_id",
+        skip_fn=lambda kw: kw.get("helper_type") != "template",
+    )
+    async def _delete_resolved_flow_helper(
+        self,
+        *,
+        helper_type: HelperTypeLiteral,
+        target: str,
+        entry_id: str,
+        wait_bool: bool,
+        warnings: list[str],
+    ) -> dict[str, Any]:
+        """Capture and remove a Template entry under its stable write lock."""
+        client = self._client
+        # Step 2: collect sub-entity IDs for the wait phase
+        sub_entities = await _get_entities_for_config_entry(client, entry_id, warnings)
+        entity_ids = [e["entity_id"] for e in sub_entities if "entity_id" in e]
+
+        # Step 3: delete the config entry
+        delete_result = await self._delete_flow_config_entry(
+            entry_id, target, helper_type
+        )
+
+        require_restart = bool(
+            isinstance(delete_result, dict)
+            and delete_result.get("require_restart", False)
+        )
+
+        # Step 4: wait for all sub-entities to be removed in parallel
+        response: dict[str, Any] = {
+            "success": True,
+            "action": "delete",
+            "target": target,
+            "helper_type": helper_type,
+            "method": "config_flow_delete",
+            "entry_id": entry_id,
+            "entity_ids": entity_ids,
+            "require_restart": require_restart,
+            "message": (
+                f"Successfully deleted {helper_type} (entry: {entry_id}, "
+                f"{len(entity_ids)} sub-entities)."
+            ),
+        }
+        if wait_bool and entity_ids:
+            results = await asyncio.gather(
+                *[wait_for_entity_removed(client, eid) for eid in entity_ids],
+                return_exceptions=True,
+            )
+            # Auth/connection errors during polling must surface as
+            # tool errors — wait_for_entity_removed re-raises these
+            # deliberately. Re-raise the first one we find so the
+            # outer except chain converts it to a structured error.
+            for res in results:
+                if isinstance(
+                    res, HomeAssistantConnectionError | HomeAssistantAuthError
+                ):
+                    raise res
+            not_removed = [
+                eid
+                for eid, res in zip(entity_ids, results, strict=True)
+                if res is not True
+            ]
+            if not_removed:
+                response.setdefault("warnings", []).append(
+                    f"Deletion confirmed but the following entities "
+                    f"are still present after the wait window: "
+                    f"{not_removed}"
+                )
+        if warnings:
+            response.setdefault("warnings", []).extend(warnings)
+        return response
 
     def _raise_flow_helper_lookup_error(
         self,

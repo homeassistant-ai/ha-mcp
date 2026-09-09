@@ -29,7 +29,8 @@ from __future__ import annotations
 import functools
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastmcp.exceptions import ToolError
@@ -237,24 +238,59 @@ def with_auto_backup(
                         },
                     )
                 )
-            if enabled:
-                await _capture_pre_write_snapshot(
-                    func,
-                    args,
-                    kwargs,
-                    settings=settings,
-                    explicit_client=explicit_client,
-                    domain=domain,
-                    domain_fn=domain_fn,
-                    id_param=id_param,
-                    id_fn=id_fn,
-                    mandatory=mandatory,
-                )
-            return await func(*args, **kwargs)
+            snap_domain, entity_id = _resolve_snapshot_target(
+                kwargs,
+                domain=domain,
+                domain_fn=domain_fn,
+                id_param=id_param,
+                id_fn=id_fn,
+            )
+            async with _template_write_context(
+                _resolve_backup_client(explicit_client, args),
+                settings,
+                snap_domain,
+                entity_id,
+            ):
+                if enabled:
+                    await _capture_pre_write_snapshot(
+                        func,
+                        args,
+                        kwargs,
+                        settings=settings,
+                        explicit_client=explicit_client,
+                        domain=domain,
+                        domain_fn=domain_fn,
+                        id_param=id_param,
+                        id_fn=id_fn,
+                        mandatory=mandatory,
+                    )
+                return await func(*args, **kwargs)
 
         return wrapper
 
     return decorator
+
+
+@asynccontextmanager
+async def _template_write_context(
+    client: Any, settings: Any, domain: str, entity_id: str
+) -> AsyncIterator[None]:
+    """Keep a helper edit's capture and mutation in the restore critical section.
+
+    The lock is needed even when ordinary auto-backup is disabled: restores
+    always capture a safety snapshot before replacing the current options.
+    """
+    # Both options-update tools take stable config-entry IDs. Alias-based helper
+    # removal and dotted subentry targets have separate resolution paths.
+    is_entry_write = (
+        domain in {"helper_template", "integration"} and "." not in entity_id
+    )
+    if is_entry_write and entity_id and client is not None:
+        manager = get_backup_manager(client, settings)
+        async with manager.config_entry_write_guard(entity_id):
+            yield
+    else:
+        yield
 
 
 def _resolve_backup_client(explicit_client: Any, args: tuple[Any, ...]) -> Any:

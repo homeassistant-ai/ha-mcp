@@ -56,7 +56,10 @@ async def test_missing_component_never_creates_or_edits_helper(
     mcp.call_tool.side_effect = call_tool
     ha = AsyncMock()
     await TemplateHelperScenario().test_template_options_full_loop(
-        mcp_client=mcp, ha_client=ha, template_type=template_type
+        mcp_client=mcp,
+        ha_client=ha,
+        template_type=template_type,
+        ha_container_with_fresh_config={},
     )
     assert [name for name, _ in calls] == [
         "ha_config_list_helpers",

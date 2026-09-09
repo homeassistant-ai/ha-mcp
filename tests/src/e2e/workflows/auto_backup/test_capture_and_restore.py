@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -725,12 +726,103 @@ class TestHelperCaptureRestore:
 # ---------------------------------------------------------------- complex helper lane
 
 
+async def _assert_template_alias_capture(
+    mcp_client, entity_id: str, entry_id: str
+) -> None:
+    """An entity-addressed capture belongs to the stable entry's history."""
+    mcp = MCPAssertions(mcp_client)
+    created = await mcp.call_tool_success(
+        "ha_manage_backup",
+        {
+            "scope": "edits",
+            "action": "create",
+            "domain": "helper_template",
+            "entity_id": entity_id,
+        },
+    )
+    name = created["data"]["backup_name"]
+    try:
+        viewed = await mcp.call_tool_success(
+            "ha_manage_backup",
+            {"scope": "edits", "action": "view", "backup_name": name},
+        )
+        assert viewed["data"]["entity_id"] == entry_id
+        stable_filter = {
+            "scope": "edits",
+            "domain": "helper_template",
+            "entity_id": entry_id,
+        }
+        listed = await mcp.call_tool_success(
+            "ha_manage_backup", {**stable_filter, "action": "list"}
+        )
+        assert name in {row["name"] for row in listed["data"]["backups"]}
+        deleted = await mcp.call_tool_success(
+            "ha_manage_backup", {**stable_filter, "action": "delete"}
+        )
+        assert deleted["data"]["deleted"] == [name]
+    finally:
+        await safe_call_tool(
+            mcp_client,
+            "ha_manage_backup",
+            {"scope": "edits", "action": "delete", "backup_name": name},
+        )
+
+
+async def _assert_template_degraded_scrub_refused(
+    mcp_client,
+    config_path: str,
+    entry_id: str,
+    backup_name: str,
+    expected_options: dict[str, Any],
+) -> None:
+    """Malformed disposable secrets must block capture and restore without writes."""
+    mcp = MCPAssertions(mcp_client)
+    snapshot_filter = {
+        "scope": "edits",
+        "domain": "helper_template",
+        "entity_id": entry_id,
+    }
+    before = await mcp.call_tool_success(
+        "ha_manage_backup", {**snapshot_filter, "action": "list"}
+    )
+    names = {row["name"] for row in before["data"]["backups"]}
+    secrets_path = Path(config_path) / "secrets.yaml"
+    original = secrets_path.read_bytes() if secrets_path.exists() else None
+    try:
+        secrets_path.write_text("review_fixture: [\n", encoding="utf-8")
+        await mcp.call_tool_failure(
+            "ha_manage_backup", {**snapshot_filter, "action": "create"}
+        )
+        await mcp.call_tool_failure(
+            "ha_manage_backup",
+            {"scope": "edits", "action": "restore", "backup_name": backup_name},
+        )
+        after = await mcp.call_tool_success(
+            "ha_manage_backup", {**snapshot_filter, "action": "list"}
+        )
+        assert {row["name"] for row in after["data"]["backups"]} == names
+    finally:
+        if original is None:
+            secrets_path.unlink(missing_ok=True)
+        else:
+            secrets_path.write_bytes(original)
+    helpers = await mcp.call_tool_success(
+        "ha_config_list_helpers", {"helper_type": "template"}
+    )
+    assert (
+        next(
+            row["options"] for row in helpers["helpers"] if row["entry_id"] == entry_id
+        )
+        == expected_options
+    )
+
+
 @pytest.mark.helper
 @pytest.mark.cleanup
 class TestTemplateHelperCaptureRestore:
     @pytest.mark.parametrize("template_type", ["sensor", "binary_sensor"])
     async def test_template_options_full_loop(
-        self, mcp_client, ha_client, template_type: str
+        self, mcp_client, ha_client, ha_container_with_fresh_config, template_type: str
     ) -> None:
         """Restore through either component entry; refuse absent-component reads.
 
@@ -814,6 +906,7 @@ class TestTemplateHelperCaptureRestore:
                 for row in before["helpers"]
                 if row.get("entry_id") == entry_id
             )
+            await _assert_template_alias_capture(mcp_client, entity_id, entry_id)
             changed = {
                 "state": "{{ 99 }}" if template_type == "sensor" else "{{ false }}",
                 "additional_options": {"availability": "{{ true }}"},
@@ -865,6 +958,12 @@ class TestTemplateHelperCaptureRestore:
                 "entry_id": entry_id,
                 "options": original,
             }
+            # Only testcontainers expose a disposable mounted config directory;
+            # HAOS still exercises the API-only capture and restore assertions.
+            if config_path := ha_container_with_fresh_config.get("config_path"):
+                await _assert_template_degraded_scrub_refused(
+                    mcp_client, config_path, entry_id, name, edited_options
+                )
             restored = await safe_call_tool(
                 mcp_client,
                 "ha_manage_backup",
@@ -890,6 +989,23 @@ class TestTemplateHelperCaptureRestore:
                 "12" if template_type == "sensor" else "on",
                 timeout=20,
             ), f"Template helper {entity_id} did not activate the restored state"
+            mcp = MCPAssertions(mcp_client)
+            await mcp.call_tool_success(
+                "ha_remove_helpers_integrations",
+                {"target": entity_id, "helper_type": "template", "confirm": True},
+            )
+            deleted = await mcp.call_tool_success(
+                "ha_manage_backup",
+                {
+                    "scope": "edits",
+                    "action": "delete",
+                    "domain": "helper_template",
+                    "entity_id": entry_id,
+                },
+            )
+            assert backup_names <= set(deleted["data"]["deleted"])
+            backup_names.clear()
+            entry_id = None
         finally:
             if entry_id is not None:
                 await ha_client.delete_config_entry(entry_id)

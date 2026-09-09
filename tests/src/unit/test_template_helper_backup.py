@@ -54,7 +54,9 @@ async def test_capture_complete_options_without_opening_flow(
         "entry_id": "template-entry",
         "options": _record()["options"],
     }
-    send.assert_awaited_once_with(
+    assert snapshot["entity_id"] == "template-entry"
+    assert send.await_count == (2 if "." in target else 1)
+    send.assert_awaited_with(
         manager._client,
         {
             "type": "ha_mcp_tools/helpers_list",
@@ -308,8 +310,13 @@ async def test_deleted_entry_and_target_mismatch_never_start_restore(
 
 async def _captured_alias(manager, monkeypatch):
     monkeypatch.setattr(bm, "_ws_send", AsyncMock(return_value=_response()))
-    path = await manager.maybe_snapshot("helper_template", "sensor.renamed_example")
-    assert path is not None
+    # Keep exercising legacy files after new captures adopt stable headers.
+    path = manager._write_snapshot(
+        "helper_template",
+        "sensor.renamed_example",
+        {"entry_id": "template-entry", "options": _record()["options"]},
+        "test",
+    )
     return path.name
 
 

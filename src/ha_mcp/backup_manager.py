@@ -53,7 +53,8 @@ import threading
 import time
 import weakref
 from collections import Counter
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -378,7 +379,7 @@ class BackupManager:
         # for the manager's lifetime — each lock is tiny (~64 bytes);
         # removing a lock while another task is awaiting it would race.
         self._locks: dict[str, asyncio.Lock] = {}
-        self._restore_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+        self._entry_write_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
         self._protected_snapshot_names: Counter[str] = Counter()
@@ -454,6 +455,13 @@ class BackupManager:
 
     # ----- capture -------------------------------------------------------
 
+    @asynccontextmanager
+    async def config_entry_write_guard(self, entity_id: str) -> AsyncIterator[None]:
+        """Serialize entry writes with Template capture and restore operations."""
+        lock = self._entry_write_locks.setdefault(entity_id, asyncio.Lock())
+        async with lock:
+            yield
+
     async def maybe_snapshot(
         self,
         domain: str,
@@ -493,6 +501,15 @@ class BackupManager:
         if handler is None:
             return None
 
+        if domain == "helper_template" and "." in entity_id:
+            config = await self._fetch_config_for_snapshot(
+                handler, entity_id, f"{domain}:{entity_id}", mandatory=mandatory
+            )
+            if config is _SNAPSHOT_SKIP:
+                return None
+            entity_id = _template_entry_id(entity_id, config)
+            # Resolve before bookkeeping, but read options again under the lock:
+            # another write may complete while this alias capture waits.
         key = f"{domain}:{entity_id}"
         lock = self._locks.setdefault(key, asyncio.Lock())
         async with lock:
@@ -739,8 +756,19 @@ class BackupManager:
         ``config`` (which is the whole automation, dashboard or file), so the
         read stops at the ``config:`` line and never parses the body: every
         listing row opens its file, and an unfiltered listing of hundreds of
-        whole-file snapshots has to stay a header read per row.
+        whole-file snapshots has to stay a header read per row. Template
+        snapshots are the exception: older headers used aliases, so their
+        stable identity must be read from config.entry_id.
         """
+        if path.name.startswith("helper_template."):
+            try:
+                data = self.read_snapshot(path.name)
+                entity_id = data.get("entity_id")
+                if not isinstance(entity_id, str):
+                    return None
+                return _template_entry_id(entity_id, data.get("config"))
+            except (OSError, ValueError, HomeAssistantError):
+                return None
         try:
             with path.open(encoding="utf-8") as handle:
                 header: list[str] = []
@@ -769,8 +797,12 @@ class BackupManager:
         self, domain: str, entity_id: str, protected: frozenset[str] = frozenset()
     ) -> None:
         candidates: set[Path] = set()
-        for safe in _entity_id_aliases(entity_id):
-            candidates.update(self._dir.glob(f"{domain}.{safe}.*.yaml"))
+        if domain == "helper_template":
+            # Older snapshots used the entity alias as their filename/header.
+            candidates.update(self._dir.glob("helper_template.*.yaml"))
+        else:
+            for safe in _entity_id_aliases(entity_id):
+                candidates.update(self._dir.glob(f"{domain}.{safe}.*.yaml"))
         files = sorted(
             (p for p in candidates if self._snapshot_is_for(p, entity_id)),
             key=_snapshot_order,
@@ -843,7 +875,11 @@ class BackupManager:
             return None
         if domain and meta["domain"] != domain:
             return None
-        if safe_filter and meta["entity_id"] not in safe_filter:
+        if (
+            safe_filter
+            and meta["domain"] != "helper_template"
+            and meta["entity_id"] not in safe_filter
+        ):
             return None
         # Every row reports the id its payload names, not its stem: a filter
         # needs the stored id to settle the stem ambiguity anyway, and a stem
@@ -975,8 +1011,7 @@ class BackupManager:
                         safety_backup=None,
                     ) from err
                 data["entity_id"] = entity_id
-                lock = self._restore_locks.setdefault(entity_id, asyncio.Lock())
-                async with lock:
+                async with self.config_entry_write_guard(entity_id):
                     return await self._restore_snapshot_data(
                         name, data, take_safety_backup=take_safety_backup
                     )
@@ -2731,6 +2766,10 @@ async def _fetch_template_helper(client: Any, entity_id: str) -> Any:
         ),
         "ha_mcp_tools/helpers_list",
     )
+    if result.get("secret_scrub_degraded"):
+        raise HomeAssistantError(
+            "Template helper secret scrub is degraded; capture is unsafe"
+        )
     covered = _require_list(result.get("covered_types"), "helpers_list.covered_types")
     if "template" not in covered:
         raise HomeAssistantError(
@@ -2755,6 +2794,8 @@ async def _fetch_template_helper(client: Any, entity_id: str) -> Any:
 
 def _template_entry_id(entity_id: str, config: Any) -> str:
     """Resolve a captured alias to the stable identity used for diff and restore."""
+    if not isinstance(entity_id, str) or not entity_id:
+        raise HomeAssistantError("Template helper snapshot has no target identity")
     snapshot = _require_dict(config, "template helper snapshot")
     entry_id = snapshot.get("entry_id")
     if not isinstance(entry_id, str) or not entry_id:
