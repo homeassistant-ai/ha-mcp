@@ -45,10 +45,14 @@ from __future__ import annotations
 import asyncio
 import difflib
 import hashlib
+import json
 import logging
 import os
 import re
+import threading
 import time
+import weakref
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -100,6 +104,33 @@ class MandatoryBackupError(Exception):
     def __init__(self, message: str, *, suggestions: list[str] | None = None) -> None:
         super().__init__(message)
         self.suggestions = suggestions or []
+
+
+class BackupRestoreError(HomeAssistantError):
+    """A restore outcome whose apply knowledge must survive caller mapping."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        apply_status: Literal["not_applied", "unknown", "applied"] = "not_applied",
+        verification_status: Literal[
+            "not_run", "matched", "mismatched", "unavailable"
+        ] = "not_run",
+        **outcome: Any,
+    ) -> None:
+        super().__init__(message)
+        self.outcome = {
+            **outcome,
+            "apply_status": apply_status,
+            "verification_status": verification_status,
+        }
+
+
+_RESTORE_ERRORS: tuple[type[BaseException], ...] = (
+    *_CAPTURE_TRANSIENT_ERRORS,
+    MandatoryBackupError,
+)
 
 
 # Soft cap on per-entity throttle/lock tracker size. Auto-pruning kicks
@@ -347,6 +378,11 @@ class BackupManager:
         # for the manager's lifetime — each lock is tiny (~64 bytes);
         # removing a lock while another task is awaiting it would race.
         self._locks: dict[str, asyncio.Lock] = {}
+        self._restore_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
+        self._protected_snapshot_names: Counter[str] = Counter()
+        self._snapshot_pin_lock = threading.Lock()
         self._init_dir_error: str | None = None
         self._dir = self._resolve_dir()
 
@@ -606,7 +642,11 @@ class BackupManager:
         self._last_snapshot[key] = now
         self._maybe_prune_trackers()
         try:
-            await asyncio.to_thread(self._rotate, domain, entity_id)
+            # Freeze pins before dispatch: cancellation must not unprotect files
+            # from a rotation already running in the executor.
+            with self._snapshot_pin_lock:
+                protected = frozenset(self._protected_snapshot_names)
+            await asyncio.to_thread(self._rotate, domain, entity_id, protected)
         except OSError as err:
             logger.warning(
                 "Auto-backup: rotation failed for %s — %s: %s",
@@ -725,7 +765,9 @@ class BackupManager:
         """Whether ``path`` holds a snapshot of ``entity_id`` (see ``_id_matches``)."""
         return _id_matches(self._payload_entity_id(path), entity_id)
 
-    def _rotate(self, domain: str, entity_id: str) -> None:
+    def _rotate(
+        self, domain: str, entity_id: str, protected: frozenset[str] = frozenset()
+    ) -> None:
         candidates: set[Path] = set()
         for safe in _entity_id_aliases(entity_id):
             candidates.update(self._dir.glob(f"{domain}.{safe}.*.yaml"))
@@ -736,7 +778,16 @@ class BackupManager:
         excess = len(files) - self.retain_per_entity
         for old in files[: max(0, excess)]:
             try:
-                old.unlink()
+                # A restore can pin a file after this rotation was dispatched.
+                # Check and unlink atomically against those new pins as well as
+                # the frozen pins retained after a cancelled caller unwinds.
+                with self._snapshot_pin_lock:
+                    if (
+                        old.name in protected
+                        or old.name in self._protected_snapshot_names
+                    ):
+                        continue
+                    old.unlink()
             except OSError as err:
                 logger.warning("Auto-backup: failed to rotate %s: %s", old.name, err)
 
@@ -909,7 +960,45 @@ class BackupManager:
             return await self._restore_legacy(
                 name[len(LEGACY_PREFIX) :], take_safety_backup=take_safety_backup
             )
-        data = await asyncio.to_thread(self.read_snapshot, name)
+        self._protect_snapshot(name)
+        try:
+            data = await asyncio.to_thread(self.read_snapshot, name)
+            if data["domain"] == "helper_template":
+                try:
+                    entity_id = _template_entry_id(data["entity_id"], data["config"])
+                except HomeAssistantError as err:
+                    raise BackupRestoreError(
+                        "Template helper snapshot has an invalid target; restore was not attempted",
+                        restored_from=name,
+                        domain="helper_template",
+                        entity_id=data["entity_id"],
+                        safety_backup=None,
+                    ) from err
+                data["entity_id"] = entity_id
+                lock = self._restore_locks.setdefault(entity_id, asyncio.Lock())
+                async with lock:
+                    return await self._restore_snapshot_data(
+                        name, data, take_safety_backup=take_safety_backup
+                    )
+            return await self._restore_snapshot_data(
+                name, data, take_safety_backup=take_safety_backup
+            )
+        finally:
+            self._unprotect_snapshot(name)
+
+    def _protect_snapshot(self, name: str) -> None:
+        with self._snapshot_pin_lock:
+            self._protected_snapshot_names[name] += 1
+
+    def _unprotect_snapshot(self, name: str) -> None:
+        with self._snapshot_pin_lock:
+            self._protected_snapshot_names[name] -= 1
+            if not self._protected_snapshot_names[name]:
+                del self._protected_snapshot_names[name]
+
+    async def _restore_snapshot_data(
+        self, name: str, data: dict[str, Any], *, take_safety_backup: bool
+    ) -> dict[str, Any]:
         domain = data["domain"]
         entity_id = data["entity_id"]
         config = data["config"]
@@ -918,20 +1007,76 @@ class BackupManager:
             raise LookupError(f"No restore handler registered for domain {domain!r}")
 
         safety_path: Path | None = None
-        if take_safety_backup:
-            safety_path = await self.maybe_snapshot(
-                domain, entity_id, tool_name="ha_manage_backup.restore.safety"
-            )
-        result = await handler.restore(self._client, entity_id, config)
-        return {
+        outcome: dict[str, Any] = {
             "restored_from": name,
             "domain": domain,
             "entity_id": entity_id,
-            "safety_backup": safety_path.name if safety_path else None,
-            "result": result,
+            "safety_backup": None,
         }
+        apply_status: Literal["not_applied", "unknown", "applied"] = "not_applied"
+        try:
+            if domain == "helper_template":
+                current = await handler.fetch(self._client, entity_id)
+                _template_restore_options(config, current)
+            if take_safety_backup:
+                safety_path = await self._capture_restore_safety(domain, entity_id)
+                if safety_path is not None:
+                    self._protect_snapshot(safety_path.name)
+                    outcome["safety_backup"] = safety_path.name
+            apply_status = "unknown"
+            result = await handler.restore(self._client, entity_id, config)
+        except BackupRestoreError as err:
+            err.outcome.update(outcome)
+            raise
+        except _RESTORE_ERRORS as err:
+            if domain == "helper_template":
+                message = (
+                    "Template helper restore was not attempted; inspect the target and backup storage"
+                    if apply_status == "not_applied"
+                    else "Template helper restore outcome is unknown; inspect current options before retrying"
+                )
+                raise BackupRestoreError(
+                    message, apply_status=apply_status, **outcome
+                ) from err
+            raise
+        finally:
+            if safety_path is not None:
+                self._unprotect_snapshot(safety_path.name)
+        if domain == "helper_template":
+            outcome.update(apply_status="applied", verification_status="matched")
+        return {**outcome, "result": result}
+
+    async def _capture_restore_safety(self, domain: str, entity_id: str) -> Path | None:
+        """Template restore requires a fresh recovery point for its stable entry."""
+        if domain != "helper_template":
+            return await self.maybe_snapshot(
+                domain, entity_id, tool_name="ha_manage_backup.restore.safety"
+            )
+        path = await self.maybe_snapshot(
+            domain,
+            entity_id,
+            tool_name="ha_manage_backup.restore.safety",
+            force=True,
+            mandatory=True,
+        )
+        if path is None:
+            raise MandatoryBackupError(
+                "Template helper no longer exists; restore was not attempted"
+            )
+        return path
 
     # ----- diff ----------------------------------------------------------
+
+    async def snapshot_comparison(self, name: str) -> tuple[dict[str, Any], Any]:
+        """Read a snapshot and the live config for its stable target identity."""
+        data = await asyncio.to_thread(self.read_snapshot, name)
+        domain = data["domain"]
+        if domain == "helper_template":
+            data["entity_id"] = _template_entry_id(data["entity_id"], data["config"])
+        handler = self._handlers.get(domain)
+        if handler is None:
+            raise LookupError(f"No diff handler registered for domain {domain!r}")
+        return data, await handler.fetch(self._client, data["entity_id"])
 
     async def diff_snapshot(self, name: str) -> DiffResponse | DiffResponseText:
         """Compare a stored snapshot against the live config of the same entity.
@@ -952,14 +1097,10 @@ class BackupManager:
         """
         if name.startswith(LEGACY_PREFIX):
             return await self._diff_legacy(name[len(LEGACY_PREFIX) :])
-        data = await asyncio.to_thread(self.read_snapshot, name)
+        data, current = await self.snapshot_comparison(name)
         domain = data["domain"]
         entity_id = data["entity_id"]
         stored = data["config"]
-        handler = self._handlers.get(domain)
-        if handler is None:
-            raise LookupError(f"No diff handler registered for domain {domain!r}")
-        current = await handler.fetch(self._client, entity_id)
         captured_at = data.get("captured")
         if data.get("kind") == _TEXT_KIND:
             return _build_text_diff_response(
@@ -2553,6 +2694,175 @@ def _make_blueprint_handler(domain: str) -> DomainHandler:
     return DomainHandler(domain=f"blueprint_{domain}", fetch=fetch, restore=restore)
 
 
+def _template_options(config: Any) -> dict[str, Any]:
+    """Require persisted template options that can safely be restored."""
+    from .redaction import sentinel_option_keys
+
+    options = _require_dict(config, "template helper options")
+    if not all(
+        isinstance(options.get(key), str) and options[key]
+        for key in ("name", "template_type")
+    ):
+        raise HomeAssistantError("Template helper options lack name or template_type")
+    # The component's resolved-!secret scrub predates the server sentinels.
+    # Neither kind of placeholder is a usable recovery value.
+    if sentinel_option_keys(options) or "**redacted**" in json.dumps(options):
+        raise HomeAssistantError(
+            "Template helper options contain redacted values; capture is incomplete"
+        )
+    return options
+
+
+async def _fetch_template_helper(client: Any, entity_id: str) -> Any:
+    """Read template options through the component, without starting a flow.
+
+    Core's config-entry metadata and entity state omit this configuration.
+    A missing/old component is an error, never a state-only snapshot. The
+    component applies its normal secret scrub and never returns entry.data.
+    """
+    result = _require_dict(
+        await _ws_send(
+            client,
+            {
+                "type": "ha_mcp_tools/helpers_list",
+                "helper_types": ["template"],
+                "include_flow_helpers": True,
+            },
+        ),
+        "ha_mcp_tools/helpers_list",
+    )
+    covered = _require_list(result.get("covered_types"), "helpers_list.covered_types")
+    if "template" not in covered:
+        raise HomeAssistantError(
+            "The component cannot authoritatively read template helpers"
+        )
+    records = _require_list(result.get("helpers"), "ha_mcp_tools/helpers_list.helpers")
+    for raw_record in records:
+        record = _require_dict(raw_record, "helpers_list helper record")
+        if record.get("kind") != "flow" or record.get("helper_type") != "template":
+            continue
+        if entity_id not in (record.get("entry_id"), record.get("entity_id")):
+            continue
+        entry_id = record.get("entry_id")
+        if not isinstance(entry_id, str) or not entry_id:
+            raise HomeAssistantError("Template helper has no config-entry identity")
+        return {
+            "entry_id": entry_id,
+            "options": _template_options(record.get("options")),
+        }
+    return None
+
+
+def _template_entry_id(entity_id: str, config: Any) -> str:
+    """Resolve a captured alias to the stable identity used for diff and restore."""
+    snapshot = _require_dict(config, "template helper snapshot")
+    entry_id = snapshot.get("entry_id")
+    if not isinstance(entry_id, str) or not entry_id:
+        raise HomeAssistantError(
+            "Template helper snapshot has no config-entry identity"
+        )
+    if entity_id != entry_id and "." not in entity_id:
+        raise HomeAssistantError(
+            "Template helper snapshot target does not match its entry"
+        )
+    return entry_id
+
+
+def _template_restore_options(config: Any, current: Any) -> dict[str, Any]:
+    """Validate immutable identity before capturing or submitting a restore."""
+    snapshot = _require_dict(config, "template helper snapshot")
+    options = _template_options(snapshot.get("options"))
+    if current is None:
+        raise BackupRestoreError(
+            "Template helper no longer exists; restore cannot recreate it"
+        )
+    immutable = {"name", "template_type"}
+    # Core exposes device_class only during creation for these template types.
+    # Passing it through an options flow can fail after committing an empty edit.
+    if options["template_type"] in {"button", "cover", "event", "update"}:
+        immutable.add("device_class")
+    if any(
+        not _snapshot_configs_match(current["options"].get(key), options.get(key))
+        for key in immutable
+    ):
+        raise BackupRestoreError("Template helper identity changed; restore refused")
+    return {key: value for key, value in options.items() if key not in immutable}
+
+
+def _snapshot_configs_match(expected: Any, current: Any) -> bool:
+    """Reuse the preview's type-sensitive comparison (False is not 0)."""
+    patch: list[dict[str, Any]] = []
+    _compute_json_patch(expected, current, 1, patch)
+    return not patch
+
+
+async def _verify_template_restore(
+    client: Any, entry_id: str, expected: Any
+) -> Literal["matched", "mismatched", "unavailable"]:
+    """Bound readback after a dispatched apply, including uncertain replies."""
+    try:
+        async with asyncio.timeout(5):
+            restored = await _fetch_template_helper(client, entry_id)
+    except _CAPTURE_TRANSIENT_ERRORS:
+        return "unavailable"
+    return "matched" if _snapshot_configs_match(expected, restored) else "mismatched"
+
+
+async def _restore_template_helper(client: Any, entity_id: str, config: Any) -> Any:
+    """Restore existing options, retaining apply knowledge separately from readback."""
+    from .tools.config_entry_flow import OptionsFlowError, update_config_entry_options
+
+    snapshot = _require_dict(config, "template helper snapshot")
+    entry_id = _template_entry_id(entity_id, snapshot)
+    try:
+        current = await _fetch_template_helper(client, entry_id)
+        editable = _template_restore_options(snapshot, current)
+    except BackupRestoreError:
+        raise
+    except _CAPTURE_TRANSIENT_ERRORS as err:
+        raise BackupRestoreError(
+            "Template helper could not be checked; restore was not attempted"
+        ) from err
+    expected = {
+        "entry_id": entry_id,
+        "options": _template_options(snapshot.get("options")),
+    }
+    try:
+        result = await update_config_entry_options(
+            client,
+            entry_id,
+            editable,
+            expected_domain="template",
+            noun="helper",
+            keep_current_values=False,
+        )
+    except OptionsFlowError as err:
+        if err.apply_status == "not_applied":
+            raise BackupRestoreError(
+                "Template helper options flow refused the restore; no options were applied"
+            ) from err
+        verification = await _verify_template_restore(client, entry_id, expected)
+        raise BackupRestoreError(
+            "Template helper restore did not complete normally; inspect current options before retrying",
+            apply_status=err.apply_status,
+            verification_status=verification,
+        ) from err
+    verification = await _verify_template_restore(client, entry_id, expected)
+    if verification == "unavailable":
+        raise BackupRestoreError(
+            "Template helper restore was applied but verification is unavailable; inspect current options before retrying",
+            apply_status="applied",
+            verification_status=verification,
+        )
+    if verification != "matched":
+        raise BackupRestoreError(
+            "Template helper restore was applied but verification did not match the snapshot; inspect current options before retrying",
+            apply_status="applied",
+            verification_status=verification,
+        )
+    return result
+
+
 def _make_helper_handler(helper_type: str) -> DomainHandler:
     async def fetch(client: Any, entity_id: str) -> Any:
         return await _fetch_helper(client, entity_id, helper_type)
@@ -2571,8 +2881,9 @@ def _make_helper_handler(helper_type: str) -> DomainHandler:
 # utility_meter, ...) live in config entries with a separate API and
 # would silently produce unrestorable backups if included here. The
 # decorator's ``domain_fn`` builds ``helper_<type>`` keys; if the user
-# edits a flow-helper, ``handler_for`` returns None and the capture
+# edits an unsupported flow-helper, ``handler_for`` returns None and the capture
 # logs a single WARNING — neutral failure, not a silent corruption.
+# Template has its own options-backed handler below, not this list-backed family.
 _KNOWN_HELPER_TYPES = sorted(_HELPER_LIST_TYPES)
 
 
@@ -2612,3 +2923,8 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
         mgr.register(_make_blueprint_handler(blueprint_domain))
     for helper_type in _KNOWN_HELPER_TYPES:
         mgr.register(_make_helper_handler(helper_type))
+    mgr.register(
+        DomainHandler(
+            "helper_template", _fetch_template_helper, _restore_template_helper
+        )
+    )

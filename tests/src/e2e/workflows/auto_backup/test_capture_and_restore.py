@@ -20,7 +20,12 @@ from typing import Any
 
 import pytest
 
-from ...utilities.assertions import extract_error_message, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    extract_error_message,
+    safe_call_tool,
+)
+from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
@@ -716,6 +721,167 @@ class TestHelperCaptureRestore:
 
 
 # ---------------------------------------------------------------- complex helper lane
+
+
+@pytest.mark.helper
+@pytest.mark.cleanup
+class TestTemplateHelperCaptureRestore:
+    @pytest.mark.parametrize("template_type", ["sensor", "binary_sensor"])
+    async def test_template_options_full_loop(
+        self, mcp_client, ha_client, template_type: str
+    ) -> None:
+        """Restore through either component entry; refuse absent-component reads.
+
+        Auto-backup defaults are enabled with no throttle on every backend.
+        Read them through MCP instead of changing pytest's environment, which
+        cannot reconfigure an embedded, app, or stdio server.
+        """
+        async with MCPAssertions(mcp_client) as mcp:
+            if not component_surface_available():
+                unavailable = await mcp.call_tool_failure(
+                    "ha_config_list_helpers", {"helper_type": "template"}
+                )
+                assert unavailable["error"]["code"] == "COMPONENT_NOT_INSTALLED"
+                # No helper is created or edited in this topology. A capture
+                # cannot substitute entity state for unreadable persisted options.
+                missing_id = uuid.uuid4().hex
+                snapshot = await mcp.call_tool_failure(
+                    "ha_manage_backup",
+                    {
+                        "scope": "edits",
+                        "action": "create",
+                        "domain": "helper_template",
+                        "entity_id": missing_id,
+                    },
+                )
+                assert snapshot["error"]["code"] == "RESOURCE_NOT_FOUND"
+                listing = await mcp.call_tool_success(
+                    "ha_manage_backup",
+                    {
+                        "scope": "edits",
+                        "action": "list",
+                        "domain": "helper_template",
+                        "entity_id": missing_id,
+                    },
+                )
+                assert listing["data"]["backups"] == []
+                return
+            settings = await mcp.call_tool_success(
+                "ha_manage_backup", {"scope": "edits", "action": "list"}
+            )
+            assert settings["data"]["enabled"] is True, settings
+            assert settings["data"]["throttle_minutes"] == 0, settings
+
+        entry_id = None
+        backup_names: set[str] = set()
+        try:
+            create = await safe_call_tool(
+                mcp_client,
+                "ha_config_set_helper",
+                {
+                    "helper_type": "template",
+                    "name": f"Backup Template {uuid.uuid4().hex[:8]}",
+                    "config": {
+                        "template_type": template_type,
+                        "state": "{{ 12 }}"
+                        if template_type == "sensor"
+                        else "{{ true }}",
+                    },
+                },
+            )
+            assert create.get("success") is True, create
+            entry_id = create["entry_id"]
+            before = await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_config_list_helpers",
+                arguments={"helper_type": "template"},
+                predicate=lambda d: any(
+                    row.get("entry_id") == entry_id for row in d.get("helpers", [])
+                ),
+                description="template helper options are readable before edit",
+            )
+            original = next(
+                row["options"]
+                for row in before["helpers"]
+                if row.get("entry_id") == entry_id
+            )
+            changed = {
+                "state": "{{ 99 }}" if template_type == "sensor" else "{{ false }}",
+                "additional_options": {"availability": "{{ true }}"},
+            }
+            if template_type == "sensor":
+                changed["unit_of_measurement"] = "W"
+            edit = await safe_call_tool(
+                mcp_client,
+                "ha_config_set_helper",
+                {"helper_type": "template", "helper_id": entry_id, "config": changed},
+            )
+            assert edit.get("success") is True, edit
+            persisted = await wait_for_tool_result(
+                mcp_client,
+                tool_name="ha_config_list_helpers",
+                arguments={"helper_type": "template"},
+                predicate=lambda data: any(
+                    row.get("entry_id") == entry_id
+                    and row.get("options", {}).get("state") == changed["state"]
+                    for row in data.get("helpers", [])
+                ),
+                description="template edit changed persisted state before restore",
+            )
+            edited_options = next(
+                row["options"]
+                for row in persisted["helpers"]
+                if row.get("entry_id") == entry_id
+            )
+            assert edited_options["additional_options"]["availability"] == "{{ true }}"
+            if template_type == "sensor":
+                assert edited_options["unit_of_measurement"] == "W"
+            name = await _wait_for_backup(
+                mcp_client, domain="helper_template", entity_id=entry_id
+            )
+            backup_names.add(name)
+            viewed = await safe_call_tool(
+                mcp_client,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "view", "backup_name": name},
+            )
+            assert viewed.get("success") is True, viewed
+            assert viewed["data"]["config"] == {
+                "entry_id": entry_id,
+                "options": original,
+            }
+            restored = await safe_call_tool(
+                mcp_client,
+                "ha_manage_backup",
+                {"scope": "edits", "action": "restore", "backup_name": name},
+            )
+            assert restored.get("success") is True, restored
+            assert restored["data"]["safety_backup"] is not None
+            backup_names.add(restored["data"]["safety_backup"])
+            after = await safe_call_tool(
+                mcp_client, "ha_config_list_helpers", {"helper_type": "template"}
+            )
+            assert (
+                next(
+                    row["options"]
+                    for row in after["helpers"]
+                    if row.get("entry_id") == entry_id
+                )
+                == original
+            )
+        finally:
+            if entry_id is not None:
+                await ha_client.delete_config_entry(entry_id)
+            for backup_name in backup_names:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_manage_backup",
+                    {
+                        "scope": "edits",
+                        "action": "delete",
+                        "backup_name": backup_name,
+                    },
+                )
 
 
 @pytest.mark.helper

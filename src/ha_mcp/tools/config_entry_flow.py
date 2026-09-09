@@ -30,10 +30,13 @@ imported in one direction only (menu <- form <- walker <- here):
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
+from functools import partial
 from typing import Any, Literal
 
 from fastmcp.exceptions import ToolError
 
+from ..client.rest_client import HomeAssistantAPIError, HomeAssistantError
 from ..errors import ErrorCode, create_error_response
 from ..redaction import sentinel_option_keys
 from .config_entry_flow_form import _extract_schema_field_names
@@ -46,6 +49,110 @@ from .config_entry_flow_walker import (
 from .helpers import raise_tool_error
 
 logger = logging.getLogger(__name__)
+
+
+class OptionsFlowError(HomeAssistantError):
+    """Complete-restore failure with submission knowledge for reconciliation."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        apply_status: Literal["not_applied", "unknown", "applied"],
+        entry_id: str,
+        flow_id: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.apply_status = apply_status
+        self.entry_id = entry_id
+        self.flow_id = flow_id
+
+
+@dataclass
+class _OptionsFlowProgress:
+    """Track replies before the walker can fail while interpreting them."""
+
+    entry_id: str
+    flow_id: str | None = None
+    apply_status: Literal["not_applied", "unknown", "applied"] = "not_applied"
+
+    def failure(self) -> OptionsFlowError:
+        messages = {
+            "not_applied": "Options restore was refused before application",
+            "unknown": "Options restore got no completion reply; the change may have been applied",
+            "applied": "Options restore completed but its result could not be processed",
+        }
+        return OptionsFlowError(
+            messages[self.apply_status],
+            apply_status=self.apply_status,
+            entry_id=self.entry_id,
+            flow_id=self.flow_id,
+        )
+
+    async def submit(
+        self, client: Any, flow_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.apply_status = "unknown"
+        try:
+            result: dict[str, Any] = await client.submit_options_flow_step(
+                flow_id, payload
+            )
+        except HomeAssistantAPIError as err:
+            if err.status_code is not None and 400 <= err.status_code < 500:
+                self.apply_status = "not_applied"
+            raise
+        if result.get("type") == _FlowType.CREATE_ENTRY:
+            self.apply_status = "applied"
+        elif result.get("type") == _FlowType.ABORT or (
+            result.get("type") == _FlowType.FORM and result.get("errors")
+        ):
+            # Template's single options form has not committed on rejection.
+            self.apply_status = "not_applied"
+        else:
+            # A complete snapshot cannot safely populate an unexpected next step.
+            raise self.failure()
+        return result
+
+
+def _unknown_snapshot_fields(
+    schema: list[Any], config: dict[str, Any], prefix: str = ""
+) -> list[str]:
+    fields = {
+        field["name"]: field
+        for field in schema
+        if isinstance(field, dict) and isinstance(field.get("name"), str)
+    }
+    unknown: list[str] = []
+    for name, value in config.items():
+        path = f"{prefix}.{name}" if prefix else name
+        if name not in fields:
+            unknown.append(path)
+        elif isinstance(fields[name].get("schema"), list) and isinstance(value, dict):
+            unknown.extend(
+                _unknown_snapshot_fields(fields[name]["schema"], value, path)
+            )
+    return unknown
+
+
+def _preflight_options_restore(
+    progress: _OptionsFlowProgress, step: dict[str, Any], config: dict[str, Any]
+) -> None:
+    """Reject unsupported complete-snapshot fields before a Template submit."""
+    schema = step.get("data_schema")
+    if step.get("type") != _FlowType.FORM or not isinstance(schema, list):
+        message = "Options restore requires an authoritative options form"
+    elif unknown := _unknown_snapshot_fields(schema, config):
+        message = "Snapshot fields are not accepted by the options form: " + ", ".join(
+            sorted(unknown)
+        )
+    else:
+        return
+    raise OptionsFlowError(
+        message,
+        apply_status=progress.apply_status,
+        entry_id=progress.entry_id,
+        flow_id=progress.flow_id,
+    )
 
 
 async def _abort_flow_best_effort(client: Any, flow_id: str) -> None:
@@ -284,17 +391,18 @@ async def update_config_entry_options(
     *,
     expected_domain: str | None = None,
     noun: str = "integration",
+    keep_current_values: bool = True,
 ) -> dict[str, Any]:
     """Update an existing config entry via its options flow.
 
     When ``expected_domain`` is provided, verifies the entry's domain matches
     it first (the helper path passes the helper_type; the generic
     ``ha_set_integration`` path passes ``None`` to accept any domain). Starts
-    an options flow, walks the flow steps, and returns the result. Aborts the
-    flow on error. ``noun`` only affects response wording.
+    an options flow, walks the flow steps, and returns the result. ``noun``
+    only affects response wording.
 
-    This edits an existing entry, so the walk runs with
-    ``keep_current_values``: every field an options step declares that
+    By default the walk runs with ``keep_current_values``: every field an
+    options step declares that
     ``config_dict`` does not name is submitted with the value the step itself
     carries, exactly as the HA UI's "Configure" dialog posts back the boxes
     nobody touched. Before issue #2254 those keys were dropped and voluptuous
@@ -303,7 +411,33 @@ async def update_config_entry_options(
     opposite request and is honoured as a clear, which for a field carrying a
     schema default means submitting the ``None`` for Home Assistant to
     validate rather than omitting it into that default.
+    A complete options snapshot restore passes ``keep_current_values=False``
+    so optional fields absent from the snapshot are removed by Home Assistant.
+    It requires a single authoritative form and raises ``OptionsFlowError``
+    with apply knowledge on failure; uncertain or completed restores are not
+    aborted. Ordinary edits retain their existing error/abort behavior.
     """
+    progress = None if keep_current_values else _OptionsFlowProgress(entry_id)
+    try:
+        return await _update_config_entry_options(
+            client, entry_id, config_dict, expected_domain, noun, progress
+        )
+    except OptionsFlowError:
+        raise
+    except Exception as err:
+        if progress is not None:
+            raise progress.failure() from err
+        raise
+
+
+async def _update_config_entry_options(
+    client: Any,
+    entry_id: str,
+    config_dict: dict[str, Any],
+    expected_domain: str | None,
+    noun: str,
+    progress: _OptionsFlowProgress | None,
+) -> dict[str, Any]:
     _reject_redaction_sentinels(config_dict)
     config_entry = await client.get_config_entry(entry_id)
     actual_domain = config_entry.get("domain")
@@ -325,6 +459,10 @@ async def update_config_entry_options(
 
     flow_result = await client.start_options_flow(entry_id)
     flow_id = flow_result.get("flow_id")
+    if progress is not None:
+        progress.flow_id = flow_id
+        if flow_result.get("type") == _FlowType.CREATE_ENTRY:
+            progress.apply_status = "applied"
 
     if not flow_id:
         raise_tool_error(
@@ -339,22 +477,28 @@ async def update_config_entry_options(
         )
 
     try:
+        if progress is not None:
+            _preflight_options_restore(progress, flow_result, config_dict)
+
         result = await _handle_flow_steps(
             client,
             flow_id,
             flow_result,
             config_dict,
-            submit_fn=client.submit_options_flow_step,
+            submit_fn=partial(progress.submit, client)
+            if progress is not None
+            else client.submit_options_flow_step,
             helper_type=expected_domain,
-            keep_current_values=True,
+            keep_current_values=progress is None,
         )
     except Exception:
-        try:
-            await asyncio.wait_for(client.abort_options_flow(flow_id), timeout=5.0)
-        except Exception as abort_err:
-            logger.warning(
-                f"Failed to abort options flow {flow_id} after error: {abort_err}"
-            )
+        if progress is None or progress.apply_status == "not_applied":
+            try:
+                await asyncio.wait_for(client.abort_options_flow(flow_id), timeout=5.0)
+            except Exception as abort_err:
+                logger.warning(
+                    f"Failed to abort options flow {flow_id} after error: {abort_err}"
+                )
         raise
 
     entry = result["entry"].get("result", {})

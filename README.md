@@ -212,6 +212,8 @@ Spend less time configuring, more time enjoying your smart home.
 | **💾 System** | Backup/restore, updates, apps, device registry |
 | **🔒 Safety** | Read Only Mode toggle, per-tool enable/disable, tool security policies (user approval), automatic edit backups |
 
+Template helper edit backups capture persisted options through the HA-MCP custom component, using either its Server entry or File & YAML Tools entry. Restore requires the original config entry and a fresh safety backup, removes optional settings absent from the snapshot, and verifies the persisted result. An unavailable or mismatched verification is reported as a failure that may have applied the change; inspect the current options before retrying. Entity/device registry metadata is outside this snapshot, and deleted entries are not recreated.
+
 <details>
 <!-- TOOLS_TABLE_START -->
 

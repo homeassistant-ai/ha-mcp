@@ -28,6 +28,7 @@ from pydantic import Field
 from ..backup_manager import (
     LEGACY_PREFIX,
     BackupManager,
+    BackupRestoreError,
     MandatoryBackupError,
     get_backup_manager,
 )
@@ -2084,6 +2085,18 @@ async def _edits_restore(
                 context={"backup_name": bname},
             )
         )
+    except BackupRestoreError as err:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                str(err),
+                context={"backup_name": bname, "data": err.outcome},
+                suggestions=[
+                    "Inspect the current configuration and restore outcome before retrying",
+                    "Use safety_backup to inspect or restore the captured previous state",
+                ],
+            )
+        )
     except MandatoryBackupError as err:
         # A legacy restore's mandatory pre-restore safety snapshot
         # genuinely failed — the overwrite was blocked, nothing changed.
@@ -2092,9 +2105,17 @@ async def _edits_restore(
         raise_tool_error(
             create_error_response(
                 ErrorCode.BACKUP_CAPTURE_FAILED,
-                f"Restore blocked: the pre-restore safety snapshot could "
-                f"not be captured: {err}. Nothing was changed.",
-                context={"backup_name": bname},
+                "Restore blocked: the pre-restore safety snapshot could "
+                "not be captured. Nothing was changed.",
+                context={
+                    "backup_name": bname,
+                    "data": {
+                        "restored_from": bname,
+                        "safety_backup": None,
+                        "apply_status": "not_applied",
+                        "verification_status": "not_run",
+                    },
+                },
                 suggestions=err.suggestions
                 or ["Retry once the underlying issue is resolved"],
             )

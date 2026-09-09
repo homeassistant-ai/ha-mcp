@@ -1818,6 +1818,27 @@ function renderBackups() {
   });
 }
 
+function backupRestoreOutcomeMessage(outcome = {}) {
+  let message;
+  if (outcome.apply_status === 'not_applied') {
+    message = t('backup.restore.not_applied', {}, 'Restore was not applied. Nothing was changed.');
+  } else if (outcome.apply_status === 'applied') {
+    if (outcome.verification_status === 'mismatched') {
+      message = t('backup.restore.mismatched', {}, 'Restore was applied, but the current configuration does not match the backup.');
+    } else if (outcome.verification_status === 'matched') {
+      message = t('backup.restore.verified', {}, 'Restore was applied and verified.');
+    } else {
+      message = t('backup.restore.unverified', {}, 'Restore was applied, but verification is unavailable.');
+    }
+  } else {
+    message = t('backup.restore.unknown', {}, 'Whether this restore changed Home Assistant could not be confirmed. Inspect the current configuration and backup list before retrying.');
+  }
+  if (outcome.safety_backup) {
+    message += '\n\n' + t('backup.restore.safety', {name: outcome.safety_backup}, 'Safety backup: ' + outcome.safety_backup + '. Inspect the current configuration before restoring this safety backup to recover the previous state.');
+  }
+  return message;
+}
+
 async function backupAction(act, name) {
   // Each branch wraps its fetch+json in try/catch so a network drop or an
   // HTML error body (json() throwing) surfaces a visible toast instead of
@@ -1853,12 +1874,21 @@ async function backupAction(act, name) {
     try {
       const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name) + '/restore', {method: 'POST'});
       const data = await resp.json();
-      if (!resp.ok) { alert(t('backup.errors.restore_detail', {detail: JSON.stringify(data)}, 'Restore failed: ' + JSON.stringify(data))); return; }
+      if (!resp.ok || !data.success) {
+        const outcome = data.data || {};
+        let message = backupRestoreOutcomeMessage(outcome);
+        if (data.error?.message) message += '\n\n' + data.error.message;
+        alert(message);
+        if (outcome.safety_backup || !outcome.apply_status || outcome.apply_status === 'unknown') await loadBackups();
+        return;
+      }
       const safetyBackup = data.data && data.data.safety_backup ? data.data.safety_backup : t('common.none', {}, '(none)');
       alert(t('backup.restored', {name: safetyBackup}, 'Restored. Safety backup: ' + safetyBackup));
-      loadBackups();
+      await loadBackups();
     } catch (err) {
-      showToast(t('backup.errors.restore', {name, message: String(err)}, 'Restore of "' + name + '" failed: ' + String(err)), {isError: true});
+      const message = backupRestoreOutcomeMessage();
+      showToast(t('backup.errors.restore', {name, message}, 'Restore of "' + name + '" failed: ' + message), {isError: true});
+      await loadBackups();
     }
   } else if (act === 'delete') {
     if (!confirm(t('backup.confirm.delete', {name}, 'Delete ' + name + '? This cannot be undone.'))) return;

@@ -24,7 +24,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from .._version import is_running_in_addon
-from ..backup_manager import get_backup_manager
+from ..backup_manager import (
+    _CAPTURE_TRANSIENT_ERRORS,
+    BackupRestoreError,
+    MandatoryBackupError,
+    get_backup_manager,
+)
 from ..config import (
     BACKUP_OVERRIDE_FIELDS,
     _reset_global_settings,
@@ -124,28 +129,17 @@ async def _diff_backup(
         return _bad_request("Backup manager unavailable")
     name = request.path_params.get("name", "")
     try:
-        snapshot = await asyncio.to_thread(mgr.read_snapshot, name)
+        snapshot, current = await mgr.snapshot_comparison(name)
     except FileNotFoundError:
         return _not_found(name)
-    except ValueError as err:
+    except (ValueError, LookupError) as err:
         return _bad_request(str(err))
-    handler = mgr.handler_for(snapshot["domain"])
-    if handler is None:
+    except _CAPTURE_TRANSIENT_ERRORS:
         return _bad_request(
-            f"No handler for domain {snapshot['domain']!r}; cannot diff",
-            code=ErrorCode.RESOURCE_NOT_FOUND,
-            status=404,
+            "Could not fetch the current configuration for comparison.",
+            code=ErrorCode.CONNECTION_FAILED,
+            status=502,
         )
-    client = getattr(server, "client", None) or getattr(server, "_client", None)
-    # Narrow to transport / HA-API / FS errors so programming bugs
-    # propagate to the request handler instead of decorating the diff
-    # output with a "_error" sentinel masquerading as entity state.
-    from ..backup_manager import _CAPTURE_TRANSIENT_ERRORS
-
-    try:
-        current = await handler.fetch(client, snapshot["entity_id"])
-    except _CAPTURE_TRANSIENT_ERRORS as err:
-        current = {"_error": f"{type(err).__name__}: {err}"}
     backup_yaml = yaml.safe_dump(
         snapshot.get("config"), default_flow_style=False, sort_keys=True
     ).splitlines()
@@ -165,8 +159,7 @@ async def _diff_backup(
         {
             "success": True,
             "diff": "\n".join(diff),
-            "backup_present": current is not None
-            and not (isinstance(current, dict) and "_error" in current),
+            "backup_present": current is not None,
         }
     )
 
@@ -184,6 +177,37 @@ async def _restore_backup(
         return _not_found(name)
     except (ValueError, LookupError) as err:
         return _bad_request(str(err))
+    except BackupRestoreError as err:
+        return JSONResponse(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                str(err),
+                context={"data": err.outcome},
+                suggestions=[
+                    "Inspect the current configuration and restore outcome before retrying",
+                    "Use safety_backup to inspect or restore the captured previous state",
+                ],
+            ),
+            status_code=409,
+        )
+    except MandatoryBackupError as err:
+        return JSONResponse(
+            create_error_response(
+                ErrorCode.BACKUP_CAPTURE_FAILED,
+                "Restore blocked: the pre-restore safety snapshot could not "
+                "be captured. Nothing was changed.",
+                suggestions=err.suggestions,
+                context={
+                    "data": {
+                        "restored_from": name,
+                        "safety_backup": None,
+                        "apply_status": "not_applied",
+                        "verification_status": "not_run",
+                    }
+                },
+            ),
+            status_code=409,
+        )
     return JSONResponse({"success": True, "data": result})
 
 

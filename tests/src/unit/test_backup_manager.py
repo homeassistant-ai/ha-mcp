@@ -1274,18 +1274,18 @@ class TestFactory:
             "integration",
             "helper_input_boolean",
             "helper_timer",
+            "helper_template",
         ]:
             assert mgr.handler_for(d) is not None, f"missing handler: {d}"
 
     def test_helper_flow_types_have_no_handler(self, tmp_path: Path) -> None:
-        # Flow-helper types (template, group, utility_meter, ...) live in
+        # Other flow-helper types (group, utility_meter, ...) live in
         # config entries with a separate update API — registering them
         # would produce unrestorable snapshots (entity-state stubs).
         # They must NOT be registered as backup domains.
         settings = _StubSettings(auto_backup_dir=str(tmp_path))
         mgr = get_backup_manager(_StubClient(), settings)
         for d in [
-            "helper_template",
             "helper_group",
             "helper_utility_meter",
             "helper_threshold",
@@ -1310,6 +1310,8 @@ def _standalone_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    # Path.home() ignores HOME on Windows; never inspect the operator's backups.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path / "data"))
     bm.get_data_dir.cache_clear()
     yield tmp_path / "data"
