@@ -83,7 +83,7 @@ async def test_rotation_dispatched_before_restore_must_honor_later_pin(
         assert not restore.done()
         assert source.exists()
         release.set()
-        await capture
+        await asyncio.gather(capture)
         result = await restore
         assert manager.read_snapshot(result["safety_backup"])["config"] == current
         assert source.exists(), (

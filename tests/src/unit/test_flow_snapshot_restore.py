@@ -247,5 +247,5 @@ async def test_cancellation_after_submit_is_propagated() -> None:
     await asyncio.wait_for(submitted.wait(), timeout=1)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.gather(task)
     client.abort_options_flow.assert_not_awaited()

@@ -74,10 +74,11 @@ async def test_active_restore_pins_source_and_safety_during_other_capture(manage
         assert len(safety_names) == 1
         await manager.maybe_snapshot("helper_template", "template-entry", force=True)
         assert source.exists()
-        assert manager.read_snapshot(safety_names.pop())["config"] == current
+        (safety_name,) = safety_names
+        assert manager.read_snapshot(safety_name)["config"] == current
     finally:
         release.set()
-        await task
+        await asyncio.gather(task)
 
 
 async def test_serialized_restores_capture_immediate_predecessor(manager):
@@ -217,7 +218,7 @@ async def test_cancellation_releases_entry_for_next_restore_and_keeps_recovery(m
     await entered.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.gather(task)
     assert source.exists()
     assert len(manager.list_snapshots(domain="helper_template")) == 2
     manager.register(

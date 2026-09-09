@@ -222,7 +222,7 @@ async def test_alias_removal_uses_core_identity_and_waits_for_restore(
             manager._client.delete_config_entry.assert_not_awaited()
     finally:
         if task is not None:
-            await task
+            await asyncio.gather(task)
     manager._client.delete_config_entry.assert_awaited_once_with("template-entry")
     assert not list(manager.backup_dir.glob("*.yaml"))
 
