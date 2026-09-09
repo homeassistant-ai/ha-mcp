@@ -36,7 +36,11 @@ from typing import Any, Literal
 
 from fastmcp.exceptions import ToolError
 
-from ..client.rest_client import HomeAssistantAPIError, HomeAssistantError
+from ..client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantAuthError,
+    HomeAssistantError,
+)
 from ..errors import ErrorCode, create_error_response
 from ..redaction import sentinel_option_keys
 from .config_entry_flow_form import _extract_schema_field_names
@@ -97,6 +101,9 @@ class _OptionsFlowProgress:
             result: dict[str, Any] = await client.submit_options_flow_step(
                 flow_id, payload
             )
+        except HomeAssistantAuthError:
+            self.apply_status = "not_applied"
+            raise
         except HomeAssistantAPIError as err:
             if err.status_code is not None and 400 <= err.status_code < 500:
                 self.apply_status = "not_applied"

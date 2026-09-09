@@ -5,13 +5,16 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
+    HomeAssistantAuthError,
+    HomeAssistantClient,
     HomeAssistantConnectionError,
 )
-from ha_mcp.tools.config_entry_flow import update_config_entry_options
+from ha_mcp.tools.config_entry_flow import OptionsFlowError, update_config_entry_options
 from ha_mcp.tools.config_entry_flow_form import _handle_form_step, _ReuseState
 
 
@@ -154,15 +157,49 @@ async def test_acknowledged_completion_survives_local_response_error() -> None:
     client.abort_options_flow.assert_not_awaited()
 
 
-async def test_explicit_ha_rejection_is_not_applied() -> None:
-    client = _client()
-    client.submit_options_flow_step.side_effect = HomeAssistantAPIError(
-        "unauthorized", status_code=401
+@pytest.mark.parametrize(
+    ("status_code", "apply_status", "error_type"),
+    [
+        (401, "not_applied", HomeAssistantAuthError),
+        (403, "not_applied", HomeAssistantAPIError),
+        (504, "unknown", HomeAssistantAPIError),
+    ],
+)
+async def test_http_submit_failure_preserves_application_knowledge(
+    status_code: int, apply_status: str, error_type: type[Exception]
+) -> None:
+    requests: list[tuple[str, str]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        return httpx.Response(status_code, json={"message": "Rejected"})
+
+    async with httpx.AsyncClient(
+        base_url="http://offline.invalid/api", transport=httpx.MockTransport(respond)
+    ) as http_client:
+        native = HomeAssistantClient.__new__(HomeAssistantClient)
+        native.httpx_client = http_client
+        client = _client()
+        client.submit_options_flow_step = AsyncMock(
+            wraps=native.submit_options_flow_step
+        )
+        with pytest.raises(OptionsFlowError) as caught:
+            await _restore(client, {"press": []})
+
+    assert isinstance(caught.value.__cause__, error_type)
+    assert caught.value.apply_status == apply_status
+    assert caught.value.entry_id == "entry"
+    assert caught.value.flow_id == "restore-flow"
+    client.submit_options_flow_step.assert_awaited_once_with(
+        "restore-flow", {"press": []}
     )
-    with pytest.raises(Exception) as caught:
-        await _restore(client, {"press": []})
-    assert getattr(caught.value, "apply_status", None) == "not_applied"
-    client.abort_options_flow.assert_awaited_once_with("restore-flow")
+    assert requests == [
+        ("POST", "/api/config/config_entries/options/flow/restore-flow")
+    ]
+    if apply_status == "not_applied":
+        client.abort_options_flow.assert_awaited_once_with("restore-flow")
+    else:
+        client.abort_options_flow.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

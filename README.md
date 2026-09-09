@@ -290,7 +290,7 @@ The **HA-MCP Custom Component** also powers a set of privileged tools that stand
 | `ha_write_file` *(beta)* | Write files to allowed directories |
 | `ha_delete_file` *(beta)* | Delete files from allowed directories |
 
-All other tools work without the component. These five return an error with installation instructions if the component is missing.
+Template helper edit backups and restores also require the component, using either its Server entry or File & YAML Tools entry. These five tools return an error with installation instructions if the component is missing.
 
 These tools also require beta feature flags. See **[Beta Features](docs/beta.md)** for how to enable them — including the `ENABLE_BETA_FEATURES` master flag, which must be on before the filesystem/YAML sub-flags take effect.
 
