@@ -39,8 +39,7 @@ def recovery(tmp_path, monkeypatch):
                 row["entity_id"] = message.get("new_entity_id", row["entity_id"])
                 row["name"] = message.get("name", row.get("name"))
                 return deepcopy(row)
-            case _:
-                raise AssertionError(message)
+        raise AssertionError(message)
 
     async def create(client, helper_type, options):
         assert helper_type == "template"
@@ -227,8 +226,11 @@ async def test_existing_entry_diff_only_previews_restorable_options(
         else []
     )
     data, current = await recovery.manager.snapshot_comparison(recovery.name)
-    assert data["config"]["entities"] == [ENTITY]
-    assert current["entities"][0]["entity_id"] == "sensor.now_renamed"
+    assert "entities" not in data["config"]
+    assert "entities" not in current
+    assert recovery.manager.read_snapshot(recovery.name)["config"]["entities"] == [
+        ENTITY
+    ]
 
 
 async def test_racing_collision_preserves_created_helper_and_reports_identity(recovery):

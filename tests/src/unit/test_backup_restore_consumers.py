@@ -238,6 +238,7 @@ def template_runtime(tmp_path, monkeypatch):
         restore_reads=0,
         alias="sensor.example",
         replacement=False,
+        missing=False,
     )
 
     async def submit(flow_id, payload):
@@ -316,7 +317,10 @@ def template_runtime(tmp_path, monkeypatch):
                     },
                 }
             )
-        return {"covered_types": ["template"], "helpers": helpers}
+        return {
+            "covered_types": ["template"],
+            "helpers": [] if state.missing else helpers,
+        }
 
     monkeypatch.setattr(bm, "_ws_send", send)
     manager = bm.BackupManager(
@@ -396,6 +400,61 @@ async def test_manager_settings_preview_follows_original_entry_after_alias_reuse
     assert "current:original-entry" in payload["diff"]
     assert "99" in payload["diff"]
     assert "999" not in payload["diff"]
+
+
+@pytest.mark.parametrize(
+    "scenario", ["registry", "options", "legacy", "legacy_options", "deleted"]
+)
+@pytest.mark.asyncio
+async def test_settings_and_mcp_preview_only_restore_effects(
+    template_runtime, scenario, monkeypatch
+):
+    runtime = template_runtime
+    snapshot = await runtime.manager.maybe_snapshot(
+        "helper_template", "sensor.example", force=True
+    )
+    assert snapshot is not None
+    config = runtime.manager.read_snapshot(snapshot.name)["config"]
+    if scenario.startswith("legacy"):
+        config.pop("entities")
+        snapshot = runtime.manager._write_snapshot(
+            "helper_template", "original-entry", config, None
+        )
+    runtime.state.alias = "sensor.renamed"
+    changed_options = scenario in {"options", "legacy_options"}
+    if changed_options:
+        runtime.state.options["state"] = "{{ 99 }}"
+    runtime.state.missing = scenario == "deleted"
+
+    response = await ui._diff_backup(
+        None, Request({"type": "http", "path_params": {"name": snapshot.name}})
+    )
+    assert response.status_code == 200
+    settings_diff = json.loads(response.body)
+    monkeypatch.setattr(
+        "ha_mcp.tools.backup.get_backup_manager", lambda *args: runtime.manager
+    )
+    monkeypatch.setattr("ha_mcp.tools.backup.get_global_settings", SimpleNamespace)
+    mcp_diff = await _dispatcher()(
+        scope="edits", action="diff", backup_name=snapshot.name
+    )
+    assert mcp_diff["success"]
+    assert settings_diff["backup_present"] is not runtime.state.missing
+    assert mcp_diff["data"]["entity_missing"] is runtime.state.missing
+    if runtime.state.missing:
+        assert "entities:" in settings_diff["diff"]
+        assert "sensor.example" in settings_diff["diff"]
+    else:
+        assert "entities:" not in settings_diff["diff"]
+        assert "sensor.renamed" not in settings_diff["diff"]
+        assert bool(settings_diff["diff"]) is changed_options
+        assert mcp_diff["data"]["unchanged"] is not changed_options
+        if changed_options:
+            assert "12" in settings_diff["diff"] and "99" in settings_diff["diff"]
+    raw = await ui._view_backup(
+        None, Request({"type": "http", "path_params": {"name": snapshot.name}})
+    )
+    assert json.loads(raw.body)["data"]["config"] == config
 
 
 @pytest.mark.parametrize("consumer", ["settings", "mcp"])

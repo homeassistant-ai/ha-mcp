@@ -7,6 +7,7 @@ import pytest
 from ...utilities.assertions import MCPAssertions, safe_call_tool
 from ...utilities.topology import component_surface_available
 from ...utilities.wait_helpers import (
+    wait_for_condition,
     wait_for_entity_registration,
     wait_for_entity_state,
     wait_for_tool_result,
@@ -92,6 +93,16 @@ async def _assert_collision_refused(
     }, "A collision must be refused before creating a replacement"
     await ha_client.delete_config_entry(blocker_id)
     entry_ids.remove(blocker_id)
+
+    async def target_is_free():
+        registry = await ha_client.list_entity_registry()
+        states = await ha_client.get_states()
+        return all(row["entity_id"] != target for row in [*registry, *states])
+
+    assert await wait_for_condition(
+        target_is_free,
+        condition_name=f"{target} absent from both registry and states",
+    ), "The deleted collision occupant must be gone before retrying restore"
 
 
 @pytest.mark.helper

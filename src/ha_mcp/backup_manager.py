@@ -361,6 +361,26 @@ def _resolve_default_dir() -> Path:
 _SNAPSHOT_SKIP: Any = object()
 
 
+async def _await_backup_io[T](operation: Callable[..., T], *args: Any) -> T:
+    """Keep backup locks/pins until executor I/O settles, even after cancellation."""
+    worker = asyncio.create_task(asyncio.to_thread(operation, *args))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        # Cancelling the await cannot stop its executor thread. Releasing the
+        # caller's lock now would let another capture reserve the same filename.
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue  # Repeated cancellation must not release the lock early.
+            except Exception:
+                break  # Consume the worker failure below; preserve cancellation.
+        if not worker.cancelled():
+            worker.exception()
+        raise
+
+
 class BackupManager:
     """Per-entity snapshot manager. One instance per server, cached on client."""
 
@@ -636,7 +656,7 @@ class BackupManager:
         fails (e.g. disk-full).
         """
         try:
-            path = await asyncio.to_thread(
+            path = await _await_backup_io(
                 self._write_snapshot, domain, entity_id, config, tool_name
             )
         except (OSError, yaml.YAMLError) as err:
@@ -663,7 +683,7 @@ class BackupManager:
             # from a rotation already running in the executor.
             with self._snapshot_pin_lock:
                 protected = frozenset(self._protected_snapshot_names)
-            await asyncio.to_thread(self._rotate, domain, entity_id, protected)
+            await _await_backup_io(self._rotate, domain, entity_id, protected)
         except OSError as err:
             logger.warning(
                 "Auto-backup: rotation failed for %s — %s: %s",
@@ -1124,7 +1144,15 @@ class BackupManager:
         handler = self._handlers.get(domain)
         if handler is None:
             raise LookupError(f"No diff handler registered for domain {domain!r}")
-        return data, await handler.fetch(self._client, data["entity_id"])
+        current = await handler.fetch(self._client, data["entity_id"])
+        if domain == "helper_template" and current is not None:
+            # Both MCP and Settings preview this comparison. Registry metadata
+            # is recreation-only; an existing-entry restore applies options.
+            data["config"] = {
+                key: data["config"][key] for key in ("entry_id", "options")
+            }
+            current = {key: current[key] for key in ("entry_id", "options")}
+        return data, current
 
     async def diff_snapshot(self, name: str) -> DiffResponse | DiffResponseText:
         """Compare a stored snapshot against the live config of the same entity.
@@ -1165,11 +1193,6 @@ class BackupManager:
                 counts=_summarize_patch_counts([]),
                 truncated=False,
             )
-        if domain == "helper_template":
-            # Entity metadata is used only for recreation. For an existing
-            # entry the restore applies options, so the preview must agree.
-            stored = {key: stored[key] for key in ("entry_id", "options")}
-            current = {key: current[key] for key in ("entry_id", "options")}
         patch: list[dict[str, Any]] = []
         truncated = _compute_json_patch(stored, current, _MAX_PATCH_OPS, patch)
         return _build_diff_response(
