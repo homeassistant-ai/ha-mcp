@@ -911,7 +911,7 @@ class AutomationConfigTools:
             # Optional hash check for full config updates. When it runs it
             # resolves ``identifier`` to the storage key — thread that through so
             # the upsert doesn't re-resolve (issue #1813 Phase 0). Stays None on
-            # the no-hash update path (raw identifier resolved once, in upsert).
+            # the no-hash path, where the guard and upsert resolve independently.
             resolved_id: str | None = None
             if identifier and config_hash:
                 _, resolved_id = await self._fetch_and_verify_hash(
@@ -1332,8 +1332,10 @@ class AutomationConfigTools:
         try:
             current = await self._client.get_automation_config(identifier)
         except HomeAssistantAPIError as exc:
-            if exc.status_code == 404:
+            if exc.status_code == 404 and not identifier.startswith("automation."):
                 return  # Preserve intentional creation with a caller-chosen ID.
+            # Entity-ID resolution also maps lookup failures to 404. Never retry
+            # those as creation: a recovered lookup could overwrite an unchecked target.
             raise
         if current.get("alias") == config["alias"]:
             return

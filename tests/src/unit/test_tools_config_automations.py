@@ -544,6 +544,45 @@ class TestAutomationReplacementGuard:
             )
         mock_client.upsert_automation_config.assert_not_awaited()
 
+    async def test_entity_lookup_failure_cannot_be_retried_as_creation(
+        self, tools, mock_client, replacement
+    ):
+        from ha_mcp.client.rest_client import (
+            HomeAssistantAPIError,
+            HomeAssistantClient,
+        )
+
+        # Exercise the actual client resolver: it maps a failed state lookup to
+        # 404. A second lookup would recover and target the existing automation.
+        for name in (
+            "get_entity_state",
+            "_resolve_automation_id",
+            "get_automation_config",
+            "upsert_automation_config",
+        ):
+            setattr(
+                mock_client,
+                name,
+                getattr(HomeAssistantClient, name).__get__(mock_client),
+            )
+        mock_client._request = AsyncMock(
+            side_effect=[
+                HomeAssistantAPIError("Transient server failure", status_code=500),
+                {"attributes": {"id": "abc123unique"}},
+                {"result": "ok"},
+            ]
+        )
+
+        with pytest.raises(ToolError) as exc:
+            await tools.ha_config_set_automation(
+                identifier="automation.morning_routine", config=replacement, wait=False
+            )
+
+        assert json.loads(str(exc.value))["error"]["code"] == "RESOURCE_NOT_FOUND"
+        mock_client._request.assert_awaited_once_with(
+            "GET", "/states/automation.morning_routine"
+        )
+
 
 class TestStripRedundantIdentifierEcho:
     """Direct regression armor for the `_strip_redundant_identifier_echo`
