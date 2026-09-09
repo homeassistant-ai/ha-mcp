@@ -335,6 +335,7 @@ WS_ENTITY_LOOKUP = f"{WS_API_PREFIX}/entity_lookup"
 WS_BACKUP_PREP = f"{WS_API_PREFIX}/backup_prep"
 WS_REGISTRIES = f"{WS_API_PREFIX}/registries"
 WS_DASHBOARDS = f"{WS_API_PREFIX}/dashboards"
+WS_DASHBOARD_EDIT = f"{WS_API_PREFIX}/dashboard_edit"
 WS_SERVICES_LIST = f"{WS_API_PREFIX}/services_list"
 WS_REFERENCE_DATA = f"{WS_API_PREFIX}/reference_data"
 WS_SERVER_ENTRY = f"{WS_API_PREFIX}/server_entry"
@@ -382,6 +383,7 @@ CAPABILITIES: list[str] = [
     "backup_prep",
     "registries",
     "dashboards",
+    "dashboard_edit",
     # A flag, not a standalone command: gates the additive whole-document
     # search-result keys on ``ha_mcp_tools/dashboards`` mode=search
     # (``document_matches`` + ``yaml_skipped`` + ``load_failed``, issue #2008).
@@ -575,9 +577,12 @@ def async_register_commands(hass: HomeAssistant) -> None:
     HA-core state rather than anything the unloaded entry cached, HA core
     authenticates the connection, and ``@require_admin`` gates each command — so
     a caller reaching it can already do the same through HA's own WS API. The
-    write commands are no exception: their D1 domain block refuses
-    ``domain == "ha_mcp_tools"`` unconditionally, so the leftover surface can
-    never reach the privileged filesystem/YAML services, which
+    service-dispatching writes enforce D1: they refuse
+    ``domain == "ha_mcp_tools"`` unconditionally. Dashboard edits do not dispatch
+    services: they use Core's Lovelace storage API under the same admin gate as
+    ``lovelace/config/save``. Server-entry updates retain their own live-entry
+    and option validation. These commands do not grant access to the privileged
+    filesystem/YAML services, which
     :func:`~custom_components.ha_mcp_tools._async_unload_tools_entry` does remove
     on unload. Admin-gated commands answering from live core state until the
     next restart is the trade this makes.
@@ -618,6 +623,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
         (_backup_prep_schema(), _do_backup_prep, None),
         (_registries_schema(), _do_registries, None),
         (_dashboards_schema(), _do_dashboards, _dashboards_prep),
+        (_dashboard_edit_schema(), _do_dashboard_edit, _dashboard_edit_prep),
         (_services_list_schema(), _do_services_list, _services_list_prep),
         (_reference_data_schema(), _do_reference_data, None),
         (_server_entry_schema(), _do_server_entry, None),
@@ -630,7 +636,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
             _do_server_entry_update,
             _server_entry_update_prep,
         ),
-        # The first WRITE command: the dispatch + the bounded confirmation wait are
+        # The service WRITE command: dispatch + the bounded confirmation wait are
         # inherently async, so ALL of the work lives in the ``_call_service_prep``
         # async pre-step and ``_do_call_service`` is a pure response formatter.
         (_call_service_schema(), _do_call_service, _call_service_prep),
@@ -6829,3 +6835,29 @@ def _dispatched_unconfirmed_bulk_result(
         "dispatched": sum(1 for r in op_results if r["dispatched"]),
         "failed": sum(1 for r in op_results if r.get("error") is not None),
     }
+
+
+def _dashboard_edit_schema() -> dict[Any, Any]:
+    """The additive edit command; cross-field validation precedes any save."""
+    return {
+        vol.Required("type"): WS_DASHBOARD_EDIT,
+        vol.Optional("url_path"): vol.Any(str, None),
+        vol.Optional("expected_hash"): vol.Any(str, None),
+        vol.Optional("config"): dict,
+        vol.Optional("patch"): list,
+    }
+
+
+async def _dashboard_edit_prep(
+    hass: HomeAssistant, msg: dict[str, Any]
+) -> dict[str, Any]:
+    from .dashboard_edit import async_edit_dashboard
+
+    return {"result": await async_edit_dashboard(hass, msg)}
+
+
+def _do_dashboard_edit(
+    hass: HomeAssistant, msg: dict[str, Any], *, result: dict[str, Any]
+) -> dict[str, Any]:
+    """Preserve the write outcome assembled by the async edit lifecycle."""
+    return result

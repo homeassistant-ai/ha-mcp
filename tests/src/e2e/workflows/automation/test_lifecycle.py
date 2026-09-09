@@ -252,9 +252,18 @@ class TestAutomationLifecycle:
             ],
         )
 
+        before_update = parse_mcp_result(
+            await mcp_client.call_tool(
+                "ha_config_get_automation", {"identifier": automation_entity}
+            )
+        )
         update_result = await mcp_client.call_tool(
             "ha_config_set_automation",
-            {"identifier": automation_entity, "config": update_config},
+            {
+                "identifier": automation_entity,
+                "config": update_config,
+                "config_hash": before_update["config_hash"],
+            },
         )
 
         assert_mcp_success(update_result, "automation update")
@@ -1266,11 +1275,7 @@ class TestConfigHashMismatch:
     async def test_update_without_hash_succeeds(
         self, mcp_client, cleanup_tracker, test_data_factory
     ) -> None:
-        """Update without config_hash is allowed (hash check is opt-in).
-
-        Guard code: `if identifier and config_hash:` — omitting config_hash
-        skips the optimistic-lock check entirely, enabling unconditional overwrites.
-        """
+        """Updates retaining the existing alias do not require config_hash."""
         # 1. CREATE
         test_light = await _find_test_light_entity(mcp_client)
         config = test_data_factory.automation_config(
@@ -1286,13 +1291,14 @@ class TestConfigHashMismatch:
         assert automation_entity, f"no entity_id: {create_data}"
         cleanup_tracker.track("automation", automation_entity)
 
-        # 2. UPDATE without config_hash — guard skipped, must succeed
+        # 2. UPDATE without config_hash, retaining the same alias.
         await wait_for_automation(mcp_client, automation_entity)
         update_config = test_data_factory.automation_config(
             "A6 No Hash Test Updated",
             trigger=[{"platform": "time", "at": "08:00:00"}],
             action=[{"service": "light.turn_on", "target": {"entity_id": test_light}}],
         )
+        update_config["alias"] = config["alias"]
         result = await safe_call_tool(
             mcp_client,
             "ha_config_set_automation",

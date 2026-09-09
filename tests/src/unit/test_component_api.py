@@ -17,6 +17,7 @@ import pytest
 
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
 from ha_mcp.tools import component_api
@@ -273,7 +274,7 @@ async def test_malformed_info_result_caches_none() -> None:
 
     assert first is None
     assert second is None
-    # A responding-but-malformed component is a stable negative → probed once.
+    # Repeated reads inside the failure cooldown reuse the cached fallback.
     assert ws.send_command.await_count == 1
 
 
@@ -326,17 +327,23 @@ def _clock(start: float = 1000.0) -> list[float]:
 
 
 @pytest.mark.asyncio
-async def test_fresh_negative_does_not_reprobe(monkeypatch) -> None:
-    """A negative within the TTL window is honored without re-probing."""
+@pytest.mark.parametrize("absence", ["unknown_command", "unsupported_schema"])
+async def test_fresh_negative_does_not_reprobe(monkeypatch, absence) -> None:
+    """Definitive absence keeps the five-minute cache, not the failure cooldown."""
     clock = _clock()
     monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
     ws = _make_ws(
         info_exc=HomeAssistantCommandError("Command failed: x", "unknown_command")
+        if absence == "unknown_command"
+        else None,
+        info_result={**_INFO_OK, "schema_version": SUPPORTED_SCHEMA_VERSION + 1},
     )
     client = _client()
     with _patch_ws(ws):
         assert await get_component_caps(client) is None
-        clock[0] += component_api._NEGATIVE_CACHE_TTL_S - 1  # still inside window
+        clock[0] += 31  # Past the transient cooldown; definitive absence stays cached.
+        assert await get_component_caps(client, strict=True) is None
+        clock[0] += 268  # At 299 seconds, still inside the five-minute window.
         assert await get_component_caps(client) is None
     assert ws.send_command.await_count == 1
 
@@ -412,3 +419,79 @@ def test_is_unknown_command_keys_off_code_not_message() -> None:
         HomeAssistantCommandError("Command failed: bad", "invalid_format")
     )
     assert not is_unknown_command(ValueError("boom"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    ["connection", "timeout", "command", "unexpected", "malformed", "malformed_caps"],
+)
+@pytest.mark.parametrize("strict_first", [False, True])
+async def test_strict_discovery_recovers_after_cached_failure_expires(
+    monkeypatch, failure, strict_first
+):
+    """Failed probes hold for 30 seconds, preserving reads, then allow recovery."""
+    clock = _clock()
+    monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
+    client = _client()
+    ws = _make_ws(
+        info_exc={
+            "connection": HomeAssistantConnectionError("down"),
+            "timeout": HomeAssistantCommandTimeout("slow info"),
+            "command": HomeAssistantCommandError("broken info", "unknown_error"),
+            "unexpected": RuntimeError("broken probe"),
+        }.get(failure),
+        info_result={**_INFO_OK, "capabilities": ["search", 17]}
+        if failure == "malformed_caps"
+        else None,
+    )
+    with _patch_ws(ws):
+        if strict_first:
+            with pytest.raises(component_api.ComponentDiscoveryError):
+                await get_component_caps(client, strict=True)
+        first_read = await get_component_caps(client)
+        assert component_supports(first_read, "search") is (failure == "malformed_caps")
+        with pytest.raises(component_api.ComponentDiscoveryError):
+            await get_component_caps(client, strict=True)
+        assert ws.send_command.await_count == 1
+        # Discovery has recovered, but callers still honor the short cooldown.
+        ws.send_command.side_effect = None
+        ws.send_command.return_value = {"success": True, "result": _INFO_OK}
+        clock[0] += 29
+        assert await get_component_caps(client) is first_read
+        with pytest.raises(component_api.ComponentDiscoveryError):
+            await get_component_caps(client, strict=True)
+        assert ws.send_command.await_count == 1
+        # Pin the recovery time, not whichever TTL the implementation uses.
+        clock[0] += 1
+        assert component_supports(
+            await get_component_caps(client, strict=True), "search"
+        )
+        assert component_supports(
+            await get_component_caps(client, strict=True), "search"
+        )
+        assert ws.send_command.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "absence", ["unknown_command", "old_capabilities", "unsupported_schema"]
+)
+async def test_strict_discovery_accepts_definitive_capability_absence(absence):
+    """Confirmed incompatible or absent capability remains a valid fallback."""
+    ws = _make_ws(
+        info_exc=HomeAssistantCommandError("absent", "unknown_command")
+        if absence == "unknown_command"
+        else None,
+        info_result={
+            **_INFO_OK,
+            "schema_version": 2 if absence == "unsupported_schema" else 1,
+        },
+    )
+    client = _client()
+    with _patch_ws(ws):
+        for _ in range(2):
+            assert not component_supports(
+                await get_component_caps(client, strict=True), "dashboard_edit"
+            )
+    assert ws.send_command.await_count == 1

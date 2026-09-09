@@ -4,6 +4,7 @@ Configuration management tools for Home Assistant Lovelace dashboards.
 This module provides tools for managing dashboard metadata and content.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -17,6 +18,7 @@ from pydantic import Field
 
 from ..client.rest_client import (
     HomeAssistantCommandError,
+    HomeAssistantCommandNotSent,
     HomeAssistantCommandTimeout,
 )
 from ..client.websocket_client import get_websocket_client
@@ -43,6 +45,7 @@ from ..dashboard_screenshot.paths import (
 from ..errors import ErrorCode, create_error_response, get_error_code, get_error_message
 from ..strict_bps import BestPracticeKeyParam
 from ..utils.config_hash import compute_config_hash
+from ..utils.dashboard_patch import apply_dashboard_patch
 from ..utils.python_sandbox import (
     PythonSandboxError,
     PythonSandboxExecutionError,
@@ -56,6 +59,12 @@ from .component_api import (
     get_component_caps,
     invalidate_caps,
     is_unknown_command,
+)
+from .component_dashboard_edit import edit_dashboard_via_component
+from .dashboard_edit_errors import (
+    raise_dashboard_edit_error,
+    raise_dashboard_edit_fetch_error,
+    raise_known_dashboard_save_rejection,
 )
 from .helpers import (
     exception_to_structured_error,
@@ -74,6 +83,18 @@ from .util_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+_LARGE_DASHBOARD_CONFIG_SIZE = 10000
+
+
+def _large_dashboard_replacement_warning(size: int) -> str | None:
+    """Keep the full-replacement guidance identical on both backends."""
+    if size < _LARGE_DASHBOARD_CONFIG_SIZE:
+        return None
+    return (
+        f"Replaced large config ({size:,} bytes). "
+        "Consider patch for known paths or python_transform for pattern-based edits."
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1482,8 +1503,11 @@ async def _attach_dashboard_render_paths_after_write(
     back before claiming canonical render paths. The submitted config remains a
     screenshot-targeting fallback only when that readback fails.
     """
+    result.update(config_hash=None, write_committed=True, post_write_verified=False)
     try:
-        authoritative_config, _ = await _get_dashboard_config_internal(client, url_path)
+        authoritative_config, config_hash = await _get_dashboard_config_internal(
+            client, url_path
+        )
     except ToolError as exc:
         result.setdefault("warnings", []).append(
             "Canonical render paths unavailable after the dashboard write: "
@@ -1504,6 +1528,7 @@ async def _attach_dashboard_render_paths_after_write(
             f"Canonical render paths unavailable after the dashboard write: {exc}"
         )
         return fallback_config
+    result.update(config_hash=config_hash, post_write_verified=True)
     _attach_dashboard_render_paths(result, url_path, authoritative_config)
     return authoritative_config
 
@@ -2753,14 +2778,14 @@ class DashboardConfigTools:
             Field(
                 description="Dashboard configuration with views and cards. "
                 "Omit or set to None to create dashboard without initial config. "
-                "Mutually exclusive with python_transform."
+                "Mutually exclusive with python_transform and patch."
             ),
         ] = None,
         python_transform: Annotated[
             str | None,
             Field(
                 description="Python expression to transform existing dashboard config. "
-                "Mutually exclusive with config. "
+                "Mutually exclusive with config and patch. "
                 "Requires config_hash for validation. "
                 "See PYTHON TRANSFORM SECURITY below for allowed operations. "
                 "Examples: "
@@ -2774,7 +2799,7 @@ class DashboardConfigTools:
             str | None,
             Field(
                 description="Config hash from ha_config_get_dashboard for optimistic locking. "
-                "REQUIRED for python_transform (validates dashboard unchanged). "
+                "REQUIRED for python_transform and patch (validates dashboard unchanged). "
                 "Optional for config (validates before full replacement if provided)."
             ),
         ] = None,
@@ -2829,6 +2854,18 @@ class DashboardConfigTools:
                 "views[].path to render."
             ),
         ] = None,
+        patch: Annotated[
+            list[dict[str, Any]] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description="Structured dashboard edits: up to 100 JSON Patch "
+                "add, remove, replace or test operations using RFC 6901 paths. "
+                "Use /- to append to an array; escape ~ as ~0 and / as ~1 in keys. "
+                "Requires config_hash. Mutually exclusive with config and "
+                "python_transform. Update title/icon/require_admin/show_in_sidebar "
+                "in a separate call. Strings in value are preserved literally."
+            ),
+        ] = None,
     ) -> "dict[str, Any] | ToolResult":
         """
         Create or update a Home Assistant dashboard.
@@ -2836,13 +2873,18 @@ class DashboardConfigTools:
         MUST call ha_get_skill_guide OR refer to your locally installed skills first.
 
         Creates a new dashboard or updates an existing one with the provided configuration.
-        Supports two modes: full config replacement OR Python transformation.
+        Supports full config replacement, Python transformation, or structured patch edits.
 
         Use 'default' or 'lovelace' to target the built-in default dashboard.
         New dashboards require a hyphenated url_path (e.g., 'my-dashboard').
 
         WHEN TO USE WHICH MODE:
-        - python_transform: RECOMMENDED for edits. Surgical/pattern-based updates, works on all platforms.
+        - patch: Edit known paths with literal values using add/remove/replace/test and config_hash.
+          Example: patch=[{"op": "replace", "path": "/views/0/title", "value": "Home"}].
+          Append with /views/0/cards/-; escape ~ as ~0 and / as ~1 in path keys.
+          move/copy are unsupported. See the full patch guide:
+          https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/dashboard-edits.md
+        - python_transform: Use loops or pattern-based changes across cards and views.
         - config: New dashboards only, or full restructure. Replaces everything.
 
         IMPORTANT: After delete/add operations, indices shift! Subsequent python_transform calls
@@ -2855,7 +2897,7 @@ class DashboardConfigTools:
         (beta feature); for visual re-checks after the write, use the dedicated
         ha_get_dashboard_screenshot tool instead of re-sending config.
 
-        PYTHON TRANSFORM EXAMPLES (RECOMMENDED):
+        PYTHON TRANSFORM EXAMPLES:
         - Update card icon: 'config["views"][0]["cards"][0]["icon"] = "mdi:thermometer"'
         - Add card: 'config["views"][0]["cards"].append({"type": "button", "entity": "light.bedroom"})'
         - Delete card: 'del config["views"][0]["cards"][2]'
@@ -2940,8 +2982,9 @@ class DashboardConfigTools:
             }
         )
 
-        Note: When updating an existing dashboard, title/icon/require_admin/show_in_sidebar
-        are also updated if explicitly provided alongside (or instead of) a config change.
+        Note: title/icon/require_admin/show_in_sidebar can be updated in metadata-only
+        calls or alongside a full config replacement. For python_transform or patch,
+        update metadata in a separate call; combining it with patch is rejected.
 
         STORAGE-MODE vs YAML-MODE DASHBOARDS:
         This tool only manages storage-mode dashboards (created via UI/API and stored in
@@ -2957,6 +3000,11 @@ class DashboardConfigTools:
         entry in configuration.yaml but does NOT touch the dashboard
         body in the referenced .yaml file.
         """
+        action = (
+            "patch"
+            if patch is not None
+            else ("python_transform" if python_transform is not None else "set")
+        )
         screenshot_options = _DashboardScreenshotOptions(view_path=view_path)
         try:
             # Reject an invalid view_path BEFORE committing the write. On the
@@ -2968,28 +3016,63 @@ class DashboardConfigTools:
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         "view_path cannot be empty.",
-                        context={"view_path": view_path},
+                        context={"action": action, "view_path": view_path},
                     )
                 )
             (
                 url_path,
                 pre_resolved_from,
                 pre_fetched_dashboards,
-            ) = await self._resolve_set_dashboard_url_path(url_path)
+            ) = await self._resolve_set_dashboard_url_path(url_path, action=action)
 
-            # Validate mutual exclusivity of config and python_transform
-            if config is not None and python_transform is not None:
+            if (
+                sum(value is not None for value in (config, python_transform, patch))
+                > 1
+            ):
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "Cannot use both config and python_transform simultaneously",
+                        "config, python_transform and patch are mutually exclusive "
+                        "and cannot be used simultaneously",
                         suggestions=[
-                            "Use only ONE of: config or python_transform",
+                            "Use only ONE of: config, python_transform or patch",
                             "config: Full replacement",
-                            "python_transform: Python-based edits (recommended)",
+                            "python_transform: Loops and pattern-based edits",
                         ],
-                        context={"action": "set", "url_path": url_path},
+                        context={"action": action, "url_path": url_path},
                     )
+                )
+
+            if patch is not None and any(
+                value is not None
+                for value in (title, icon, require_admin, show_in_sidebar)
+            ):
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "patch cannot be combined with dashboard metadata "
+                        "(title, icon, require_admin, show_in_sidebar)",
+                        suggestions=[
+                            "Update metadata in a separate ha_config_set_dashboard call "
+                            "without patch, config or python_transform",
+                        ],
+                        context={
+                            "action": action,
+                            "url_path": url_path,
+                            "write_committed": False,
+                        },
+                    )
+                )
+
+            if patch is not None:
+                return await self._run_dashboard_patch(
+                    url_path,
+                    config_hash,
+                    patch,
+                    pre_resolved_from,
+                    MandatoryBPS,
+                    return_screenshot=return_screenshot,
+                    screenshot_options=screenshot_options,
                 )
 
             if python_transform is not None:
@@ -3023,7 +3106,7 @@ class DashboardConfigTools:
         except Exception as e:
             error = exception_to_structured_error(
                 e,
-                context={"action": "set", "url_path": url_path},
+                context={"action": action, "url_path": url_path},
                 suggestions=[
                     "Ensure url_path is unique (not already in use for different dashboard type)",
                     "New dashboards require a hyphenated url_path",
@@ -3037,7 +3120,7 @@ class DashboardConfigTools:
             return None
 
     async def _resolve_set_dashboard_url_path(
-        self, url_path: str
+        self, url_path: str, *, action: str = "set"
     ) -> tuple[str, str | None, list[dict[str, Any]] | None]:
         """Validate the set target and canonicalize supported dashboard identifiers.
 
@@ -3069,7 +3152,7 @@ class DashboardConfigTools:
                 "Pass a dashboard URL path (e.g. 'my-dashboard')",
                 "Use 'default' or 'lovelace' for the default dashboard",
             ],
-            context={"action": "set"},
+            context={"action": action},
         )
         # Handle "default" as alias for the default dashboard
         # (matches ha_config_get_dashboard behavior)
@@ -3095,7 +3178,7 @@ class DashboardConfigTools:
         if "-" not in url_path and url_path != "lovelace":
             resolved, dashboards = await _resolve_dashboard(self._client, url_path)
             if dashboards is None:
-                _raise_dashboard_registry_read_error(action="set", url_path=url_path)
+                _raise_dashboard_registry_read_error(action=action, url_path=url_path)
             if resolved is not None and resolved["url_path"]:
                 exact_url_path_exists = resolved["url_path"] == url_path
                 pre_fetched_dashboards = dashboards
@@ -3125,19 +3208,19 @@ class DashboardConfigTools:
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     "url_path must contain a hyphen (-)",
                     suggestions=suggestions,
-                    context={"action": "set", "url_path": url_path},
+                    context={"action": action, "url_path": url_path},
                 )
             )
 
         return url_path, pre_resolved_from, pre_fetched_dashboards
 
     async def _fetch_and_verify_dashboard_hash(
-        self, url_path: str, config_hash: str
+        self, url_path: str, config_hash: str, *, action: str = "python_transform"
     ) -> dict[str, Any]:
         """Fetch current dashboard config and verify ``config_hash`` (optimistic locking).
 
         Re-wraps the shared fetch helper's generic error with
-        python_transform-specific UX suggestions, and raises on a hash
+        edit-specific UX suggestions, and raises on a hash
         mismatch (concurrent edit since the caller's last read).
         """
         try:
@@ -3145,30 +3228,15 @@ class DashboardConfigTools:
                 self._client, url_path
             )
         except ToolError as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Dashboard not found or inaccessible: {extract_tool_error_message(e)}",
-                    suggestions=[
-                        "python_transform requires an existing dashboard",
-                        "Use 'config' parameter to create a new dashboard",
-                        "Verify dashboard exists with ha_config_get_dashboard(list_only=True)",
-                    ],
-                    context={"action": "python_transform", "url_path": url_path},
-                )
-            )
+            raise_dashboard_edit_fetch_error(e, url_path, action)
 
         if current_hash != config_hash:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Dashboard modified since last read (conflict)",
-                    suggestions=[
-                        "Call ha_config_get_dashboard() again",
-                        "Use the fresh config_hash from that response",
-                    ],
-                    context={"action": "python_transform", "url_path": url_path},
-                )
+            raise_dashboard_edit_error(
+                url_path,
+                "conflict",
+                "Dashboard modified since last read (conflict)",
+                False,
+                action,
             )
         return current_config
 
@@ -3212,33 +3280,14 @@ class DashboardConfigTools:
         return transformed_config
 
     async def _save_dashboard_python_transform(
-        self, url_path: str, transformed_config: dict[str, Any]
+        self,
+        url_path: str,
+        transformed_config: dict[str, Any],
+        *,
+        action: str = "python_transform",
     ) -> tuple[dict[str, Any], str | None, str | None]:
         """Save transformed config and best-effort reload its authoritative form."""
-        save_data: dict[str, Any] = {
-            "type": "lovelace/config/save",
-            "config": transformed_config,
-        }
-        if url_path:
-            save_data["url_path"] = url_path
-
-        save_result = await self._client.send_websocket_message(save_data)
-
-        if isinstance(save_result, dict) and not save_result.get("success", True):
-            error_msg = save_result.get("error", {})
-            if isinstance(error_msg, dict):
-                error_msg = error_msg.get("message", str(error_msg))
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to save transformed config: {error_msg}",
-                    suggestions=[
-                        "Expression may have produced invalid dashboard structure",
-                        "Verify config format is valid Lovelace JSON",
-                    ],
-                    context={"action": "python_transform", "url_path": url_path},
-                )
-            )
+        await self._save_dashboard_config(url_path, transformed_config, action=action)
 
         # HA may normalize after save, so prefer an authoritative re-fetch. The
         # mutation has already committed at this point: a follow-up read failure
@@ -3255,8 +3304,9 @@ class DashboardConfigTools:
             return transformed_config, None, warning
         except Exception as exc:
             logger.warning(
-                "Could not reload dashboard %s after Python transform: %s",
+                "Could not reload dashboard %s after %s: %s",
                 url_path,
+                action,
                 exc,
                 exc_info=True,
             )
@@ -3298,35 +3348,169 @@ class DashboardConfigTools:
         transformed_config = self._apply_dashboard_python_transform(
             url_path, python_transform, current_config
         )
-        (
-            post_save_config,
-            new_config_hash,
-            post_save_warning,
-        ) = await self._save_dashboard_python_transform(url_path, transformed_config)
+        native_result = await edit_dashboard_via_component(
+            self._client,
+            url_path,
+            expected_hash=config_hash,
+            config=transformed_config,
+            action="python_transform",
+        )
+        if native_result is None:
+            native_result = await self._save_dashboard_edit_legacy(
+                url_path, transformed_config
+            )
+        return await self._finish_dashboard_edit(
+            url_path,
+            native_result,
+            "python_transform",
+            pre_resolved_from,
+            MandatoryBPS,
+            python_transform=python_transform,
+            return_screenshot=return_screenshot,
+            screenshot_options=screenshot_options,
+        )
 
-        transform_result: dict[str, Any] = {
-            "success": True,
-            "action": "python_transform",
-            "url_path": url_path,
-            "config_hash": new_config_hash,
+    async def _save_dashboard_edit_legacy(
+        self,
+        url_path: str,
+        config: dict[str, Any],
+        *,
+        action: str = "python_transform",
+    ) -> dict[str, Any]:
+        """Adapt the existing save/readback path to the shared result contract."""
+        post_config, config_hash, warning = await self._save_dashboard_python_transform(
+            url_path, config, action=action
+        )
+        return {
+            "config": post_config,
+            "config_hash": config_hash,
             "write_committed": True,
-            "post_write_verified": post_save_warning is None,
-            "python_expression": python_transform,
-            "message": f"Dashboard {url_path} updated via Python transform",
+            "post_write_verified": warning is None,
+            "warnings": [warning] if warning else [],
         }
+
+    async def _run_dashboard_patch(
+        self,
+        url_path: str,
+        config_hash: str | None,
+        patch: list[dict[str, Any]] | str,
+        pre_resolved_from: str | None,
+        MandatoryBPS: bool,
+        *,
+        return_screenshot: bool,
+        screenshot_options: _DashboardScreenshotOptions,
+    ) -> "dict[str, Any] | ToolResult":
+        """Apply structured edits in Core, or use the existing legacy save path."""
+        if config_hash is None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "config_hash is required for patch",
+                    suggestions=["Read the dashboard first and use its config_hash"],
+                    context={"action": "patch", "url_path": url_path},
+                )
+            )
+        try:
+            parsed_patch = parse_json_param(patch, "patch")
+            if not isinstance(parsed_patch, list):
+                raise ValueError("patch must be a list of operations")
+        except ValueError as exc:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    str(exc),
+                    context={"action": "patch", "url_path": url_path},
+                )
+            )
+        result = await edit_dashboard_via_component(
+            self._client,
+            url_path,
+            expected_hash=config_hash,
+            patch=parsed_patch,
+            action="patch",
+        )
+        if result is None:
+            current = await self._fetch_and_verify_dashboard_hash(
+                url_path, config_hash, action="patch"
+            )
+
+            try:
+                updated = apply_dashboard_patch(current, parsed_patch)
+            except ValueError as exc:
+                raise_dashboard_edit_error(
+                    url_path, "validation_failed", str(exc), False, "patch"
+                )
+            self._validate_strategy_dashboard_replacement(
+                url_path,
+                was_strategy_dashboard="strategy" in current,
+                replacement_config=updated,
+                action="patch",
+            )
+            # Compare JSON hashes rather than Python equality: true and 1 are
+            # different dashboard values even though Python considers them equal.
+            if compute_config_hash(updated) == config_hash:
+                result = {
+                    "config": current,
+                    "config_hash": config_hash,
+                    "write_committed": False,
+                    "post_write_verified": True,
+                    "unchanged": True,
+                }
+            else:
+                result = await self._save_dashboard_edit_legacy(
+                    url_path, updated, action="patch"
+                )
+        return await self._finish_dashboard_edit(
+            url_path,
+            result,
+            "patch",
+            pre_resolved_from,
+            MandatoryBPS,
+            return_screenshot=return_screenshot,
+            screenshot_options=screenshot_options,
+        )
+
+    async def _finish_dashboard_edit(
+        self,
+        url_path: str,
+        edit: dict[str, Any],
+        action: str,
+        pre_resolved_from: str | None,
+        MandatoryBPS: bool,
+        *,
+        return_screenshot: bool,
+        screenshot_options: _DashboardScreenshotOptions,
+        python_transform: str | None = None,
+    ) -> "dict[str, Any] | ToolResult":
+        """Preserve public edit fields, authoritative paths, BPS and screenshots."""
+        result: dict[str, Any] = {
+            "success": True,
+            "action": action,
+            "url_path": url_path,
+            "config_hash": edit["config_hash"],
+            "write_committed": edit["write_committed"],
+            "post_write_verified": edit["post_write_verified"],
+            "message": f"Dashboard {url_path} updated via "
+            + ("Python transform" if action == "python_transform" else "patch"),
+        }
+        if python_transform is not None:
+            result["python_expression"] = python_transform
         if pre_resolved_from is not None:
-            transform_result["resolved_from"] = pre_resolved_from
-        if post_save_warning is not None:
-            transform_result["warnings"] = [post_save_warning]
-        if post_save_warning is None:
-            _attach_dashboard_render_paths(transform_result, url_path, post_save_config)
-        _attach_dashboard_skill(transform_result, MandatoryBPS)
+            result["resolved_from"] = pre_resolved_from
+        if edit.get("warnings"):
+            result["warnings"] = list(edit["warnings"])
+        if edit.get("unchanged"):
+            result["unchanged"] = True
+            result["message"] = f"Dashboard {url_path} unchanged"
+        if edit["post_write_verified"]:
+            _attach_dashboard_render_paths(result, url_path, edit["config"])
+        _attach_dashboard_skill(result, MandatoryBPS)
         return await _maybe_attach_screenshot(
-            transform_result,
+            result,
             url_path,
             return_screenshot,
             client=self._client,
-            config=post_save_config,
+            config=edit["config"],
             options=screenshot_options,
         )
 
@@ -3527,7 +3711,9 @@ class DashboardConfigTools:
             if _is_no_stored_dashboard_config_error(exc):
                 if config_hash is None:
                     return None
-                self._raise_dashboard_hash_conflict(url_path)
+                self._raise_dashboard_hash_conflict(
+                    url_path, message="Dashboard has no saved config"
+                )
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
@@ -3537,7 +3723,13 @@ class DashboardConfigTools:
                         "Retry the operation",
                         "Read the dashboard with ha_config_get_dashboard first",
                     ],
-                    context={"action": "set", "url_path": url_path},
+                    context={
+                        "action": "set",
+                        "url_path": url_path,
+                        "reason": "load_failed",
+                        "write_committed": False,
+                        "post_write_verified": False,
+                    },
                 )
             )
 
@@ -3549,29 +3741,23 @@ class DashboardConfigTools:
             url_path,
             was_strategy_dashboard="strategy" in existing_config,
             replacement_config=replacement_config,
-            action="config",
+            action="set",
         )
 
-        if existing_config_size >= 10000:
-            return (
-                f"Replaced large config ({existing_config_size:,} bytes). "
-                "Consider python_transform for targeted edits."
-            )
-        return None
+        return _large_dashboard_replacement_warning(existing_config_size)
 
     @staticmethod
-    def _raise_dashboard_hash_conflict(url_path: str) -> NoReturn:
+    def _raise_dashboard_hash_conflict(
+        url_path: str, *, message: str = "Dashboard modified since last read (conflict)"
+    ) -> NoReturn:
         """Raise the shared optimistic-lock conflict for a full replacement."""
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
-                "Dashboard modified since last read (conflict)",
-                suggestions=[
-                    "Call ha_config_get_dashboard() again",
-                    "Use the fresh config_hash, or omit config_hash to force replace",
-                ],
-                context={"action": "set", "url_path": url_path},
-            )
+        raise_dashboard_edit_error(
+            url_path,
+            "conflict",
+            message,
+            False,
+            "set",
+            hash_supplied=True,
         )
 
     @staticmethod
@@ -3585,45 +3771,81 @@ class DashboardConfigTools:
         """Prevent this tool from taking control of a strategy dashboard."""
         if not was_strategy_dashboard or "strategy" in replacement_config:
             return
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_FAILED,
-                "Strategy dashboards cannot be converted to custom dashboards via this tool",
-                suggestions=[
-                    "Use 'Take Control' in the Home Assistant interface to convert it",
-                    "Keep a strategy configuration when updating this dashboard",
-                ],
-                context={"action": action, "url_path": url_path},
-            )
+        raise_dashboard_edit_error(
+            url_path,
+            "strategy_conversion",
+            "Strategy dashboards cannot be converted to custom dashboards via this tool",
+            False,
+            action,
         )
 
     async def _save_dashboard_config(
-        self, url_path: str, config_dict: dict[str, Any]
+        self,
+        url_path: str,
+        config_dict: dict[str, Any],
+        *,
+        action: str = "set",
     ) -> None:
-        """Save ``config_dict`` as the full dashboard config replacement."""
+        """Save through the legacy API with a consistent outcome for every edit mode."""
         config_save_data: dict[str, Any] = {
             "type": "lovelace/config/save",
             "config": config_dict,
         }
         if url_path:
             config_save_data["url_path"] = url_path
-        save_result = await self._client.send_websocket_message(config_save_data)
-
-        if isinstance(save_result, dict) and not save_result.get("success", True):
-            error_msg = save_result.get("error", {})
-            if isinstance(error_msg, dict):
-                error_msg = error_msg.get("message", str(error_msg))
+        try:
+            save_result = await self._client.send_websocket_message(config_save_data)
+        except ToolError:
+            raise
+        except asyncio.CancelledError:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
-                    f"Failed to save dashboard config: {error_msg}",
+                    "Dashboard write outcome unknown: save request was cancelled",
                     suggestions=[
-                        "Verify config format is valid Lovelace JSON",
-                        "Check that you have admin permissions",
-                        "Ensure all entity IDs in config exist",
+                        "Read the dashboard before retrying to check whether the save applied"
                     ],
-                    context={"action": "set", "url_path": url_path},
+                    context={
+                        "action": action,
+                        "url_path": url_path,
+                        "reason": "write_outcome_unknown",
+                        "write_committed": None,
+                        "post_write_verified": False,
+                    },
                 )
+            )
+        except HomeAssistantCommandNotSent as exc:
+            raise_dashboard_edit_error(
+                url_path, "write_not_sent", str(exc), False, action
+            )
+        except Exception as exc:
+            exception_to_structured_error(
+                exc,
+                context={
+                    "action": action,
+                    "url_path": url_path,
+                    "write_committed": None,
+                    "reason": "write_outcome_unknown",
+                    "post_write_verified": False,
+                },
+                suggestions=[
+                    "Read the dashboard before retrying to check whether the save applied",
+                ],
+            )
+
+        if isinstance(save_result, dict) and not save_result.get("success", True):
+            raise_known_dashboard_save_rejection(save_result, url_path, action)
+            error_msg = save_result.get("error", {})
+            if isinstance(error_msg, dict):
+                error_msg = error_msg.get("message", str(error_msg))
+            # Core may update the live config before persistence raises. An
+            # unrecognized error response cannot establish an unwritten edit.
+            raise_dashboard_edit_error(
+                url_path,
+                "write_outcome_unknown",
+                f"Failed to save {'transformed' if action == 'python_transform' else 'dashboard'} config: {error_msg}",
+                None,
+                action,
             )
 
     async def _apply_dashboard_config(
@@ -3632,11 +3854,60 @@ class DashboardConfigTools:
         config: dict[str, Any] | str,
         config_hash: str | None,
         dashboard_exists: bool,
-    ) -> tuple[bool, str | None, dict[str, Any]]:
-        """Parse + validate ``config`` and save it as a full replacement.
+        *,
+        metadata_updated: bool = False,
+    ) -> tuple[bool, str | None, dict[str, Any], dict[str, Any] | None]:
+        """Preserve prior registry writes on any configuration-update failure."""
+        try:
+            return await self._prepare_and_save_dashboard_config(
+                url_path, config, config_hash, dashboard_exists
+            )
+        except (asyncio.CancelledError, Exception) as exc:
+            if dashboard_exists and not metadata_updated:
+                raise
+            # Native and legacy outcomes describe only the config command. A
+            # preceding create/metadata call already succeeded in either case.
+            if isinstance(exc, asyncio.CancelledError):
+                error = create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Configuration update cancelled before saving",
+                    context={"action": "set", "url_path": url_path},
+                    suggestions=["Read the dashboard before deciding whether to retry"],
+                )
+            elif isinstance(exc, ToolError):
+                error = json.loads(str(exc))
+            else:
+                error = exception_to_structured_error(
+                    exc,
+                    context={"action": "set", "url_path": url_path},
+                    raise_error=False,
+                )
+            # Validation/read failures precede saving. Save helpers attach an
+            # explicit None when they cannot determine the configuration outcome.
+            error["config_write_committed"] = error.get("write_committed", False)
+            error["write_committed"] = True
+            error["dashboard_created"] = not dashboard_exists
+            error["metadata_updated"] = metadata_updated
+            prior_change = (
+                "Dashboard metadata was updated"
+                if dashboard_exists
+                else "Dashboard was created"
+            )
+            error["error"]["message"] = (
+                f"{prior_change}; configuration update: {error['error']['message']}"
+            )
+            raise_tool_error(error)
+        # CodeQL does not infer the shared helper's NoReturn contract.
+        raise AssertionError("unreachable: raise_tool_error always raises")
 
-        Returns ``(config_updated, warning, saved_config)``.
-        """
+    async def _prepare_and_save_dashboard_config(
+        self,
+        url_path: str,
+        config: dict[str, Any] | str,
+        config_hash: str | None,
+        dashboard_exists: bool,
+    ) -> tuple[bool, str | None, dict[str, Any], dict[str, Any] | None]:
+        """Return (updated, warning, saved config, native result) for either backend."""
         parsed_config = parse_json_param(config, "config")
         if parsed_config is None or not isinstance(parsed_config, dict):
             raise_tool_error(
@@ -3650,6 +3921,19 @@ class DashboardConfigTools:
                 )
             )
         config_dict = cast(dict[str, Any], parsed_config)
+        # Creation has no previous config to compare. Match the legacy create
+        # path, which ignores a supplied hash; existing entries retain the guard.
+        native_result = await edit_dashboard_via_component(
+            self._client,
+            url_path,
+            expected_hash=config_hash if dashboard_exists else None,
+            config=config_dict,
+        )
+        if native_result is not None:
+            native_warning = _large_dashboard_replacement_warning(
+                native_result["previous_config_size"]
+            )
+            return True, native_warning, native_result["config"], native_result
 
         warning: str | None = None
         if dashboard_exists:
@@ -3658,7 +3942,27 @@ class DashboardConfigTools:
             )
 
         await self._save_dashboard_config(url_path, config_dict)
-        return True, warning, config_dict
+        return True, warning, config_dict, None
+
+    async def _attach_dashboard_write_result(
+        self,
+        result: dict[str, Any],
+        url_path: str,
+        render_config: dict[str, Any] | None,
+        native_result: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """Reuse native verification without another dashboard fetch."""
+        if native_result is None:
+            return await _attach_dashboard_render_paths_after_write(
+                self._client, result, url_path, render_config
+            )
+        for key in ("config_hash", "write_committed", "post_write_verified"):
+            result[key] = native_result[key]
+        if native_result.get("warnings"):
+            result.setdefault("warnings", []).extend(native_result["warnings"])
+        if native_result["post_write_verified"]:
+            _attach_dashboard_render_paths(result, url_path, native_result["config"])
+        return cast(dict[str, Any], native_result["config"])
 
     async def _run_dashboard_config_update(
         self,
@@ -3692,6 +3996,7 @@ class DashboardConfigTools:
         )
 
         config_updated = False
+        native_result: dict[str, Any] | None = None
         render_config: dict[str, Any] | None = None
         warnings: list[str] = []
         if config is not None:
@@ -3699,8 +4004,13 @@ class DashboardConfigTools:
                 config_updated,
                 config_warning,
                 render_config,
+                native_result,
             ) = await self._apply_dashboard_config(
-                url_path, config, config_hash, dashboard_exists
+                url_path,
+                config,
+                config_hash,
+                dashboard_exists,
+                metadata_updated=metadata_updated,
             )
             if config_warning:
                 warnings.append(config_warning)
@@ -3724,7 +4034,7 @@ class DashboardConfigTools:
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
                     "No dashboard changes were requested",
                     suggestions=[
-                        "Provide config or python_transform to change dashboard content",
+                        "Provide config, patch or python_transform to change dashboard content",
                         "Provide a metadata field such as title or icon",
                         "Use ha_config_get_dashboard to read a dashboard without changing it",
                     ],
@@ -3756,8 +4066,8 @@ class DashboardConfigTools:
             # whether the create-or-update operation updated an existing target.
             result_dict["resolved_from"] = pre_resolved_from
 
-        render_config = await _attach_dashboard_render_paths_after_write(
-            self._client, result_dict, url_path, render_config
+        render_config = await self._attach_dashboard_write_result(
+            result_dict, url_path, render_config, native_result
         )
         _attach_dashboard_skill(result_dict, MandatoryBPS)
         return await _maybe_attach_screenshot(

@@ -1,0 +1,17 @@
+
+config['views'][1]['sections'].append({'type': 'grid', 'cards': [
+  {'type': 'heading', 'heading': 'Stresstest', 'heading_style': 'subtitle'},
+  {'type': 'custom:mushroom-chips-card', 'alignment': 'start', 'chips': [
+    {'type': 'template', 'icon': 'mdi:test-tube',
+     'content': "{{ states('input_select.radio_sender') }}",
+     'icon_color': "{% if is_state('script.radio_play','on') %}amber{% else %}green{% endif %}",
+     'tap_action': {'action': 'none'}},
+    {'type': 'template', 'icon': 'mdi:volume-high',
+     'content': "{{ (state_attr('media_player.vsx_832','volume_level') | float(0) * 100) | round(0) }}%",
+     'tap_action': {'action': 'none'}},
+    {'type': 'template', 'icon': 'mdi:remote',
+     'content': "{{ states('select.elite_aktivitaten') }}",
+     'tap_action': {'action': 'none'}}]},
+  {'type': 'tile', 'entity': 'media_player.shield_2',
+   'features': [{'type': 'media-player-playback'}],
+   'features_position': 'bottom'}]})

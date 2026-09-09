@@ -716,6 +716,7 @@ class TestLifecycleWriteWarningsShape:
         from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 
         client = MagicMock()
+        client.get_automation_config = AsyncMock(return_value={"alias": "Test Auto"})
         client.upsert_automation_config = AsyncMock(
             return_value={"entity_id": "automation.test_auto"}
         )

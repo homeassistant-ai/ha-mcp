@@ -15,7 +15,7 @@ class TestSetDashboardMetadataUpdate:
 
     @pytest.fixture
     def mock_client(self):
-        client = MagicMock()
+        client = MagicMock(base_url=None, token=None)
         client.send_websocket_message = AsyncMock()
         return client
 
@@ -231,7 +231,7 @@ class TestSetDashboardListCallDedup:
 
     @pytest.fixture
     def mock_client(self):
-        client = MagicMock()
+        client = MagicMock(base_url=None, token=None)
         client.send_websocket_message = AsyncMock()
         return client
 
@@ -347,7 +347,7 @@ class TestSetDashboardUrlPathCreationContract:
 
     @pytest.fixture
     def mock_client(self):
-        client = MagicMock()
+        client = MagicMock(base_url=None, token=None)
         client.send_websocket_message = AsyncMock()
         return client
 
@@ -546,7 +546,9 @@ class TestSetDashboardUrlPathCreationContract:
 
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
-        assert "conflict" in body["error"]["message"]
+        assert body["error"]["message"] == "Dashboard has no saved config"
+        assert body["reason"] == "conflict"
+        assert body["write_committed"] is False
         assert body["url_path"] == "no-config"
         assert mock_client.send_websocket_message.call_count == 2
 
@@ -633,6 +635,9 @@ class TestSetDashboardUrlPathCreationContract:
         assert body["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "Cannot verify" in body["error"]["message"]
         assert read_error in body["error"]["details"]
+        assert body["reason"] == "load_failed"
+        assert body["write_committed"] is False
+        assert body["post_write_verified"] is False
         assert body["url_path"] == "map"
         assert mock_client.send_websocket_message.call_count == 2
 

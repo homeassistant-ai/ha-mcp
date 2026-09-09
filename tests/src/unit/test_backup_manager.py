@@ -1312,6 +1312,7 @@ def _standalone_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     # Path.home() ignores HOME on Windows; never inspect the operator's backups.
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path / "data"))
     bm.get_data_dir.cache_clear()
     yield tmp_path / "data"

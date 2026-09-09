@@ -210,6 +210,7 @@ async def test_python_transform_hash_conflict(mcp_client, ha_client):
         "ha_config_set_automation",
         {
             "identifier": entity_id,
+            "config_hash": config_hash,
             "config": {
                 "alias": "Test Conflict Modified",
                 "trigger": [{"platform": "time", "at": "11:00:00"}],
@@ -539,6 +540,7 @@ async def test_full_config_update_with_stale_hash(mcp_client, ha_client):
         "ha_config_set_automation",
         {
             "identifier": entity_id,
+            "config_hash": old_hash,
             "config": {
                 "alias": "Modified",
                 "trigger": [{"platform": "time", "at": "19:30:00"}],

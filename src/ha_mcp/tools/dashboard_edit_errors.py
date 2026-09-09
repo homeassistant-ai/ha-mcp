@@ -1,0 +1,156 @@
+"""Consistent failure codes and recovery guidance for dashboard edit backends."""
+
+from __future__ import annotations
+
+import json
+from typing import Any, NoReturn
+
+from fastmcp.exceptions import ToolError
+
+from ..errors import ErrorCode, create_error_response, get_error_code, get_error_message
+from .helpers import extract_tool_error_message, raise_tool_error
+
+_MODE_SUGGESTIONS = [
+    "Use a storage-mode dashboard created through the Home Assistant UI or API",
+    "For a YAML dashboard, edit its dashboard YAML file directly",
+]
+_EDIT_SUGGESTIONS = {
+    "yaml_not_supported": _MODE_SUGGESTIONS,
+    "unsupported_mode": _MODE_SUGGESTIONS,
+    "unauthorized": [
+        "Connect using a Home Assistant admin session to edit dashboards",
+        "Check the permissions of the Home Assistant user behind this session",
+    ],
+    "invalid_format": [
+        "Check the dashboard edit parameters against the reported schema error",
+        "Check that HA-MCP and the custom component support the same command format",
+    ],
+    "strategy_conversion": [
+        "Use 'Take Control' in the Home Assistant interface to convert it",
+        "Keep a strategy configuration when updating this dashboard",
+    ],
+    "not_found": [
+        "Verify the dashboard URL with ha_config_get_dashboard(list_only=True)",
+        "Use the 'config' parameter to create a dashboard or initialize its saved config",
+    ],
+    "validation_failed": [
+        "Correct the config or patch according to the validation error",
+        "For patch operations, check the JSON Pointer paths and operation values",
+    ],
+    "conflict": [
+        "Read the dashboard again with ha_config_get_dashboard",
+        "Use its fresh config_hash and rebase the edit on the current config",
+    ],
+    "recovery_mode": [
+        "Resolve Home Assistant recovery mode before retrying the dashboard edit",
+    ],
+    "write_not_sent": [
+        "Reconnect to Home Assistant, then retry the dashboard config edit",
+        "The config write was not sent; its edit parameters can be reused",
+    ],
+    "write_outcome_unknown": [
+        "Read the dashboard with ha_config_get_dashboard before retrying",
+        "Use its fresh config_hash and check whether the requested changes already applied",
+    ],
+}
+
+
+def raise_dashboard_edit_error(
+    url_path: str | None,
+    code: str,
+    message: str,
+    write_committed: bool | None,
+    action: str,
+    *,
+    hash_supplied: bool = False,
+) -> NoReturn:
+    """Preserve the operation and outcome while suggesting a relevant next step."""
+    error_code = {
+        "validation_failed": ErrorCode.VALIDATION_FAILED,
+        "yaml_not_supported": ErrorCode.VALIDATION_FAILED,
+        "unsupported_mode": ErrorCode.VALIDATION_FAILED,
+        "strategy_conversion": ErrorCode.VALIDATION_FAILED,
+        "not_found": ErrorCode.RESOURCE_NOT_FOUND,
+        "unauthorized": ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+        "invalid_format": ErrorCode.VALIDATION_FAILED,
+        "write_not_sent": ErrorCode.CONNECTION_FAILED,
+    }.get(code, ErrorCode.SERVICE_CALL_FAILED)
+    suggestions = _EDIT_SUGGESTIONS.get(
+        code,
+        [
+            "Check the Home Assistant connection and this session's permissions",
+            "Check Home Assistant logs for the reported error before retrying",
+        ],
+    )
+    if code == "conflict" and action == "set" and hash_supplied:
+        suggestions = [
+            *suggestions,
+            "For a full replacement, omit config_hash to force replace",
+        ]
+    if code == "write_outcome_unknown":
+        message = f"Dashboard write outcome unknown: {message}"
+    raise_tool_error(
+        create_error_response(
+            error_code,
+            message,
+            suggestions=suggestions,
+            context={
+                "action": action,
+                "url_path": url_path,
+                "reason": code,
+                "write_committed": write_committed,
+                "post_write_verified": False,
+            },
+        )
+    )
+
+
+def raise_dashboard_edit_fetch_error(
+    exc: ToolError, url_path: str, action: str
+) -> NoReturn:
+    """Only Core's explicit config_not_found means an absent dashboard/config."""
+    try:
+        data = json.loads(str(exc))
+    except (ValueError, TypeError):
+        data = None
+    reason = (
+        "not_found"
+        if isinstance(data, dict) and data.get("ha_error_code") == "config_not_found"
+        else "load_failed"
+    )
+    raise_dashboard_edit_error(
+        url_path, reason, extract_tool_error_message(exc), False, action
+    )
+
+
+def raise_known_dashboard_save_rejection(
+    response: dict[str, Any], url_path: str, action: str
+) -> None:
+    """Translate definite Core rejections; leave all other save errors unchanged.
+
+    Lovelace's WebSocket wrapper reports missing configs as config_not_found.
+    LovelaceConfig.async_save rejects non-storage implementations (including
+    YAML) with HomeAssistantError("Not supported"), encoded as code "error".
+    Require both that code and exact message: recovery-mode failures differ.
+    """
+    code = response.get("error_code") or get_error_code(response)
+    message = get_error_message(response) or "Dashboard save rejected"
+    if code in {"unauthorized", "invalid_format"}:
+        raise_dashboard_edit_error(url_path, code, message, False, action)
+    if code == "config_not_found":
+        raise_dashboard_edit_error(url_path, "not_found", message, False, action)
+    if code == "error" and message.removeprefix("Command failed: ") == "Not supported":
+        raise_dashboard_edit_error(
+            url_path,
+            "unsupported_mode",
+            "Dashboard does not support storage-mode editing",
+            False,
+            action,
+        )
+    if (
+        code == "error"
+        and message.removeprefix("Command failed: ")
+        == "Saving not supported in recovery mode"
+    ):
+        # LovelaceStorage checks recovery mode before changing its live config.
+        raise_dashboard_edit_error(url_path, "recovery_mode", message, False, action)
