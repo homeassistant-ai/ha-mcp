@@ -29,6 +29,7 @@ from ..errors import (
     create_error_response,
     create_validation_error,
 )
+from ..read_only import require_write_access
 from ..utils.entity_membership import normalize_member_entity_ids
 from .bulk_selector import (
     _NON_AGGREGATE_ROOT_DOMAINS,
@@ -1816,6 +1817,7 @@ class ServiceTools:
         name="ha_call_service",
         tags={"Service & Device Control"},
         annotations={
+            "readOnlyHint": False,
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Call Service",
@@ -2000,7 +2002,14 @@ class ServiceTools:
         Only one-shot request/response commands are supported; streaming/two-phase
         and service-invoking commands are rejected, and the other service
         parameters (entity_id, return_response, etc.) don't apply.
+
+        Unavailable in Read Only Mode, including read-like services and WebSocket
+        commands. Use dedicated read tools while that mode is enabled.
         """
+        # Guard the escape hatch itself as well as the MCP catalog/middleware:
+        # direct dispatch must never reach either transport in read-only mode.
+        require_write_access("ha_call_service")
+
         # WebSocket-command escape hatch (issue #1839): reach one-shot WS
         # commands that aren't registered services (e.g. repairs/ignore_issue).
         if ws_command is not None:

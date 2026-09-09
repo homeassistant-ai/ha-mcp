@@ -272,14 +272,24 @@ async def test_overview_reports_read_only_mode(readonly_mcp):
 @pytest.mark.asyncio
 async def test_direct_write_tool_call_blocked(readonly_mcp):
     client, _server = readonly_mcp
-    body = await _expect_read_only_blocked(
-        client,
-        "ha_call_service",
+    for arguments in (
         {"domain": "light", "service": "turn_on", "entity_id": "light.bed_light"},
-    )
-    assert body["tool_name"] == "ha_call_service"
-    # The error must point the user at the toggle.
-    assert "Read Only Mode" in body["error"]["message"]
+        {
+            "domain": "persistent_notification",
+            "service": "create",
+            "data": {"message": "read-only regression"},
+        },
+        {"domain": "weather", "service": "get_forecasts", "return_response": True},
+        {"ws_command": "repairs/list_issues"},
+        {
+            "ws_command": "repairs/ignore_issue",
+            "data": {"domain": "sun", "issue_id": "test", "ignore": True},
+        },
+    ):
+        body = await _expect_read_only_blocked(client, "ha_call_service", arguments)
+        assert body["tool_name"] == "ha_call_service"
+        # The error must point the user at the toggle.
+        assert "Read Only Mode" in body["error"]["message"]
 
 
 @pytest.mark.asyncio
