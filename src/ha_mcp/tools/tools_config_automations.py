@@ -543,8 +543,9 @@ class AutomationConfigTools:
         identifier: Annotated[
             str | None,
             Field(
-                description="Automation entity_id or unique_id for updates. "
-                "Required for python_transform. Omit to create new automation with generated unique_id.",
+                description="Target automation entity_id or HA config 'id' (unique_id). "
+                "Omit for creation with a generated ID. Values such as 'new' are literal IDs, not placeholders. "
+                "Required for python_transform.",
                 default=None,
             ),
         ] = None,
@@ -567,7 +568,8 @@ class AutomationConfigTools:
             Field(
                 description="Config hash from ha_config_get_automation for optimistic locking. "
                 "REQUIRED for python_transform (validates automation unchanged). "
-                "Optional for config updates (validates before full replacement if provided).",
+                "Required when a config update changes an existing automation's alias. "
+                "Otherwise optional for config updates (validates before full replacement if provided).",
             ),
         ] = None,
         take_control_of_blueprint: Annotated[
@@ -673,7 +675,11 @@ class AutomationConfigTools:
         - Add trigger: python_transform="config['triggers'].append({'trigger': 'state', 'entity_id': 'binary_sensor.motion', 'to': 'on'})"
         - Remove last action: python_transform="config['actions'].pop()"
 
-        Creates a new automation (if identifier omitted) or updates existing automation with provided configuration.
+        Omit identifier and config['id'] to create a new automation with a generated ID.
+        A previously unused raw ID can also create an automation with that specific ID.
+        Reusing an identifier targets the same automation, even if the alias changes.
+        To intentionally rename or replace it, first read it with ha_config_get_automation
+        and pass its config_hash. A changed alias without that hash is rejected before writing.
 
         AUTOMATION TYPES:
 
@@ -732,8 +738,10 @@ class AutomationConfigTools:
         })
 
         Update existing automation:
+        current = ha_config_get_automation(identifier="automation.morning_routine")
         ha_config_set_automation(
             identifier="automation.morning_routine",
+            config_hash=current["config_hash"],
             config={
                 "alias": "Updated Morning Routine",
                 "triggers": [{"trigger": "time", "at": "06:30:00"}],
@@ -909,6 +917,8 @@ class AutomationConfigTools:
                 _, resolved_id = await self._fetch_and_verify_hash(
                     identifier, config_hash, "set"
                 )
+            elif identifier:
+                await self._guard_alias_replacement(identifier, config_dict)
 
             self._validate_required_fields(config_dict, identifier)
             bp_warnings = _check_best_practices(config_dict)
@@ -1308,6 +1318,34 @@ class AutomationConfigTools:
             and isinstance(entry.get("entity_id"), str)
             and entry["entity_id"].startswith("automation.")
         ][:10]
+
+    async def _guard_alias_replacement(
+        self, identifier: str, config: dict[str, Any]
+    ) -> None:
+        """Require a prior read before replacing a differently named automation."""
+        if "alias" not in config:
+            return  # Required-field validation supplies the actionable error.
+        try:
+            current = await self._client.get_automation_config(identifier)
+        except HomeAssistantAPIError as exc:
+            if exc.status_code == 404:
+                return  # Preserve intentional creation with a caller-chosen ID.
+            raise
+        if current.get("alias") == config["alias"]:
+            return
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_FAILED,
+                f"Automation {identifier!r} already exists as {current.get('alias')!r}. "
+                f"This write would replace it with {config['alias']!r}. Nothing was written.",
+                context={"identifier": identifier, "parameter": "config_hash"},
+                suggestions=[
+                    "Omit identifier and remove config['id'] to create a separate automation.",
+                    "For an intentional rename or replacement, call ha_config_get_automation "
+                    "for this identifier, inspect its config, and resubmit with its config_hash.",
+                ],
+            )
+        )
 
     async def _raise_automation_not_found(self, identifier: str) -> None:
         """Raise a structured RESOURCE_NOT_FOUND ToolError for a missing automation.

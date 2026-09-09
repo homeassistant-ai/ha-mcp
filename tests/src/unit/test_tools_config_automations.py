@@ -466,6 +466,85 @@ class TestDeleteAutomationIdKey:
         assert result.get("unique_id") == "abc123unique"
 
 
+class TestAutomationReplacementGuard:
+    """An alias change must not silently replace an unrelated automation (#2407)."""
+
+    @pytest.fixture
+    def replacement(self):
+        return {
+            "alias": "Bathroom lights",
+            "triggers": [{"trigger": "event", "event_type": "issue_2407_test"}],
+            "actions": [{"stop": "No device actions"}],
+        }
+
+    @pytest.mark.parametrize(
+        "identifier", ["new", "custom_id", "automation.morning_routine"]
+    )
+    async def test_alias_change_without_hash_does_not_write(
+        self, tools, mock_client, replacement, identifier
+    ):
+        with pytest.raises(ToolError) as exc:
+            await tools.ha_config_set_automation(
+                identifier=identifier, config=replacement, wait=False
+            )
+
+        error = json.loads(str(exc.value))
+        assert error["error"]["code"] == "VALIDATION_FAILED"
+        assert "Morning Routine" in str(exc.value)
+        assert "Bathroom lights" in str(exc.value)
+        assert "config_hash" in str(exc.value)
+        assert "ha_config_get_automation" in str(exc.value)
+        assert "Omit identifier" in str(exc.value)
+        mock_client.upsert_automation_config.assert_not_awaited()
+
+    async def test_intentional_rename_with_fresh_hash_succeeds(
+        self, tools, mock_client, replacement
+    ):
+        before = await tools.ha_config_get_automation(identifier="abc123unique")
+        result = await tools.ha_config_set_automation(
+            identifier="abc123unique",
+            config=replacement,
+            config_hash=before["config_hash"],
+            wait=False,
+        )
+        assert result["success"] is True
+        assert (
+            mock_client.upsert_automation_config.call_args.args[0]["alias"]
+            == "Bathroom lights"
+        )
+
+    @pytest.mark.parametrize("identifier", [None, "chosen_custom_id"])
+    async def test_creation_remains_available(
+        self, tools, mock_client, replacement, identifier
+    ):
+        from ha_mcp.client.rest_client import HomeAssistantAPIError
+
+        mock_client.get_automation_config.side_effect = HomeAssistantAPIError(
+            "Not found", status_code=404
+        )
+        result = await tools.ha_config_set_automation(
+            identifier=identifier, config=replacement, wait=False
+        )
+        assert result["success"] is True
+        mock_client.upsert_automation_config.assert_awaited_once()
+        assert mock_client.upsert_automation_config.call_args.args[1] == identifier
+
+    @pytest.mark.parametrize("status", [401, 500])
+    async def test_failed_lookup_does_not_allow_overwrite(
+        self, tools, mock_client, replacement, status
+    ):
+        from ha_mcp.client.rest_client import HomeAssistantAPIError
+
+        mock_client.get_automation_config.side_effect = HomeAssistantAPIError(
+            "Lookup failed", status_code=status
+        )
+        with pytest.raises(ToolError):
+            await tools.ha_config_set_automation(
+                identifier="new", config=replacement, wait=False
+            )
+        mock_client.upsert_automation_config.assert_not_awaited()
+
+
 class TestStripRedundantIdentifierEcho:
     """Direct regression armor for the `_strip_redundant_identifier_echo`
     helper, pinning (a) `unique_id` survives the strip — the load-bearing

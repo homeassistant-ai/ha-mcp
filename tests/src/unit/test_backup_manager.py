@@ -1310,6 +1310,7 @@ def _standalone_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
     monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path / "data"))
     bm.get_data_dir.cache_clear()
     yield tmp_path / "data"
