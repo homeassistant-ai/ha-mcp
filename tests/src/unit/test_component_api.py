@@ -327,17 +327,23 @@ def _clock(start: float = 1000.0) -> list[float]:
 
 
 @pytest.mark.asyncio
-async def test_fresh_negative_does_not_reprobe(monkeypatch) -> None:
-    """A negative within the TTL window is honored without re-probing."""
+@pytest.mark.parametrize("absence", ["unknown_command", "unsupported_schema"])
+async def test_fresh_negative_does_not_reprobe(monkeypatch, absence) -> None:
+    """Definitive absence keeps the five-minute cache, not the failure cooldown."""
     clock = _clock()
     monkeypatch.setattr(component_api, "_monotonic", lambda: clock[0])
     ws = _make_ws(
         info_exc=HomeAssistantCommandError("Command failed: x", "unknown_command")
+        if absence == "unknown_command"
+        else None,
+        info_result={**_INFO_OK, "schema_version": SUPPORTED_SCHEMA_VERSION + 1},
     )
     client = _client()
     with _patch_ws(ws):
         assert await get_component_caps(client) is None
-        clock[0] += component_api._NEGATIVE_CACHE_TTL_S - 1  # still inside window
+        clock[0] += 31  # Past the transient cooldown; definitive absence stays cached.
+        assert await get_component_caps(client, strict=True) is None
+        clock[0] += 268  # At 299 seconds, still inside the five-minute window.
         assert await get_component_caps(client) is None
     assert ws.send_command.await_count == 1
 
