@@ -331,6 +331,12 @@ def _raise_read_only_error(
     )
 
 
+def require_write_access(tool_name: str) -> None:
+    """Reject direct tool execution while Read Only Mode is enabled."""
+    if get_global_settings().read_only_mode:
+        _raise_read_only_error(tool_name)
+
+
 class ReadOnlyToolsTransform(Transform):
     """Hide write-capable tools from the catalog while read-only mode is on.
 
