@@ -26,7 +26,7 @@ from ...utilities.assertions import (
     safe_call_tool,
 )
 from ...utilities.topology import component_surface_available
-from ...utilities.wait_helpers import wait_for_tool_result
+from ...utilities.wait_helpers import wait_for_entity_state, wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -782,7 +782,7 @@ class TestTemplateHelperCaptureRestore:
                     "helper_type": "template",
                     "name": f"Backup Template {uuid.uuid4().hex[:8]}",
                     "config": {
-                        "template_type": template_type,
+                        "next_step_id": template_type,
                         "state": "{{ 12 }}"
                         if template_type == "sensor"
                         else "{{ true }}",
@@ -791,6 +791,13 @@ class TestTemplateHelperCaptureRestore:
             )
             assert create.get("success") is True, create
             entry_id = create["entry_id"]
+            entity_ids = [
+                entity_id
+                for entity_id in create["entity_ids"]
+                if entity_id.startswith(f"{template_type}.")
+            ]
+            assert len(entity_ids) == 1, create
+            entity_id = entity_ids[0]
             before = await wait_for_tool_result(
                 mcp_client,
                 tool_name="ha_config_list_helpers",
@@ -836,6 +843,12 @@ class TestTemplateHelperCaptureRestore:
             assert edited_options["additional_options"]["availability"] == "{{ true }}"
             if template_type == "sensor":
                 assert edited_options["unit_of_measurement"] == "W"
+            assert await wait_for_entity_state(
+                mcp_client,
+                entity_id,
+                "99" if template_type == "sensor" else "off",
+                timeout=20,
+            ), f"Template helper {entity_id} did not activate the edited state"
             name = await _wait_for_backup(
                 mcp_client, domain="helper_template", entity_id=entry_id
             )
@@ -869,6 +882,12 @@ class TestTemplateHelperCaptureRestore:
                 )
                 == original
             )
+            assert await wait_for_entity_state(
+                mcp_client,
+                entity_id,
+                "12" if template_type == "sensor" else "on",
+                timeout=20,
+            ), f"Template helper {entity_id} did not activate the restored state"
         finally:
             if entry_id is not None:
                 await ha_client.delete_config_entry(entry_id)
