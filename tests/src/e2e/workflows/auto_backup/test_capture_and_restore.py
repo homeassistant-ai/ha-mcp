@@ -20,13 +20,31 @@ from typing import Any
 
 import pytest
 
-from ...utilities.assertions import extract_error_message, safe_call_tool
+from ...utilities.assertions import MCPAssertions, extract_error_message, safe_call_tool
 from ...utilities.wait_helpers import wait_for_tool_result
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------- helpers
+
+
+async def _update_automation(
+    mcp_client, identifier: str, config: dict[str, Any]
+) -> None:
+    """Confirm intentional replacements and fail if the setup write is rejected."""
+    mcp = MCPAssertions(mcp_client)
+    current = await mcp.call_tool_success(
+        "ha_config_get_automation", {"identifier": identifier}
+    )
+    await mcp.call_tool_success(
+        "ha_config_set_automation",
+        {
+            "identifier": identifier,
+            "config": config,
+            "config_hash": current["config_hash"],
+        },
+    )
 
 
 def _enable_auto_backup(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -333,11 +351,7 @@ class TestAutomationCaptureRestore:
 
         # Edit it once — decorator captures pre-edit state.
         edited = {**original, "alias": f"E2E Backup Edited {suffix}"}
-        await safe_call_tool(
-            mcp_client,
-            "ha_config_set_automation",
-            {"config": edited, "identifier": identifier},
-        )
+        await _update_automation(mcp_client, identifier, edited)
 
         # List backups; ours should be there.
         listing = await safe_call_tool(
@@ -488,10 +502,8 @@ class TestAutomationDiff:
         )
         # Edit — the decorator snapshots the pre-edit state (alias =
         # original_alias). Live state ends at alias = edited_alias.
-        await safe_call_tool(
-            mcp_client,
-            "ha_config_set_automation",
-            {"config": {**original, "alias": edited_alias}, "identifier": identifier},
+        await _update_automation(
+            mcp_client, identifier, {**original, "alias": edited_alias}
         )
         backup_name = await _wait_for_backup(
             mcp_client, domain="automation", entity_id=identifier
@@ -547,13 +559,10 @@ class TestAutomationDiff:
             "ha_config_set_automation",
             {"config": original, "identifier": identifier},
         )
-        await safe_call_tool(
+        await _update_automation(
             mcp_client,
-            "ha_config_set_automation",
-            {
-                "config": {**original, "alias": f"E2E Diff Missing Edited {suffix}"},
-                "identifier": identifier,
-            },
+            identifier,
+            {**original, "alias": f"E2E Diff Missing Edited {suffix}"},
         )
         backup_name = await _wait_for_backup(
             mcp_client, domain="automation", entity_id=identifier
@@ -603,19 +612,16 @@ class TestAutomationDiff:
             {"config": original, "identifier": identifier},
         )
         # Edit several fields so the captured-vs-live diff is > 1 op.
-        await safe_call_tool(
+        await _update_automation(
             mcp_client,
-            "ha_config_set_automation",
+            identifier,
             {
-                "config": {
-                    **original,
-                    "alias": f"E2E Diff Trunc Edited {suffix}",
-                    "trigger": [
-                        {"platform": "time", "at": "13:00:00"},
-                        {"platform": "time", "at": "14:00:00"},
-                    ],
-                },
-                "identifier": identifier,
+                **original,
+                "alias": f"E2E Diff Trunc Edited {suffix}",
+                "trigger": [
+                    {"platform": "time", "at": "13:00:00"},
+                    {"platform": "time", "at": "14:00:00"},
+                ],
             },
         )
         backup_name = await _wait_for_backup(
@@ -1081,16 +1087,13 @@ class TestToggleOffSkipsCapture:
                 "identifier": identifier,
             },
         )
-        await safe_call_tool(
+        await _update_automation(
             mcp_client,
-            "ha_config_set_automation",
+            identifier,
             {
-                "config": {
-                    "alias": "Auto off test edited",
-                    "trigger": [{"platform": "time", "at": "12:00:00"}],
-                    "action": [{"service": "homeassistant.no_op"}],
-                },
-                "identifier": identifier,
+                "alias": "Auto off test edited",
+                "trigger": [{"platform": "time", "at": "12:00:00"}],
+                "action": [{"service": "homeassistant.no_op"}],
             },
         )
 
