@@ -1339,24 +1339,24 @@ class AutomationConfigTools:
             # Entity-ID resolution also maps lookup failures to 404. Never retry
             # those as creation: a recovered lookup could overwrite an unchecked target.
             raise
-        if current.get("alias") == config["alias"]:
-            raw_id = current.get("id")
-            return str(raw_id) if raw_id is not None else None
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"Automation {identifier!r} already exists as {current.get('alias')!r}. "
-                f"This write would replace it with {config['alias']!r}. Nothing was written.",
-                context={"identifier": identifier, "parameter": "config_hash"},
-                suggestions=[
-                    "Omit identifier and remove config['id'] to create a separate automation.",
-                    (
-                        "For an intentional rename or replacement, call ha_config_get_automation "
-                        "for this identifier, inspect its config, and resubmit with its config_hash."
-                    ),
-                ],
+        if current.get("alias") != config["alias"]:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Automation {identifier!r} already exists as {current.get('alias')!r}. "
+                    f"This write would replace it with {config['alias']!r}. Nothing was written.",
+                    context={"identifier": identifier, "parameter": "config_hash"},
+                    suggestions=[
+                        "Omit identifier and remove config['id'] to create a separate automation.",
+                        (
+                            "For an intentional rename or replacement, call ha_config_get_automation "
+                            "for this identifier, inspect its config, and resubmit with its config_hash."
+                        ),
+                    ],
+                )
             )
-        )
+        raw_id = current.get("id")
+        return str(raw_id) if raw_id is not None else None
 
     async def _raise_automation_not_found(self, identifier: str) -> None:
         """Raise a structured RESOURCE_NOT_FOUND ToolError for a missing automation.
