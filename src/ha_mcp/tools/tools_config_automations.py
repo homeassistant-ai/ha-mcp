@@ -908,17 +908,18 @@ class AutomationConfigTools:
             # (trigger -> triggers, action -> actions, condition -> conditions).
             config_dict = _normalize_automation_config(config_dict)
 
-            # Optional hash check for full config updates. When it runs it
-            # resolves ``identifier`` to the storage key — thread that through so
-            # the upsert doesn't re-resolve (issue #1813 Phase 0). Stays None on
-            # the no-hash path, where the guard and upsert resolve independently.
+            # Both the hash check and alias guard read the resolved storage key.
+            # Reuse it for the write to avoid a second entity-ID lookup (#1813).
+            # Creation and responses without an id retain the existing fallback.
             resolved_id: str | None = None
             if identifier and config_hash:
                 _, resolved_id = await self._fetch_and_verify_hash(
                     identifier, config_hash, "set"
                 )
             elif identifier:
-                await self._guard_alias_replacement(identifier, config_dict)
+                resolved_id = await self._guard_alias_replacement(
+                    identifier, config_dict
+                )
 
             self._validate_required_fields(config_dict, identifier)
             bp_warnings = _check_best_practices(config_dict)
@@ -1024,11 +1025,11 @@ class AutomationConfigTools:
         """Upsert, threading a pre-resolved unique_id when available.
 
         When ``resolved_id`` is set the caller already resolved ``identifier``
-        (via ``_fetch_and_verify_hash``); pass it with ``_resolved=True`` so the
+        (via the hash check or alias guard); pass it with ``_resolved=True`` so the
         REST client skips the redundant entity_id→unique_id lookup (issue #1813
         Phase 0). Otherwise fall back to the raw ``identifier`` and let the REST
-        client resolve — the create path (``identifier is None``) and the
-        no-hash update path both land here unchanged.
+        client resolve — creation and fetched configs without an id use this
+        fallback.
         """
         result: dict[str, Any]
         if resolved_id is not None:
@@ -1215,8 +1216,8 @@ class AutomationConfigTools:
         more: Home Assistant goes on counting the automation as a user of that
         blueprint until it is removed, so there is no release to wait for.
 
-        ``resolved_id`` (set only when the optional hash check pre-resolved
-        ``identifier``) is threaded to the upsert so it skips the redundant
+        ``resolved_id`` (set when the hash check or alias guard fetched an id)
+        is threaded to the upsert so it skips the redundant
         re-resolve; None falls back to resolving inside the REST client.
         """
         result = await self._upsert_automation(config_dict, identifier, resolved_id)
@@ -1321,24 +1322,26 @@ class AutomationConfigTools:
 
     async def _guard_alias_replacement(
         self, identifier: str, config: dict[str, Any]
-    ) -> None:
+    ) -> str | None:
         """Require a prior read before replacing a differently named automation.
 
+        Return the fetched storage id for reuse by the write, when available.
         This catches sequential ID reuse. The REST read and write are separate
         requests, so it does not provide atomic protection against other writers.
         """
         if "alias" not in config:
-            return  # Required-field validation supplies the actionable error.
+            return None  # Required-field validation supplies the actionable error.
         try:
             current = await self._client.get_automation_config(identifier)
         except HomeAssistantAPIError as exc:
             if exc.status_code == 404 and not identifier.startswith("automation."):
-                return  # Preserve intentional creation with a caller-chosen ID.
+                return None  # Preserve intentional creation with a caller-chosen ID.
             # Entity-ID resolution also maps lookup failures to 404. Never retry
             # those as creation: a recovered lookup could overwrite an unchecked target.
             raise
         if current.get("alias") == config["alias"]:
-            return
+            raw_id = current.get("id")
+            return str(raw_id) if raw_id is not None else None
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,

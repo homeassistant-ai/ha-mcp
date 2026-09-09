@@ -319,10 +319,10 @@ class TestFullConfigSetAutomationIdKey:
 
 class TestAutomationUpsertResolvedThreading:
     """Issue #1813 Phase 0 item #6: when the tool pre-resolves the identifier
-    (its hash-verify fetch already resolved the storage key), it threads
+    (its hash-verify or alias-guard fetch resolved the storage key), it threads
     ``_resolved=True`` and the resolved unique_id into
     ``upsert_automation_config`` so the REST client skips the redundant second
-    resolve. The no-pre-resolve paths (create, no-hash update) stay unthreaded.
+    resolve. Creation and fetched configs without an id stay unthreaded.
     """
 
     @pytest.fixture
@@ -385,11 +385,15 @@ class TestAutomationUpsertResolvedThreading:
         assert kwargs.get("_resolved") is True
         assert args[1] == "abc123unique"
 
-    async def test_full_config_without_hash_is_not_threaded(
-        self, tools, mock_client, canonical_config
+    @pytest.mark.parametrize("stored_id", ["abc123unique", 123, None])
+    async def test_full_config_without_hash_reuses_guard_id_when_available(
+        self, tools, mock_client, canonical_config, stored_id
     ):
-        """No ``config_hash`` → no pre-resolve → the raw identifier is passed and
-        the REST client resolves once (``_resolved`` stays False/absent)."""
+        """Reuse the guard's storage key, with the existing no-id fallback."""
+        if stored_id is None:
+            mock_client.get_automation_config.return_value.pop("id")
+        else:
+            mock_client.get_automation_config.return_value["id"] = stored_id
         result = await tools.ha_config_set_automation(
             identifier="automation.morning_routine",
             config=canonical_config,
@@ -397,9 +401,14 @@ class TestAutomationUpsertResolvedThreading:
         )
 
         assert result["success"] is True
+        mock_client.get_automation_config.assert_awaited_once_with(
+            "automation.morning_routine"
+        )
         args, kwargs = mock_client.upsert_automation_config.call_args
-        assert kwargs.get("_resolved", False) is False
-        assert args[1] == "automation.morning_routine"
+        assert kwargs.get("_resolved", False) is (stored_id is not None)
+        assert args[1] == (
+            str(stored_id) if stored_id is not None else "automation.morning_routine"
+        )
 
     async def test_create_is_not_threaded(self, tools, mock_client, canonical_config):
         """Create (identifier omitted) never pre-resolves — upsert gets
