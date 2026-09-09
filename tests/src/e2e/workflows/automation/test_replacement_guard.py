@@ -38,7 +38,7 @@ async def test_existing_automation_alias_change_requires_read(
         {"identifier": identifier, "config": replacement},
         expected_error="already exists",
     )
-    assert blocked["error"]["code"] == "VALIDATION_FAILED"
+    assert blocked["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
     after = await mcp.call_tool_success(
         "ha_config_get_automation", {"identifier": identifier}
     )

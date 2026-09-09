@@ -1322,7 +1322,11 @@ class AutomationConfigTools:
     async def _guard_alias_replacement(
         self, identifier: str, config: dict[str, Any]
     ) -> None:
-        """Require a prior read before replacing a differently named automation."""
+        """Require a prior read before replacing a differently named automation.
+
+        This catches sequential ID reuse. The REST read and write are separate
+        requests, so it does not provide atomic protection against other writers.
+        """
         if "alias" not in config:
             return  # Required-field validation supplies the actionable error.
         try:
@@ -1335,14 +1339,16 @@ class AutomationConfigTools:
             return
         raise_tool_error(
             create_error_response(
-                ErrorCode.VALIDATION_FAILED,
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"Automation {identifier!r} already exists as {current.get('alias')!r}. "
                 f"This write would replace it with {config['alias']!r}. Nothing was written.",
                 context={"identifier": identifier, "parameter": "config_hash"},
                 suggestions=[
                     "Omit identifier and remove config['id'] to create a separate automation.",
-                    "For an intentional rename or replacement, call ha_config_get_automation "
-                    "for this identifier, inspect its config, and resubmit with its config_hash.",
+                    (
+                        "For an intentional rename or replacement, call ha_config_get_automation "
+                        "for this identifier, inspect its config, and resubmit with its config_hash."
+                    ),
                 ],
             )
         )

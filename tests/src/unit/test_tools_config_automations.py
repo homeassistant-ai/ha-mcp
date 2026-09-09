@@ -489,7 +489,7 @@ class TestAutomationReplacementGuard:
             )
 
         error = json.loads(str(exc.value))
-        assert error["error"]["code"] == "VALIDATION_FAILED"
+        assert error["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
         assert "Morning Routine" in str(exc.value)
         assert "Bathroom lights" in str(exc.value)
         assert "config_hash" in str(exc.value)

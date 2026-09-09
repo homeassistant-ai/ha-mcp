@@ -901,6 +901,7 @@ class TestSetAutomationMissingSurfacesAvailableIds:
         # + get_states — both empty is fine.
         client.get_services = AsyncMock(return_value={})
         # The actual upsert raises 404 — the audit-family failure mode.
+        client.get_automation_config = AsyncMock(return_value={"alias": "X"})
         client.upsert_automation_config = AsyncMock(
             side_effect=_api_404("Automation not found: automation.missing")
         )
