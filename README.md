@@ -218,6 +218,8 @@ For Template backup listing and bulk deletion, filter by the config-entry ID ret
 
 If the original entry has been deleted, restore recreates the helper and reports its new config-entry ID. The saved entity ID and custom name are restored when available; an occupied entity ID is refused before creation. Older snapshots without entity metadata cannot preserve renamed entity IDs. If a collision or verification failure occurs after creation, the new helper and source backup are retained and the result reports the new entry for inspection. Other entity/device registry settings are not restored. Helper and integration edits through the same server wait until restore finishes; other Home Assistant clients are outside this coordination. Failed or uncertain restores report their outcome and safe refusal reasons; inspect the current helper before retrying.
 
+Edit backups can contain sensitive configuration. On POSIX, the backup directory must belong to the server user and prevent other users from replacing files, including through parent paths or directory aliases. Unsafe storage is refused without changing directory permissions; choose a private directory with trusted parents through `HAMCP_BACKUP_DIR`. New snapshots are private, and recognized owned snapshots lose group/other access. Existing Windows directory ACLs remain operator-managed.
+
 <details>
 <!-- TOOLS_TABLE_START -->
 

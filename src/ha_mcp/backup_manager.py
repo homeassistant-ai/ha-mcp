@@ -15,7 +15,9 @@ keep using that directory; see ``_resolve_default_dir``.
 
 New backup directories request owner-only access. On POSIX, snapshots are
 created with mode 0600; recognized existing owned snapshot files lose any
-group/other access on the first storage check. Existing directory modes stay unchanged.
+group/other access on the first storage check. Storage must be owned by the
+current user and protected from replacement through its directory ancestors.
+Unsafe directory ownership or modes are refused without changing them.
 On Windows, Python 3.13 restricts newly created 0700 directories; existing
 custom directory ACLs remain the operator's responsibility.
 
@@ -150,6 +152,10 @@ class InvalidBackupSnapshotError(ValueError):
     """Persisted snapshot data is invalid, independently of live HA access."""
 
 
+class UnsafeBackupStorageError(PermissionError):
+    """Snapshot storage can be replaced or modified by an untrusted local user."""
+
+
 def _snapshot_validation_message(error: ValueError) -> str:
     """Keep local field-only validation messages, never raw YAML parser text."""
     return (
@@ -196,6 +202,10 @@ def _template_failure_reason(step: str, error: BaseException) -> str:
         return str(error.outcome.get("reason") or "restore_refused")
     if isinstance(error, InvalidBackupSnapshotError):
         return "invalid_snapshot"
+    if isinstance(error, UnsafeBackupStorageError) or isinstance(
+        error.__cause__, UnsafeBackupStorageError
+    ):
+        return "unsafe_backup_storage"
     if isinstance(error, MandatoryBackupError):
         return "backup_capture_failed"
     if step == "safety_backup" and isinstance(error, OSError):
@@ -223,6 +233,34 @@ def _log_template_failure(step: str, error: BaseException) -> None:
         type(error).__name__,
         _template_failure_reason(step, error),
         f" detail={detail}" if detail else "",
+    )
+
+
+def _snapshot_restore_failure(
+    domain: str,
+    step: str,
+    apply_status: Literal["not_applied", "unknown", "applied"],
+    error: BaseException,
+    outcome: dict[str, Any],
+) -> BackupRestoreError | None:
+    """Preserve known storage refusals and Template apply outcomes for callers."""
+    if apply_status == "not_applied" and isinstance(error, UnsafeBackupStorageError):
+        logger.warning("Backup restore step=%s refused: %s", step, error)
+        message = str(error)
+    elif domain == "helper_template":
+        _log_template_failure(step, error)
+        message = _template_safe_failure_detail(step, error) or (
+            "Template helper restore was not attempted; inspect the target and backup storage"
+            if apply_status == "not_applied"
+            else "Template helper restore outcome is unknown; inspect current options before retrying"
+        )
+    else:
+        return None
+    return BackupRestoreError(
+        message,
+        apply_status=apply_status,
+        reason=_template_failure_reason(step, error),
+        **outcome,
     )
 
 
@@ -407,7 +445,7 @@ def _legacy_default_dir() -> Path:
     xdg = os.environ.get("XDG_DATA_HOME")
     if xdg:
         return Path(xdg) / "ha_mcp" / "backups"
-    return (Path.home() / ".local" / "share" / "ha_mcp" / "backups").resolve()
+    return Path.home() / ".local" / "share" / "ha_mcp" / "backups"
 
 
 def _holds_files(path: Path) -> bool:
@@ -417,7 +455,11 @@ def _holds_files(path: Path) -> bool:
     listed or restored from, so there is nothing to keep using.
     """
     try:
-        return any(path.iterdir())
+        if not path.is_dir():
+            return False
+        return any(_trusted_backup_directory(path).iterdir())
+    except UnsafeBackupStorageError:
+        raise
     except OSError:
         return False
 
@@ -479,23 +521,104 @@ async def _await_backup_io[T](operation: Callable[..., T], *args: Any) -> T:
         raise
 
 
+def _snapshot_file_exists(path: Path) -> bool:
+    _trusted_backup_directory(path.parent)
+    _reject_snapshot_symlink(path)
+    return path.is_file()
+
+
+def _reject_snapshot_symlink(path: Path) -> None:
+    if path.is_symlink():
+        raise UnsafeBackupStorageError(
+            "Symbolic links cannot be used as backup snapshot files"
+        )
+
+
 def _require_restore_safety(path: Path) -> None:
     """Check the recovery file after its restore pin closes the deletion race."""
-    if not path.is_file():
+    if not _snapshot_file_exists(path):
         raise MandatoryBackupError(
             "The safety snapshot disappeared before restore; no changes were applied"
         )
+
+
+def _validate_backup_directory(metadata: os.stat_result, *, leaf: bool = False) -> None:
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise NotADirectoryError("Backup storage path is not a directory")
+    owners = {os.geteuid()} if leaf else {0, os.geteuid()}
+    if metadata.st_uid not in owners:
+        raise UnsafeBackupStorageError("Backup storage path has untrusted ownership")
+    if metadata.st_mode & 0o022 and (leaf or not metadata.st_mode & stat.S_ISVTX):
+        raise UnsafeBackupStorageError(
+            "Backup storage path permits writes by other users; use a private directory with trusted ancestors"
+        )
+
+
+def _backup_component_metadata(
+    path: Path, *, create: bool
+) -> tuple[os.stat_result, bool]:
+    try:
+        return path.lstat(), False
+    except FileNotFoundError:
+        if not create:
+            raise
+    # The parent has already passed ownership/mode checks. If another process
+    # creates this name first, validate that object before traversing it.
+    with suppress(FileExistsError):
+        path.mkdir(mode=0o700)
+    return path.lstat(), True
+
+
+def _trusted_posix_backup_directory(directory: Path, *, create: bool) -> Path:
+    """Validate every raw alias hop before returning its canonical directory."""
+    absolute = directory if directory.is_absolute() else Path.cwd() / directory
+    current = Path(absolute.anchor)
+    _validate_backup_directory(current.lstat())
+    remaining = list(absolute.parts[1:])
+    created = False
+    links = 0
+    while remaining:
+        part = remaining.pop(0)
+        if part == "..":
+            current = current.parent
+            continue
+        candidate = current / part
+        metadata, made_directory = _backup_component_metadata(candidate, create=create)
+        created |= made_directory
+        if stat.S_ISLNK(metadata.st_mode):
+            links += 1
+            if metadata.st_uid not in {0, os.geteuid()} or links > 40:
+                raise UnsafeBackupStorageError("Backup storage alias is not trusted")
+            target = candidate.readlink()
+            if target.is_absolute():
+                current = Path(target.anchor)
+                remaining = list(target.parts[1:]) + remaining
+            else:
+                remaining = list(target.parts) + remaining
+            continue
+        _validate_backup_directory(metadata)
+        current = candidate
+    _validate_backup_directory(current.lstat(), leaf=True)
+    if create and not created:
+        current.mkdir(mode=0o700, exist_ok=True)
+    return current
+
+
+def _trusted_backup_directory(directory: Path, *, create: bool = False) -> Path:
+    if os.name == "posix":
+        return _trusted_posix_backup_directory(directory, create=create)
+    if create:
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return directory.resolve()
 
 
 def _restrict_existing_snapshot_permissions(directory: Path) -> None:
     """Restrict recognized POSIX snapshots through descriptors, never symlinks."""
     if os.name != "posix":
         return  # chmod does not restrict Windows ACLs.
-    # Configured directory aliases are supported; pin the resolved directory
-    # before inspecting children, which are never opened through symlinks.
-    directory_fd = os.open(
-        directory.resolve(), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    )
+    directory = _trusted_backup_directory(directory)
+    # The vetted canonical path has no replaceable untrusted alias components.
+    directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         for name in os.listdir(directory_fd):
             # Old failed writes used a predictable .yaml.tmp sibling.
@@ -584,6 +707,7 @@ class BackupManager:
         self._init_dir_error: str | None = None
         self._directory_checked = False
         self._directory_check_lock = asyncio.Lock()
+        self._canonical_directory: Path | None = None
 
     # ----- configuration -------------------------------------------------
 
@@ -606,7 +730,7 @@ class BackupManager:
         """Configured enablement after the latest directory check or capture.
 
         Status callers await ``ensure_directory_ready`` before reading this
-        property; properties and construction never perform filesystem I/O.
+        property; construction and this property do not initialize storage.
         """
         if self._init_dir_error is not None:
             return False
@@ -618,16 +742,18 @@ class BackupManager:
         return self._init_dir_error
 
     async def ensure_directory_ready(self) -> None:
-        """Probe enabled storage once off-loop before reporting backup health."""
+        """Initialize once and recheck enabled storage trust off-loop."""
         if not getattr(self._settings, "enable_auto_backup", False):
             return
         async with self._directory_check_lock:
-            if not self._directory_checked:
-                await _await_backup_io(self._check_directory)
+            await _await_backup_io(self._check_directory)
 
     def _check_directory(self) -> None:
         try:
-            self._prepare_directory()
+            if self._directory_checked:
+                self._storage_directory()
+            else:
+                self._prepare_directory()
         except OSError as err:
             self._init_dir_error = f"{type(err).__name__}: {err}"
             logger.warning(
@@ -637,9 +763,18 @@ class BackupManager:
             self._directory_checked = True
 
     def _prepare_directory(self) -> None:
-        self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        directory = self._storage_directory(create=True)
         if not self._directory_checked or self._init_dir_error is not None:
-            _restrict_existing_snapshot_permissions(self._dir)
+            _restrict_existing_snapshot_permissions(directory)
+
+    def _storage_directory(self, *, create: bool = False) -> Path:
+        # Cache the canonical target, never its trust: every operation checks
+        # current permissions, and no later operation re-follows an alias.
+        directory = _trusted_backup_directory(
+            self._canonical_directory or self._dir, create=create
+        )
+        self._canonical_directory = directory
+        return directory
 
     @property
     def throttle_seconds(self) -> int:
@@ -772,6 +907,8 @@ class BackupManager:
         on-demand capture (the ``(edits, create)`` action on
         ``ha_manage_backup``). It also retries storage after an earlier
         directory failure; a fresh write must succeed before capture succeeds.
+        An explicit forced capture reports unsafe storage rather than treating
+        that refusal as a skipped capture.
         The ``handler is None`` and ``config is None`` skips still
         apply (force can't conjure a snapshot for an entity that
         doesn't exist or has no registered handler).
@@ -815,9 +952,17 @@ class BackupManager:
             )
             if config is _SNAPSHOT_SKIP:
                 return None
-            return await self._write_and_rotate(
-                domain, entity_id, key, config, tool_name, now, mandatory=mandatory
-            )
+            try:
+                return await self._write_and_rotate(
+                    domain, entity_id, key, config, tool_name, now, mandatory=mandatory
+                )
+            except UnsafeBackupStorageError as err:
+                if mandatory:
+                    raise MandatoryBackupError(str(err), safe_detail=str(err)) from err
+                if force:
+                    raise
+                logger.warning("Auto-backup: storage refused: %s", err)
+                return None
 
     def _resolve_snapshot_handler(
         self, domain: str, entity_id: str, *, force: bool, mandatory: bool
@@ -926,6 +1071,8 @@ class BackupManager:
             path = await _await_backup_io(
                 self._write_snapshot, domain, entity_id, config, tool_name
             )
+        except UnsafeBackupStorageError:
+            raise
         except (OSError, yaml.YAMLError) as err:
             if mandatory:
                 message = (
@@ -958,6 +1105,8 @@ class BackupManager:
                 with self._snapshot_pin_lock:
                     protected = frozenset(self._protected_snapshot_names)
                 await _await_backup_io(self._rotate, domain, entity_id, protected)
+            except UnsafeBackupStorageError:
+                raise
             except OSError as err:
                 logger.warning(
                     "Auto-backup: rotation failed for %s — %s: %s",
@@ -965,7 +1114,7 @@ class BackupManager:
                     type(err).__name__,
                     err,
                 )
-            if not await _await_backup_io(path.is_file):
+            if not await _await_backup_io(_snapshot_file_exists, path):
                 message = (
                     f"The new snapshot for {key} disappeared before capture completed"
                 )
@@ -1027,7 +1176,7 @@ class BackupManager:
         body = yaml.safe_dump(payload, default_flow_style=False, sort_keys=False)
         # mkstemp creates a unique 0600 inode before any configuration is written.
         fd, tmp_name = tempfile.mkstemp(
-            prefix=f".{target.name}.", suffix=".tmp", dir=self._dir
+            prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
         )
         try:
             try:
@@ -1055,11 +1204,12 @@ class BackupManager:
         ``maybe_snapshot`` serialises captures per key, so the ``exists()``
         probe is not racing another capture of the same entity.
         """
-        target = self._dir / f"{domain}.{safe}.{ts}.yaml"
+        directory = self._storage_directory()
+        target = directory / f"{domain}.{safe}.{ts}.yaml"
         for seq in range(1, _MAX_SAME_SECOND):
             if not target.exists():
                 return target
-            target = self._dir / f"{domain}.{safe}.{ts}_{seq:02d}.yaml"
+            target = directory / f"{domain}.{safe}.{ts}_{seq:02d}.yaml"
         if not target.exists():
             return target
         raise OSError(
@@ -1089,6 +1239,7 @@ class BackupManager:
         if path.name.startswith("helper_template."):
             return self._template_snapshot_identity(path)
         try:
+            _reject_snapshot_symlink(path)
             with path.open(encoding="utf-8") as handle:
                 header: list[str] = []
                 for line in handle:
@@ -1096,6 +1247,8 @@ class BackupManager:
                         break
                     header.append(line)
                 loaded = yaml.safe_load("".join(header))
+        except UnsafeBackupStorageError:
+            raise
         except (OSError, yaml.YAMLError) as err:
             logger.warning(
                 "Auto-backup: cannot identify %s, leaving it in place: %s",
@@ -1116,6 +1269,7 @@ class BackupManager:
         The cache is shared with listing/deletion and guarded across IO threads.
         """
         try:
+            _reject_snapshot_symlink(path)
             before = path.stat()
             signature = (
                 before.st_dev,
@@ -1152,6 +1306,8 @@ class BackupManager:
             ):
                 self._forget_template_identity(path.name)
                 return None
+        except UnsafeBackupStorageError:
+            raise
         except OSError as err:
             logger.warning(
                 "Auto-backup: cannot identify %s, leaving it in place: %s",
@@ -1175,17 +1331,21 @@ class BackupManager:
     def _rotate(
         self, domain: str, entity_id: str, protected: frozenset[str] = frozenset()
     ) -> None:
+        try:
+            directory = self._storage_directory()
+        except (FileNotFoundError, NotADirectoryError):
+            return
         candidates: set[Path] = set()
         if domain == "helper_template":
             # Older snapshots used the entity alias as their filename/header.
-            candidates.update(self._dir.glob("helper_template.*.yaml"))
+            candidates.update(directory.glob("helper_template.*.yaml"))
             names = {path.name for path in candidates}
             with self._template_identity_lock:
                 for name in self._template_identity_cache.keys() - names:
                     del self._template_identity_cache[name]
         else:
             for safe in _entity_id_aliases(entity_id):
-                candidates.update(self._dir.glob(f"{domain}.{safe}.*.yaml"))
+                candidates.update(directory.glob(f"{domain}.{safe}.*.yaml"))
         files = sorted(
             (p for p in candidates if self._snapshot_is_for(p, entity_id)),
             key=_snapshot_order,
@@ -1219,7 +1379,11 @@ class BackupManager:
         entity_id: str | None = None,
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
-        if not self._dir.exists():
+        try:
+            directory = self._storage_directory()
+        except (FileNotFoundError, NotADirectoryError):
+            return []
+        if not directory.exists():
             return []
         # ``entity_id`` comparison: filenames hold the sanitized form (see
         # ``_safe_entity_id`` — any char outside ``[A-Za-z0-9._-]`` becomes
@@ -1237,7 +1401,7 @@ class BackupManager:
         out: list[dict[str, Any]] = []
         # Newest first by capture time — see ``_snapshot_order`` for why the
         # filename itself is not the key.
-        for path in sorted(self._dir.glob("*.yaml"), key=_snapshot_order, reverse=True):
+        for path in sorted(directory.glob("*.yaml"), key=_snapshot_order, reverse=True):
             row = self._listing_row(
                 path, domain=domain, safe_filter=safe_filter, entity_id=entity_id
             )
@@ -1377,10 +1541,12 @@ class BackupManager:
         """
         if not name or os.sep in name or "/" in name or ".." in name:
             raise ValueError(f"Invalid snapshot name: {name!r}")
-        path = (self._dir / name).resolve()
+        directory = self._storage_directory()
+        _reject_snapshot_symlink(directory / name)
+        path = (directory / name).resolve()
         # Defence-in-depth: post-resolve, verify still under backup_dir.
         try:
-            path.relative_to(self._dir.resolve())
+            path.relative_to(directory)
         except ValueError as err:
             raise ValueError(f"Invalid snapshot name: {name!r}") from err
         if not path.is_file():
@@ -1394,6 +1560,13 @@ class BackupManager:
         try:
             data = await asyncio.to_thread(self.read_snapshot, name)
             _validate_snapshot_envelope(data)
+        except UnsafeBackupStorageError as err:
+            raise BackupRestoreError(
+                str(err),
+                reason="unsafe_backup_storage",
+                restored_from=name,
+                safety_backup=None,
+            ) from err
         except FileNotFoundError as err:
             raise BackupRestoreError(
                 f"Backup {name!r} not found",
@@ -1505,19 +1678,11 @@ class BackupManager:
             err.outcome = {**outcome, **err.outcome}
             raise
         except _RESTORE_ERRORS as err:
-            if domain == "helper_template":
-                _log_template_failure(step, err)
-                message = _template_safe_failure_detail(step, err) or (
-                    "Template helper restore was not attempted; inspect the target and backup storage"
-                    if apply_status == "not_applied"
-                    else "Template helper restore outcome is unknown; inspect current options before retrying"
-                )
-                raise BackupRestoreError(
-                    message,
-                    apply_status=apply_status,
-                    reason=_template_failure_reason(step, err),
-                    **outcome,
-                ) from err
+            failure = _snapshot_restore_failure(
+                domain, step, apply_status, err, outcome
+            )
+            if failure is not None:
+                raise failure from err
             raise
         finally:
             if safety_path is not None:

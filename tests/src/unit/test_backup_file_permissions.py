@@ -6,6 +6,7 @@ import os
 import stat
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -240,3 +241,365 @@ def test_posix_migration_never_follows_a_replacement_symlink(tmp_path, monkeypat
     assert manager.init_dir_error is None
     assert stat.S_IMODE(outside.stat().st_mode) == 0o644
     assert snapshot.is_symlink()
+
+
+def _unsafe_snapshot_store(tmp_path, placement, mode):
+    """Seed trusted storage, then make one relevant directory replaceable."""
+    namespace = tmp_path / "namespace"
+    namespace.mkdir(mode=0o700)
+    directory = namespace / "backups"
+    manager = _mk_manager(directory)
+    snapshot = manager._write_snapshot(
+        "automation", "example", {"value": "original"}, None
+    )
+    configured = directory
+    unsafe = directory if placement == "leaf" else namespace
+    if placement.startswith("alias"):
+        alias_parent = tmp_path / "aliases"
+        alias_parent.mkdir(mode=0o700)
+        alias = alias_parent / "backups"
+        alias.symlink_to(directory, target_is_directory=True)
+        configured = alias
+        unsafe = alias_parent
+        if placement == "alias_hop":
+            configured = tmp_path / "outer-alias"
+            configured.symlink_to(alias, target_is_directory=True)
+    unsafe.chmod(mode)
+    return configured, unsafe, snapshot
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason="POSIX directory replacement permissions"
+)
+@pytest.mark.parametrize("placement", ["leaf", "parent", "alias", "alias_hop"])
+@pytest.mark.parametrize("mode", [0o770, 0o777])
+def test_posix_storage_health_refuses_replaceable_directory(tmp_path, placement, mode):
+    configured, unsafe, snapshot = _unsafe_snapshot_store(tmp_path, placement, mode)
+    before = snapshot.read_bytes()
+    manager = _mk_manager(configured)
+
+    manager._check_directory()
+
+    assert manager.init_dir_error is not None
+    assert not manager.enabled
+    assert stat.S_IMODE(unsafe.stat().st_mode) == mode
+    assert snapshot.read_bytes() == before
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason="POSIX directory replacement permissions"
+)
+@pytest.mark.parametrize("operation", ["read", "list", "write", "delete", "rotate"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_posix_snapshot_access_rechecks_directory_trust(tmp_path, operation, enabled):
+    directory = tmp_path / "backups"
+    manager = _mk_manager(directory, enable_auto_backup=enabled)
+    snapshot = manager._write_snapshot("automation", "example", {}, None)
+    assert manager._directory_checked
+    directory.chmod(0o777)
+    before = snapshot.read_bytes()
+
+    with pytest.raises(OSError):
+        if operation == "read":
+            manager.read_snapshot(snapshot.name)
+        elif operation == "list":
+            manager.list_snapshots()
+        elif operation == "write":
+            manager._write_snapshot("automation", "example", {}, None)
+        elif operation == "delete":
+            manager.delete_snapshot(snapshot.name)
+        else:
+            manager._rotate("automation", "example")
+
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o777
+    assert snapshot.read_bytes() == before
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason="POSIX directory replacement permissions"
+)
+def test_posix_private_file_mode_does_not_make_replaced_snapshot_trustworthy(tmp_path):
+    configured, unsafe, snapshot = _unsafe_snapshot_store(tmp_path, "leaf", 0o777)
+    replacement = configured / "replacement"
+    replacement.write_text(
+        snapshot.read_text().replace("value: original", "value: replaced"),
+        encoding="utf-8",
+    )
+    replacement.chmod(0o600)
+    os.replace(replacement, snapshot)
+    assert stat.S_IMODE(snapshot.stat().st_mode) == 0o600
+    assert "value: replaced" in snapshot.read_text()
+
+    with pytest.raises(OSError):
+        _mk_manager(configured, enable_auto_backup=False).read_snapshot(snapshot.name)
+
+    assert stat.S_IMODE(unsafe.stat().st_mode) == 0o777
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason="POSIX directory replacement permissions"
+)
+@pytest.mark.parametrize("operation", ["diff", "restore"])
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_posix_restore_and_diff_refuse_untrusted_storage_before_ha_access(
+    tmp_path, operation, enabled
+):
+    configured, _, snapshot = _unsafe_snapshot_store(tmp_path, "leaf", 0o777)
+    manager = _mk_manager(configured, enable_auto_backup=enabled)
+    fetch = AsyncMock(return_value={"value": "live"})
+    restore = AsyncMock(return_value={"value": "restored"})
+    manager.register(
+        bm.DomainHandler(domain="automation", fetch=fetch, restore=restore)
+    )
+
+    if operation == "diff":
+        with pytest.raises(OSError):
+            await manager.snapshot_comparison(snapshot.name)
+    else:
+        with pytest.raises(bm.BackupRestoreError) as caught:
+            await manager.restore_snapshot(snapshot.name)
+        assert caught.value.outcome["reason"] == "unsafe_backup_storage"
+        assert caught.value.outcome["apply_status"] == "not_applied"
+
+    fetch.assert_not_awaited()
+    restore.assert_not_awaited()
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason="POSIX directory replacement permissions"
+)
+@pytest.mark.parametrize("mode", [0o700, 0o755])
+@pytest.mark.parametrize("parent_mode", [0o700, 0o1777])
+def test_posix_storage_accepts_nonwritable_leaf_and_protected_sticky_parent(
+    tmp_path, mode, parent_mode
+):
+    parent = tmp_path / "namespace"
+    parent.mkdir(mode=0o700)
+    directory = parent / "backups"
+    directory.mkdir(mode=mode)
+    parent.chmod(parent_mode)
+    manager = _mk_manager(directory)
+
+    manager._check_directory()
+
+    assert manager.init_dir_error is None
+    assert manager.enabled
+    assert stat.S_IMODE(directory.stat().st_mode) == mode
+    assert stat.S_IMODE(parent.stat().st_mode) == parent_mode
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason="POSIX directory replacement permissions"
+)
+@pytest.mark.parametrize("operation", ["check", "capture"])
+def test_posix_unsafe_parent_refused_before_creating_backup_directory(
+    tmp_path, operation
+):
+    parent = tmp_path / "replaceable"
+    parent.mkdir(mode=0o700)
+    parent.chmod(0o777)
+    directory = parent / "not-created"
+    manager = _mk_manager(directory)
+
+    if operation == "check":
+        manager._check_directory()
+        assert manager.init_dir_error is not None
+        assert not manager.enabled
+    else:
+        with pytest.raises(OSError):
+            manager._write_snapshot("automation", "example", {}, None)
+
+    assert not directory.exists()
+    assert stat.S_IMODE(parent.stat().st_mode) == 0o777
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory ownership")
+@pytest.mark.parametrize("foreign", ["leaf", "sticky_child", "sticky_link"])
+def test_posix_foreign_directory_or_sticky_child_is_not_trusted(
+    tmp_path, monkeypatch, foreign
+):
+    parent = tmp_path / "namespace"
+    parent.mkdir(mode=0o700)
+    child = parent / "child"
+    child.mkdir(mode=0o755)
+    directory = child / "backups"
+    snapshot = _mk_manager(directory)._write_snapshot("automation", "example", {}, None)
+    configured = directory
+    untrusted = directory
+    if foreign == "sticky_child":
+        parent.chmod(0o1777)
+        untrusted = child
+    elif foreign == "sticky_link":
+        alias_parent = tmp_path / "aliases"
+        alias_parent.mkdir(mode=0o700)
+        alias_parent.chmod(0o1777)
+        configured = alias_parent / "backups"
+        configured.symlink_to(directory, target_is_directory=True)
+        untrusted = configured
+    native_lstat = Path.lstat
+
+    def lstat(path, *args, **kwargs):
+        metadata = native_lstat(path, *args, **kwargs)
+        if path == untrusted:
+            fields = list(metadata)
+            fields[4] = os.geteuid() + 1
+            return os.stat_result(fields)
+        return metadata
+
+    monkeypatch.setattr(Path, "lstat", lstat)
+    manager = _mk_manager(configured)
+
+    manager._check_directory()
+
+    assert manager.init_dir_error is not None
+    assert not manager.enabled
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    assert snapshot.exists()
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason="POSIX directory replacement permissions"
+)
+@pytest.mark.parametrize("mandatory", [False, True])
+async def test_posix_forced_capture_refuses_unsafe_storage_when_disabled(
+    tmp_path, mandatory
+):
+    configured, unsafe, snapshot = _unsafe_snapshot_store(tmp_path, "leaf", 0o777)
+    manager = _mk_manager(configured, enable_auto_backup=False)
+    manager.register(
+        bm.DomainHandler(
+            domain="automation",
+            fetch=AsyncMock(return_value={"private-value": "must not be written"}),
+            restore=AsyncMock(),
+        )
+    )
+    error_type = bm.MandatoryBackupError if mandatory else bm.UnsafeBackupStorageError
+
+    with pytest.raises(error_type) as caught:
+        await manager.maybe_snapshot(
+            "automation", "example", force=True, mandatory=mandatory
+        )
+
+    assert "private-value" not in str(caught.value)
+    assert list(configured.iterdir()) == [snapshot]
+    assert stat.S_IMODE(unsafe.stat().st_mode) == 0o777
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX directory alias ownership")
+def test_posix_legacy_default_cannot_hide_unsafe_alias_ancestry(tmp_path, monkeypatch):
+    configured, unsafe, snapshot = _unsafe_snapshot_store(tmp_path, "alias_hop", 0o777)
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.setattr(bm, "_legacy_default_dir", lambda: configured)
+    monkeypatch.setattr(bm, "get_data_dir", lambda: tmp_path / "new-default")
+
+    with pytest.raises(bm.UnsafeBackupStorageError):
+        bm._resolve_default_dir()
+
+    assert snapshot.exists()
+    assert stat.S_IMODE(unsafe.stat().st_mode) == 0o777
+
+
+@pytest.mark.skipif(
+    os.name != "posix", reason="POSIX directory replacement permissions"
+)
+async def test_posix_mandatory_capture_revalidates_storage_before_throttle(tmp_path):
+    directory = tmp_path / "backups"
+    manager = _mk_manager(directory, auto_backup_throttle_minutes=10)
+    fetch = AsyncMock(return_value={"value": "original"})
+    manager.register(
+        bm.DomainHandler(domain="automation", fetch=fetch, restore=AsyncMock())
+    )
+    snapshot = await manager.maybe_snapshot("automation", "example", mandatory=True)
+    assert snapshot is not None
+    directory.chmod(0o777)
+
+    with pytest.raises(bm.MandatoryBackupError):
+        await manager.maybe_snapshot("automation", "example", mandatory=True)
+
+    fetch.assert_awaited_once()
+    assert list(directory.iterdir()) == [snapshot]
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o777
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX snapshot symlink semantics")
+@pytest.mark.parametrize(
+    "operation", ["read", "diff", "restore", "list", "rotate", "delete"]
+)
+async def test_posix_snapshot_symlink_cannot_bypass_directory_trust(
+    tmp_path, monkeypatch, operation
+):
+    manager = _mk_manager(tmp_path, auto_backup_retain_per_entity=1)
+    monkeypatch.setattr(bm, "_now_ts", lambda: "20200101_000000")
+    snapshot = manager._write_snapshot(
+        "automation", "example", {"value": "original"}, None
+    )
+    nested = tmp_path / "untrusted"
+    nested.mkdir(mode=0o700)
+    target = nested / "snapshot.yaml"
+    original = snapshot.read_bytes()
+    target.write_bytes(original)
+    snapshot.unlink()
+    snapshot.symlink_to(target)
+    nested.chmod(0o777)
+    monkeypatch.setattr(bm, "_now_ts", lambda: "20200101_000001")
+    retained = manager._write_snapshot("automation", "example", {}, None)
+    fetch = AsyncMock(return_value={"value": "live"})
+    restore = AsyncMock(return_value={})
+    manager.register(
+        bm.DomainHandler(domain="automation", fetch=fetch, restore=restore)
+    )
+    opened = []
+    native_open = Path.open
+
+    def open_file(path, *args, **kwargs):
+        if path in (snapshot, target):
+            opened.append(path)
+        return native_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_file)
+    if operation == "restore":
+        with pytest.raises(bm.BackupRestoreError) as caught:
+            await manager.restore_snapshot(snapshot.name)
+        assert caught.value.outcome["reason"] == "unsafe_backup_storage"
+        assert caught.value.outcome["apply_status"] == "not_applied"
+    elif operation in ("read", "diff", "delete"):
+        with pytest.raises(OSError):
+            if operation == "read":
+                manager.read_snapshot(snapshot.name)
+            elif operation == "delete":
+                manager.delete_snapshot(snapshot.name)
+            else:
+                await manager.snapshot_comparison(snapshot.name)
+    else:
+        try:
+            if operation == "list":
+                assert snapshot.name not in {
+                    row["name"] for row in manager.list_snapshots()
+                }
+            else:
+                manager._rotate("automation", "example")
+        except bm.UnsafeBackupStorageError:
+            pass
+
+    assert not opened
+    fetch.assert_not_awaited()
+    restore.assert_not_awaited()
+    assert snapshot.is_symlink()
+    assert retained.exists()
+    assert target.read_bytes() == original
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX legacy storage discovery")
+def test_posix_absent_legacy_store_does_not_block_safe_default(tmp_path, monkeypatch):
+    legacy_parent = tmp_path / "legacy"
+    legacy_parent.mkdir(mode=0o700)
+    legacy_parent.chmod(0o777)
+    legacy = legacy_parent / "ha_mcp" / "backups"
+    data_dir = tmp_path / "safe-data"
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    monkeypatch.setattr(bm, "_legacy_default_dir", lambda: legacy)
+    monkeypatch.setattr(bm, "get_data_dir", lambda: data_dir)
+
+    assert bm._resolve_default_dir() == data_dir / "backups"
+    assert not legacy.exists()
+    assert stat.S_IMODE(legacy_parent.stat().st_mode) == 0o777

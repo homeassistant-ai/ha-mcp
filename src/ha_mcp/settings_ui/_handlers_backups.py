@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import Awaitable
 from typing import TYPE_CHECKING, Any
 
 from starlette.requests import Request
@@ -29,6 +30,7 @@ from ..backup_manager import (
     BackupRestoreError,
     MandatoryBackupError,
     SnapshotInUseError,
+    UnsafeBackupStorageError,
     _snapshot_validation_message,
     _TemplateReadError,
     get_backup_manager,
@@ -149,6 +151,8 @@ async def _diff_backup(
             ),
             status_code=409,
         )
+    except UnsafeBackupStorageError:
+        raise
     except _CAPTURE_TRANSIENT_ERRORS as err:
         # Transport/HA API/filesystem failures are not evidence of a deleted
         # entity. Keep their diagnostics without echoing options or raw bodies.
@@ -207,6 +211,7 @@ async def _restore_backup(
             "invalid_snapshot": ErrorCode.VALIDATION_INVALID_PARAMETER,
             "unsupported_domain": ErrorCode.VALIDATION_INVALID_PARAMETER,
             "backup_capture_failed": ErrorCode.BACKUP_CAPTURE_FAILED,
+            "unsafe_backup_storage": ErrorCode.CONFIG_VALIDATION_FAILED,
         }.get(err.outcome.get("reason") or "", ErrorCode.SERVICE_CALL_FAILED)
         return JSONResponse(
             create_error_response(
@@ -591,28 +596,46 @@ async def _save_backup_config(
     return await apply_backup_config(server, clean)
 
 
+async def _snapshot_response(operation: Awaitable[JSONResponse]) -> JSONResponse:
+    """Keep local storage refusals distinct from missing backups or HA outages."""
+    try:
+        return await operation
+    except UnsafeBackupStorageError as err:
+        return JSONResponse(
+            create_error_response(
+                ErrorCode.CONFIG_VALIDATION_FAILED,
+                str(err),
+                context={"data": {"reason": "unsafe_backup_storage"}},
+                suggestions=[
+                    "Check backup-directory ownership and parent-path write permissions before retrying",
+                ],
+            ),
+            status_code=409,
+        )
+
+
 def build_backups_handlers(
     server: HomeAssistantSmartMCPServer | None,
 ) -> dict[str, Any]:
     """Construct the backup snapshot + auto-backup-config route handlers."""
 
     async def list_backups(request: Request) -> JSONResponse:
-        return await _list_backups(server, request)
+        return await _snapshot_response(_list_backups(server, request))
 
     async def view_backup(request: Request) -> JSONResponse:
-        return await _view_backup(server, request)
+        return await _snapshot_response(_view_backup(server, request))
 
     async def diff_backup(request: Request) -> JSONResponse:
-        return await _diff_backup(server, request)
+        return await _snapshot_response(_diff_backup(server, request))
 
     async def restore_backup(request: Request) -> JSONResponse:
-        return await _restore_backup(server, request)
+        return await _snapshot_response(_restore_backup(server, request))
 
     async def delete_backup(request: Request) -> JSONResponse:
-        return await _delete_backup(server, request)
+        return await _snapshot_response(_delete_backup(server, request))
 
     async def delete_backups_bulk(request: Request) -> JSONResponse:
-        return await _delete_backups_bulk(server, request)
+        return await _snapshot_response(_delete_backups_bulk(server, request))
 
     async def get_backup_config(request: Request) -> JSONResponse:
         return await _get_backup_config(server, request)

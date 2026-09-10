@@ -31,6 +31,7 @@ from ..backup_manager import (
     BackupRestoreError,
     MandatoryBackupError,
     SnapshotInUseError,
+    UnsafeBackupStorageError,
     get_backup_manager,
 )
 from ..client.rest_client import (
@@ -1846,18 +1847,30 @@ async def _dispatch_edits_action(
     limit: int,
 ) -> dict[str, Any]:
     """Route a ``scope="edits"`` action to its per-entity auto-backup handler."""
-    if action == "create":
-        return await _edits_create(mgr, scope, action, domain, entity_id)
-    if action == "list":
-        return await _edits_list(mgr, settings, domain, entity_id, limit)
-    if action == "view":
-        return await _edits_view(mgr, scope, action, backup_name)
-    if action == "diff":
-        return await _edits_diff(mgr, scope, action, backup_name)
-    if action == "restore":
-        return await _edits_restore(mgr, scope, action, backup_name)
-    # action == "delete"
-    return await _edits_delete(mgr, domain, entity_id, backup_name, older_than_days)
+    try:
+        if action == "create":
+            return await _edits_create(mgr, scope, action, domain, entity_id)
+        if action == "list":
+            return await _edits_list(mgr, settings, domain, entity_id, limit)
+        if action == "view":
+            return await _edits_view(mgr, scope, action, backup_name)
+        if action == "diff":
+            return await _edits_diff(mgr, scope, action, backup_name)
+        if action == "restore":
+            return await _edits_restore(mgr, scope, action, backup_name)
+        # action == "delete"
+        return await _edits_delete(mgr, domain, entity_id, backup_name, older_than_days)
+    except UnsafeBackupStorageError as err:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.CONFIG_VALIDATION_FAILED,
+                str(err),
+                context={"data": {"reason": "unsafe_backup_storage"}},
+                suggestions=[
+                    "Check backup-directory ownership and parent-path write permissions before retrying",
+                ],
+            )
+        )
 
 
 async def _edits_create(
@@ -2015,7 +2028,7 @@ async def _edits_diff(
                 context={"backup_name": bname},
             )
         )
-    except ToolError:
+    except (ToolError, UnsafeBackupStorageError):
         raise
     except Exception as err:
         # Fetching the live config for diff goes through the
@@ -2097,6 +2110,7 @@ async def _edits_restore(
             "invalid_snapshot": ErrorCode.VALIDATION_INVALID_PARAMETER,
             "unsupported_domain": ErrorCode.VALIDATION_INVALID_PARAMETER,
             "backup_capture_failed": ErrorCode.BACKUP_CAPTURE_FAILED,
+            "unsafe_backup_storage": ErrorCode.CONFIG_VALIDATION_FAILED,
         }.get(err.outcome.get("reason") or "", ErrorCode.SERVICE_CALL_FAILED)
         raise_tool_error(
             create_error_response(
