@@ -1938,7 +1938,14 @@ async function backupAction(act, name) {
     if (!confirm(t('backup.confirm.delete', {name}, 'Delete ' + name + '? This cannot be undone.'))) return;
     try {
       const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name), {method: 'DELETE'});
-      if (!resp.ok) { const d = await resp.json(); alert(t('backup.errors.delete_detail', {detail: JSON.stringify(d)}, 'Delete failed: ' + JSON.stringify(d))); return; }
+      if (!resp.ok) {
+        const data = await resp.json();
+        const detail = data.data?.reason === 'snapshot_in_use'
+          ? t('backup.delete.in_use', {}, 'This backup is in use. Retry after the active capture or restore finishes.')
+          : data.error?.message || JSON.stringify(data);
+        alert(t('backup.errors.delete_detail', {detail}, 'Delete failed: ' + detail));
+        return;
+      }
       loadBackups();
     } catch (err) {
       showToast(t('backup.errors.delete', {name, message: String(err)}, 'Delete of "' + name + '" failed: ' + String(err)), {isError: true});
@@ -1956,20 +1963,25 @@ async function bulkDeleteBackups() {
   if (days) params.set('older_than_days', days);
   if (!params.toString()) { alert(t('backup.bulk.filter_required', {}, 'Set at least one filter (Domain, Entity, or age in days).')); return; }
   if (!confirm(t('backup.bulk.confirm', {filters: params.toString()}, 'Delete all backups matching: ' + params.toString() + '?'))) return;
-  const resp = await fetch('./api/settings/backups?' + params.toString(), {method: 'DELETE'});
-  const data = await resp.json();
-  if (!resp.ok) { alert(t('backup.errors.bulk_delete', {detail: JSON.stringify(data)}, 'Bulk delete failed: ' + JSON.stringify(data))); return; }
-  const deleted = data.count || 0;
-  const failed = Array.isArray(data.failed) ? data.failed : [];
-  let message = failed.length
-    ? t('backup.bulk.partial', {deleted, failed: failed.length}, 'Deleted ' + deleted + ' backup(s); failed to delete ' + failed.length + ' backup(s).')
-    : t('backup.bulk.deleted', {count: deleted}, 'Deleted ' + deleted + ' backup(s)');
-  const inUse = failed.filter(name => data.failure_reasons?.[name] === 'snapshot_in_use').length;
-  if (inUse) {
-    message += '\n\n' + t('backup.bulk.in_use', {count: inUse}, inUse + ' backup(s) are in use. Retry after the active capture or restore finishes.');
+  try {
+    const resp = await fetch('./api/settings/backups?' + params.toString(), {method: 'DELETE'});
+    const data = await resp.json();
+    if (!resp.ok) { alert(t('backup.errors.bulk_delete', {detail: JSON.stringify(data)}, 'Bulk delete failed: ' + JSON.stringify(data))); return; }
+    const deleted = data.count || 0;
+    const failed = Array.isArray(data.failed) ? data.failed : [];
+    let message = failed.length
+      ? t('backup.bulk.partial', {deleted, failed: failed.length}, 'Deleted ' + deleted + ' backup(s); failed to delete ' + failed.length + ' backup(s).')
+      : t('backup.bulk.deleted', {count: deleted}, 'Deleted ' + deleted + ' backup(s)');
+    const inUse = failed.filter(name => data.failure_reasons?.[name] === 'snapshot_in_use').length;
+    if (inUse) {
+      message += '\n\n' + t('backup.bulk.in_use', {count: inUse}, inUse + ' backup(s) are in use. Retry after the active capture or restore finishes.');
+    }
+    alert(message);
+  } catch {
+    const detail = t('backup.bulk.unknown', {}, 'The deletion result could not be confirmed. Check the backup list before retrying.');
+    showToast(t('backup.errors.bulk_delete', {detail}, 'Bulk delete failed: ' + detail), {isError: true});
   }
-  alert(message);
-  loadBackups();
+  await loadBackups();
 }
 
 // Focus management for the snapshot modal (WAI-ARIA APG dialog pattern):

@@ -1472,17 +1472,19 @@ class TestConcurrentCapture:
 
 
 class TestEnabledRespectsDirError:
-    def test_enabled_false_when_dir_init_failed(self, tmp_path: Path) -> None:
-        # Simulate a backup dir that can't be created. ``enabled`` must
-        # report False so listing/status surfaces don't lie about
-        # backup health.
+    async def test_enabled_false_when_dir_init_failed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mkdir = MagicMock(side_effect=PermissionError("read-only filesystem"))
+        monkeypatch.setattr(Path, "mkdir", mkdir)
         mgr = BackupManager(
             _StubSettings(enable_auto_backup=True, auto_backup_dir=str(tmp_path)),
             _StubClient(),
         )
-        mgr._init_dir_error = "OSError: read-only filesystem"
+        await mgr.list_edits_and_legacy(domain="automation")
         assert mgr.enabled is False
-        assert mgr.init_dir_error == "OSError: read-only filesystem"
+        assert mgr.init_dir_error == "PermissionError: read-only filesystem"
+        mkdir.assert_called_once()
 
 
 class TestForceSnapshot:
@@ -1543,12 +1545,13 @@ class TestForceSnapshot:
     ) -> None:
         mgr = _mk_manager(tmp_path)
         mgr.register(_mk_handler(fetched={"alias": "x"}))
-        mgr._init_dir_error = "OSError: read-only filesystem"
         monkeypatch.setattr(
             Path,
             "mkdir",
             MagicMock(side_effect=PermissionError("read-only filesystem")),
         )
+        await mgr.list_edits_and_legacy(domain="automation")
+        assert mgr.init_dir_error == "PermissionError: read-only filesystem"
         # Even with force, an unreachable backup dir can't accept writes.
         path = await mgr.maybe_snapshot("automation", "foo", force=True)
         assert path is None
@@ -2410,9 +2413,11 @@ class TestMaybeSnapshotMandatory:
     ) -> None:
         mgr = _mk_manager(tmp_path)
         mgr.register(_mk_handler(domain="file", fetched="body\n"))
-        mgr._init_dir_error = "backup dir not writable"
         mkdir = MagicMock(side_effect=PermissionError("backup dir not writable"))
         monkeypatch.setattr(Path, "mkdir", mkdir)
+        await mgr.list_edits_and_legacy(domain="file")
+        assert mgr.init_dir_error == "PermissionError: backup dir not writable"
+        mkdir.reset_mock()
         with pytest.raises(bm.MandatoryBackupError):
             await mgr.maybe_snapshot("file", "www/x.css", mandatory=True, force=True)
         mkdir.assert_called_once()

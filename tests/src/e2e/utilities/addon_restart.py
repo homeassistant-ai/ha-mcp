@@ -1,6 +1,7 @@
 """Fresh-client probes and process-identity fences for disruptive app tests."""
 
 import asyncio
+import json
 import logging
 import time
 from typing import Any
@@ -13,7 +14,11 @@ from .assertions import parse_mcp_result
 from .wait_helpers import _POLLING_TRANSIENT_ERRORS
 
 LOG = logging.getLogger(__name__)
-TRANSIENT_ADDON_ERRORS = (*_POLLING_TRANSIENT_ERRORS, httpx.HTTPError)
+TRANSIENT_ADDON_ERRORS = (
+    *_POLLING_TRANSIENT_ERRORS,
+    httpx.HTTPError,
+    json.JSONDecodeError,
+)
 
 
 def _call_timeout(deadline: float) -> float:
@@ -82,6 +87,7 @@ async def wait_for_addon_replacement(
     *,
     timeout: float = 180.0,
     poll_interval: float = 3.0,
+    submission_error: Exception | None = None,
 ) -> str:
     """Wait for a different process and a fresh MCP exchange with its endpoint."""
     deadline = time.monotonic() + timeout
@@ -105,9 +111,15 @@ async def wait_for_addon_replacement(
             LOG.debug("App replacement probe unavailable: %s", error)
             last = error
         await asyncio.sleep(min(poll_interval, max(deadline - time.monotonic(), 0)))
+    submission_detail = (
+        f", restart submission error={submission_error!r}"
+        if submission_error is not None
+        else ""
+    )
     raise AssertionError(
         "App replacement never completed a fresh MCP exchange within "
-        f"{timeout}s (previous instance={baseline_instance_id}, last={last!r})"
+        f"{timeout}s (previous instance={baseline_instance_id}, last={last!r}"
+        f"{submission_detail})"
     )
 
 
@@ -148,10 +160,12 @@ async def restore_info_level(
     # Resolve the budget before the attempt: expiration here cannot mean the
     # server accepted a restart. Once sent, even a lost response may mean it did.
     submission_timeout = _call_timeout(deadline)
+    submission_error: Exception | None = None
     try:
         await restart_self(settings_restart, timeout=submission_timeout)
     except (httpx.HTTPError, TimeoutError) as error:
-        LOG.debug("INFO restore restart outcome uncertain: %s", error)
+        LOG.warning("INFO restore restart outcome uncertain: %s", error)
+        submission_error = error
     # Never replay an attempted restart; its old process may still be serving.
     await wait_for_addon_replacement(
         settings_info,
@@ -159,4 +173,5 @@ async def restore_info_level(
         baseline,
         timeout=ready_timeout,
         poll_interval=poll_interval,
+        submission_error=submission_error,
     )

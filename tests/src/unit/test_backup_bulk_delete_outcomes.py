@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from fastmcp.exceptions import ToolError
 from starlette.requests import Request
 
 from ha_mcp.settings_ui import _handlers_backups as ui
@@ -102,3 +103,33 @@ async def test_bulk_delete_reports_when_every_snapshot_is_in_use(
         assert pinned.exists()
     finally:
         manager._unprotect_snapshot(pinned.name)
+
+
+@pytest.mark.parametrize("consumer", ["mcp", "settings"])
+async def test_single_delete_preserves_retryable_in_use_reason(
+    deletion, monkeypatch, consumer
+):
+    manager, pinned, _, _ = deletion
+    if consumer == "mcp":
+        with pytest.raises(ToolError) as caught:
+            await _edits_delete(manager, None, None, pinned.name, None)
+        payload = json.loads(str(caught.value))
+    else:
+        monkeypatch.setattr(ui, "_backup_mgr", lambda server: manager)
+        response = await ui._delete_backup(
+            None, Request({"type": "http", "path_params": {"name": pinned.name}})
+        )
+        assert response.status_code == 409
+        payload = json.loads(response.body)
+    assert payload["error"]["code"] == "SERVICE_CALL_FAILED"
+    assert payload["data"]["reason"] == "snapshot_in_use"
+    assert "retry" in payload["error"]["suggestion"].lower()
+    assert pinned.exists()
+
+
+async def test_mcp_bulk_delete_omits_empty_warnings(tmp_path):
+    manager = _mk_manager(tmp_path)
+    removable = manager._write_snapshot("automation", "removable", {}, "test")
+    response = await _edits_delete(manager, "automation", None, None, None)
+    assert response["data"]["deleted"] == [removable.name]
+    assert "warnings" not in response

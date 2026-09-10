@@ -164,6 +164,37 @@ def test_settings_mandatory_capture_failure_is_json_and_does_not_echo_details(
     assert "secret-marker" not in response.text
 
 
+@pytest.mark.parametrize("template", [False, True])
+@pytest.mark.parametrize("consumer", ["mcp", "settings"])
+async def test_mandatory_capture_failure_keeps_backup_error_code(
+    template, consumer, monkeypatch
+):
+    from ha_mcp.tools.backup import _edits_restore
+
+    error = (
+        BackupRestoreError(
+            "The pre-restore safety snapshot could not be captured.",
+            reason="backup_capture_failed",
+            restored_from=NAME,
+            safety_backup=None,
+        )
+        if template
+        else MandatoryBackupError("Upstream message with secret-marker")
+    )
+    manager = SimpleNamespace(restore_snapshot=AsyncMock(side_effect=error))
+    if consumer == "settings":
+        response = response_for(monkeypatch, manager)
+        assert response.status_code == 409
+        payload = response.json()
+    else:
+        with pytest.raises(ToolError) as caught:
+            await _edits_restore(manager, "edits", "restore", NAME)
+        payload = json.loads(str(caught.value))
+    assert payload["error"]["code"] == "BACKUP_CAPTURE_FAILED"
+    assert payload["data"]["apply_status"] == "not_applied"
+    assert "secret-marker" not in json.dumps(payload)
+
+
 @pytest.mark.asyncio
 async def test_settings_diff_uses_stable_snapshot_comparison(monkeypatch):
     snapshot = {

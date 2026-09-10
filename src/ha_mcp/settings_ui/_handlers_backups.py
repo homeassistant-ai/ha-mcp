@@ -28,6 +28,9 @@ from ..backup_manager import (
     _CAPTURE_TRANSIENT_ERRORS,
     BackupRestoreError,
     MandatoryBackupError,
+    SnapshotInUseError,
+    _snapshot_validation_message,
+    _TemplateReadError,
     get_backup_manager,
 )
 from ..config import (
@@ -80,6 +83,7 @@ async def _list_backups(
         limit = int(params.get("limit", "500"))
     except ValueError:
         return _bad_request("'limit' must be an integer")
+    await mgr.ensure_directory_ready()
     # Offload sync directory I/O to keep the request handler async-clean.
     entries = await asyncio.to_thread(
         mgr.list_snapshots,
@@ -113,7 +117,7 @@ async def _view_backup(
     except FileNotFoundError:
         return _not_found(name)
     except ValueError as err:
-        return _bad_request(str(err))
+        return _bad_request(_snapshot_validation_message(err))
     return JSONResponse({"success": True, "data": data})
 
 
@@ -133,9 +137,18 @@ async def _diff_backup(
     except FileNotFoundError:
         return _not_found(name)
     except ValueError as err:
-        return _bad_request(str(err))
+        return _bad_request(_snapshot_validation_message(err))
     except LookupError as err:
         return _bad_request(str(err), code=ErrorCode.RESOURCE_NOT_FOUND, status=404)
+    except _TemplateReadError as err:
+        return JSONResponse(
+            create_error_response(
+                ErrorCode.CONFIG_VALIDATION_FAILED,
+                str(err),
+                context={"data": {"reason": err.reason}},
+            ),
+            status_code=409,
+        )
     except _CAPTURE_TRANSIENT_ERRORS as err:
         # Transport/HA API/filesystem failures are not evidence of a deleted
         # entity. Keep their diagnostics without echoing options or raw bodies.
@@ -193,6 +206,7 @@ async def _restore_backup(
             "snapshot_not_found": ErrorCode.RESOURCE_NOT_FOUND,
             "invalid_snapshot": ErrorCode.VALIDATION_INVALID_PARAMETER,
             "unsupported_domain": ErrorCode.VALIDATION_INVALID_PARAMETER,
+            "backup_capture_failed": ErrorCode.BACKUP_CAPTURE_FAILED,
         }.get(err.outcome.get("reason") or "", ErrorCode.SERVICE_CALL_FAILED)
         return JSONResponse(
             create_error_response(
@@ -247,6 +261,18 @@ async def _delete_backup(
         await asyncio.to_thread(mgr.delete_snapshot, name)
     except FileNotFoundError:
         return _not_found(name)
+    except SnapshotInUseError as err:
+        return JSONResponse(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                str(err),
+                context={"data": {"reason": "snapshot_in_use"}},
+                suggestions=[
+                    "Retry after the active capture or restore finishes",
+                ],
+            ),
+            status_code=409,
+        )
     except ValueError as err:
         return _bad_request(str(err))
     return JSONResponse({"success": True, "deleted": [name]})

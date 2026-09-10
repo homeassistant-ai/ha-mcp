@@ -30,6 +30,7 @@ from ..backup_manager import (
     BackupManager,
     BackupRestoreError,
     MandatoryBackupError,
+    SnapshotInUseError,
     get_backup_manager,
 )
 from ..client.rest_client import (
@@ -2095,6 +2096,7 @@ async def _edits_restore(
             "snapshot_not_found": ErrorCode.RESOURCE_NOT_FOUND,
             "invalid_snapshot": ErrorCode.VALIDATION_INVALID_PARAMETER,
             "unsupported_domain": ErrorCode.VALIDATION_INVALID_PARAMETER,
+            "backup_capture_failed": ErrorCode.BACKUP_CAPTURE_FAILED,
         }.get(err.outcome.get("reason") or "", ErrorCode.SERVICE_CALL_FAILED)
         raise_tool_error(
             create_error_response(
@@ -2192,6 +2194,20 @@ async def _edits_delete(
     if backup_name:
         try:
             await asyncio.to_thread(mgr.delete_snapshot, backup_name)
+        except SnapshotInUseError as err:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    str(err),
+                    context={
+                        "backup_name": backup_name,
+                        "data": {"reason": "snapshot_in_use"},
+                    },
+                    suggestions=[
+                        "Retry deletion after the active capture or restore finishes"
+                    ],
+                )
+            )
         except FileNotFoundError:
             raise_tool_error(
                 create_error_response(
@@ -2249,5 +2265,5 @@ async def _edits_delete(
             "count": len(deleted),
             "failed_count": len(failed),
         },
-        "warnings": warnings,
+        **({"warnings": warnings} if warnings else {}),
     }

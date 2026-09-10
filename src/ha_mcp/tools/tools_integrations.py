@@ -2189,10 +2189,9 @@ class IntegrationTools:
         ),
         id_param="target",
         domain_resolver=_resolve_config_entry_backup_domain,
-        # The flow-removal owner resolves aliases through Core before capture.
-        skip_fn=lambda kw: (
-            kw.get("helper_type") == "template" and "." in str(kw.get("target", ""))
-        ),
+        # Explicit Template removal validates and resolves its target through
+        # Core before the inner decorator captures the authoritative entry.
+        skip_fn=lambda kw: kw.get("helper_type") == "template",
     )
     @log_tool_usage
     async def ha_remove_helpers_integrations(

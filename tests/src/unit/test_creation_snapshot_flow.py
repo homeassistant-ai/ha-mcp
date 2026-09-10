@@ -77,7 +77,8 @@ async def test_complete_recreation_submits_nested_options_unchanged(
         ("menu_create", "applied", "unsupported_form", False),
         ("missing_flow", "not_applied", None, False),
         ("initial_unknown", "unknown", None, False),
-        ("form_followup", "unknown", None, False),
+        ("form_followup", "not_applied", "unsupported_form", True),
+        ("menu_followup", "not_applied", "unsupported_form", True),
         ("form_validation", "not_applied", "validation_failed", True),
         ("invalid_reply", "unknown", None, False),
         ("invalid_created_result", "applied", None, False),
@@ -110,8 +111,11 @@ async def test_complete_recreation_reports_native_outcomes_without_retry(
             "type": "private-step",
             "flow_id": "create-flow",
         }
-    elif scenario == "form_followup":
-        replies[1] = {"type": "menu", "menu_options": ["private-step"]}
+    elif scenario.endswith("followup"):
+        replies[1] = {
+            "form_followup": _form(),
+            "menu_followup": {"type": "menu", "menu_options": ["private-step"]},
+        }[scenario]
     elif scenario == "form_validation":
         replies[1] = {
             **_form(),

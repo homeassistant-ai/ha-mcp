@@ -7,6 +7,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from ha_mcp import backup_manager as bm
 from ha_mcp.tools import auto_backup
@@ -144,6 +145,46 @@ async def test_generic_template_mutation_captures_options_before_write(
         "options": original,
         "entities": [entry_backup.entity],
     }
+
+
+async def test_explicit_template_entry_id_is_rejected_without_capture(
+    entry_backup: SimpleNamespace,
+) -> None:
+    with pytest.raises(ToolError, match="ENTITY_NOT_FOUND"):
+        await entry_backup.tools.ha_remove_helpers_integrations(
+            target="template-entry", helper_type="template", confirm=True, wait=False
+        )
+
+    entry_backup.client.delete_config_entry.assert_not_awaited()
+    assert entry_backup.mutations == []
+    assert not list(entry_backup.manager.backup_dir.glob("*.yaml"))
+
+
+async def test_explicit_template_entity_id_captures_once_after_resolution(
+    entry_backup: SimpleNamespace,
+) -> None:
+    async def registry_read(message: dict[str, Any]) -> dict[str, Any]:
+        if message["type"] == "config/entity_registry/get":
+            assert message["entity_id"] == "sensor.example"
+            return {"success": True, "result": {"config_entry_id": "template-entry"}}
+        assert message["type"] == "config/entity_registry/list"
+        return {"success": True, "result": []}
+
+    entry_backup.client.send_websocket_message.side_effect = registry_read
+    result = await entry_backup.tools.ha_remove_helpers_integrations(
+        target="sensor.example", helper_type="template", confirm=True, wait=False
+    )
+
+    assert result["success"] is True
+    entry_backup.client.delete_config_entry.assert_awaited_once_with("template-entry")
+    assert len(entry_backup.mutations) == 1
+    mutation = entry_backup.mutations[0]
+    assert mutation["locked"] is True
+    assert len(mutation["snapshots"]) == 1
+    snapshot = mutation["snapshots"][0]
+    assert snapshot["domain"] == "helper_template"
+    assert snapshot["entity_id"] == "template-entry"
+    assert snapshot["config"]["options"] == entry_backup.options
 
 
 @pytest.mark.parametrize("enabled", [False, True])

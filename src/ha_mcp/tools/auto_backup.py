@@ -284,7 +284,8 @@ async def _template_write_context(
     """Keep a helper edit's capture and mutation in the restore critical section.
 
     The lock is needed even when ordinary auto-backup is disabled: restores
-    always capture a safety snapshot before replacing the current options.
+    of existing Template helpers require a safety snapshot before replacing
+    their current options.
     """
     # Both options-update tools take stable config-entry IDs. Alias-based helper
     # removal and dotted subentry targets have separate resolution paths.

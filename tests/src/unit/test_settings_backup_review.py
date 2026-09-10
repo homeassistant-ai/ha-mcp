@@ -21,6 +21,31 @@ from ha_mcp.settings_ui import _handlers_backups as ui
 NAME = "automation.example.20260909_000000.yaml"
 
 
+async def test_settings_inventory_reports_unusable_directory_before_capture(
+    tmp_path, monkeypatch
+):
+    parent = tmp_path / "not-a-directory"
+    parent.write_text("occupied", encoding="utf-8")
+    settings = SimpleNamespace(
+        enable_auto_backup=True,
+        auto_backup_dir=str(parent / "backups"),
+        auto_backup_throttle_minutes=0,
+        auto_backup_retain_per_entity=5,
+    )
+    manager = bm.BackupManager(settings, SimpleNamespace())
+    monkeypatch.setattr(ui, "_backup_mgr", lambda server: manager)
+    monkeypatch.setattr(ui, "get_global_settings", lambda: settings)
+
+    response = await ui._list_backups(
+        None, Request({"type": "http", "query_string": b""})
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.body)["enabled"] is False
+    assert manager.init_dir_error is not None
+    assert parent.read_text(encoding="utf-8") == "occupied"
+
+
 @pytest.mark.parametrize(
     ("error", "status", "code"),
     [
@@ -67,6 +92,77 @@ async def test_settings_diff_logs_safe_failure_diagnostics(monkeypatch, caplog):
     assert "503" in caplog.text
     assert "option-value-secret" not in caplog.text
     assert "<html>" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("reason", "message"),
+    [
+        (
+            "template_read_unsupported",
+            "The component cannot authoritatively read template helpers",
+        ),
+        (
+            "secret_scrub_degraded",
+            "Template helper secret scrub is degraded; capture is unsafe",
+        ),
+        (
+            "ambiguous_entry_identity",
+            "Template helper listing has ambiguous identities",
+        ),
+        ("ambiguous_target", "Template helper target is ambiguous"),
+        ("ambiguous_registry", "Entity registry has ambiguous identities"),
+        (
+            "redacted_options",
+            "Template helper options contain redacted values; capture is incomplete",
+        ),
+        ("invalid_options", "Template helper options must be an object"),
+    ],
+)
+async def test_settings_diff_preserves_template_refusal_reason(
+    monkeypatch, reason, message
+):
+    manager = SimpleNamespace(
+        snapshot_comparison=AsyncMock(
+            side_effect=bm._TemplateReadError(message, reason)
+        )
+    )
+    monkeypatch.setattr(ui, "_backup_mgr", lambda server: manager)
+
+    response = await ui._diff_backup(
+        None, Request({"type": "http", "path_params": {"name": NAME}})
+    )
+
+    assert response.status_code == 409
+    payload = json.loads(response.body)
+    assert payload["error"]["code"] == "CONFIG_VALIDATION_FAILED"
+    assert payload["error"]["message"] == message
+    assert payload["data"]["reason"] == reason
+
+
+@pytest.mark.parametrize("action", ["view", "diff", "restore"])
+async def test_settings_snapshot_validation_never_echoes_yaml_values(
+    tmp_path, monkeypatch, action
+):
+    manager = bm.BackupManager(
+        SimpleNamespace(auto_backup_dir=str(tmp_path), enable_auto_backup=True),
+        SimpleNamespace(),
+    )
+    (tmp_path / NAME).write_text(
+        "config:\n  private-config-value: [broken\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(ui, "_backup_mgr", lambda server: manager)
+
+    response = await getattr(ui, f"_{action}_backup")(
+        None, Request({"type": "http", "path_params": {"name": NAME}})
+    )
+
+    assert response.status_code == 400
+    payload = json.loads(response.body)
+    assert payload["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+    assert payload["error"]["message"] == (
+        "Snapshot is invalid; inspect its YAML and schema version"
+    )
+    assert "private-config-value" not in response.body.decode()
 
 
 @pytest.mark.parametrize(

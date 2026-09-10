@@ -9,7 +9,9 @@ from ._js_harness import HarnessResult, extract_script_body, run_script
 from .test_settings_ui_js_behavior import DEFAULT_FETCHES
 
 
-def _delete_backups(reply: dict, *, locale: str = "en", messages=None) -> HarnessResult:
+def _delete_backups(
+    reply: dict, *, locale: str = "en", messages=None, response=None
+) -> HarnessResult:
     from ha_mcp.settings_ui import _render_settings_html
 
     page = _render_settings_html(
@@ -35,7 +37,7 @@ def _delete_backups(reply: dict, *, locale: str = "en", messages=None) -> Harnes
             **DEFAULT_FETCHES,
             "/api/settings/backups?": {
                 "byMethod": {
-                    "DELETE": {"status": 200, "json": reply},
+                    "DELETE": response or {"status": 200, "json": reply},
                     "GET": {"status": 200, "json": {"backups": []}},
                 }
             },
@@ -132,3 +134,70 @@ def test_successful_bulk_delete_keeps_existing_result() -> None:
         {"success": True, "deleted": ["deleted.yaml"], "failed": [], "count": 1}
     )
     assert result.alerts == ["Deleted 1 backup(s)"]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"throw": "connection lost after DELETE"},
+        {"status": 500, "body": "<html>private-error-body</html>"},
+        {"status": 200, "body": "{truncated"},
+    ],
+)
+def test_bulk_delete_response_failure_shows_toast_and_refreshes_inventory(response):
+    result = _delete_backups({}, response=response)
+
+    assert not result.alerts
+    assert "Bulk delete failed" in result.dom
+    assert "could not be confirmed" in result.dom
+    assert "before retrying" in result.dom
+    assert "private-error-body" not in result.dom
+
+
+@pytest.mark.parametrize("translated", [False, True])
+def test_single_delete_in_use_renders_retry_guidance(translated):
+    from ha_mcp.settings_ui import _render_settings_html
+
+    name = "automation.example.20260909_000000.yaml"
+    page = _render_settings_html(
+        Request({"type": "http", "query_string": b"", "headers": []})
+    )
+    messages = {"backup.delete.in_use": "busy; retry when idle"} if translated else {}
+    result = run_script(
+        extract_script_body(page),
+        initial_html=page,
+        prelude=(
+            "const catalogElement = document.getElementById('ha-mcp-i18n');"
+            "const catalog = JSON.parse(catalogElement.textContent);"
+            f"Object.assign(catalog.messages, {json.dumps(messages)});"
+            "catalogElement.textContent = JSON.stringify(catalog);"
+        ),
+        fetch_map={
+            **DEFAULT_FETCHES,
+            f"/api/settings/backups/{name}": {
+                "status": 409,
+                "json": {
+                    "success": False,
+                    "error": {
+                        "code": "SERVICE_CALL_FAILED",
+                        "message": "Snapshot in use",
+                    },
+                    "data": {"reason": "snapshot_in_use"},
+                },
+            },
+        },
+        invoke=(
+            "await new Promise(resolve => setTimeout(resolve, 100));"
+            f"await window.backupAction('delete', {json.dumps(name)});"
+        ),
+        settle_ms=300,
+    )
+
+    assert not result.errors
+    expected = (
+        "busy; retry when idle"
+        if translated
+        else "This backup is in use. Retry after the active capture or restore finishes."
+    )
+    assert result.alerts == [f"Delete failed: {expected}"]
+    assert len(result.fetches_to(f"/api/settings/backups/{name}")) == 1

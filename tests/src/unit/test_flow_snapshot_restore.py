@@ -212,13 +212,15 @@ async def test_http_submit_failure_preserves_application_knowledge(
 async def test_unexpected_followup_does_not_submit_another_restore_step(reply) -> None:
     client = _client()
     client.submit_options_flow_step.return_value = reply
-    with pytest.raises(Exception) as caught:
+    with pytest.raises(OptionsFlowError) as caught:
         await _restore(client, {"press": []})
-    assert getattr(caught.value, "apply_status", None) == "unknown"
+    assert caught.value.apply_status == "not_applied"
+    assert caught.value.reason == "unsupported_form"
+    assert "authoritative options form" in str(caught.value)
     client.submit_options_flow_step.assert_awaited_once_with(
         "restore-flow", {"press": []}
     )
-    client.abort_options_flow.assert_not_awaited()
+    client.abort_options_flow.assert_awaited_once_with("restore-flow")
 
 
 async def test_native_form_validation_rejection_is_not_applied() -> None:

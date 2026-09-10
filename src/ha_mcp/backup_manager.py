@@ -102,9 +102,18 @@ class MandatoryBackupError(Exception):
     ``suggestions`` carries remediation surfaced in that structured error.
     """
 
-    def __init__(self, message: str, *, suggestions: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        suggestions: list[str] | None = None,
+        safe_detail: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.suggestions = suggestions or []
+        # Only locally authored diagnostics may opt in. Fetch/YAML exceptions
+        # can include configuration values even when wrapped by this class.
+        self.safe_detail = safe_detail
 
 
 class BackupRestoreError(HomeAssistantError):
@@ -130,6 +139,15 @@ class BackupRestoreError(HomeAssistantError):
 
 class InvalidBackupSnapshotError(ValueError):
     """Persisted snapshot data is invalid, independently of live HA access."""
+
+
+def _snapshot_validation_message(error: ValueError) -> str:
+    """Keep local field-only validation messages, never raw YAML parser text."""
+    return (
+        str(error)
+        if isinstance(error, InvalidBackupSnapshotError)
+        else "Snapshot is invalid; inspect its YAML and schema version"
+    )
 
 
 class SnapshotInUseError(ValueError):
@@ -162,19 +180,40 @@ class _TemplateReadError(HomeAssistantError):
         self.reason = reason
 
 
-def _log_template_failure(step: str, error: BaseException) -> None:
-    # Remote exceptions can contain submitted options or credentials. Log the
-    # operation, type and locally assigned cause, never arbitrary error text.
-    reason = error.reason if isinstance(error, _TemplateReadError) else "upstream_error"
+def _template_failure_reason(step: str, error: BaseException) -> str:
+    if isinstance(error, _TemplateReadError):
+        return error.reason
     if isinstance(error, BackupRestoreError):
-        reason = error.outcome.get("reason") or "restore_refused"
-    elif isinstance(error, InvalidBackupSnapshotError):
-        reason = "invalid_snapshot"
+        return str(error.outcome.get("reason") or "restore_refused")
+    if isinstance(error, InvalidBackupSnapshotError):
+        return "invalid_snapshot"
+    if isinstance(error, MandatoryBackupError):
+        return "backup_capture_failed"
+    if step == "safety_backup" and isinstance(error, OSError):
+        return "backup_storage_failed"
+    return "upstream_error"
+
+
+def _template_safe_failure_detail(step: str, error: BaseException) -> str | None:
+    if isinstance(error, MandatoryBackupError):
+        return error.safe_detail
+    # The safety stage wraps remote fetch failures in MandatoryBackupError;
+    # a raw OSError here comes from retained-file I/O. Other stages call HA.
+    if step == "safety_backup" and isinstance(error, OSError):
+        return str(error)
+    return None
+
+
+def _log_template_failure(step: str, error: BaseException) -> None:
+    # Remote exceptions can contain submitted options or credentials. Preserve
+    # only local storage diagnostics and explicitly safe capture details.
+    detail = _template_safe_failure_detail(step, error)
     logger.warning(
-        "Template restore step=%s failed: %s reason=%s",
+        "Template restore step=%s failed: %s reason=%s%s",
         step,
         type(error).__name__,
-        reason,
+        _template_failure_reason(step, error),
+        f" detail={detail}" if detail else "",
     )
 
 
@@ -480,6 +519,8 @@ class BackupManager:
         self._protected_snapshot_names: Counter[str] = Counter()
         self._snapshot_pin_lock = threading.Lock()
         self._init_dir_error: str | None = None
+        self._directory_checked = False
+        self._directory_check_lock = asyncio.Lock()
 
     # ----- configuration -------------------------------------------------
 
@@ -490,7 +531,7 @@ class BackupManager:
     def _resolve_dir(self) -> Path:
         configured = (getattr(self._settings, "auto_backup_dir", "") or "").strip()
         # A disabled write still needs coordination, but must not create storage.
-        # The first capture creates this directory in the backup I/O executor.
+        # Status checks and captures initialize storage in the backup I/O executor.
         return Path(configured).expanduser() if configured else _resolve_default_dir()
 
     @property
@@ -499,18 +540,38 @@ class BackupManager:
 
     @property
     def enabled(self) -> bool:
-        # An unreachable backup dir effectively disables the feature —
-        # surface that through ``enabled`` so callers (the list endpoint,
-        # the settings UI status panel) report the truth instead of
-        # advertising "enabled" while every capture silently no-ops.
+        """Configured enablement after the latest directory check or capture.
+
+        Status callers await ``ensure_directory_ready`` before reading this
+        property; properties and construction never perform filesystem I/O.
+        """
         if self._init_dir_error is not None:
             return False
         return bool(getattr(self._settings, "enable_auto_backup", False))
 
     @property
     def init_dir_error(self) -> str | None:
-        """The reason the backup dir could not be created, or None."""
+        """Failure from the latest directory check or capture, if any."""
         return self._init_dir_error
+
+    async def ensure_directory_ready(self) -> None:
+        """Probe enabled storage once off-loop before reporting backup health."""
+        if not getattr(self._settings, "enable_auto_backup", False):
+            return
+        async with self._directory_check_lock:
+            if not self._directory_checked:
+                await _await_backup_io(self._check_directory)
+
+    def _check_directory(self) -> None:
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+        except OSError as err:
+            self._init_dir_error = f"{type(err).__name__}: {err}"
+            logger.warning(
+                "Auto-backup: directory unavailable: %s", self._init_dir_error
+            )
+        finally:
+            self._directory_checked = True
 
     @property
     def throttle_seconds(self) -> int:
@@ -647,6 +708,8 @@ class BackupManager:
         apply (force can't conjure a snapshot for an entity that
         doesn't exist or has no registered handler).
         """
+        if not force:
+            await self.ensure_directory_ready()
         handler = self._resolve_snapshot_handler(
             domain, entity_id, force=force, mandatory=mandatory
         )
@@ -700,8 +763,12 @@ class BackupManager:
         """
         if self._init_dir_error is not None and not force:
             if mandatory:
+                message = (
+                    f"the auto-backup directory is unusable: {self._init_dir_error}"
+                )
                 raise MandatoryBackupError(
-                    f"the auto-backup directory is unusable: {self._init_dir_error}",
+                    message,
+                    safe_detail=message,
                     suggestions=[
                         "Check the auto-backup directory's permissions and "
                         "free space, or set HAMCP_BACKUP_DIR to a writable "
@@ -793,9 +860,13 @@ class BackupManager:
             )
         except (OSError, yaml.YAMLError) as err:
             if mandatory:
-                raise MandatoryBackupError(
+                message = (
                     f"could not write the pre-write snapshot for {key}: "
-                    f"{type(err).__name__}: {err}",
+                    f"{type(err).__name__}: {err}"
+                )
+                raise MandatoryBackupError(
+                    message,
+                    safe_detail=message if isinstance(err, OSError) else None,
                     suggestions=[
                         "Free up disk space, or delete old snapshots via "
                         "ha_manage_backup(scope='edits', action='delete')",
@@ -871,6 +942,7 @@ class BackupManager:
             self._dir.mkdir(parents=True, exist_ok=True)
         except OSError as err:
             self._init_dir_error = f"{type(err).__name__}: {err}"
+            self._directory_checked = True
             raise
         safe = _safe_entity_id(entity_id)
         target = self._unclaimed_target(domain, safe, _now_ts())
@@ -890,6 +962,7 @@ class BackupManager:
         tmp.write_text("# ha_mcp_backup\n" + body)
         os.replace(str(tmp), str(target))
         self._init_dir_error = None
+        self._directory_checked = True
         logger.info("Auto-backup: wrote %s", target.name)
         return target
 
@@ -981,8 +1054,14 @@ class BackupManager:
                 entity_id = data.get("entity_id")
                 if isinstance(entity_id, str):
                     identity = _template_entry_id(entity_id, data.get("config"))
-            except (ValueError, HomeAssistantError):
-                pass  # A stable malformed file is cached as unowned, never deleted.
+            except (ValueError, HomeAssistantError) as err:
+                # A stable malformed file is cached as unowned, never deleted.
+                # Parser messages may contain option values; retain only type.
+                logger.warning(
+                    "Auto-backup: cannot identify %s, leaving it in place: %s",
+                    path.name,
+                    type(err).__name__,
+                )
             after = path.stat()
             if signature != (
                 after.st_dev,
@@ -993,7 +1072,12 @@ class BackupManager:
             ):
                 self._forget_template_identity(path.name)
                 return None
-        except OSError:
+        except OSError as err:
+            logger.warning(
+                "Auto-backup: cannot identify %s, leaving it in place: %s",
+                path.name,
+                type(err).__name__,
+            )
             self._forget_template_identity(path.name)
             return None
         with self._template_identity_lock:
@@ -1238,15 +1322,8 @@ class BackupManager:
                 safety_backup=None,
             ) from err
         except ValueError as err:
-            # YAML parser diagnostics can include configuration values. Only
-            # our envelope validator supplies safe field-only messages.
-            message = (
-                str(err)
-                if isinstance(err, InvalidBackupSnapshotError)
-                else "Snapshot is invalid; inspect its YAML and schema version"
-            )
             raise BackupRestoreError(
-                message,
+                _snapshot_validation_message(err),
                 reason="invalid_snapshot",
                 restored_from=name,
                 safety_backup=None,
@@ -1349,13 +1426,16 @@ class BackupManager:
         except _RESTORE_ERRORS as err:
             if domain == "helper_template":
                 _log_template_failure(step, err)
-                message = (
+                message = _template_safe_failure_detail(step, err) or (
                     "Template helper restore was not attempted; inspect the target and backup storage"
                     if apply_status == "not_applied"
                     else "Template helper restore outcome is unknown; inspect current options before retrying"
                 )
                 raise BackupRestoreError(
-                    message, apply_status=apply_status, **outcome
+                    message,
+                    apply_status=apply_status,
+                    reason=_template_failure_reason(step, err),
+                    **outcome,
                 ) from err
             raise
         finally:
@@ -1543,6 +1623,7 @@ class BackupManager:
         says so, so the tool response doesn't read as a clean, complete list
         with the ``.bak`` history silently missing (#1996).
         """
+        await self.ensure_directory_ready()
         want_legacy = domain in (None, "yaml_file") and entity_id is None
         legacy: list[dict[str, Any]] = []
         warnings: list[str] = []
@@ -3607,7 +3688,7 @@ def _make_helper_handler(helper_type: str) -> DomainHandler:
 
 # Helper types we register backup handlers for. Only list-backed types
 # (those served by ``<helper_type>/list`` WebSocket commands) have
-# round-trippable snapshot/restore — flow-helper types (template, group,
+# round-trippable snapshot/restore — flow-helper types (group,
 # utility_meter, ...) live in config entries with a separate API and
 # would silently produce unrestorable backups if included here. The
 # decorator's ``domain_fn`` builds ``helper_<type>`` keys; if the user

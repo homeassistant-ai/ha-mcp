@@ -197,6 +197,11 @@ class _OptionsFlowProgress:
                 self.fields = tuple(result["errors"])
         else:
             # A complete snapshot cannot safely populate an unexpected next step.
+            # Supported snapshot flows commit only on CREATE_ENTRY; another
+            # form or menu leaves the submitted options pending in the flow.
+            if result.get("type") in (_FlowType.FORM, _FlowType.MENU):
+                self.apply_status = "not_applied"
+                self.reason = "unsupported_form"
             raise self.failure()
 
 
@@ -292,7 +297,7 @@ class _CreationFlowProgress(_OptionsFlowProgress):
 async def _create_snapshot_helper(
     client: Any, helper_type: str, config: dict[str, Any]
 ) -> dict[str, Any]:
-    """Create a complete snapshot through the shared walker without dropping fields."""
+    """Create a helper from a complete snapshot without dropping fields."""
     progress = _CreationFlowProgress(config)
     try:
         _reject_redaction_sentinels(config)
@@ -611,8 +616,8 @@ async def update_config_entry_options(
     validate rather than omitting it into that default.
     A complete options snapshot restore passes ``keep_current_values=False``
     so current values absent from the snapshot are not copied into the payload.
-    The caller must ensure the integration replaces its options and does not
-    commit a submission that returns validation errors. The restore requires
+    The caller must ensure the integration replaces its options only when its
+    flow returns CREATE_ENTRY. The restore requires
     a single authoritative form and raises ``OptionsFlowError``
     with apply knowledge on failure; uncertain or completed restores are not
     aborted. Ordinary edits retain their existing error/abort behavior.
@@ -822,7 +827,7 @@ async def create_flow_helper(
     """Create a new flow-based helper via the config flow.
 
     Starts a config flow, walks the flow steps, and returns the result.
-    Aborts the flow on error.
+    Ordinary creation aborts the flow on error.
     Complete snapshots require all options in the selected form and preserve
     uncertain or completed creation flows for reconciliation.
     """
