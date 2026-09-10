@@ -211,6 +211,10 @@ def test_traditional_chinese_regions_normalize_to_zh_hant(tmp_path: Path) -> Non
     assert normalize_locale("zh-Hans-HK", catalogs) == "zh-hans"
     assert normalize_locale("zh-Hans-TW", catalogs) == "zh-hans"
     assert normalize_locale("zh-Hant-CN", catalogs) == "zh-hant"
+    # Bare "zh" keeps the Simplified fallback even once Traditional ships:
+    # the Traditional catalog must claim only explicit script and region tags.
+    assert normalize_locale("zh", catalogs) == "zh-hans"
+    assert select_locale(ha_language="zh", catalogs=catalogs) == "zh-hans"
     assert select_locale(accept_language="zh-TW,zh;q=0.9", catalogs=catalogs) == (
         "zh-hant"
     )
