@@ -285,8 +285,7 @@ async def _delete_backups_bulk(
     return JSONResponse(
         {
             "success": True,
-            "deleted": bulk["deleted"],
-            "failed": bulk["failed"],
+            **bulk,
             "count": len(bulk["deleted"]),
             "failed_count": len(bulk["failed"]),
         }

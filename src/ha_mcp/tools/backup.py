@@ -2230,17 +2230,24 @@ async def _edits_delete(
     )
     deleted = bulk["deleted"]
     failed = bulk["failed"]
+    warnings = (
+        [f"Failed to delete {len(failed)} backup(s); see server log"] if failed else []
+    )
+    in_use_count = sum(
+        reason == "snapshot_in_use"
+        for reason in bulk.get("failure_reasons", {}).values()
+    )
+    if in_use_count:
+        warnings.append(
+            f"{in_use_count} backup(s) are in use by a capture or restore; "
+            "retry deletion after it finishes."
+        )
     return {
         "success": True,
         "data": {
-            "deleted": deleted,
-            "failed": failed,
+            **bulk,
             "count": len(deleted),
             "failed_count": len(failed),
         },
-        "warnings": (
-            [f"Failed to delete {len(failed)} backup(s); see server log"]
-            if failed
-            else []
-        ),
+        "warnings": warnings,
     }

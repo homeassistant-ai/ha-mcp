@@ -277,7 +277,7 @@ async def test_active_restore_protects_source_and_safety_from_deletion(manager, 
         assert {row["name"] for row in manager.list_snapshots()} == protected
     finally:
         release.set()
-        await task
+        await asyncio.gather(task)
     assert set(manager.delete_bulk(domain="helper_template")["deleted"]) == protected
 
 

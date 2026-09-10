@@ -58,7 +58,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 import yaml  # type: ignore[import-untyped]
 from fastmcp.exceptions import ToolError
@@ -134,6 +134,14 @@ class InvalidBackupSnapshotError(ValueError):
 
 class SnapshotInUseError(ValueError):
     """A snapshot is pinned by capture or restore and cannot be deleted yet."""
+
+
+class BulkDeleteResult(TypedDict):
+    """Keep filename lists stable while explaining safe, actionable refusals."""
+
+    deleted: list[str]
+    failed: list[str]
+    failure_reasons: NotRequired[dict[str, Literal["snapshot_in_use"]]]
 
 
 def _validate_snapshot_envelope(data: dict[str, Any]) -> None:
@@ -1163,16 +1171,17 @@ class BackupManager:
         domain: str | None = None,
         entity_id: str | None = None,
         older_than_days: int | None = None,
-    ) -> dict[str, list[str]]:
+    ) -> BulkDeleteResult:
         """Delete snapshots matching ``domain`` / ``entity_id`` / age.
 
         Returns a dict ``{"deleted": [...], "failed": [...]}`` so callers
-        can surface partial failures to the user rather than logging
-        them silently. Each failure also gets a WARNING in the server
-        log so the underlying OS error is preserved.
+        can surface partial failures. ``failure_reasons`` optionally maps
+        in-use filenames to a safe retryable code. Other exception details
+        remain in the server WARNING log.
         """
         deleted: list[str] = []
         failed: list[str] = []
+        failure_reasons: dict[str, Literal["snapshot_in_use"]] = {}
         cutoff: float | None = None
         if older_than_days is not None:
             if older_than_days < 0:
@@ -1186,10 +1195,15 @@ class BackupManager:
                 deleted.append(meta["name"])
             except (OSError, ValueError) as err:
                 failed.append(meta["name"])
+                if isinstance(err, SnapshotInUseError):
+                    failure_reasons[meta["name"]] = "snapshot_in_use"
                 logger.warning(
                     "Auto-backup: bulk-delete failed for %s: %s", meta["name"], err
                 )
-        return {"deleted": deleted, "failed": failed}
+        result: BulkDeleteResult = {"deleted": deleted, "failed": failed}
+        if failure_reasons:
+            result["failure_reasons"] = failure_reasons
+        return result
 
     def _resolve_snapshot_path(self, name: str) -> Path:
         """Validate a snapshot name and return its absolute Path.

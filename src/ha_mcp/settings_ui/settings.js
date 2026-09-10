@@ -1959,7 +1959,16 @@ async function bulkDeleteBackups() {
   const resp = await fetch('./api/settings/backups?' + params.toString(), {method: 'DELETE'});
   const data = await resp.json();
   if (!resp.ok) { alert(t('backup.errors.bulk_delete', {detail: JSON.stringify(data)}, 'Bulk delete failed: ' + JSON.stringify(data))); return; }
-  alert(t('backup.bulk.deleted', {count: data.count || 0}, 'Deleted ' + (data.count || 0) + ' backup(s)'));
+  const deleted = data.count || 0;
+  const failed = Array.isArray(data.failed) ? data.failed : [];
+  let message = failed.length
+    ? t('backup.bulk.partial', {deleted, failed: failed.length}, 'Deleted ' + deleted + ' backup(s); failed to delete ' + failed.length + ' backup(s).')
+    : t('backup.bulk.deleted', {count: deleted}, 'Deleted ' + deleted + ' backup(s)');
+  const inUse = failed.filter(name => data.failure_reasons?.[name] === 'snapshot_in_use').length;
+  if (inUse) {
+    message += '\n\n' + t('backup.bulk.in_use', {count: inUse}, inUse + ' backup(s) are in use. Retry after the active capture or restore finishes.');
+  }
+  alert(message);
   loadBackups();
 }
 
