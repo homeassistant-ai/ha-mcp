@@ -1,0 +1,15 @@
+{
+  "common": {
+    "oauth_not_serving": "舊版 OAuth 尚未提供這些憑證；請在 Home Assistant 提示時重新啟動以啟用。"
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data_description": {
+          "server_port": "此伺服器監聽的連接埠。ha-mcp App（附加元件）使用 9583，因此預設為 9584，讓兩者可同時執行；若未執行該 App（附加元件），可使用任何未占用的連接埠。",
+          "server_url": "處理程序內伺服器用來連線至 Home Assistant 的 URL（通常就是此執行個體）。留空會依此執行個體的連接埠與 SSL 設定自動推導；只有在伺服器必須改走其他路由時才需設定。"
+        }
+      }
+    }
+  }
+}

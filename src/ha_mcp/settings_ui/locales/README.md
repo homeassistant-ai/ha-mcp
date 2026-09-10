@@ -25,7 +25,7 @@ Home Assistant language code used across every corresponding file:
 - `homeassistant-addon-dev/translations/<code>.yaml` (generated)
 
 <!-- Keep the following marker line intact; locale parity tests parse it. -->
-The current code set `cs`, `de`, `eo`, `es`, `fr`, `it`, `ko`, `nl`, `pl`, `ru`, `sv`, `tlh`, and `zh-Hans` names every file:
+The current code set `cs`, `de`, `eo`, `es`, `fr`, `it`, `ko`, `nl`, `pl`, `ru`, `sv`, `tlh`, `zh-Hans`, and `zh-Hant` names every file:
 the parity test keeps this documentation aligned with the shipped catalogs.
 
 Klingon (`tlh`) is the one best-effort exception. Its catalogs may be edited

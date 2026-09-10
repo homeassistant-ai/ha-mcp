@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "native_name": "繁體中文",
+    "dir": "ltr"
+  },
+  "messages": {
+    "accessibility.storage_blocked": "您的瀏覽器正在阻止網站儲存；選擇僅對本次會話生效。",
+    "actions.approve": "核准",
+    "actions.deny": "拒絕",
+    "notice.restart.standalone": "⚠ 更改已儲存。重新啟動 ha-mcp 程序，然後在您的 AI 用戶端中重新整理 MCP 工具列表。",
+    "policies.operators.contains": "包含",
+    "policies.operators.eq": "等於",
+    "policies.operators.exists": "存在",
+    "policies.operators.exists_long": "存在（任意值）",
+    "policies.operators.gt": "大於",
+    "policies.operators.in": "屬於其中之一",
+    "policies.operators.lt": "小於",
+    "policies.operators.neq": "不等於",
+    "policies.operators.not_in": "不屬於其中之一",
+    "policies.operators.regex": "匹配正規表示式",
+    "policies.pending.already_decided": "此核准已被{decision}，可能由另一個分頁或會話完成。",
+    "policies.pending.decision.approved": "核准",
+    "policies.pending.decision.denied": "拒絕",
+    "visibility.errors.conflict": "設定已在另一個分頁或會話中被更改。請重新載入頁面，然後重新應用您的更改。"
+  }
+}
