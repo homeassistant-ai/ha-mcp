@@ -1325,12 +1325,12 @@ class TestDefaultDir:
     def test_new_install_defaults_under_data_dir(self, _standalone_env: Path) -> None:
         assert bm._resolve_default_dir() == _standalone_env / "backups"
 
-    def test_manager_creates_default_under_data_dir(
+    def test_manager_resolves_default_without_creating_storage(
         self, _standalone_env: Path
     ) -> None:
         mgr = BackupManager(_StubSettings(auto_backup_dir=""), _StubClient())
         assert mgr.backup_dir == _standalone_env / "backups"
-        assert mgr.backup_dir.is_dir()
+        assert not mgr.backup_dir.exists()
         assert mgr.init_dir_error is None
         assert mgr.enabled
 

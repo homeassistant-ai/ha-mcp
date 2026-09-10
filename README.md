@@ -214,6 +214,8 @@ Spend less time configuring, more time enjoying your smart home.
 
 Template helper edit backups capture persisted options through the HA-MCP custom component, using either its Server entry or File & YAML Tools entry. Helper edits, generic integration options edits, and deletion capture the stable config-entry identity and entity ID/name mapping. Capture refuses degraded secret scrubbing. Restoring an existing helper requires a fresh safety backup, removes optional settings absent from the snapshot, and verifies persisted options.
 
+For Template backup listing and bulk deletion, filter by the config-entry ID returned as `entity_id` by capture. Capture accepts an entity alias; the history filters use the stable config-entry ID. Recreation reports its replacement config-entry ID and saved entity mapping separately.
+
 If the original entry has been deleted, restore recreates the helper and reports its new config-entry ID. The saved entity ID and custom name are restored when available; an occupied entity ID is refused before creation. Older snapshots without entity metadata cannot preserve renamed entity IDs. If a collision or verification failure occurs after creation, the new helper and source backup are retained and the result reports the new entry for inspection. Other entity/device registry settings are not restored. Helper and integration edits through the same server wait until restore finishes; other Home Assistant clients are outside this coordination. Failed or uncertain restores report their outcome and safe refusal reasons; inspect the current helper before retrying.
 
 <details>

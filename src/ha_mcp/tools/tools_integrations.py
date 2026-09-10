@@ -2553,7 +2553,7 @@ class IntegrationTools:
         wait_bool: bool,
         warnings: list[str],
     ) -> dict[str, Any]:
-        """Capture and remove a Template entry under its stable write lock."""
+        """Remove a resolved flow entry, capturing Templates under their write lock."""
         client = self._client
         # Step 2: collect sub-entity IDs for the wait phase
         sub_entities = await _get_entities_for_config_entry(client, entry_id, warnings)

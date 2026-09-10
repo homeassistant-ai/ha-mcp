@@ -3105,6 +3105,8 @@ def _stdio_env(container_info: dict[str, Any], config_dir: Path) -> dict[str, st
         "HOMEASSISTANT_URL": container_info["base_url"],
         "HOMEASSISTANT_TOKEN": container_info.get("token", TEST_TOKEN),
         "HA_MCP_CONFIG_DIR": str(config_dir),
+        # Config-dir isolation alone still permits an existing legacy backup dir.
+        "HAMCP_BACKUP_DIR": str(config_dir / "backups"),
         "HAMCP_ENV_FILE": os.environ.get("HAMCP_ENV_FILE", "tests/.env.test"),
         "PATH": os.environ.get("PATH", ""),
         "HOME": os.environ.get("HOME", ""),

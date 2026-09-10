@@ -1902,9 +1902,14 @@ async function backupAction(act, name) {
     }
   } else if (act === 'restore') {
     if (!confirm(t('backup.confirm.restore', {name}, 'Restore ' + name + '?\n\nThis overwrites existing configuration or recreates a deleted Template helper. The current configuration is backed up first if it exists.'))) return;
+    let stage = 'request';
+    let httpStatus = null;
     try {
       const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name) + '/restore', {method: 'POST'});
+      httpStatus = resp.status;
+      stage = 'response_json';
       const data = await resp.json();
+      stage = 'outcome';
       if (!resp.ok || !data.success) {
         const outcome = data.data || {};
         let message = backupRestoreOutcomeMessage(outcome);
@@ -1919,6 +1924,12 @@ async function backupAction(act, name) {
         : t('backup.restored', {name: safetyBackup}, 'Restored. Safety backup: ' + safetyBackup));
       await loadBackups();
     } catch (err) {
+      // JSON parse errors can contain the upstream body. Retain the failure
+      // stage/type/status for diagnosis without logging raw errors or options.
+      const errorType = ['TypeError', 'SyntaxError', 'AbortError', 'NetworkError', 'TimeoutError'].includes(err?.name) ? err.name : 'Error';
+      console.warn('Backup restore response unavailable',
+        'stage=' + stage, 'error_type=' + errorType,
+        'http_status=' + (Number.isInteger(httpStatus) ? httpStatus : null));
       const message = backupRestoreOutcomeMessage();
       showToast(t('backup.errors.restore', {name, message}, 'Restore of "' + name + '" failed: ' + message), {isError: true});
       await loadBackups();

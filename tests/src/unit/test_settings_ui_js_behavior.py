@@ -6603,6 +6603,108 @@ class TestBackupActionErrorToast:
         )
 
 
+class TestBackupRestoreDiagnostics:
+    """Unknown restore results retain diagnostics without echoing upstream bodies."""
+
+    @pytest.mark.parametrize(
+        ("reply", "stage", "error_type", "status"),
+        [
+            ({"throw": "option-value-secret"}, "request", "TypeError", None),
+            (
+                {"status": 502, "body": "<html>option-value-secret</html>"},
+                "response_json",
+                "SyntaxError",
+                502,
+            ),
+        ],
+    )
+    def test_uncertain_response_logs_safe_context_and_refreshes_once(
+        self, settings_script: str, reply: dict, stage: str, error_type: str, status
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            settle_ms=300,
+            fetch_map={
+                **DEFAULT_FETCHES,
+                "/restore": reply,
+                "/backups?": {"status": 200, "json": {"success": True, "backups": []}},
+            },
+            invoke=(
+                "await new Promise(resolve => setTimeout(resolve, 100));"
+                "await window.backupAction('restore', 'snap_a');"
+            ),
+        )
+        _assert_clean_init(result)
+        assert len(result.fetches_to("/restore")) == 1
+        assert len(result.fetches_to("/backups?")) == 1
+        assert "could not be confirmed" in result.dom
+        assert "before retrying" in result.dom
+        diagnostics = [
+            row
+            for row in result.console
+            if row["level"] == "warn"
+            and row["args"][0] == "Backup restore response unavailable"
+        ]
+        assert len(diagnostics) == 1
+        assert diagnostics[0]["args"] == [
+            "Backup restore response unavailable",
+            f"stage={stage}",
+            f"error_type={error_type}",
+            f"http_status={status if status is not None else 'null'}",
+        ]
+        assert "option-value-secret" not in result.dom + json.dumps(result.console)
+
+    @pytest.mark.parametrize(
+        ("mapping", "extra", "expected"),
+        [
+            (
+                {"created_entity_id": "sensor.new", "restored_entity_id": "sensor.old"},
+                {},
+                "Entity ID: sensor.new → sensor.old",
+            ),
+            (
+                {"created_entity_id": "sensor.new", "target_entity_id": "sensor.old"},
+                {},
+                "Entity rename could not be confirmed: sensor.new → sensor.old",
+            ),
+            ({}, {"entity_ids_restored": False}, "This snapshot has no entity mapping"),
+        ],
+    )
+    def test_recreated_outcome_renders_mapping_and_safety_as_plain_text(
+        self, settings_script: str, mapping: dict, extra: dict, expected: str
+    ) -> None:
+        outcome = {
+            "apply_status": "applied",
+            "verification_status": "matched",
+            "restore_mode": "recreated",
+            "result": {"entry_id": "new-entry", "entity_id_mapping": mapping, **extra},
+            "conflicting_entity_id": "sensor.occupied",
+            "safety_backup": '<img src="x" onerror="alert(1)">',
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=DEFAULT_FETCHES,
+            settle_ms=300,
+            invoke=(
+                f"showToast(backupRestoreOutcomeMessage({json.dumps(outcome)}));"
+                "document.body.setAttribute('data-message', "
+                "document.querySelector('.ha-toast-msg').textContent);"
+                "document.body.setAttribute('data-injected', "
+                "document.querySelectorAll('.ha-toast-msg img').length);"
+            ),
+        )
+        _assert_clean_init(result)
+        message = _probe(result, "message") or ""
+        assert "Restore was applied and verified" in message
+        assert "Recreated config entry: new-entry" in message
+        assert expected in message
+        assert "sensor.occupied is already in use" in message
+        assert "Safety backup:" in message
+        assert _probe(result, "injected") == "0"
+
+
 class TestLlmApiToggle:
     """The per-tool "LLM API" toggle (#1745): renders the server-computed
     effective value, a flip lands in the POSTed llm_api overrides, and the

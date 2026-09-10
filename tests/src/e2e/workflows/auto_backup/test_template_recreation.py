@@ -110,8 +110,9 @@ async def _assert_collision_refused(
 class TestTemplateDeletedHelperRecovery:
     @pytest.mark.parametrize("template_type", ["sensor", "binary_sensor"])
     @pytest.mark.parametrize("collision", [False, True], ids=["renamed", "occupied"])
+    @pytest.mark.parametrize("delete_route", ["entry", "alias"])
     async def test_generic_edit_delete_and_recreate(
-        self, mcp_client, ha_client, template_type, collision
+        self, mcp_client, ha_client, template_type, collision, delete_route
     ):
         mcp = MCPAssertions(mcp_client)
         if not component_surface_available():
@@ -163,14 +164,17 @@ class TestTemplateDeletedHelperRecovery:
             assert await _options(mcp_client, original_id) == original_options
 
             before_delete = await _backup_names(mcp, original_id)
+            delete_arguments = {"target": original_id, "confirm": True}
+            if delete_route == "alias":
+                delete_arguments.update(target=target, helper_type="template")
             await mcp.call_tool_success(
                 "ha_remove_helpers_integrations",
-                {"target": original_id, "confirm": True},
+                delete_arguments,
             )
             entry_ids.remove(original_id)
             delete_backups = await _backup_names(mcp, original_id) - before_delete
             assert len(delete_backups) == 1, (
-                "Direct-entry deletion must capture options"
+                f"{delete_route} deletion must capture its own fresh snapshot"
             )
             (saved,) = delete_backups
             source = await mcp.call_tool_success(
@@ -179,6 +183,7 @@ class TestTemplateDeletedHelperRecovery:
             )
             assert source["data"]["config"]["options"] == original_options
             assert source["data"]["config"]["entities"][0]["entity_id"] == target
+            assert source["data"]["config"]["entities"][0]["name"] == label
 
             if collision:
                 await _assert_collision_refused(
@@ -189,8 +194,7 @@ class TestTemplateDeletedHelperRecovery:
                 {"scope": "edits", "action": "restore", "backup_name": saved},
             )
             outcome = restored["data"]
-            replacement = outcome["entity_id"]
-            assert outcome["result"]["entry_id"] == replacement
+            replacement = outcome["result"]["entry_id"]
             entry_ids.add(replacement)
             backup_targets.add(replacement)
             assert replacement != original_id

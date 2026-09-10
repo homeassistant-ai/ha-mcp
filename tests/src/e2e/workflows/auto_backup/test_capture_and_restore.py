@@ -58,7 +58,7 @@ def _enable_auto_backup(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ENABLE_AUTO_BACKUP", "true")
     monkeypatch.setenv("AUTO_BACKUP_THROTTLE_MINUTES", "0")
     monkeypatch.setenv("AUTO_BACKUP_RETAIN_PER_ENTITY", "20")
-    # backup_dir is per-test-tmpdir to avoid cross-test pollution.
+    # The directory's autouse fixture pins HAMCP_BACKUP_DIR for in-process tests.
     from ha_mcp.config import _reset_global_settings
 
     _reset_global_settings()

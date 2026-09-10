@@ -132,9 +132,20 @@ async def _diff_backup(
         snapshot, current = await mgr.snapshot_comparison(name)
     except FileNotFoundError:
         return _not_found(name)
-    except (ValueError, LookupError) as err:
+    except ValueError as err:
         return _bad_request(str(err))
-    except _CAPTURE_TRANSIENT_ERRORS:
+    except LookupError as err:
+        return _bad_request(str(err), code=ErrorCode.RESOURCE_NOT_FOUND, status=404)
+    except _CAPTURE_TRANSIENT_ERRORS as err:
+        # Transport/HA API/filesystem failures are not evidence of a deleted
+        # entity. Keep their diagnostics without echoing options or raw bodies.
+        status = getattr(err, "status_code", None)
+        logger.warning(
+            "Backup comparison failed for %r (%s, upstream_status=%s)",
+            name,
+            type(err).__name__,
+            status if type(status) is int else None,
+        )
         return _bad_request(
             "Could not fetch the current configuration for comparison.",
             code=ErrorCode.CONNECTION_FAILED,

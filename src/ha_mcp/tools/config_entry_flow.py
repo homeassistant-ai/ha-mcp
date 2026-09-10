@@ -68,6 +68,7 @@ _RESTORE_REASON_MESSAGES: dict[OptionsRestoreReason, str] = {
 # snapshot keys and HA error payloads may contain values and must not be echoed.
 _SAFE_RESTORE_FIELD_NAMES = frozenset(
     {
+        "additional_options",
         "availability",
         "availability_template",
         "device_class",
@@ -95,7 +96,15 @@ class OptionsFlowError(HomeAssistantError):
         fields: tuple[str, ...] = (),
     ) -> None:
         self.reason = reason
-        self.fields = tuple(sorted(set(fields) & _SAFE_RESTORE_FIELD_NAMES))
+        self.fields = tuple(
+            sorted(
+                field
+                for field in set(fields)
+                if all(
+                    segment in _SAFE_RESTORE_FIELD_NAMES for segment in field.split(".")
+                )
+            )
+        )
         if reason is not None:
             message = _RESTORE_REASON_MESSAGES[reason]
             if self.fields:
@@ -152,7 +161,8 @@ class _OptionsFlowProgress:
             self.apply_status = "not_applied"
             self.reason = "flow_aborted"
         elif result.get("type") == _FlowType.FORM and result.get("errors"):
-            # Template's single options form has not committed on rejection.
+            # Complete-restore callers require an options form that does not
+            # commit when it reports a validation rejection.
             self.apply_status = "not_applied"
             self.reason = "validation_failed"
             if isinstance(result["errors"], dict):
@@ -186,7 +196,7 @@ def _unknown_snapshot_fields(
 def _preflight_options_restore(
     progress: _OptionsFlowProgress, step: dict[str, Any], config: dict[str, Any]
 ) -> None:
-    """Reject unsupported complete-snapshot fields before a Template submit."""
+    """Reject unsupported complete-snapshot fields before an options submit."""
     schema = step.get("data_schema")
     reason: OptionsRestoreReason
     fields: tuple[str, ...] = ()
@@ -468,8 +478,10 @@ async def update_config_entry_options(
     schema default means submitting the ``None`` for Home Assistant to
     validate rather than omitting it into that default.
     A complete options snapshot restore passes ``keep_current_values=False``
-    so optional fields absent from the snapshot are removed by Home Assistant.
-    It requires a single authoritative form and raises ``OptionsFlowError``
+    so current values absent from the snapshot are not copied into the payload.
+    The caller must ensure the integration replaces its options and does not
+    commit a submission that returns validation errors. The restore requires
+    a single authoritative form and raises ``OptionsFlowError``
     with apply knowledge on failure; uncertain or completed restores are not
     aborted. Ordinary edits retain their existing error/abort behavior.
     """
@@ -478,12 +490,25 @@ async def update_config_entry_options(
         return await _update_config_entry_options(
             client, entry_id, config_dict, expected_domain, noun, progress
         )
-    except OptionsFlowError:
-        raise
-    except Exception as err:
-        if progress is not None:
-            raise progress.failure() from err
-        raise
+    except (Exception, asyncio.CancelledError) as err:
+        if progress is None:
+            raise
+        failure = err if isinstance(err, OptionsFlowError) else progress.failure()
+        if failure.flow_id and failure.apply_status != "not_applied":
+            logger.warning(
+                "Options restore flow %s for entry %s was not aborted after failure "
+                "(apply_status=%s, reason=%s, fields=%s, error_type=%s); "
+                "reconcile Home Assistant state before retrying",
+                failure.flow_id,
+                failure.entry_id,
+                failure.apply_status,
+                failure.reason,
+                failure.fields,
+                type(err).__name__,
+            )
+        if isinstance(err, (OptionsFlowError, asyncio.CancelledError)):
+            raise
+        raise failure from err
 
 
 async def _update_config_entry_options(
@@ -547,13 +572,18 @@ async def _update_config_entry_options(
             helper_type=expected_domain,
             keep_current_values=progress is None,
         )
-    except Exception:
+    except Exception as flow_err:
         if progress is None or progress.apply_status == "not_applied":
             try:
                 await asyncio.wait_for(client.abort_options_flow(flow_id), timeout=5.0)
             except Exception as abort_err:
                 logger.warning(
-                    f"Failed to abort options flow {flow_id} after error: {abort_err}"
+                    "Failed to abort options flow %s for entry %s "
+                    "(stage=abort_cleanup, reason=%s, error_type=%s)",
+                    flow_id,
+                    entry_id,
+                    flow_err.reason if isinstance(flow_err, OptionsFlowError) else None,
+                    type(abort_err).__name__,
                 )
         raise
 
