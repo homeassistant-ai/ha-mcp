@@ -28,6 +28,68 @@ NAME = "helper_template.sensor.example.20260909_000000.yaml"
 SAFETY = "helper_template.original-entry.20260909_000001.yaml"
 
 
+@pytest.mark.parametrize(
+    ("handler_warnings", "safety_backup", "expected_warnings"),
+    [
+        (
+            ["The recreated helper may have a new entity ID."],
+            None,
+            ["The recreated helper may have a new entity ID."],
+        ),
+        (None, None, []),
+        ([], None, []),
+        (
+            None,
+            SAFETY,
+            ["This restore did NOT restart HA. To revert, restore the safety_backup."],
+        ),
+        (
+            ["Check dependent references."],
+            SAFETY,
+            [
+                "Check dependent references.",
+                "This restore did NOT restart HA. To revert, restore the safety_backup.",
+            ],
+        ),
+        (
+            ["This restore did NOT restart HA. To revert, restore the safety_backup."],
+            SAFETY,
+            ["This restore did NOT restart HA. To revert, restore the safety_backup."],
+        ),
+    ],
+    ids=["legacy-identity", "absent", "empty", "safety", "combined", "deduplicated"],
+)
+@pytest.mark.asyncio
+async def test_mcp_restore_promotes_warnings_without_mutating_manager_result(
+    monkeypatch, handler_warnings, safety_backup, expected_warnings
+):
+    handler_result = {"apply_status": "applied", "verification_status": "verified"}
+    if handler_warnings is not None:
+        handler_result["warnings"] = handler_warnings
+    result = {
+        "restored_from": NAME,
+        "safety_backup": safety_backup,
+        "result": handler_result,
+    }
+    original = deepcopy(result)
+    manager = SimpleNamespace(restore_snapshot=AsyncMock(return_value=result))
+    monkeypatch.setattr("ha_mcp.tools.backup.get_backup_manager", lambda *args: manager)
+    monkeypatch.setattr("ha_mcp.tools.backup.get_global_settings", SimpleNamespace)
+
+    response = await _dispatcher()(scope="edits", action="restore", backup_name=NAME)
+
+    assert response["success"] is True
+    if expected_warnings:
+        assert response["warnings"] == expected_warnings
+    else:
+        assert "warnings" not in response
+    expected_data = deepcopy(original)
+    expected_data["result"].pop("warnings", None)
+    assert response["data"] == expected_data
+    assert result == original
+    manager.restore_snapshot.assert_awaited_once_with(NAME)
+
+
 @pytest.mark.parametrize("consumer", ["settings", "mcp"])
 @pytest.mark.parametrize(
     ("apply_status", "verification_status"),

@@ -2149,14 +2149,22 @@ async def _edits_restore(
             ],
         )
         return None  # unreachable: exception_to_structured_error always raises
+    # The manager also serves Settings, which consumes handler warnings in place.
+    # Copy its result before moving warnings to the MCP response envelope.
+    data = dict(result)
+    warnings: list[str] = []
+    if isinstance(result.get("result"), dict):
+        handler_result = dict(result["result"])
+        warnings.extend(handler_result.pop("warnings", []))
+        data["result"] = handler_result
+    if result.get("safety_backup"):
+        warnings.append(
+            "This restore did NOT restart HA. To revert, restore the safety_backup."
+        )
     return {
         "success": True,
-        "data": result,
-        "warnings": [
-            "This restore did NOT restart HA. To revert, restore the safety_backup."
-        ]
-        if result.get("safety_backup")
-        else [],
+        "data": data,
+        **({"warnings": list(dict.fromkeys(warnings))} if warnings else {}),
     }
 
 

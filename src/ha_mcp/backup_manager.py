@@ -402,6 +402,15 @@ class BackupManager:
         self._entry_write_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
+        self._entry_write_owners: dict[str, asyncio.Task[Any]] = {}
+        self._entry_admissions: dict[asyncio.Task[Any], bool] = {}
+        self._entry_restore_owner: asyncio.Task[Any] | None = None
+        self._entry_restores_waiting = 0
+        self._entry_writes_changed = asyncio.Event()
+        self._template_identity_cache: dict[
+            str, tuple[tuple[int, int, int, int, int], str | None]
+        ] = {}
+        self._template_identity_lock = threading.Lock()
         self._protected_snapshot_names: Counter[str] = Counter()
         self._snapshot_pin_lock = threading.Lock()
         self._init_dir_error: str | None = None
@@ -476,11 +485,65 @@ class BackupManager:
     # ----- capture -------------------------------------------------------
 
     @asynccontextmanager
-    async def config_entry_write_guard(self, entity_id: str) -> AsyncIterator[None]:
-        """Serialize entry writes with Template capture and restore operations."""
-        lock = self._entry_write_locks.setdefault(entity_id, asyncio.Lock())
-        async with lock:
+    async def _config_entry_admission(self, exclusive: bool) -> AsyncIterator[None]:
+        """Drain guarded writes before a restore can expose an unknown new ID.
+
+        Ordinary writes remain parallel across entries. Template restores pause
+        them server-wide until creation, renaming and verification finish: the
+        replacement can be visible before the create response gives us its ID.
+        Admission precedes entry locking so already queued writes can drain.
+        All state belongs to the server event loop; cleanup never awaits.
+        """
+        task = asyncio.current_task()
+        assert task is not None
+        if task in self._entry_admissions:
+            if exclusive and not self._entry_admissions[task]:
+                raise RuntimeError(
+                    "Cannot start Template restore inside an entry write"
+                )
             yield
+            return
+        if exclusive:
+            self._entry_restores_waiting += 1
+            try:
+                while self._entry_admissions:
+                    self._entry_writes_changed.clear()
+                    await self._entry_writes_changed.wait()
+                self._entry_restore_owner = task
+            finally:
+                self._entry_restores_waiting -= 1
+                self._entry_writes_changed.set()
+        else:
+            while self._entry_restore_owner or self._entry_restores_waiting:
+                self._entry_writes_changed.clear()
+                await self._entry_writes_changed.wait()
+        self._entry_admissions[task] = exclusive
+        try:
+            yield
+        finally:
+            del self._entry_admissions[task]
+            if exclusive:
+                self._entry_restore_owner = None
+            self._entry_writes_changed.set()
+
+    @asynccontextmanager
+    async def config_entry_write_guard(
+        self, entity_id: str, *, exclusive: bool = False
+    ) -> AsyncIterator[None]:
+        """Serialize entry writes; Template restores also reserve admission."""
+        async with self._config_entry_admission(exclusive):
+            task = asyncio.current_task()
+            assert task is not None
+            if self._entry_write_owners.get(entity_id) is task:
+                yield
+                return
+            lock = self._entry_write_locks.setdefault(entity_id, asyncio.Lock())
+            async with lock:
+                self._entry_write_owners[entity_id] = task
+                try:
+                    yield
+                finally:
+                    del self._entry_write_owners[entity_id]
 
     async def maybe_snapshot(
         self,
@@ -781,14 +844,7 @@ class BackupManager:
         stable identity must be read from config.entry_id.
         """
         if path.name.startswith("helper_template."):
-            try:
-                data = self.read_snapshot(path.name)
-                entity_id = data.get("entity_id")
-                if not isinstance(entity_id, str):
-                    return None
-                return _template_entry_id(entity_id, data.get("config"))
-            except (OSError, ValueError, HomeAssistantError):
-                return None
+            return self._template_snapshot_identity(path)
         try:
             with path.open(encoding="utf-8") as handle:
                 header: list[str] = []
@@ -809,6 +865,55 @@ class BackupManager:
         found = loaded.get("entity_id")
         return found if isinstance(found, str) else None
 
+    def _template_snapshot_identity(self, path: Path) -> str | None:
+        """Validate new/changed Template YAML once, including legacy alias headers.
+
+        Rotation still enumerates and stats the history to discover imported or
+        changed files, but it does not repeatedly parse unrelated YAML bodies.
+        The cache is shared with listing/deletion and guarded across IO threads.
+        """
+        try:
+            before = path.stat()
+            signature = (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+            )
+            with self._template_identity_lock:
+                cached = self._template_identity_cache.get(path.name)
+                if cached is not None and cached[0] == signature:
+                    return cached[1]
+            identity = None
+            try:
+                data = self.read_snapshot(path.name)
+                entity_id = data.get("entity_id")
+                if isinstance(entity_id, str):
+                    identity = _template_entry_id(entity_id, data.get("config"))
+            except (ValueError, HomeAssistantError):
+                pass  # A stable malformed file is cached as unowned, never deleted.
+            after = path.stat()
+            if signature != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+            ):
+                self._forget_template_identity(path.name)
+                return None
+        except OSError:
+            self._forget_template_identity(path.name)
+            return None
+        with self._template_identity_lock:
+            self._template_identity_cache[path.name] = (signature, identity)
+        return identity
+
+    def _forget_template_identity(self, name: str) -> None:
+        with self._template_identity_lock:
+            self._template_identity_cache.pop(name, None)
+
     def _snapshot_is_for(self, path: Path, entity_id: str) -> bool:
         """Whether ``path`` holds a snapshot of ``entity_id`` (see ``_id_matches``)."""
         return _id_matches(self._payload_entity_id(path), entity_id)
@@ -820,6 +925,10 @@ class BackupManager:
         if domain == "helper_template":
             # Older snapshots used the entity alias as their filename/header.
             candidates.update(self._dir.glob("helper_template.*.yaml"))
+            names = {path.name for path in candidates}
+            with self._template_identity_lock:
+                for name in self._template_identity_cache.keys() - names:
+                    del self._template_identity_cache[name]
         else:
             for safe in _entity_id_aliases(entity_id):
                 candidates.update(self._dir.glob(f"{domain}.{safe}.*.yaml"))
@@ -840,6 +949,7 @@ class BackupManager:
                     ):
                         continue
                     old.unlink()
+                    self._forget_template_identity(old.name)
             except OSError as err:
                 logger.warning("Auto-backup: failed to rotate %s: %s", old.name, err)
 
@@ -953,6 +1063,7 @@ class BackupManager:
     def delete_snapshot(self, name: str) -> Path:
         path = self._resolve_snapshot_path(name)
         path.unlink()
+        self._forget_template_identity(name)
         return path
 
     def delete_bulk(
@@ -981,6 +1092,7 @@ class BackupManager:
                 continue
             try:
                 (self._dir / meta["name"]).unlink()
+                self._forget_template_identity(meta["name"])
                 deleted.append(meta["name"])
             except OSError as err:
                 failed.append(meta["name"])
@@ -1031,7 +1143,7 @@ class BackupManager:
                         safety_backup=None,
                     ) from err
                 data["entity_id"] = entity_id
-                async with self.config_entry_write_guard(entity_id):
+                async with self.config_entry_write_guard(entity_id, exclusive=True):
                     return await self._restore_snapshot_data(
                         name, data, take_safety_backup=take_safety_backup
                     )
