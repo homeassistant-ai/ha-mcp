@@ -11,6 +11,7 @@ import pytest
 from ha_mcp import backup_manager as bm
 from ha_mcp.tools import config_entry_flow
 
+from .test_template_deleted_recovery import recovery as recovery
 from .test_template_helper_backup import _record, _response
 
 
@@ -30,6 +31,81 @@ def manager(tmp_path):
 def snapshot(manager, state="old", target="template-entry"):
     config = {"entry_id": target, "options": {**_record()["options"], "state": state}}
     return manager._write_snapshot("helper_template", target, config, "test")
+
+
+async def test_existing_template_cannot_opt_out_of_required_safety(manager):
+    source = snapshot(manager)
+    manager._settings.enable_auto_backup = False
+    current = {
+        "entry_id": "template-entry",
+        "options": {**_record()["options"], "state": "before"},
+    }
+    saved_names = []
+
+    async def restore(*_):
+        saved = [row for row in manager.list_snapshots() if row["name"] != source.name]
+        assert len(saved) == 1, "Required safety snapshot must exist before apply"
+        saved_names.append(saved[0]["name"])
+        assert manager.read_snapshot(saved_names[0])["config"] == current
+        return {"success": True}
+
+    manager.register(
+        bm.DomainHandler("helper_template", AsyncMock(return_value=current), restore)
+    )
+    result = await manager.restore_snapshot(source.name, take_safety_backup=False)
+    assert result["safety_backup"] == saved_names[0]
+    assert result["apply_status"] == "applied"
+
+
+async def test_template_safety_opt_out_still_refuses_failed_capture(
+    manager, monkeypatch
+):
+    source = snapshot(manager)
+    current = {
+        "entry_id": "template-entry",
+        "options": {**_record()["options"], "state": "before"},
+    }
+    restore = AsyncMock(return_value={"success": True})
+    manager.register(
+        bm.DomainHandler("helper_template", AsyncMock(return_value=current), restore)
+    )
+
+    def write_failure(*_):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(manager, "_write_snapshot", write_failure)
+    with pytest.raises(bm.BackupRestoreError) as caught:
+        await manager.restore_snapshot(source.name, take_safety_backup=False)
+    assert caught.value.outcome["reason"] == "backup_capture_failed"
+    assert caught.value.outcome["apply_status"] == "not_applied"
+    assert caught.value.outcome["safety_backup"] is None
+    assert source.exists()
+    restore.assert_not_awaited()
+
+
+async def test_absent_template_opt_out_recreates_without_safety(recovery):
+    result = await recovery.manager.restore_snapshot(
+        recovery.name, take_safety_backup=False
+    )
+    assert result["restore_mode"] == "recreated"
+    assert result["entity_id"] == "new-entry"
+    assert result["safety_backup"] is None
+    assert result["verification_status"] == "matched"
+    assert [row["name"] for row in recovery.manager.list_snapshots()] == [recovery.name]
+    recovery.create.assert_awaited_once()
+
+
+async def test_non_template_restore_keeps_safety_opt_out(manager):
+    config = {"alias": "Saved automation"}
+    source = manager._write_snapshot("automation", "example", config, "test")
+    fetch = AsyncMock(return_value={"alias": "Current automation"})
+    restore = AsyncMock(return_value={"success": True})
+    manager.register(bm.DomainHandler("automation", fetch, restore))
+    result = await manager.restore_snapshot(source.name, take_safety_backup=False)
+    assert result["safety_backup"] is None
+    assert [row["name"] for row in manager.list_snapshots()] == [source.name]
+    fetch.assert_not_awaited()
+    restore.assert_awaited_once_with(manager._client, "example", config)
 
 
 async def test_refusal_keeps_selected_source_at_retention_one(manager, monkeypatch):

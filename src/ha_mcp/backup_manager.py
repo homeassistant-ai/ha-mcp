@@ -13,6 +13,12 @@ exists), else ``<data dir>/backups`` where the data dir is what
 under the pre-#2372 default ``${XDG_DATA_HOME:-~/.local/share}/ha_mcp/backups``
 keep using that directory; see ``_resolve_default_dir``.
 
+New backup directories request owner-only access. On POSIX, snapshots are
+created with mode 0600; recognized existing owned snapshot files lose any
+group/other access on the first storage check. Existing directory modes stay unchanged.
+On Windows, Python 3.13 restricts newly created 0700 directories; existing
+custom directory ACLs remain the operator's responsibility.
+
 File format
 -----------
 One YAML file per snapshot, named
@@ -44,16 +50,19 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import errno
 import hashlib
 import logging
 import os
 import re
+import stat
+import tempfile
 import threading
 import time
 import weakref
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import cached_property
@@ -478,6 +487,60 @@ def _require_restore_safety(path: Path) -> None:
         )
 
 
+def _restrict_existing_snapshot_permissions(directory: Path) -> None:
+    """Restrict recognized POSIX snapshots through descriptors, never symlinks."""
+    if os.name != "posix":
+        return  # chmod does not restrict Windows ACLs.
+    # Configured directory aliases are supported; pin the resolved directory
+    # before inspecting children, which are never opened through symlinks.
+    directory_fd = os.open(
+        directory.resolve(), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    )
+    try:
+        for name in os.listdir(directory_fd):
+            # Old failed writes used a predictable .yaml.tmp sibling.
+            if _FILENAME_RE.fullmatch(name.removesuffix(".tmp")) is None:
+                continue
+            try:
+                metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                if not _snapshot_needs_restriction(metadata):
+                    continue
+                fd = os.open(
+                    name,
+                    os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                    dir_fd=directory_fd,
+                )
+            except FileNotFoundError:
+                continue  # Rotation or deletion won before this migration read.
+            except OSError as err:
+                if err.errno == errno.ELOOP:
+                    continue  # The name was replaced with a symlink after stat.
+                raise
+            try:
+                metadata = os.fstat(fd)
+                if (
+                    _snapshot_needs_restriction(metadata)
+                    and os.read(fd, len(b"# ha_mcp_backup\r\n"))
+                    .split(b"\n", 1)[0]
+                    .removesuffix(b"\r")
+                    == b"# ha_mcp_backup"
+                ):
+                    os.fchmod(fd, stat.S_IMODE(metadata.st_mode) & ~0o077)
+            finally:
+                os.close(fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _snapshot_needs_restriction(metadata: os.stat_result) -> bool:
+    return (
+        stat.S_ISREG(metadata.st_mode)
+        and metadata.st_uid == os.geteuid()
+        and metadata.st_nlink == 1
+        and bool(metadata.st_mode & 0o077)
+    )
+
+
 @dataclass
 class _EntryAdmissionState:
     """Event-loop coordination survives settings-driven manager replacements."""
@@ -564,7 +627,7 @@ class BackupManager:
 
     def _check_directory(self) -> None:
         try:
-            self._dir.mkdir(parents=True, exist_ok=True)
+            self._prepare_directory()
         except OSError as err:
             self._init_dir_error = f"{type(err).__name__}: {err}"
             logger.warning(
@@ -572,6 +635,11 @@ class BackupManager:
             )
         finally:
             self._directory_checked = True
+
+    def _prepare_directory(self) -> None:
+        self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if not self._directory_checked or self._init_dir_error is not None:
+            _restrict_existing_snapshot_permissions(self._dir)
 
     @property
     def throttle_seconds(self) -> int:
@@ -939,7 +1007,7 @@ class BackupManager:
         self, domain: str, entity_id: str, config: Any, tool_name: str | None
     ) -> Path:
         try:
-            self._dir.mkdir(parents=True, exist_ok=True)
+            self._prepare_directory()
         except OSError as err:
             self._init_dir_error = f"{type(err).__name__}: {err}"
             self._directory_checked = True
@@ -957,10 +1025,22 @@ class BackupManager:
         if domain in _TEXT_DOMAINS:
             payload["kind"] = _TEXT_KIND
         body = yaml.safe_dump(payload, default_flow_style=False, sort_keys=False)
-        # Atomic write via tmp+rename
-        tmp = target.with_suffix(".yaml.tmp")
-        tmp.write_text("# ha_mcp_backup\n" + body)
-        os.replace(str(tmp), str(target))
+        # mkstemp creates a unique 0600 inode before any configuration is written.
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{target.name}.", suffix=".tmp", dir=self._dir
+        )
+        try:
+            try:
+                stream = os.fdopen(fd, "w")
+            except BaseException:
+                os.close(fd)
+                raise
+            with stream:
+                stream.write("# ha_mcp_backup\n" + body)
+            os.replace(tmp_name, str(target))
+        finally:
+            with suppress(OSError):
+                Path(tmp_name).unlink()
         self._init_dir_error = None
         self._directory_checked = True
         logger.info("Auto-backup: wrote %s", target.name)
@@ -1405,7 +1485,8 @@ class BackupManager:
         step = "safety_preflight"
         try:
             needs_safety = await self._restore_needs_safety(handler, entity_id, config)
-            if take_safety_backup and needs_safety:
+            # Existing Template helpers always require a fresh recovery point.
+            if needs_safety and (domain == "helper_template" or take_safety_backup):
                 step = "safety_backup"
                 safety_path = await self._capture_restore_safety(domain, entity_id)
                 if safety_path is not None:
