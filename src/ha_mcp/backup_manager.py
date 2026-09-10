@@ -750,7 +750,7 @@ class BackupManager:
 
     def _check_directory(self) -> None:
         try:
-            if self._directory_checked:
+            if self._directory_checked and self._init_dir_error is None:
                 self._storage_directory()
             else:
                 self._prepare_directory()
@@ -759,6 +759,8 @@ class BackupManager:
             logger.warning(
                 "Auto-backup: directory unavailable: %s", self._init_dir_error
             )
+        else:
+            self._init_dir_error = None
         finally:
             self._directory_checked = True
 

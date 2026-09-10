@@ -1556,8 +1556,13 @@ class TestForceSnapshot:
         assert path is None
 
     @pytest.mark.parametrize("mandatory", [False, True])
-    async def test_force_retries_repaired_directory(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mandatory: bool
+    @pytest.mark.parametrize("force", [False, True])
+    async def test_capture_retries_repaired_directory(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mandatory: bool,
+        force: bool,
     ) -> None:
         mgr = _mk_manager(tmp_path)
         mgr.register(_mk_handler(fetched={"alias": "x"}))
@@ -1576,10 +1581,8 @@ class TestForceSnapshot:
             await mgr.maybe_snapshot("automation", "foo", mandatory=True)
         assert mgr.init_dir_error is not None
         writable = True
-        # Ordinary automatic captures preserve their existing sticky behavior.
-        assert await mgr.maybe_snapshot("automation", "foo") is None
         recovered = await mgr.maybe_snapshot(
-            "automation", "foo", force=True, mandatory=mandatory
+            "automation", "foo", force=force, mandatory=mandatory
         )
         assert recovered is not None and recovered.exists()
         assert mgr.read_snapshot(recovered.name)["config"] == {"alias": "x"}

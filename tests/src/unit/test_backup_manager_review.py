@@ -1,6 +1,8 @@
 """Directory health and Template recovery retain safe local diagnostics."""
 
 import logging
+import os
+import stat
 import threading
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -49,6 +51,47 @@ async def test_disabled_health_check_and_capture_do_not_resolve_storage(monkeypa
     assert await manager.maybe_snapshot("automation", "example") is None
     assert manager.enabled is False
     assert manager.init_dir_error is None
+
+
+async def test_directory_recovery_retries_failed_snapshot_migration(
+    tmp_path, monkeypatch
+):
+    legacy = tmp_path / "automation.example.20260910_000000.yaml"
+    legacy.write_text("# ha_mcp_backup\nschema_version: 1\n", encoding="utf-8")
+    legacy.chmod(0o666)
+    manager = _mk_manager(tmp_path)
+    fetch = AsyncMock(return_value={"alias": "Current"})
+    manager.register(bm.DomainHandler("automation", fetch, AsyncMock()))
+    native_restrict = bm._restrict_existing_snapshot_permissions
+    attempts = []
+    migration_available = False
+
+    def restrict(directory):
+        attempts.append(directory)
+        if not migration_available:
+            raise PermissionError("Snapshot permission migration unavailable")
+        native_restrict(directory)
+
+    monkeypatch.setattr(bm, "_restrict_existing_snapshot_permissions", restrict)
+    for _ in range(2):
+        await manager.ensure_directory_ready()
+        assert manager.enabled is False
+        assert "migration unavailable" in manager.init_dir_error
+    assert len(attempts) == 2
+    fetch.assert_not_awaited()
+
+    migration_available = True
+    captured = await manager.maybe_snapshot("automation", "example")
+    assert captured is not None and captured.exists()
+    assert manager.enabled is True
+    assert manager.init_dir_error is None
+    assert len(attempts) == 3
+    fetch.assert_awaited_once()
+    if os.name == "posix":
+        assert stat.S_IMODE(legacy.stat().st_mode) == 0o600
+
+    await manager.ensure_directory_ready()
+    assert len(attempts) == 3
 
 
 @pytest.mark.parametrize("failure", ["yaml", "identity", "unreadable"])
