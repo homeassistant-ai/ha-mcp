@@ -135,18 +135,24 @@ async def restore_info_level(
                 await post_log_level(
                     settings_advanced, "INFO", timeout=_call_timeout(deadline)
                 )
-                await restart_self(settings_restart, timeout=_call_timeout(deadline))
             break
         except TRANSIENT_ADDON_ERRORS as error:
-            LOG.debug("INFO restore submission unavailable: %s", error)
+            LOG.debug("INFO restore preparation unavailable: %s", error)
             last = error
             await asyncio.sleep(min(poll_interval, max(deadline - time.monotonic(), 0)))
     else:
         raise AssertionError(
-            f"Could not submit the INFO restore restart within {restore_timeout}s "
+            f"Could not prepare the INFO restore restart within {restore_timeout}s "
             f"(last={last!r})"
         )
-    # Never replay a successful restart POST because a readiness probe fails.
+    # Resolve the budget before the attempt: expiration here cannot mean the
+    # server accepted a restart. Once sent, even a lost response may mean it did.
+    submission_timeout = _call_timeout(deadline)
+    try:
+        await restart_self(settings_restart, timeout=submission_timeout)
+    except (httpx.HTTPError, TimeoutError) as error:
+        LOG.debug("INFO restore restart outcome uncertain: %s", error)
+    # Never replay an attempted restart; its old process may still be serving.
     await wait_for_addon_replacement(
         settings_info,
         addon_url,

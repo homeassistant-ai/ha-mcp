@@ -65,6 +65,12 @@ class _Addon:
         self.reads: list[tuple[float, str]] = []
         self.mcp_calls: list[tuple[float, str, str]] = []
         self.clients: list[Any] = []
+        self.request_errors: dict[str, list[Exception]] = {}
+
+    def raise_request_error(self, url: str) -> None:
+        errors = self.request_errors.get(url)
+        if errors:
+            raise errors.pop(0)
 
     def instance(self) -> str:
         if self.replace_at is not None and self.clock.now >= self.replace_at:
@@ -84,6 +90,7 @@ class _Addon:
                 pass
 
             async def get(self, url: str) -> httpx.Response:
+                owner.raise_request_error(url)
                 instance = owner.instance()
                 owner.reads.append((owner.clock.now, instance))
                 return httpx.Response(
@@ -94,6 +101,7 @@ class _Addon:
 
             async def post(self, url: str, *, json: dict[str, Any]) -> httpx.Response:
                 owner.posts.append((url, json))
+                owner.raise_request_error(url)
                 return httpx.Response(
                     200,
                     json={"restart_required": True},
@@ -201,6 +209,97 @@ async def test_changed_instance_retries_transient_mcp_using_a_new_client(addon):
     assert addon.clock.now == pytest.approx(3.0)
     assert len(addon.clients) == 2
     assert addon.posts == []
+
+
+@pytest.mark.parametrize("error_type", [httpx.ReadError, TimeoutError])
+async def test_lost_restart_response_waits_for_replacement_without_replay(
+    addon, error_type
+):
+    """An accepted restart may lose its response before the old listener exits."""
+    addon.disconnect_at = None
+    addon.request_errors[_RESTART] = [error_type("response lost")] * 5
+    completion_error = None
+
+    try:
+        await addon_restart.restore_info_level(
+            _ADVANCED,
+            _RESTART,
+            _INFO,
+            _MCP,
+            restore_timeout=10.0,
+            ready_timeout=10.0,
+            poll_interval=3.0,
+        )
+    except AssertionError as error:
+        completion_error = error
+
+    assert [url for url, _ in addon.posts].count(_RESTART) == 1
+    assert completion_error is None, completion_error
+    assert addon.clock.now == pytest.approx(6.0)
+    assert addon.reads[:2] == [(0.0, "old-process"), (0.0, "old-process")]
+    assert addon.mcp_calls[0][1] == "replacement-process"
+
+
+@pytest.mark.parametrize("error_type", [httpx.ReadError, TimeoutError])
+async def test_uncertain_restart_without_replacement_times_out_without_replay(
+    addon, error_type
+):
+    addon.disconnect_at = addon.replace_at = None
+    addon.request_errors[_RESTART] = [error_type("response lost")] * 5
+
+    with pytest.raises(AssertionError):
+        await addon_restart.restore_info_level(
+            _ADVANCED,
+            _RESTART,
+            _INFO,
+            _MCP,
+            restore_timeout=10.0,
+            ready_timeout=10.0,
+            poll_interval=3.0,
+        )
+
+    assert [url for url, _ in addon.posts].count(_RESTART) == 1
+    assert addon.clock.now == pytest.approx(10.0)
+    assert addon.mcp_calls == []
+
+
+@pytest.mark.parametrize("endpoint", [_INFO, _ADVANCED])
+async def test_transient_before_restart_submission_is_retried(addon, endpoint):
+    addon.disconnect_at = None
+    addon.replace_at = 9.0
+    addon.request_errors[endpoint] = [httpx.ReadError("temporarily unavailable")]
+
+    await addon_restart.restore_info_level(
+        _ADVANCED,
+        _RESTART,
+        _INFO,
+        _MCP,
+        restore_timeout=10.0,
+        ready_timeout=10.0,
+        poll_interval=3.0,
+    )
+
+    assert not addon.request_errors[endpoint]
+    assert [url for url, _ in addon.posts].count(_RESTART) == 1
+    expected_advanced_posts = 1 if endpoint == _INFO else 2
+    assert [url for url, _ in addon.posts].count(_ADVANCED) == expected_advanced_posts
+    assert addon.clock.now == pytest.approx(9.0)
+    assert addon.mcp_calls[0][1] == "replacement-process"
+
+
+@pytest.mark.parametrize("error_type", [TypeError, AssertionError])
+@pytest.mark.parametrize("endpoint", [_INFO, _ADVANCED, _RESTART])
+async def test_submission_contract_errors_propagate_without_retry(
+    addon, error_type, endpoint
+):
+    addon.request_errors[endpoint] = [error_type("broken contract")]
+
+    with pytest.raises(error_type, match="broken contract"):
+        await addon_restart.restore_info_level(_ADVANCED, _RESTART, _INFO, _MCP)
+
+    assert addon.clock.now == 0
+    expected_restart_posts = int(endpoint == _RESTART)
+    assert [url for url, _ in addon.posts].count(_RESTART) == expected_restart_posts
 
 
 async def test_readiness_passes_each_exchange_its_remaining_deadline(
