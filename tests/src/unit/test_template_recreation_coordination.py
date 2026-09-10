@@ -16,7 +16,7 @@ async def _cancel_tasks(*tasks):
         if task is not None:
             task.cancel()
             with suppress(asyncio.CancelledError, bm.BackupRestoreError):
-                await task
+                await asyncio.gather(task)
 
 
 @pytest.mark.parametrize("stage", ["create_reply", "rename", "verification"])
@@ -77,7 +77,7 @@ async def test_new_entry_writes_wait_until_recreation_finishes(
             assert not entered.is_set(), "The replacement entry is still being restored"
             release.set()
             result = await restore
-            await writer
+            await asyncio.gather(writer)
         assert result["verification_status"] == "matched"
         assert entered.is_set()
     finally:
@@ -155,7 +155,7 @@ async def test_unrelated_ordinary_writes_remain_parallel(recovery):
         async with recovery.manager.config_entry_write_guard("old-entry"):
             task = asyncio.create_task(other())
             await entered.wait()
-            await task
+            await asyncio.gather(task)
 
 
 async def test_cancelled_recreation_releases_waiting_entry_write(recovery):
@@ -186,8 +186,8 @@ async def test_cancelled_recreation_releases_waiting_entry_write(recovery):
         assert not entered.is_set()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await task
-        await writer
+            await asyncio.gather(task)
+        await asyncio.gather(writer)
         assert entered.is_set()
         assert recovery.state.entries[0]["entry_id"] == "new-entry"
     assert recovery.name not in recovery.manager._protected_snapshot_names
@@ -223,7 +223,7 @@ async def test_cancelled_waiting_restore_does_not_block_new_writes(recovery):
             task.cancel()
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
-                await task
+                await asyncio.gather(task)
             await asyncio.create_task(another_write())
 
 
@@ -243,7 +243,7 @@ async def test_nested_ordinary_write_can_finish_after_restore_queues(recovery):
             await attempted.wait()
             async with guard("new-entry"), guard("another-entry"):
                 assert not entered.is_set()
-        await task
+        await asyncio.gather(task)
         assert entered.is_set()
 
 
@@ -267,8 +267,8 @@ async def test_cancelled_queued_entry_guard_does_not_hold_up_restore(recovery):
             restoring = asyncio.create_task(restore())
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
-                await task
-        await restoring
+                await asyncio.gather(task)
+        await asyncio.gather(restoring)
 
 
 async def test_guard_upgrade_refuses_instead_of_deadlocking(recovery):
@@ -295,5 +295,5 @@ async def test_exclusive_restores_for_different_entries_serialize(recovery):
             task = asyncio.create_task(restore())
             await attempted.wait()
             assert not entered.is_set()
-        await task
+        await asyncio.gather(task)
         assert entered.is_set()
