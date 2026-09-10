@@ -14,9 +14,14 @@ _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
 _STABLE_WORKFLOW = "haos-e2e-tests.yml"
 _BETA_WORKFLOW = "haos-e2e-beta-tests.yml"
 _CONTAINER_BETA_WORKFLOW = "e2e-beta-tests.yml"
-# 7 actual consumers (the six HAOS lanes + the image builder); the floor is what
-# catches a lane that silently loses its image-cache step.
-_CACHE_KEY_CONSUMER_FLOOR = 7
+# 8 actual consumers (the six HAOS lanes, their shared build job and the
+# master image builder); the floor is what catches a lane that silently loses
+# its image-cache step.
+_CACHE_KEY_CONSUMER_FLOOR = 8
+# The job that builds the qcow2 once per run and writes the shared key before
+# any lane starts (#2311).
+_SHARED_BUILD_JOB = "build-image"
+_BUILD_COMMAND = "python3 tests/haos_image_build/build_image.py"
 _CACHE_KEY_OUTPUT_MARKER = "cache-key=haos-image-"
 _HAOS_IMAGE_CACHE_PATH = "/tmp/haos-test-image.qcow2"
 _CACHE_ACTIONS = {
@@ -173,6 +178,93 @@ def test_cache_key_consumer_discovery_tracks_jobs_individually(
     assert _cache_key_consumers(tmp_path) == [
         (path, f"lane-{index}") for index in range(_CACHE_KEY_CONSUMER_FLOOR)
     ]
+
+
+def _stable_jobs() -> dict[str, dict[str, Any]]:
+    jobs = _workflow(_WORKFLOW_DIR / _STABLE_WORKFLOW)["jobs"]
+    return {str(job_id): job for job_id, job in jobs.items() if isinstance(job, dict)}
+
+
+def _stable_lanes() -> dict[str, dict[str, Any]]:
+    """The six HAOS lanes: every stable job that restores the image, minus the build job."""
+    lanes = {
+        job_id: job
+        for job_id, job in _stable_jobs().items()
+        if job_id != _SHARED_BUILD_JOB and _uses_haos_image_cache(job)
+    }
+    assert len(lanes) >= 6, sorted(lanes)
+    return lanes
+
+
+def _needs(job: dict[str, Any]) -> list[str]:
+    needs = job.get("needs") or []
+    return [needs] if isinstance(needs, str) else [str(need) for need in needs]
+
+
+def _steps_using(job: dict[str, Any], action: str) -> list[dict[str, Any]]:
+    return [
+        step
+        for step in _job_steps(job)
+        if str(step.get("uses", "")).partition("@")[0] == action
+    ]
+
+
+def _build_steps(job: dict[str, Any]) -> list[dict[str, Any]]:
+    """Steps that invoke the bake — matched on the command, not the script
+    name, which the diagnostics step's prose also mentions."""
+    return [
+        step for step in _job_steps(job) if _BUILD_COMMAND in str(step.get("run", ""))
+    ]
+
+
+def test_every_stable_lane_waits_for_the_shared_image_build() -> None:
+    """A lane that starts before ``build-image`` builds the image again for itself.
+
+    That is the six-fold build on a miss push that #2311 removes, and it comes
+    back the moment a new lane is copied from a pre-#2311 template.
+    """
+    jobs = _stable_jobs()
+    assert _SHARED_BUILD_JOB in jobs, sorted(jobs)
+    assert _needs(jobs[_SHARED_BUILD_JOB]) == ["changes"]
+    for job_id, job in _stable_lanes().items():
+        assert _SHARED_BUILD_JOB in _needs(job), f"{job_id} does not wait for the build"
+
+
+def test_shared_image_build_probes_without_downloading_and_writes_once() -> None:
+    job = _stable_jobs()[_SHARED_BUILD_JOB]
+    restores = _steps_using(job, "actions/cache/restore")
+    assert len(restores) == 1, "one probe"
+    assert restores[0]["with"].get("lookup-only") is True, (
+        "the probe must not download a multi-GB image it never boots"
+    )
+    saves = _steps_using(job, "actions/cache/save")
+    assert len(saves) == 1, "one writer"
+    assert "cache-hit != 'true'" in str(saves[0].get("if")), "save on a miss only"
+    builds = _build_steps(job)
+    assert len(builds) == 1, "one build"
+    assert "cache-hit != 'true'" in str(builds[0].get("if")), "build on a miss only"
+
+
+def test_shared_image_build_skips_exactly_when_the_lanes_skip() -> None:
+    """Docs-only PRs must not boot a runner for the build either."""
+    build_if = str(_stable_jobs()[_SHARED_BUILD_JOB].get("if"))
+    lane_ifs = {str(job.get("if")) for job in _stable_lanes().values()}
+    assert lane_ifs == {build_if}, (build_if, lane_ifs)
+
+
+def test_every_stable_lane_keeps_its_local_build_fallback() -> None:
+    """The cache can still miss after ``build-image`` ran (eviction, refused
+    save, or the job failed), and a rebuild inside the lane is faster than
+    any retry — the lanes' own build step stays (#2311).
+    """
+    for job_id, job in _stable_lanes().items():
+        builds = _build_steps(job)
+        assert len(builds) == 1, f"{job_id} lost its local build"
+        assert "cache-hit != 'true'" in str(builds[0].get("if")), job_id
+        assert "!cancelled()" in str(job.get("if")), (
+            f"{job_id} would be skipped by a failed build job instead of "
+            "building for itself"
+        )
 
 
 def test_beta_lane_discovery_does_not_depend_on_attestation(tmp_path: Path) -> None:

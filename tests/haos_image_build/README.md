@@ -30,8 +30,10 @@ run it uploads the qcow2 as a workflow artifact (reviewer sanity-check). On
 shared Actions cache used by all six E2E lanes. They all live in
 `haos-e2e-tests.yml` as the jobs `haos-e2e`, `haos-e2e-inaddon`,
 `haos-e2e-inaddon-no-tools`, `haos-e2e-embedded`,
-`haos-e2e-embedded-no-tools`, and `haos-e2e-stdio`; each restores the qcow2
-from that cache and falls back to a local build on a miss.
+`haos-e2e-embedded-no-tools`, and `haos-e2e-stdio`. A `build-image` job
+ahead of them probes that cache and, on a miss, builds and saves the qcow2
+once; each lane then restores it and falls back to its own local build if the
+restore still misses.
 
 ## Version pinning
 

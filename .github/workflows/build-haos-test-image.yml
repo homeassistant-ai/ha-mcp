@@ -11,8 +11,9 @@ name: Build HAOS Test Image (Prime Shared Cache)
 # and push to master that touches any input baked into the qcow2.
 #
 # INVARIANT — the path triggers below MUST mirror the ``git ls-tree`` paths
-# that the six HAOS E2E lanes in ``haos-e2e-tests.yml`` hash into their image
-# cache keys (see each "Compute image cache key" step). The beta lanes in
+# that the six HAOS E2E lanes and their shared ``build-image`` job in
+# ``haos-e2e-tests.yml`` hash into their image cache keys (see each "Compute
+# image cache key" step). The beta lanes in
 # ``haos-e2e-beta-tests.yml`` are NOT part of this invariant: they key a
 # separate ``haos-beta-image-*`` namespace this workflow never primes.
 # When master commits change a baked
@@ -244,7 +245,8 @@ jobs:
         if: github.ref == 'refs/heads/master'
         continue-on-error: true
         # INVARIANT: this git ls-tree must stay byte-IDENTICAL to the
-        # "Compute image cache key" step in all six HAOS E2E lanes —
+        # "Compute image cache key" step in the shared ``build-image`` job and
+        # all six HAOS E2E lanes —
         # otherwise this warms a key the lanes never restore (a wasted prime,
         # not a stale test: the lanes still recompute their own correct key).
         # NOTE the push-trigger paths above are a deliberate SUPERSET (they also

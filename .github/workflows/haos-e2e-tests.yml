@@ -9,21 +9,30 @@ name: HAOS E2E Tests
 # The lanes themselves are unchanged: same job ids, same job NAMES (they are
 # required status checks, so the names are a branch-protection contract), same
 # steps, same env, same timeouts, and the same shared ``haos-image-*`` cache
-# key. The external `haos-e2e` lane is still the sole writer of that cache;
-# every other lane restores only.
+# key. A `build-image` job ahead of the lanes writes that cache within a run
+# (#2311); the lanes restore, and each keeps its own local build as the
+# fallback for a miss.
 #
 # One behavioral change comes with the merge: a manual dispatch now runs ALL
 # SIX lanes, where dispatching a single lane's file previously ran that lane
 # alone. Narrow a dispatch with the `pytest_args` / `pytest_paths` inputs
 # rather than by picking a file.
 #
-# Image resolution strategy (per lane, per run):
-#   1. Try GitHub Actions cache (keyed on HAOS version + build inputs)
-#   2. On a cache miss, build locally (build_image.py); only `haos-e2e` saves
+# Image resolution strategy (per run):
+#   1. `build-image` probes the GitHub Actions cache (keyed on HAOS version +
+#      build inputs) without downloading. On a miss it builds locally
+#      (build_image.py) once and saves. The six lanes wait for it.
+#   2. Each lane restores from the cache. If the restore still misses — the
+#      entry was evicted between probe and restore, the save was refused
+#      because another run held the key, or `build-image` itself failed —
+#      the lane builds locally exactly as it always did, so a broken build
+#      job never blocks a lane. Only `haos-e2e` saves on that path.
 #
 # One job per lane on purpose: the qcow2 stays on that runner's local disk
-# through build -> test, so there's no cross-job upload+download of the ~7 GB
-# image (previously cost ~5 min per PR).
+# through restore -> test, so there's no cross-job upload+download of the
+# ~7 GB image (previously cost ~5 min per PR). The cache is the only channel
+# between `build-image` and the lanes. What the job removes is the six-fold
+# BUILD on a miss push, not the per-lane restore.
 
 on:
   # No workflow-level `paths:` filter on purpose. These checks are REQUIRED
@@ -138,9 +147,127 @@ jobs:
           echo "run=$run"
           echo "run=$run" >> "$GITHUB_OUTPUT"
 
+  build-image:
+    name: Build HAOS image (shared)
+    needs: changes
+    # Same skip rule as the lanes below: a docs-only PR must not boot a runner
+    # here either, and a classifier that did not succeed must not skip the
+    # build the lanes are about to wait for. Both halves are pinned by
+    # tests/src/unit/test_haos_image_workflow_shape.py.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
+    runs-on: ubuntu-22.04
+    # A local build takes 6-9 minutes; the lanes' 45 covers build + suite,
+    # this job never runs the suite.
+    timeout-minutes: 30
+
+    # One image build per run instead of one per lane (#2311). All six lanes
+    # compute the same key and restore the same qcow2, and the only writer
+    # used to be `haos-e2e` — whose save landed long after the other five
+    # lanes, started in parallel, had already missed and built for
+    # themselves. So a miss push built the identical image six times. This
+    # job runs first: on a hit it is a metadata probe (seconds); on a miss it
+    # is the single build and the single save, and the lanes restore it.
+    #
+    # The lanes keep every local-build step they had. They fall back to it
+    # when this job failed (their `if:` is `!cancelled()`, not `success()`),
+    # when the save here was refused ("another job may be creating this
+    # cache"), or when the entry was evicted between the probe and their
+    # restore — a rebuild inside the lane is faster than any retry.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          # No submodules and no history: the bake stages
+          # homeassistant-addon-dev, the webhook proxy and custom_components
+          # (build_image.py's stage_* functions), none of them a submodule,
+          # and `git ls-tree -r HEAD` reads the tree, not a checkout. The
+          # lanes fetch more only for their own test suite.
+
+      - name: Compute image cache key
+        id: key
+        # INVARIANT: byte-identical to the lanes' step of the same name
+        # (test_haos_image_workflow_shape.py pins it). A key computed
+        # differently here primes an entry the lanes never restore.
+        run: |
+          hash=$(git ls-tree -r HEAD \
+            tests/haos_image_build \
+            tests/initial_test_state \
+            custom_components/ha_mcp_tools \
+            homeassistant-addon-webhook-proxy \
+            | sha256sum | cut -d' ' -f1 | head -c16)
+          echo "cache-key=haos-image-$hash" >> "$GITHUB_OUTPUT"
+
+      - name: Probe image cache (metadata only, no download)
+        id: restore-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: /tmp/haos-test-image.qcow2
+          key: ${{ steps.key.outputs.cache-key }}
+          # The entry is several GB and this job never boots the image; it
+          # only needs to know whether the key exists.
+          lookup-only: true
+
+      - name: Report image-acquisition path
+        run: |
+          echo "::notice title=HAOS image cache::cache-hit=${{ steps.restore-cache.outputs.cache-hit }} key=${{ steps.key.outputs.cache-key }}"
+
+      - name: Install QEMU + OVMF + libguestfs
+        if: steps.restore-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils ovmf xz-utils curl libguestfs-tools sshpass
+          # Ubuntu installs the kernel image as 0600 root:root, but
+          # libguestfs's supermin appliance builder needs to read it as
+          # the invoking (unprivileged) user. Documented at
+          # https://libguestfs.org/guestfs-faq.1.html#kernel-permissions
+          # (search "kernel image is not readable") — workaround is to
+          # relax perms on /boot/vmlinuz-*.
+          sudo chmod +r /boot/vmlinuz-*
+
+      - name: Enable KVM group perms
+        if: steps.restore-cache.outputs.cache-hit != 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Free disk space for the local build
+        # Same pruning as the lanes: the bake peaks at the edge of the
+        # runner's ~14 GB SSD, see the comment on the ``haos-e2e`` step.
+        if: steps.restore-cache.outputs.cache-hit != 'true'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/share/swift /opt/ghc \
+            /usr/local/lib/android /usr/local/.ghcup
+          sudo apt-get clean
+          docker system prune -af --volumes || true
+          df -h /
+
+      - name: Install build-script Python deps (cache miss only)
+        if: steps.restore-cache.outputs.cache-hit != 'true'
+        run: pip install -r tests/haos_image_build/requirements.txt
+
+      - name: Build image locally (cache miss only)
+        # `force_local_build` is deliberately not honoured here: it asks each
+        # lane to ignore the cached image and rebuild for itself, and a save
+        # cannot replace an existing entry under the same key anyway.
+        if: steps.restore-cache.outputs.cache-hit != 'true'
+        run: |
+          python3 tests/haos_image_build/build_image.py --verbose \
+            --output /tmp/haos-test-image.qcow2
+
+      - name: Save image to cache (cache miss only)
+        if: steps.restore-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: /tmp/haos-test-image.qcow2
+          key: ${{ steps.key.outputs.cache-key }}
+
   haos-e2e:
     name: HAOS E2E Tests
-    needs: changes
+    needs: [changes, build-image]
     # A skipped job reports Success to the required status check (unlike a
     # workflow-level path-skip, which never reports). See the `changes` job.
     # Skipping requires a classifier that SUCCEEDED and said `false` out loud.
@@ -251,12 +378,13 @@ jobs:
             --output /tmp/haos-test-image.qcow2
 
       - name: Save image to cache (cache miss only)
-        # Save whenever the runtime cache missed so the locally-built
-        # qcow2 populates the shared key and future runs restore it
-        # instead of rebuilding. This is the sole writer for the shared
-        # cache key (#1407 + #1428); the other five lanes intentionally
-        # don't save, see the block comment at the same position in
-        # the ``haos-e2e-inaddon`` job below.
+        # The shared key is normally written by ``build-image`` before this
+        # lane starts. This save covers the fallback path only: the lane
+        # restored nothing (entry evicted, save refused, or the build job
+        # failed) and built for itself, so the key is repopulated for the
+        # next run. It stays the only LANE that saves (#1407 + #1428); the
+        # other five intentionally don't, see the block comment at the same
+        # position in the ``haos-e2e-inaddon`` job below.
         if: steps.restore-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -373,7 +501,7 @@ jobs:
 
   haos-e2e-embedded:
     name: HAOS E2E Tests (embedded)
-    needs: changes
+    needs: [changes, build-image]
     # A skipped job reports Success to the required status check (unlike a
     # workflow-level path-skip, which never reports). See the `changes` job.
     # Skipping requires a classifier that SUCCEEDED and said `false` out loud.
@@ -474,9 +602,10 @@ jobs:
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-test-image.qcow2
 
-      # No cache-save step here on purpose. The external lane (``haos-e2e``)
-      # computes the same cache key (#1407) and is the SOLE saver of the
-      # shared qcow2; the other five lanes only restore from that shared
+      # No cache-save step here on purpose. The ``build-image`` job writes the
+      # shared key before any lane starts; on the fallback path the external
+      # lane (``haos-e2e``) computes the same cache key (#1407) and is the SOLE
+      # lane that saves the shared qcow2; the other five lanes only restore from that shared
       # key. All six lanes start in parallel on the same PR
       # push, so having only one saver avoids the "another job may be creating
       # this cache" race + the wasted tar+zstd write of a 12 GB image. The
@@ -609,7 +738,7 @@ jobs:
 
   haos-e2e-inaddon:
     name: HAOS E2E Tests (inaddon)
-    needs: changes
+    needs: [changes, build-image]
     # A skipped job reports Success to the required status check (unlike a
     # workflow-level path-skip, which never reports). See the `changes` job.
     # Skipping requires a classifier that SUCCEEDED and said `false` out loud.
@@ -704,9 +833,10 @@ jobs:
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-test-image.qcow2
 
-      # No cache-save step here on purpose. The external lane (``haos-e2e``)
-      # computes the same cache key (#1407) and always tries to save the
-      # same qcow2; all six lanes start in
+      # No cache-save step here on purpose. The ``build-image`` job writes the
+      # shared key before any lane starts; on the fallback path the external
+      # lane (``haos-e2e``) computes the same cache key (#1407) and always
+      # tries to save the same qcow2; all six lanes start in
       # parallel on the same PR push, so whichever lost the save race
       # was burning ~25s on a tar+zstd-write of a 12 GB qcow2 that
       # the actions/cache service then refused with
@@ -882,7 +1012,7 @@ jobs:
 
   haos-e2e-stdio:
     name: HAOS E2E Tests (stdio)
-    needs: changes
+    needs: [changes, build-image]
     # A skipped job reports Success to the required status check. Skipping
     # therefore requires the classifier to have succeeded and explicitly said
     # false. The status function is also deliberate: without !cancelled(), an
@@ -959,9 +1089,10 @@ jobs:
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-test-image.qcow2
 
-      # The external HAOS lane is the sole writer for this shared key. A
-      # simultaneous cache miss can build here, but this parallel lane must not
-      # race it with a second cache save.
+      # The ``build-image`` job writes this shared key before the lanes start;
+      # on the fallback path the external HAOS lane is the only lane that
+      # saves. A simultaneous cache miss can build here, but this parallel
+      # lane must not race it with a second cache save.
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
@@ -1061,7 +1192,7 @@ jobs:
 
   haos-e2e-embedded-no-tools:
     name: HAOS E2E Tests (embedded, no tools entry)
-    needs: changes
+    needs: [changes, build-image]
     # A skipped job reports Success to the required status check (unlike a
     # workflow-level path-skip, which never reports). See the `changes` job.
     # Skipping requires a classifier that SUCCEEDED and said `false` out loud.
@@ -1163,9 +1294,10 @@ jobs:
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-test-image.qcow2
 
-      # No cache-save step here on purpose. The external lane (``haos-e2e``)
-      # computes the same cache key (#1407) and is the SOLE saver of the
-      # shared qcow2; the other five lanes — this one, the two inaddon lanes,
+      # No cache-save step here on purpose. The ``build-image`` job writes the
+      # shared key before any lane starts; on the fallback path the external
+      # lane (``haos-e2e``) computes the same cache key (#1407) and is the SOLE
+      # lane that saves the shared qcow2; the other five lanes — this one, the two inaddon lanes,
       # the stdio lane and the component-present embedded lane — only restore
       # from that shared key. They all start in parallel on the same PR
       # push, so having only one saver avoids the "another job may be creating
@@ -1305,7 +1437,7 @@ jobs:
 
   haos-e2e-inaddon-no-tools:
     name: HAOS E2E Tests (inaddon, no tools entry)
-    needs: changes
+    needs: [changes, build-image]
     # A skipped job reports Success to the required status check (unlike a
     # workflow-level path-skip, which never reports). See the `changes` job.
     # Skipping requires a classifier that SUCCEEDED and said `false` out loud.
@@ -1401,9 +1533,10 @@ jobs:
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-test-image.qcow2
 
-      # No cache-save step here on purpose. The external lane (``haos-e2e``)
-      # computes the same cache key (#1407) and always tries to save the
-      # same qcow2; all six HAOS lanes start in
+      # No cache-save step here on purpose. The ``build-image`` job writes the
+      # shared key before any lane starts; on the fallback path the external
+      # lane (``haos-e2e``) computes the same cache key (#1407) and always
+      # tries to save the same qcow2; all six HAOS lanes start in
       # parallel on the same PR push, so whichever lost the save race
       # was burning ~25s on a tar+zstd-write of a 12 GB qcow2 that
       # the actions/cache service then refused with
