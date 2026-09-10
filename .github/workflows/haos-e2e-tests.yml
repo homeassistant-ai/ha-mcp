@@ -177,11 +177,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-          # No submodules and no history: the bake stages
-          # homeassistant-addon-dev, the webhook proxy and custom_components
-          # (build_image.py's stage_* functions), none of them a submodule,
-          # and `git ls-tree -r HEAD` reads the tree, not a checkout. The
-          # lanes fetch more only for their own test suite.
+          # The bake copies all of src/ha_mcp into the dev app's build
+          # context (build_image.py, stage_dev_addon_source), and that tree
+          # includes the vendored skills submodule at
+          # src/ha_mcp/resources/skills-vendor, which pyproject.toml packages.
+          # Same checkout as build-haos-test-image.yml. No fetch-depth: the
+          # cache key is `git ls-tree -r HEAD`, which reads the tree.
+          submodules: true
 
       - name: Compute image cache key
         id: key
