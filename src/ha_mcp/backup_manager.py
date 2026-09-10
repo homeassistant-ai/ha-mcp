@@ -132,6 +132,20 @@ class InvalidBackupSnapshotError(ValueError):
     """Persisted snapshot data is invalid, independently of live HA access."""
 
 
+class SnapshotInUseError(ValueError):
+    """A snapshot is pinned by capture or restore and cannot be deleted yet."""
+
+
+def _validate_snapshot_envelope(data: dict[str, Any]) -> None:
+    """Validate stored identities before selecting or dispatching a handler."""
+    for key in ("domain", "entity_id", "config"):
+        if key not in data:
+            raise InvalidBackupSnapshotError(f"Snapshot is missing {key}")
+    for key in ("domain", "entity_id"):
+        if not isinstance(data[key], str) or (key == "domain" and not data[key]):
+            raise InvalidBackupSnapshotError(f"Snapshot has invalid {key}")
+
+
 class _TemplateReadError(HomeAssistantError):
     """A local validation failure with a safe diagnostic code."""
 
@@ -409,6 +423,14 @@ async def _await_backup_io[T](operation: Callable[..., T], *args: Any) -> T:
         raise
 
 
+def _require_restore_safety(path: Path) -> None:
+    """Check the recovery file after its restore pin closes the deletion race."""
+    if not path.is_file():
+        raise MandatoryBackupError(
+            "The safety snapshot disappeared before restore; no changes were applied"
+        )
+
+
 @dataclass
 class _EntryAdmissionState:
     """Event-loop coordination survives settings-driven manager replacements."""
@@ -611,8 +633,8 @@ class BackupManager:
         ``force=True`` bypasses the ``enable_auto_backup`` toggle and the
         per-entity throttle window so the caller can drive an explicit
         on-demand capture (the ``(edits, create)`` action on
-        ``ha_manage_backup``). Init-dir errors still short-circuit —
-        without a writable backup dir there's nothing to do regardless.
+        ``ha_manage_backup``). It also retries storage after an earlier
+        directory failure; a fresh write must succeed before capture succeeds.
         The ``handler is None`` and ``config is None`` skips still
         apply (force can't conjure a snapshot for an entity that
         doesn't exist or has no registered handler).
@@ -668,7 +690,7 @@ class BackupManager:
         is a legitimate skip (feature disabled, no entity id, no handler) — the
         caller returns None and lets the wrapped write proceed.
         """
-        if self._init_dir_error is not None:
+        if self._init_dir_error is not None and not force:
             if mandatory:
                 raise MandatoryBackupError(
                     f"the auto-backup directory is unusable: {self._init_dir_error}",
@@ -778,22 +800,37 @@ class BackupManager:
                 err,
             )
             return None
-        self._last_snapshot[key] = now
-        self._maybe_prune_trackers()
+        # Filename order can move backward when a same-second suffix gap is
+        # reused or the wall clock changes. Keep this capture alive throughout
+        # its own rotation, including against explicit concurrent deletion.
+        self._protect_snapshot(path.name)
         try:
-            # Freeze pins before dispatch: cancellation must not unprotect files
-            # from a rotation already running in the executor.
-            with self._snapshot_pin_lock:
-                protected = frozenset(self._protected_snapshot_names)
-            await _await_backup_io(self._rotate, domain, entity_id, protected)
-        except OSError as err:
-            logger.warning(
-                "Auto-backup: rotation failed for %s — %s: %s",
-                key,
-                type(err).__name__,
-                err,
-            )
-        return path
+            try:
+                # Freeze pins before dispatch: cancellation must not unprotect
+                # files from a rotation already running in the executor.
+                with self._snapshot_pin_lock:
+                    protected = frozenset(self._protected_snapshot_names)
+                await _await_backup_io(self._rotate, domain, entity_id, protected)
+            except OSError as err:
+                logger.warning(
+                    "Auto-backup: rotation failed for %s — %s: %s",
+                    key,
+                    type(err).__name__,
+                    err,
+                )
+            if not await _await_backup_io(path.is_file):
+                message = (
+                    f"The new snapshot for {key} disappeared before capture completed"
+                )
+                if mandatory:
+                    raise MandatoryBackupError(message)
+                logger.warning("Auto-backup: %s", message)
+                return None
+            self._last_snapshot[key] = now
+            self._maybe_prune_trackers()
+            return path
+        finally:
+            self._unprotect_snapshot(path.name)
 
     def _maybe_prune_trackers(self) -> None:
         """Cap per-entity tracker growth.
@@ -844,6 +881,7 @@ class BackupManager:
         tmp = target.with_suffix(".yaml.tmp")
         tmp.write_text("# ha_mcp_backup\n" + body)
         os.replace(str(tmp), str(target))
+        self._init_dir_error = None
         logger.info("Auto-backup: wrote %s", target.name)
         return target
 
@@ -981,7 +1019,9 @@ class BackupManager:
             key=_snapshot_order,
         )
         excess = len(files) - self.retain_per_entity
-        for old in files[: max(0, excess)]:
+        for old in files:
+            if excess <= 0:
+                break
             try:
                 # A restore can pin a file after this rotation was dispatched.
                 # Check and unlink atomically against those new pins as well as
@@ -994,6 +1034,7 @@ class BackupManager:
                         continue
                     old.unlink()
                     self._forget_template_identity(old.name)
+                    excess -= 1
             except OSError as err:
                 logger.warning("Auto-backup: failed to rotate %s: %s", old.name, err)
 
@@ -1107,8 +1148,13 @@ class BackupManager:
 
     def delete_snapshot(self, name: str) -> Path:
         path = self._resolve_snapshot_path(name)
-        path.unlink()
-        self._forget_template_identity(name)
+        with self._snapshot_pin_lock:
+            if name in self._protected_snapshot_names:
+                raise SnapshotInUseError(
+                    "Snapshot is in use by a capture or active restore; retry after it finishes"
+                )
+            path.unlink()
+            self._forget_template_identity(name)
         return path
 
     def delete_bulk(
@@ -1136,10 +1182,9 @@ class BackupManager:
             if cutoff is not None and meta["mtime"] >= cutoff:
                 continue
             try:
-                (self._dir / meta["name"]).unlink()
-                self._forget_template_identity(meta["name"])
+                self.delete_snapshot(meta["name"])
                 deleted.append(meta["name"])
-            except OSError as err:
+            except (OSError, ValueError) as err:
                 failed.append(meta["name"])
                 logger.warning(
                     "Auto-backup: bulk-delete failed for %s: %s", meta["name"], err
@@ -1166,6 +1211,34 @@ class BackupManager:
 
     # ----- restore -------------------------------------------------------
 
+    async def _read_restore_snapshot(self, name: str) -> dict[str, Any]:
+        """Preserve no-write knowledge only while loading the restore input."""
+        try:
+            data = await asyncio.to_thread(self.read_snapshot, name)
+            _validate_snapshot_envelope(data)
+        except FileNotFoundError as err:
+            raise BackupRestoreError(
+                f"Backup {name!r} not found",
+                reason="snapshot_not_found",
+                restored_from=name,
+                safety_backup=None,
+            ) from err
+        except ValueError as err:
+            # YAML parser diagnostics can include configuration values. Only
+            # our envelope validator supplies safe field-only messages.
+            message = (
+                str(err)
+                if isinstance(err, InvalidBackupSnapshotError)
+                else "Snapshot is invalid; inspect its YAML and schema version"
+            )
+            raise BackupRestoreError(
+                message,
+                reason="invalid_snapshot",
+                restored_from=name,
+                safety_backup=None,
+            ) from err
+        return data
+
     async def restore_snapshot(
         self, name: str, *, take_safety_backup: bool = True
     ) -> dict[str, Any]:
@@ -1175,7 +1248,7 @@ class BackupManager:
             )
         self._protect_snapshot(name)
         try:
-            data = await asyncio.to_thread(self.read_snapshot, name)
+            data = await self._read_restore_snapshot(name)
             if data["domain"] == "helper_template":
                 try:
                     snapshot = _validate_template_snapshot(
@@ -1221,7 +1294,14 @@ class BackupManager:
         config = data["config"]
         handler = self._handlers.get(domain)
         if handler is None:
-            raise LookupError(f"No restore handler registered for domain {domain!r}")
+            raise BackupRestoreError(
+                f"No restore handler registered for domain {domain!r}",
+                reason="unsupported_domain",
+                restored_from=name,
+                domain=domain,
+                entity_id=entity_id,
+                safety_backup=None,
+            )
 
         safety_path: Path | None = None
         outcome: dict[str, Any] = {
@@ -1239,6 +1319,7 @@ class BackupManager:
                 safety_path = await self._capture_restore_safety(domain, entity_id)
                 if safety_path is not None:
                     self._protect_snapshot(safety_path.name)
+                    await _await_backup_io(_require_restore_safety, safety_path)
                     outcome["safety_backup"] = safety_path.name
             apply_status = "unknown"
             step = "apply"
@@ -1306,12 +1387,7 @@ class BackupManager:
     async def snapshot_comparison(self, name: str) -> tuple[dict[str, Any], Any]:
         """Read a snapshot and the live config for its stable target identity."""
         data = await asyncio.to_thread(self.read_snapshot, name)
-        for key in ("domain", "entity_id", "config"):
-            if key not in data:
-                raise InvalidBackupSnapshotError(f"Snapshot is missing {key}")
-        for key in ("domain", "entity_id"):
-            if not isinstance(data[key], str) or (key == "domain" and not data[key]):
-                raise InvalidBackupSnapshotError(f"Snapshot has invalid {key}")
+        _validate_snapshot_envelope(data)
         domain = data["domain"]
         if domain == "helper_template":
             snapshot = _validate_template_snapshot(data["entity_id"], data["config"])
@@ -3393,7 +3469,7 @@ async def _recreate_template_helper(
     client: Any, entry_id: str, snapshot: dict[str, Any]
 ) -> dict[str, Any]:
     """Create through the ordinary helper flow; never retry uncertain writes."""
-    from .tools.config_entry_flow import create_flow_helper
+    from .tools.config_entry_flow import CreationFlowError, create_flow_helper
 
     snapshot = _template_snapshot_for_restore(entry_id, snapshot)
     try:
@@ -3416,7 +3492,30 @@ async def _recreate_template_helper(
             if key != "template_type"
         }
         create_config["next_step_id"] = snapshot["options"]["template_type"]
-        result = await create_flow_helper(client, "template", create_config)
+        result = await create_flow_helper(
+            client, "template", create_config, complete_snapshot=True
+        )
+    except CreationFlowError as err:
+        _log_template_failure("create_entry", err)
+        identity: dict[str, Any] = (
+            {"entry_id": err.entry_id, "entity_id": err.entry_id}
+            if err.entry_id
+            else {}
+        )
+        raise BackupRestoreError(
+            str(err),
+            apply_status=err.apply_status,
+            reason=err.reason
+            or (
+                "creation_outcome_unknown"
+                if err.apply_status == "unknown"
+                else "creation_flow_failed"
+            ),
+            fields=list(err.fields),
+            restore_mode="recreated",
+            original_entry_id=entry_id,
+            **identity,
+        ) from err
     except _CAPTURE_TRANSIENT_ERRORS as err:
         _log_template_failure("create_entry", err)
         raise BackupRestoreError(
@@ -3448,14 +3547,14 @@ async def _recreate_template_helper(
     expected = {"entry_id": new_entry_id, "options": snapshot["options"]}
     mapping: dict[str, str] = {}
     try:
-        if saved is not None:
-            mapping = await _restore_template_entity_id(client, new_entry_id, saved)
         verification = await _verify_template_restore(client, new_entry_id, expected)
         if verification != "matched":
             raise BackupRestoreError(
                 "Template helper was recreated but its options could not be verified",
                 verification_status=verification,
             )
+        if saved is not None:
+            mapping = await _restore_template_entity_id(client, new_entry_id, saved)
     except _CAPTURE_TRANSIENT_ERRORS as err:
         _log_template_failure("recreation_readback", err)
         detail = (

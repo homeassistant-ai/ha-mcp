@@ -189,17 +189,31 @@ async def _restore_backup(
     except (ValueError, LookupError) as err:
         return _bad_request(str(err))
     except BackupRestoreError as err:
+        code = {
+            "snapshot_not_found": ErrorCode.RESOURCE_NOT_FOUND,
+            "invalid_snapshot": ErrorCode.VALIDATION_INVALID_PARAMETER,
+            "unsupported_domain": ErrorCode.VALIDATION_INVALID_PARAMETER,
+        }.get(err.outcome.get("reason") or "", ErrorCode.SERVICE_CALL_FAILED)
         return JSONResponse(
             create_error_response(
-                ErrorCode.SERVICE_CALL_FAILED,
+                code,
                 str(err),
                 context={"data": err.outcome},
                 suggestions=[
                     "Inspect the current configuration and restore outcome before retrying",
-                    "Use safety_backup to inspect or restore the captured previous state",
-                ],
+                ]
+                + (
+                    [
+                        "Use safety_backup to inspect or restore the captured previous state"
+                    ]
+                    if err.outcome.get("safety_backup")
+                    else []
+                ),
             ),
-            status_code=409,
+            status_code={
+                ErrorCode.RESOURCE_NOT_FOUND: 404,
+                ErrorCode.VALIDATION_INVALID_PARAMETER: 400,
+            }.get(code, 409),
         )
     except MandatoryBackupError as err:
         return JSONResponse(

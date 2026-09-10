@@ -58,7 +58,8 @@ async def test_rotation_dispatched_before_restore_must_honor_later_pin(
         nonlocal calls
         calls += 1
         if calls == 1:
-            assert not protected
+            # This capture pins itself; the restore source is pinned later.
+            assert source.name not in protected
             entered.set()
             assert release.wait(5)
         return original_rotate(domain, entity_id, protected)

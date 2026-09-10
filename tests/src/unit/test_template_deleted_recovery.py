@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp import backup_manager as bm
-from ha_mcp.client.rest_client import HomeAssistantError
+from ha_mcp.client.rest_client import HomeAssistantConnectionError, HomeAssistantError
 from ha_mcp.tools import config_entry_flow
 
 OPTIONS = {"name": "Example", "template_type": "sensor", "state": "{{ 12 }}"}
@@ -41,7 +41,7 @@ def recovery(tmp_path, monkeypatch):
                 return deepcopy(row)
         raise AssertionError(message)
 
-    async def create(client, helper_type, options):
+    async def create(client, helper_type, options, *, complete_snapshot=False):
         assert helper_type == "template"
         assert options == {
             "name": "Example",
@@ -236,8 +236,8 @@ async def test_existing_entry_diff_only_previews_restorable_options(
 async def test_racing_collision_preserves_created_helper_and_reports_identity(recovery):
     creator = recovery.create.side_effect
 
-    async def race(*args):
-        result = await creator(*args)
+    async def race(*args, **kwargs):
+        result = await creator(*args, **kwargs)
         recovery.state.registry.append(
             {
                 "entity_id": ENTITY["entity_id"],
@@ -386,4 +386,112 @@ async def test_recreation_drives_native_template_menu_and_form(recovery, monkeyp
     assert result["entity_id"] == "new-entry"
     assert len(submissions) == 2
     assert "warnings" not in result["result"]
+    client.abort_config_flow.assert_not_awaited()
+
+
+def _native_recreation_flow(recovery, monkeypatch, schema, *, submit_error=None):
+    """Exercise the production create helper and walker with a native-shaped API."""
+    client = recovery.manager._client
+    client.start_config_flow = AsyncMock(
+        return_value={
+            "type": "menu",
+            "flow_id": "create-flow",
+            "step_id": "user",
+            "menu_options": ["sensor"],
+        }
+    )
+    form = {
+        "type": "form",
+        "flow_id": "create-flow",
+        "step_id": "sensor",
+        "data_schema": schema,
+    }
+
+    async def submit(flow_id, payload):
+        if payload == {"next_step_id": "sensor"}:
+            return deepcopy(form)
+        if submit_error is not None:
+            raise submit_error
+        await recovery.create.side_effect(
+            client,
+            "template",
+            {"name": "Example", "state": "{{ 12 }}", "next_step_id": "sensor"},
+        )
+        return {
+            "type": "create_entry",
+            "result": {"entry_id": "new-entry", "title": "Example"},
+        }
+
+    client.submit_config_flow_step = AsyncMock(side_effect=submit)
+    client.abort_config_flow = AsyncMock()
+    monkeypatch.setattr(config_entry_flow, "create_flow_helper", recovery.native_create)
+    return client
+
+
+@pytest.mark.parametrize("nested", [False, True])
+async def test_recreation_rejects_undeclared_snapshot_fields_before_create(
+    recovery, monkeypatch, nested
+):
+    recovery.config["options"]["additional_options"] = {"availability": "{{ false }}"}
+    name = recovery.manager._write_snapshot(
+        "helper_template", "old-entry", recovery.config, "test"
+    ).name
+    schema = [{"name": "name", "required": True}, {"name": "state", "required": True}]
+    if nested:
+        schema.append({"name": "additional_options", "schema": []})
+    client = _native_recreation_flow(recovery, monkeypatch, schema)
+
+    with pytest.raises(bm.BackupRestoreError) as caught:
+        await recovery.manager.restore_snapshot(name)
+
+    assert caught.value.outcome["apply_status"] == "not_applied"
+    assert caught.value.outcome["reason"] == "unsupported_fields"
+    assert caught.value.outcome["fields"] == [
+        "additional_options.availability" if nested else "additional_options"
+    ]
+    assert recovery.state.entries == []
+    assert recovery.state.registry == []
+    client.submit_config_flow_step.assert_awaited_once_with(
+        "create-flow", {"next_step_id": "sensor"}
+    )
+    client.abort_config_flow.assert_awaited_once_with("create-flow")
+
+
+async def test_recreation_verifies_created_options_before_rebinding_entity_id(
+    recovery, monkeypatch
+):
+    recovery.config["options"]["additional_options"] = {"availability": "{{ false }}"}
+    name = recovery.manager._write_snapshot(
+        "helper_template", "old-entry", recovery.config, "test"
+    ).name
+    schema = [
+        {"name": "name", "required": True},
+        {"name": "state", "required": True},
+        {"name": "additional_options", "schema": [{"name": "availability"}]},
+    ]
+    client = _native_recreation_flow(recovery, monkeypatch, schema)
+
+    with pytest.raises(bm.BackupRestoreError) as caught:
+        await recovery.manager.restore_snapshot(name)
+
+    assert caught.value.outcome["apply_status"] == "applied"
+    assert caught.value.outcome["verification_status"] == "mismatched"
+    assert recovery.state.registry[0]["entity_id"] == "sensor.example"
+    assert recovery.state.registry[0]["name"] is None
+    client.abort_config_flow.assert_not_awaited()
+
+
+async def test_recreation_lost_creation_reply_preserves_flow_for_reconciliation(
+    recovery, monkeypatch
+):
+    client = _native_recreation_flow(
+        recovery,
+        monkeypatch,
+        [{"name": "name", "required": True}, {"name": "state", "required": True}],
+        submit_error=HomeAssistantConnectionError("reply lost"),
+    )
+    with pytest.raises(bm.BackupRestoreError) as caught:
+        await recovery.manager.restore_snapshot(recovery.name)
+    assert caught.value.outcome["apply_status"] == "unknown"
+    assert client.submit_config_flow_step.await_count == 2
     client.abort_config_flow.assert_not_awaited()

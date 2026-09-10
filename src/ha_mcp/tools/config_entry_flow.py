@@ -30,9 +30,10 @@ imported in one direction only (menu <- form <- walker <- here):
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from fastmcp.exceptions import ToolError
 
@@ -85,6 +86,10 @@ _SAFE_RESTORE_FIELD_NAMES = frozenset(
 class OptionsFlowError(HomeAssistantError):
     """Complete-restore failure with submission knowledge for reconciliation."""
 
+    reason_messages: ClassVar[dict[OptionsRestoreReason, str]] = (
+        _RESTORE_REASON_MESSAGES
+    )
+
     def __init__(
         self,
         message: str,
@@ -106,13 +111,24 @@ class OptionsFlowError(HomeAssistantError):
             )
         )
         if reason is not None:
-            message = _RESTORE_REASON_MESSAGES[reason]
+            message = self.reason_messages[reason]
             if self.fields:
                 message += ": " + ", ".join(self.fields)
         super().__init__(message)
         self.apply_status = apply_status
         self.entry_id = entry_id
         self.flow_id = flow_id
+
+
+class CreationFlowError(OptionsFlowError):
+    """Complete-snapshot creation failure with conservative application knowledge."""
+
+    reason_messages: ClassVar[dict[OptionsRestoreReason, str]] = {
+        "unsupported_form": "Template recreation requires an authoritative creation form",
+        "unsupported_fields": "Snapshot fields are not accepted by the creation form",
+        "validation_failed": "Home Assistant rejected the recreated helper as invalid",
+        "flow_aborted": "Home Assistant aborted the helper recreation",
+    }
 
 
 @dataclass
@@ -124,14 +140,16 @@ class _OptionsFlowProgress:
     apply_status: Literal["not_applied", "unknown", "applied"] = "not_applied"
     reason: OptionsRestoreReason | None = None
     fields: tuple[str, ...] = ()
+    error_type: ClassVar[type[OptionsFlowError]] = OptionsFlowError
+    operation: ClassVar[str] = "Options restore"
 
     def failure(self) -> OptionsFlowError:
         messages = {
-            "not_applied": "Options restore was refused before application",
-            "unknown": "Options restore got no completion reply; the change may have been applied",
-            "applied": "Options restore completed but its result could not be processed",
+            "not_applied": f"{self.operation} was refused before application",
+            "unknown": f"{self.operation} got no completion reply; the change may have been applied",
+            "applied": f"{self.operation} completed but its result could not be processed",
         }
-        return OptionsFlowError(
+        return self.error_type(
             messages[self.apply_status],
             apply_status=self.apply_status,
             entry_id=self.entry_id,
@@ -141,13 +159,18 @@ class _OptionsFlowProgress:
         )
 
     async def submit(
-        self, client: Any, flow_id: str, payload: dict[str, Any]
+        self,
+        client: Any,
+        flow_id: str,
+        payload: dict[str, Any],
+        *,
+        submit_fn: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
+        | None = None,
     ) -> dict[str, Any]:
         self.apply_status = "unknown"
         try:
-            result: dict[str, Any] = await client.submit_options_flow_step(
-                flow_id, payload
-            )
+            submit = submit_fn or client.submit_options_flow_step
+            result = await submit(flow_id, payload)
         except HomeAssistantAuthError:
             self.apply_status = "not_applied"
             raise
@@ -155,6 +178,11 @@ class _OptionsFlowProgress:
             if err.status_code is not None and 400 <= err.status_code < 500:
                 self.apply_status = "not_applied"
             raise
+        self.record_reply(result)
+        return result
+
+    def record_reply(self, result: dict[str, Any]) -> None:
+        """Record application knowledge before the walker interprets a reply."""
         if result.get("type") == _FlowType.CREATE_ENTRY:
             self.apply_status = "applied"
         elif result.get("type") == _FlowType.ABORT:
@@ -170,7 +198,6 @@ class _OptionsFlowProgress:
         else:
             # A complete snapshot cannot safely populate an unexpected next step.
             raise self.failure()
-        return result
 
 
 def _unknown_snapshot_fields(
@@ -211,7 +238,7 @@ def _preflight_options_restore(
             fields = tuple(step["errors"])
     else:
         return
-    raise OptionsFlowError(
+    raise progress.error_type(
         _RESTORE_REASON_MESSAGES[reason],
         apply_status=progress.apply_status,
         entry_id=progress.entry_id,
@@ -219,6 +246,111 @@ def _preflight_options_restore(
         reason=reason,
         fields=fields,
     )
+
+
+class _CreationFlowProgress(_OptionsFlowProgress):
+    """Require the selected creation form to consume a complete snapshot."""
+
+    error_type = CreationFlowError
+    operation = "Template recreation"
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        super().__init__(entry_id="")
+        self.config = {
+            key: value for key, value in config.items() if key != "next_step_id"
+        }
+        self.current_step: dict[str, Any] = {}
+
+    def record_reply(self, result: dict[str, Any]) -> None:
+        previous_type = self.current_step.get("type")
+        self.current_step = result
+        if previous_type in (None, _FlowType.MENU) and result.get("type") in (
+            _FlowType.MENU,
+            _FlowType.FORM,
+        ):
+            self.apply_status = "not_applied"
+            return
+        super().record_reply(result)
+        if self.apply_status == "applied" and isinstance(result.get("result"), dict):
+            entry_id = result["result"].get("entry_id")
+            if isinstance(entry_id, str):
+                self.entry_id = entry_id
+        if self.apply_status == "applied" and previous_type != _FlowType.FORM:
+            self.reason = "unsupported_form"
+            raise self.failure()
+
+    async def submit(
+        self, client: Any, flow_id: str, payload: dict[str, Any], **kwargs: Any
+    ) -> dict[str, Any]:
+        if self.current_step.get("type") == _FlowType.FORM:
+            _preflight_options_restore(self, self.current_step, self.config)
+        return await super().submit(
+            client, flow_id, payload, submit_fn=client.submit_config_flow_step
+        )
+
+
+async def _create_snapshot_helper(
+    client: Any, helper_type: str, config: dict[str, Any]
+) -> dict[str, Any]:
+    """Create a complete snapshot through the shared walker without dropping fields."""
+    progress = _CreationFlowProgress(config)
+    try:
+        _reject_redaction_sentinels(config)
+        progress.apply_status = "unknown"
+        initial_step = await client.start_config_flow(helper_type)
+        progress.flow_id = initial_step.get("flow_id")
+        progress.record_reply(initial_step)
+        if not progress.flow_id:
+            raise progress.failure()
+        result = await _handle_flow_steps(
+            client,
+            progress.flow_id,
+            initial_step,
+            config,
+            submit_fn=partial(progress.submit, client),
+            helper_type=helper_type,
+        )
+        entry = result["entry"].get("result", {})
+        return {
+            "success": True,
+            "entry_id": entry.get("entry_id"),
+            "title": entry.get("title"),
+            "domain": helper_type,
+            "message": f"{helper_type} helper recreated successfully",
+        }
+    except (Exception, asyncio.CancelledError) as err:
+        failure = err if isinstance(err, CreationFlowError) else progress.failure()
+        await _cleanup_snapshot_creation(client, progress, failure)
+        if isinstance(err, (CreationFlowError, asyncio.CancelledError)):
+            raise
+        raise failure from err
+
+
+async def _cleanup_snapshot_creation(
+    client: Any, progress: _CreationFlowProgress, failure: OptionsFlowError
+) -> None:
+    if not progress.flow_id:
+        return
+    if failure.apply_status == "not_applied":
+        try:
+            await asyncio.wait_for(
+                client.abort_config_flow(progress.flow_id), timeout=5
+            )
+        except Exception as err:
+            logger.warning(
+                "Template recreation flow %s cleanup failed (reason=%s, error_type=%s)",
+                progress.flow_id,
+                failure.reason,
+                type(err).__name__,
+            )
+    else:
+        logger.warning(
+            "Template recreation flow %s was not aborted "
+            "(apply_status=%s, reason=%s); reconcile Home Assistant before retrying",
+            progress.flow_id,
+            failure.apply_status,
+            failure.reason,
+        )
 
 
 async def _abort_flow_best_effort(client: Any, flow_id: str) -> None:
@@ -684,10 +816,16 @@ async def create_flow_helper(
     client: Any,
     helper_type: str,
     config_dict: dict[str, Any],
+    *,
+    complete_snapshot: bool = False,
 ) -> dict[str, Any]:
     """Create a new flow-based helper via the config flow.
 
     Starts a config flow, walks the flow steps, and returns the result.
     Aborts the flow on error.
+    Complete snapshots require all options in the selected form and preserve
+    uncertain or completed creation flows for reconciliation.
     """
+    if complete_snapshot:
+        return await _create_snapshot_helper(client, helper_type, config_dict)
     return await create_config_entry(client, helper_type, config_dict, noun="helper")

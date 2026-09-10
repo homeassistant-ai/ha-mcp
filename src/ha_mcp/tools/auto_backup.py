@@ -174,9 +174,9 @@ def with_auto_backup(
     write proceeds regardless.
 
     ``skip_fn`` (optional) short-circuits the whole decorator — including
-    the ``mandatory`` gate — for calls it identifies as unable to write
-    (e.g. a yaml-edit confirm-flow preview): no snapshot, no refusal, the
-    wrapped tool runs directly.
+    the ``mandatory`` gate — for calls that cannot write (e.g. a yaml-edit
+    preview) or delegate capture and write coordination to an inner owner.
+    The wrapped tool runs directly without an outer snapshot or refusal.
 
     ``domain_resolver`` optionally refines the capture domain from HA metadata.
     It receives the client, tool kwargs, initial domain and entity ID inside
@@ -207,10 +207,9 @@ def with_auto_backup(
     def decorator(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            # A call skip_fn identifies as unable to write (e.g. a yaml-edit
-            # confirm-flow PREVIEW, which returns a diff and writes nothing)
-            # needs no pre-write snapshot — and must not be refused by the
-            # mandatory gate either, since there is nothing to protect.
+            # Read-only previews need no capture. Delegated writes acquire
+            # their own guard and snapshot after resolving or confirming the
+            # target, so they also bypass this outer capture and refusal.
             if skip_fn is not None and skip_fn(kwargs):
                 return await func(*args, **kwargs)
             # Settings + target resolution happen OUTSIDE the best-effort

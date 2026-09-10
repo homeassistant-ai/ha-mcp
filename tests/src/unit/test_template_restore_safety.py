@@ -1,6 +1,7 @@
 """Recovery references and observed options survive refusal and concurrency."""
 
 import asyncio
+import threading
 from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -198,6 +199,148 @@ async def test_safety_snapshot_can_recover_predecessor_at_retention_one(manager)
     # Protection expires when calls finish; later captures resume normal retention.
     await manager.maybe_snapshot("helper_template", "template-entry", force=True)
     assert len(manager.list_snapshots(domain="helper_template")) == 1
+
+
+@pytest.mark.parametrize("clock_rollback", [False, True])
+async def test_safety_exists_before_apply_despite_older_filename_order(
+    manager, monkeypatch, clock_rollback
+):
+    manager._settings.auto_backup_retain_per_entity = 1
+    timestamp = "20260910_120000"
+    monkeypatch.setattr(bm, "_now_ts", lambda: timestamp)
+    current = {
+        "entry_id": "template-entry",
+        "options": {**_record()["options"], "state": "before"},
+    }
+    manager.register(
+        bm.DomainHandler(
+            "helper_template", AsyncMock(return_value=current), AsyncMock()
+        )
+    )
+    source = await manager.maybe_snapshot("helper_template", "template-entry")
+    if clock_rollback:
+        timestamp = "20260909_120000"
+    else:
+        source = await manager.maybe_snapshot("helper_template", "template-entry")
+        assert source.name.endswith("_01.yaml")
+    applied = []
+
+    async def restore(_client, _target, _config):
+        safety = [row for row in manager.list_snapshots() if row["name"] != source.name]
+        assert len(safety) == 1, (
+            "restore must have a retained safety snapshot before applying"
+        )
+        assert manager.read_snapshot(safety[0]["name"])["config"] == current
+        applied.append(True)
+        return {"success": True}
+
+    manager.register(
+        bm.DomainHandler("helper_template", AsyncMock(return_value=current), restore)
+    )
+    outcome = await manager.restore_snapshot(source.name)
+    assert applied == [True]
+    assert source.exists()
+    assert manager.read_snapshot(outcome["safety_backup"])["config"] == current
+
+
+@pytest.mark.parametrize("bulk", [False, True])
+async def test_active_restore_protects_source_and_safety_from_deletion(manager, bulk):
+    source = snapshot(manager)
+    unprotected = snapshot(manager, "other history")
+    current = {"entry_id": "template-entry", "options": _record()["options"]}
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def restore(*_):
+        entered.set()
+        await release.wait()
+        return {"success": True}
+
+    manager.register(
+        bm.DomainHandler("helper_template", AsyncMock(return_value=current), restore)
+    )
+    task = asyncio.create_task(manager.restore_snapshot(source.name))
+    try:
+        await entered.wait()
+        protected = {row["name"] for row in manager.list_snapshots()} - {
+            unprotected.name
+        }
+        assert len(protected) == 2
+        if bulk:
+            result = manager.delete_bulk(domain="helper_template")
+            assert set(result["failed"]) == protected
+            assert result["deleted"] == [unprotected.name]
+        else:
+            for name in protected:
+                with pytest.raises(ValueError, match="active restore"):
+                    manager.delete_snapshot(name)
+            manager.delete_snapshot(unprotected.name)
+        assert {row["name"] for row in manager.list_snapshots()} == protected
+    finally:
+        release.set()
+        await task
+    assert set(manager.delete_bulk(domain="helper_template")["deleted"]) == protected
+
+
+async def test_safety_capture_is_pinned_while_rotation_runs(manager, monkeypatch):
+    source = snapshot(manager)
+    current = {"entry_id": "template-entry", "options": _record()["options"]}
+    manager.register(
+        bm.DomainHandler(
+            "helper_template",
+            AsyncMock(return_value=current),
+            AsyncMock(return_value={}),
+        )
+    )
+    native_rotate = manager._rotate
+    rotating = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def rotate(*args):
+        loop.call_soon_threadsafe(rotating.set)
+        if not release.wait(5):
+            raise TimeoutError("test did not release rotation")
+        native_rotate(*args)
+
+    monkeypatch.setattr(manager, "_rotate", rotate)
+    task = asyncio.create_task(manager.restore_snapshot(source.name))
+    try:
+        await asyncio.wait_for(rotating.wait(), 2)
+        safety = [
+            row["name"]
+            for row in manager.list_snapshots()
+            if row["name"] != source.name
+        ]
+        assert len(safety) == 1
+        with pytest.raises(ValueError, match="active restore"):
+            manager.delete_snapshot(safety[0])
+    finally:
+        release.set()
+        outcome = await task
+    assert manager.read_snapshot(outcome["safety_backup"])["config"] == current
+
+
+async def test_missing_safety_at_pin_handoff_refuses_apply(manager, monkeypatch):
+    source = snapshot(manager)
+    current = {"entry_id": "template-entry", "options": _record()["options"]}
+    restore = AsyncMock(return_value={})
+    manager.register(
+        bm.DomainHandler("helper_template", AsyncMock(return_value=current), restore)
+    )
+    native_capture = manager._capture_restore_safety
+
+    async def delete_before_restore_pin(*args):
+        path = await native_capture(*args)
+        manager.delete_snapshot(path.name)
+        return path
+
+    monkeypatch.setattr(manager, "_capture_restore_safety", delete_before_restore_pin)
+    with pytest.raises(bm.BackupRestoreError) as caught:
+        await manager.restore_snapshot(source.name)
+    assert caught.value.outcome["apply_status"] == "not_applied"
+    assert caught.value.outcome["safety_backup"] is None
+    restore.assert_not_awaited()
+    assert source.exists()
 
 
 async def test_cancellation_releases_entry_for_next_restore_and_keeps_recovery(manager):

@@ -36,8 +36,8 @@ async def test_new_entry_writes_wait_until_recreation_finishes(
         reached.set()
         await release.wait()
 
-    async def create(*args):
-        result = await original_create(*args)
+    async def create(*args, **kwargs):
+        result = await original_create(*args, **kwargs)
         if stage == "create_reply":
             await pause()  # HA exposes the new entry before the response returns.
         return result
@@ -113,9 +113,9 @@ async def test_recreation_drains_existing_and_queued_entry_writes(
             entered.set()
             await release.wait()
 
-    async def create(*args):
+    async def create(*args, **kwargs):
         created.set()
-        return await original_create(*args)
+        return await original_create(*args, **kwargs)
 
     recovery.create.side_effect = create
     monkeypatch.setattr(manager, "config_entry_write_guard", guard)
@@ -165,8 +165,8 @@ async def test_cancelled_recreation_releases_waiting_entry_write(recovery):
     entered = asyncio.Event()
     original_create = recovery.create.side_effect
 
-    async def create(*args):
-        result = await original_create(*args)
+    async def create(*args, **kwargs):
+        result = await original_create(*args, **kwargs)
         reached.set()
         await blocked.wait()
         return result

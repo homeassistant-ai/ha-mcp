@@ -846,6 +846,27 @@ class TestCapture:
         assert not first.exists()
         assert len(list(tmp_path.glob("automation.x.*.yaml"))) == 2
 
+    @pytest.mark.parametrize("clock_rollback", [False, True])
+    async def test_new_capture_survives_older_filename_order(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock_rollback: bool
+    ) -> None:
+        """A returned recovery point survives gap reuse and wall-clock rollback."""
+        timestamp = "20260910_120000"
+        monkeypatch.setattr(bm, "_now_ts", lambda: timestamp)
+        mgr = _mk_manager(tmp_path, auto_backup_retain_per_entity=1)
+        mgr.register(_mk_handler(fetched={"v": "previous"}))
+        await mgr.maybe_snapshot("automation", "x")
+        if clock_rollback:
+            timestamp = "20260909_120000"
+        else:
+            # The second capture takes _01 and rotates away the base name.
+            await mgr.maybe_snapshot("automation", "x")
+        mgr.register(_mk_handler(fetched={"v": "fresh"}))
+        fresh = await mgr.maybe_snapshot("automation", "x", mandatory=True)
+        assert fresh is not None and fresh.exists()
+        assert mgr.read_snapshot(fresh.name)["config"] == {"v": "fresh"}
+        assert [row["name"] for row in mgr.list_snapshots()] == [fresh.name]
+
 
 # ---------------------------------------------------------------- retention
 
@@ -960,6 +981,16 @@ class TestRetention:
 
 
 class TestListReadDelete:
+    def test_bulk_reports_invalid_listed_name_without_aborting(
+        self, tmp_path: Path
+    ) -> None:
+        mgr = _mk_manager(tmp_path)
+        invalid = mgr._write_snapshot("automation", "invalid..name", {}, "test")
+        valid = mgr._write_snapshot("automation", "valid", {}, "test")
+        result = mgr.delete_bulk(domain="automation")
+        assert result == {"deleted": [valid.name], "failed": [invalid.name]}
+        assert invalid.exists()
+
     async def test_list_filters_by_domain(self, tmp_path: Path) -> None:
         mgr = _mk_manager(tmp_path)
         mgr.register(_mk_handler("automation", fetched={"a": 1}))
@@ -1201,7 +1232,7 @@ class TestRestore:
         assert result["restored_from"] == path.name
         assert result["result"]["ok"] is True
 
-    async def test_restore_propagates_value_error_on_unknown_domain(
+    async def test_restore_reports_no_write_on_unknown_domain(
         self, tmp_path: Path
     ) -> None:
         mgr = _mk_manager(tmp_path)
@@ -1217,8 +1248,10 @@ class TestRestore:
                 }
             )
         )
-        with pytest.raises(LookupError):
+        with pytest.raises(bm.BackupRestoreError) as caught:
             await mgr.restore_snapshot(bogus.name)
+        assert caught.value.outcome["reason"] == "unsupported_domain"
+        assert caught.value.outcome["apply_status"] == "not_applied"
 
     async def test_restore_safety_backup_disabled(self, tmp_path: Path) -> None:
         mgr = _mk_manager(tmp_path, enable_auto_backup=False)
@@ -1505,13 +1538,51 @@ class TestForceSnapshot:
         path = await mgr.maybe_snapshot("automation", "foo", force=True)
         assert path is None
 
-    async def test_force_still_respects_init_dir_error(self, tmp_path: Path) -> None:
+    async def test_force_still_fails_for_unwritable_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         mgr = _mk_manager(tmp_path)
         mgr.register(_mk_handler(fetched={"alias": "x"}))
         mgr._init_dir_error = "OSError: read-only filesystem"
+        monkeypatch.setattr(
+            Path,
+            "mkdir",
+            MagicMock(side_effect=PermissionError("read-only filesystem")),
+        )
         # Even with force, an unreachable backup dir can't accept writes.
         path = await mgr.maybe_snapshot("automation", "foo", force=True)
         assert path is None
+
+    @pytest.mark.parametrize("mandatory", [False, True])
+    async def test_force_retries_repaired_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mandatory: bool
+    ) -> None:
+        mgr = _mk_manager(tmp_path)
+        mgr.register(_mk_handler(fetched={"alias": "x"}))
+        native_mkdir = Path.mkdir
+        writable = False
+
+        def mkdir(path: Path, *args: Any, **kwargs: Any) -> None:
+            if path == tmp_path and not writable:
+                raise PermissionError("controlled directory failure")
+            native_mkdir(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "mkdir", mkdir)
+        with pytest.raises(
+            bm.MandatoryBackupError, match="controlled directory failure"
+        ):
+            await mgr.maybe_snapshot("automation", "foo", mandatory=True)
+        assert mgr.init_dir_error is not None
+        writable = True
+        # Ordinary automatic captures preserve their existing sticky behavior.
+        assert await mgr.maybe_snapshot("automation", "foo") is None
+        recovered = await mgr.maybe_snapshot(
+            "automation", "foo", force=True, mandatory=mandatory
+        )
+        assert recovered is not None and recovered.exists()
+        assert mgr.read_snapshot(recovered.name)["config"] == {"alias": "x"}
+        assert mgr.init_dir_error is None
+        assert mgr.enabled is True
 
 
 class TestSupportedDomains:
@@ -2334,12 +2405,17 @@ class TestMaybeSnapshotMandatory:
         # disk-full remediation is carried for the structured error to surface.
         assert exc.value.suggestions
 
-    async def test_raises_on_init_dir_error(self, tmp_path: Path) -> None:
+    async def test_raises_when_forced_init_retry_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         mgr = _mk_manager(tmp_path)
         mgr.register(_mk_handler(domain="file", fetched="body\n"))
         mgr._init_dir_error = "backup dir not writable"
+        mkdir = MagicMock(side_effect=PermissionError("backup dir not writable"))
+        monkeypatch.setattr(Path, "mkdir", mkdir)
         with pytest.raises(bm.MandatoryBackupError):
             await mgr.maybe_snapshot("file", "www/x.css", mandatory=True, force=True)
+        mkdir.assert_called_once()
 
     async def test_new_entity_returns_none_not_raise(self, tmp_path: Path) -> None:
         """config is None (new file/key) is a legitimate skip, not a failure."""

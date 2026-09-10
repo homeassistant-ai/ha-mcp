@@ -2334,7 +2334,7 @@ class IntegrationTools:
         **WARNING:** Removing a helper or integration that is referenced by
         automations, scripts, or other integrations may cause those to fail.
         Use ha_search() / ha_get_integration() to verify before
-        removal. Cannot be undone.
+        removal. Recovery requires a usable backup and supported restore path.
         """
         # === Confirm gate (uniform for all four paths) ===
         if not confirm:
@@ -2346,8 +2346,8 @@ class IntegrationTools:
                         "target": target,
                         "helper_type": helper_type,
                         "warning": (
-                            "This will permanently delete the helper or "
-                            "integration. This cannot be undone."
+                            "This will delete the helper or integration. "
+                            "Recovery is not guaranteed."
                         ),
                     },
                 )

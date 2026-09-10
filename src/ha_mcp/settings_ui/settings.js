@@ -1834,10 +1834,10 @@ function backupRestoreOutcomeMessage(outcome = {}) {
     message = t('backup.restore.unknown', {}, 'Whether this restore changed Home Assistant could not be confirmed. Inspect the current configuration and backup list before retrying.');
   }
   const reasons = {
-    unsupported_form: t('backup.restore.reason.unsupported_form', {}, 'Home Assistant did not provide an options form suitable for this restore.'),
-    unsupported_fields: t('backup.restore.reason.unsupported_fields', {}, 'Some snapshot fields are not accepted by the current options form.'),
-    validation_failed: t('backup.restore.reason.validation_failed', {}, 'Home Assistant rejected the restored options as invalid.'),
-    flow_aborted: t('backup.restore.reason.flow_aborted', {}, 'Home Assistant aborted the options restore.'),
+    unsupported_form: t('backup.restore.reason.unsupported_form', {}, 'Home Assistant did not provide a form suitable for this restore.'),
+    unsupported_fields: t('backup.restore.reason.unsupported_fields', {}, 'Some snapshot fields are not accepted by the current form.'),
+    validation_failed: t('backup.restore.reason.validation_failed', {}, 'Home Assistant rejected the restored configuration as invalid.'),
+    flow_aborted: t('backup.restore.reason.flow_aborted', {}, 'Home Assistant aborted the restore flow.'),
   };
   if (Object.hasOwn(reasons, outcome.reason)) {
     message += '\n\n' + reasons[outcome.reason];
@@ -1901,7 +1901,7 @@ async function backupAction(act, name) {
       showToast(t('backup.errors.diff', {name, message: String(err)}, 'Could not diff backup "' + name + '": ' + String(err)), {isError: true});
     }
   } else if (act === 'restore') {
-    if (!confirm(t('backup.confirm.restore', {name}, 'Restore ' + name + '?\n\nThis overwrites existing configuration or recreates a deleted Template helper. The current configuration is backed up first if it exists.'))) return;
+    if (!confirm(t('backup.confirm.restore', {name}, 'Restore ' + name + '?\n\nThis overwrites existing configuration or recreates a deleted Template helper. Existing Template helpers require a fresh safety backup. Other restores use the current auto-backup settings and may proceed without a new safety backup.'))) return;
     let stage = 'request';
     let httpStatus = null;
     try {

@@ -614,7 +614,10 @@ def test_settings_recreation_success_exposes_new_identity_and_mapping(
     else:
         assert "may have a new entity ID" in rendered.alerts[0]
     assert "Safety backup: (none)" not in rendered.alerts[0]
-    assert "if it exists" in rendered.confirms[0]
+    assert (
+        "Existing Template helpers require a fresh safety backup"
+        in rendered.confirms[0]
+    )
     assert len(rendered.fetches_to("/backups?")) == 1
 
 
