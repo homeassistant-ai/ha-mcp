@@ -1519,10 +1519,9 @@ class TestForceSnapshot:
         # Sleep less than the throttle window — without force, returns None.
         second = await mgr.maybe_snapshot("automation", "foo")
         assert second is None
-        # With force, captures again despite the window. (Both calls may
-        # land in the same wall-clock second and overwrite the same
-        # filename — what matters here is that ``maybe_snapshot``
-        # returned a Path rather than the throttle-skip None.)
+        # Force captures again despite the throttle window. Same-second
+        # captures receive distinct filenames; this test checks that force
+        # returns a Path rather than the throttle-skip None.
         third = await mgr.maybe_snapshot("automation", "foo", force=True)
         assert third is not None
 
