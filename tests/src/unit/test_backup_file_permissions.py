@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -571,15 +572,14 @@ async def test_posix_snapshot_symlink_cannot_bypass_directory_trust(
             else:
                 await manager.snapshot_comparison(snapshot.name)
     else:
-        try:
+        # Inventory and rotation may omit the link or explicitly refuse it.
+        with suppress(bm.UnsafeBackupStorageError):
             if operation == "list":
                 assert snapshot.name not in {
                     row["name"] for row in manager.list_snapshots()
                 }
             else:
                 manager._rotate("automation", "example")
-        except bm.UnsafeBackupStorageError:
-            pass
 
     assert not opened
     fetch.assert_not_awaited()

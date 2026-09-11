@@ -17,6 +17,8 @@ New backup directories request owner-only access. On POSIX, snapshots are
 created with mode 0600; recognized existing owned snapshot files lose any
 group/other access on the first storage check. Storage must be owned by the
 current user and protected from replacement through its directory ancestors.
+Embedded HA's registered config-directory owner is also trusted for ancestors
+within that configuration tree; the backup directory remains server-owned.
 Unsafe directory ownership or modes are refused without changing them.
 On Windows, Python 3.13 restricts newly created 0700 directories; existing
 custom directory ACLs remain the operator's responsibility.
@@ -542,10 +544,15 @@ def _require_restore_safety(path: Path) -> None:
         )
 
 
-def _validate_backup_directory(metadata: os.stat_result, *, leaf: bool = False) -> None:
+def _validate_backup_directory(
+    metadata: os.stat_result,
+    *,
+    leaf: bool = False,
+    embedded_owner: int | None = None,
+) -> None:
     if not stat.S_ISDIR(metadata.st_mode):
         raise NotADirectoryError("Backup storage path is not a directory")
-    owners = {os.geteuid()} if leaf else {0, os.geteuid()}
+    owners = {os.geteuid()} if leaf else {0, os.geteuid(), embedded_owner}
     if metadata.st_uid not in owners:
         raise UnsafeBackupStorageError("Backup storage path has untrusted ownership")
     if metadata.st_mode & 0o022 and (leaf or not metadata.st_mode & stat.S_ISVTX):
@@ -569,6 +576,26 @@ def _backup_component_metadata(
     return path.lstat(), True
 
 
+def _embedded_backup_anchor() -> tuple[Path, int] | None:
+    """The in-memory HA config registration grants its owner scoped trust.
+
+    HA Container can run as root with an operator-owned config bind mount.
+    Environment settings cannot establish this authority, and an unavailable
+    registration grants no additional ownership allowance.
+    """
+    from .config import get_embedded_config_dir
+
+    configured = get_embedded_config_dir()
+    if configured is None:
+        return None
+    try:
+        anchor = Path(configured).resolve(strict=True)
+        metadata = anchor.lstat()
+    except (OSError, RuntimeError):
+        return None
+    return (anchor, metadata.st_uid) if stat.S_ISDIR(metadata.st_mode) else None
+
+
 def _trusted_posix_backup_directory(directory: Path, *, create: bool) -> Path:
     """Validate every raw alias hop before returning its canonical directory."""
     absolute = directory if directory.is_absolute() else Path.cwd() / directory
@@ -577,6 +604,7 @@ def _trusted_posix_backup_directory(directory: Path, *, create: bool) -> Path:
     remaining = list(absolute.parts[1:])
     created = False
     links = 0
+    embedded_anchor = _embedded_backup_anchor()
     while remaining:
         part = remaining.pop(0)
         if part == "..":
@@ -585,9 +613,15 @@ def _trusted_posix_backup_directory(directory: Path, *, create: bool) -> Path:
         candidate = current / part
         metadata, made_directory = _backup_component_metadata(candidate, create=create)
         created |= made_directory
+        # Recompute after every alias/.. hop, so trust cannot escape HA's tree.
+        embedded_owner = (
+            embedded_anchor[1]
+            if embedded_anchor and candidate.is_relative_to(embedded_anchor[0])
+            else None
+        )
         if stat.S_ISLNK(metadata.st_mode):
             links += 1
-            if metadata.st_uid not in {0, os.geteuid()} or links > 40:
+            if metadata.st_uid not in {0, os.geteuid(), embedded_owner} or links > 40:
                 raise UnsafeBackupStorageError("Backup storage alias is not trusted")
             target = candidate.readlink()
             if target.is_absolute():
@@ -596,7 +630,7 @@ def _trusted_posix_backup_directory(directory: Path, *, create: bool) -> Path:
             else:
                 remaining = list(target.parts) + remaining
             continue
-        _validate_backup_directory(metadata)
+        _validate_backup_directory(metadata, embedded_owner=embedded_owner)
         current = candidate
     _validate_backup_directory(current.lstat(), leaf=True)
     if create and not created:
@@ -1194,7 +1228,7 @@ class BackupManager:
                 Path(tmp_name).unlink()
         self._init_dir_error = None
         self._directory_checked = True
-        logger.info("Auto-backup: wrote %s", target.name)
+        logger.info("Auto-backup: snapshot written")
         return target
 
     def _unclaimed_target(self, domain: str, safe: str, ts: str) -> Path:
