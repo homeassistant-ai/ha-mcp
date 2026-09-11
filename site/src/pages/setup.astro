@@ -2560,7 +2560,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
               </ul>`;
         uiSteps = `<div class="instruction-block">
           <h3 class="instruction-title">Claude.ai Configuration</h3>
-          <p class="text-slate-300 text-sm mb-3">Claude.ai connector setup is known to be flaky, but usually works after repeated attempts. See the <a href="${base}/faq#claude-ai-connection" class="text-blue-400 hover:underline">Claude.ai connection FAQ</a> for embedded-server restart guidance and troubleshooting.</p>
+          <p class="text-slate-300 text-sm mb-3">Claude.ai connector setup is known to be flaky, but usually works after repeated attempts. If you installed the embedded HA-MCP server, make sure you have <strong>restarted Home Assistant</strong> after installation so everything registers properly.</p>
           <ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
             <li>Open Claude.ai → <strong>Customize</strong> (left sidebar) → <strong>Connectors</strong> → <strong>Add</strong></li>
             <li>Enter a name (e.g. <code class="bg-slate-800 px-1 rounded">Home Assistant</code>) and the URL <code class="bg-slate-800 px-1 rounded">{{MCP_SERVER_URL}}</code>, then click <strong>Continue</strong>. Claude checks the server and pre-fills the next step; choices it worked out are tagged <em>Detected</em> — keep them.</li>
