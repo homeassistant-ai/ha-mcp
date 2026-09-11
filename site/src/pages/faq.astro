@@ -458,6 +458,8 @@ source ~/.zshrc
 
         <div class="faq-item" id="claude-ai-connection">
           <h3 class="text-lg font-medium text-white mb-2">Claude.ai connection issues</h3>
+          <p class="text-slate-300 mb-3">Claude.ai connector setup is known to be flaky, but usually works after repeated attempts. Enter the URL, click <strong>Continue</strong>, and keep the settings marked <strong>Detected</strong>. If authentication is not auto-detected, the connection may not be working: <strong>delete any existing connector and create a new one, then try again</strong>. You can try selecting settings manually, but connections typically only work when the settings are auto-detected, so manually forcing them — including <strong>None / No login</strong> — may not help.</p>
+          <p class="text-slate-300 mb-3">If you installed the embedded HA-MCP server, make sure you have <strong>restarted Home Assistant</strong> after installation so everything registers properly.</p>
           <p class="text-slate-300 mb-3">If tools stop responding or the connector appears disconnected in Claude.ai:</p>
           <ol class="text-slate-300 space-y-2 list-decimal list-inside">
             <li><strong>Restart both Claude.ai and the MCP server.</strong> Refresh the Claude.ai page in your browser and restart the ha-mcp process (or Docker container). Either side can hold stale connection state. An intermittent connect failure is usually a transient tunnel/relay hiccup, so a restart and retry often clears it.</li>
