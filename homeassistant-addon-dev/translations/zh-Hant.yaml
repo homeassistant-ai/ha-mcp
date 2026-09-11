@@ -4,142 +4,76 @@
 # addon_dev.*); regenerate with: python scripts/generate_locales.py
 configuration:
   backup_hint:
-    name: Full-HA snapshot suggestion level (LLM-facing)
-    description: 'Tunes the wording of the hint the LLM sees in the
-
-      `ha_manage_backup(scope=''snapshot'')` tool description for when to
-
-      suggest a full Home Assistant tarball backup before risky operations
-
-      (e.g. mass device deletes). Affects ONLY this one LLM-facing prompt
-
-      sentence.
+    name: 完整 HA 快照建議層級（面向 LLM）
+    description: '調整 LLM 在 `ha_manage_backup(scope=''snapshot'')` 工具說明中看到的提示詞措辭，以決定何時在執行有風險的操作（例如大量刪除裝置）之前建議完整的
+      Home Assistant tarball 備份。僅影響此單一面向 LLM 的提示語句。
 
 
-      For per-edit automatic snapshots of automations / scripts / helpers /
-
-      etc., use the separate **Enable auto-backup of edits** toggle below.'
+      如需自動化 / 腳本 / 輔助程式等的每次編輯自動快照，請使用下方獨立的 **Enable auto-backup of edits** 開關。'
   secret_path:
-    name: Secret path override
-    description: 'Optional custom HTTP path for the MCP server. Leave empty to use
-      the auto-generated secure path.
+    name: 密鑰路徑覆寫
+    description: 'MCP 伺服器的選用自訂 HTTP 路徑。保持空白以使用自動產生的安全路徑。
 
       '
   enable_tool_search:
-    name: Enable tool search
-    description: 'Replace the full tool catalog with search-based discovery. Reduces
-      idle context by roughly 90%, to about 5K tokens. ⚠️ Do NOT enable this in clients
-      with their own built-in tool search / deferred tools (claude.ai, Claude Desktop,
-      Claude Code) — the two search layers conflict, and the client''s built-in tool
-      search is the better choice there; leave this off. Whether tools are deferred
-      depends on your client and model combination: use this when your setup loads
-      the full catalog up front — models without native deferred tools (e.g. Gemini,
-      OpenAI-compatible local models, Claude Haiku), clients that inline all tool
-      schemas regardless of model (e.g. GitHub Copilot CLI), or smaller context windows.
-      Some Codex models and ChatGPT include deferred tools too — check your client/model
-      directly to confirm its features so you don''t leave this enabled unnecessarily.
-      Tools are found via ha_search_tools and executed via categorized proxies (read/write/delete).
-      Requires restart to take effect.'
+    name: 啟用工具搜尋
+    description: 以基於搜尋的探索取代完整的工具目錄。可將閒置上下文減少約 90%，降至約 5K 個 Token。⚠️ 請勿在具有內建工具搜尋／延遲工具功能的用戶端（claude.ai、Claude
+      Desktop、Claude Code）中啟用此功能 — 這兩個搜尋層會發生衝突，且在此情況下用戶端的內建工具搜尋是更好的選擇；請保持關閉。工具是否延遲取決於您的用戶端與模型組合：當您的設定在前端載入完整目錄時請使用此功能
+      — 不具備原生延遲工具的模型（例如 Gemini、相容 OpenAI 的本機模型、Claude Haiku）、不論模型為何均內嵌所有工具結構定義的用戶端（例如
+      GitHub Copilot CLI），或是較小的上下文視窗。某些 Codex 模型和 ChatGPT 也包含延遲工具 — 請直接檢查您的用戶端／模型以確認其功能，以免不必要地保持啟用。工具可透過
+      ha_search_tools 尋找，並透過已分類的代理程式（讀取／寫入／刪除）執行。需要重新啟動才能生效。
   enable_tool_security_policies:
-    name: Enable Tool Security Policies (advanced)
-    description: Gate high-stakes tool calls (lock/alarm control, automation writes,
-      etc.) behind user approval. When a guarded tool is called, the agent tells the
-      user to open the Tool Security Policies tab in the web UI and click Approve
-      before the call proceeds. Per-tool rules with optional argument conditions are
-      configured in the Tool Security Policies tab. Off by default. Requires restart
-      to take effect.
+    name: 啟用工具安全性策略（進階）
+    description: 將高風險工具呼叫（鎖定／警報控制、自動化寫入等）限制在使用者核准之後。當呼叫受保護的工具時，代理程式會指示使用者在網頁 UI 中開啟「工具安全性策略」分頁並點擊「核准」，然後呼叫才會繼續。具備選用引數條件的個別工具規則可在「工具安全性策略」分頁中進行設定。預設為關閉。需要重新啟動才能生效。
   enable_security_policy_tool:
-    name: Let AI agents edit tool security policies
-    description: 'Registers the ha_manage_security_policy tool, which lets connected
-      AI agents read and rewrite the tool security policies — including removing approval
-      gates. Off by default. Independent of the Tool Security Policies option above:
-      this controls who can edit the rules, not whether they are enforced. The tool
-      cannot see or decide pending approvals. To keep a human in the loop, gate the
-      tool before enabling it: switch on "security gated" for Manage Security Policy
-      in the Tools tab of the web UI. Requires restart to take effect.'
+    name: 允許 AI 代理程式編輯工具安全性策略
+    description: 註冊 ha_manage_security_policy 工具，該工具允許連線的 AI 代理程式讀取和重寫工具安全性策略，包括移除批准閘道。預設為關閉。與上方的「工具安全性策略」選項獨立：這控制誰可以編輯規則，而不是是否強制執行它們。該工具無法看到或決定待處理的批准。若要將人類納入控制流程中，請在啟用該工具之前加上閘道：在網頁
+      UI 的「工具」分頁中，將「Manage Security Policy」切換為「security gated」。需要重新啟動才能生效。
   read_only_mode:
-    name: Read Only Mode
-    description: Toggles all write tools off, and removes ability for tools to make
-      any write or destructive calls. Mixed read/write tools — backups, Apps (add-ons),
-      energy preferences, voice pipelines, and code mode when enabled — stay available
-      with their write operations blocked. Same toggle as the web UI Tools tab. Off
-      by default. Requires restart to take effect.
+    name: 唯讀模式
+    description: 將所有寫入工具關閉，並移除工具進行任何寫入或具破壞性呼叫的能力。混合讀取／寫入工具（備份、應用程式（附加元件）、能源偏好設定、語音管線，以及啟用時的程式碼模式）將保持可用，但其寫入操作會被封鎖。與網頁
+      UI「工具」分頁中的切換開關相同。預設為關閉。需要重新啟動才能生效。
   redact_secrets:
-    name: Redact Secrets
-    description: Redacts secrets from tool responses before they reach the AI assistant.
-      App (add-on) options and integration fields marked as passwords are replaced
-      with a set/empty marker (so "is this credential configured?" stays answerable),
-      and other tool responses are scrubbed of secret values the server has already
-      seen (values shorter than 6 characters are skipped, since replacing tiny fragments
-      would corrupt unrelated output). Fields not marked as passwords by their schema
-      cannot be detected. Off by default.
+    name: 遮蔽機密資訊
+    description: 在工具回應到達 AI 助理之前，將其中的機密資訊遮蔽。應用程式（附加元件）選項以及標記為密碼的整合欄位會被替換為已設定／空白標記（以便「此憑證是否已設定？」保持可回答），並且其他工具回應中會清除伺服器已經看過的機密值（小於
+      6 個字元的實值會被略過，因為替換微小片段會損壞不相關的輸出）。其結構定義未標記為密碼的欄位無法被偵測。預設為關閉。需要重新啟動才能生效。
   enable_beta_features:
-    name: Enable beta features (master)
-    description: ⚠ DANGER — these tools can PERMANENTLY DAMAGE your Home Assistant
-      installation. They write to your YAML config, your filesystem, install custom
-      components, run arbitrary sandboxed Python, and edit tool docstrings the AI
-      sees. There is no warranty and no support guarantee — you enable them at your
-      OWN RISK. Take a Home Assistant backup before turning this on, and never enable
-      in production without one. Master gate for the experimental sub-flags below;
-      sub-flags are ignored at runtime while this master is off, even when explicitly
-      set to true. The same toggle is also surfaced in the web settings UI under "Beta
-      features (dangerous)" — either surface reflects the other on restart.
+    name: 啟用測試版功能 (master)
+    description: ⚠ 危險 —— 這些工具可能會永久損壞您的 Home Assistant 安裝。它們會寫入您的 YAML 設定、檔案系統、安裝自訂元件、執行任意沙盒
+      Python，以及編輯 AI 看到的工具說明字串。沒有保固且不保證支援 —— 您需自行承擔啟用的風險。啟用前請先建立 Home Assistant 備份，且在沒有備份的情況下切勿在生產環境中啟用。下方實驗性子旗標的主開關；當此主開關關閉時，子旗標在執行階段將被忽略，即使明確設定為
+      true 也是如此。相同的切換開關也顯示在網頁設定 UI 的「Beta features (dangerous)」下方 —— 重新啟動後，任一介面都會反映另一個介面的狀態。
   enable_yaml_config_editing:
-    name: Enable YAML config editing (beta)
-    description: Beta feature. Allows AI assistants to add, replace, or remove top-level
-      keys in configuration.yaml and packages/*.yaml. Only whitelisted keys are allowed
-      (e.g., template, sensor, command_line, mqtt, knx); core keys like homeassistant,
-      http, and recorder are blocked. Each edit validates YAML syntax, runs a config
-      check, and creates an automatic backup. Changes to most keys require a full
-      HA restart to take effect. See docs/beta.md for known limitations. Dedicated
-      tools (automations, scripts, scenes, helpers, template sensors) should be preferred
-      when available. REQUIRES the master "Enable beta features" toggle above (and
-      in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless
-      of its value here.
+    name: 啟用 YAML 設定編輯 (beta)
+    description: 測試版功能。允許 AI 助理新增、取代或移除 configuration.yaml 和 packages/*.yaml 中的頂層金鑰。僅允許列入白名單的金鑰（例如：template、sensor、command_line、mqtt、knx）；核心金鑰（如
+      homeassistant、http 和 recorder）會被封鎖。每次編輯都會驗證 YAML 語法、執行設定檢查並建立自動備份。對大多數金鑰的更改需要完整的
+      HA 重新啟動才能生效。已知限制請參閱 docs/beta.md。可行時應優先使用專用工具（automations、scripts、scenes、helpers、template
+      sensors）。需要上方（以及網頁 UI 中）的「Enable beta features」主開關處於開啟狀態 —— 否則此子旗標在執行階段將被忽略，無論其在此處的值為何。
   enable_yaml_packages_automation:
-    name: Allow automation in packages/*.yaml
-    description: Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts
-      yaml_path='automation' inside packages/*.yaml. When off, the call is rejected
-      both client-side and server-side. The storage-mode tool (ha_config_set_automation)
-      is unaffected. Default OFF; only takes effect when "Enable YAML config editing"
-      above is also on.
+    name: 允許 packages/*.yaml 中的 automation
+    description: YAML 設定編輯的子切換開關。開啟時，ha_config_set_yaml 接受 packages/*.yaml 內的 yaml_path='automation'。關閉時，該呼叫會在用戶端和伺服器端被拒絕。儲存模式工具
+      (ha_config_set_automation) 不受影響。預設為關閉；只有在上方「Enable YAML config editing」也開啟時才會生效。
   enable_yaml_packages_script:
-    name: Allow script in packages/*.yaml
-    description: Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts
-      yaml_path='script' inside packages/*.yaml. When off, the call is rejected both
-      client-side and server-side. The storage-mode tool (ha_config_set_script) is
-      unaffected. Default OFF; only takes effect when "Enable YAML config editing"
-      above is also on.
+    name: 允許 packages/*.yaml 中的 script
+    description: YAML 設定編輯的子切換開關。開啟時，ha_config_set_yaml 接受 packages/*.yaml 內的 yaml_path='script'。關閉時，該呼叫會在用戶端和伺服器端被拒絕。儲存模式工具
+      (ha_config_set_script) 不受影響。預設為關閉；只有在上方「Enable YAML config editing」也開啟時才會生效。
   enable_yaml_packages_scene:
-    name: Allow scene in packages/*.yaml
-    description: Sub-toggle of YAML config editing. When on, ha_config_set_yaml accepts
-      yaml_path='scene' inside packages/*.yaml. When off, the call is rejected both
-      client-side and server-side. The storage-mode tool (ha_config_set_scene) is
-      unaffected. Default OFF; only takes effect when "Enable YAML config editing"
-      above is also on.
+    name: 允許 packages/*.yaml 中的 scene
+    description: YAML 設定編輯的子切換開關。開啟時，ha_config_set_yaml 接受 packages/*.yaml 內的 yaml_path='scene'。關閉時，該呼叫會在用戶端和伺服器端被拒絕。儲存模式工具
+      (ha_config_set_scene) 不受影響。預設為關閉；只有在上方「Enable YAML config editing」也開啟時才會生效。
   enable_yaml_edit_confirm:
-    name: Require confirmation for YAML edits (diff preview)
-    description: 'Sub-toggle of YAML config editing, ON by default (recommended).
-      The first ha_config_set_yaml call returns a unified diff of exactly what would
-      change on disk plus a confirm token and writes nothing; the edit only lands
-      when the call is repeated with that token. Exists so unintended changes outside
-      the requested edit are caught before they reach disk (issue #1720). Turn off
-      only to save one round-trip per edit.'
+    name: 要求確認 YAML 編輯（差異預覽）
+    description: 'YAML 設定編輯的子切換開關，預設為開啟（建議）。第一次 ha_config_set_yaml 呼叫會傳回磁碟上實際變更內容的統一差異（unified
+      diff）以及確認權杖，且不會寫入任何內容；只有在使用該權杖重複呼叫時，編輯才會生效。存在的目的是在請求編輯之外的非預期更改到達磁碟之前將其攔截（問題
+      #1720）。僅在需要節省每次編輯的一次往返時才關閉。'
   enable_code_mode:
-    name: Enable custom tool sandbox (beta)
-    description: Beta feature. Enables the ha_manage_custom_tool tool, which lets
-      AI assistants create, run, save, and delete custom Python code in a secure sandbox
-      when no built-in tool can handle the request. Code runs in an isolated interpreter
-      with no filesystem or arbitrary network access. Sandbox code can hit the HA
-      REST API (api_get/api_post), send WebSocket commands (ws_send), call existing
-      MCP tools (call_tool), or remove a saved tool (delete_saved_tool). Saved tools
-      persist to /data/saved_tools.json by default so they survive app (add-on) restarts,
-      and are visible to any client that can connect. See docs/beta.md for known limitations.
-      Requires restart to take effect. REQUIRES the master "Enable beta features"
-      toggle above (and in the web UI) to be on — otherwise this sub-flag is ignored
-      at runtime regardless of its value here.
+    name: 啟用自訂工具沙盒 (beta)
+    description: 測試版功能。啟用 ha_manage_custom_tool 工具，當沒有內建工具能處理請求時，讓 AI 程式助理能在安全沙盒中建立、執行、儲存和刪除自訂
+      Python 程式碼。程式碼在沒有檔案系統或任意網路存取權的隔離解譯器中執行。沙盒程式碼可以存取 HA REST API (api_get/api_post)、傳送
+      WebSocket 命令 (ws_send)、呼叫現有的 MCP 工具 (call_tool)，或移除已儲存的工具 (delete_saved_tool)。已儲存的工具預設會持久化至
+      /data/saved_tools.json，以便在應用程式（附加元件）重新啟動後保留，並且對任何可以連線的用戶端可見。已知限制請參閱 docs/beta.md。需要重新啟動才能生效。需要上方（以及網頁
+      UI 中）的「Enable beta features」主開關處於開啟狀態 —— 否則此子旗標在執行階段將被忽略，無論其在此處的值為何。
   enable_lite_docstrings:
-    name: Enable lite tool docstrings (beta)
+    name: 啟用精簡工具說明字串 (beta)
     description: 'Beta feature. Replaces the docstrings on 15 heavy ha-mcp tools (ha_config_get_automation,
       ha_config_set_automation, ha_config_get_script, ha_config_set_script, ha_config_get_scene,
       ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard,
@@ -156,41 +90,25 @@ configuration:
       "Enable beta features" toggle above (and in the web UI) to be on — otherwise
       this sub-flag is ignored at runtime regardless of its value here.'
   enable_mandatory_bps:
-    name: Attach best-practice skills on writes
-    description: 'Master switch for the write-tool skill content delivery feature
-      (issue #1182). When enabled (default), the six config write tools (automations,
-      scripts, scenes, helpers, dashboards, raw YAML) attach the canonical Home Assistant
-      best-practice reference files under `skill_content` on every successful write,
-      plus auto-embed any reference sections cited by best-practice warnings. Each
-      tool also exposes a per-call `MandatoryBPS` parameter the agent can set to false
-      on subsequent calls once it has the content. When this master switch is off,
-      NO skill_content goes out regardless of the per-call parameter or BP warnings.
-      Recommended ON as the first choice; disable only for models with very small
-      context windows. Turning this off may degrade write accuracy. Requires restart
-      to take effect.'
+    name: 寫入時附加最佳實踐技能
+    description: '寫入工具技能內容傳遞功能的主開關（issue #1182）。啟用時（預設），六個設定寫入工具（自動化、指令碼、場景、輔助程式、儀表板、原始
+      YAML）會在每次成功寫入時，於 `skill_content` 下方附加標準的 Home Assistant 最佳實踐參考檔案，並自動嵌入最佳實踐警告所引用的任何參考章節。每個工具也公開了每次呼叫皆有的
+      `MandatoryBPS` 參數，一旦代理程式取得內容，便可在後續呼叫中將其設定為 false。當此主開關關閉時，無論每次呼叫的參數或最佳實踐警告為何，都不會發出任何
+      skill_content。建議作為首選保持「開啟」；僅對上下文視窗非常小的模型進行停用。關閉此功能可能會降低寫入準確度。需要重新啟動才能生效。'
   enable_strict_mandatory_bps:
-    name: Strict best-practices mode
-    description: 'Strict mode: prevents the client from using the tool until it can
-      prove that it read the best practices. While on, the six best-practice write
-      tools (automations, scripts, scenes, helpers, dashboards, raw YAML) are blocked
-      and return an error directing the client to read the best-practices skill via
-      ha_get_skill_guide and pass back the acknowledgment key it obtains there. While
-      on, the ha_get_skill_guide tool is locked enabled — it is the only publisher
-      of the acknowledgment key. Child of the "Attach best-practice skills on writes"
-      option above and inert while that parent is off. Requires restart to take effect.'
+    name: 嚴格最佳實踐模式
+    description: 嚴格模式：防止用戶端在證明其已閱讀最佳做法之前使用該工具。啟用後，六個最佳做法寫入工具（automations、scripts、scenes、helpers、dashboards、raw
+      YAML）將被封鎖並傳回錯誤，指示用戶端透過 ha_get_skill_guide 閱讀最佳做法技能並傳回其在該處獲得的確認金鑰。啟用後，ha_get_skill_guide
+      工具將被鎖定為啟用狀態——它是確認金鑰的唯一發布者。上方「Attach best-practice skills on writes」選項的子選項，當該父選項關閉時處於非作用中狀態。需要重新啟動才能生效。
   ha_tool_concurrency:
-    name: Home Assistant tool concurrency
-    description: Optional limit on outer Home Assistant tool calls across all sessions.
-      Internal REST, WebSocket, and per-tool fan-out concurrency is unchanged. 0 keeps
-      unlimited behavior. A call waiting for capacity fails after 60 seconds.
+    name: Home Assistant 工具併發數
+    description: 跨所有工作階段對外部 Home Assistant 工具呼叫的選填限制。內部的 REST、WebSocket 和每個工具的扇出併發數保持不變。0
+      表示維持無限行為。等待容量的呼叫會在 60 秒後失敗。
   enable_filesystem_tools:
-    name: Enable filesystem tools (beta)
-    description: 'Sets HAMCP_ENABLE_FILESYSTEM_TOOLS=true. Enables direct file read/write
-      access to your Home Assistant filesystem. WARNING: This gives the MCP server
-      sensitive direct file access to your system. Only enable if you trust the AI
-      assistant with file operations. Requires restart to take effect. REQUIRES the
-      master "Enable beta features" toggle above (and in the web UI) to be on — otherwise
-      this sub-flag is ignored at runtime regardless of its value here.'
+    name: 啟用檔案系統工具 (beta)
+    description: 設定 HAMCP_ENABLE_FILESYSTEM_TOOLS=true。啟用對 Home Assistant 檔案系統的直接檔案讀取/寫入存取權。警告：這會賦予
+      MCP 伺服器對您系統的敏感直接檔案存取權。只有在您信任 AI 助理進行檔案操作時才啟用。需要重新啟動才能生效。需要上方（以及網頁 UI 中）的「Enable
+      beta features」主開關處於開啟狀態 —— 否則此子旗標在執行階段將被忽略，無論其在此處的值為何。
   enable_dashboard_screenshot:
     name: Enable dashboard screenshot mode (beta)
     description: Beta feature — disabled by default. Adds the ha_get_dashboard_screenshot
@@ -207,68 +125,37 @@ configuration:
       in the web UI) to be on — otherwise this sub-flag is ignored at runtime regardless
       of its value here.
   enable_auto_backup:
-    name: Enable auto-backup of edits
-    description: 'Captures a per-entity snapshot before every wrapped write/destructive
-      MCP tool call (automation, script, scene, helper, dashboard, dashboard resource,
-      label, category, group, zone, area, calendar, todo, entity, device, integration,
-      and sibling remove/delete tools). The auto-backup throttle bounds how often
-      that happens: 0 (default) captures on every such call, N>0 at most one snapshot
-      per N minutes per entity. Snapshots are saved as YAML files under /data/ha_mcp_backups/
-      (override via HAMCP_BACKUP_DIR) and listed, restored, or deleted via the Backups
-      tab in the web settings UI or via ha_manage_backup(scope=''edits'', ...). For
-      those domains the capture is best-effort — a failure logs a WARNING and the
-      write proceeds. The file and raw-YAML tools are the exception: ha_write_file,
-      ha_delete_file and ha_config_set_yaml treat the snapshot as a precondition,
-      so a write through them is refused while this is off, and a failed capture blocks
-      it. On by default; unchecking opts out of the best-effort captures and takes
-      the file and raw-YAML tools out of service with them. Requires restart to take
-      effect.'
+    name: 啟用編輯自動備份
+    description: 在每次封裝的寫入/破壞性 MCP 工具呼叫（自動化、腳本、場景、輔助程式、儀表板、儀表板資源、標籤、類別、群組、區域、範圍、行事曆、待辦事項、實體、裝置、整合，以及同級移除/刪除工具）之前，擷取每個實體的快照。自動備禦節流限制了這種情況發生的頻率：0（預設）在每次此類呼叫時擷取，N>0
+      則每隔 N 分鐘每個實體最多擷取一個快照。快照會以 YAML 檔案形式儲存於 /data/ha_mcp_backups/（透過 HAMCP_BACKUP_DIR
+      覆寫），並可透過網頁設定 UI 中的「備份」分頁或透過 ha_manage_backup(scope='edits', ...) 進行列集、還原或刪除。對於這些網域，擷取是盡力而為的
+      — 失敗會記錄 WARNING 且寫入會繼續進行。檔案和原始 YAML 工具是特例：ha_write_file、ha_delete_file 和 ha_config_set_yaml
+      將快照視為先決條件，因此在關閉此功能時透過它們進行的寫入將被拒絕，而擷取失敗也會阻止寫入。預設為開啟；取消勾選則會退出盡力而為的擷取，並同時停用檔案和原始
+      YAML 工具。需要重新啟動才能生效。
   auto_backup_throttle_minutes:
-    name: Auto-backup throttle (minutes)
-    description: Per-entity throttle window. 0 (default) captures a snapshot on every
-      wrapped write. N>0 captures at most one snapshot per N minutes per entity. Range
-      0–1440.
+    name: 自動備份節流（分鐘）
+    description: 每個實體的節流視窗。0（預設）在每次封裝的寫入時擷取快照。N>0 每隔 N 分鐘每個實體最多擷取一個快照。範圍 0–1440。
   auto_backup_retain_per_entity:
-    name: Auto-backup retention (per entity)
-    description: Maximum number of snapshots kept per entity. Older snapshots beyond
-      this cap are rotated out on each successful capture. Default 100, range 1–10000.
+    name: 自動備份保留數量（每個實體）
+    description: 每個實體保留的最大快照數。超出此上限的較舊快照會在每次成功擷取時被輪替清除。預設 100，範圍 1–10000。
   enable_snapshot_delete:
-    name: Allow snapshot deletion
-    description: Lets ha_manage_backup delete full HA snapshot tarballs (scope='snapshot',
-      action='delete'). Off by default — a snapshot may be the last recovery point
-      after a mistaken change, so a human must opt in here. Even when on, scheduled
-      backups, the newest remaining snapshot, and anything younger than the age floor
-      below stay protected.
+    name: 允許刪除快照
+    description: 允許 ha_manage_backup 刪除完整的 Home Assistant 快照 tarball（scope='snapshot'，action='delete'）。預設為關閉
+      — 快照可能是錯誤變更後的最後復原點，因此必須由人工在此手動啟用。即使在開啟時，排程備份、最新剩餘的快照，以及任何比下方年齡下限更新的項目仍會受到保護。
   snapshot_delete_min_age_days:
-    name: Minimum snapshot age to delete (days)
-    description: A snapshot must be at least this old before it can be deleted. Range
-      0–365; 0 disables the floor (the newest-snapshot and scheduled-backup protections
-      still apply). Default 7.
+    name: 可刪除的最小快照天數（天）
+    description: 快照必須達到此年齡才能被刪除。範圍 0–365；0 表示停用下限（最新快照和排程備份保護仍然適用）。預設 7。
   tool_search_max_results:
-    name: Tool search max results
-    description: 'Maximum number of tools returned by ha_search_tools when tool search
-      is enabled. Lower values (2-3) save context tokens but may miss relevant tools.
-      Range: 2-10. Requires restart.'
+    name: 工具搜尋最大結果數
+    description: 當啟用工具搜尋時，ha_search_tools 所回傳的最大工具數量。較低的值（2-3）可節省上下文 Token，但可能會遺漏相關工具。範圍：2-10。需要重新啟動。
   disabled_tools:
-    name: Disabled tools (comma-separated)
-    description: Tools listed here are forced off and locked in the web Settings UI
-      (Tools tab) — they cannot be re-enabled there without unsetting this option
-      first. A small set of mandatory tools (ha_search, ha_get_overview, ha_get_state,
-      ha_report_issue, ha_manage_backup) cannot be disabled and keep running even
-      if listed here. ha_get_skill_guide can be disabled only while strict best-practices
-      mode (enable_strict_mandatory_bps) is off. Comma-separated tool names (e.g.
-      ha_call_event,ha_eval_template).
+    name: 停用的工具（以逗號分隔）
+    description: 此處列出的工具會被強制關閉並在網頁設定 UI（「工具」分頁）中鎖定 — 若不先取消此選項，將無法在該處重新啟用。一小組強制性工具（ha_search、ha_get_overview、ha_get_state、ha_report_issue、ha_manage_backup）無法停用，即使列在此處也會繼續執行。ha_get_skill_guide
+      僅能在嚴格最佳實務模式（enable_strict_mandatory_bps）關閉時停用。以逗號分隔的工具名稱（例如 ha_call_event,ha_eval_template）。
   pinned_tools:
-    name: Pinned tools (comma-separated)
-    description: Tools listed here are locked pinned — they appear at the top of the
-      Tools tab and cannot be unpinned from the web Settings UI without unsetting
-      this option first. Useful in combination with Tool Search. Comma-separated tool
-      names.
+    name: 固定的工具（以逗號分隔）
+    description: 此處列出的工具會被鎖定固定 — 牠們會顯示在「工具」分頁的最上方，若不先取消此選項，將無法從網頁設定 UI 取消固定。結合「工具搜尋」使用非常實用。以逗號分隔的工具名稱。
   verify_ssl:
-    name: Verify TLS certificate
-    description: Verify the Home Assistant server's TLS certificate. The app (add-on)
-      connects via the Supervisor proxy, so this normally has no effect and should
-      stay enabled. Disable only if you've reconfigured the app (add-on) to talk to
-      HA over a public HTTPS hostname with a self-signed certificate or hostname mismatch.
-      Disabling weakens transport security — leave on unless you know you need it.
-      Requires restart to take effect.
+    name: 驗證 TLS 憑證
+    description: 驗證 Home Assistant 伺服器的 TLS 憑證。應用程式（附加元件）透過 Supervisor Proxy 連線，因此通常沒有影響，應保持啟用狀態。僅在您已將應用程式（附加元件）重新設定為透過具有自我簽署憑證或主機名稱不符的公開
+      HTTPS 主機名稱與 Home Assistant 通訊時才予以停用。停用會削弱傳輸安全性 — 除非您確定需要，否則請保持開啟。需要重新啟動才能生效。

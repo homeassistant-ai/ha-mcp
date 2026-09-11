@@ -1,15 +1,168 @@
 {
-  "common": {
-    "oauth_not_serving": "舊版 OAuth 尚未提供這些憑證；請在 Home Assistant 提示時重新啟動以啟用。"
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA-MCP 自訂元件",
+        "description": "選擇要新增的項目。**HA-MCP Server** 會在 Home Assistant 內部執行完整的 ha-mcp 伺服器，並透過 Home Assistant Webhook 對外暴露——這是多數人想要的安裝方式。它是獨立伺服器，可完全取代所有其他安裝方法：App（附加元件）、Docker、uvx/PyPI、stdio；若執行了此項，請勿同時執行其中任一其他方式。**HA-MCP File & YAML Tools** 有兩種角色。如果您的 ha-mcp 伺服器是在 Home Assistant 外部執行（app、Docker、uvx/PyPI、stdio），此項目可讓該伺服器獲得無法從外部取得的處理程序內元件功能（快速的處理程序內搜尋、設定項目後設資料、登錄檔支援的讀取），因此非常值得新增至每個外部安裝中，它同時也是 ha-mcp 選擇性啟用的檔案/YAML 工具所需的具特權檔案與 YAML 編輯服務之閘道。如果您改為新增 **HA-MCP Server** 項目，該項目已提供這些共用功能，因此只有在需要作為選擇性檔案/YAML 工具的閘道時，才需要這個第二個項目。它適用於所有伺服器類型，且隨時都能在之後新增。",
+        "menu_options": {
+          "server": "HA-MCP Server（建議）",
+          "tools": "HA-MCP File & YAML Tools（選用）"
+        }
+      },
+      "tools": {
+        "title": "HA-MCP File & YAML Tools",
+        "description": "設定具特權的檔案與 YAML 設定服務，這些服務受限於 ha-mcp 選擇性啟用的檔案/YAML 編輯工具（功能旗標，預設為關閉）之閘道保護——這適用於所有伺服器類型，包含處理程序內的 HA-MCP Server。如果您的 ha-mcp 伺服器在 Home Assistant 外部執行，此項目還能讓它獲得無法從外部取得的處理程序內元件功能（快速的處理程序內搜尋、設定項目後設資料、登錄檔支援的讀取），即使未開啟檔案/YAML 工具也很值得擁有。您可以隨時新增或移除此項目。"
+      },
+      "server": {
+        "title": "HA-MCP Server",
+        "description": "這會在 Home Assistant 內部執行完整的 ha-mcp 伺服器，並透過 Home Assistant Webhook 將其遠端暴露（可透過 Nabu Casa 或任何反向代理存取）。它是獨立伺服器，可完全取代 app（附加元件）、Docker、uvx/PyPI 與 stdio 安裝方法——請勿與其他 ha-mcp 伺服器同時執行。選取**提交**以啟動；您隨後可在整合選項中變更連接埠、繫結與驗證。"
+      }
+    },
+    "abort": {
+      "already_configured": "此項目已經設定過了。",
+      "unsupported_home_assistant": "處理程序內的 HA-MCP Server 需要 Home Assistant {required} 或更新版本，但此執行個體目前執行的版本為 {installed}。您仍然可以在以 app（附加元件）或 Docker 容器方式執行的外部 ha-mcp 伺服器上，使用此元件的 HA-MCP File & YAML Tools 項目。"
+    }
   },
   "options": {
     "step": {
-      "init": {
+      "tools_info": {
+        "title": "HA-MCP File & YAML Tools",
+        "description": "設定 ha-mcp 選擇性啟用的檔案/YAML 編輯工具所使用的具特權檔案與 YAML 編輯服務。這些設定也會顯示在 ha-mcp 伺服器的自身的設定 UI 中，並立即生效而無需重新啟動。無法覆寫的拒絕底線仍會阻擋敏感路徑（例如 .storage）與信任邊界金鑰（homeassistant、http、frontend、lovelace）。",
+        "data": {
+          "allowed_dirs": "額外檔案路徑",
+          "extra_yaml_keys": "額外的 YAML 寫入金鑰"
+        },
         "data_description": {
+          "allowed_dirs": "相對於 config 目錄的路徑，包含精確的檔名（例如 sensor.yaml），或是 /share、/media、/ssl 與 /backup底下的路徑。每個項目都會被授予該路徑及其下方所有內容的讀寫權限；請將每個路徑輸入為獨立的列表項目。項目會以字面值進行比對；不支援如 * 的萬用字元。會略過目錄普遍遍歷與其他不允許的路徑。",
+          "extra_yaml_keys": "除了內建金鑰之外，ha_config_set_yaml 可以寫入的頂層金鑰，適用於此安裝上的 YAML 優先整合（例如 alert2）。信任邊界金鑰將被略過。"
+        }
+      },
+      "init": {
+        "title": "HA-MCP Server",
+        "description": "設定 HA-MCP 伺服器。{panel_hint}此處的變更會在儲存時套用。\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
+        "data": {
+          "channel": "發布管道",
+          "auto_update": "自動伺服器更新",
+          "server_port": "MCP 伺服器監聽連接埠",
+          "bind_host": "網路存取",
+          "webhook_auth": "驗證模式",
+          "oauth_client_id_override": "舊版 OAuth：自訂用戶端 ID（選用）",
+          "oauth_client_secret_override": "舊版 OAuth：自訂用戶端密鑰（選用）",
+          "oauth_regenerate": "舊版 OAuth：立即重新產生用戶端 ID/密鑰",
+          "pip_spec": "開發人員：ha-mcp 套件覆寫",
+          "server_url": "Home Assistant URL（進階）",
+          "external_url": "外部 URL（選用）",
+          "webhook_id_override": "自訂 Webhook 密鑰（選用）",
+          "secret_path_override": "自訂直接存取路徑（選用）",
+          "regenerate_secrets": "立即重新產生連線密鑰",
+          "enable_webhook": "透過 Webhook 進行遠端存取",
+          "enable_llm_api": "對話代理 LLM API",
+          "llm_api_exposure": "對話代理工具暴露",
+          "enable_startup_notification": "啟動通知",
+          "enable_sidebar_panel": "側邊欄設定面板"
+        },
+        "data_description": {
+          "channel": "「穩定版 (Stable)」會安裝最新的穩定發布版本；「開發版 (Development)」會安裝最新的開發建置版本。當啟用自動更新時，重新載入或重新啟動，加上定期檢查，將會安裝所選管道的最新建置版本。下方覆寫的開發人員套件具有較高優先權，並會停用自動更新。",
+          "auto_update": "啟用時，將會自動安裝所選管道的最新發布版本——於重新載入或重新啟動時，以及透過定期檢查。關閉時，伺服器將維持在目前已安裝的版本，直到您重新開啟此功能為止。這僅控制 ha-mcp 伺服器套件；HA-MCP 自訂元件本身的更新依然透過 HACS 進行。",
           "server_port": "此伺服器監聽的連接埠。ha-mcp App（附加元件）使用 9583，因此預設為 9584，讓兩者可同時執行；若未執行該 App（附加元件），可使用任何未占用的連接埠。",
-          "server_url": "處理程序內伺服器用來連線至 Home Assistant 的 URL（通常就是此執行個體）。留空會依此執行個體的連接埠與 SSL 設定自動推導；只有在伺服器必須改走其他路由時才需設定。"
+          "bind_host": "誰可以直接連線至 MCP 伺服器連接埠。預設值符合 app（附加元件）：可在您的本機網路上存取，並以密鑰路徑作為憑證。選擇「回送 (loopback)」以僅允許來自 Home Assistant 電腦本身的連線——無論哪種方式，Webhook URL 與側邊欄面板都能正常運作。",
+          "webhook_auth": "MCP 用戶端如何在 Webhook URL 證明其身分。使用密鑰 URL 時，連結本身就是唯一的憑證——OAuth 仍會為使用它的用戶端執行，但每個登入都會自動核准：不需要登入，也不需要用戶端 ID 或密鑰。使用 Home Assistant 登入時，像 claude.ai 這類的用戶端會使用 Home Assistant 管理員帳號 (OAuth) 登入。使用舊版 OAuth 時，此整合會執行自己的登入服務，並發行用戶端 ID 與密鑰，以貼到需要它們的用戶端中——可能需要重新啟動 Home Assistant 才能完全啟用或停用它。",
+          "oauth_client_id_override": "取代自動產生的舊版 OAuth 用戶端 ID。保持空白以保留目前的值。僅在驗證模式設為舊版 OAuth 時使用。",
+          "oauth_client_secret_override": "取代自動產生的舊版 OAuth 用戶端密鑰。保持空白以保留目前的值。僅在驗證模式設為舊版 OAuth 時使用。",
+          "oauth_regenerate": "單次動作：為舊版 OAuth 模式產生全新的用戶端 ID（Client ID）與密鑰（Secret）。它只會在修復提示要求的 Home Assistant 重新啟動後生效——在重新啟動之前，先前的用戶端 ID 與密鑰會繼續運作，新的則不會。同時也會清除上方的兩個覆寫欄位。",
+          "pip_spec": "保持空白。僅用於測試特定的 ha-mcp 建置（例如預先發布版本釘選）；會覆寫發布管道並停用自動更新，直到清除為止。",
+          "server_url": "處理程序內伺服器用來連線至 Home Assistant 的 URL（通常就是此執行個體）。留空會依此執行個體的連接埠與 SSL 設定自動推導；只有在伺服器必須改走其他路由時才需設定。",
+          "external_url": "顯示為主要的連線 URL ——當 Home Assistant 位於您自己的網域或反向代理背後時請使用此項。請輸入包含通訊協定的完整基礎位址。它必須直接指向 Home Assistant ——在瀏覽器中開啟它應該能到達您的 HA 登入頁面——且不得包含如 :8123（或任何其他連接埠）的連接埠，否則遠端 MCP 用戶端將無法連線。留空以自動使用 Nabu Casa / 本機位址。",
+          "webhook_id_override": "取代連線 URL (/api/webhook/...) 中的隨機 webhook 密鑰。URL 即為憑證——請使用長且難以猜測的值。留空以保留目前的值。",
+          "secret_path_override": "取代用於伺服器連接埠上直接存取的隨機路徑。相同的規則：路徑即為憑證。留空以保留目前的值。",
+          "regenerate_secrets": "單次動作：產生全新的隨機 webhook 密鑰與直接存取路徑，並立即使舊的連線 URL 失效。同時也會清除上方的兩個覆寫欄位。",
+          "enable_webhook": "為僅限本機模式關閉：完全不會註冊 Home Assistant webhook，因此任何事物（包含 Nabu Casa）都無法透過 Home Assistant 連線至伺服器。直接伺服器連接埠與側邊欄面板將繼續運作。",
+          "enable_llm_api": "提供完整工具集給 Home Assistant 對話代理程式（OpenAI、Google、Ollama 等）：啟用時，代理程式可在「控制 Home Assistant」下方選取「HA-MCP Server」，並從 Assist 聊天與語音中驅動工具。啟用只會使其可被選取——在您於代理程式上挑選它之前，不會暴露任何內容。使用指南：{llm_api_docs_url}",
+          "llm_api_exposure": "提供給對話代理程式的工具集外觀。工具搜尋（預設）可保持代理程式的上下文簡短：具有釘選工具加上搜尋/執行中介工具的精簡 API。完整目錄直接列出每個暴露的工具——較適合大上下文模型。兩者會並排註冊，以便每個代理程式在「控制 Home Assistant」下方挑選自己的工具。個別工具暴露管理可在 HA-MCP 設定面板中進行；詳細資訊：{llm_api_docs_url}",
+          "enable_startup_notification": "每次伺服器啟動時顯示通知，指向僅限管理員的設定介面。關閉以安靜地啟動——連線 URL 仍會顯示在 Home Assistant 記錄檔中。",
+          "enable_sidebar_panel": "在側邊欄中顯示 HA-MCP 設定面板（僅限管理員）。關閉以移除側邊欄項目——伺服器選項仍可在此畫面上使用。"
         }
       }
     }
+  },
+  "issues": {
+    "server_start_failed": {
+      "title": "HA-MCP 處理程序內伺服器啟動失敗",
+      "description": "無法在 Home Assistant 內啟動 HA-MCP 處理程序內伺服器：\n\n{detail}\n\n請檢查 Home Assistant 記錄檔，然後重新載入整合（或修正根本問題並重新載入）以重試。"
+    },
+    "server_package_install_failed": {
+      "title": "無法安裝 HA-MCP 處理程序內伺服器套件",
+      "description": "安裝用於處理程序內伺服器的 ha-mcp 套件失敗：\n\n{detail}\n\n請解決上述描述的相容性或安裝問題，然後重新載入整合以重試。"
+    },
+    "component_outdated": {
+      "title": "透過 HACS 更新 HA-MCP 自訂元件",
+      "description": "已安裝的 ha-mcp 伺服器需要 HA-MCP 自訂元件 {required} 或更新版本，但您目前安裝的是 {installed}。請透過 HACS 更新元件（開啟 HA-MCP 自訂元件項目，若尚未顯示更新則使用「更新資訊」）並重新整理 Home Assistant。伺服器在此期間會繼續執行，但在更新元件之前，某些較新功能可能無法運作。"
+    },
+    "server_update_held": {
+      "title": "HA-MCP 伺服器更新正在等待元件更新",
+      "description": "ha-mcp 伺服器 {latest} 可供使用，但該版本同時也更新了 HA-MCP 自訂元件（至 {shipped}；您目前執行的是 {running}）。為避免啟動執行中元件從未測試過的伺服器版本，自動伺服器更新將暫緩，直到元件更新為止。\n\n請透過 HACS 更新元件（開啟 HA-MCP 自訂元件項目，若尚未顯示更新則使用「更新資訊」），然後重新啟動 Home Assistant——伺服器更新隨後會自動安裝。若無論如何都要安裝伺服器更新，請按下 HA-MCP 伺服器更新實體上的「安裝」。"
+    },
+    "legacy_hacs_source": {
+      "title": "從舊版儲存庫安裝的元件",
+      "description": "HACS 正在追蹤此元件的主要 ha-mcp 伺服器儲存庫，因此 HACS 在此顯示的是伺服器的版本號碼與發布說明，而非元件本身的版本（2.x）。更新會繼續運作，但標籤會維持錯誤狀態。若要修正：從 HACS 中移除此儲存庫（您的整合設定與設定項目會被保留），將 homeassistant-ai/ha-mcp-integration 新增為自訂儲存庫，從中重新安裝元件，然後重新啟動 Home Assistant。"
+    },
+    "legacy_oauth_restart": {
+      "title": "重新啟動 Home Assistant 以套用舊版 OAuth 設定",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "要重新啟動 Home Assistant 嗎？",
+            "description": "送出此表單將會重新啟動 Home Assistant 並套用舊版 OAuth 設定。\n\n按一下**送出**以立即重新啟動。"
+          }
+        }
+      }
+    }
+  },
+  "selector": {
+    "server_channel": {
+      "options": {
+        "stable": "穩定版（建議）",
+        "dev": "開發版（最新建置）"
+      }
+    },
+    "server_webhook_auth": {
+      "options": {
+        "none": "機密 webhook URL（預設）",
+        "ha_auth": "使用 Home Assistant 登入（OAuth）",
+        "legacy": "舊版 OAuth（此整合會發行要貼上的用戶端 ID/密鑰）"
+      }
+    },
+    "llm_api_exposure": {
+      "options": {
+        "tool_search": "工具搜尋（精簡，預設）",
+        "full": "完整目錄",
+        "both": "兩者（依每個代理程式選擇）"
+      }
+    }
+  },
+  "entity": {
+    "update": {
+      "server_update": {
+        "name": "更新"
+      }
+    }
+  },
+  "common": {
+    "connect_direct_access": "來自 Home Assistant 機器的直接存取：{url}",
+    "connect_local_lan": "本機/區域網路 (當網路存取為 \"Local network\")：{url}",
+    "connect_remote_url": "遠端連線 URL：{url}",
+    "connect_urls_label": "連線 URL：",
+    "connect_urls_pending": "伺服器啟動後，連線 URL 將會顯示在此處（以及 Home Assistant 記錄檔中）。",
+    "connect_webhook_disabled": "透過 webhook 的遠端存取已停用（僅限本機模式）。",
+    "oauth_creds_pending": "伺服器啟動後，用戶端 ID 與用戶端密鑰將會顯示在此處。",
+    "oauth_not_serving": "舊版 OAuth 尚未提供這些憑證；請在 Home Assistant 提示時重新啟動以啟用。",
+    "oauth_select_legacy_mode": "將驗證模式設為上方的舊版 OAuth 並儲存，以產生用戶端 ID 與用戶端密鑰。",
+    "panel_hint": "開啟 [HA-MCP 設定面板](/ha-mcp)進行工具管理與伺服器設定。",
+    "tools_module_installed": "Beta/進階檔案與 YAML 工具模組（選用）：已安裝",
+    "tools_module_not_installed": "Beta/進階檔案與 YAML 工具模組（選填）：未安裝 — 請在此整合頁面上按一下「新增項目」並選擇 \"HA-MCP File & YAML Tools\" 來加以新增",
+    "tools_module_not_loaded": "Beta/進階檔案與 YAML 工具模組（選填）：已安裝但未載載 — 請在此整合頁面上啟用或重新載入「HA-MCP File & YAML Tools」項目",
+    "version_line": "元件 {component_version} - 伺服器 ha-mcp {server_version}（{channel} 通道）",
+    "version_not_installed": "尚未安裝",
+    "version_unknown": "未知"
   }
 }
