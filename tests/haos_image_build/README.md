@@ -56,8 +56,8 @@ Beta lanes independently read `beta.json`: `hassos.ova`, `supervisor`, and
 for explicit local builds. OS prerelease versions such as `18.2.rc1` select
 the corresponding release qcow2 instead of the stable OS pin.
 
-The beta lanes do not use the Actions cache: each bakes its own qcow2 on every
-run, so a ~4.9 GB image never competes for the repository cache budget with the
+The beta lanes do not use the Actions cache: each bakes its own qcow2 whenever it
+runs, so a ~4.9 GB image never competes for the repository cache budget with the
 stable qcow2 and the Home Assistant container images. Automatic beta runs skip
 only when all three channel versions equal stable, so an OS-only beta release
 still runs. Manual dispatch always runs, and the beta canary checks the booted

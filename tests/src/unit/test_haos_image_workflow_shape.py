@@ -29,7 +29,7 @@ _CACHE_KEY_COMMAND = """hash=$(git ls-tree -r HEAD \\
   tests/initial_test_state \\
   custom_components/ha_mcp_tools \\
   homeassistant-addon-webhook-proxy \\
-  | sha256sum | cut -d' ' -f1 | head -c16)
+  | grep -v '\\.md$' | sha256sum | cut -d' ' -f1 | head -c16)
 echo "cache-key=haos-image-$hash" >> "$GITHUB_OUTPUT"
 """
 
