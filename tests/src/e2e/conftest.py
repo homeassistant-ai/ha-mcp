@@ -527,9 +527,29 @@ def pytest_collection_modifyitems(config, items):
 # reaches 50 first calls pytest.exit and ends the session (validated under -n2:
 # a 150-test all-error run aborts at 50 in ~2s).
 _doomed_detector = DoomedRunDetector()
+_reported_failure_workers: set[str] = set()
 
 
 def pytest_runtest_logreport(report):
+    # A worker can abort while another keeps passing tests. xdist may then exit
+    # before pytest renders its error summary, losing the original fixture cause.
+    # Forwarded reports have a node only on the controller: print each worker's
+    # first fixture failure there immediately, outside worker output capture.
+    node = getattr(report, "node", None)
+    if (
+        node is not None
+        and report.when in ("setup", "teardown")
+        and report.outcome == "failed"
+        and node.gateway.id not in _reported_failure_workers
+    ):
+        terminal = node.config.pluginmanager.get_plugin("terminalreporter")
+        if terminal is not None:
+            _reported_failure_workers.add(node.gateway.id)
+            terminal.write_sep(
+                "!",
+                f"First {report.when} failure on {node.gateway.id}: {report.nodeid}",
+            )
+            terminal.write_line(str(report.longrepr))
     if _doomed_detector.record(report.when, report.outcome):
         pytest.exit(
             f"Aborting: {_doomed_detector.streak} consecutive setup/teardown "
@@ -3105,6 +3125,8 @@ def _stdio_env(container_info: dict[str, Any], config_dir: Path) -> dict[str, st
         "HOMEASSISTANT_URL": container_info["base_url"],
         "HOMEASSISTANT_TOKEN": container_info.get("token", TEST_TOKEN),
         "HA_MCP_CONFIG_DIR": str(config_dir),
+        # Config-dir isolation alone still permits an existing legacy backup dir.
+        "HAMCP_BACKUP_DIR": str(config_dir / "backups"),
         "HAMCP_ENV_FILE": os.environ.get("HAMCP_ENV_FILE", "tests/.env.test"),
         "PATH": os.environ.get("PATH", ""),
         "HOME": os.environ.get("HOME", ""),

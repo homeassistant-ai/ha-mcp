@@ -48,12 +48,18 @@ import hashlib
 import logging
 import os
 import re
+import tempfile
+import threading
 import time
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+import weakref
+from collections import Counter
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import cached_property
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 import yaml  # type: ignore[import-untyped]
 from fastmcp.exceptions import ToolError
@@ -97,9 +103,125 @@ class MandatoryBackupError(Exception):
     ``suggestions`` carries remediation surfaced in that structured error.
     """
 
-    def __init__(self, message: str, *, suggestions: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        suggestions: list[str] | None = None,
+        safe_detail: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.suggestions = suggestions or []
+        # Only locally authored diagnostics may opt in. Fetch/YAML exceptions
+        # can include configuration values even when wrapped by this class.
+        self.safe_detail = safe_detail
+
+
+class BackupRestoreError(HomeAssistantError):
+    """A restore outcome whose apply knowledge must survive caller mapping."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        apply_status: Literal["not_applied", "unknown", "applied"] = "not_applied",
+        verification_status: Literal[
+            "not_run", "matched", "mismatched", "unavailable"
+        ] = "not_run",
+        **outcome: Any,
+    ) -> None:
+        super().__init__(message)
+        self.outcome = {
+            **outcome,
+            "apply_status": apply_status,
+            "verification_status": verification_status,
+        }
+
+
+class InvalidBackupSnapshotError(ValueError):
+    """Persisted snapshot data is invalid, independently of live HA access."""
+
+
+def _snapshot_validation_message(error: ValueError) -> str:
+    """Keep local field-only validation messages, never raw YAML parser text."""
+    return (
+        str(error)
+        if isinstance(error, InvalidBackupSnapshotError)
+        else "Snapshot is invalid; inspect its YAML and schema version"
+    )
+
+
+class SnapshotInUseError(ValueError):
+    """A snapshot is pinned by capture or restore and cannot be deleted yet."""
+
+
+class BulkDeleteResult(TypedDict):
+    """Keep filename lists stable while explaining safe, actionable refusals."""
+
+    deleted: list[str]
+    failed: list[str]
+    failure_reasons: NotRequired[dict[str, Literal["snapshot_in_use"]]]
+
+
+def _validate_snapshot_envelope(data: dict[str, Any]) -> None:
+    """Validate stored identities before selecting or dispatching a handler."""
+    for key in ("domain", "entity_id", "config"):
+        if key not in data:
+            raise InvalidBackupSnapshotError(f"Snapshot is missing {key}")
+    for key in ("domain", "entity_id"):
+        if not isinstance(data[key], str) or (key == "domain" and not data[key]):
+            raise InvalidBackupSnapshotError(f"Snapshot has invalid {key}")
+
+
+class _TemplateReadError(HomeAssistantError):
+    """A local validation failure with a safe diagnostic code."""
+
+    def __init__(self, message: str, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+def _template_failure_reason(step: str, error: BaseException) -> str:
+    if isinstance(error, _TemplateReadError):
+        return error.reason
+    if isinstance(error, BackupRestoreError):
+        return str(error.outcome.get("reason") or "restore_refused")
+    if isinstance(error, InvalidBackupSnapshotError):
+        return "invalid_snapshot"
+    if isinstance(error, MandatoryBackupError):
+        return "backup_capture_failed"
+    if step == "safety_backup" and isinstance(error, OSError):
+        return "backup_storage_failed"
+    return "upstream_error"
+
+
+def _template_safe_failure_detail(step: str, error: BaseException) -> str | None:
+    if isinstance(error, MandatoryBackupError):
+        return error.safe_detail
+    # The safety stage wraps remote fetch failures in MandatoryBackupError;
+    # a raw OSError here comes from retained-file I/O. Other stages call HA.
+    if step == "safety_backup" and isinstance(error, OSError):
+        return str(error)
+    return None
+
+
+def _log_template_failure(step: str, error: BaseException) -> None:
+    # Remote exceptions can contain submitted options or credentials. Preserve
+    # only local storage diagnostics and explicitly safe capture details.
+    detail = _template_safe_failure_detail(step, error)
+    logger.warning(
+        "Template restore step=%s failed: %s reason=%s%s",
+        step,
+        type(error).__name__,
+        _template_failure_reason(step, error),
+        f" detail={detail}" if detail else "",
+    )
+
+
+_RESTORE_ERRORS: tuple[type[BaseException], ...] = (
+    *_CAPTURE_TRANSIENT_ERRORS,
+    MandatoryBackupError,
+)
 
 
 # Soft cap on per-entity throttle/lock tracker size. Auto-pruning kicks
@@ -329,6 +451,45 @@ def _resolve_default_dir() -> Path:
 _SNAPSHOT_SKIP: Any = object()
 
 
+async def _await_backup_io[T](operation: Callable[..., T], *args: Any) -> T:
+    """Keep backup locks/pins until executor I/O settles, even after cancellation."""
+    worker = asyncio.create_task(asyncio.to_thread(operation, *args))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        # Cancelling the await cannot stop its executor thread. Releasing the
+        # caller's lock now would let another capture reserve the same filename.
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue  # Repeated cancellation must not release the lock early.
+            except Exception:
+                break  # Consume the worker failure below; preserve cancellation.
+        if not worker.cancelled():
+            worker.exception()
+        raise
+
+
+def _require_restore_safety(path: Path) -> None:
+    """Check the recovery file after its restore pin closes the deletion race."""
+    if not path.is_file():
+        raise MandatoryBackupError(
+            "The safety snapshot disappeared before restore; no changes were applied"
+        )
+
+
+@dataclass
+class _EntryAdmissionState:
+    """Event-loop coordination survives settings-driven manager replacements."""
+
+    admissions: dict[asyncio.Task[Any], bool] = field(default_factory=dict)
+    restore_owner: asyncio.Task[Any] | None = None
+    restores_waiting: int = 0
+    changed: asyncio.Event = field(default_factory=asyncio.Event)
+    restore_entity_id: str | None = None
+
+
 class BackupManager:
     """Per-entity snapshot manager. One instance per server, cached on client."""
 
@@ -347,25 +508,32 @@ class BackupManager:
         # for the manager's lifetime — each lock is tiny (~64 bytes);
         # removing a lock while another task is awaiting it would race.
         self._locks: dict[str, asyncio.Lock] = {}
+        self._entry_write_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
+        self._entry_write_owners: dict[str, asyncio.Task[Any]] = {}
+        self._entry_admission_state = _EntryAdmissionState()
+        self._template_identity_cache: dict[
+            str, tuple[tuple[int, int, int, int, int], str | None]
+        ] = {}
+        self._template_identity_lock = threading.Lock()
+        self._protected_snapshot_names: Counter[str] = Counter()
+        self._snapshot_pin_lock = threading.Lock()
         self._init_dir_error: str | None = None
-        self._dir = self._resolve_dir()
+        self._directory_checked = False
+        self._directory_check_lock = asyncio.Lock()
 
     # ----- configuration -------------------------------------------------
 
+    @cached_property
+    def _dir(self) -> Path:
+        return self._resolve_dir()
+
     def _resolve_dir(self) -> Path:
         configured = (getattr(self._settings, "auto_backup_dir", "") or "").strip()
-        path = Path(configured).expanduser() if configured else _resolve_default_dir()
-        try:
-            path.mkdir(parents=True, exist_ok=True)
-        except OSError as err:
-            self._init_dir_error = f"{type(err).__name__}: {err}"
-            logger.warning(
-                "Auto-backup: could not create backup dir %s: %s. "
-                "Captures will be silently skipped until startup is rerun.",
-                path,
-                err,
-            )
-        return path
+        # A disabled write still needs coordination, but must not create storage.
+        # Status checks and captures initialize storage in the backup I/O executor.
+        return Path(configured).expanduser() if configured else _resolve_default_dir()
 
     @property
     def backup_dir(self) -> Path:
@@ -373,18 +541,40 @@ class BackupManager:
 
     @property
     def enabled(self) -> bool:
-        # An unreachable backup dir effectively disables the feature —
-        # surface that through ``enabled`` so callers (the list endpoint,
-        # the settings UI status panel) report the truth instead of
-        # advertising "enabled" while every capture silently no-ops.
+        """Configured enablement after the latest directory check or capture.
+
+        Status callers await ``ensure_directory_ready`` before reading this
+        property; construction and this property do not initialize storage.
+        """
         if self._init_dir_error is not None:
             return False
         return bool(getattr(self._settings, "enable_auto_backup", False))
 
     @property
     def init_dir_error(self) -> str | None:
-        """The reason the backup dir could not be created, or None."""
+        """Failure from the latest directory check or capture, if any."""
         return self._init_dir_error
+
+    async def ensure_directory_ready(self) -> None:
+        """Probe enabled storage off-loop and retry failed initialization."""
+        if not getattr(self._settings, "enable_auto_backup", False):
+            return
+        async with self._directory_check_lock:
+            if not self._directory_checked or self._init_dir_error is not None:
+                await _await_backup_io(self._check_directory)
+
+    def _check_directory(self) -> None:
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+        except OSError as err:
+            self._init_dir_error = f"{type(err).__name__}: {err}"
+            logger.warning(
+                "Auto-backup: directory unavailable: %s", self._init_dir_error
+            )
+        else:
+            self._init_dir_error = None
+        finally:
+            self._directory_checked = True
 
     @property
     def throttle_seconds(self) -> int:
@@ -418,6 +608,76 @@ class BackupManager:
 
     # ----- capture -------------------------------------------------------
 
+    @asynccontextmanager
+    async def _config_entry_admission(self, exclusive: bool) -> AsyncIterator[None]:
+        """Drain guarded writes before a restore can expose an unknown new ID.
+
+        Ordinary writes remain parallel across entries. Template restores pause
+        them server-wide until creation, renaming and verification finish: the
+        replacement can be visible before the create response gives us its ID.
+        Admission precedes entry locking so already queued writes can drain.
+        All state belongs to the server event loop; cleanup never awaits.
+        """
+        task = asyncio.current_task()
+        assert task is not None
+        state = self._entry_admission_state
+        if task in state.admissions:
+            if exclusive and not state.admissions[task]:
+                raise RuntimeError(
+                    "Cannot start Template restore inside an entry write"
+                )
+            yield
+            return
+        if exclusive:
+            state.restores_waiting += 1
+            try:
+                while state.admissions:
+                    state.changed.clear()
+                    await state.changed.wait()
+                state.restore_owner = task
+            finally:
+                state.restores_waiting -= 1
+                state.changed.set()
+        else:
+            if state.restore_owner or state.restores_waiting:
+                logger.info(
+                    "Auto-backup: config-entry write waiting for Template restore (%s)",
+                    state.restore_entity_id or "awaiting admission",
+                )
+            while state.restore_owner or state.restores_waiting:
+                state.changed.clear()
+                await state.changed.wait()
+        state.admissions[task] = exclusive
+        try:
+            yield
+        finally:
+            del state.admissions[task]
+            if exclusive:
+                state.restore_owner = None
+                state.restore_entity_id = None
+            state.changed.set()
+
+    @asynccontextmanager
+    async def config_entry_write_guard(
+        self, entity_id: str, *, exclusive: bool = False
+    ) -> AsyncIterator[None]:
+        """Serialize entry writes; Template restores also reserve admission."""
+        async with self._config_entry_admission(exclusive):
+            task = asyncio.current_task()
+            assert task is not None
+            if exclusive:
+                self._entry_admission_state.restore_entity_id = entity_id
+            if self._entry_write_owners.get(entity_id) is task:
+                yield
+                return
+            lock = self._entry_write_locks.setdefault(entity_id, asyncio.Lock())
+            async with lock:
+                self._entry_write_owners[entity_id] = task
+                try:
+                    yield
+                finally:
+                    del self._entry_write_owners[entity_id]
+
     async def maybe_snapshot(
         self,
         domain: str,
@@ -445,18 +705,29 @@ class BackupManager:
         ``force=True`` bypasses the ``enable_auto_backup`` toggle and the
         per-entity throttle window so the caller can drive an explicit
         on-demand capture (the ``(edits, create)`` action on
-        ``ha_manage_backup``). Init-dir errors still short-circuit —
-        without a writable backup dir there's nothing to do regardless.
+        ``ha_manage_backup``). It also retries storage after an earlier
+        directory failure; a fresh write must succeed before capture succeeds.
         The ``handler is None`` and ``config is None`` skips still
         apply (force can't conjure a snapshot for an entity that
         doesn't exist or has no registered handler).
         """
+        if not force:
+            await self.ensure_directory_ready()
         handler = self._resolve_snapshot_handler(
             domain, entity_id, force=force, mandatory=mandatory
         )
         if handler is None:
             return None
 
+        if domain == "helper_template" and "." in entity_id:
+            config = await self._fetch_config_for_snapshot(
+                handler, entity_id, f"{domain}:{entity_id}", mandatory=mandatory
+            )
+            if config is _SNAPSHOT_SKIP:
+                return None
+            entity_id = _template_entry_id(entity_id, config)
+            # Resolve before bookkeeping, but read options again under the lock:
+            # another write may complete while this alias capture waits.
         key = f"{domain}:{entity_id}"
         lock = self._locks.setdefault(key, asyncio.Lock())
         async with lock:
@@ -493,10 +764,14 @@ class BackupManager:
         is a legitimate skip (feature disabled, no entity id, no handler) — the
         caller returns None and lets the wrapped write proceed.
         """
-        if self._init_dir_error is not None:
+        if self._init_dir_error is not None and not force:
             if mandatory:
+                message = (
+                    f"the auto-backup directory is unusable: {self._init_dir_error}"
+                )
                 raise MandatoryBackupError(
-                    f"the auto-backup directory is unusable: {self._init_dir_error}",
+                    message,
+                    safe_detail=message,
                     suggestions=[
                         "Check the auto-backup directory's permissions and "
                         "free space, or set HAMCP_BACKUP_DIR to a writable "
@@ -583,14 +858,18 @@ class BackupManager:
         fails (e.g. disk-full).
         """
         try:
-            path = await asyncio.to_thread(
+            path = await _await_backup_io(
                 self._write_snapshot, domain, entity_id, config, tool_name
             )
         except (OSError, yaml.YAMLError) as err:
             if mandatory:
-                raise MandatoryBackupError(
+                message = (
                     f"could not write the pre-write snapshot for {key}: "
-                    f"{type(err).__name__}: {err}",
+                    f"{type(err).__name__}: {err}"
+                )
+                raise MandatoryBackupError(
+                    message,
+                    safe_detail=message if isinstance(err, OSError) else None,
                     suggestions=[
                         "Free up disk space, or delete old snapshots via "
                         "ha_manage_backup(scope='edits', action='delete')",
@@ -603,18 +882,37 @@ class BackupManager:
                 err,
             )
             return None
-        self._last_snapshot[key] = now
-        self._maybe_prune_trackers()
+        # Filename order can move backward when a same-second suffix gap is
+        # reused or the wall clock changes. Keep this capture alive throughout
+        # its own rotation, including against explicit concurrent deletion.
+        self._protect_snapshot(path.name)
         try:
-            await asyncio.to_thread(self._rotate, domain, entity_id)
-        except OSError as err:
-            logger.warning(
-                "Auto-backup: rotation failed for %s — %s: %s",
-                key,
-                type(err).__name__,
-                err,
-            )
-        return path
+            try:
+                # Freeze pins before dispatch: cancellation must not unprotect
+                # files from a rotation already running in the executor.
+                with self._snapshot_pin_lock:
+                    protected = frozenset(self._protected_snapshot_names)
+                await _await_backup_io(self._rotate, domain, entity_id, protected)
+            except OSError as err:
+                logger.warning(
+                    "Auto-backup: rotation failed for %s — %s: %s",
+                    key,
+                    type(err).__name__,
+                    err,
+                )
+            if not await _await_backup_io(path.is_file):
+                message = (
+                    f"The new snapshot for {key} disappeared before capture completed"
+                )
+                if mandatory:
+                    raise MandatoryBackupError(message)
+                logger.warning("Auto-backup: %s", message)
+                return None
+            self._last_snapshot[key] = now
+            self._maybe_prune_trackers()
+            return path
+        finally:
+            self._unprotect_snapshot(path.name)
 
     def _maybe_prune_trackers(self) -> None:
         """Cap per-entity tracker growth.
@@ -643,6 +941,12 @@ class BackupManager:
     def _write_snapshot(
         self, domain: str, entity_id: str, config: Any, tool_name: str | None
     ) -> Path:
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+        except OSError as err:
+            self._init_dir_error = f"{type(err).__name__}: {err}"
+            self._directory_checked = True
+            raise
         safe = _safe_entity_id(entity_id)
         target = self._unclaimed_target(domain, safe, _now_ts())
         payload: dict[str, Any] = {
@@ -656,11 +960,25 @@ class BackupManager:
         if domain in _TEXT_DOMAINS:
             payload["kind"] = _TEXT_KIND
         body = yaml.safe_dump(payload, default_flow_style=False, sort_keys=False)
-        # Atomic write via tmp+rename
-        tmp = target.with_suffix(".yaml.tmp")
-        tmp.write_text("# ha_mcp_backup\n" + body)
-        os.replace(str(tmp), str(target))
-        logger.info("Auto-backup: wrote %s", target.name)
+        # mkstemp creates a unique 0600 inode before any configuration is written.
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
+        )
+        try:
+            try:
+                stream = os.fdopen(fd, "w")
+            except BaseException:
+                os.close(fd)
+                raise
+            with stream:
+                stream.write("# ha_mcp_backup\n" + body)
+            os.replace(tmp_name, str(target))
+        finally:
+            with suppress(OSError):
+                Path(tmp_name).unlink()
+        self._init_dir_error = None
+        self._directory_checked = True
+        logger.info("Auto-backup: snapshot written")
         return target
 
     def _unclaimed_target(self, domain: str, safe: str, ts: str) -> Path:
@@ -699,8 +1017,12 @@ class BackupManager:
         ``config`` (which is the whole automation, dashboard or file), so the
         read stops at the ``config:`` line and never parses the body: every
         listing row opens its file, and an unfiltered listing of hundreds of
-        whole-file snapshots has to stay a header read per row.
+        whole-file snapshots has to stay a header read per row. Template
+        snapshots are the exception: older headers used aliases, so their
+        stable identity must be read from config.entry_id.
         """
+        if path.name.startswith("helper_template."):
+            return self._template_snapshot_identity(path)
         try:
             with path.open(encoding="utf-8") as handle:
                 header: list[str] = []
@@ -721,22 +1043,105 @@ class BackupManager:
         found = loaded.get("entity_id")
         return found if isinstance(found, str) else None
 
+    def _template_snapshot_identity(self, path: Path) -> str | None:
+        """Validate new/changed Template YAML once, including legacy alias headers.
+
+        Rotation still enumerates and stats the history to discover imported or
+        changed files, but it does not repeatedly parse unrelated YAML bodies.
+        The cache is shared with listing/deletion and guarded across IO threads.
+        """
+        try:
+            before = path.stat()
+            signature = (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+            )
+            with self._template_identity_lock:
+                cached = self._template_identity_cache.get(path.name)
+                if cached is not None and cached[0] == signature:
+                    return cached[1]
+            identity = None
+            try:
+                data = self.read_snapshot(path.name)
+                entity_id = data.get("entity_id")
+                if isinstance(entity_id, str):
+                    identity = _template_entry_id(entity_id, data.get("config"))
+            except (ValueError, HomeAssistantError) as err:
+                # A stable malformed file is cached as unowned, never deleted.
+                # Parser messages may contain option values; retain only type.
+                logger.warning(
+                    "Auto-backup: cannot identify %s, leaving it in place: %s",
+                    path.name,
+                    type(err).__name__,
+                )
+            after = path.stat()
+            if signature != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+            ):
+                self._forget_template_identity(path.name)
+                return None
+        except OSError as err:
+            logger.warning(
+                "Auto-backup: cannot identify %s, leaving it in place: %s",
+                path.name,
+                type(err).__name__,
+            )
+            self._forget_template_identity(path.name)
+            return None
+        with self._template_identity_lock:
+            self._template_identity_cache[path.name] = (signature, identity)
+        return identity
+
+    def _forget_template_identity(self, name: str) -> None:
+        with self._template_identity_lock:
+            self._template_identity_cache.pop(name, None)
+
     def _snapshot_is_for(self, path: Path, entity_id: str) -> bool:
         """Whether ``path`` holds a snapshot of ``entity_id`` (see ``_id_matches``)."""
         return _id_matches(self._payload_entity_id(path), entity_id)
 
-    def _rotate(self, domain: str, entity_id: str) -> None:
+    def _rotate(
+        self, domain: str, entity_id: str, protected: frozenset[str] = frozenset()
+    ) -> None:
         candidates: set[Path] = set()
-        for safe in _entity_id_aliases(entity_id):
-            candidates.update(self._dir.glob(f"{domain}.{safe}.*.yaml"))
+        if domain == "helper_template":
+            # Older snapshots used the entity alias as their filename/header.
+            candidates.update(self._dir.glob("helper_template.*.yaml"))
+            names = {path.name for path in candidates}
+            with self._template_identity_lock:
+                for name in self._template_identity_cache.keys() - names:
+                    del self._template_identity_cache[name]
+        else:
+            for safe in _entity_id_aliases(entity_id):
+                candidates.update(self._dir.glob(f"{domain}.{safe}.*.yaml"))
         files = sorted(
             (p for p in candidates if self._snapshot_is_for(p, entity_id)),
             key=_snapshot_order,
         )
         excess = len(files) - self.retain_per_entity
-        for old in files[: max(0, excess)]:
+        for old in files:
+            if excess <= 0:
+                break
             try:
-                old.unlink()
+                # A restore can pin a file after this rotation was dispatched.
+                # Check and unlink atomically against those new pins as well as
+                # the frozen pins retained after a cancelled caller unwinds.
+                with self._snapshot_pin_lock:
+                    if (
+                        old.name in protected
+                        or old.name in self._protected_snapshot_names
+                    ):
+                        continue
+                    old.unlink()
+                    self._forget_template_identity(old.name)
+                    excess -= 1
             except OSError as err:
                 logger.warning("Auto-backup: failed to rotate %s: %s", old.name, err)
 
@@ -792,15 +1197,20 @@ class BackupManager:
             return None
         if domain and meta["domain"] != domain:
             return None
-        if safe_filter and meta["entity_id"] not in safe_filter:
+        if (
+            safe_filter
+            and meta["domain"] != "helper_template"
+            and meta["entity_id"] not in safe_filter
+        ):
             return None
         # Every row reports the id its payload names, not its stem: a filter
         # needs the stored id to settle the stem ambiguity anyway, and a stem
         # shown to the caller — digest or pre-digest — is a value the filter
         # would refuse or misroute, where the stored id is what the settings
         # UI and ha_manage_backup can send straight back and get that entity's
-        # whole history. The read is header-only (``_payload_entity_id``); a
-        # file that cannot identify itself keeps its stem in an unfiltered
+        # whole history. Template payloads also supply the stable config-entry
+        # ID; other domains need only the header. A file that cannot identify
+        # itself keeps its stem in an unfiltered
         # listing and is left out of a filtered one.
         payload_id = self._payload_entity_id(path)
         if entity_id and not _id_matches(payload_id, entity_id):
@@ -845,7 +1255,13 @@ class BackupManager:
 
     def delete_snapshot(self, name: str) -> Path:
         path = self._resolve_snapshot_path(name)
-        path.unlink()
+        with self._snapshot_pin_lock:
+            if name in self._protected_snapshot_names:
+                raise SnapshotInUseError(
+                    "Snapshot is in use by a capture or active restore; retry after it finishes"
+                )
+            path.unlink()
+            self._forget_template_identity(name)
         return path
 
     def delete_bulk(
@@ -854,16 +1270,17 @@ class BackupManager:
         domain: str | None = None,
         entity_id: str | None = None,
         older_than_days: int | None = None,
-    ) -> dict[str, list[str]]:
+    ) -> BulkDeleteResult:
         """Delete snapshots matching ``domain`` / ``entity_id`` / age.
 
         Returns a dict ``{"deleted": [...], "failed": [...]}`` so callers
-        can surface partial failures to the user rather than logging
-        them silently. Each failure also gets a WARNING in the server
-        log so the underlying OS error is preserved.
+        can surface partial failures. ``failure_reasons`` optionally maps
+        in-use filenames to a safe retryable code. Other exception details
+        remain in the server WARNING log.
         """
         deleted: list[str] = []
         failed: list[str] = []
+        failure_reasons: dict[str, Literal["snapshot_in_use"]] = {}
         cutoff: float | None = None
         if older_than_days is not None:
             if older_than_days < 0:
@@ -873,14 +1290,19 @@ class BackupManager:
             if cutoff is not None and meta["mtime"] >= cutoff:
                 continue
             try:
-                (self._dir / meta["name"]).unlink()
+                self.delete_snapshot(meta["name"])
                 deleted.append(meta["name"])
-            except OSError as err:
+            except (OSError, ValueError) as err:
                 failed.append(meta["name"])
+                if isinstance(err, SnapshotInUseError):
+                    failure_reasons[meta["name"]] = "snapshot_in_use"
                 logger.warning(
                     "Auto-backup: bulk-delete failed for %s: %s", meta["name"], err
                 )
-        return {"deleted": deleted, "failed": failed}
+        result: BulkDeleteResult = {"deleted": deleted, "failed": failed}
+        if failure_reasons:
+            result["failure_reasons"] = failure_reasons
+        return result
 
     def _resolve_snapshot_path(self, name: str) -> Path:
         """Validate a snapshot name and return its absolute Path.
@@ -902,6 +1324,27 @@ class BackupManager:
 
     # ----- restore -------------------------------------------------------
 
+    async def _read_restore_snapshot(self, name: str) -> dict[str, Any]:
+        """Preserve no-write knowledge only while loading the restore input."""
+        try:
+            data = await asyncio.to_thread(self.read_snapshot, name)
+            _validate_snapshot_envelope(data)
+        except FileNotFoundError as err:
+            raise BackupRestoreError(
+                f"Backup {name!r} not found",
+                reason="snapshot_not_found",
+                restored_from=name,
+                safety_backup=None,
+            ) from err
+        except ValueError as err:
+            raise BackupRestoreError(
+                _snapshot_validation_message(err),
+                reason="invalid_snapshot",
+                restored_from=name,
+                safety_backup=None,
+            ) from err
+        return data
+
     async def restore_snapshot(
         self, name: str, *, take_safety_backup: bool = True
     ) -> dict[str, Any]:
@@ -909,29 +1352,168 @@ class BackupManager:
             return await self._restore_legacy(
                 name[len(LEGACY_PREFIX) :], take_safety_backup=take_safety_backup
             )
-        data = await asyncio.to_thread(self.read_snapshot, name)
+        self._protect_snapshot(name)
+        try:
+            data = await self._read_restore_snapshot(name)
+            if data["domain"] == "helper_template":
+                try:
+                    snapshot = _validate_template_snapshot(
+                        data["entity_id"], data["config"]
+                    )
+                    entity_id = snapshot["entry_id"]
+                except InvalidBackupSnapshotError as err:
+                    _log_template_failure("snapshot_validation", err)
+                    raise BackupRestoreError(
+                        str(err),
+                        reason="invalid_snapshot",
+                        restored_from=name,
+                        domain="helper_template",
+                        entity_id=data["entity_id"],
+                        safety_backup=None,
+                    ) from err
+                data["entity_id"] = entity_id
+                async with self.config_entry_write_guard(entity_id, exclusive=True):
+                    return await self._restore_snapshot_data(
+                        name, data, take_safety_backup=take_safety_backup
+                    )
+            return await self._restore_snapshot_data(
+                name, data, take_safety_backup=take_safety_backup
+            )
+        finally:
+            self._unprotect_snapshot(name)
+
+    def _protect_snapshot(self, name: str) -> None:
+        with self._snapshot_pin_lock:
+            self._protected_snapshot_names[name] += 1
+
+    def _unprotect_snapshot(self, name: str) -> None:
+        with self._snapshot_pin_lock:
+            self._protected_snapshot_names[name] -= 1
+            if not self._protected_snapshot_names[name]:
+                del self._protected_snapshot_names[name]
+
+    async def _restore_snapshot_data(
+        self, name: str, data: dict[str, Any], *, take_safety_backup: bool
+    ) -> dict[str, Any]:
         domain = data["domain"]
         entity_id = data["entity_id"]
         config = data["config"]
         handler = self._handlers.get(domain)
         if handler is None:
-            raise LookupError(f"No restore handler registered for domain {domain!r}")
+            raise BackupRestoreError(
+                f"No restore handler registered for domain {domain!r}",
+                reason="unsupported_domain",
+                restored_from=name,
+                domain=domain,
+                entity_id=entity_id,
+                safety_backup=None,
+            )
 
         safety_path: Path | None = None
-        if take_safety_backup:
-            safety_path = await self.maybe_snapshot(
-                domain, entity_id, tool_name="ha_manage_backup.restore.safety"
-            )
-        result = await handler.restore(self._client, entity_id, config)
-        return {
+        outcome: dict[str, Any] = {
             "restored_from": name,
             "domain": domain,
             "entity_id": entity_id,
-            "safety_backup": safety_path.name if safety_path else None,
-            "result": result,
+            "safety_backup": None,
         }
+        apply_status: Literal["not_applied", "unknown", "applied"] = "not_applied"
+        step = "safety_preflight"
+        try:
+            needs_safety = await self._restore_needs_safety(handler, entity_id, config)
+            # Existing Template helpers always require a fresh recovery point.
+            if needs_safety and (domain == "helper_template" or take_safety_backup):
+                step = "safety_backup"
+                safety_path = await self._capture_restore_safety(domain, entity_id)
+                if safety_path is not None:
+                    self._protect_snapshot(safety_path.name)
+                    await _await_backup_io(_require_restore_safety, safety_path)
+                    outcome["safety_backup"] = safety_path.name
+            apply_status = "unknown"
+            step = "apply"
+            # Commit to the absent-target branch: if an entry reappeared since
+            # preflight, recreation refuses instead of editing it without safety.
+            restore = handler.restore if needs_safety else _recreate_template_helper
+            result = await restore(self._client, entity_id, config)
+        except BackupRestoreError as err:
+            if domain == "helper_template" and step != "apply":
+                _log_template_failure(step, err)
+            err.outcome = {**outcome, **err.outcome}
+            raise
+        except _RESTORE_ERRORS as err:
+            if domain == "helper_template":
+                _log_template_failure(step, err)
+                message = _template_safe_failure_detail(step, err) or (
+                    "Template helper restore was not attempted; inspect the target and backup storage"
+                    if apply_status == "not_applied"
+                    else "Template helper restore outcome is unknown; inspect current options before retrying"
+                )
+                raise BackupRestoreError(
+                    message,
+                    apply_status=apply_status,
+                    reason=_template_failure_reason(step, err),
+                    **outcome,
+                ) from err
+            raise
+        finally:
+            if safety_path is not None:
+                self._unprotect_snapshot(safety_path.name)
+        if domain == "helper_template":
+            outcome.update(apply_status="applied", verification_status="matched")
+            outcome.update(_template_recreated_outcome(result, entity_id))
+        return {**outcome, "result": result}
+
+    async def _restore_needs_safety(
+        self, handler: DomainHandler, entity_id: str, config: Any
+    ) -> bool:
+        if handler.domain != "helper_template":
+            return True
+        current = await handler.fetch(self._client, entity_id)
+        if current is None:
+            return False  # No existing entry to snapshot; recreation rechecks absence.
+        _template_restore_options(config, current)
+        return True
+
+    async def _capture_restore_safety(self, domain: str, entity_id: str) -> Path | None:
+        """Template restore requires a fresh recovery point for its stable entry."""
+        if domain != "helper_template":
+            return await self.maybe_snapshot(
+                domain, entity_id, tool_name="ha_manage_backup.restore.safety"
+            )
+        path = await self.maybe_snapshot(
+            domain,
+            entity_id,
+            tool_name="ha_manage_backup.restore.safety",
+            force=True,
+            mandatory=True,
+        )
+        if path is None:
+            raise MandatoryBackupError(
+                "Template helper no longer exists; restore was not attempted"
+            )
+        return path
 
     # ----- diff ----------------------------------------------------------
+
+    async def snapshot_comparison(self, name: str) -> tuple[dict[str, Any], Any]:
+        """Read a snapshot and the live config for its stable target identity."""
+        data = await asyncio.to_thread(self.read_snapshot, name)
+        _validate_snapshot_envelope(data)
+        domain = data["domain"]
+        if domain == "helper_template":
+            snapshot = _validate_template_snapshot(data["entity_id"], data["config"])
+            data["entity_id"] = snapshot["entry_id"]
+        handler = self._handlers.get(domain)
+        if handler is None:
+            raise LookupError(f"No diff handler registered for domain {domain!r}")
+        current = await handler.fetch(self._client, data["entity_id"])
+        if domain == "helper_template" and current is not None:
+            # Both MCP and Settings preview this comparison. Registry metadata
+            # is recreation-only; an existing-entry restore applies options.
+            data["config"] = {
+                key: data["config"][key] for key in ("entry_id", "options")
+            }
+            current = {key: current[key] for key in ("entry_id", "options")}
+        return data, current
 
     async def diff_snapshot(self, name: str) -> DiffResponse | DiffResponseText:
         """Compare a stored snapshot against the live config of the same entity.
@@ -952,14 +1534,10 @@ class BackupManager:
         """
         if name.startswith(LEGACY_PREFIX):
             return await self._diff_legacy(name[len(LEGACY_PREFIX) :])
-        data = await asyncio.to_thread(self.read_snapshot, name)
+        data, current = await self.snapshot_comparison(name)
         domain = data["domain"]
         entity_id = data["entity_id"]
         stored = data["config"]
-        handler = self._handlers.get(domain)
-        if handler is None:
-            raise LookupError(f"No diff handler registered for domain {domain!r}")
-        current = await handler.fetch(self._client, entity_id)
         captured_at = data.get("captured")
         if data.get("kind") == _TEXT_KIND:
             return _build_text_diff_response(
@@ -1061,6 +1639,7 @@ class BackupManager:
         says so, so the tool response doesn't read as a clean, complete list
         with the ``.bak`` history silently missing (#1996).
         """
+        await self.ensure_directory_ready()
         want_legacy = domain in (None, "yaml_file") and entity_id is None
         legacy: list[dict[str, Any]] = []
         warnings: list[str] = []
@@ -1448,12 +2027,20 @@ def get_backup_manager(client: Any, settings: Any) -> BackupManager:
     ``settings`` object identity differs from the cached manager's —
     runtime env-var changes that reset the global settings singleton
     (see ``config._reset_global_settings``) yield a fresh ``settings``
-    instance, which forces a manager rebuild so the new
-    ``enable_auto_backup`` / throttle / retention values take effect.
+    instance, which forces a manager rebuild so new settings take effect.
+    Active guards, capture locks and restore pins survive that replacement.
     """
     mgr = getattr(client, "_auto_backup_manager", None)
-    if mgr is None or mgr._settings is not settings:
+    if not isinstance(mgr, BackupManager) or mgr._settings is not settings:
+        previous = mgr
         mgr = BackupManager(settings, client)
+        if isinstance(previous, BackupManager):
+            mgr._entry_admission_state = previous._entry_admission_state
+            mgr._entry_write_locks = previous._entry_write_locks
+            mgr._entry_write_owners = previous._entry_write_owners
+            mgr._locks = previous._locks
+            mgr._protected_snapshot_names = previous._protected_snapshot_names
+            mgr._snapshot_pin_lock = previous._snapshot_pin_lock
         register_default_handlers(mgr, client)
         try:
             client._auto_backup_manager = mgr
@@ -2553,6 +3140,556 @@ def _make_blueprint_handler(domain: str) -> DomainHandler:
     return DomainHandler(domain=f"blueprint_{domain}", fetch=fetch, restore=restore)
 
 
+def _template_options(config: Any) -> dict[str, Any]:
+    """Require persisted template options that can safely be restored."""
+    from .redaction import sentinel_option_keys
+
+    if not isinstance(config, dict):
+        raise _TemplateReadError(
+            "Template helper options must be an object", "invalid_options"
+        )
+    options = config
+    if not all(
+        isinstance(options.get(key), str) and options[key]
+        for key in ("name", "template_type")
+    ):
+        raise _TemplateReadError(
+            "Template helper options lack name or template_type", "invalid_options"
+        )
+    # The component's resolved-!secret scrub predates the server sentinels.
+    # Neither kind of placeholder is a usable recovery value.
+    if sentinel_option_keys(options) or _contains_redacted_leaf(options):
+        raise _TemplateReadError(
+            "Template helper options contain redacted values; capture is incomplete",
+            "redacted_options",
+        )
+    return options
+
+
+def _contains_redacted_leaf(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(_contains_redacted_leaf(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_redacted_leaf(item) for item in value)
+    return isinstance(value, str) and value == "**redacted**"
+
+
+async def _fetch_template_helper(client: Any, entity_id: str) -> Any:
+    """Read template options through the component, without starting a flow.
+
+    Core's config-entry metadata and entity state omit this configuration.
+    A missing/old component is an error, never a state-only snapshot. The
+    component applies its normal secret scrub and never returns entry.data.
+    """
+    result = _require_dict(
+        await _ws_send(
+            client,
+            {
+                "type": "ha_mcp_tools/helpers_list",
+                "helper_types": ["template"],
+                "include_flow_helpers": True,
+            },
+        ),
+        "ha_mcp_tools/helpers_list",
+    )
+    if result.get("secret_scrub_degraded"):
+        raise _TemplateReadError(
+            "Template helper secret scrub is degraded; capture is unsafe",
+            "secret_scrub_degraded",
+        )
+    covered = _require_list(result.get("covered_types"), "helpers_list.covered_types")
+    if "template" not in covered:
+        raise _TemplateReadError(
+            "The component cannot authoritatively read template helpers",
+            "template_read_unsupported",
+        )
+    records = _require_list(result.get("helpers"), "ha_mcp_tools/helpers_list.helpers")
+    templates: dict[str, dict[str, Any]] = {}
+    for raw_record in records:
+        record = _require_dict(raw_record, "helpers_list helper record")
+        if record.get("kind") != "flow" or record.get("helper_type") != "template":
+            continue
+        entry_id = record.get("entry_id")
+        if not isinstance(entry_id, str) or not entry_id or entry_id in templates:
+            raise _TemplateReadError(
+                "Template helper listing has ambiguous identities",
+                "ambiguous_entry_identity",
+            )
+        templates[entry_id] = record
+    matches = [
+        record
+        for record in templates.values()
+        if entity_id in (record["entry_id"], record.get("entity_id"))
+    ]
+    if len(matches) > 1:
+        raise _TemplateReadError(
+            "Template helper target is ambiguous", "ambiguous_target"
+        )
+    if matches:
+        record = matches[0]
+        entry_id = record["entry_id"]
+        registry = await _template_entity_registry(client)
+        return {
+            "entry_id": entry_id,
+            "options": _template_options(record.get("options")),
+            "entities": [
+                {
+                    key: row.get(key)
+                    for key in ("entity_id", "unique_id", "name", "original_name")
+                }
+                for row in registry
+                if row.get("config_entry_id") == entry_id
+            ],
+        }
+    return None
+
+
+async def _template_entity_registry(client: Any) -> list[dict[str, Any]]:
+    """Read the native registry, refusing partial or malformed identity data."""
+    rows = _require_list(
+        await _ws_send(client, {"type": "config/entity_registry/list"}),
+        "entity registry",
+    )
+    seen: set[str] = set()
+    result = []
+    for raw_row in rows:
+        row = _require_dict(raw_row, "entity registry row")
+        entity_id = row.get("entity_id")
+        if not isinstance(entity_id, str) or "." not in entity_id or entity_id in seen:
+            raise _TemplateReadError(
+                "Entity registry has ambiguous identities", "ambiguous_registry"
+            )
+        seen.add(entity_id)
+        result.append(row)
+    return result
+
+
+def _template_entry_id(entity_id: str, config: Any) -> str:
+    """Resolve a captured alias to the stable identity used for diff and restore."""
+    if not isinstance(entity_id, str) or not entity_id:
+        raise HomeAssistantError("Template helper snapshot has no target identity")
+    snapshot = _require_dict(config, "template helper snapshot")
+    entry_id = snapshot.get("entry_id")
+    if not isinstance(entry_id, str) or not entry_id:
+        raise HomeAssistantError(
+            "Template helper snapshot has no config-entry identity"
+        )
+    if entity_id != entry_id and "." not in entity_id:
+        raise HomeAssistantError(
+            "Template helper snapshot target does not match its entry"
+        )
+    return entry_id
+
+
+def _validate_template_snapshot(entity_id: str, config: Any) -> dict[str, Any]:
+    """Reject corrupt stored data before accessing HA or making a change."""
+    try:
+        _template_entry_id(entity_id, config)
+        snapshot = _require_dict(config, "template helper snapshot")
+        _template_options(snapshot.get("options"))
+    except HomeAssistantError as err:
+        # These validators produce local messages without snapshot values.
+        raise InvalidBackupSnapshotError(
+            f"Template helper snapshot is invalid: {err}"
+        ) from err
+    return snapshot
+
+
+def _template_snapshot_for_restore(entity_id: str, config: Any) -> dict[str, Any]:
+    try:
+        return _validate_template_snapshot(entity_id, config)
+    except InvalidBackupSnapshotError as err:
+        _log_template_failure("snapshot_validation", err)
+        raise BackupRestoreError(str(err), reason="invalid_snapshot") from err
+
+
+def _template_restore_options(config: Any, current: Any) -> dict[str, Any]:
+    """Validate immutable identity before capturing or submitting a restore."""
+    snapshot = _require_dict(config, "template helper snapshot")
+    options = _template_options(snapshot.get("options"))
+    if current is None:
+        raise BackupRestoreError(
+            "Template helper no longer exists; restore cannot recreate it"
+        )
+    immutable = {"name", "template_type"}
+    # Core exposes device_class only during creation for these template types.
+    # Passing it through an options flow can fail after committing an empty edit.
+    if options["template_type"] in {"button", "cover", "event", "update"}:
+        immutable.add("device_class")
+    if any(
+        not _snapshot_configs_match(current["options"].get(key), options.get(key))
+        for key in immutable
+    ):
+        raise BackupRestoreError("Template helper identity changed; restore refused")
+    return {key: value for key, value in options.items() if key not in immutable}
+
+
+def _snapshot_configs_match(expected: Any, current: Any) -> bool:
+    """Reuse the preview's type-sensitive comparison (False is not 0)."""
+    patch: list[dict[str, Any]] = []
+    _compute_json_patch(expected, current, 1, patch)
+    return not patch
+
+
+async def _verify_template_restore(
+    client: Any, entry_id: str, expected: Any
+) -> Literal["matched", "mismatched", "unavailable"]:
+    """Bound readback after a dispatched apply, including uncertain replies."""
+    try:
+        async with asyncio.timeout(5):
+            restored = await _fetch_template_helper(client, entry_id)
+    except _CAPTURE_TRANSIENT_ERRORS as err:
+        _log_template_failure("options_readback", err)
+        return "unavailable"
+    actual = (
+        {"entry_id": restored["entry_id"], "options": restored["options"]}
+        if restored is not None
+        else None
+    )
+    if _snapshot_configs_match(expected, actual):
+        return "matched"
+    logger.warning("Template restore step=options_readback reason=options_mismatch")
+    return "mismatched"
+
+
+async def _restore_template_helper(client: Any, entity_id: str, config: Any) -> Any:
+    """Restore options or recreate an authoritatively absent Template helper."""
+    from .tools.config_entry_flow import OptionsFlowError, update_config_entry_options
+
+    snapshot = _template_snapshot_for_restore(entity_id, config)
+    entry_id = _template_entry_id(entity_id, snapshot)
+    try:
+        current = await _fetch_template_helper(client, entry_id)
+        if current is None:
+            return await _recreate_template_helper(client, entry_id, snapshot)
+        editable = _template_restore_options(snapshot, current)
+    except BackupRestoreError as err:
+        _log_template_failure("options_preflight", err)
+        raise
+    except _CAPTURE_TRANSIENT_ERRORS as err:
+        _log_template_failure("options_preflight", err)
+        raise BackupRestoreError(
+            "Template helper could not be checked; restore was not attempted"
+        ) from err
+    expected = {
+        "entry_id": entry_id,
+        "options": _template_options(snapshot.get("options")),
+    }
+    try:
+        result = await update_config_entry_options(
+            client,
+            entry_id,
+            editable,
+            expected_domain="template",
+            noun="helper",
+            keep_current_values=False,
+        )
+    except OptionsFlowError as err:
+        logger.warning(
+            "Template restore step=options_flow failed: %s apply_status=%s reason=%s fields=%s",
+            type(err).__name__,
+            err.apply_status,
+            err.reason,
+            list(err.fields),
+        )
+        if err.apply_status == "not_applied":
+            raise BackupRestoreError(
+                str(err)
+                if err.reason
+                else "Template helper options flow refused the restore; no options were applied",
+                reason=err.reason,
+                fields=list(err.fields),
+            ) from err
+        verification = await _verify_template_restore(client, entry_id, expected)
+        raise BackupRestoreError(
+            "Template helper restore did not complete normally; inspect current options before retrying",
+            apply_status=err.apply_status,
+            verification_status=verification,
+            reason=err.reason,
+            fields=list(err.fields),
+        ) from err
+    verification = await _verify_template_restore(client, entry_id, expected)
+    if verification == "unavailable":
+        raise BackupRestoreError(
+            "Template helper restore was applied but verification is unavailable; inspect current options before retrying",
+            apply_status="applied",
+            verification_status=verification,
+        )
+    if verification != "matched":
+        raise BackupRestoreError(
+            "Template helper restore was applied but verification did not match the snapshot; inspect current options before retrying",
+            apply_status="applied",
+            verification_status=verification,
+        )
+    return result
+
+
+def _template_recreated_outcome(result: Any, original_entry_id: str) -> dict[str, Any]:
+    if result.get("restore_mode") != "recreated":
+        return {}
+    return {
+        "restore_mode": "recreated",
+        "original_entry_id": original_entry_id,
+        "entity_id": result["entry_id"],
+    }
+
+
+def _template_saved_entity(snapshot: dict[str, Any]) -> dict[str, Any] | None:
+    """Core creates one Template entity with the config-entry ID as unique ID."""
+    entities = snapshot.get("entities")
+    if entities is None or entities == []:
+        return None  # Older snapshots captured options without registry metadata.
+    if not isinstance(entities, list) or len(entities) != 1:
+        raise BackupRestoreError(
+            "Template snapshot has invalid or ambiguous entity mapping",
+            reason="invalid_snapshot",
+        )
+    row = entities[0]
+    if not isinstance(row, dict):
+        raise BackupRestoreError(
+            "Template snapshot entity must be an object", reason="invalid_snapshot"
+        )
+    entity_id = row.get("entity_id")
+    if (
+        not isinstance(entity_id, str)
+        or not re.fullmatch(r"[a-z_]+\.[a-z0-9_]+", entity_id)
+        or entity_id.split(".")[0] != snapshot["options"]["template_type"]
+        or row.get("unique_id") != snapshot["entry_id"]
+        or any(
+            row.get(key) is not None and not isinstance(row[key], str)
+            for key in ("name", "original_name")
+        )
+    ):
+        raise BackupRestoreError(
+            "Template snapshot has an unsupported entity mapping",
+            reason="invalid_snapshot",
+        )
+    return row
+
+
+async def _template_recreation_preflight(
+    client: Any, entry_id: str, snapshot: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Confirm absence independently, then reject collisions before creating."""
+    _template_options(snapshot.get("options"))
+    saved = _template_saved_entity(snapshot)
+    # list_config_entries() drops malformed rows. Absence must be established
+    # from the complete native response before a restore can create an entry.
+    entries = _require_list(
+        await client._request("GET", "/config/config_entries/entry"), "config entries"
+    )
+    for raw_entry in entries:
+        entry = _require_dict(raw_entry, "config entry")
+        if not isinstance(entry.get("entry_id"), str) or not entry["entry_id"]:
+            raise BackupRestoreError("Config-entry listing is incomplete")
+        if entry["entry_id"] == entry_id:
+            raise BackupRestoreError(
+                "Template config entry still exists; recreation was not attempted",
+                reason="entry_still_exists",
+            )
+    if saved is not None:
+        await _check_template_entity_collision(client, saved["entity_id"])
+    return saved
+
+
+async def _check_template_entity_collision(
+    client: Any, target: str, *, owned_entry_id: str | None = None
+) -> None:
+    """Check both registered and state-only occupants; never take another ID."""
+    registry = await _template_entity_registry(client)
+    owned_ids = {
+        row["entity_id"]
+        for row in registry
+        if owned_entry_id is not None and row.get("config_entry_id") == owned_entry_id
+    }
+    states = _require_list(await client.get_states(), "entity states")
+    state_ids = {_require_dict(row, "entity state").get("entity_id") for row in states}
+    occupied = {row["entity_id"] for row in registry} | state_ids
+    if target in occupied and target not in owned_ids:
+        raise BackupRestoreError(
+            "The saved entity ID is occupied; it will not be overwritten",
+            reason="entity_id_collision",
+            conflicting_entity_id=target,
+        )
+
+
+async def _created_template_entity(client: Any, entry_id: str) -> dict[str, Any]:
+    """Wait for the one native Template registry entity after flow completion."""
+    async with asyncio.timeout(5):
+        while True:
+            rows = [
+                row
+                for row in await _template_entity_registry(client)
+                if row.get("config_entry_id") == entry_id
+            ]
+            if rows:
+                if len(rows) != 1 or rows[0].get("unique_id") != entry_id:
+                    raise HomeAssistantError(
+                        "Recreated Template entity mapping is ambiguous"
+                    )
+                return rows[0]
+            await asyncio.sleep(0.1)
+
+
+async def _restore_template_entity_id(
+    client: Any, entry_id: str, saved: dict[str, Any]
+) -> dict[str, str]:
+    """Restore only the newly created entity's ID/name, guarded by ownership."""
+    row = await _created_template_entity(client, entry_id)
+    source, target = row["entity_id"], saved["entity_id"]
+    if source.split(".")[0] != target.split(".")[0]:
+        raise BackupRestoreError(
+            "Recreated Template entity has an unexpected domain",
+            reason="entity_identity_mismatch",
+            verification_status="mismatched",
+        )
+    await _check_template_entity_collision(client, target, owned_entry_id=entry_id)
+    update: dict[str, Any] = {
+        "type": "config/entity_registry/update",
+        "entity_id": source,
+    }
+    if source != target:
+        update["new_entity_id"] = target
+    if row.get("name") != saved.get("name"):
+        update["name"] = saved.get("name")
+    if len(update) > 2:
+        try:
+            await _ws_send(client, update)
+        except _CAPTURE_TRANSIENT_ERRORS as err:
+            _log_template_failure("entity_rename", err)
+            raise BackupRestoreError(
+                "The recreated helper's entity rename outcome is unknown",
+                reason="entity_rename_outcome_unknown",
+                entity_id_mapping={
+                    "created_entity_id": source,
+                    "target_entity_id": target,
+                },
+                verification_status="unavailable",
+            ) from err
+    actual = await _created_template_entity(client, entry_id)
+    if actual["entity_id"] != target or actual.get("name") != saved.get("name"):
+        raise BackupRestoreError(
+            "Recreated Template entity identity did not match",
+            reason="entity_identity_mismatch",
+            verification_status="mismatched",
+        )
+    return {"created_entity_id": source, "restored_entity_id": target}
+
+
+async def _recreate_template_helper(
+    client: Any, entry_id: str, snapshot: dict[str, Any]
+) -> dict[str, Any]:
+    """Create through the ordinary helper flow; never retry uncertain writes."""
+    from .tools.config_entry_flow import CreationFlowError, create_flow_helper
+
+    snapshot = _template_snapshot_for_restore(entry_id, snapshot)
+    try:
+        saved = await _template_recreation_preflight(client, entry_id, snapshot)
+    except BackupRestoreError as err:
+        _log_template_failure("recreation_preflight", err)
+        raise
+    except _CAPTURE_TRANSIENT_ERRORS as err:
+        _log_template_failure("recreation_preflight", err)
+        raise BackupRestoreError(
+            "Template helper absence and entity IDs could not be verified; recreation was not attempted",
+            reason="recreation_preflight_unavailable",
+        ) from err
+    try:
+        # Persisted template_type identifies the entry's entity platform; the
+        # create flow selects that platform through its initial menu instead.
+        create_config = {
+            key: value
+            for key, value in snapshot["options"].items()
+            if key != "template_type"
+        }
+        create_config["next_step_id"] = snapshot["options"]["template_type"]
+        result = await create_flow_helper(
+            client, "template", create_config, complete_snapshot=True
+        )
+    except CreationFlowError as err:
+        _log_template_failure("create_entry", err)
+        identity: dict[str, Any] = (
+            {"entry_id": err.entry_id, "entity_id": err.entry_id}
+            if err.entry_id
+            else {}
+        )
+        raise BackupRestoreError(
+            str(err),
+            apply_status=err.apply_status,
+            reason=err.reason
+            or (
+                "creation_outcome_unknown"
+                if err.apply_status == "unknown"
+                else "creation_flow_failed"
+            ),
+            fields=list(err.fields),
+            restore_mode="recreated",
+            original_entry_id=entry_id,
+            **identity,
+        ) from err
+    except _CAPTURE_TRANSIENT_ERRORS as err:
+        _log_template_failure("create_entry", err)
+        raise BackupRestoreError(
+            "Template helper creation outcome is unknown; inspect helpers before retrying",
+            apply_status="unknown",
+            reason="creation_outcome_unknown",
+            restore_mode="recreated",
+            original_entry_id=entry_id,
+        ) from err
+    new_entry_id = result.get("entry_id")
+    if (
+        not isinstance(new_entry_id, str)
+        or not new_entry_id
+        or new_entry_id == entry_id
+    ):
+        logger.warning("Template restore step=create_entry reason=missing_new_identity")
+        raise BackupRestoreError(
+            "Template helper creation returned no new identity; inspect helpers before retrying",
+            apply_status="unknown",
+            reason="creation_outcome_unknown",
+            original_entry_id=entry_id,
+        )
+    outcome = {
+        "entry_id": new_entry_id,
+        "entity_id": new_entry_id,
+        "original_entry_id": entry_id,
+        "restore_mode": "recreated",
+    }
+    expected = {"entry_id": new_entry_id, "options": snapshot["options"]}
+    mapping: dict[str, str] = {}
+    try:
+        verification = await _verify_template_restore(client, new_entry_id, expected)
+        if verification != "matched":
+            raise BackupRestoreError(
+                "Template helper was recreated but its options could not be verified",
+                verification_status=verification,
+            )
+        if saved is not None:
+            mapping = await _restore_template_entity_id(client, new_entry_id, saved)
+    except _CAPTURE_TRANSIENT_ERRORS as err:
+        _log_template_failure("recreation_readback", err)
+        detail = (
+            err.outcome
+            if isinstance(err, BackupRestoreError)
+            else {"verification_status": "unavailable"}
+        )
+        raise BackupRestoreError(
+            "Template helper was recreated but recovery is incomplete; inspect the new entry before retrying",
+            **{**detail, **outcome, "apply_status": "applied"},
+        ) from err
+    response = {
+        **result,
+        **outcome,
+        "entity_ids_restored": saved is not None,
+        "entity_id_mapping": mapping,
+    }
+    if saved is None:
+        response["warnings"] = [
+            "This snapshot has no entity mapping; the recreated helper may have a new entity ID."
+        ]
+    return response
+
+
 def _make_helper_handler(helper_type: str) -> DomainHandler:
     async def fetch(client: Any, entity_id: str) -> Any:
         return await _fetch_helper(client, entity_id, helper_type)
@@ -2567,12 +3704,13 @@ def _make_helper_handler(helper_type: str) -> DomainHandler:
 
 # Helper types we register backup handlers for. Only list-backed types
 # (those served by ``<helper_type>/list`` WebSocket commands) have
-# round-trippable snapshot/restore — flow-helper types (template, group,
+# round-trippable snapshot/restore — flow-helper types (group,
 # utility_meter, ...) live in config entries with a separate API and
 # would silently produce unrestorable backups if included here. The
 # decorator's ``domain_fn`` builds ``helper_<type>`` keys; if the user
-# edits a flow-helper, ``handler_for`` returns None and the capture
+# edits an unsupported flow-helper, ``handler_for`` returns None and the capture
 # logs a single WARNING — neutral failure, not a silent corruption.
+# Template has its own options-backed handler below, not this list-backed family.
 _KNOWN_HELPER_TYPES = sorted(_HELPER_LIST_TYPES)
 
 
@@ -2612,3 +3750,8 @@ def register_default_handlers(mgr: BackupManager, _client: Any) -> None:
         mgr.register(_make_blueprint_handler(blueprint_domain))
     for helper_type in _KNOWN_HELPER_TYPES:
         mgr.register(_make_helper_handler(helper_type))
+    mgr.register(
+        DomainHandler(
+            "helper_template", _fetch_template_helper, _restore_template_helper
+        )
+    )

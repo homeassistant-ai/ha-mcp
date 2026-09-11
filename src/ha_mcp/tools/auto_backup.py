@@ -29,7 +29,8 @@ from __future__ import annotations
 import functools
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastmcp.exceptions import ToolError
@@ -153,6 +154,8 @@ def with_auto_backup(
     client: Any = None,
     mandatory: bool = False,
     skip_fn: Callable[[dict[str, Any]], bool] | None = None,
+    domain_resolver: Callable[[Any, dict[str, Any], str, str], Awaitable[str]]
+    | None = None,
 ) -> Callable[..., Any]:
     """Decorate a write/destructive tool with pre-write auto-backup capture.
 
@@ -171,9 +174,13 @@ def with_auto_backup(
     write proceeds regardless.
 
     ``skip_fn`` (optional) short-circuits the whole decorator — including
-    the ``mandatory`` gate — for calls it identifies as unable to write
-    (e.g. a yaml-edit confirm-flow preview): no snapshot, no refusal, the
-    wrapped tool runs directly.
+    the ``mandatory`` gate — for calls that cannot write (e.g. a yaml-edit
+    preview) or delegate capture and write coordination to an inner owner.
+    The wrapped tool runs directly without an outer snapshot or refusal.
+
+    ``domain_resolver`` optionally refines the capture domain from HA metadata.
+    It receives the client, tool kwargs, initial domain and entity ID inside
+    the write guard, before capture. Its failures follow the capture policy.
 
     ``mandatory=True`` makes auto-backup a precondition (file/YAML writes,
     #1579 — those formerly kept their own private backups). It fails the
@@ -200,10 +207,9 @@ def with_auto_backup(
     def decorator(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            # A call skip_fn identifies as unable to write (e.g. a yaml-edit
-            # confirm-flow PREVIEW, which returns a diff and writes nothing)
-            # needs no pre-write snapshot — and must not be refused by the
-            # mandatory gate either, since there is nothing to protect.
+            # Read-only previews need no capture. Delegated writes acquire
+            # their own guard and snapshot after resolving or confirming the
+            # target, so they also bypass this outer capture and refusal.
             if skip_fn is not None and skip_fn(kwargs):
                 return await func(*args, **kwargs)
             # Settings + target resolution happen OUTSIDE the best-effort
@@ -237,24 +243,61 @@ def with_auto_backup(
                         },
                     )
                 )
-            if enabled:
-                await _capture_pre_write_snapshot(
-                    func,
-                    args,
-                    kwargs,
-                    settings=settings,
-                    explicit_client=explicit_client,
-                    domain=domain,
-                    domain_fn=domain_fn,
-                    id_param=id_param,
-                    id_fn=id_fn,
-                    mandatory=mandatory,
-                )
-            return await func(*args, **kwargs)
+            snap_domain, entity_id = _resolve_snapshot_target(
+                kwargs,
+                domain=domain,
+                domain_fn=domain_fn,
+                id_param=id_param,
+                id_fn=id_fn,
+            )
+            async with _template_write_context(
+                _resolve_backup_client(explicit_client, args),
+                settings,
+                snap_domain,
+                entity_id,
+            ):
+                if enabled:
+                    await _capture_pre_write_snapshot(
+                        func,
+                        args,
+                        kwargs,
+                        settings=settings,
+                        explicit_client=explicit_client,
+                        domain=domain,
+                        domain_fn=domain_fn,
+                        id_param=id_param,
+                        id_fn=id_fn,
+                        mandatory=mandatory,
+                        domain_resolver=domain_resolver,
+                    )
+                return await func(*args, **kwargs)
 
         return wrapper
 
     return decorator
+
+
+@asynccontextmanager
+async def _template_write_context(
+    client: Any, settings: Any, domain: str, entity_id: str
+) -> AsyncIterator[None]:
+    """Keep a helper edit's capture and mutation in the restore critical section.
+
+    The lock is needed even when ordinary auto-backup is disabled: restores
+    of existing Template helpers require a safety snapshot before replacing
+    their current options.
+    """
+    # Both options-update tools take stable config-entry IDs. Alias-based helper
+    # removal and dotted subentry targets have separate resolution paths.
+    is_entry_write = (
+        domain in {"helper_template", "integration"} and "." not in entity_id
+    )
+    if is_entry_write and entity_id and client is not None:
+        manager = get_backup_manager(client, settings)
+        async with manager.config_entry_write_guard(entity_id):
+            yield
+    else:
+        yield
 
 
 def _resolve_backup_client(explicit_client: Any, args: tuple[Any, ...]) -> Any:
@@ -297,6 +340,7 @@ async def _capture_pre_write_snapshot(
     id_param: str | None,
     id_fn: Callable[[dict[str, Any]], str] | None,
     mandatory: bool,
+    domain_resolver: Callable[[Any, dict[str, Any], str, str], Awaitable[str]] | None,
 ) -> None:
     """Resolve the snapshot target and capture a pre-write backup.
 
@@ -312,6 +356,10 @@ async def _capture_pre_write_snapshot(
     if entity_id:
         try:
             if client_obj is not None:
+                if domain_resolver is not None:
+                    snap_domain = await domain_resolver(
+                        client_obj, kwargs, snap_domain, entity_id
+                    )
                 mgr = get_backup_manager(client_obj, settings)
                 await mgr.maybe_snapshot(
                     snap_domain,

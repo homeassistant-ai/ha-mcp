@@ -212,6 +212,12 @@ Spend less time configuring, more time enjoying your smart home.
 | **💾 System** | Backup/restore, updates, apps, device registry |
 | **🔒 Safety** | Read Only Mode toggle, per-tool enable/disable, tool security policies (user approval), automatic edit backups |
 
+Template helper edit backups capture persisted options through the HA-MCP custom component, using either its Server entry or File & YAML Tools entry. Helper edits, generic integration options edits, and deletion capture the stable config-entry identity and entity ID/name mapping. Capture refuses degraded secret scrubbing. Restoring an existing helper requires a fresh safety backup, removes optional settings absent from the snapshot, and verifies persisted options.
+
+For Template backup listing and bulk deletion, filter by the config-entry ID returned as `entity_id` by capture. Capture accepts an entity alias; the history filters use the stable config-entry ID. Recreation reports its replacement config-entry ID and saved entity mapping separately.
+
+If the original entry has been deleted, restore recreates the helper and reports its new config-entry ID. The saved entity ID and custom name are restored when available; an occupied entity ID is refused before creation. Older snapshots without entity metadata cannot preserve renamed entity IDs. If a collision or verification failure occurs after creation, the new helper and source backup are retained and the result reports the new entry for inspection. Other entity/device registry settings are not restored. Helper and integration edits through the same server wait until restore finishes; other Home Assistant clients are outside this coordination. Failed or uncertain restores report their outcome and safe refusal reasons; inspect the current helper before retrying.
+
 <details>
 <!-- TOOLS_TABLE_START -->
 
@@ -288,7 +294,7 @@ The **HA-MCP Custom Component** also powers a set of privileged tools that stand
 | `ha_write_file` *(beta)* | Write files to allowed directories |
 | `ha_delete_file` *(beta)* | Delete files from allowed directories |
 
-All other tools work without the component. These five return an error with installation instructions if the component is missing.
+Template helper edit backups and restores also require the component, using either its Server entry or File & YAML Tools entry. These five tools return an error with installation instructions if the component is missing.
 
 These tools also require beta feature flags. See **[Beta Features](docs/beta.md)** for how to enable them — including the `ENABLE_BETA_FEATURES` master flag, which must be on before the filesystem/YAML sub-flags take effect.
 

@@ -1818,6 +1818,58 @@ function renderBackups() {
   });
 }
 
+function backupRestoreOutcomeMessage(outcome = {}) {
+  let message;
+  if (outcome.apply_status === 'not_applied') {
+    message = t('backup.restore.not_applied', {}, 'Restore was not applied. Nothing was changed.');
+  } else if (outcome.apply_status === 'applied') {
+    if (outcome.verification_status === 'mismatched') {
+      message = t('backup.restore.mismatched', {}, 'Restore was applied, but the current configuration does not match the backup.');
+    } else if (outcome.verification_status === 'matched') {
+      message = t('backup.restore.verified', {}, 'Restore was applied and verified.');
+    } else {
+      message = t('backup.restore.unverified', {}, 'Restore was applied, but verification is unavailable.');
+    }
+  } else {
+    message = t('backup.restore.unknown', {}, 'Whether this restore changed Home Assistant could not be confirmed. Inspect the current configuration and backup list before retrying.');
+  }
+  const reasons = {
+    unsupported_form: t('backup.restore.reason.unsupported_form', {}, 'Home Assistant did not provide a form suitable for this restore.'),
+    unsupported_fields: t('backup.restore.reason.unsupported_fields', {}, 'Some snapshot fields are not accepted by the current form.'),
+    validation_failed: t('backup.restore.reason.validation_failed', {}, 'Home Assistant rejected the restored configuration as invalid.'),
+    flow_aborted: t('backup.restore.reason.flow_aborted', {}, 'Home Assistant aborted the restore flow.'),
+  };
+  if (Object.hasOwn(reasons, outcome.reason)) {
+    message += '\n\n' + reasons[outcome.reason];
+    if (Array.isArray(outcome.fields) && outcome.fields.length) {
+      message += '\n' + t('backup.restore.fields', {fields: outcome.fields.join(', ')}, 'Fields: ' + outcome.fields.join(', '));
+    }
+  }
+  if (outcome.restore_mode === 'recreated') {
+    const result = outcome.result || outcome;
+    const entryId = outcome.entry_id || result.entry_id;
+    if (entryId) {
+      message += '\n\n' + t('backup.restore.recreated_entry', {entry_id: entryId}, 'Recreated config entry: ' + entryId);
+    }
+    const mapping = outcome.entity_id_mapping || result.entity_id_mapping || {};
+    if (mapping.restored_entity_id) {
+      message += '\n' + t('backup.restore.entity_mapping', {created: mapping.created_entity_id, restored: mapping.restored_entity_id}, 'Entity ID: ' + mapping.created_entity_id + ' → ' + mapping.restored_entity_id);
+    } else if (mapping.target_entity_id) {
+      message += '\n' + t('backup.restore.entity_mapping_unknown', {created: mapping.created_entity_id, target: mapping.target_entity_id}, 'Entity rename could not be confirmed: ' + mapping.created_entity_id + ' → ' + mapping.target_entity_id + '. Inspect the new entry before retrying.');
+    }
+    if (result.entity_ids_restored === false) {
+      message += '\n' + t('backup.restore.mapping_unavailable', {}, 'This snapshot has no entity mapping; the recreated helper may have a new entity ID.');
+    }
+  }
+  if (outcome.conflicting_entity_id) {
+    message += '\n' + t('backup.restore.entity_collision', {entity_id: outcome.conflicting_entity_id}, 'The saved entity ID ' + outcome.conflicting_entity_id + ' is already in use and was not overwritten.');
+  }
+  if (outcome.safety_backup) {
+    message += '\n\n' + t('backup.restore.safety', {name: outcome.safety_backup}, 'Safety backup: ' + outcome.safety_backup + '. Inspect the current configuration before restoring this safety backup to recover the previous state.');
+  }
+  return message;
+}
+
 async function backupAction(act, name) {
   // Each branch wraps its fetch+json in try/catch so a network drop or an
   // HTML error body (json() throwing) surfaces a visible toast instead of
@@ -1849,22 +1901,51 @@ async function backupAction(act, name) {
       showToast(t('backup.errors.diff', {name, message: String(err)}, 'Could not diff backup "' + name + '": ' + String(err)), {isError: true});
     }
   } else if (act === 'restore') {
-    if (!confirm(t('backup.confirm.restore', {name}, 'Restore ' + name + '?\n\nThis will overwrite the current entity state. A safety backup of the current state is taken first.'))) return;
+    if (!confirm(t('backup.confirm.restore', {name}, 'Restore ' + name + '?\n\nThis overwrites existing configuration or recreates a deleted Template helper. Existing Template helpers require a fresh safety backup. Other restores use the current auto-backup settings and may proceed without a new safety backup.'))) return;
+    let stage = 'request';
+    let httpStatus = null;
     try {
       const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name) + '/restore', {method: 'POST'});
+      httpStatus = resp.status;
+      stage = 'response_json';
       const data = await resp.json();
-      if (!resp.ok) { alert(t('backup.errors.restore_detail', {detail: JSON.stringify(data)}, 'Restore failed: ' + JSON.stringify(data))); return; }
+      stage = 'outcome';
+      if (!resp.ok || !data.success) {
+        const outcome = data.data || {};
+        let message = backupRestoreOutcomeMessage(outcome);
+        if (data.error?.message) message += '\n\n' + data.error.message;
+        alert(message);
+        if (outcome.safety_backup || outcome.apply_status !== 'not_applied') await loadBackups();
+        return;
+      }
       const safetyBackup = data.data && data.data.safety_backup ? data.data.safety_backup : t('common.none', {}, '(none)');
-      alert(t('backup.restored', {name: safetyBackup}, 'Restored. Safety backup: ' + safetyBackup));
-      loadBackups();
+      alert(data.data?.restore_mode === 'recreated'
+        ? backupRestoreOutcomeMessage(data.data)
+        : t('backup.restored', {name: safetyBackup}, 'Restored. Safety backup: ' + safetyBackup));
+      await loadBackups();
     } catch (err) {
-      showToast(t('backup.errors.restore', {name, message: String(err)}, 'Restore of "' + name + '" failed: ' + String(err)), {isError: true});
+      // JSON parse errors can contain the upstream body. Retain the failure
+      // stage/type/status for diagnosis without logging raw errors or options.
+      const errorType = ['TypeError', 'SyntaxError', 'AbortError', 'NetworkError', 'TimeoutError'].includes(err?.name) ? err.name : 'Error';
+      console.warn('Backup restore response unavailable',
+        'stage=' + stage, 'error_type=' + errorType,
+        'http_status=' + (Number.isInteger(httpStatus) ? httpStatus : null));
+      const message = backupRestoreOutcomeMessage();
+      showToast(t('backup.errors.restore', {name, message}, 'Restore of "' + name + '" failed: ' + message), {isError: true});
+      await loadBackups();
     }
   } else if (act === 'delete') {
     if (!confirm(t('backup.confirm.delete', {name}, 'Delete ' + name + '? This cannot be undone.'))) return;
     try {
       const resp = await fetch('./api/settings/backups/' + encodeURIComponent(name), {method: 'DELETE'});
-      if (!resp.ok) { const d = await resp.json(); alert(t('backup.errors.delete_detail', {detail: JSON.stringify(d)}, 'Delete failed: ' + JSON.stringify(d))); return; }
+      if (!resp.ok) {
+        const data = await resp.json();
+        const detail = data.data?.reason === 'snapshot_in_use'
+          ? t('backup.delete.in_use', {}, 'This backup is in use. Retry after the active capture or restore finishes.')
+          : data.error?.message || JSON.stringify(data);
+        alert(t('backup.errors.delete_detail', {detail}, 'Delete failed: ' + detail));
+        return;
+      }
       loadBackups();
     } catch (err) {
       showToast(t('backup.errors.delete', {name, message: String(err)}, 'Delete of "' + name + '" failed: ' + String(err)), {isError: true});
@@ -1882,11 +1963,25 @@ async function bulkDeleteBackups() {
   if (days) params.set('older_than_days', days);
   if (!params.toString()) { alert(t('backup.bulk.filter_required', {}, 'Set at least one filter (Domain, Entity, or age in days).')); return; }
   if (!confirm(t('backup.bulk.confirm', {filters: params.toString()}, 'Delete all backups matching: ' + params.toString() + '?'))) return;
-  const resp = await fetch('./api/settings/backups?' + params.toString(), {method: 'DELETE'});
-  const data = await resp.json();
-  if (!resp.ok) { alert(t('backup.errors.bulk_delete', {detail: JSON.stringify(data)}, 'Bulk delete failed: ' + JSON.stringify(data))); return; }
-  alert(t('backup.bulk.deleted', {count: data.count || 0}, 'Deleted ' + (data.count || 0) + ' backup(s)'));
-  loadBackups();
+  try {
+    const resp = await fetch('./api/settings/backups?' + params.toString(), {method: 'DELETE'});
+    const data = await resp.json();
+    if (!resp.ok) { alert(t('backup.errors.bulk_delete', {detail: JSON.stringify(data)}, 'Bulk delete failed: ' + JSON.stringify(data))); return; }
+    const deleted = data.count || 0;
+    const failed = Array.isArray(data.failed) ? data.failed : [];
+    let message = failed.length
+      ? t('backup.bulk.partial', {deleted, failed: failed.length}, 'Deleted ' + deleted + ' backup(s); failed to delete ' + failed.length + ' backup(s).')
+      : t('backup.bulk.deleted', {count: deleted}, 'Deleted ' + deleted + ' backup(s)');
+    const inUse = failed.filter(name => data.failure_reasons?.[name] === 'snapshot_in_use').length;
+    if (inUse) {
+      message += '\n\n' + t('backup.bulk.in_use', {count: inUse}, inUse + ' backup(s) are in use. Retry after the active capture or restore finishes.');
+    }
+    alert(message);
+  } catch {
+    const detail = t('backup.bulk.unknown', {}, 'The deletion result could not be confirmed. Check the backup list before retrying.');
+    showToast(t('backup.errors.bulk_delete', {detail}, 'Bulk delete failed: ' + detail), {isError: true});
+  }
+  await loadBackups();
 }
 
 // Focus management for the snapshot modal (WAI-ARIA APG dialog pattern):

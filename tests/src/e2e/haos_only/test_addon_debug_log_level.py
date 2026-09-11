@@ -29,10 +29,9 @@ web-UI setting a silent no-op and left #1721's reporter unable to
 produce debug logs. Kill-signal diagnostics arm on the same condition
 (they replaced the removed ``advanced_debug_logging`` addon toggle).
 
-The ``finally`` restores ``log_level=INFO`` (retried set+restart, as
-the readonly-mode test does) and re-warms the SHARED session
-``mcp_client`` — self-restarts drop its connection for later tests on
-this worker (documented in test_supervisor_inaddon.py).
+The ``finally`` restores ``log_level=INFO`` and waits for that restart's
+replacement process to answer a fresh MCP exchange. This disruptive test
+never instantiates the shared session client used by later tests.
 """
 
 from __future__ import annotations
@@ -42,13 +41,21 @@ import logging
 import time
 from typing import Any
 
-import httpx
 import pytest
-from fastmcp import Client
-from fastmcp.client.transports import StreamableHttpTransport
 
-from ..utilities.assertions import parse_mcp_result
-from ..utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
+from ..utilities.addon_restart import (
+    TRANSIENT_ADDON_ERRORS as _TRANSIENT,
+)
+from ..utilities.addon_restart import (
+    call_tool_fresh as _call_tool_fresh,
+)
+from ..utilities.addon_restart import (
+    post_log_level as _post_log_level,
+)
+from ..utilities.addon_restart import (
+    restart_self as _restart_self,
+)
+from ..utilities.addon_restart import restore_info_level
 
 LOG = logging.getLogger(__name__)
 
@@ -60,66 +67,10 @@ DEBUG_CANARY = "Debug logging active (log_level applied from settings)"
 ARMING_LINE = "arming kill-signal diagnostics"
 INSTALLED_LINE = "kill-signal diagnostics installed for"
 
-# Transient errors expected while the addon restarts underneath us:
-# the MCP-client polling set from wait_helpers, plus httpx transport
-# errors from a freshly-opened connection dying or being refused
-# mid-restart. Bugs (TypeError, KeyError, AssertionError) must propagate
-# per .gemini/styleguide.md "Exception Handling in Test Polling Loops".
-_TRANSIENT = (*_POLLING_TRANSIENT_ERRORS, httpx.HTTPError)
-
-# The finally-block restore/warm loops additionally retry on
-# AssertionError: _post_log_level / _restart_self assert on HTTP status,
-# and a 5xx from the addon mid-restart is a legitimate transient there
-# (same shape as test_readonly_mode's `_transient` restore set). The
-# main proof-polling loop deliberately does NOT get this — a real
-# assertion inside it must fail the test with its true cause.
-_RESTORE_TRANSIENT = (*_TRANSIENT, AssertionError)
-
 # Addon restart = container stop + start; CI runners take 5-25s, plus
 # the install thread's confirmation line lags boot slightly.
 _RECOVERY_TIMEOUT = 180.0
 _POLL_INTERVAL = 3.0
-
-
-async def _call_tool_fresh(addon_url: str, tool: str, args: dict[str, Any]) -> Any:
-    """Call an MCP tool over a fresh streamable-HTTP connection.
-
-    The server is stateless, so a new client per call is cheap and —
-    unlike a long-lived session — immune to the addon restarting
-    between calls.
-    """
-    client = Client(StreamableHttpTransport(url=addon_url))
-    async with client:
-        raw = await client.call_tool(tool, args)
-    return parse_mcp_result(raw)
-
-
-async def _post_log_level(settings_advanced_url: str, level: str) -> None:
-    """Write ``log_level`` through the settings advanced API."""
-    async with httpx.AsyncClient(timeout=30.0) as http:
-        resp = await http.post(settings_advanced_url, json={"log_level": level})
-    assert resp.status_code == 200, (
-        f"POST {{'log_level': {level!r}}} to {settings_advanced_url} returned "
-        f"{resp.status_code}: {resp.text[:500]}"
-    )
-    body = resp.json()
-    assert body.get("restart_required") is True, (
-        f"settings API response missing restart_required=True: {body}"
-    )
-
-
-async def _restart_self(settings_restart_url: str) -> None:
-    """Self-restart via the settings restart endpoint.
-
-    Empty body → target='self'; the handler schedules the bounce in the
-    background so this 200 flushes before the process dies (same
-    mechanism the readonly-mode e2e uses).
-    """
-    async with httpx.AsyncClient(timeout=30.0) as http:
-        resp = await http.post(settings_restart_url, json={})
-    assert resp.status_code == 200, (
-        f"self-restart POST returned {resp.status_code}: {resp.text[:300]}"
-    )
 
 
 def _has_debug_record(logs: str) -> bool:
@@ -201,7 +152,6 @@ async def _await_full_debug_proof(slug: str) -> None:
 @pytest.mark.inaddon_only
 @pytest.mark.addon_disruptive
 async def test_web_ui_debug_log_level_reaches_addon_log(
-    mcp_client: Any,
     ha_container_with_fresh_config: dict[str, Any],
 ) -> None:
     """Web-UI log_level=DEBUG must produce DEBUG output in the addon log."""
@@ -214,10 +164,9 @@ async def test_web_ui_debug_log_level_reaches_addon_log(
     base = addon_url.split("/mcp", 1)[0]
     settings_advanced = f"{base}{HA_MCP_TEST_SECRET_PATH}/api/settings/advanced"
     settings_restart = f"{base}{HA_MCP_TEST_SECRET_PATH}/api/settings/restart"
+    settings_info = f"{base}{HA_MCP_TEST_SECRET_PATH}/api/settings/info"
 
-    # Resolve the dev addon's Supervisor slug while the shared client is
-    # still live (pre-restart).
-    data = parse_mcp_result(await mcp_client.call_tool("ha_get_app", {}))
+    data = await _call_tool_fresh(addon_url, "ha_get_app", {})
     addons = data.get("addons") or []
     dev_addon = next((a for a in addons if a.get("name") == DEV_ADDON_NAME), None)
     assert dev_addon is not None, (
@@ -242,29 +191,12 @@ async def test_web_ui_debug_log_level_reaches_addon_log(
         await _restart_self(settings_restart)
         await _await_full_debug_proof(slug)
     finally:
-        # Restore INFO for the rest of the session — retried as a set,
-        # like the readonly-mode restore (a leaked DEBUG level would
-        # flood every later test's addon log).
-        restore_deadline = time.monotonic() + _RECOVERY_TIMEOUT
-        while True:
-            try:
-                await _post_log_level(settings_advanced, "INFO")
-                await _restart_self(settings_restart)
-                break
-            except _RESTORE_TRANSIENT:
-                if time.monotonic() >= restore_deadline:
-                    raise
-                await asyncio.sleep(_POLL_INTERVAL)
-        # The self-restarts dropped the SHARED session mcp_client's
-        # connection. Warm it back up so later tests on this worker get
-        # a live session (read tool is enough; retry while the addon
-        # finishes booting).
-        warm_deadline = time.monotonic() + _RECOVERY_TIMEOUT
-        while True:
-            try:
-                await mcp_client.call_tool("ha_get_overview", {})
-                break
-            except _RESTORE_TRANSIENT:
-                if time.monotonic() >= warm_deadline:
-                    raise
-                await asyncio.sleep(_POLL_INTERVAL)
+        await restore_info_level(
+            settings_advanced,
+            settings_restart,
+            settings_info,
+            addon_url,
+            restore_timeout=_RECOVERY_TIMEOUT,
+            ready_timeout=_RECOVERY_TIMEOUT,
+            poll_interval=_POLL_INTERVAL,
+        )

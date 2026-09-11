@@ -711,10 +711,13 @@ def _consume_declared_section(
         explicit_source=explicit_source,
         keep_current_values=keep_current_values,
     )
-    if not nested_data:
+    # An explicitly supplied empty section is a value, unlike omission.
+    if not nested_data and explicit_section != {}:
         return
     if section_name is not None:
         form_data[section_name] = nested_data
+        if explicit_section == {}:
+            _mark_consumed(consumed_config_keys, path_prefix, section_name)
     else:
         form_data.update(nested_data)
 
