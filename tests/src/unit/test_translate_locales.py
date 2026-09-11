@@ -948,6 +948,50 @@ class TestCallGeminiRetry:
         assert translate_locales._call_gemini("prompt") == {"s0": "Hallo"}
         assert len(calls) == 2
 
+    def test_non_object_envelope_is_retried_not_a_traceback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 200 whose body is JSON but not an object (a proxy answering
+        ``[]``), or not JSON at all (an HTML error page), must reach the same
+        report and retry as a cut-off answer — not an AttributeError or a
+        JSONDecodeError escaping from the envelope parse."""
+
+        def raise_value_error() -> Any:
+            raise json.JSONDecodeError("Expecting value", "<html>", 0)
+
+        calls: list[int] = []
+        responses = [
+            SimpleNamespace(status_code=200, text="[]", json=list),
+            SimpleNamespace(status_code=200, text="<html>", json=raise_value_error),
+            self._response(200),
+        ]
+
+        def fake_post(*_args: Any, **_kwargs: Any) -> Any:
+            calls.append(1)
+            return responses[len(calls) - 1]
+
+        monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
+        assert translate_locales._call_gemini("prompt") == {"s0": "Hallo"}
+        assert len(calls) == 3
+
+    def test_non_object_answer_is_retried(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The candidate text parsing as a JSON list would make every
+        ``response.get`` downstream an AttributeError; it is an unusable
+        answer like any other."""
+        listed = {"candidates": [{"content": {"parts": [{"text": "[]"}]}}]}
+        calls: list[int] = []
+        responses = [self._response(200, listed), self._response(200)]
+
+        def fake_post(*_args: Any, **_kwargs: Any) -> Any:
+            calls.append(1)
+            return responses[len(calls) - 1]
+
+        monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
+        assert translate_locales._call_gemini("prompt") == {"s0": "Hallo"}
+        assert len(calls) == 2
+
     def test_persistently_unparseable_answer_names_the_finish_reason(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
