@@ -274,6 +274,14 @@ markers = [
     "beta_haos_only: beta HAOS image lanes with Supervisor/Core version expectations configured",
 ]
 asyncio_mode = "auto"
+# Same per-test timeout as tests/pytest.ini, which only applies when pytest is
+# invoked from tests/. `uv run pytest` at the repository root (the command in
+# the PR checklist) resolves its config here instead, and without these a hung
+# test stalls that run until the CI job timeout. Keep the three values in sync
+# with tests/pytest.ini; that file documents why 300s and why func-only.
+timeout = 300
+timeout_method = "signal"
+timeout_func_only = true
 
 [dependency-groups]
 dev = [

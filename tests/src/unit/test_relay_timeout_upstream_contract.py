@@ -107,6 +107,9 @@ def real_aiohttp() -> dict[str, Any]:
         capture_output=True,
         text=True,
         check=False,
+        # This runs in a fixture, and timeout_func_only bills the pytest
+        # deadline to the test function only, so nothing else bounds it.
+        timeout=120,
     )
     assert completed.returncode == 0, (
         "Could not introspect the real aiohttp. It is a dev dependency for "
