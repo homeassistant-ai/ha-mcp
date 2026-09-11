@@ -454,10 +454,6 @@ jobs:
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-beta-test-image.qcow2
 
-      # The inaddon beta lane is the sole saver for this shared beta key. This
-      # dependent lane restores the primed image, or builds locally if the
-      # writer failed before saving it.
-
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:

@@ -313,6 +313,10 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
         build = next(
             step for step in steps if step.get("name") == "Build the beta image"
         )
+        assert "if" not in build, (
+            f"{beta_job_id} bakes its own image on every run: a conditional here "
+            "would leave the lane with no qcow2 (#2311)"
+        )
         assert build["env"] == {
             "HAOS_BUILD_OS_VERSION": "${{ steps.versions.outputs.os_version }}",
             "HAOS_BUILD_SUPERVISOR_CHANNEL": "beta",
