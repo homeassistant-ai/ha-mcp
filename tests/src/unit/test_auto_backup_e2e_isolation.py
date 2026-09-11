@@ -1,8 +1,6 @@
 """The edit-backup E2E fixture must never select a developer's legacy history."""
 
 import os
-import shutil
-import stat
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,40 +15,6 @@ from ha_mcp.utils import data_paths
 from ..e2e import conftest as e2e_fixtures
 from ..e2e.workflows.auto_backup import conftest as backup_fixtures
 from ..e2e.workflows.auto_backup.test_capture_and_restore import _enable_auto_backup
-
-
-@pytest.mark.skipif(os.name != "posix", reason="POSIX fixture permission checks")
-@pytest.mark.parametrize("source_mode", [0o755, 0o775])
-def test_embedded_staging_permissions_allow_private_backup_capture(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, source_mode: int
-) -> None:
-    seed = tmp_path / "seed"
-    (seed / ".ha_mcp").mkdir(parents=True)
-    (seed / ".ha_mcp" / "backup_settings.json").write_text("{}", encoding="utf-8")
-    seed.chmod(source_mode)
-    config_root = tmp_path / "config"
-    # The session fixture copies directory metadata before applying its modes.
-    shutil.copytree(seed, config_root)
-    e2e_fixtures._setup_config_permissions(config_root)
-    monkeypatch.setattr(config, "get_embedded_config_dir", lambda: str(config_root))
-    directory = config_root / ".ha_mcp" / "backups"
-    manager = bm.BackupManager(
-        SimpleNamespace(auto_backup_dir=str(directory), enable_auto_backup=True),
-        SimpleNamespace(),
-    )
-
-    snapshot = manager._write_snapshot("automation", "fixture", {"alias": "old"}, None)
-
-    assert manager.read_snapshot(snapshot.name)["config"] == {"alias": "old"}
-    # Root HA can write; host-side test readers retain group/other traversal/read.
-    assert stat.S_IMODE(config_root.stat().st_mode) == 0o755
-    assert stat.S_IMODE(directory.parent.stat().st_mode) == 0o755
-    assert (
-        stat.S_IMODE((directory.parent / "backup_settings.json").stat().st_mode)
-        == 0o644
-    )
-    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
-    assert stat.S_IMODE(snapshot.stat().st_mode) == 0o600
 
 
 @pytest.mark.parametrize("backend", ["container", "haos"])

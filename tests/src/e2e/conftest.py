@@ -738,15 +738,25 @@ def _refresh_recorder_timestamps(
 
 
 def _setup_config_permissions(config_path: Path) -> None:
-    """Keep staged config readable without making backup ancestors writable."""
-    # HA runs as root in the test image. Host readers need traversal/read, not
-    # group write. copytree also copies the source root's mode, so reset it too.
-    config_path.chmod(0o755)
+    """Set up proper permissions for Home Assistant config directory."""
+    import stat
+
+    # Set directory permissions recursively
     for root, dirs, files in os.walk(config_path):
         for d in dirs:
-            os.chmod(os.path.join(root, d), 0o755)
+            os.chmod(
+                os.path.join(root, d),
+                stat.S_IRWXU | stat.S_IRWXG | stat.S_IROTH | stat.S_IXOTH,
+            )
         for f in files:
-            os.chmod(os.path.join(root, f), 0o644)
+            os.chmod(
+                os.path.join(root, f),
+                stat.S_IRUSR
+                | stat.S_IWUSR
+                | stat.S_IRGRP
+                | stat.S_IWGRP
+                | stat.S_IROTH,
+            )
 
 
 def _clear_stale_hacs_lock(lock_dir: Path) -> None:

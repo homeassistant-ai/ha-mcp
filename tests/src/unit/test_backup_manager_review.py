@@ -16,6 +16,111 @@ from .test_template_backup_review import _config
 from .test_template_backup_review import manager as manager
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_shared_directory_allows_capture_without_changing_existing_modes(tmp_path):
+    tmp_path.chmod(0o777)
+    retained = tmp_path / "automation.retained.20260910_000000.yaml"
+    retained.write_text("# ha_mcp_backup\nschema_version: 1\n", encoding="utf-8")
+    retained.chmod(0o666)
+    manager = _mk_manager(tmp_path)
+
+    snapshot = manager._write_snapshot("automation", "example", {"alias": "old"}, None)
+
+    assert manager.read_snapshot(snapshot.name)["config"] == {"alias": "old"}
+    assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o777
+    assert stat.S_IMODE(retained.stat().st_mode) == 0o666
+    assert stat.S_IMODE(snapshot.stat().st_mode) == 0o600
+
+
+def test_snapshot_temp_is_exclusively_created_private_before_writing(
+    tmp_path, monkeypatch
+):
+    manager = _mk_manager(tmp_path)
+    native_open = os.open
+    creations = []
+
+    def open_file(path, flags, mode=0o777, **kwargs):
+        if flags & os.O_CREAT:
+            creations.append((Path(path), flags, mode))
+            assert mode == 0o600
+            assert flags & os.O_EXCL
+            assert not Path(path).exists()
+        return native_open(path, flags, mode, **kwargs)
+
+    monkeypatch.setattr(os, "open", open_file)
+    snapshot = manager._write_snapshot(
+        "helper_template", "entry", {"options": {"state": "private value"}}, None
+    )
+
+    assert len(creations) == 1
+    assert creations[0][0].parent == tmp_path
+    assert creations[0][0] != snapshot.with_suffix(".yaml.tmp")
+    assert (
+        manager.read_snapshot(snapshot.name)["config"]["options"]["state"]
+        == "private value"
+    )
+
+
+def test_snapshot_does_not_reuse_an_existing_predictable_temp(tmp_path, monkeypatch):
+    monkeypatch.setattr(bm, "_now_ts", lambda: "20260910_000000")
+    leftover = tmp_path / "automation.example.20260910_000000.yaml.tmp"
+    leftover.write_text("unrelated unfinished write", encoding="utf-8")
+
+    snapshot = _mk_manager(tmp_path)._write_snapshot("automation", "example", {}, None)
+
+    assert snapshot.exists()
+    assert leftover.read_text(encoding="utf-8") == "unrelated unfinished write"
+
+
+@pytest.mark.parametrize("failure", ["fdopen", "write", "replace"])
+def test_failed_snapshot_removes_only_its_temporary_file(
+    tmp_path, monkeypatch, failure
+):
+    retained = tmp_path / "retained.yaml"
+    retained.write_text("retained", encoding="utf-8")
+    manager = _mk_manager(tmp_path)
+    native_fdopen = os.fdopen
+
+    class FailedWrite:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            return self
+
+        def write(self, content):
+            self.stream.write(content[:20])
+            raise OSError("disk full")
+
+        def __exit__(self, *args):
+            self.stream.close()
+
+    if failure == "fdopen":
+
+        def fail_fdopen(fd, *args):
+            raise OSError("fdopen failed")
+
+        monkeypatch.setattr(os, "fdopen", fail_fdopen)
+    elif failure == "write":
+        monkeypatch.setattr(
+            os,
+            "fdopen",
+            lambda *args, **kwargs: FailedWrite(native_fdopen(*args, **kwargs)),
+        )
+    else:
+
+        def fail_replace(*args):
+            raise OSError("replace failed")
+
+        monkeypatch.setattr(os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match=r"disk full|replace failed|fdopen failed"):
+        manager._write_snapshot("automation", "example", {}, None)
+
+    assert list(tmp_path.iterdir()) == [retained]
+    assert retained.read_text(encoding="utf-8") == "retained"
+
+
 async def test_listing_checks_directory_off_loop_before_first_capture(
     tmp_path, monkeypatch
 ):
@@ -53,45 +158,40 @@ async def test_disabled_health_check_and_capture_do_not_resolve_storage(monkeypa
     assert manager.init_dir_error is None
 
 
-async def test_directory_recovery_retries_failed_snapshot_migration(
-    tmp_path, monkeypatch
-):
-    legacy = tmp_path / "automation.example.20260910_000000.yaml"
-    legacy.write_text("# ha_mcp_backup\nschema_version: 1\n", encoding="utf-8")
-    legacy.chmod(0o666)
-    manager = _mk_manager(tmp_path)
+async def test_directory_recovery_retries_failed_initialization(tmp_path, monkeypatch):
+    directory = tmp_path / "backups"
+    manager = _mk_manager(directory)
     fetch = AsyncMock(return_value={"alias": "Current"})
     manager.register(bm.DomainHandler("automation", fetch, AsyncMock()))
-    native_restrict = bm._restrict_existing_snapshot_permissions
+    native_mkdir = Path.mkdir
     attempts = []
-    migration_available = False
+    available = False
 
-    def restrict(directory):
-        attempts.append(directory)
-        if not migration_available:
-            raise PermissionError("Snapshot permission migration unavailable")
-        native_restrict(directory)
+    def mkdir(path, *args, **kwargs):
+        if path == directory:
+            attempts.append(path)
+            if not available:
+                raise PermissionError("Backup directory temporarily unavailable")
+        return native_mkdir(path, *args, **kwargs)
 
-    monkeypatch.setattr(bm, "_restrict_existing_snapshot_permissions", restrict)
+    monkeypatch.setattr(Path, "mkdir", mkdir)
     for _ in range(2):
         await manager.ensure_directory_ready()
         assert manager.enabled is False
-        assert "migration unavailable" in manager.init_dir_error
+        assert "temporarily unavailable" in manager.init_dir_error
     assert len(attempts) == 2
     fetch.assert_not_awaited()
 
-    migration_available = True
-    captured = await manager.maybe_snapshot("automation", "example")
-    assert captured is not None and captured.exists()
+    available = True
+    await manager.ensure_directory_ready()
     assert manager.enabled is True
     assert manager.init_dir_error is None
     assert len(attempts) == 3
-    fetch.assert_awaited_once()
-    if os.name == "posix":
-        assert stat.S_IMODE(legacy.stat().st_mode) == 0o600
-
     await manager.ensure_directory_ready()
     assert len(attempts) == 3
+    captured = await manager.maybe_snapshot("automation", "example")
+    assert captured is not None and captured.exists()
+    fetch.assert_awaited_once()
 
 
 @pytest.mark.parametrize("failure", ["yaml", "identity", "unreadable"])
