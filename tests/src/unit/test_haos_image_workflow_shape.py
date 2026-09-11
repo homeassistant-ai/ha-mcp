@@ -199,18 +199,19 @@ def test_beta_lane_discovery_does_not_depend_on_attestation(tmp_path: Path) -> N
 
 
 def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
-    """Both beta lanes share one workflow and one manifest-keyed qcow2 cache.
+    """Both beta lanes bake the same beta OS, Supervisor, and Core.
 
     The lanes live in a single workflow file for each user-originated master
-    update, nightly schedule, or manual dispatch. The cache-writing inaddon
-    lane runs first, then the embedded lane consumes its image.
+    update, nightly schedule, or manual dispatch, and each bakes its own qcow2.
+    Neither touches the Actions cache: a ~4.9 GB image in a 10 GB repository
+    budget evicted the stable qcow2 and the Home Assistant container images
+    that the pull-request lanes restore (#2311).
     """
     lane_specs = (
         ("haos-e2e-inaddon-beta", "inaddon", "haos-e2e-inaddon"),
         ("haos-e2e-embedded-beta", "embedded", "haos-e2e-embedded"),
     )
     beta_resolvers: list[str] = []
-    beta_cache_keys: list[str] = []
     # The container beta workflow's resolver job is the only other beta.json
     # consumer; it has no HAOS mode and is pinned down by
     # test_container_beta_lane_resolves_the_beta_core_image_once below.
@@ -275,8 +276,9 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
             assert job["needs"] == "resolve-beta"
             assert job["if"] == skip_guard
         else:
-            assert job["needs"] == ["resolve-beta", "haos-e2e-inaddon-beta"], (
-                "the embedded lane must wait for the sole cache writer"
+            assert job["needs"] == ["resolve-beta"], (
+                "the embedded lane bakes its own image, so it must not wait "
+                "on the inaddon lane (#2311)"
             )
             assert job["if"] == (
                 "${{ !cancelled() && needs.resolve-beta.result == 'success' "
@@ -299,20 +301,17 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
         assert '["homeassistant"]["qemux86-64"]' in resolve["run"]
         beta_resolvers.append(resolve["run"])
 
-        cache_key = next(
-            step for step in steps if step.get("name") == "Compute beta image cache key"
+        assert not any(
+            str(step.get("uses", "")).partition("@")[0] in _CACHE_ACTIONS
+            for step in steps
+        ), (
+            f"{beta_job_id} must not use the Actions cache: a ~4.9 GB beta "
+            "image evicts the stable qcow2 and the HA container images that "
+            "the pull-request lanes restore (#2311)"
         )
-        cache_script = cache_key["run"]
-        assert "haos-beta-image-" in cache_script
-        assert "steps.versions.outputs.supervisor_version" in cache_script
-        assert "steps.versions.outputs.core_version" in cache_script
-        assert "steps.versions.outputs.os_version" in cache_script
-        beta_cache_keys.append(cache_script)
 
         build = next(
-            step
-            for step in steps
-            if step.get("name") == "Build image locally (cache miss or forced rebuild)"
+            step for step in steps if step.get("name") == "Build the beta image"
         )
         assert build["env"] == {
             "HAOS_BUILD_OS_VERSION": "${{ steps.versions.outputs.os_version }}",
@@ -322,11 +321,6 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
             ),
             "HAOS_BUILD_CORE_VERSION": "${{ steps.versions.outputs.core_version }}",
         }
-
-        restore = next(
-            step for step in steps if step.get("name") == "Restore image from cache"
-        )
-        assert restore["with"]["path"] == "/tmp/haos-beta-test-image.qcow2"
 
         run_step = next(
             step for step in steps if step.get("env", {}).get("HAOS_TEST_MODE")
@@ -378,7 +372,6 @@ def test_beta_lanes_share_a_current_supervisor_and_core_image() -> None:
         assert "env" not in stable_build
 
     assert beta_resolvers[0] == beta_resolvers[1]
-    assert beta_cache_keys[0] == beta_cache_keys[1]
 
 
 def test_container_beta_lane_resolves_the_beta_core_image_once() -> None:
