@@ -12,9 +12,10 @@ name: Build HAOS Test Image (Prime Shared Cache)
 #
 # INVARIANT — the path triggers below MUST mirror the ``git ls-tree`` paths
 # that the six HAOS E2E lanes in ``haos-e2e-tests.yml`` hash into their image
-# cache keys (see each "Compute image cache key" step). The beta lanes in
-# ``haos-e2e-beta-tests.yml`` are NOT part of this invariant: they key a
-# separate ``haos-beta-image-*`` namespace this workflow never primes.
+# cache keys (see each "Compute image cache key" step), including the
+# ``*.md`` filter those keys apply. The beta lanes in
+# ``haos-e2e-beta-tests.yml`` are NOT part of this invariant: they use no
+# cache at all and bake their own image whenever they run.
 # When master commits change a baked
 # input that isn't listed here, the master cache-prime stays at the
 # previous state and every subsequent PR on a cache miss builds locally
@@ -34,6 +35,11 @@ on:
       - 'custom_components/ha_mcp_tools/**'
       - 'homeassistant-addon-webhook-proxy/**'
       - 'homeassistant-addon-dev/**'
+      # Markdown under those paths is not baked and is filtered out of the
+      # lanes' cache-key hash, so a doc-only commit leaves the key unchanged.
+      # Without this exclusion the prime would rebuild and then fail to save
+      # over its own still-current key.
+      - '!**/*.md'
       # The workflow itself — bumping the build script or env triggers a cache refresh.
       - '.github/workflows/build-haos-test-image.yml'
   schedule:
