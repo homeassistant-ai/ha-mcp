@@ -974,6 +974,23 @@ class TestCallGeminiRetry:
         assert translate_locales._call_gemini("prompt") == {"s0": "Hallo"}
         assert len(calls) == 3
 
+    def test_odd_shaped_envelope_fields_are_retried_not_a_traceback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``promptFeedback`` that is not an object and ``candidates`` that is
+        not a list must not raise out of the shape lookups either."""
+        odd = {"candidates": {"not": "a list"}, "promptFeedback": "not an object"}
+        calls: list[int] = []
+        responses = [self._response(200, odd), self._response(200)]
+
+        def fake_post(*_args: Any, **_kwargs: Any) -> Any:
+            calls.append(1)
+            return responses[len(calls) - 1]
+
+        monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
+        assert translate_locales._call_gemini("prompt") == {"s0": "Hallo"}
+        assert len(calls) == 2
+
     def test_non_object_answer_is_retried(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

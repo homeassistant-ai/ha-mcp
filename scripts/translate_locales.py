@@ -751,7 +751,8 @@ def _read_answer(response: httpx.Response) -> tuple[dict[str, Any] | None, str, 
         # call. Failing on the spot marked every string of that chunk failed
         # and counted toward declaring the engine dead. A prompt-level block
         # is the one shape that is deterministic; it is reported at once.
-        blocked = bool((payload.get("promptFeedback") or {}).get("blockReason"))
+        feedback = payload.get("promptFeedback")
+        blocked = isinstance(feedback, dict) and bool(feedback.get("blockReason"))
         return None, _describe_unusable(payload, exc, response.text), not blocked
     return parsed, "", True
 
@@ -765,8 +766,9 @@ def _describe_unusable(payload: dict[str, Any], exc: Exception, body: str) -> st
     reach neither, so a failed run could not say which it had seen. With no
     candidate text to show, the start of the raw body stands in for it.
     """
-    candidates = payload.get("candidates") or [{}]
-    candidate = candidates[0] if isinstance(candidates[0], dict) else {}
+    candidates = payload.get("candidates")
+    first = candidates[0] if isinstance(candidates, list) and candidates else None
+    candidate = first if isinstance(first, dict) else {}
     text = ""
     try:
         text = str(candidate["content"]["parts"][0]["text"])
