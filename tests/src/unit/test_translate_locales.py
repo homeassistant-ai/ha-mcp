@@ -16,7 +16,7 @@ import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -906,15 +906,127 @@ class TestCallGeminiRetry:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """HTTP 200 with an empty candidates list (safety-filter block) must
-        read like the other engine failures, not a raw IndexError."""
+        read like the other engine failures, not a raw IndexError — and a
+        prompt-level block is deterministic, so it is not retried."""
         blocked = {"candidates": [], "promptFeedback": {"blockReason": "SAFETY"}}
-        monkeypatch.setattr(
-            translate_locales.httpx,
-            "post",
-            lambda *_a, **_k: self._response(200, blocked),
-        )
-        with pytest.raises(SystemExit, match="unusable response"):
+        calls: list[int] = []
+
+        def fake_post(*_args: Any, **_kwargs: Any) -> Any:
+            calls.append(1)
+            return self._response(200, blocked)
+
+        monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
+        with pytest.raises(SystemExit, match="unusable response") as excinfo:
             translate_locales._call_gemini("prompt")
+        assert len(calls) == 1
+        assert 'promptFeedback={"blockReason": "SAFETY"}' in str(excinfo.value)
+
+    # A 200 whose JSON object stops a third of the way in, as the engine
+    # answered once for a 95-string chunk the identical prompt then
+    # completed on the next call.
+    _CUT_OFF: ClassVar[dict[str, Any]] = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": '{\n "s0": "你好",\n'}]},
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {"candidatesTokenCount": 7},
+    }
+
+    def test_unparseable_answer_is_retried_like_a_transient_status(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[int] = []
+        responses = [self._response(200, self._CUT_OFF), self._response(200)]
+
+        def fake_post(*_args: Any, **_kwargs: Any) -> Any:
+            calls.append(1)
+            return responses[len(calls) - 1]
+
+        monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
+        assert translate_locales._call_gemini("prompt") == {"s0": "Hallo"}
+        assert len(calls) == 2
+
+    def test_non_object_envelope_is_retried_not_a_traceback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 200 whose body is JSON but not an object (a proxy answering
+        ``[]``), or not JSON at all (an HTML error page), must reach the same
+        report and retry as a cut-off answer — not an AttributeError or a
+        JSONDecodeError escaping from the envelope parse."""
+
+        def raise_value_error() -> Any:
+            raise json.JSONDecodeError("Expecting value", "<html>", 0)
+
+        calls: list[int] = []
+        responses = [
+            SimpleNamespace(status_code=200, text="[]", json=list),
+            SimpleNamespace(status_code=200, text="<html>", json=raise_value_error),
+            self._response(200),
+        ]
+
+        def fake_post(*_args: Any, **_kwargs: Any) -> Any:
+            calls.append(1)
+            return responses[len(calls) - 1]
+
+        monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
+        assert translate_locales._call_gemini("prompt") == {"s0": "Hallo"}
+        assert len(calls) == 3
+
+    def test_odd_shaped_envelope_fields_are_retried_not_a_traceback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``promptFeedback`` that is not an object and ``candidates`` that is
+        not a list must not raise out of the shape lookups either."""
+        odd = {"candidates": {"not": "a list"}, "promptFeedback": "not an object"}
+        calls: list[int] = []
+        responses = [self._response(200, odd), self._response(200)]
+
+        def fake_post(*_args: Any, **_kwargs: Any) -> Any:
+            calls.append(1)
+            return responses[len(calls) - 1]
+
+        monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
+        assert translate_locales._call_gemini("prompt") == {"s0": "Hallo"}
+        assert len(calls) == 2
+
+    def test_non_object_answer_is_retried(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The candidate text parsing as a JSON list would make every
+        ``response.get`` downstream an AttributeError; it is an unusable
+        answer like any other."""
+        listed = {"candidates": [{"content": {"parts": [{"text": "[]"}]}}]}
+        calls: list[int] = []
+        responses = [self._response(200, listed), self._response(200)]
+
+        def fake_post(*_args: Any, **_kwargs: Any) -> Any:
+            calls.append(1)
+            return responses[len(calls) - 1]
+
+        monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
+        assert translate_locales._call_gemini("prompt") == {"s0": "Hallo"}
+        assert len(calls) == 2
+
+    def test_persistently_unparseable_answer_names_the_finish_reason(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[int] = []
+
+        def fake_post(*_args: Any, **_kwargs: Any) -> Any:
+            calls.append(1)
+            return self._response(200, self._CUT_OFF)
+
+        monkeypatch.setattr(translate_locales.httpx, "post", fake_post)
+        with pytest.raises(SystemExit, match="unusable response") as excinfo:
+            translate_locales._call_gemini("prompt")
+        assert len(calls) == 5
+        message = str(excinfo.value)
+        assert "finishReason=STOP" in message
+        assert '"candidatesTokenCount": 7' in message
+        cut_text = self._CUT_OFF["candidates"][0]["content"]["parts"][0]["text"]
+        assert message.endswith(f"ends {cut_text!r}")
 
 
 class TestEngineFailureDegradation:

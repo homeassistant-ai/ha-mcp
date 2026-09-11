@@ -222,9 +222,11 @@ accurate and runs `python scripts/update_locale_baseline.py`.
 ## Sync failures and recovery
 
 The translation workflow uses conservative pacing and retries transient 429,
-5xx, and timeout failures with backoff. A repeatedly failing request records
-its strings as failed and continues; two dead batches stop the run before it
-burns the remaining quota.
+5xx, and timeout failures with backoff, and treats a 200 whose body is not a
+parseable JSON object (a cut-off or malformed answer) the same way; only a
+prompt-level block is reported without a retry. A repeatedly failing request
+records its strings as failed and continues; two dead batches stop the run
+before it burns the remaining quota.
 
 A partial run commits completed translations plus
 `tests/src/unit/locale_sync_progress.json`. Rerun the workflow or wait for the

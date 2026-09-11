@@ -711,30 +711,81 @@ def _call_gemini(prompt: str) -> dict[str, Any]:
             print(f"  engine {last_error}; retrying in {delay}s", file=sys.stderr)
             time.sleep(delay)
             continue
-        if response.status_code == 200:
-            payload = response.json()
-            try:
-                text = payload["candidates"][0]["content"]["parts"][0]["text"]
-                parsed: dict[str, Any] = json.loads(text)
-            except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-                # An empty/filtered candidate list or non-JSON answer should
-                # read like the HTTP failures, not a raw traceback.
-                raise SystemExit(
-                    f"Gemini API returned an unusable response ({exc!r}): "
-                    f"{json.dumps(payload)[:300]}"
-                ) from exc
+        parsed, last_error, retryable = _read_answer(response)
+        if parsed is not None:
             return parsed
-        last_error = f"HTTP {response.status_code}: {response.text[:300]}"
-        if response.status_code in (429, 500, 502, 503, 504):
-            if _out_of_time():
-                last_error += " (time budget exhausted; not retrying)"
-                break
-            delay = 20 * attempt
-            print(f"  engine {last_error}; retrying in {delay}s", file=sys.stderr)
-            time.sleep(delay)
-            continue
-        break
+        if not retryable:
+            break
+        if _out_of_time():
+            last_error += " (time budget exhausted; not retrying)"
+            break
+        delay = 20 * attempt
+        print(f"  engine {last_error}; retrying in {delay}s", file=sys.stderr)
+        time.sleep(delay)
     raise SystemExit(f"Gemini API call failed: {last_error}")
+
+
+def _read_answer(response: httpx.Response) -> tuple[dict[str, Any] | None, str, bool]:
+    """``(parsed, error, retryable)`` for one engine response."""
+    if response.status_code != 200:
+        error = f"HTTP {response.status_code}: {response.text[:300]}"
+        return None, error, response.status_code in (429, 500, 502, 503, 504)
+    try:
+        envelope = response.json()
+    except ValueError as exc:
+        # Not JSON at all — a proxy's HTML error page behind a 200.
+        return None, _describe_unusable({}, exc, response.text), True
+    # A JSON body that is not an object (``[]`` from a proxy) must reach the
+    # same report and retry, not an AttributeError on the lookups below.
+    payload: dict[str, Any] = envelope if isinstance(envelope, dict) else {}
+    try:
+        text = payload["candidates"][0]["content"]["parts"][0]["text"]
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise TypeError(f"answer is a JSON {type(parsed).__name__}, not an object")
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        # An empty/filtered candidate list or non-JSON answer reads like the
+        # HTTP failures, not a raw traceback — and retries like them: the
+        # engine has answered a 200 carrying a JSON object cut off a third of
+        # the way in, for a chunk the identical prompt completed on the next
+        # call. Failing on the spot marked every string of that chunk failed
+        # and counted toward declaring the engine dead. A prompt-level block
+        # is the one shape that is deterministic; it is reported at once.
+        feedback = payload.get("promptFeedback")
+        blocked = isinstance(feedback, dict) and bool(feedback.get("blockReason"))
+        return None, _describe_unusable(payload, exc, response.text), not blocked
+    return parsed, "", True
+
+
+def _describe_unusable(payload: dict[str, Any], exc: Exception, body: str) -> str:
+    """One line naming why a 200 carried no parseable JSON object.
+
+    The finish reason and token usage are what tell a cut-off answer
+    (MAX_TOKENS, SAFETY, RECITATION) from a malformed one (STOP); the first
+    300 characters of the raw payload, which is what used to be logged,
+    reach neither, so a failed run could not say which it had seen. With no
+    candidate text to show, the start of the raw body stands in for it.
+    """
+    candidates = payload.get("candidates")
+    first = candidates[0] if isinstance(candidates, list) and candidates else None
+    candidate = first if isinstance(first, dict) else {}
+    text = ""
+    try:
+        text = str(candidate["content"]["parts"][0]["text"])
+    except (KeyError, IndexError, TypeError):
+        pass  # no candidate text at all; the raw body stands in below
+    shown = (
+        f"text[{len(text)} chars] ends {text[-200:]!r}"
+        if text
+        else f"body starts {body[:200]!r}"
+    )
+    return (
+        f"unusable response ({exc!r}); "
+        f"finishReason={candidate.get('finishReason')}; "
+        f"promptFeedback={json.dumps(payload.get('promptFeedback'))}; "
+        f"usageMetadata={json.dumps(payload.get('usageMetadata'))}; "
+        f"{shown}"
+    )
 
 
 def _chunk(batch: dict[str, str]) -> list[dict[str, str]]:
