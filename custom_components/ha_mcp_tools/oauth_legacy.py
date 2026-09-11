@@ -89,7 +89,7 @@ PKCE_VERIFIER_MAX = 128
 # SHA-256 → 32 bytes → 43 base64url chars (no padding).
 PKCE_S256_CHALLENGE_LEN = 43
 _PKCE_VERIFIER_RE = re.compile(r"[A-Za-z0-9._~-]+")
-_PKCE_CHALLENGE_RE = re.compile(r"[A-Za-z0-9_-]{43}")
+_PKCE_CHALLENGE_RE = re.compile(rf"[A-Za-z0-9_-]{{{PKCE_S256_CHALLENGE_LEN}}}")
 
 # Pending-code dict cap. An attacker spamming /authorize with valid params
 # could grow the dict between the prune passes that run on each issuance.

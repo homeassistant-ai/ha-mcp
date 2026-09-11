@@ -237,7 +237,6 @@ class TestConfigErrorHandling:
             cwd=tmp_path,
             capture_output=True,
             text=True,
-            timeout=30,
             check=False,
         )
 
@@ -271,7 +270,6 @@ class TestConfigErrorHandling:
             cwd=tmp_path,
             capture_output=True,
             text=True,
-            timeout=30,
             check=False,
         )
 
@@ -293,7 +291,6 @@ class TestConfigErrorHandling:
             cwd=tmp_path,
             capture_output=True,
             text=True,
-            timeout=30,
             check=False,
         )
 
@@ -315,7 +312,6 @@ class TestConfigErrorHandling:
             cwd=tmp_path,
             capture_output=True,
             text=True,
-            timeout=30,
             check=False,
         )
 
@@ -344,7 +340,6 @@ class TestConfigErrorHandling:
             cwd=tmp_path,
             capture_output=True,
             text=True,
-            timeout=60,
             check=False,
         )
 

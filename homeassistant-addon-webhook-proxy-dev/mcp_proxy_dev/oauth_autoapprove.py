@@ -231,20 +231,6 @@ class AutoApproveProvider:
         return secrets.token_urlsafe(32)
 
 
-def _active_autoapprove_provider(hass: HomeAssistant) -> AutoApproveProvider | None:
-    """The live none-mode auto-approve provider, or None when it is not live.
-
-    Read live from ``hass.data`` (not captured at view construction) so the bound
-    views serve only while none-autoapprove is the active mode and 404 otherwise
-    — mirrors ``oauth._active_oauth_mode``'s per-request gating.
-    """
-    domain_data = hass.data.get(DOMAIN)
-    if not isinstance(domain_data, dict):
-        return None
-    provider = domain_data.get(AUTOAPPROVE_PROVIDER_KEY)
-    return provider if isinstance(provider, AutoApproveProvider) else None
-
-
 def _domain_data(hass: HomeAssistant) -> dict[str, Any] | None:
     """Return the live proxy data used for per-request mode dispatch."""
     data = hass.data.get(DOMAIN)

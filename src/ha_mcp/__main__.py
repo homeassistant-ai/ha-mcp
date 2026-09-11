@@ -616,7 +616,7 @@ async def _run_with_shutdown(server_coro: Coroutine[Any, Any, Any]) -> None:
     shutdown_task = asyncio.create_task(_shutdown_event.wait())
 
     try:
-        done, pending = await asyncio.wait(
+        done, _ = await asyncio.wait(
             [server_task, shutdown_task],
             return_when=asyncio.FIRST_COMPLETED,
         )

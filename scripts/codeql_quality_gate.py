@@ -38,6 +38,9 @@ PATHS_IGNORE: tuple[str, ...] = (
     # ours. Scoped to the library subtree, NOT all of _vendor/, so our own
     # _vendor/__init__.py stays gated exactly as ruff lints it.
     "src/ha_mcp/_vendor/websockets/",
+    # Vendored skills submodule — upstream's code, shipped as package data and
+    # excluded from ruff for the same reason.
+    "src/ha_mcp/resources/skills-vendor/",
 )
 
 # Per-finding allowlist for verified false positives and intentional patterns

@@ -106,7 +106,6 @@ def real_aiohttp() -> dict[str, Any]:
         [sys.executable, "-c", _AIOHTTP_PROBE, *_TIMEOUT_FIELDS],
         capture_output=True,
         text=True,
-        timeout=120,
         check=False,
     )
     assert completed.returncode == 0, (

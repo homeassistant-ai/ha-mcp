@@ -198,7 +198,6 @@ def test_importing_ha_mcp_survives_old_rich():
         [sys.executable, "-c", program],
         capture_output=True,
         text=True,
-        timeout=120,
         check=False,
     )
     assert result.returncode == 0, (

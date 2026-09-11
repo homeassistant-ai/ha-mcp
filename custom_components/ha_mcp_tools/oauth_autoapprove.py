@@ -165,20 +165,6 @@ def _webhook_cfg(hass: HomeAssistant) -> dict[str, Any] | None:
     return cfg if isinstance(cfg, dict) else None
 
 
-def _active_autoapprove_provider(hass: HomeAssistant) -> AutoApproveProvider | None:
-    """The live none-mode auto-approve provider, or None when it is not live.
-
-    Read live from ``hass.data`` (not captured at view construction) so the
-    bound views serve only while none-autoapprove is the active mode and 404
-    otherwise — mirrors ``mcp_webhook._active_webhook_id``'s per-request gating.
-    """
-    cfg = _webhook_cfg(hass)
-    if cfg is None:
-        return None
-    provider = cfg.get(CFG_AUTOAPPROVE_PROVIDER)
-    return provider if isinstance(provider, AutoApproveProvider) else None
-
-
 def _validate_autoapprove_authorize(params: Any) -> web.Response | None:
     """Validate the none-mode /authorize query; a 400 Response, or None if OK.
 
