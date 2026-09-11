@@ -1,14 +1,16 @@
 name: HAOS E2E Tests (beta)
 
-# Both beta HAOS lanes live in this file (#2292 / #2302). They keep their
-# existing job ids, names, steps, and shared ``haos-beta-image-*`` cache key
-# for a qcow2 baked with the current beta OS, Supervisor, and Core.
-# `haos-e2e-inaddon-beta` is the sole writer of that cache;
-# `haos-e2e-embedded-beta` restores only (and can build locally on a miss).
+# Both beta HAOS lanes live in this file (#2292 / #2302). Each bakes its own
+# qcow2 from the current beta OS, Supervisor, and Core on every run.
+#
+# These lanes deliberately do NOT use the Actions cache (#2311). The beta image
+# is ~4.9 GB against a 10 GB repository budget, and holding it evicted both the
+# stable ``haos-image-*`` qcow2 that every pull request restores and the
+# ``ha-image-*`` Home Assistant container images that keep the e2e lanes off the
+# registry. No pull request waits on these lanes, so they pay the build instead.
 #
 # Both lanes run for every user-originated master push, the nightly schedule,
-# and manual dispatch. The embedded lane waits for the cache-writing inaddon
-# lane so a cache miss does not start two identical image builds.
+# and manual dispatch, and they run in parallel.
 
 on:
   # Test committed ha-mcp code against upcoming beta OS, Supervisor, and Core
@@ -35,11 +37,6 @@ on:
         type: string
         required: false
         default: 'src/e2e/'
-      force_local_build:
-        description: 'Build the qcow2 locally even on a cache hit (ignore the cached image)'
-        type: boolean
-        required: false
-        default: false
 
 permissions:
   contents: read
@@ -64,8 +61,8 @@ jobs:
   # whenever those change and
   # otherwise lives until cache eviction) is taken to cover it, and
   # both lanes below are skipped on push and schedule; a manual dispatch
-  # always runs. Each lane still resolves the versions itself for its cache
-  # key and build inputs.
+  # always runs. Each lane still resolves the versions itself for its build
+  # inputs.
   resolve-beta:
     name: Resolve beta versions
     runs-on: ubuntu-latest
@@ -174,33 +171,6 @@ jobs:
           echo "supervisor_version=$supervisor_version" >> "$GITHUB_OUTPUT"
           echo "core_version=$core_version" >> "$GITHUB_OUTPUT"
 
-      - name: Compute beta image cache key
-        id: key
-        # Both beta lanes restore this byte-identical image. The three upstream
-        # versions prevent an older beta image from satisfying a newer run;
-        # the hash invalidates it when any hashed repository bake input changes.
-        run: |
-          hash=$(git ls-tree -r HEAD \
-            tests/haos_image_build \
-            tests/initial_test_state \
-            custom_components/ha_mcp_tools \
-            homeassistant-addon-webhook-proxy \
-            | sha256sum | cut -d' ' -f1 | head -c16)
-          echo "cache-key=haos-beta-image-${{ steps.versions.outputs.os_version }}-${{ steps.versions.outputs.supervisor_version }}-${{ steps.versions.outputs.core_version }}-$hash" >> "$GITHUB_OUTPUT"
-
-      - name: Restore image from cache
-        id: restore-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: /tmp/haos-beta-test-image.qcow2
-          key: ${{ steps.key.outputs.cache-key }}
-
-      - name: Report beta image cache result
-        # Reports the cache lookup result; a forced local build may still run
-        # after a hit.
-        run: |
-          echo "::notice title=HAOS image cache::cache-hit=${{ steps.restore-cache.outputs.cache-hit }} key=${{ steps.key.outputs.cache-key }}"
-
       - name: Install QEMU + OVMF + libguestfs
         run: |
           sudo apt-get update
@@ -216,13 +186,11 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Free disk space for the local build
-        # On a cache miss (or a forced rebuild) the qcow2 is built locally;
-        # its download (~1.5 GB xz) + decompress (~7 GB qcow2) + boot +
+        # The qcow2 is baked on every run; its download (~1.5 GB xz) + decompress (~7 GB qcow2) + boot +
         # app install peaks at the edge of the runner's ~14 GB SSD, so
         # prune the ~30 GB of preinstalled tooling the bake does not use.
         # Keep /opt/hostedtoolcache: Python from there is on PATH for
         # build_image.py. See haos-e2e-tests.yml for the full rationale.
-        if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
         run: |
           df -h /
           sudo rm -rf /usr/share/dotnet /usr/share/swift /opt/ghc \
@@ -231,12 +199,10 @@ jobs:
           docker system prune -af --volumes || true
           df -h /
 
-      - name: Install build-script Python deps (cache miss or forced rebuild)
-        if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
+      - name: Install build-script Python deps
         run: pip install -r tests/haos_image_build/requirements.txt
 
-      - name: Build image locally (cache miss or forced rebuild)
-        if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
+      - name: Build the beta image
         env:
           HAOS_BUILD_OS_VERSION: ${{ steps.versions.outputs.os_version }}
           HAOS_BUILD_SUPERVISOR_CHANNEL: beta
@@ -245,28 +211,6 @@ jobs:
         run: |
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-beta-test-image.qcow2
-
-      - name: Compress beta image for Actions cache
-        if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
-        run: |
-          qemu-img convert -c -O qcow2 \
-            /tmp/haos-beta-test-image.qcow2 \
-            /tmp/haos-beta-test-image.qcow2.compressed
-          mv /tmp/haos-beta-test-image.qcow2.compressed \
-            /tmp/haos-beta-test-image.qcow2
-          qemu-img check /tmp/haos-beta-test-image.qcow2
-          bytes=$(stat -c%s /tmp/haos-beta-test-image.qcow2)
-          if [ "$bytes" -lt 1073741824 ]; then
-            echo "::error::Compressed beta qcow2 is suspiciously small: $bytes bytes"
-            exit 1
-          fi
-
-      - name: Save beta image cache
-        if: steps.restore-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: /tmp/haos-beta-test-image.qcow2
-          key: ${{ steps.key.outputs.cache-key }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
@@ -420,10 +364,8 @@ jobs:
 
   haos-e2e-embedded-beta:
     name: HAOS E2E Tests (embedded beta)
-    # Wait for the sole cache writer to finish priming a new beta image. Still
-    # run if the inaddon suite fails after saving it, and build locally if that
-    # lane failed before the save; only a cancelled workflow suppresses this.
-    needs: [resolve-beta, haos-e2e-inaddon-beta]
+    # Bakes its own image, so it does not wait on the inaddon lane.
+    needs: [resolve-beta]
     if: ${{ !cancelled() && needs.resolve-beta.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.resolve-beta.outputs.superfluous != 'true') }}
     runs-on: ubuntu-22.04
     # The embedded beta lane receives extra headroom for the per-worker runtime
@@ -470,33 +412,6 @@ jobs:
           echo "supervisor_version=$supervisor_version" >> "$GITHUB_OUTPUT"
           echo "core_version=$core_version" >> "$GITHUB_OUTPUT"
 
-      - name: Compute beta image cache key
-        id: key
-        # Both beta lanes restore this byte-identical image. The three upstream
-        # versions prevent an older beta image from satisfying a newer run;
-        # the hash invalidates it when any hashed repository bake input changes.
-        run: |
-          hash=$(git ls-tree -r HEAD \
-            tests/haos_image_build \
-            tests/initial_test_state \
-            custom_components/ha_mcp_tools \
-            homeassistant-addon-webhook-proxy \
-            | sha256sum | cut -d' ' -f1 | head -c16)
-          echo "cache-key=haos-beta-image-${{ steps.versions.outputs.os_version }}-${{ steps.versions.outputs.supervisor_version }}-${{ steps.versions.outputs.core_version }}-$hash" >> "$GITHUB_OUTPUT"
-
-      - name: Restore image from cache
-        id: restore-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: /tmp/haos-beta-test-image.qcow2
-          key: ${{ steps.key.outputs.cache-key }}
-
-      - name: Report beta image cache result
-        # Reports the cache lookup result; a forced local build may still run
-        # after a hit.
-        run: |
-          echo "::notice title=HAOS image cache::cache-hit=${{ steps.restore-cache.outputs.cache-hit }} key=${{ steps.key.outputs.cache-key }}"
-
       - name: Install QEMU + OVMF + libguestfs
         run: |
           sudo apt-get update
@@ -512,13 +427,12 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Free disk space for the local build
-        # On a cache miss (or a forced rebuild) the qcow2 is built locally; its
+        # The qcow2 is baked on every run; its
         # download (~1.5 GB xz) + decompress (~7 GB qcow2) + boot + app install
         # peaks at the edge of the runner's ~14 GB SSD, so prune the ~30 GB of
         # preinstalled tooling the bake does not use. Keep /opt/hostedtoolcache:
         # Python from there is on PATH for build_image.py. See haos-e2e-tests.yml
         # for the full rationale.
-        if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
         run: |
           df -h /
           sudo rm -rf /usr/share/dotnet /usr/share/swift /opt/ghc \
@@ -527,12 +441,10 @@ jobs:
           docker system prune -af --volumes || true
           df -h /
 
-      - name: Install build-script Python deps (cache miss or forced rebuild)
-        if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
+      - name: Install build-script Python deps
         run: pip install -r tests/haos_image_build/requirements.txt
 
-      - name: Build image locally (cache miss or forced rebuild)
-        if: steps.restore-cache.outputs.cache-hit != 'true' || github.event.inputs.force_local_build == 'true'
+      - name: Build the beta image
         env:
           HAOS_BUILD_OS_VERSION: ${{ steps.versions.outputs.os_version }}
           HAOS_BUILD_SUPERVISOR_CHANNEL: beta
@@ -541,10 +453,6 @@ jobs:
         run: |
           python3 tests/haos_image_build/build_image.py --verbose \
             --output /tmp/haos-beta-test-image.qcow2
-
-      # The inaddon beta lane is the sole saver for this shared beta key. This
-      # dependent lane restores the primed image, or builds locally if the
-      # writer failed before saving it.
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
