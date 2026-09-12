@@ -291,6 +291,30 @@ See the [integration's README](https://github.com/norpol/hass-codex-tunnel-mcp#r
 2. **Subsequent requests** - Should be faster (packages cached)
 3. **Alternative** - Use Docker for consistent performance
 
+### Claude Desktop stays busy after an HTTP tool call
+
+For HTTP connections (including a local stdio-to-HTTP bridge), **Settings →
+Advanced → Diagnostics** offers two independent experiments. Both default to
+**off** and require a server restart:
+
+- **HTTP transport diagnostics** (`HAMCP_HTTP_TRANSPORT_DIAGNOSTICS=true`):
+  logs request/response byte counts, elapsed time, body completion, observed
+  disconnects and exception types at INFO level. Each request gets a server-generated
+  trace identifier. No bodies, credentials, secret paths or client request IDs
+  are logged. Set the log level to INFO or DEBUG to see these records.
+- **JSON responses instead of streaming** (`HAMCP_HTTP_JSON_RESPONSE=true`):
+  asks FastMCP to return a single JSON response instead of an SSE stream.
+  This affects all HTTP clients connected to that server and removes streamed
+  progress notifications from those responses. Tool results are unchanged.
+
+Diagnostics can help distinguish an incomplete upload from an incomplete
+response. `response_complete=True` means the ASGI server accepted the final
+body event; it does **not** prove the client received or processed the result.
+These options are experiments, not a confirmed fix for Claude Desktop hangs.
+They do not affect a direct stdio server or require a custom component update.
+Turn them off and restart to restore the previous HTTP behavior, including any
+existing FastMCP JSON-response configuration.
+
 ### Tools are missing or using old version
 
 If you're seeing fewer tools than expected or outdated behavior, `uvx` may be using a cached old version.

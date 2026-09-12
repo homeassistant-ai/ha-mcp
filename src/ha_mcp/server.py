@@ -14,13 +14,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
 import yaml  # type: ignore[import-untyped]
-from fastmcp import FastMCP
 from mcp.types import Icon
 from pydantic import Field
 
 from .config import _PACKAGE_VERSION, get_global_settings
 from .errors import ErrorCode, create_error_response
 from .hacs_auto_refresh import hacs_refresh_lifespan
+from .http_transport import HttpTransportFastMCP as FastMCP
 from .tools.helpers import raise_tool_error
 from .transforms import DEFAULT_PINNED_TOOLS
 

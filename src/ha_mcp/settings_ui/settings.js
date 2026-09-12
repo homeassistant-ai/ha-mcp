@@ -3981,6 +3981,8 @@ const ADVANCED_FIELD_META = {
   environment:         { label: "Environment",                 help: "'development' or 'production'. Affects logging verbosity. Restart required." },
   log_level:           { label: "Log level",                   help: "DEBUG/INFO/WARNING/ERROR/CRITICAL. Set once at startup; restart required." },
   debug:               { label: "Debug mode",                  help: "Verbose request logging. Logs sensitive data; do not enable in production. Restart required." },
+  http_transport_diagnostics: { label: "HTTP transport diagnostics", help: "Experimental. Log MCP HTTP byte counts, timing and completion at INFO level, without payloads or credentials. Does not confirm client receipt. HTTP only; restart required." },
+  http_json_response: { label: "JSON responses instead of streaming", help: "Experimental. Return a single JSON response instead of an SSE stream. Affects all HTTP clients on this server and disables streamed progress for these responses. HTTP only; restart required." },
   code_mode_max_duration:    { label: "Code-mode max duration (s)",   help: "Wall-clock budget per sandbox run. Range 1–300. Restart required." },
   code_mode_max_memory:      { label: "Code-mode max memory (bytes)", help: "RSS cap per sandbox run. Range 1 MB–256 MB. Restart required." },
   code_mode_max_recursion:   { label: "Code-mode max recursion",      help: "Recursion-depth cap per sandbox run. Restart required." },
@@ -4002,6 +4004,7 @@ const ADVANCED_RESTART_REQUIRED = new Set([
   "ha_tool_concurrency",
   "enabled_tool_modules", "enable_websocket",
   "log_level", "debug",
+  "http_transport_diagnostics", "http_json_response",
   "mcp_server_name", "mcp_server_version", "environment",
   // fuzzy_threshold is read once by SmartSearchTools at the
   // lazy-init singleton (tools/smart_search/) — changes

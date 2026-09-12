@@ -19,6 +19,9 @@ from tests.src.e2e.haos_only import (
     test_addon_debug_log_level as debug_level,
 )
 from tests.src.e2e.haos_only import (
+    test_http_transport_options as http_options,
+)
+from tests.src.e2e.haos_only import (
     test_inaddon_startup_nudge as startup_nudge,
 )
 from tests.src.e2e.utilities import addon_restart
@@ -154,6 +157,7 @@ def addon(monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> _Addon:
     "test_function",
     [
         debug_level.test_web_ui_debug_log_level_reaches_addon_log,
+        http_options.test_http_options_apply_and_restore_after_restart,
         startup_nudge.test_addon_launcher_schedules_the_startup_nudge,
     ],
 )
@@ -186,6 +190,26 @@ async def test_restore_waits_for_old_process_exit_and_fresh_mcp_readiness(addon)
     ]
     assert len(addon.clients) == 2
     assert addon.clients[0] is not addon.clients[1]
+
+
+async def test_restore_independent_http_options_waits_for_replacement(addon):
+    changes = {
+        "http_transport_diagnostics": False,
+        "http_json_response": True,
+        "log_level": "WARNING",
+    }
+    await addon_restart.restore_advanced_settings(
+        _ADVANCED,
+        _RESTART,
+        _INFO,
+        _MCP,
+        changes=changes,
+        restore_timeout=10.0,
+        ready_timeout=15.0,
+        poll_interval=3.0,
+    )
+    assert addon.posts == [(_ADVANCED, changes), (_RESTART, {})]
+    assert addon.mcp_calls[-1][1] == "replacement-process"
 
 
 async def test_accepted_restart_is_not_replayed_when_old_process_stays_healthy(addon):
@@ -411,8 +435,8 @@ async def test_restore_submission_passes_each_http_exchange_its_remaining_budget
         clock.now += 1.0
         return "old-process"
 
-    async def post_level(url, level, *, timeout):
-        assert level == "INFO"
+    async def post_level(url, changes, *, timeout):
+        assert changes == {"log_level": "INFO"}
         calls.append(("advanced", clock.now, timeout))
         clock.now += 2.0
 
@@ -429,7 +453,7 @@ async def test_restore_submission_passes_each_http_exchange_its_remaining_budget
         return "replacement-process"
 
     monkeypatch.setattr(addon_restart, "get_instance_id", get_instance)
-    monkeypatch.setattr(addon_restart, "post_log_level", post_level)
+    monkeypatch.setattr(addon_restart, "post_advanced_settings", post_level)
     monkeypatch.setattr(addon_restart, "restart_self", restart)
     monkeypatch.setattr(addon_restart, "wait_for_addon_replacement", replacement)
 
