@@ -93,7 +93,13 @@ mypy_path = "src"
 # /tmp keeps the cache on Linux tmpfs — avoids the slow Windows FS in WSL2.
 # Windows-native contributors can remove this line or override with MYPY_CACHE_DIR.
 cache_dir = "/tmp/.mypy_cache"
-# See the ruff extend-exclude entry: vendored submodule, not our code.
+# Vendored skills submodule: upstream's code, not ours to type-check. This is
+# the exclusion that was actually failing a local run, because `mypy src/`
+# recurses into the submodule when it is initialized while CI's lint job checks
+# out without `submodules: true` and never sees it.
+# A regex, NOT a [[tool.mypy.overrides]] module entry like the ha_mcp._vendor.*
+# one below: `skills-vendor` contains a hyphen, so it has no importable module
+# path for a module pattern to match. Do not "simplify" it into that block.
 exclude = ['^src/ha_mcp/resources/skills-vendor/']
 warn_return_any = true
 warn_unused_configs = true
@@ -152,11 +158,12 @@ extend-exclude = [
     # with PATHS_IGNORE in scripts/codeql_quality_gate.py.
     "src/ha_mcp/_vendor/websockets",
     # Vendored skills submodule (src/ha_mcp/resources/skills-vendor) — upstream's
-    # code, shipped as package data. CI's lint job checks out without
-    # `submodules: true`, so it never lints these files; a local checkout with
-    # the submodule initialized did, which made the pre-commit hook fail on code
-    # we do not own. Kept in sync with PATHS_IGNORE in
-    # scripts/codeql_quality_gate.py.
+    # code, shipped as package data. This covers the directory-scoped commands,
+    # `ruff check src/ ...` in CI and the ones in CONTRIBUTING.md. It does NOT
+    # affect lefthook, which passes {staged_files} as explicit paths that ruff
+    # lints regardless of extend-exclude (force-exclude is not set), and a
+    # submodule's contents are never staged in the superproject anyway. Kept in
+    # sync with PATHS_IGNORE in scripts/codeql_quality_gate.py.
     "src/ha_mcp/resources/skills-vendor",
     # HA integration manifests must be strict JSON (no trailing commas);
     # ruff 0.15+ formats .json files as JSONC and inserts trailing commas
@@ -274,14 +281,6 @@ markers = [
     "beta_haos_only: beta HAOS image lanes with Supervisor/Core version expectations configured",
 ]
 asyncio_mode = "auto"
-# Same per-test timeout as tests/pytest.ini, which only applies when pytest is
-# invoked from tests/. `uv run pytest` at the repository root (the command in
-# the PR checklist) resolves its config here instead, and without these a hung
-# test stalls that run until the CI job timeout. Keep the three values in sync
-# with tests/pytest.ini; that file documents why 300s and why func-only.
-timeout = 300
-timeout_method = "signal"
-timeout_func_only = true
 
 [dependency-groups]
 dev = [

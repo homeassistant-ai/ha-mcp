@@ -46,7 +46,7 @@ time.sleep(0.5)
 
 
 def _run_with_open_stdin(
-    script: str, stdout: int = subprocess.DEVNULL
+    script: str, timeout: float = 60, stdout: int = subprocess.DEVNULL
 ) -> tuple[int, str]:
     """Run ``script`` in a subprocess whose stdin stays open until it exits.
 
@@ -63,14 +63,15 @@ def _run_with_open_stdin(
         stderr=subprocess.PIPE,
     )
     try:
-        proc.wait()
+        proc.wait(timeout=timeout)
     finally:
         if proc.poll() is None:
             proc.kill()
-    _, stderr = proc.communicate()
+    _, stderr = proc.communicate(timeout=10)
     return proc.returncode, stderr.decode(errors="replace")
 
 
+@pytest.mark.timeout(120)
 class TestForceExitMechanism:
     """The finalization abort is real, and _force_exit sidesteps it."""
 
@@ -138,6 +139,7 @@ def _drain(stream: BufferedReader, sink: bytearray) -> None:
     sys.platform == "win32",
     reason="POSIX signal semantics required (SIGTERM); CI runs this on Linux",
 )
+@pytest.mark.timeout(180)
 def test_stdio_server_sigterm_exits_cleanly(tmp_path: Path) -> None:
     """Full-server regression test: SIGTERM mid-session must exit cleanly.
 
@@ -199,7 +201,7 @@ def test_stdio_server_sigterm_exits_cleanly(tmp_path: Path) -> None:
             target=lambda: response.append(stdout.readline()), daemon=True
         )
         reader.start()
-        reader.join()
+        reader.join(timeout=90)
         assert response and response[0], "no initialize response before timeout"
         assert b'"serverInfo"' in response[0]
 
@@ -208,11 +210,11 @@ def test_stdio_server_sigterm_exits_cleanly(tmp_path: Path) -> None:
         time.sleep(1.0)
 
         proc.send_signal(signal.SIGTERM)
-        returncode = proc.wait()
+        returncode = proc.wait(timeout=60)
     finally:
         if proc.poll() is None:
             proc.kill()
-            proc.wait()
+            proc.wait(timeout=10)
 
     stderr_text = stderr_sink.decode(errors="replace")
     assert returncode == 0, (

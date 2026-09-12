@@ -60,6 +60,7 @@ from .oauth_legacy import (
     _PKCE_CHALLENGE_RE,
     _TOKEN_RESPONSE_HEADERS,
     ACCESS_TOKEN_TTL,
+    PKCE_S256_CHALLENGE_LEN,
     PKCECodeStore,
     _is_valid_redirect_uri,
     _issuer_for,
@@ -183,7 +184,9 @@ def _validate_autoapprove_authorize(params: Any) -> web.Response | None:
         return _json_error("invalid_request", 400, "code_challenge_method must be S256")
     if not _PKCE_CHALLENGE_RE.fullmatch(params.get("code_challenge", "")):
         return _json_error(
-            "invalid_request", 400, "invalid code_challenge (43-char base64url)"
+            "invalid_request",
+            400,
+            f"invalid code_challenge ({PKCE_S256_CHALLENGE_LEN}-char base64url)",
         )
     if not _is_valid_redirect_uri(params.get("redirect_uri", "")):
         return _json_error("invalid_request", 400, "invalid redirect_uri")
