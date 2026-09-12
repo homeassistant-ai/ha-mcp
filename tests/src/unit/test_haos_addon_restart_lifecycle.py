@@ -378,6 +378,51 @@ async def test_transient_before_restart_submission_is_retried(addon, endpoint):
     assert addon.mcp_calls[0][1] == "replacement-process"
 
 
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 500])
+async def test_permanent_settings_http_errors_propagate_without_retry(addon, status):
+    error = httpx.HTTPStatusError(
+        "settings rejected",
+        request=httpx.Request("POST", _ADVANCED),
+        response=httpx.Response(status),
+    )
+    addon.request_errors[_ADVANCED] = [error]
+    with pytest.raises(httpx.HTTPStatusError) as raised:
+        await addon_restart.restore_advanced_settings(
+            _ADVANCED,
+            _RESTART,
+            _INFO,
+            _MCP,
+            changes={"http_json_response": False},
+        )
+    assert raised.value is error
+    assert addon.clock.now == 0
+    assert addon.posts == [(_ADVANCED, {"http_json_response": False})]
+
+
+@pytest.mark.parametrize("status", [502, 503, 504])
+async def test_temporary_gateway_error_during_restore_is_retried(addon, status):
+    addon.disconnect_at = None
+    addon.request_errors[_ADVANCED] = [
+        httpx.HTTPStatusError(
+            "restarting",
+            request=httpx.Request("POST", _ADVANCED),
+            response=httpx.Response(status),
+        )
+    ]
+    await addon_restart.restore_advanced_settings(
+        _ADVANCED,
+        _RESTART,
+        _INFO,
+        _MCP,
+        changes={"http_json_response": False},
+        restore_timeout=10.0,
+        ready_timeout=10.0,
+        poll_interval=3.0,
+    )
+    assert [url for url, _ in addon.posts] == [_ADVANCED, _ADVANCED, _RESTART]
+    assert addon.mcp_calls[-1][1] == "replacement-process"
+
+
 @pytest.mark.parametrize("error_type", [TypeError, ValueError, AssertionError])
 @pytest.mark.parametrize("endpoint", [_INFO, _ADVANCED, _RESTART])
 async def test_submission_contract_errors_propagate_without_retry(

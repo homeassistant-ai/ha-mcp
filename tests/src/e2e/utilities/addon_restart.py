@@ -159,6 +159,12 @@ async def restore_advanced_settings(
                 )
             break
         except TRANSIENT_ADDON_ERRORS as error:
+            # Retry gateway outages during a preceding restart, but surface
+            # rejected settings/authentication immediately instead of timing out.
+            if isinstance(
+                error, httpx.HTTPStatusError
+            ) and error.response.status_code not in (502, 503, 504):
+                raise
             LOG.debug("Settings restore preparation unavailable: %s", error)
             last = error
             await asyncio.sleep(min(poll_interval, max(deadline - time.monotonic(), 0)))

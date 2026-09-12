@@ -244,14 +244,13 @@ async def test_unfinished_response_and_cancellation(caplog, error):
     async def send(message):
         pass
 
-    operation = TransportDiagnostics(app, path="/mcp")(
-        {"type": "http", "path": "/mcp", "headers": []}, receive, send
-    )
+    observe = TransportDiagnostics(app, path="/mcp")
+    scope = {"type": "http", "path": "/mcp", "headers": []}
     if error is None:
-        await operation
+        await observe(scope, receive, send)
     else:
         with pytest.raises(asyncio.CancelledError) as raised:
-            await operation
+            await observe(scope, receive, send)
         assert raised.value is error
         assert "error=CancelledError" in caplog.text
     assert "response_bytes=3" in caplog.text
