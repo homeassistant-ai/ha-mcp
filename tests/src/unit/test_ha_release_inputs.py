@@ -89,7 +89,6 @@ def _run_beta_step(
         },
         capture_output=True,
         text=True,
-        timeout=15,
         check=False,
     )
     return result, output.read_text() if output.exists() else ""

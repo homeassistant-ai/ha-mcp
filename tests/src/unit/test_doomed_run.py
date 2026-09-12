@@ -154,7 +154,6 @@ def test_xdist_abort_retains_first_shared_fixture_failure(tmp_path):
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=60,
         check=False,
     )
     output = result.stdout + result.stderr

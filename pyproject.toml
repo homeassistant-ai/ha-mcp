@@ -93,6 +93,14 @@ mypy_path = "src"
 # /tmp keeps the cache on Linux tmpfs — avoids the slow Windows FS in WSL2.
 # Windows-native contributors can remove this line or override with MYPY_CACHE_DIR.
 cache_dir = "/tmp/.mypy_cache"
+# Vendored skills submodule: upstream's code, not ours to type-check. This is
+# the exclusion that was actually failing a local run, because `mypy src/`
+# recurses into the submodule when it is initialized while CI's lint job checks
+# out without `submodules: true` and never sees it.
+# A regex, NOT a [[tool.mypy.overrides]] module entry like the ha_mcp._vendor.*
+# one below: `skills-vendor` contains a hyphen, so it has no importable module
+# path for a module pattern to match. Do not "simplify" it into that block.
+exclude = ['^src/ha_mcp/resources/skills-vendor/']
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -149,6 +157,14 @@ extend-exclude = [
     # Vendored websockets — upstream's code style, not ours. Kept in sync
     # with PATHS_IGNORE in scripts/codeql_quality_gate.py.
     "src/ha_mcp/_vendor/websockets",
+    # Vendored skills submodule (src/ha_mcp/resources/skills-vendor) — upstream's
+    # code, shipped as package data. This covers the directory-scoped commands,
+    # `ruff check src/ ...` in CI and the ones in CONTRIBUTING.md. It does NOT
+    # affect lefthook, which passes {staged_files} as explicit paths that ruff
+    # lints regardless of extend-exclude (force-exclude is not set), and a
+    # submodule's contents are never staged in the superproject anyway. Kept in
+    # sync with PATHS_IGNORE in scripts/codeql_quality_gate.py.
+    "src/ha_mcp/resources/skills-vendor",
     # HA integration manifests must be strict JSON (no trailing commas);
     # ruff 0.15+ formats .json files as JSONC and inserts trailing commas
     # which makes Python's json.load() reject the file at HA startup.

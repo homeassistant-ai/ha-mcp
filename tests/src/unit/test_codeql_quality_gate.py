@@ -150,6 +150,20 @@ def test_vendored_paths_are_ignored(tmp_path: Path) -> None:
                 1,
                 "authored",
             ),
+            _result(
+                "py/empty-except",
+                "src/ha_mcp/resources/skills-vendor/scripts/check_eval_cases.py",
+                1,
+                "vendored skills submodule",
+            ),
+            # Our OWN file under resources/: the ignore is scoped to the
+            # submodule directory, so a sibling we author must still gate.
+            _result(
+                "py/empty-except",
+                "src/ha_mcp/resources/loader.py",
+                1,
+                "authored",
+            ),
             _result("py/empty-except", "src/a.py", 1, "first-party"),
         ],
     )
@@ -157,6 +171,7 @@ def test_vendored_paths_are_ignored(tmp_path: Path) -> None:
     assert [f[0] for f in findings] == [
         "src/a.py",
         "src/ha_mcp/_vendor/__init__.py",
+        "src/ha_mcp/resources/loader.py",
     ]
 
 

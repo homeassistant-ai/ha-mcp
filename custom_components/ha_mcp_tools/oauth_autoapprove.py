@@ -60,6 +60,7 @@ from .oauth_legacy import (
     _PKCE_CHALLENGE_RE,
     _TOKEN_RESPONSE_HEADERS,
     ACCESS_TOKEN_TTL,
+    PKCE_S256_CHALLENGE_LEN,
     PKCECodeStore,
     _is_valid_redirect_uri,
     _issuer_for,
@@ -165,20 +166,6 @@ def _webhook_cfg(hass: HomeAssistant) -> dict[str, Any] | None:
     return cfg if isinstance(cfg, dict) else None
 
 
-def _active_autoapprove_provider(hass: HomeAssistant) -> AutoApproveProvider | None:
-    """The live none-mode auto-approve provider, or None when it is not live.
-
-    Read live from ``hass.data`` (not captured at view construction) so the
-    bound views serve only while none-autoapprove is the active mode and 404
-    otherwise — mirrors ``mcp_webhook._active_webhook_id``'s per-request gating.
-    """
-    cfg = _webhook_cfg(hass)
-    if cfg is None:
-        return None
-    provider = cfg.get(CFG_AUTOAPPROVE_PROVIDER)
-    return provider if isinstance(provider, AutoApproveProvider) else None
-
-
 def _validate_autoapprove_authorize(params: Any) -> web.Response | None:
     """Validate the none-mode /authorize query; a 400 Response, or None if OK.
 
@@ -197,7 +184,9 @@ def _validate_autoapprove_authorize(params: Any) -> web.Response | None:
         return _json_error("invalid_request", 400, "code_challenge_method must be S256")
     if not _PKCE_CHALLENGE_RE.fullmatch(params.get("code_challenge", "")):
         return _json_error(
-            "invalid_request", 400, "invalid code_challenge (43-char base64url)"
+            "invalid_request",
+            400,
+            f"invalid code_challenge ({PKCE_S256_CHALLENGE_LEN}-char base64url)",
         )
     if not _is_valid_redirect_uri(params.get("redirect_uri", "")):
         return _json_error("invalid_request", 400, "invalid redirect_uri")

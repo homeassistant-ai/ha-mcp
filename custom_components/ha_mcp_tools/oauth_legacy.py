@@ -89,7 +89,7 @@ PKCE_VERIFIER_MAX = 128
 # SHA-256 → 32 bytes → 43 base64url chars (no padding).
 PKCE_S256_CHALLENGE_LEN = 43
 _PKCE_VERIFIER_RE = re.compile(r"[A-Za-z0-9._~-]+")
-_PKCE_CHALLENGE_RE = re.compile(r"[A-Za-z0-9_-]{43}")
+_PKCE_CHALLENGE_RE = re.compile(rf"[A-Za-z0-9_-]{{{PKCE_S256_CHALLENGE_LEN}}}")
 
 # Pending-code dict cap. An attacker spamming /authorize with valid params
 # could grow the dict between the prune passes that run on each issuance.
@@ -676,7 +676,8 @@ class LegacyOAuthProvider:
             return _text_error(400, "invalid code_challenge_method (S256 required)")
         if not _PKCE_CHALLENGE_RE.fullmatch(code_challenge):
             return _text_error(
-                400, "invalid code_challenge (must be 43-char base64url)"
+                400,
+                f"invalid code_challenge (must be {PKCE_S256_CHALLENGE_LEN}-char base64url)",
             )
         if client_id != self.client_id:
             return _text_error(400, "invalid client_id", restart_hint=True)

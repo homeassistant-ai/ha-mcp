@@ -55,7 +55,6 @@ from ._persistence import (
 )
 from ._supervisor import (
     _BACKGROUND_RESTART_TASKS,
-    _SUPERVISOR_SELF_RESTART_FLUSH_DELAY_S,
     _schedule_supervisor_self_restart,
     _supervisor_fetch_current_options,
     _supervisor_merge_and_post_options,
