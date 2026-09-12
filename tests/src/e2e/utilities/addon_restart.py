@@ -53,19 +53,28 @@ async def get_instance_id(settings_info_url: str, *, timeout: float = 30.0) -> s
     return instance_id
 
 
+async def post_advanced_settings(
+    settings_advanced_url: str, changes: dict[str, Any], *, timeout: float = 30.0
+) -> None:
+    """Persist settings through the same API as the web UI."""
+    async with asyncio.timeout(timeout):
+        async with httpx.AsyncClient(timeout=timeout) as http:
+            response = await http.post(settings_advanced_url, json=changes)
+    response.raise_for_status()
+    assert response.status_code == 200, (
+        f"Advanced-settings POST returned {response.status_code}"
+    )
+    assert response.json().get("restart_required") is True, (
+        "Settings API response missing restart_required=True"
+    )
+
+
 async def post_log_level(
     settings_advanced_url: str, level: str, *, timeout: float = 30.0
 ) -> None:
     """Write the log level through the same settings API as the web UI."""
-    async with asyncio.timeout(timeout):
-        async with httpx.AsyncClient(timeout=timeout) as http:
-            response = await http.post(settings_advanced_url, json={"log_level": level})
-    response.raise_for_status()
-    assert response.status_code == 200, (
-        f"Log-level POST returned {response.status_code}"
-    )
-    assert response.json().get("restart_required") is True, (
-        "Settings API response missing restart_required=True"
+    await post_advanced_settings(
+        settings_advanced_url, {"log_level": level}, timeout=timeout
     )
 
 
@@ -123,6 +132,67 @@ async def wait_for_addon_replacement(
     )
 
 
+async def restore_advanced_settings(
+    settings_advanced: str,
+    settings_restart: str,
+    settings_info: str,
+    addon_url: str,
+    *,
+    changes: dict[str, Any],
+    restore_timeout: float = 120.0,
+    ready_timeout: float = 180.0,
+    poll_interval: float = 3.0,
+) -> None:
+    """Restore saved settings and finish replacement before another test connects."""
+    deadline = time.monotonic() + restore_timeout
+    last: object = None
+    while (remaining := deadline - time.monotonic()) > 0:
+        try:
+            async with asyncio.timeout(remaining):
+                # The baseline belongs to this cleanup restart, not the earlier
+                # settings restart. Its old process may keep answering after 200.
+                baseline = await get_instance_id(
+                    settings_info, timeout=_call_timeout(deadline)
+                )
+                await post_advanced_settings(
+                    settings_advanced, changes, timeout=_call_timeout(deadline)
+                )
+            break
+        except TRANSIENT_ADDON_ERRORS as error:
+            # Retry gateway outages during a preceding restart, but surface
+            # rejected settings/authentication immediately instead of timing out.
+            if isinstance(
+                error, httpx.HTTPStatusError
+            ) and error.response.status_code not in (502, 503, 504):
+                raise
+            LOG.debug("Settings restore preparation unavailable: %s", error)
+            last = error
+            await asyncio.sleep(min(poll_interval, max(deadline - time.monotonic(), 0)))
+    else:
+        raise AssertionError(
+            f"Could not prepare the settings restore restart within {restore_timeout}s "
+            f"(last={last!r})"
+        )
+    # Resolve the budget before the attempt: expiration here cannot mean the
+    # server accepted a restart. Once sent, even a lost response may mean it did.
+    submission_timeout = _call_timeout(deadline)
+    submission_error: Exception | None = None
+    try:
+        await restart_self(settings_restart, timeout=submission_timeout)
+    except (httpx.HTTPError, TimeoutError) as error:
+        LOG.warning("Settings restore restart outcome uncertain: %s", error)
+        submission_error = error
+    # Never replay an attempted restart; its old process may still be serving.
+    await wait_for_addon_replacement(
+        settings_info,
+        addon_url,
+        baseline,
+        timeout=ready_timeout,
+        poll_interval=poll_interval,
+        submission_error=submission_error,
+    )
+
+
 async def restore_info_level(
     settings_advanced: str,
     settings_restart: str,
@@ -133,45 +203,14 @@ async def restore_info_level(
     ready_timeout: float = 180.0,
     poll_interval: float = 3.0,
 ) -> None:
-    """Restore INFO, then finish its replacement before another test connects."""
-    deadline = time.monotonic() + restore_timeout
-    last: object = None
-    while (remaining := deadline - time.monotonic()) > 0:
-        try:
-            async with asyncio.timeout(remaining):
-                # The baseline belongs to this cleanup restart, not the earlier
-                # DEBUG restart. Its old process may keep answering after 200.
-                baseline = await get_instance_id(
-                    settings_info, timeout=_call_timeout(deadline)
-                )
-                await post_log_level(
-                    settings_advanced, "INFO", timeout=_call_timeout(deadline)
-                )
-            break
-        except TRANSIENT_ADDON_ERRORS as error:
-            LOG.debug("INFO restore preparation unavailable: %s", error)
-            last = error
-            await asyncio.sleep(min(poll_interval, max(deadline - time.monotonic(), 0)))
-    else:
-        raise AssertionError(
-            f"Could not prepare the INFO restore restart within {restore_timeout}s "
-            f"(last={last!r})"
-        )
-    # Resolve the budget before the attempt: expiration here cannot mean the
-    # server accepted a restart. Once sent, even a lost response may mean it did.
-    submission_timeout = _call_timeout(deadline)
-    submission_error: Exception | None = None
-    try:
-        await restart_self(settings_restart, timeout=submission_timeout)
-    except (httpx.HTTPError, TimeoutError) as error:
-        LOG.warning("INFO restore restart outcome uncertain: %s", error)
-        submission_error = error
-    # Never replay an attempted restart; its old process may still be serving.
-    await wait_for_addon_replacement(
+    """Restore INFO using the shared replacement/readiness fence."""
+    await restore_advanced_settings(
+        settings_advanced,
+        settings_restart,
         settings_info,
         addon_url,
-        baseline,
-        timeout=ready_timeout,
+        changes={"log_level": "INFO"},
+        restore_timeout=restore_timeout,
+        ready_timeout=ready_timeout,
         poll_interval=poll_interval,
-        submission_error=submission_error,
     )

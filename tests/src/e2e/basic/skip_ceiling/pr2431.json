@@ -1,0 +1,13 @@
+{
+  "reason": "#2431 adds one inaddon_only / addon_disruptive HTTP options restart scenario. It runs only in the serial HAOS in-app phase, including the no-tools variant, and skips on every other lane.",
+  "deltas": {
+    "container": 1,
+    "haos": 1,
+    "haos_stdio": 1,
+    "embedded": 1,
+    "haos_embedded": 1,
+    "container_no_tools": 1,
+    "embedded_no_tools": 1,
+    "haos_embedded_no_tools": 1
+  }
+}

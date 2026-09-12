@@ -124,6 +124,12 @@ class Settings(BaseSettings):
     debug: bool = Field(False, alias="DEBUG")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
 
+    # Opt-in HTTP experiments, applied at app construction (restart required).
+    http_transport_diagnostics: bool = Field(
+        False, alias="HAMCP_HTTP_TRANSPORT_DIAGNOSTICS"
+    )
+    http_json_response: bool = Field(False, alias="HAMCP_HTTP_JSON_RESPONSE")
+
     # MCP Server configuration
     mcp_server_name: str = Field("ha-mcp", alias="MCP_SERVER_NAME")
     mcp_server_version: str = Field(
@@ -940,6 +946,16 @@ ADVANCED_SETTINGS_FIELDS: tuple[AdvancedField, ...] = (
     AdvancedField("environment", "ENVIRONMENT", str, "diagnostics", True),
     AdvancedField("log_level", "LOG_LEVEL", str, "diagnostics", True),
     AdvancedField("debug", "DEBUG", bool, "diagnostics", True),
+    AdvancedField(
+        "http_transport_diagnostics",
+        "HAMCP_HTTP_TRANSPORT_DIAGNOSTICS",
+        bool,
+        "diagnostics",
+        True,
+    ),
+    AdvancedField(
+        "http_json_response", "HAMCP_HTTP_JSON_RESPONSE", bool, "diagnostics", True
+    ),
     # Settings UI sidecar (stdio-only). 0 (default) = first spawn picks a
     # free port and later spawns reuse it via ui.state (#2131); a value
     # pins a preferred fixed port instead (best-effort, #1587).
