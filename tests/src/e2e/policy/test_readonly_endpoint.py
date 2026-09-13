@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from ha_mcp.config import get_global_settings
+from ha_mcp.utils.data_paths import get_data_dir
 
 from .test_readonly_mode import _build_readonly_server
 
@@ -23,10 +24,12 @@ async def test_readonly_endpoint_with_real_ha(
     )
     app = server.mcp.http_app(path="/mcp", stateless_http=True, json_response=True)
     entity = "light.bed_light"
-    original = await ha_client.get_entity_state(entity)
-    assert original["state"] in ("on", "off"), original
-    target = "off" if original["state"] == "on" else "on"
+    original_state = None
     try:
+        original = await ha_client.get_entity_state(entity)
+        assert original["state"] in ("on", "off"), original
+        original_state = original["state"]
+        target = "off" if original_state == "on" else "on"
         async with (
             app.router.lifespan_context(app),
             httpx.AsyncClient(
@@ -95,11 +98,13 @@ async def test_readonly_endpoint_with_real_ha(
             assert get_global_settings().read_only_mode is False
     finally:
         try:
-            await ha_client.call_service(
-                "light", f"turn_{original['state']}", {"entity_id": entity}
-            )
+            if original_state is not None:
+                await ha_client.call_service(
+                    "light", f"turn_{original_state}", {"entity_id": entity}
+                )
         finally:
             await ha_client.close()
+            get_data_dir.cache_clear()
 
 
 @pytest.mark.embedded_only

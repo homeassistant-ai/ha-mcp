@@ -2579,7 +2579,7 @@ class TestOAuthSetupEntry:
             + (2 if _unified_oauth_routes() else 0)
             + (1 if _scoped_revoke_supported() else 0)
         )
-        assert hass.http.register_view.call_count == expected_views
+        assert len(_oauth_view_calls(hass)) == expected_views
         # Successful OAuth setup records that THIS flavor owns the root routes,
         # so the sibling flavor refuses loudly instead of shadowing them.
         assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == mod.DOMAIN
@@ -2707,7 +2707,7 @@ class TestOAuthSetupEntry:
         # sibling's claim left intact.
         mock_unreg.assert_called_once_with(hass, "mcp_test_webhook_id_12345")
         session.close.assert_awaited_once()
-        hass.http.register_view.assert_not_called()
+        assert not _oauth_view_calls(hass)
         assert mod.DOMAIN not in hass.data
         assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == sibling_domain
 
@@ -2879,7 +2879,7 @@ class TestOAuthRestartRepairTrigger:
         assert hass.data[mod.DOMAIN]["oauth"] is not None
         mock_unreg.assert_not_called()
         # The 4 root views are NOT re-registered on a same-flavor reload.
-        assert hass.http.register_view.call_count == 0
+        assert len(_oauth_view_calls(hass)) == 0
         # Ownership marker + bound-view fingerprint stay ours (unchanged).
         assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == mod.DOMAIN
         assert hass.data[mod.OAUTH_ROUTE_KEY_FINGERPRINT] == (
@@ -2936,7 +2936,7 @@ class TestOAuthRestartRepairTrigger:
         assert hass.data[mod.DOMAIN]["oauth"] is not None
         mock_unreg.assert_not_called()
         # The root views are NOT re-registered (HA can't re-bind mid-session).
-        assert hass.http.register_view.call_count == 0
+        assert len(_oauth_view_calls(hass)) == 0
         # Ownership marker stays ours; the stale fingerprint is left in place so
         # a later boot-time setup re-registers and refreshes it.
         assert hass.data[mod.OAUTH_ROUTE_OWNER_KEY] == mod.DOMAIN
@@ -3705,7 +3705,7 @@ class TestWellKnownMetadataViews:
         hass.data = {}
         hass.http = MagicMock()
         assert oauth.register_metadata_views(hass, first) is False
-        assert hass.http.register_view.call_count == 6
+        assert len(_oauth_view_calls(hass)) == 6
         # Same id on a reload: bound views are reused, no restart.
         assert oauth.register_metadata_views(hass, first) is False
         rotated = oauth.OAuthProvider(
@@ -3718,7 +3718,7 @@ class TestWellKnownMetadataViews:
         )
         assert oauth.register_metadata_views(hass, rotated) is True
         # It never rebinds — HA cannot drop a bound view until it restarts.
-        assert hass.http.register_view.call_count == 6
+        assert len(_oauth_view_calls(hass)) == 6
 
 
 class TestAuthorizeViewGet:
@@ -4968,9 +4968,7 @@ class TestOAuthSetupEntryRegistersExpectedViews:
         ):
             await mod.async_setup_entry(hass, MagicMock())
 
-        registered_urls = {
-            call.args[0].url for call in hass.http.register_view.call_args_list
-        }
+        registered_urls = {call.args[0].url for call in _oauth_view_calls(hass)}
         # Authorize/token live at the root because Claude.ai constructs
         # those URLs from the resource host without consulting the
         # authorization-server metadata document. Flavors that ship the
@@ -5111,9 +5109,7 @@ class TestHaAuthMode:
             result = await mod.async_setup_entry(hass, MagicMock())
 
         assert result is True
-        registered = {
-            call.args[0].url for call in hass.http.register_view.call_args_list
-        }
+        registered = {call.args[0].url for call in _oauth_view_calls(hass)}
         expected = {
             f"{CURRENT['oauth_base']}/authorization-server",
         } | _wellknown_oauth_urls(oauth, "mcp_test")
@@ -5267,7 +5263,7 @@ class TestHaAuthMode:
             patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
         ):
             await mod.async_setup_entry(hass, MagicMock())
-            first = hass.http.register_view.call_count
+            first = len(_oauth_view_calls(hass))
             hass.http.register_view.reset_mock()
             # A second setup (config-entry reload) must NOT re-register the views.
             await mod.async_setup_entry(hass, MagicMock())
@@ -5277,7 +5273,7 @@ class TestHaAuthMode:
             + (1 if _scoped_revoke_supported() else 0)
             + (1 if _dcr_registration_supported() else 0)
         )
-        assert hass.http.register_view.call_count == 0
+        assert len(_oauth_view_calls(hass)) == 0
         # The register-once flag lives in oauth.py (a top-level hass.data key),
         # not on the integration package.
         assert hass.data[oauth._METADATA_VIEWS_REGISTERED_KEY] is True
@@ -5314,7 +5310,7 @@ class TestHaAuthMode:
             await mod.async_setup_entry(hass, MagicMock())
         mock_create.assert_called_once_with(hass, mod.DOMAIN)
         # HA cannot rebind a bound view, so nothing was registered again...
-        assert hass.http.register_view.call_count == 0
+        assert len(_oauth_view_calls(hass)) == 0
         # ...and the recorded bound id stays the one the URLs actually carry.
         assert hass.data[oauth._METADATA_VIEWS_BOUND_WEBHOOK_ID_KEY] == "mcp_test"
 
@@ -5335,7 +5331,7 @@ class TestHaAuthMode:
             patch.object(mod.aiohttp, "ClientSession", return_value=session),
         ):
             await mod.async_setup_entry(hass, MagicMock())
-            assert hass.http.register_view.call_count == (
+            assert len(_oauth_view_calls(hass)) == (
                 (6 if _scoped_only_prm(oauth) else 7)
                 + (2 if _unified_oauth_routes() else 0)
                 + (1 if _scoped_revoke_supported() else 0)
@@ -5351,7 +5347,7 @@ class TestHaAuthMode:
             hass.http.register_view.reset_mock()
             # A fresh setup after the unload reuses the still-bound views.
             await mod.async_setup_entry(hass, MagicMock())
-        assert hass.http.register_view.call_count == 0
+        assert len(_oauth_view_calls(hass)) == 0
         assert hass.data[flag_key] is True
 
     def _legacy_config(self):
@@ -5386,7 +5382,7 @@ class TestHaAuthMode:
             patch.object(mod.aiohttp, "ClientSession", return_value=MagicMock()),
         ):
             await mod.async_setup_entry(hass, MagicMock())  # ha_auth discovery
-            assert hass.http.register_view.call_count == (
+            assert len(_oauth_view_calls(hass)) == (
                 (6 if _scoped_only_prm(oauth) else 7)
                 + (2 if _unified_oauth_routes() else 0)
                 + (1 if _scoped_revoke_supported() else 0)
@@ -5394,9 +5390,7 @@ class TestHaAuthMode:
             )
             hass.http.register_view.reset_mock()
             await mod.async_setup_entry(hass, MagicMock())  # legacy: only 2 root
-        registered = {
-            call.args[0].url for call in hass.http.register_view.call_args_list
-        }
+        registered = {call.args[0].url for call in _oauth_view_calls(hass)}
         assert registered == {"/authorize", "/token"}
         # None of the metadata views were registered a second time.
         assert not (registered & _wellknown_oauth_urls(oauth, "mcp_test"))
@@ -5420,7 +5414,7 @@ class TestHaAuthMode:
         ):
             await mod.async_setup_entry(hass, MagicMock())  # legacy views + root
             # metadata bundle + the two root aliases legacy binds.
-            assert hass.http.register_view.call_count == (
+            assert len(_oauth_view_calls(hass)) == (
                 (6 if _scoped_only_prm(oauth) else 7)
                 + 2
                 + (2 if _unified_oauth_routes() else 0)
@@ -5429,11 +5423,11 @@ class TestHaAuthMode:
             hass.http.register_view.reset_mock()
             await mod.async_setup_entry(hass, MagicMock())  # ha_auth: reuse all
         if _dcr_registration_supported():
-            assert [
-                call.args[0].url for call in hass.http.register_view.call_args_list
-            ] == [f"{CURRENT['oauth_base']}/register"]
+            assert [call.args[0].url for call in _oauth_view_calls(hass)] == [
+                f"{CURRENT['oauth_base']}/register"
+            ]
         else:
-            assert hass.http.register_view.call_count == 0
+            assert len(_oauth_view_calls(hass)) == 0
         assert hass.data[mod.DOMAIN]["oauth_mode"] == mod.OAUTH_MODE_HA_AUTH
 
     async def test_unknown_mode_raises(self, hass, tmp_path):
@@ -5486,7 +5480,7 @@ class TestHaAuthMode:
         session.close.assert_awaited_once()
         assert mod.DOMAIN not in hass.data
         # The ResourceServer was never constructed and no view registered.
-        hass.http.register_view.assert_not_called()
+        assert not _oauth_view_calls(hass)
 
     async def test_creds_without_mode_takes_legacy_path(self, hass, tmp_path):
         """Back-compat pin: a creds-shaped section without a mode key is legacy,
@@ -7074,9 +7068,7 @@ class TestNoneAutoApproveMode:
             result = await mod.async_setup_entry(hass, MagicMock())
 
         assert result is True
-        registered = {
-            call.args[0].url for call in hass.http.register_view.call_args_list
-        }
+        registered = {call.args[0].url for call in _oauth_view_calls(hass)}
         metadata = {
             f"{CURRENT['oauth_base']}/authorization-server",
         } | _wellknown_oauth_urls(oauth, "mcp_test")
@@ -7265,6 +7257,15 @@ class TestNoneAutoApproveMode:
         request.read.assert_awaited_once()
 
 
+def _oauth_view_calls(hass):
+    """Keep OAuth surface assertions independent of the MCP forwarding route."""
+    return [
+        call
+        for call in hass.http.register_view.call_args_list
+        if call.args[0].url != "/api/webhook/{webhook_id}/readonly"
+    ]
+
+
 class TestReadOnlyWebhook:
     @pytest.fixture
     def mod(self):
@@ -7283,6 +7284,7 @@ class TestReadOnlyWebhook:
             "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
             "webhook_id": "mcp_test_readonly",
         }
+        hass.async_add_executor_job = AsyncMock(return_value=config)
         with (
             patch.object(mod, "_read_config", return_value=config),
             patch.object(
@@ -7345,3 +7347,32 @@ class TestReadOnlyWebhook:
             assert await view.post(request, "mcp_test") is rejection
         session.request.assert_not_called()
         request.read.assert_not_awaited()
+
+    async def test_duplicate_registration_preserves_existing_webhook(self, mod):
+        hass = MagicMock()
+        hass.data = {}
+        existing = AsyncMock()
+        mod.register_readonly_webhook(hass, "mcp_existing", existing)
+        view = hass.http.register_view.call_args.args[0]
+        session = MagicMock()
+        session.close = AsyncMock()
+        config = {
+            "target_url": "http://localhost/private_aaaaaaaaaaaaaaaa",
+            "webhook_id": "mcp_existing",
+        }
+        hass.async_add_executor_job = AsyncMock(return_value=config)
+        with (
+            patch.object(mod, "_read_config", return_value=config),
+            patch.object(
+                mod, "async_register", side_effect=ValueError("already registered")
+            ),
+            patch.object(mod, "async_unregister") as unregister,
+            patch.object(mod.aiohttp, "ClientSession", return_value=session),
+            pytest.raises(_FakeConfigEntryError),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+        unregister.assert_not_called()
+        request = MagicMock()
+        await view.post(request, "mcp_existing")
+        existing.assert_awaited_once_with(hass, "mcp_existing", request, read_only=True)
+        session.close.assert_awaited_once()

@@ -72,7 +72,6 @@ from .oauth_legacy import (
     build_unbound_legacy_provider,
     clear_scoped_legacy_credentials,
 )
-
 from .readonly_webhook import (
     readonly_url,
     register_readonly_webhook,
@@ -614,9 +613,9 @@ async def _async_handle_webhook(
     if auth_response is not None:
         return auth_response
 
-    target_url: str = cfg["target_url"]
-    if read_only:
-        target_url = readonly_url(target_url)
+    target_url: str = (
+        readonly_url(cfg["target_url"]) if read_only else cfg["target_url"]
+    )
     session: aiohttp.ClientSession = cfg["session"]
 
     body = await request.read()

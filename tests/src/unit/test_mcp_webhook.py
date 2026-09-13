@@ -942,6 +942,37 @@ class TestRegisterWebhook:
         await mw.async_unregister_webhook(hass)
         assert (await view.post(make_request(), WEBHOOK_ID)).status == 404
 
+    @pytest.mark.parametrize("disable", [False, True])
+    async def test_readonly_alias_inactive_after_failed_setup_or_disable(
+        self, monkeypatch, disable
+    ):
+        hass = _register_hass()
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: FakeSession())
+        arguments = dict(
+            port=9584, secret_path="/private_x", auth_mode=WEBHOOK_AUTH_NONE
+        )
+        await mw.async_register_webhook(hass, _entry(), **arguments)
+        view = next(
+            call.args[0]
+            for call in hass.http.register_view.call_args_list
+            if call.args[0].url == "/api/webhook/{webhook_id}/readonly"
+        )
+        await mw.async_unregister_webhook(hass)
+        if disable:
+            await mw.async_register_webhook(
+                hass, _entry(), register_endpoint=False, **arguments
+            )
+        else:
+            monkeypatch.setattr(
+                mw,
+                "_bind_none_surface",
+                MagicMock(side_effect=RuntimeError("setup failed")),
+            )
+            with pytest.raises(RuntimeError, match="setup failed"):
+                await mw.async_register_webhook(hass, _entry(), **arguments)
+        assert (await view.post(make_request(), WEBHOOK_ID)).status == 404
+        await mw.async_unregister_webhook(hass)
+
     @pytest.fixture(autouse=True)
     def _reset_registration_state(self):
         # async_register / async_unregister are module-global MagicMocks shared
@@ -1539,7 +1570,8 @@ async def test_readonly_webhook_reuses_auth_gate(auth_mode, monkeypatch):
     assert session.calls[-1]["url"] == TARGET_URL + "/readonly"
 
 
-async def test_readonly_webhook_route_shared_across_installations():
+@pytest.fixture
+def readonly_webhook_modules():
     import importlib.util
     from pathlib import Path
 
@@ -1553,6 +1585,13 @@ async def test_readonly_webhook_route_shared_across_installations():
     spec = importlib.util.spec_from_file_location("readonly_webhook_proxy_test", source)
     proxy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(proxy)
+    return embedded, proxy
+
+
+async def test_readonly_webhook_route_shared_across_installations(
+    readonly_webhook_modules,
+):
+    embedded, proxy = readonly_webhook_modules
     hass = _register_hass()
     first, second = AsyncMock(), AsyncMock()
     embedded.register_readonly_webhook(hass, "embedded", first)

@@ -7,6 +7,7 @@ retain their existing authentication and forwarding behavior.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 from aiohttp import web
@@ -28,7 +29,9 @@ class ReadOnlyWebhookView(HomeAssistantView):
         self.hass = hass
 
     async def post(self, request: web.Request, webhook_id: str) -> web.StreamResponse:
-        handler = self.hass.data[_REGISTRY].get(webhook_id)
+        handler: Callable[..., Awaitable[web.StreamResponse]] | None = self.hass.data[
+            _REGISTRY
+        ].get(webhook_id)
         if handler is None:
             return web.Response(status=404)
         return await handler(self.hass, webhook_id, request, read_only=True)
@@ -36,7 +39,11 @@ class ReadOnlyWebhookView(HomeAssistantView):
     get = post
 
 
-def register_readonly_webhook(hass: HomeAssistant, webhook_id: str, handler) -> None:
+def register_readonly_webhook(
+    hass: HomeAssistant,
+    webhook_id: str,
+    handler: Callable[..., Awaitable[web.StreamResponse]],
+) -> None:
     """Bind the common route once, and activate this webhook's alias."""
     if _REGISTRY not in hass.data:
         hass.http.register_view(ReadOnlyWebhookView(hass))
