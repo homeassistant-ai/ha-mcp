@@ -104,10 +104,12 @@ def test_readonly_alias_keeps_oauth_authentication_and_discovery():
     from ha_mcp.auth import HomeAssistantOAuthProvider
 
     mcp, writes = _server()
-    provider = HomeAssistantOAuthProvider(base_url="http://testserver")
+    provider = HomeAssistantOAuthProvider(base_url="https://testserver")
     mcp.auth = provider
     token = provider._encode_token("test-ha-token")
-    with TestClient(mcp.http_app(path="/mcp", stateless_http=True)) as client:
+    with TestClient(
+        mcp.http_app(path="/mcp", stateless_http=True), base_url="https://testserver"
+    ) as client:
         for path in ("/mcp", "/mcp/readonly"):
             for authorization in (None, "Bearer invalid-token"):
                 headers = {"Authorization": authorization} if authorization else {}
@@ -117,7 +119,7 @@ def test_readonly_alias_keeps_oauth_authentication_and_discovery():
                 metadata_url = challenge.split('resource_metadata="')[1].split('"')[0]
                 metadata = client.get(metadata_url)
                 assert metadata.status_code == 200, metadata.text
-                assert metadata.json()["resource"] == "http://testserver/mcp"
+                assert metadata.json()["resource"] == "https://testserver/mcp"
         client.headers["Authorization"] = f"Bearer {token}"
         blocked = _rpc(client, "/mcp/readonly", "tools/call", {"name": "write"})
         assert blocked["result"]["isError"] is True

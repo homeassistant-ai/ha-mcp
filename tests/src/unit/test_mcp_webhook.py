@@ -916,6 +916,32 @@ def _entry() -> MagicMock:
 
 
 class TestRegisterWebhook:
+    async def test_readonly_alias_forwards_and_is_removed_on_unload(self, monkeypatch):
+        hass = _register_hass()
+        session = FakeSession(upstream=FakeUpstream(status=200))
+        monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: session)
+        await mw.async_register_webhook(
+            hass,
+            _entry(),
+            port=9584,
+            secret_path="/private_x",
+            auth_mode=WEBHOOK_AUTH_NONE,
+        )
+        views = [call.args[0] for call in hass.http.register_view.call_args_list]
+        matches = [
+            view for view in views if view.url == "/api/webhook/{webhook_id}/readonly"
+        ]
+        assert len(matches) == 1, "Missing read-only webhook route"
+        view = matches[0]
+        response = await view.post(make_request(), WEBHOOK_ID)
+        assert response.status == 200
+        assert session.calls[-1]["url"] == "http://127.0.0.1:9584/private_x/readonly"
+        calls = len(session.calls)
+        assert (await view.post(make_request(), "other-webhook")).status == 404
+        assert len(session.calls) == calls
+        await mw.async_unregister_webhook(hass)
+        assert (await view.post(make_request(), WEBHOOK_ID)).status == 404
+
     @pytest.fixture(autouse=True)
     def _reset_registration_state(self):
         # async_register / async_unregister are module-global MagicMocks shared
