@@ -233,3 +233,15 @@ def test_alias_does_not_capture_unrelated_routes():
             assert client.post(path, json={}).status_code == 404
         catalog = _rpc(client, "/mcp/readonly/", "tools/list")
         assert {tool["name"] for tool in catalog["result"]["tools"]} == {"read"}
+
+
+@pytest.mark.parametrize("prefix_in_path", [False, True])
+def test_readonly_endpoint_under_root_path(prefix_in_path):
+    mcp, writes = _server()
+    app = mcp.http_app(path="/mcp", stateless_http=True, json_response=True)
+    prefix = "/prefix" if prefix_in_path else ""
+    with TestClient(app, root_path="/prefix") as client:
+        result = _rpc(client, prefix + "/mcp/readonly", "tools/call", {"name": "write"})
+        assert result["result"]["isError"] is True
+        assert "READ_ONLY_MODE" in str(result)
+        assert writes == []

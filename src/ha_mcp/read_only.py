@@ -1,7 +1,8 @@
 """Read-only mode — catalog filtering and call-time write blocking (#1569).
 
 When ``Settings.read_only_mode`` is on (Tools-tab toggle in the web UI,
-``read_only_mode`` addon option, or ``READ_ONLY_MODE`` env var):
+``read_only_mode`` addon option, or ``READ_ONLY_MODE`` env var), or the
+HTTP connection uses the ``/readonly`` endpoint:
 
 - ``ReadOnlyToolsTransform`` hides write-capable tools from the MCP
   catalog at list time, except the exempt mixed read/write tools in
@@ -14,6 +15,8 @@ When ``Settings.read_only_mode`` is on (Tools-tab toggle in the web UI,
 Both consult the live settings singleton per request, so flipping the
 toggle in standalone HTTP mode takes effect without a restart (addon
 and stdio modes pick it up on restart, like every other feature flag).
+The HTTP endpoint additionally restricts its own request context without
+changing the shared settings.
 
 A tool counts as write-capable when its ``readOnlyHint`` annotation is
 not ``True`` — the same fail-closed default the policy handlers and the
@@ -51,7 +54,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_request_read_only: ContextVar[bool] = ContextVar("ha_mcp_request_read_only", default=False)
+_request_read_only: ContextVar[bool] = ContextVar(
+    "ha_mcp_request_read_only", default=False
+)
 
 
 def is_read_only() -> bool:
@@ -341,9 +346,9 @@ def _raise_read_only_error(
             suggestions=[
                 "Continue with read-only tools — searching, getting, and "
                 + "listing data all remain available.",
-                "If the user wants to allow changes, they must turn off "
-                + "Read Only Mode in the ha-mcp settings UI (Tools tab) or "
-                + "the add-on configuration.",
+                "To allow changes, the user must use the normal MCP endpoint "
+                + "without /readonly and turn off the global Read Only Mode "
+                + "setting if it is enabled.",
             ],
             context=context,
         )

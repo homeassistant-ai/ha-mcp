@@ -1,4 +1,4 @@
-"""Default-off HTTP diagnostics and JSON responses for HA-MCP launchers."""
+"""Shared HTTP endpoint modes and transport options for HA-MCP launchers."""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ class HttpTransportFastMCP(FastMCP):
     """
 
     def http_app(self, *args: Any, **kwargs: Any) -> StarletteWithLifespan:
-        """Build the normal app, adding only explicitly enabled experiments."""
+        """Build the app with a readonly alias and optional transport experiments."""
         settings = get_global_settings()
         if settings.http_json_response:
             # FastMCP accepts json_response as its third positional argument.

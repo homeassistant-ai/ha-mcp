@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import secrets
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -1039,7 +1039,7 @@ class TestRegisterWebhook:
         assert cfg["oauth_provider"] is None
         # 6 discovery views + 3 unified OAuth views (authorize/token/revoke)
         # + 1 DCR view.
-        assert hass.http.register_view.call_count == 10
+        assert hass.http.register_view.call_count == 11
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
 
     async def test_none_ha_auth_none_switch_reuses_bound_views(self, monkeypatch):
@@ -1056,7 +1056,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_NONE,
         )
-        assert hass.http.register_view.call_count == 10
+        assert hass.http.register_view.call_count == 11
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
         await mw.async_unregister_webhook(hass)
 
@@ -1069,7 +1069,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_HA,
         )
-        assert hass.http.register_view.call_count == 10
+        assert hass.http.register_view.call_count == 11
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_HA
         await mw.async_unregister_webhook(hass)
 
@@ -1081,7 +1081,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_NONE,
         )
-        assert hass.http.register_view.call_count == 10
+        assert hass.http.register_view.call_count == 11
         assert mw.active_auth_mode(hass) == WEBHOOK_AUTH_NONE
 
     async def test_ha_auth_registers_resource_server_and_views(self, monkeypatch):
@@ -1103,7 +1103,7 @@ class TestRegisterWebhook:
         assert isinstance(cfg["resource_server"], mw.ResourceServer)
         # Six discovery + three unified OAuth (authorize/token/revoke) + one
         # DCR view were bound.
-        assert hass.http.register_view.call_count == 10
+        assert hass.http.register_view.call_count == 11
         assert hass.data.get(mw._OAUTH_VIEWS_REGISTERED_KEY) is True
 
     async def test_ha_auth_isolates_cimd_fetches_from_forwarding(self, monkeypatch):
@@ -1159,7 +1159,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_HA,
         )
-        assert hass.http.register_view.call_count == 10
+        assert hass.http.register_view.call_count == 11
         await mw.async_unregister_webhook(hass)
 
         # Second enable in the same HA session: no new bindings, no raise.
@@ -1170,7 +1170,7 @@ class TestRegisterWebhook:
             secret_path="/private_x",
             auth_mode=WEBHOOK_AUTH_HA,
         )
-        assert hass.http.register_view.call_count == 10
+        assert hass.http.register_view.call_count == 11
         assert isinstance(
             hass.data[DOMAIN][DATA_WEBHOOK]["resource_server"], mw.ResourceServer
         )
@@ -1232,7 +1232,7 @@ class TestRegisterWebhook:
         assert cfg["resource_server"] is None
         # 6 discovery + 3 unified scoped (authorize/token/revoke) + 2 root
         # legacy views.
-        assert hass.http.register_view.call_count == 11
+        assert hass.http.register_view.call_count == 12
         assert hass.data.get(OAUTH_ROUTE_OWNER_KEY) == DOMAIN
         assert restart_needed is False
 
@@ -1272,7 +1272,7 @@ class TestRegisterWebhook:
         assert hass.data[OAUTH_ROUTE_OWNER_KEY] == "webhook_proxy"
         # Only metadata + the three unified scoped views bind; root remains
         # add-on-owned.
-        assert hass.http.register_view.call_count == 9
+        assert hass.http.register_view.call_count == 10
         assert any(
             record.levelname == "WARNING"
             and record.name == mw.__name__
@@ -1514,3 +1514,61 @@ class TestRegisterWebhook:
         mw.async_register.assert_not_called()
         hass.http.register_view.assert_not_called()
         assert mw.active_auth_mode(hass) is None
+
+
+@pytest.mark.parametrize(
+    "auth_mode", [WEBHOOK_AUTH_NONE, WEBHOOK_AUTH_HA, WEBHOOK_AUTH_LEGACY]
+)
+async def test_readonly_webhook_reuses_auth_gate(auth_mode, monkeypatch):
+    from custom_components.ha_mcp_tools.readonly_webhook import ReadOnlyWebhookView
+
+    hass = _register_hass()
+    session = FakeSession(upstream=FakeUpstream(status=200))
+    _store_cfg(hass, session=session, auth_mode=auth_mode)
+    mw.register_readonly_webhook(hass, WEBHOOK_ID, mw._async_handle_webhook)
+    view = ReadOnlyWebhookView(hass)
+    rejection = mw.web.Response(status=401)
+    gate = AsyncMock(return_value=rejection)
+    monkeypatch.setattr(mw, "_check_webhook_auth", gate)
+    request = make_request()
+    assert await view.post(request, WEBHOOK_ID) is rejection
+    gate.assert_awaited_once_with(request, hass.data[DOMAIN][DATA_WEBHOOK])
+    assert session.calls == []
+    gate.return_value = None
+    assert (await view.get(request, WEBHOOK_ID)).status == 200
+    assert session.calls[-1]["url"] == TARGET_URL + "/readonly"
+
+
+async def test_readonly_webhook_route_shared_across_installations():
+    import importlib.util
+    from pathlib import Path
+
+    from custom_components.ha_mcp_tools import readonly_webhook as embedded
+
+    source = (
+        Path(__file__).resolve().parents[3]
+        / "homeassistant-addon-webhook-proxy-dev/mcp_proxy_dev/readonly_webhook.py"
+    )
+    assert source.read_bytes() == Path(embedded.__file__).read_bytes()
+    spec = importlib.util.spec_from_file_location("readonly_webhook_proxy_test", source)
+    proxy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(proxy)
+    hass = _register_hass()
+    first, second = AsyncMock(), AsyncMock()
+    embedded.register_readonly_webhook(hass, "embedded", first)
+    proxy.register_readonly_webhook(hass, "proxy", second)
+    hass.http.register_view.assert_called_once()
+    view = hass.http.register_view.call_args.args[0]
+    request = make_request()
+    await view.post(request, "embedded")
+    await view.get(request, "proxy")
+    first.assert_awaited_once_with(hass, "embedded", request, read_only=True)
+    second.assert_awaited_once_with(hass, "proxy", request, read_only=True)
+    embedded.unregister_readonly_webhook(hass, "embedded")
+    assert (await view.post(request, "embedded")).status == 404
+    await view.post(request, "proxy")
+    assert second.await_count == 2
+    assert (
+        proxy.readonly_url("http://localhost/private/?key=value")
+        == "http://localhost/private/readonly?key=value"
+    )

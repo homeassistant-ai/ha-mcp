@@ -4273,9 +4273,9 @@ class SearchTools:
                 "Read Only Mode is ON: write-capable tools are disabled and "
                 "all write or destructive operations are blocked "
                 "server-side. You can search, read, and analyze freely. To "
-                "allow changes, the user must turn off Read Only Mode in "
-                "the ha-mcp settings UI (Tools tab) or the add-on "
-                "configuration."
+                "allow changes, the user must use the normal MCP endpoint "
+                "without /readonly and turn off the global Read Only Mode "
+                "setting if it is enabled."
             )
 
         # Surface the MCP server's own update status after projection.
