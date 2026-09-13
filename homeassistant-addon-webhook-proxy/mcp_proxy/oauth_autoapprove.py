@@ -39,7 +39,7 @@ from __future__ import annotations
 import logging
 import secrets
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import aiohttp
 from aiohttp import web
@@ -56,6 +56,7 @@ from .oauth import (
     MODE_LEGACY,
     MODE_NONE_AUTOAPPROVE,
     OAUTH_BASE,
+    PKCE_S256_CHALLENGE_LEN,
     PKCECodeStore,
     _addon_alive,
     _build_base_url,
@@ -156,7 +157,9 @@ def _validate_autoapprove_authorize(params: Any) -> web.Response | None:
         return _json_error("invalid_request", 400, "code_challenge_method must be S256")
     if not _PKCE_CHALLENGE_RE.fullmatch(params.get("code_challenge", "")):
         return _json_error(
-            "invalid_request", 400, "invalid code_challenge (43-char base64url)"
+            "invalid_request",
+            400,
+            f"invalid code_challenge ({PKCE_S256_CHALLENGE_LEN}-char base64url)",
         )
     if not _is_valid_redirect_uri(params.get("redirect_uri", "")):
         return _json_error("invalid_request", 400, "invalid redirect_uri")
@@ -229,20 +232,6 @@ class AutoApproveProvider:
         spec-strict client that stores/echoes it is satisfied.
         """
         return secrets.token_urlsafe(32)
-
-
-def _active_autoapprove_provider(hass: HomeAssistant) -> AutoApproveProvider | None:
-    """The live none-mode auto-approve provider, or None when it is not live.
-
-    Read live from ``hass.data`` (not captured at view construction) so the bound
-    views serve only while none-autoapprove is the active mode and 404 otherwise
-    — mirrors ``oauth._active_oauth_mode``'s per-request gating.
-    """
-    domain_data = hass.data.get(DOMAIN)
-    if not isinstance(domain_data, dict):
-        return None
-    provider = domain_data.get(AUTOAPPROVE_PROVIDER_KEY)
-    return provider if isinstance(provider, AutoApproveProvider) else None
 
 
 def _domain_data(hass: HomeAssistant) -> dict[str, Any] | None:
@@ -353,10 +342,18 @@ class AutoApproveAuthorizeView(HomeAssistantView):
             params.popall("client_id", None)
             params["client_id"] = forward_id
 
-        import yarl
-
-        target = yarl.URL("/auth/authorize").with_query(params)
-        return web.Response(status=302, headers={"Location": str(target)})
+        # Percent-encode the query instead of handing the params to yarl: yarl
+        # legally leaves ":" and "/" literal inside query values (RFC 3986
+        # permits both in the query component), so a loopback client's callback
+        # forwards as ``redirect_uri=http://127.0.0.1:1234/callback``. Reverse
+        # proxies shipping a generic "block common exploits" ruleset -- Nginx
+        # Proxy Manager enables one per host with a checkbox -- match
+        # ``[a-zA-Z0-9_]=http://`` and answer 403 before core ever sees the
+        # request, stranding every native-app client behind such a proxy.
+        # Full encoding is semantically identical and survives those filters.
+        query = urlencode(list(params.items()))
+        target = f"/auth/authorize?{query}" if query else "/auth/authorize"
+        return web.Response(status=302, headers={"Location": target})
 
     async def post(self, request: web.Request) -> web.Response:
         """Handle legacy consent submissions on the scoped authorize route."""
