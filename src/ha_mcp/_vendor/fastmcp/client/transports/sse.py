@@ -1,0 +1,175 @@
+"""Server-Sent Events (SSE) transport for FastMCP Client."""
+
+from __future__ import annotations
+
+import contextlib
+import datetime
+import ssl
+from collections.abc import AsyncIterator
+from typing import Any, Literal, cast
+
+import httpx2
+from ha_mcp._vendor.mcp import ClientSession
+from ha_mcp._vendor.mcp.client.sse import sse_client
+from ha_mcp._vendor.mcp.shared._httpx_utils import McpHttpClientFactory
+from pydantic import AnyUrl
+from typing_extensions import Unpack
+
+from ha_mcp._vendor.fastmcp.client.auth.bearer import BearerAuth
+from ha_mcp._vendor.fastmcp.client.auth.client_credentials import (
+    ClientCredentialsOAuthProvider,
+    PrivateKeyJWTOAuthProvider,
+)
+from ha_mcp._vendor.fastmcp.client.auth.oauth import OAuth
+from ha_mcp._vendor.fastmcp.client.dependencies import _get_forwardable_http_headers
+from ha_mcp._vendor.fastmcp.client.transports.base import (
+    ClientTransport,
+    SessionKwargs,
+    TransportOptions,
+)
+from ha_mcp._vendor.fastmcp.utilities.timeout import normalize_timeout_to_timedelta
+
+
+class SSETransport(ClientTransport):
+    """Transport implementation that connects to an MCP server via Server-Sent Events."""
+
+    # SSE predates the sessionless modern era and cannot serve it; a client with
+    # `mode="auto"` negotiates the legacy handshake directly over SSE.
+    legacy_only = True
+
+    def __init__(
+        self,
+        url: str | AnyUrl,
+        headers: dict[str, str] | None = None,
+        auth: httpx2.Auth | Literal["oauth"] | str | None = None,
+        sse_read_timeout: datetime.timedelta | float | int | None = None,
+        httpx_client_factory: McpHttpClientFactory | None = None,
+        verify: ssl.SSLContext | bool | str | None = None,
+    ):
+        if isinstance(url, AnyUrl):
+            url = str(url)
+        if not isinstance(url, str) or not url.startswith("http"):
+            raise ValueError("Invalid HTTP/S URL provided for SSE.")
+
+        # Don't modify the URL path - respect the exact URL provided by the user
+        # Some servers are strict about trailing slashes (e.g., PayPal MCP)
+
+        self.url: str = url
+        self.headers = headers or {}
+        self.httpx_client_factory = httpx_client_factory
+        self.verify: ssl.SSLContext | bool | str | None = verify
+
+        if httpx_client_factory is not None and verify is not None:
+            import warnings
+
+            warnings.warn(
+                "Both 'httpx_client_factory' and 'verify' were provided. "
+                "The 'verify' parameter will be ignored because "
+                "'httpx_client_factory' takes precedence. Configure SSL "
+                "verification directly in your httpx_client_factory instead.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        self._set_auth(auth)
+
+        self.sse_read_timeout = normalize_timeout_to_timedelta(sse_read_timeout)
+
+    def _set_auth(self, auth: httpx2.Auth | Literal["oauth"] | str | None):
+        resolved: httpx2.Auth | None
+        if auth == "oauth":
+            resolved = OAuth(
+                self.url,
+                httpx_client_factory=self.httpx_client_factory
+                or self._make_verify_factory(),
+            )
+        elif isinstance(auth, OAuth):
+            auth._bind(self.url)
+            # Only inject the transport's factory into OAuth if OAuth still
+            # has the bare default — preserve any factory the caller attached
+            if auth.httpx_client_factory is httpx2.AsyncClient:
+                factory = self.httpx_client_factory or self._make_verify_factory()
+                if factory is not None:
+                    auth.httpx_client_factory = factory
+            resolved = auth
+        elif isinstance(
+            auth, (ClientCredentialsOAuthProvider, PrivateKeyJWTOAuthProvider)
+        ):
+            auth._bind(self.url)
+            resolved = auth
+        elif isinstance(auth, str):
+            resolved = BearerAuth(auth)
+        else:
+            resolved = auth
+        self.auth: httpx2.Auth | None = resolved
+
+    def _make_verify_factory(self) -> McpHttpClientFactory | None:
+        if self.verify is None:
+            return None
+        verify = self.verify
+
+        def factory(
+            headers: dict[str, str] | None = None,
+            timeout: httpx2.Timeout | None = None,
+            auth: httpx2.Auth | None = None,
+        ) -> httpx2.AsyncClient:
+            if timeout is None:
+                timeout = httpx2.Timeout(30.0, read=300.0)
+            kwargs: dict[str, Any] = {
+                "follow_redirects": True,
+                "timeout": timeout,
+                "verify": verify,
+            }
+            if headers is not None:
+                kwargs["headers"] = headers
+            if auth is not None:
+                kwargs["auth"] = auth
+            return httpx2.AsyncClient(**kwargs)
+
+        return cast(McpHttpClientFactory, factory)
+
+    @contextlib.asynccontextmanager
+    async def connect_session(
+        self,
+        *,
+        transport_options: TransportOptions | None = None,
+        **session_kwargs: Unpack[SessionKwargs],
+    ) -> AsyncIterator[ClientSession]:
+        options = transport_options or TransportOptions()
+        client_kwargs: dict[str, Any] = {}
+
+        # Proxies preserve eligible inbound headers while starting a distinct
+        # MCP connection with its own transport state.
+        # This is off by default so a plain Client used inside a server tool
+        # handler cannot leak caller headers to an unrelated remote server.
+        if options.forward_incoming_headers:
+            client_kwargs["headers"] = _get_forwardable_http_headers() | self.headers
+        else:
+            client_kwargs["headers"] = dict(self.headers)
+
+        # sse_read_timeout has a default value set, so we can't pass None without overriding it
+        # instead we simply leave the kwarg out if it's not provided
+        if self.sse_read_timeout is not None:
+            client_kwargs["sse_read_timeout"] = self.sse_read_timeout.total_seconds()
+        # SDK v2 session read timeouts are float seconds (see SessionKwargs);
+        # sse_client's `timeout` param is likewise float seconds.
+        read_timeout_seconds = session_kwargs.get("read_timeout_seconds")
+        if read_timeout_seconds is not None:
+            client_kwargs["timeout"] = read_timeout_seconds
+
+        if self.httpx_client_factory is not None:
+            client_kwargs["httpx_client_factory"] = self.httpx_client_factory
+        else:
+            verify_factory = self._make_verify_factory()
+            if verify_factory is not None:
+                client_kwargs["httpx_client_factory"] = verify_factory
+
+        async with sse_client(self.url, auth=self.auth, **client_kwargs) as transport:
+            read_stream, write_stream = transport
+            async with options.session_class(
+                read_stream, write_stream, **session_kwargs
+            ) as session:
+                yield session
+
+    def __repr__(self) -> str:
+        return f"<SSETransport(url='{self.url}')>"

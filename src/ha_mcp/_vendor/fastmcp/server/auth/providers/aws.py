@@ -1,0 +1,261 @@
+"""AWS Cognito OAuth provider for FastMCP.
+
+This module provides a complete AWS Cognito OAuth integration that's ready to use
+with a user pool ID, domain prefix, client ID and client secret. It handles all
+the complexity of AWS Cognito's OAuth flow, token validation, and user management.
+
+Example:
+    ```python
+    from fastmcp import FastMCP
+    from fastmcp.server.auth.providers.aws_cognito import AWSCognitoProvider
+
+    # Simple AWS Cognito OAuth protection
+    auth = AWSCognitoProvider(
+        user_pool_id="your-user-pool-id",
+        aws_region="eu-central-1",
+        client_id="your-cognito-client-id",
+        client_secret="your-cognito-client-secret"
+    )
+
+    mcp = FastMCP("My Protected Server", auth=auth)
+    ```
+"""
+
+from __future__ import annotations
+
+from typing import Literal
+
+from key_value.aio.protocols import AsyncKeyValue
+from pydantic import AnyHttpUrl
+
+from ha_mcp._vendor.fastmcp.server.auth.auth import AccessToken
+from ha_mcp._vendor.fastmcp.server.auth.oidc_proxy import (
+    DEFAULT_OIDC_DISCOVERY_TIMEOUT_SECONDS,
+    OIDCProxy,
+)
+from ha_mcp._vendor.fastmcp.server.auth.providers.jwt import JWTVerifier
+from ha_mcp._vendor.fastmcp.utilities.auth import parse_scopes
+from ha_mcp._vendor.fastmcp.utilities.logging import get_logger
+
+logger = get_logger(__name__.removeprefix("ha_mcp._vendor."))
+
+
+class AWSCognitoTokenVerifier(JWTVerifier):
+    """Token verifier for Cognito access tokens.
+
+    Cognito access tokens use a ``client_id`` claim instead of the
+    standard ``aud`` claim.  This subclass passes ``audience=None``
+    to the parent (skipping the ``aud`` check) and validates the
+    ``client_id`` claim directly.
+    """
+
+    def __init__(self, *, audience: str | list[str] | None = None, **kwargs):
+        self._expected_client_id = audience
+        super().__init__(audience=None, **kwargs)
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        """Verify token and filter claims to Cognito-specific subset."""
+        access_token = await super().verify_token(token)
+        if not access_token:
+            return None
+
+        # Validate client_id claim (Cognito's equivalent of aud)
+        if self._expected_client_id:
+            token_client_id = access_token.claims.get("client_id")
+            if isinstance(self._expected_client_id, list):
+                valid = token_client_id in self._expected_client_id
+            else:
+                valid = token_client_id == self._expected_client_id
+            if not valid:
+                self.logger.debug(
+                    "Token validation failed: client_id mismatch (expected %s, got %s)",
+                    self._expected_client_id,
+                    token_client_id,
+                )
+                return None
+
+        # Filter claims to Cognito-specific subset
+        cognito_claims = {
+            "sub": access_token.claims.get("sub"),
+            "username": access_token.claims.get("username"),
+            "cognito:groups": access_token.claims.get("cognito:groups", []),
+        }
+
+        return AccessToken(
+            token=access_token.token,
+            client_id=access_token.client_id,
+            scopes=access_token.scopes,
+            expires_at=access_token.expires_at,
+            subject=access_token.subject,
+            claims=cognito_claims,
+        )
+
+
+class AWSCognitoProvider(OIDCProxy):
+    """Complete AWS Cognito OAuth provider for FastMCP.
+
+    This provider makes it trivial to add AWS Cognito OAuth protection to any
+    FastMCP server using OIDC Discovery. Just provide your Cognito User Pool details,
+    client credentials, and a base URL, and you're ready to go.
+
+    Features:
+    - Automatic OIDC Discovery from AWS Cognito User Pool
+    - Automatic JWT token validation via Cognito's public keys
+    - Cognito-specific claim filtering (sub, username, cognito:groups)
+    - Support for Cognito User Pools
+
+    Example:
+        ```python
+        from fastmcp import FastMCP
+        from fastmcp.server.auth.providers.aws_cognito import AWSCognitoProvider
+
+        auth = AWSCognitoProvider(
+            user_pool_id="eu-central-1_XXXXXXXXX",
+            aws_region="eu-central-1",
+            client_id="your-cognito-client-id",
+            client_secret="your-cognito-client-secret",
+            base_url="https://my-server.com",
+            redirect_path="/custom/callback",
+        )
+
+        mcp = FastMCP("My App", auth=auth)
+        ```
+    """
+
+    def __init__(
+        self,
+        *,
+        user_pool_id: str,
+        client_id: str,
+        client_secret: str,
+        timeout_seconds: int | None = DEFAULT_OIDC_DISCOVERY_TIMEOUT_SECONDS,
+        base_url: AnyHttpUrl | str,
+        resource_base_url: AnyHttpUrl | str | None = None,
+        aws_region: str = "eu-central-1",
+        issuer_url: AnyHttpUrl | str | None = None,
+        redirect_path: str = "/auth/callback",
+        required_scopes: list[str] | None = None,
+        allowed_client_redirect_uris: list[str] | None = None,
+        client_storage: AsyncKeyValue | None = None,
+        jwt_signing_key: str | bytes | None = None,
+        require_authorization_consent: bool | Literal["remember", "external"] = True,
+        consent_csp_policy: str | None = None,
+        forward_resource: bool = True,
+        fallback_refresh_token_expiry_seconds: int | None = None,
+        fastmcp_access_token_expiry_seconds: int | None = None,
+        token_expiry_threshold_seconds: int = 0,
+        enable_cimd: bool = True,
+    ):
+        """Initialize AWS Cognito OAuth provider.
+
+        Args:
+            user_pool_id: Your Cognito User Pool ID (e.g., "eu-central-1_XXXXXXXXX")
+            client_id: Cognito app client ID
+            client_secret: Cognito app client secret
+            timeout_seconds: Timeout, in seconds, for the OIDC discovery request
+                made during construction. Defaults to 10 seconds so a slow or
+                unreachable issuer cannot block server startup indefinitely. Pass
+                None to fall back to the HTTP client's own default timeout.
+            base_url: Public URL where OAuth endpoints will be accessible (includes any mount path)
+            resource_base_url: Optional public base URL for the protected resource metadata
+                and token audience. Defaults to ``base_url``.
+            aws_region: AWS region where your User Pool is located (defaults to "eu-central-1")
+            issuer_url: Issuer URL for OAuth metadata (defaults to base_url). Use root-level URL
+                to avoid 404s during discovery when mounting under a path.
+            redirect_path: Redirect path configured in Cognito app (defaults to "/auth/callback")
+            required_scopes: Required Cognito scopes (defaults to ["openid"])
+            allowed_client_redirect_uris: List of allowed redirect URI patterns for MCP clients.
+                If None (default), all URIs are allowed. If empty list, no URIs are allowed.
+            client_storage: Storage backend for OAuth state (client registrations, encrypted tokens).
+                If None, an encrypted file store will be created in the data directory
+                (derived from `platformdirs`).
+            jwt_signing_key: Secret for signing FastMCP JWT tokens (any string or bytes). If bytes are provided,
+                they will be used as is. If a string is provided, it will be derived into a 32-byte key. If not
+                provided, the upstream client secret will be used to derive a 32-byte key using PBKDF2.
+            require_authorization_consent: Whether to require user consent before authorizing clients (default True).
+                When True, users see a consent screen before being redirected to AWS Cognito.
+                When False, authorization proceeds directly without user confirmation.
+                When "external", authorization follows the same direct path as False,
+                but the warning is suppressed as an operator acknowledgment that
+                equivalent protections are enforced externally.
+                SECURITY WARNING: Only set to False for local development or testing environments.
+            fallback_refresh_token_expiry_seconds: Lifetime for the FastMCP-issued
+                refresh token when the upstream provider omits `refresh_expires_in`
+                (e.g. Cognito, GitHub, many OIDC IdPs). Defaults to 1 year. The upstream
+                refresh remains the source of truth. See `OAuthProxy` for details.
+            fastmcp_access_token_expiry_seconds: Lifetime for the FastMCP-issued access
+                token, decoupling it from the upstream provider's `expires_in`. Defaults
+                to None (mirror the upstream lifetime). Set this for bridges whose
+                upstream issues short-lived access tokens that some MCP clients can't
+                refresh gracefully (e.g. `mcp-remote`). See `OAuthProxy` for details.
+            token_expiry_threshold_seconds: Number of seconds before actual expiry to
+                treat a token as expired, refreshing early to avoid races. Defaults to 0.
+            enable_cimd: Enable CIMD (Client ID Metadata Document) support for URL-based
+                client IDs (default True). Set to False to disable.
+        """
+        # Parse scopes if provided as string
+        required_scopes_final = (
+            parse_scopes(required_scopes) if required_scopes is not None else ["openid"]
+        )
+
+        # Construct OIDC discovery URL
+        config_url = f"https://cognito-idp.{aws_region}.amazonaws.com/{user_pool_id}/.well-known/openid-configuration"
+
+        # Store Cognito-specific info for claim filtering
+        self.user_pool_id = user_pool_id
+        self.aws_region = aws_region
+        self.client_id = client_id
+
+        # Initialize OIDC proxy with Cognito discovery
+        super().__init__(
+            config_url=config_url,
+            client_id=client_id,
+            client_secret=client_secret,
+            timeout_seconds=timeout_seconds,
+            algorithm="RS256",
+            required_scopes=required_scopes_final,
+            base_url=base_url,
+            resource_base_url=resource_base_url,
+            issuer_url=issuer_url,
+            redirect_path=redirect_path,
+            allowed_client_redirect_uris=allowed_client_redirect_uris,
+            client_storage=client_storage,
+            jwt_signing_key=jwt_signing_key,
+            require_authorization_consent=require_authorization_consent,
+            consent_csp_policy=consent_csp_policy,
+            forward_resource=forward_resource,
+            fallback_refresh_token_expiry_seconds=fallback_refresh_token_expiry_seconds,
+            fastmcp_access_token_expiry_seconds=fastmcp_access_token_expiry_seconds,
+            token_expiry_threshold_seconds=token_expiry_threshold_seconds,
+            enable_cimd=enable_cimd,
+        )
+
+        logger.debug(
+            "Initialized AWS Cognito OAuth provider for client %s with scopes: %s",
+            client_id,
+            required_scopes_final,
+        )
+
+    def get_token_verifier(
+        self,
+        *,
+        algorithm: str | None = None,
+        audience: str | None = None,
+        required_scopes: list[str] | None = None,
+        timeout_seconds: int | None = None,
+    ) -> AWSCognitoTokenVerifier:
+        """Creates a Cognito-specific token verifier with claim filtering.
+
+        Args:
+            algorithm: Optional token verifier algorithm
+            audience: Optional token verifier audience
+            required_scopes: Optional token verifier required_scopes
+            timeout_seconds: HTTP request timeout in seconds
+        """
+        return AWSCognitoTokenVerifier(
+            issuer=str(self.oidc_config.issuer),
+            audience=audience or self.client_id,
+            algorithm=algorithm,
+            jwks_uri=str(self.oidc_config.jwks_uri),
+            required_scopes=required_scopes,
+        )

@@ -1,0 +1,261 @@
+from collections.abc import Awaitable, Callable
+from typing import Any
+from urllib.parse import urlparse
+
+from pydantic import AnyHttpUrl
+from starlette.middleware.cors import CORSMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.routing import Route, request_response  # type: ignore
+from starlette.types import ASGIApp
+
+from ha_mcp._vendor.mcp.server.auth.handlers.authorize import AuthorizationHandler
+from ha_mcp._vendor.mcp.server.auth.handlers.metadata import MetadataHandler, ProtectedResourceMetadataHandler
+from ha_mcp._vendor.mcp.server.auth.handlers.register import RegistrationHandler
+from ha_mcp._vendor.mcp.server.auth.handlers.revoke import RevocationHandler
+from ha_mcp._vendor.mcp.server.auth.handlers.token import TokenHandler
+from ha_mcp._vendor.mcp.server.auth.middleware.client_auth import ClientAuthenticator
+from ha_mcp._vendor.mcp.server.auth.provider import OAuthAuthorizationServerProvider
+from ha_mcp._vendor.mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
+from ha_mcp._vendor.mcp.server.transport_security import DEFAULT_MAX_REQUEST_BODY_SIZE, RequestBodyLimitMiddleware
+from ha_mcp._vendor.mcp.shared.auth import JWT_BEARER_GRANT_TYPE, OAuthMetadata, ProtectedResourceMetadata
+from ha_mcp._vendor.mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
+
+
+def validate_issuer_url(url: AnyHttpUrl):
+    """Validate that the issuer URL meets OAuth 2.0 requirements.
+
+    Args:
+        url: The issuer URL to validate.
+
+    Raises:
+        ValueError: If the issuer URL is invalid.
+    """
+
+    # RFC 8414 requires HTTPS, but we allow loopback/localhost HTTP for testing
+    if url.scheme != "https" and url.host not in ("localhost", "127.0.0.1", "[::1]"):
+        raise ValueError("Issuer URL must be HTTPS")
+
+    # No fragments or query parameters allowed
+    if url.fragment:
+        raise ValueError("Issuer URL must not have a fragment")
+    if url.query:
+        raise ValueError("Issuer URL must not have a query string")
+
+
+AUTHORIZATION_PATH = "/authorize"
+TOKEN_PATH = "/token"
+REGISTRATION_PATH = "/register"
+REVOCATION_PATH = "/revoke"
+
+# SEP-990: leg 2 uses the RFC 7523 jwt-bearer grant; support is advertised as the ID-JAG profile.
+ID_JAG_GRANT_PROFILE = "urn:ietf:params:oauth:grant-profile:id-jag"
+
+
+def _cors(app: ASGIApp, allow_methods: list[str]) -> ASGIApp:
+    return CORSMiddleware(
+        app=app,
+        allow_origins="*",
+        allow_methods=allow_methods,
+        allow_headers=[MCP_PROTOCOL_VERSION_HEADER],
+    )
+
+
+def _body_limited(app: ASGIApp) -> ASGIApp:
+    return RequestBodyLimitMiddleware(app, DEFAULT_MAX_REQUEST_BODY_SIZE)
+
+
+def cors_middleware(
+    handler: Callable[[Request], Response | Awaitable[Response]],
+    allow_methods: list[str],
+) -> ASGIApp:
+    return _cors(request_response(handler), allow_methods)
+
+
+def create_auth_routes(
+    provider: OAuthAuthorizationServerProvider[Any, Any, Any],
+    issuer_url: AnyHttpUrl,
+    service_documentation_url: AnyHttpUrl | None = None,
+    client_registration_options: ClientRegistrationOptions | None = None,
+    revocation_options: RevocationOptions | None = None,
+    identity_assertion_enabled: bool = False,
+) -> list[Route]:
+    validate_issuer_url(issuer_url)
+
+    client_registration_options = client_registration_options or ClientRegistrationOptions()
+    revocation_options = revocation_options or RevocationOptions()
+    metadata = build_metadata(
+        issuer_url,
+        service_documentation_url,
+        client_registration_options,
+        revocation_options,
+        supports_identity_assertion=identity_assertion_enabled,
+    )
+    client_authenticator = ClientAuthenticator(provider)
+    token_handler = TokenHandler(provider, client_authenticator, identity_assertion_enabled=identity_assertion_enabled)
+
+    # Create routes
+    # Allow CORS requests for endpoints meant to be hit by the OAuth client
+    # (with the client secret). This is intended to support things like MCP Inspector,
+    # where the client runs in a web browser. CORS is the outermost wrapper so that
+    # responses produced by inner layers (such as a 413) still carry CORS headers.
+    routes = [
+        Route(
+            "/.well-known/oauth-authorization-server",
+            endpoint=cors_middleware(
+                MetadataHandler(metadata).handle,
+                ["GET", "OPTIONS"],
+            ),
+            methods=["GET", "OPTIONS"],
+        ),
+        Route(
+            AUTHORIZATION_PATH,
+            # do not allow CORS for authorization endpoint;
+            # clients should just redirect to this
+            endpoint=_body_limited(request_response(AuthorizationHandler(provider).handle)),
+            methods=["GET", "POST"],
+        ),
+        Route(
+            TOKEN_PATH,
+            endpoint=_cors(_body_limited(request_response(token_handler.handle)), ["POST", "OPTIONS"]),
+            methods=["POST", "OPTIONS"],
+        ),
+    ]
+
+    if client_registration_options.enabled:  # pragma: no branch
+        registration_handler = RegistrationHandler(
+            provider,
+            options=client_registration_options,
+        )
+        routes.append(
+            Route(
+                REGISTRATION_PATH,
+                endpoint=_cors(_body_limited(request_response(registration_handler.handle)), ["POST", "OPTIONS"]),
+                methods=["POST", "OPTIONS"],
+            )
+        )
+
+    if revocation_options.enabled:  # pragma: no branch
+        revocation_handler = RevocationHandler(provider, client_authenticator)
+        routes.append(
+            Route(
+                REVOCATION_PATH,
+                endpoint=_cors(_body_limited(request_response(revocation_handler.handle)), ["POST", "OPTIONS"]),
+                methods=["POST", "OPTIONS"],
+            )
+        )
+
+    return routes
+
+
+def build_metadata(
+    issuer_url: AnyHttpUrl,
+    service_documentation_url: AnyHttpUrl | None,
+    client_registration_options: ClientRegistrationOptions,
+    revocation_options: RevocationOptions,
+    supports_identity_assertion: bool = False,
+) -> OAuthMetadata:
+    authorization_url = AnyHttpUrl(str(issuer_url).rstrip("/") + AUTHORIZATION_PATH)
+    token_url = AnyHttpUrl(str(issuer_url).rstrip("/") + TOKEN_PATH)
+
+    grant_types_supported = ["authorization_code", "refresh_token"]
+    # SEP-990 / ext-auth §6: support for the ID-JAG flow is advertised as a grant PROFILE, not as
+    # the jwt-bearer grant type (which an AS might support for other purposes).
+    authorization_grant_profiles_supported: list[str] | None = None
+    if supports_identity_assertion:
+        grant_types_supported.append(JWT_BEARER_GRANT_TYPE)
+        authorization_grant_profiles_supported = [ID_JAG_GRANT_PROFILE]
+
+    # Create metadata
+    metadata = OAuthMetadata(
+        issuer=issuer_url,
+        authorization_endpoint=authorization_url,
+        token_endpoint=token_url,
+        scopes_supported=client_registration_options.valid_scopes,
+        response_types_supported=["code"],
+        response_modes_supported=None,
+        grant_types_supported=grant_types_supported,
+        token_endpoint_auth_methods_supported=["client_secret_post", "client_secret_basic"],
+        token_endpoint_auth_signing_alg_values_supported=None,
+        service_documentation=service_documentation_url,
+        ui_locales_supported=None,
+        op_policy_uri=None,
+        op_tos_uri=None,
+        introspection_endpoint=None,
+        code_challenge_methods_supported=["S256"],
+        authorization_grant_profiles_supported=authorization_grant_profiles_supported,
+    )
+
+    # Add registration endpoint if supported
+    if client_registration_options.enabled:  # pragma: no branch
+        metadata.registration_endpoint = AnyHttpUrl(str(issuer_url).rstrip("/") + REGISTRATION_PATH)
+
+    # Add revocation endpoint if supported
+    if revocation_options.enabled:  # pragma: no branch
+        metadata.revocation_endpoint = AnyHttpUrl(str(issuer_url).rstrip("/") + REVOCATION_PATH)
+        metadata.revocation_endpoint_auth_methods_supported = ["client_secret_post", "client_secret_basic"]
+
+    return metadata
+
+
+def build_resource_metadata_url(resource_server_url: AnyHttpUrl) -> AnyHttpUrl:
+    """Build RFC 9728 compliant protected resource metadata URL.
+
+    Inserts /.well-known/oauth-protected-resource between host and resource path
+    as specified in RFC 9728 §3.1.
+
+    Args:
+        resource_server_url: The resource server URL (e.g., https://example.com/mcp)
+
+    Returns:
+        The metadata URL (e.g., https://example.com/.well-known/oauth-protected-resource/mcp)
+    """
+    parsed = urlparse(str(resource_server_url))
+    # Handle trailing slash: if path is just "/", treat as empty
+    resource_path = parsed.path if parsed.path != "/" else ""
+    return AnyHttpUrl(f"{parsed.scheme}://{parsed.netloc}/.well-known/oauth-protected-resource{resource_path}")
+
+
+def create_protected_resource_routes(
+    resource_url: AnyHttpUrl,
+    authorization_servers: list[AnyHttpUrl],
+    scopes_supported: list[str] | None = None,
+    resource_name: str | None = None,
+    resource_documentation: AnyHttpUrl | None = None,
+) -> list[Route]:
+    """Create routes for OAuth 2.0 Protected Resource Metadata (RFC 9728).
+
+    Args:
+        resource_url: The URL of this resource server
+        authorization_servers: List of authorization servers that can issue tokens
+        scopes_supported: Optional list of scopes supported by this resource
+        resource_name: Optional human-readable name for this resource
+        resource_documentation: Optional URL to documentation for this resource
+
+    Returns:
+        List of Starlette routes for protected resource metadata
+    """
+    metadata = ProtectedResourceMetadata(
+        resource=resource_url,
+        authorization_servers=authorization_servers,
+        scopes_supported=scopes_supported,
+        resource_name=resource_name,
+        resource_documentation=resource_documentation,
+        # bearer_methods_supported defaults to ["header"] in the model
+    )
+
+    handler = ProtectedResourceMetadataHandler(metadata)
+
+    # RFC 9728 §3.1: Register route at /.well-known/oauth-protected-resource + resource path
+    metadata_url = build_resource_metadata_url(resource_url)
+    # Extract just the path part for route registration
+    parsed = urlparse(str(metadata_url))
+    well_known_path = parsed.path
+
+    return [
+        Route(
+            well_known_path,
+            endpoint=cors_middleware(handler.handle, ["GET", "OPTIONS"]),
+            methods=["GET", "OPTIONS"],
+        )
+    ]

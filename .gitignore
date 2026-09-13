@@ -85,7 +85,8 @@ docs/development/
 local/
 worktree/
 /.claude/settings.local.json
-fastmcp/
+# Root-anchored so it doesn't ignore src/ha_mcp/_vendor/fastmcp.
+/fastmcp/
 
 # HACS frontend - large (~51MB) JavaScript assets, downloaded during test setup
 tests/initial_test_state/custom_components/hacs/hacs_frontend/

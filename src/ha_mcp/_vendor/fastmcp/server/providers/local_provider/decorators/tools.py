@@ -1,0 +1,359 @@
+"""Tool decorator mixin for LocalProvider.
+
+This module provides the ToolDecoratorMixin class that adds tool
+registration functionality to LocalProvider.
+"""
+
+from __future__ import annotations
+
+import inspect
+import types
+from collections.abc import Callable
+from functools import partial
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Literal,
+    TypeVar,
+    Union,
+    get_args,
+    get_origin,
+    overload,
+)
+
+from ha_mcp._vendor import mcp_types
+from ha_mcp._vendor.mcp_types import ToolAnnotations
+
+from ha_mcp._vendor.fastmcp.tools.base import Tool
+from ha_mcp._vendor.fastmcp.tools.function_tool import FunctionTool
+from ha_mcp._vendor.fastmcp.utilities.authorization import AuthCheck
+from ha_mcp._vendor.fastmcp.utilities.prefab import is_prefab_type, prefab_available
+from ha_mcp._vendor.fastmcp.utilities.tasks import TaskConfig
+from ha_mcp._vendor.fastmcp.utilities.types import AnyFunction, NotSet, NotSetT
+
+if TYPE_CHECKING:
+    from ha_mcp._vendor.fastmcp.server.providers.local_provider import LocalProvider
+
+F = TypeVar("F", bound=Callable[..., Any])
+
+DuplicateBehavior = Literal["error", "warn", "replace", "ignore"]
+
+PREFAB_RENDERER_URI = "ui://prefab/renderer.html"
+
+
+def _is_prefab_type(tp: Any) -> bool:
+    """Check if *tp* is or contains a prefab type, recursing through unions and Annotated."""
+    if is_prefab_type(tp):
+        return True
+    origin = get_origin(tp)
+    if origin is Union or origin is types.UnionType or origin is Annotated:
+        return any(_is_prefab_type(a) for a in get_args(tp))
+    return False
+
+
+def _has_prefab_return_type(tool: Tool) -> bool:
+    """Check if a FunctionTool's return type annotation is a prefab type."""
+    if not isinstance(tool, FunctionTool):
+        return False
+    rt = tool.return_type
+    if rt is None or rt is inspect.Parameter.empty:
+        return False
+    return _is_prefab_type(rt)
+
+
+def _stamp_prefab_marker(tool: Tool) -> None:
+    """Mark a tool as needing a Prefab renderer resource.
+
+    Sets ``meta["ui"]["resourceUri"]`` to a placeholder URI. The server
+    recognizes the placeholder at list_tools / list_resources / read_resource
+    time and synthesizes a per-tool resource on the fly with a hashed URI
+    derived from the tool's mount-point address. Nothing is stored — the
+    renderer HTML and CSP are generated on demand from the tool's own meta.
+    """
+    from ha_mcp._vendor.fastmcp.apps.config import AppConfig, app_config_to_meta_dict
+
+    app_config = AppConfig(resource_uri=PREFAB_RENDERER_URI)
+    meta = dict(tool.meta) if tool.meta else {}
+    meta["ui"] = app_config_to_meta_dict(app_config)
+    tool.meta = meta
+
+
+def _maybe_apply_prefab_ui(provider: LocalProvider, tool: Tool) -> None:
+    """Mark a tool as a Prefab tool if its config or return type implies it.
+
+    Per-tool renderer resources are synthesized lazily at list/read time;
+    here we only normalize the tool's meta so the synthesis pass can spot
+    it. ``app=True``, return-type inference, and ``PrefabAppConfig`` all
+    funnel through the same placeholder marker.
+    """
+    meta = tool.meta or {}
+    ui = meta.get("ui")
+
+    if ui is True and prefab_available():
+        # Explicit app=True: stamp the placeholder so the synthesizer finds it.
+        _stamp_prefab_marker(tool)
+    elif ui is None and _has_prefab_return_type(tool):
+        # Inference: return type is a prefab type, stamp the placeholder.
+        _stamp_prefab_marker(tool)
+    # Otherwise the tool either has no ui meta at all (not a prefab tool)
+    # or it already has a fully-formed dict from FastMCP.tool(app=...) — the
+    # synthesizer picks up both flavors by looking for the placeholder URI.
+
+
+class ToolDecoratorMixin:
+    """Mixin class providing tool decorator functionality for LocalProvider.
+
+    This mixin contains all methods related to:
+    - Tool registration via add_tool()
+    - Tool decorator (@provider.tool)
+    """
+
+    def add_tool(self: LocalProvider, tool: Tool | Callable[..., Any]) -> Tool:
+        """Add a tool to this provider's storage.
+
+        Accepts either a Tool object or a decorated function with __fastmcp__ metadata.
+        """
+        enabled = True
+        if not isinstance(tool, Tool):
+            from ha_mcp._vendor.fastmcp.decorators import get_fastmcp_meta
+            from ha_mcp._vendor.fastmcp.tools.function_tool import ToolMeta
+
+            fmeta = get_fastmcp_meta(tool)
+            if fmeta is not None and isinstance(fmeta, ToolMeta):
+                resolved_task = fmeta.task if fmeta.task is not None else False
+                enabled = fmeta.enabled
+
+                # Merge ToolMeta.app into the meta dict
+                tool_meta = fmeta.meta
+                if fmeta.app is not None:
+                    from ha_mcp._vendor.fastmcp.apps.config import app_config_to_meta_dict
+
+                    tool_meta = dict(tool_meta) if tool_meta else {}
+                    if fmeta.app is True:
+                        tool_meta["ui"] = True
+                    else:
+                        tool_meta["ui"] = app_config_to_meta_dict(fmeta.app)
+
+                tool = Tool.from_function(
+                    tool,
+                    name=fmeta.name,
+                    version=fmeta.version,
+                    title=fmeta.title,
+                    description=fmeta.description,
+                    icons=fmeta.icons,
+                    tags=fmeta.tags,
+                    output_schema=fmeta.output_schema,
+                    annotations=fmeta.annotations,
+                    meta=tool_meta,
+                    task=resolved_task,
+                    timeout=fmeta.timeout,
+                    auth=fmeta.auth,
+                    run_in_thread=fmeta.run_in_thread,
+                )
+            else:
+                tool = Tool.from_function(tool)
+        self._add_component(tool)
+        if not enabled:
+            self.disable(keys={tool.key})
+        _maybe_apply_prefab_ui(self, tool)
+        return tool
+
+    @overload
+    def tool(
+        self: LocalProvider,
+        name_or_fn: F,
+        *,
+        name: str | None = None,
+        version: str | int | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        icons: list[mcp_types.Icon] | None = None,
+        tags: set[str] | None = None,
+        output_schema: dict[str, Any] | NotSetT | None = NotSet,
+        annotations: ToolAnnotations | dict[str, Any] | None = None,
+        meta: dict[str, Any] | None = None,
+        enabled: bool = True,
+        task: bool | TaskConfig | None = None,
+        timeout: float | None = None,
+        auth: AuthCheck | list[AuthCheck] | None = None,
+        run_in_thread: bool = True,
+    ) -> F: ...
+
+    @overload
+    def tool(
+        self: LocalProvider,
+        name_or_fn: str | None = None,
+        *,
+        name: str | None = None,
+        version: str | int | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        icons: list[mcp_types.Icon] | None = None,
+        tags: set[str] | None = None,
+        output_schema: dict[str, Any] | NotSetT | None = NotSet,
+        annotations: ToolAnnotations | dict[str, Any] | None = None,
+        meta: dict[str, Any] | None = None,
+        enabled: bool = True,
+        task: bool | TaskConfig | None = None,
+        timeout: float | None = None,
+        auth: AuthCheck | list[AuthCheck] | None = None,
+        run_in_thread: bool = True,
+    ) -> Callable[[F], F]: ...
+
+    # NOTE: This method mirrors fastmcp.tools.tool() but adds registration and
+    # the `enabled` param. It could delegate to the standalone decorator to
+    # reduce duplication.
+    def tool(
+        self: LocalProvider,
+        name_or_fn: str | AnyFunction | None = None,
+        *,
+        name: str | None = None,
+        version: str | int | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        icons: list[mcp_types.Icon] | None = None,
+        tags: set[str] | None = None,
+        output_schema: dict[str, Any] | NotSetT | None = NotSet,
+        annotations: ToolAnnotations | dict[str, Any] | None = None,
+        meta: dict[str, Any] | None = None,
+        enabled: bool = True,
+        task: bool | TaskConfig | None = None,
+        timeout: float | None = None,
+        auth: AuthCheck | list[AuthCheck] | None = None,
+        run_in_thread: bool = True,
+    ) -> (
+        Callable[[AnyFunction], FunctionTool]
+        | FunctionTool
+        | partial[Callable[[AnyFunction], FunctionTool] | FunctionTool]
+    ):
+        """Decorator to register a tool.
+
+        This decorator supports multiple calling patterns:
+        - @provider.tool (without parentheses)
+        - @provider.tool() (with empty parentheses)
+        - @provider.tool("custom_name") (with name as first argument)
+        - @provider.tool(name="custom_name") (with name as keyword argument)
+        - provider.tool(function, name="custom_name") (direct function call)
+
+        Args:
+            name_or_fn: Either a function (when used as @tool), a string name, or None
+            name: Optional name for the tool (keyword-only, alternative to name_or_fn)
+            title: Optional title for the tool
+            description: Optional description of what the tool does
+            icons: Optional icons for the tool
+            tags: Optional set of tags for categorizing the tool
+            output_schema: Optional JSON schema for the tool's output
+            annotations: Optional annotations about the tool's behavior
+            meta: Optional meta information about the tool
+            enabled: Whether the tool is enabled (default True). If False, adds to blocklist.
+            task: Optional task configuration for background execution
+
+        Returns:
+            The registered FunctionTool or a decorator function.
+
+        Example:
+            ```python
+            provider = LocalProvider()
+
+            @provider.tool
+            def greet(name: str) -> str:
+                return f"Hello, {name}!"
+
+            @provider.tool("custom_name")
+            def my_tool(x: int) -> str:
+                return str(x)
+            ```
+        """
+        if isinstance(annotations, dict):
+            annotations = ToolAnnotations(**annotations)
+
+        if isinstance(name_or_fn, classmethod):
+            raise TypeError(
+                "To decorate a classmethod, use @classmethod above @tool. "
+                "See https://gofastmcp.com/servers/tools#using-with-methods"
+            )
+
+        def decorate_and_register(
+            fn: AnyFunction, tool_name: str | None
+        ) -> FunctionTool | AnyFunction:
+            # Check for unbound method
+            try:
+                params = list(inspect.signature(fn).parameters.keys())
+            except (ValueError, TypeError):
+                params = []
+            if params and params[0] in ("self", "cls"):
+                fn_name = getattr(fn, "__name__", "function")
+                raise TypeError(
+                    f"The function '{fn_name}' has '{params[0]}' as its first parameter. "
+                    f"Use the standalone @tool decorator and register the bound method:\n\n"
+                    f"    from fastmcp.tools import tool\n\n"
+                    f"    class MyClass:\n"
+                    f"        @tool\n"
+                    f"        def {fn_name}(...):\n"
+                    f"            ...\n\n"
+                    f"    obj = MyClass()\n"
+                    f"    mcp.add_tool(obj.{fn_name})\n\n"
+                    f"See https://gofastmcp.com/servers/tools#using-with-methods"
+                )
+
+            from ha_mcp._vendor.fastmcp.tools.function_tool import ToolMeta
+
+            metadata = ToolMeta(
+                name=tool_name,
+                version=version,
+                title=title,
+                description=description,
+                icons=icons,
+                tags=tags,
+                output_schema=output_schema,
+                annotations=annotations,
+                meta=meta,
+                task=task,
+                timeout=timeout,
+                auth=auth,
+                enabled=enabled,
+                run_in_thread=run_in_thread,
+            )
+            target = fn.__func__ if hasattr(fn, "__func__") else fn
+            target.__fastmcp__ = metadata  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+            self.add_tool(fn)
+            return fn
+
+        if inspect.isroutine(name_or_fn):
+            return decorate_and_register(name_or_fn, name)
+
+        elif isinstance(name_or_fn, str):
+            # Case 3: @tool("custom_name") - name passed as first argument
+            if name is not None:
+                raise TypeError(
+                    "Cannot specify both a name as first argument and as keyword argument. "
+                    f"Use either @tool('{name_or_fn}') or @tool(name='{name}'), not both."
+                )
+            tool_name = name_or_fn
+        elif name_or_fn is None:
+            # Case 4: @tool() or @tool(name="something") - use keyword name
+            tool_name = name
+        else:
+            raise TypeError(
+                f"First argument to @tool must be a function, string, or None, got {type(name_or_fn)}"
+            )
+
+        # Return partial for cases where we need to wait for the function
+        return partial(
+            self.tool,
+            name=tool_name,
+            version=version,
+            title=title,
+            description=description,
+            icons=icons,
+            tags=tags,
+            output_schema=output_schema,
+            annotations=annotations,
+            meta=meta,
+            enabled=enabled,
+            task=task,
+            timeout=timeout,
+            auth=auth,
+            run_in_thread=run_in_thread,
+        )

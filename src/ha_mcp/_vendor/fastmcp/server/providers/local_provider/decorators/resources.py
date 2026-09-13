@@ -1,0 +1,212 @@
+"""Resource decorator mixin for LocalProvider.
+
+This module provides the ResourceDecoratorMixin class that adds resource
+and template registration functionality to LocalProvider.
+"""
+
+from __future__ import annotations
+
+import inspect
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, TypeVar
+
+from ha_mcp._vendor import mcp_types
+from ha_mcp._vendor.mcp_types import Annotations
+
+from ha_mcp._vendor.fastmcp.resources.base import Resource
+from ha_mcp._vendor.fastmcp.resources.security import (
+    INHERIT_SECURITY,
+    InheritSecurity,
+    ResourceSecurity,
+)
+from ha_mcp._vendor.fastmcp.resources.template import ResourceTemplate
+from ha_mcp._vendor.fastmcp.utilities.authorization import AuthCheck
+from ha_mcp._vendor.fastmcp.utilities.types import AnyFunction
+
+if TYPE_CHECKING:
+    from ha_mcp._vendor.fastmcp.server.providers.local_provider import LocalProvider
+
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+class ResourceDecoratorMixin:
+    """Mixin class providing resource decorator functionality for LocalProvider.
+
+    This mixin contains all methods related to:
+    - Resource registration via add_resource()
+    - Resource template registration via add_template()
+    - Resource decorator (@provider.resource)
+    """
+
+    def add_resource(
+        self: LocalProvider, resource: Resource | ResourceTemplate | Callable[..., Any]
+    ) -> Resource | ResourceTemplate:
+        """Add a resource to this provider's storage.
+
+        Accepts either a Resource/ResourceTemplate object or a decorated function with __fastmcp__ metadata.
+        """
+        enabled = True
+        if not isinstance(resource, (Resource, ResourceTemplate)):
+            from ha_mcp._vendor.fastmcp.decorators import get_fastmcp_meta
+            from ha_mcp._vendor.fastmcp.resources.function_resource import ResourceMeta
+            from ha_mcp._vendor.fastmcp.server.dependencies import without_injected_parameters
+
+            meta = get_fastmcp_meta(resource)
+            if meta is not None and isinstance(meta, ResourceMeta):
+                enabled = meta.enabled
+                has_uri_params = "{" in meta.uri and "}" in meta.uri
+                wrapper_fn = without_injected_parameters(resource)
+                has_func_params = bool(inspect.signature(wrapper_fn).parameters)
+
+                if has_uri_params or has_func_params:
+                    resource = ResourceTemplate.from_function(
+                        fn=resource,
+                        uri_template=meta.uri,
+                        name=meta.name,
+                        version=meta.version,
+                        title=meta.title,
+                        description=meta.description,
+                        icons=meta.icons,
+                        mime_type=meta.mime_type,
+                        tags=meta.tags,
+                        annotations=meta.annotations,
+                        meta=meta.meta,
+                        auth=meta.auth,
+                        security=meta.security,
+                    )
+                else:
+                    resource = Resource.from_function(
+                        fn=resource,
+                        uri=meta.uri,
+                        name=meta.name,
+                        version=meta.version,
+                        title=meta.title,
+                        description=meta.description,
+                        icons=meta.icons,
+                        mime_type=meta.mime_type,
+                        tags=meta.tags,
+                        annotations=meta.annotations,
+                        meta=meta.meta,
+                        auth=meta.auth,
+                    )
+            else:
+                raise TypeError(
+                    f"Expected Resource, ResourceTemplate, or @resource-decorated function, got {type(resource).__name__}. "
+                    "Use @resource('uri') decorator or pass a Resource/ResourceTemplate instance."
+                )
+        self._add_component(resource)
+        if not enabled:
+            self.disable(keys={resource.key})
+        return resource
+
+    def add_template(
+        self: LocalProvider, template: ResourceTemplate
+    ) -> ResourceTemplate:
+        """Add a resource template to this provider's storage."""
+        return self._add_component(template)
+
+    def resource(
+        self: LocalProvider,
+        uri: str,
+        *,
+        name: str | None = None,
+        version: str | int | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        icons: list[mcp_types.Icon] | None = None,
+        mime_type: str | None = None,
+        tags: set[str] | None = None,
+        enabled: bool = True,
+        annotations: Annotations | dict[str, Any] | None = None,
+        meta: dict[str, Any] | None = None,
+        auth: AuthCheck | list[AuthCheck] | None = None,
+        security: ResourceSecurity | None | InheritSecurity = INHERIT_SECURITY,
+    ) -> Callable[[F], F]:
+        """Decorator to register a function as a resource.
+
+        If the URI contains parameters (e.g. "resource://{param}") or the function
+        has parameters, it will be registered as a template resource.
+
+        Args:
+            uri: URI for the resource (e.g. "resource://my-resource" or "resource://{param}")
+            name: Optional name for the resource
+            title: Optional title for the resource
+            description: Optional description of the resource
+            icons: Optional icons for the resource
+            mime_type: Optional MIME type for the resource
+            tags: Optional set of tags for categorizing the resource
+            enabled: Whether the resource is enabled (default True). If False, adds to blocklist.
+            annotations: Optional annotations about the resource's behavior
+            meta: Optional meta information about the resource
+            auth: Optional authorization checks for the resource
+
+        Returns:
+            A decorator function.
+
+        Example:
+            ```python
+            provider = LocalProvider()
+
+            @provider.resource("data://config")
+            def get_config() -> str:
+                return '{"setting": "value"}'
+
+            @provider.resource("data://{city}/weather")
+            def get_weather(city: str) -> str:
+                return f"Weather for {city}"
+            ```
+        """
+        if isinstance(annotations, dict):
+            annotations = Annotations(**annotations)
+
+        if inspect.isroutine(uri):
+            raise TypeError(
+                "The @resource decorator was used incorrectly. "
+                "It requires a URI as the first argument. "
+                "Use @resource('uri') instead of @resource"
+            )
+
+        def decorator(fn: AnyFunction) -> Any:
+            # Check for unbound method
+            try:
+                params = list(inspect.signature(fn).parameters.keys())
+            except (ValueError, TypeError):
+                params = []
+            if params and params[0] in ("self", "cls"):
+                fn_name = getattr(fn, "__name__", "function")
+                raise TypeError(
+                    f"The function '{fn_name}' has '{params[0]}' as its first parameter. "
+                    f"Use the standalone @resource decorator and register the bound method:\n\n"
+                    f"    from fastmcp.resources import resource\n\n"
+                    f"    class MyClass:\n"
+                    f"        @resource('{uri}')\n"
+                    f"        def {fn_name}(...):\n"
+                    f"            ...\n\n"
+                    f"    obj = MyClass()\n"
+                    f"    mcp.add_resource(obj.{fn_name})\n\n"
+                    f"See https://gofastmcp.com/servers/resources#using-with-methods"
+                )
+
+            from ha_mcp._vendor.fastmcp.resources.function_resource import ResourceMeta
+
+            metadata = ResourceMeta(
+                uri=uri,
+                name=name,
+                version=version,
+                title=title,
+                description=description,
+                icons=icons,
+                tags=tags,
+                mime_type=mime_type,
+                annotations=annotations,
+                meta=meta,
+                auth=auth,
+                enabled=enabled,
+                security=security,
+            )
+            target = fn.__func__ if hasattr(fn, "__func__") else fn
+            target.__fastmcp__ = metadata  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+            self.add_resource(fn)
+            return fn
+
+        return decorator

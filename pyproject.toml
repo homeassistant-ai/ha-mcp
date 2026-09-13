@@ -86,6 +86,9 @@ ha_mcp = ["py.typed", "_pypi_marker", "settings_ui/settings.html", "settings_ui/
 # renovate-managed pin file the drift test reads.
 "ha_mcp._vendor" = ["requirements.txt"]
 "ha_mcp._vendor.websockets" = ["LICENSE", "VENDORED", "MANIFEST.sha256", "py.typed"]
+"ha_mcp._vendor.fastmcp" = ["LICENSE", "VENDORED", "REQUIRES.txt", "MANIFEST.sha256", "py.typed", "**/*.json", "**/*.md"]
+"ha_mcp._vendor.mcp" = ["LICENSE", "VENDORED", "REQUIRES.txt", "MANIFEST.sha256", "py.typed"]
+"ha_mcp._vendor.mcp_types" = ["LICENSE", "VENDORED", "REQUIRES.txt", "MANIFEST.sha256", "py.typed"]
 
 [tool.mypy]
 python_version = "3.13"
@@ -154,9 +157,12 @@ target-version = "py313"
 line-length = 88
 extend-exclude = [
     "tests/initial_test_state",
-    # Vendored websockets — upstream's code style, not ours. Kept in sync
+    # Vendored libraries — upstream's code style, not ours. Kept in sync
     # with PATHS_IGNORE in scripts/codeql_quality_gate.py.
     "src/ha_mcp/_vendor/websockets",
+    "src/ha_mcp/_vendor/fastmcp",
+    "src/ha_mcp/_vendor/mcp",
+    "src/ha_mcp/_vendor/mcp_types",
     # Vendored skills submodule (src/ha_mcp/resources/skills-vendor) — upstream's
     # code, shipped as package data. This covers the directory-scoped commands,
     # `ruff check src/ ...` in CI and the ones in CONTRIBUTING.md. It does NOT
