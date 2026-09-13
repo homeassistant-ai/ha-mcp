@@ -65,15 +65,15 @@ Triage-state labels:
 |---|---|
 | `ready-to-implement` | Clear path with no unresolved decisions. |
 | `needs-choices` | Multiple approaches need stakeholder input. |
-| `needs-info` | Awaiting the reporter. `close-needs-info.yml` clocks from the label event, reminds on days 3, 5, and 6, and closes on day 7; an author reply removes the label. |
+| `needs-info` | Awaiting the reporter. Only a human maintainer label application starts reminders and day-7 closure; automated requests do not. See [issue intake](issue-intake.md). |
 | `priority: high/medium/low` | Relative priority. |
 | `triaged` | Historical marker from the retired triage bot. |
 | `triage-failed` | Historical failure marker from the retired triage bot. |
 | `issue-analyzed` | Deep analysis is complete. |
 
 Bug and scope labels:
-Bug-class labels originate in issue-template form selection, CodeRabbit
-labeling, or manual triage. Scope labels are orthogonal: one issue may carry
+Bug-class labels originate in issue-template form selection or manual triage.
+Scope labels are orthogonal: one issue may carry
 both a bug-class label and a scope label.
 
 | Label | Meaning |
@@ -94,12 +94,11 @@ Lifecycle labels record state and do not double as close reasons.
 | `blocked` | Progress depends on an upstream change, sibling pull request, or design decision; recording it lets sweepers find what is waiting. |
 | `python-upgrade` | Added by Renovate's global `labels` array to every managed pull request, including non-Python updates. |
 
-CodeRabbit issue enrichment replaces the retired GitHub Models triage bot. It
-runs on new and edited issues, suggests duplicates and related work, and applies
-labels from `.coderabbit.yaml`. Plans are manual: comment
-`@coderabbitai plan` or select **Create Plan** in the enrichment comment.
-The owning configuration keys are `issue_enrichment` and
-`labeling_instructions`.
+`issue-intake.yml` owns automated issue documentation: factual summaries,
+English translations, and targeted requests for missing information. CodeRabbit
+issue enrichment, labeling, and planning are disabled to avoid competing responses.
+The model does not diagnose, propose fixes, classify cause, or create PRs.
+See [issue intake](issue-intake.md) for controls, permissions, tests, and recovery.
 
 To find open issues without deep analysis:
 
@@ -186,6 +185,7 @@ summary only when the pull request actually reaches that state.
 | `sync-tool-docs.yml` | Push to `master` touching tool sources or `scripts/extract_tools.py` | Regenerate `tools.json`, README, and app `DOCS.md`. |
 | `locale-sync.yml` | Daily or manual | Post-merge translations pushed directly to `master`. |
 | `test.yml` | Manual | Smoke-test the generic Codex action and secret refresh. |
+| `issue-intake.yml` | Human issue activity or manual | Factual issue documentation with maintainer overrides. |
 | `codex-review-issues.yml` | Manual | Write a read-only open-issue report to Actions logs. |
 | `codex-review-prs.yml` | Manual | Write a read-only open-PR report to Actions logs. |
 

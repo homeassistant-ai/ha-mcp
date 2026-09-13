@@ -92,6 +92,7 @@ tests/initial_test_state/custom_components/hacs/hacs_frontend/
 
 # Auto-Claude workspace files
 .auto-claude/
+/.issue-intake/
 .worktrees/
 .claude_settings.json
 

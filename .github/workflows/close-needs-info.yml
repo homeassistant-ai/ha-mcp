@@ -70,6 +70,25 @@ jobs:
                 core.warning(`  needs-info present but no labeled event found — skipping`);
                 continue;
               }
+              // Automated documentation may request details, but only a
+              // maintainer's explicit label application starts a close clock.
+              // Removing and reapplying needs-info is the manual confirmation.
+              const latestLabel = [...labelEvents].sort((a, b) =>
+                new Date(a.created_at) - new Date(b.created_at) || a.id - b.id
+              ).at(-1);
+              if (latestLabel.actor?.type !== 'User' || latestLabel.actor.login === 'ghhamcp') {
+                core.info('  Automated needs-info request — no reminders or automatic close');
+                continue;
+              }
+              const permission = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                username: latestLabel.actor.login,
+              });
+              if (!['maintain', 'admin'].includes(permission.data.role_name)) {
+                core.info('  needs-info has not been confirmed by a maintainer — skipping');
+                continue;
+              }
               // Newest by timestamp, not array position — the events endpoint
               // documents no sort order, and anchoring on the wrong event after
               // a remove-and-reapply would restart (or expire) the clock wrongly.
