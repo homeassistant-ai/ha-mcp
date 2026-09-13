@@ -67,6 +67,7 @@ jobs:
           sandbox: read-only
           allow-shell: "false"
           network-access: "false"
+          web-search: disabled
           instructions-file: .issue-intake/prompt.txt
           output-schema: .issue-intake/schema.json
           timeout-minutes: "8"

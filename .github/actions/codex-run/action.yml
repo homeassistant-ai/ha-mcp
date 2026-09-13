@@ -33,6 +33,10 @@ inputs:
     description: Allow network access for model-executed commands (not the Codex service connection).
     required: false
     default: "false"
+  web-search:
+    description: Hosted web search mode, independent of command network access (disabled, cached, or live).
+    required: false
+    default: cached
   passthrough-env:
     description: Newline-separated environment variable names explicitly granted to commands, e.g. GH_TOKEN. CODEX_* is reserved.
     required: false
@@ -98,6 +102,7 @@ runs:
         SANDBOX_INPUT: ${{ inputs.sandbox }}
         ALLOW_SHELL_INPUT: ${{ inputs.allow-shell }}
         NETWORK_ACCESS_INPUT: ${{ inputs.network-access }}
+        WEB_SEARCH_INPUT: ${{ inputs.web-search }}
         PASSTHROUGH_ENV_INPUT: ${{ inputs.passthrough-env }}
         TIMEOUT_MINUTES_INPUT: ${{ inputs.timeout-minutes }}
         OUTPUT_SCHEMA_INPUT: ${{ inputs.output-schema }}
@@ -130,6 +135,11 @@ runs:
           exit 1
         fi
         network_access="${NETWORK_ACCESS_INPUT:-false}"
+        web_search="${WEB_SEARCH_INPUT:-cached}"
+        case "$web_search" in
+          disabled|cached|live) ;;
+          *) echo '::error::web-search must be disabled, cached, or live.'; exit 1 ;;
+        esac
         network_access="${network_access,,}"
         if [[ "$network_access" != true && "$network_access" != false ]]; then
           echo "::error::network-access must be true or false."
@@ -276,6 +286,7 @@ runs:
           echo "CODEX_ACTION_INSTRUCTIONS=$instructions_path"
           echo "CODEX_ACTION_SCHEMA=$schema_path"
           echo "CODEX_ACTION_ALLOW_SHELL=$allow_shell"
+          echo "CODEX_ACTION_WEB_SEARCH=$web_search"
           echo "CODEX_ACTION_TIMEOUT_MINUTES=$TIMEOUT_MINUTES_INPUT"
           echo "CODEX_ACTION_PROFILE=$profile_name"
         } >> "$GITHUB_ENV"
@@ -365,6 +376,7 @@ runs:
           --profile "$CODEX_ACTION_PROFILE"
           --strict-config
           -c apps._default.enabled=false
+          -c "web_search=\"${CODEX_ACTION_WEB_SEARCH:-cached}\""
           --ephemeral
           --json
           --color never

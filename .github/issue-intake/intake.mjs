@@ -70,7 +70,7 @@ export function validateSchema(value, spec = schema, path = "result") {
     if (!value || typeof value !== "object" || Array.isArray(value))
       throw Error(`${path}: expected object`);
     if (
-      Object.keys(value).some((k) => !(k in spec.properties)) ||
+      Object.keys(value).some((k) => !Object.hasOwn(spec.properties, k)) ||
       spec.required.some((k) => !(k in value))
     )
       throw Error(`${path}: unexpected or missing property`);

@@ -20,6 +20,9 @@ error messages and uncertainty. Never reproduce credentials or secret URLs.
 - Every summary, translation and agreed-scope item needs an exact supporting
   quote from the supplied source, identified by its source_id. Quotes must be
   substrings of that source's text. Use short, discriminative quotes.
+  Copy the quote verbatim, including backticks, punctuation, and spelling.
+  Prefer 5-15 words from one contiguous passage; never join separate passages
+  into one quote, insert ellipses, or silently correct the source.
 - Extract environment facts only when stated. Use unknown (absence from the
   facts list) rather than guessing. A field cannot be both known and missing.
 - Ask only for essential missing fields that block understanding this report.

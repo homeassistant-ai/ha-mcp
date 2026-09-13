@@ -169,6 +169,9 @@ test("unverified quotes, fields, properties, and approvals are rejected", () => 
       r.root_cause = "invented";
     },
     (r) => {
+      r.toString = "unexpected inherited property";
+    },
+    (r) => {
       r.agreed_scope = [
         {
           text: "Approved",

@@ -17,6 +17,7 @@ resolve inside `GITHUB_WORKSPACE`.
 | `sandbox` | `read-only` | `read-only` or `workspace-write`; credential paths stay denied in both modes. |
 | `allow-shell` | `true` | Whether the model can execute commands. Use `false` for pre-collected untrusted reports. |
 | `network-access` | `false` | Outbound network for model commands; `true` allows direct network access without a domain allowlist. It does not govern the Codex client's connection to OpenAI. |
+| `web-search` | `cached` | Hosted web search, independent of command network: `disabled`, `cached`, or `live`. Set `disabled` for reports restricted to supplied context. |
 | `passthrough-env` | empty | Exact environment variable names, one per line, explicitly granted to commands. No wildcards; unset names and the action's reserved `CODEX*` names are rejected. |
 | `timeout-minutes` | `10` | Codex process limit, starting after setup. The caller must also cap the whole action step. |
 | `model` / `reasoning-effort` | empty | Optional explicit model and reasoning settings. |
