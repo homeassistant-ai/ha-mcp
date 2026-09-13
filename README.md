@@ -394,7 +394,8 @@ restricts both endpoints when enabled. Reconnect the client after changing its U
 so it refreshes its tool list.
 
 This is a connection mode for automated agents, not a separate permission on the
-credential: the same credentials still work at the normal endpoint. Home Assistant webhook URLs also accept the suffix:
+credential: the same credentials still work at the normal endpoint. Home Assistant
+webhook URLs also accept the suffix:
 `https://your-ha.example/api/webhook/<webhook-id>/readonly`. This requires the
 updated embedded integration or Webhook Proxy dev app (add-on), together with
 the updated MCP server.

@@ -948,9 +948,11 @@ class TestRegisterWebhook:
     ):
         hass = _register_hass()
         monkeypatch.setattr(mw.aiohttp, "ClientSession", lambda **kw: FakeSession())
-        arguments = dict(
-            port=9584, secret_path="/private_x", auth_mode=WEBHOOK_AUTH_NONE
-        )
+        arguments = {
+            "port": 9584,
+            "secret_path": "/private_x",
+            "auth_mode": WEBHOOK_AUTH_NONE,
+        }
         await mw.async_register_webhook(hass, _entry(), **arguments)
         view = next(
             call.args[0]
