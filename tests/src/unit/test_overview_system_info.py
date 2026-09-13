@@ -738,6 +738,10 @@ class TestHaGetOverviewReadOnlyMode:
             # singleton before the read-only re-read — stub both.
             lambda: SimpleNamespace(read_only_mode=on, enable_tool_search=False),
         )
+        monkeypatch.setattr(
+            "ha_mcp.read_only.get_global_settings",
+            lambda: SimpleNamespace(read_only_mode=on),
+        )
 
     @pytest.mark.asyncio
     async def test_read_only_keys_absent_when_flag_off(
