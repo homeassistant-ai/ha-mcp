@@ -9,6 +9,16 @@ history from before the fork.
 -->
 
 
+## v3.0.4.dev1 (2026-09-13)
+
+Version line rebased onto stable 3.0.3 by the promotion workflow. The discovery
+security and OAuth compatibility fixes, Claude.ai setup updates, and OAuth
+cleanup developed through 3.0.3.dev4 now ship in stable 3.0.3. See the
+[stable release notes](../homeassistant-addon-webhook-proxy/CHANGELOG.md#v303-2026-09-13)
+for details and webhook-rotation guidance. Dev and stable runtime code are
+equivalent apart from flavor identity at this promotion.
+
+
 ## v3.0.3.dev2 (2026-08-30)
 
 ### Security

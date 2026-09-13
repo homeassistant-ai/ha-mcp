@@ -1,21 +1,25 @@
 """Repairs flow for MCP Webhook Proxy.
 
-Surfaces a HACS-style "click submit to restart" card in HA's Repairs UI
-when OAuth is enabled but the root OAuth views aren't live in the running
-HA session yet — either because the add-on's fail-closed gate detected that
-the integration code currently loaded doesn't enforce OAuth, or because the
-integration itself enabled OAuth mid-session (HA binds the root /authorize +
-/token views cleanly only at startup). The card is the more discoverable
-counterpart to the persistent_notification the addon also posts; submitting
-the fix flow restarts HA so the OAuth-aware code / freshly bound root views
-take over.
+Surfaces a HACS-style "click submit to restart" card in HA's Repairs UI when
+something can only take effect at HA startup and the running session has not
+picked it up. Three causes reach the same card: the add-on's fail-closed gate
+detected that the integration code currently loaded doesn't enforce OAuth; the
+integration enabled OAuth mid-session (HA binds the root /authorize + /token
+views cleanly only at startup); or the webhook id was rotated mid-session, so
+the path-scoped discovery URL for the new id cannot be bound until a restart —
+that last one happens with OAuth OFF as well, which is why the issue's strings
+name every cause rather than only the OAuth one. The card is the more
+discoverable counterpart to the persistent_notification the addon also posts;
+submitting the fix flow restarts HA so the new code / freshly bound views take
+over.
 
 Lifecycle:
 - The marker file (RESTART_MARKER_FILE) has two writers: the add-on's
   fail-closed gate (a separate process that writes the path directly), and
   the integration's `async_setup_entry` (in __init__.py) via `_write_marker`
-  when it enables OAuth mid-session — that same path also calls `create_issue`
-  to raise the Repair immediately.
+  when a mid-session setup leaves something pending a restart (OAuth enabled,
+  or a rotated webhook id) — that same path also calls `create_issue` to raise
+  the Repair immediately.
 - Integration's `async_setup` (in __init__.py) also checks the marker on HA
   boot; if present, it calls `async_create_issue` with this domain's
   `oauth_restart_required` ID and `is_fixable=True` so the user sees
@@ -109,7 +113,7 @@ def _clear_marker() -> None:
         RESTART_MARKER_FILE.unlink(missing_ok=True)
     except OSError as e:
         _LOGGER.warning(
-            "MCP Proxy: could not delete OAuth restart marker at %s "
+            "MCP Proxy: could not delete the restart marker at %s "
             "(%s: %s) — Repair card may re-appear on next HA boot until "
             "the file is removed manually.",
             RESTART_MARKER_FILE,
@@ -119,14 +123,20 @@ def _clear_marker() -> None:
 
 
 def _write_marker() -> None:
-    """Write the OAuth restart marker (idempotent). Blocking I/O — call via
+    """Write the restart marker (idempotent). Blocking I/O — call via
     hass.async_add_executor_job. Any OSError is logged at WARNING (the Repair
-    just won't persist to the next boot; the in-memory issue is still created)."""
+    just won't persist to the next boot; the in-memory issue is still created).
+
+    The payload records why a restart is pending. Nothing reads it back —
+    `marker_present` only tests `exists()` — so it is a breadcrumb for anyone
+    looking at the file, and it must not claim OAuth when a rotated webhook id
+    with OAuth off is equally a cause.
+    """
     try:
-        RESTART_MARKER_FILE.write_text('{"reason": "oauth_enabled_mid_session"}')
+        RESTART_MARKER_FILE.write_text('{"reason": "startup_change_pending"}')
     except OSError as e:
         _LOGGER.warning(
-            "MCP Proxy: could not write OAuth restart marker at %s (%s: %s).",
+            "MCP Proxy: could not write the restart marker at %s (%s: %s).",
             RESTART_MARKER_FILE,
             type(e).__name__,
             e,

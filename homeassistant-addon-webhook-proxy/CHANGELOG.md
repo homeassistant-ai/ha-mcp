@@ -2,6 +2,42 @@
 
 <!-- version list -->
 
+## v3.0.3 (2026-09-13)
+
+### Security
+
+- Remove the fixed-path OAuth protected-resource document, which exposed the
+  webhook URL to unauthenticated callers while `ha_auth` or `legacy` mode was
+  enabled. Discovery now serves this document only at the path containing the
+  webhook ID, and the webhook's `401` response points clients there.
+- After webhook ID rotation, the old ID's discovery URL returns `404` as soon
+  as the app starts with the new ID, instead of revealing the new URL until
+  Home Assistant restarts. A Repair prompts for the Home Assistant restart
+  needed to register the new discovery URL, including when OAuth is off.
+- **Upgrade guidance:** if this installation ran `ha_auth` or `legacy` mode
+  reachable from the internet before this release, treat its webhook ID as
+  public and rotate it once. Follow **Rotating the webhook URL** in the app
+  documentation, complete the Home Assistant restart Repair, and update your
+  MCP clients with the new URL.
+
+### Bug Fixes
+
+- Percent-encode `ha_auth` authorization query parameters so native clients'
+  loopback callbacks work behind reverse proxies using Nginx Proxy Manager's
+  **Block Common Exploits** filter.
+
+### Documentation
+
+- Update Claude.ai setup instructions and startup hints for its connector
+  wizard: keep hosted client metadata for `ha_auth`, or choose **Use your own
+  OAuth client** and supply the app's credentials for `legacy` mode.
+
+### Maintenance
+
+- Remove an unused OAuth helper and reuse the existing PKCE challenge-length
+  constant in validation and error messages, without changing their behavior.
+
+
 ## v3.0.2 (2026-08-24)
 
 ### Bug Fixes

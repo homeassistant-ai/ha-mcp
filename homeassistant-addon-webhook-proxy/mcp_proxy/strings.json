@@ -12,12 +12,12 @@
   },
   "issues": {
     "oauth_restart_required": {
-      "title": "Restart Home Assistant to enable OAuth",
+      "title": "Restart Home Assistant to finish the MCP Webhook Proxy setup",
       "fix_flow": {
         "step": {
           "confirm": {
             "title": "Restart Home Assistant?",
-            "description": "OAuth was enabled in the MCP Webhook Proxy add-on, but the new OAuth-enforcing integration code has not been loaded into Home Assistant yet. Submitting this form will restart Home Assistant so the new code takes effect; the webhook URL will then enforce OAuth.\n\nClick **Submit** to restart now."
+            "description": "The MCP Webhook Proxy add-on changed something Home Assistant can only apply at startup, and the running instance has not picked it up yet. Either OAuth was enabled and the OAuth-enforcing integration code is not loaded, or the webhook ID was rotated and the new URL's OAuth discovery route is not bound. Submitting this form will restart Home Assistant so the change takes effect.\n\nClick **Submit** to restart now."
           }
         }
       }
