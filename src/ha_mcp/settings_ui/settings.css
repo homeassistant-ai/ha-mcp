@@ -539,6 +539,15 @@
   .feature-row.codemode-sub::before,
   .feature-row.yaml-packages-sub::before { left: 36px; }
 
+  .yaml-keys-editor { flex-direction: column; align-items: stretch; }
+  .yaml-keys-editor .feature-control { width: 100%; }
+  .yaml-keys-editor textarea {
+    box-sizing: border-box; width: 100%; min-height: 6rem; resize: vertical;
+    padding: 8px; color: var(--text);
+    font: inherit; font-size: 0.875rem;
+  }
+  .yaml-keys-editor textarea:disabled { cursor: not-allowed; }
+
   /* ── ADVANCED SETTINGS ───────────────────────────────────────────────── */
   .adv-section-title {
     font-size: 0.75rem; font-weight: 500; color: var(--text-secondary);
@@ -896,6 +905,7 @@
   .adv-control input[type="number"],
   .adv-control select,
   .feature-control input[type="number"],
+  .yaml-keys-editor textarea,
   .backup-field-control input[type="number"],
   .backup-filters input,
   .policy-predicate-form input,
@@ -913,6 +923,7 @@
   .adv-control input[type="number"]:hover,
   .adv-control select:hover,
   .feature-control input[type="number"]:hover,
+  .yaml-keys-editor textarea:not(:disabled):hover,
   .backup-field-control input[type="number"]:hover,
   .backup-filters input:hover,
   .policy-predicate-form input:hover,
@@ -926,6 +937,7 @@
   .adv-control input[type="number"]:focus,
   .adv-control select:focus,
   .feature-control input[type="number"]:focus,
+  .yaml-keys-editor textarea:focus,
   .backup-field-control input[type="number"]:focus,
   .backup-filters input:focus,
   .policy-predicate-form input:focus,
