@@ -277,3 +277,135 @@ async def test_other_routes_and_lifespan_are_untouched(caplog, scope):
 
     await TransportDiagnostics(app, path="/mcp")(scope, receive, send)
     assert not caplog.records
+
+
+@pytest.mark.parametrize("diagnostics", [False, True])
+@pytest.mark.parametrize(
+    "previous_level", [logging.NOTSET, logging.WARNING, logging.DEBUG]
+)
+def test_diagnostics_are_visible_under_warning_parent_and_restore(
+    monkeypatch, caplog, diagnostics, previous_level
+):
+    """HA's WARNING default must not hide an explicitly enabled diagnostic."""
+    caplog.set_level(logging.WARNING)
+    caplog.set_level(logging.WARNING, logger="ha_mcp")
+    caplog.set_level(previous_level, logger="ha_mcp.http_transport")
+    caplog.handler.setLevel(logging.INFO)
+    diagnostic_logger = logging.getLogger("ha_mcp.http_transport")
+    root_level = logging.getLogger().level
+    monkeypatch.setenv("HAMCP_HTTP_TRANSPORT_DIAGNOSTICS", str(diagnostics))
+    app = HttpTransportFastMCP("test").http_app(path="/mcp", stateless_http=True)
+    # Merely constructing an app must not change process logging.
+    assert diagnostic_logger.level == previous_level
+    with TestClient(app, base_url="http://localhost") as client:
+        response = client.post(
+            "/mcp",
+            headers={"Accept": "application/json, text/event-stream"},
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        )
+        assert response.status_code == 200
+        logging.getLogger("ha_mcp.unrelated").info("unrelated-info")
+        assert logging.getLogger().level == root_level
+        assert logging.getLogger("ha_mcp").level == logging.WARNING
+        if previous_level == logging.DEBUG:
+            assert diagnostic_logger.level == logging.DEBUG
+    records = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == diagnostic_logger.name
+    ]
+    assert (
+        any("response_complete=True" in message for message in records) is diagnostics
+    )
+    assert "unrelated-info" not in caplog.text
+    assert diagnostic_logger.level == previous_level
+
+
+@pytest.mark.parametrize(
+    "error", [RuntimeError("startup failed"), asyncio.CancelledError()]
+)
+async def test_lifespan_failure_restores_diagnostic_log_level(caplog, error):
+    caplog.set_level(logging.WARNING, logger="ha_mcp.http_transport")
+    diagnostic_logger = logging.getLogger("ha_mcp.http_transport")
+
+    async def app(scope, receive, send):
+        assert diagnostic_logger.level == logging.INFO
+        raise error
+
+    async def receive():
+        return {"type": "lifespan.startup"}
+
+    async def send(message):
+        pass
+
+    with pytest.raises(type(error)) as raised:
+        await TransportDiagnostics(app, path="/mcp")(
+            {"type": "lifespan"}, receive, send
+        )
+    assert raised.value is error
+    assert diagnostic_logger.level == logging.WARNING
+
+
+@pytest.mark.parametrize("first_to_close", [0, 1])
+def test_overlapping_http_lifespans_keep_diagnostics_until_last_shutdown(
+    monkeypatch, caplog, first_to_close
+):
+    from contextlib import ExitStack
+
+    caplog.set_level(logging.WARNING, logger="ha_mcp.http_transport")
+    monkeypatch.setenv("HAMCP_HTTP_TRANSPORT_DIAGNOSTICS", "true")
+    diagnostic_logger = logging.getLogger("ha_mcp.http_transport")
+    with ExitStack() as first, ExitStack() as second:
+        for stack in (first, second):
+            app = HttpTransportFastMCP("test").http_app(
+                path="/mcp", stateless_http=True
+            )
+            stack.enter_context(TestClient(app, base_url="http://localhost"))
+        (first, second)[first_to_close].close()
+        assert diagnostic_logger.level == logging.INFO
+    assert diagnostic_logger.level == logging.WARNING
+
+
+def test_admin_log_level_change_during_diagnostics_is_preserved(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger="ha_mcp.http_transport")
+    monkeypatch.setenv("HAMCP_HTTP_TRANSPORT_DIAGNOSTICS", "true")
+    diagnostic_logger = logging.getLogger("ha_mcp.http_transport")
+    app = HttpTransportFastMCP("test").http_app(path="/mcp", stateless_http=True)
+    with TestClient(app, base_url="http://localhost"):
+        assert diagnostic_logger.level == logging.INFO
+        diagnostic_logger.setLevel(logging.ERROR)
+    assert diagnostic_logger.level == logging.ERROR
+
+
+def test_explicit_ha_logger_override_is_respected(monkeypatch, caplog):
+    """HA's logger setter can reject changes to an explicitly configured logger."""
+    caplog.set_level(logging.WARNING, logger="ha_mcp.http_transport")
+    monkeypatch.setenv("HAMCP_HTTP_TRANSPORT_DIAGNOSTICS", "true")
+    diagnostic_logger = logging.getLogger("ha_mcp.http_transport")
+    # HassLogger.setLevel ignores ordinary changes for names in hass_overrides.
+    with monkeypatch.context() as overrides:
+        overrides.setattr(diagnostic_logger, "setLevel", lambda level: None)
+        app = HttpTransportFastMCP("test").http_app(path="/mcp", stateless_http=True)
+        with TestClient(app, base_url="http://localhost"):
+            assert diagnostic_logger.level == logging.WARNING
+        assert diagnostic_logger.level == logging.WARNING
+
+
+@pytest.mark.parametrize("override_level", [logging.INFO, logging.WARNING])
+def test_ha_admin_override_during_diagnostics_survives_shutdown(
+    monkeypatch, caplog, override_level
+):
+    """HA pins service-set levels, including INFO equal to our temporary level."""
+    caplog.set_level(logging.WARNING, logger="ha_mcp.http_transport")
+    monkeypatch.setenv("HAMCP_HTTP_TRANSPORT_DIAGNOSTICS", "true")
+    diagnostic_logger = logging.getLogger("ha_mcp.http_transport")
+    app = HttpTransportFastMCP("test").http_app(path="/mcp", stateless_http=True)
+    # Model HA's set_log_levels: register the override, then use orig_setLevel.
+    # Keep the normal setter blocked through lifespan teardown as HassLogger does.
+    with monkeypatch.context() as overrides:
+        with TestClient(app, base_url="http://localhost"):
+            assert diagnostic_logger.level == logging.INFO
+            orig_set_level = diagnostic_logger.setLevel
+            overrides.setattr(diagnostic_logger, "setLevel", lambda level: None)
+            orig_set_level(override_level)
+        assert diagnostic_logger.level == override_level
