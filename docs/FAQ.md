@@ -301,7 +301,10 @@ Advanced → Diagnostics** offers two independent experiments. Both default to
   logs request/response byte counts, elapsed time, body completion, observed
   disconnects and exception types at INFO level. Each request gets a server-generated
   trace identifier. No bodies, credentials, secret paths or client request IDs
-  are logged. Set the log level to INFO or DEBUG to see these records.
+  are logged. The toggle automatically enables INFO for this diagnostic logger,
+  including when Home Assistant defaults to WARNING, and restores the previous
+  level when the HTTP app stops. Other loggers are unchanged. Explicit Home
+  Assistant overrides for `ha_mcp.http_transport` and logging filters still apply.
 - **JSON responses instead of streaming** (`HAMCP_HTTP_JSON_RESPONSE=true`):
   asks FastMCP to return a single JSON response instead of an SSE stream.
   This affects all HTTP clients connected to that server and removes streamed

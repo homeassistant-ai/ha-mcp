@@ -79,12 +79,13 @@ async def test_http_options_apply_and_restore_after_restart(
         if a["name"] == "Home Assistant MCP Server (Dev)"
     )
     try:
+        # Diagnostics must remain visible even when the parent logs WARNING.
         await post_advanced_settings(
             advanced,
             {
                 "http_transport_diagnostics": True,
                 "http_json_response": True,
-                "log_level": "INFO",
+                "log_level": "WARNING",
             },
         )
         submission_error = None

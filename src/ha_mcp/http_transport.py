@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from threading import Lock
 from time import monotonic
 from typing import Any
 from uuid import uuid4
@@ -17,6 +20,42 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from .config import get_global_settings
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _DiagnosticLogLevel:
+    """Shared ownership while HTTP app lifespans overlap during a restart."""
+
+    users: int = 0
+    previous_level: int = logging.NOTSET
+    changed: bool = False
+    lock: Lock = field(default_factory=Lock)
+
+
+@contextmanager
+def _diagnostic_logging() -> Iterator[None]:
+    """Temporarily enable diagnostic records without changing other loggers."""
+    # Logger objects survive embedded-server module purges. Keep ownership on
+    # this logger so a retiring worker cannot reset its replacement's level.
+    state: _DiagnosticLogLevel = vars(logger).setdefault(
+        "_ha_mcp_http_diagnostics_level", _DiagnosticLogLevel()
+    )
+    with state.lock:
+        if state.users == 0:
+            state.previous_level = logger.level
+            state.changed = logger.getEffectiveLevel() > logging.INFO
+            if state.changed:
+                # Use the normal setter: HA's explicit per-logger overrides
+                # remain authoritative, and existing DEBUG levels stay intact.
+                logger.setLevel(logging.INFO)
+        state.users += 1
+    try:
+        yield
+    finally:
+        with state.lock:
+            state.users -= 1
+            if state.users == 0 and state.changed and logger.level == logging.INFO:
+                logger.setLevel(state.previous_level)
 
 
 class HttpTransportFastMCP(FastMCP):
@@ -117,6 +156,10 @@ class TransportDiagnostics:
         self.path = path.rstrip("/")
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "lifespan":
+            with _diagnostic_logging():
+                await self.app(scope, receive, send)
+            return
         if scope["type"] != "http" or scope["path"].rstrip("/") != self.path:
             await self.app(scope, receive, send)
             return

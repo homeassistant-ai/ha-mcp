@@ -449,7 +449,7 @@
     "advanced.environment.label": "Environment",
     "advanced.environment.help": "development or production. Affects logging verbosity. Restart required.",
     "advanced.http_transport_diagnostics.label": "HTTP transport diagnostics",
-    "advanced.http_transport_diagnostics.help": "Experimental. Log MCP HTTP byte counts, timing and completion at INFO level, without payloads or credentials. Does not confirm client receipt. HTTP only; restart required.",
+    "advanced.http_transport_diagnostics.help": "Experimental. Automatically enable INFO logging for HTTP diagnostics while the server runs, without payloads or credentials. Other loggers are unchanged; explicit Home Assistant logger overrides and filters still apply. Does not confirm client receipt. HTTP only; restart required.",
     "advanced.http_json_response.label": "JSON responses instead of streaming",
     "advanced.http_json_response.help": "Experimental. Return a single JSON response instead of an SSE stream. Affects all HTTP clients on this server and disables streamed progress for these responses. HTTP only; restart required.",
     "advanced.log_level.label": "Log level",
