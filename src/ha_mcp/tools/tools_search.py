@@ -4265,7 +4265,9 @@ class SearchTools:
 
         # Surface Read Only Mode after projection so the flag survives any
         # fields= filter.
-        if get_global_settings().read_only_mode:
+        from ..read_only import is_read_only
+
+        if is_read_only():
             projected["read_only_mode"] = True
             projected["read_only_mode_hint"] = (
                 "Read Only Mode is ON: write-capable tools are disabled and "

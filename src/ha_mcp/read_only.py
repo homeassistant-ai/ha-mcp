@@ -30,7 +30,9 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn
 
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
@@ -48,6 +50,23 @@ if TYPE_CHECKING:
     from fastmcp.utilities.versions import VersionSpec
 
 logger = logging.getLogger(__name__)
+
+_request_read_only: ContextVar[bool] = ContextVar("ha_mcp_request_read_only", default=False)
+
+
+def is_read_only() -> bool:
+    """Apply the global setting or the current HTTP endpoint's restriction."""
+    return get_global_settings().read_only_mode or _request_read_only.get()
+
+
+@contextmanager
+def read_only_request() -> Iterator[None]:
+    """Restrict this request and its nested tool calls without affecting others."""
+    token = _request_read_only.set(True)
+    try:
+        yield
+    finally:
+        _request_read_only.reset(token)
 
 
 class ReadOnlyExemption(NamedTuple):
@@ -333,7 +352,7 @@ def _raise_read_only_error(
 
 def require_write_access(tool_name: str) -> None:
     """Reject direct tool execution while Read Only Mode is enabled."""
-    if get_global_settings().read_only_mode:
+    if is_read_only():
         _raise_read_only_error(tool_name)
 
 
@@ -346,7 +365,7 @@ class ReadOnlyToolsTransform(Transform):
     """
 
     async def list_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
-        if not get_global_settings().read_only_mode:
+        if not is_read_only():
             return tools
         return [t for t in tools if read_only_visible(t)]
 
@@ -354,7 +373,7 @@ class ReadOnlyToolsTransform(Transform):
         self, name: str, call_next: GetToolNext, *, version: VersionSpec | None = None
     ) -> Tool | None:
         tool = await call_next(name, version=version)
-        if tool is None or not get_global_settings().read_only_mode:
+        if tool is None or not is_read_only():
             return tool
         return tool if read_only_visible(tool) else None
 
@@ -495,7 +514,7 @@ class ReadOnlyMiddleware(Middleware):
     async def on_call_tool(
         self, context: MiddlewareContext, call_next: CallNext
     ) -> Any:
-        if not get_global_settings().read_only_mode:
+        if not is_read_only():
             return await call_next(context)
 
         # RenamedToolAliasMiddleware runs ahead of this one and normally

@@ -89,7 +89,39 @@ class HttpTransportFastMCP(FastMCP):
                 args = (args[0], middleware, *args[2:])
             else:
                 kwargs["middleware"] = middleware
-        return super().http_app(*args, **kwargs)
+        app = super().http_app(*args, **kwargs)
+        if app.state.transport_type == "streamable-http":
+            app.add_middleware(ReadOnlyEndpoint, path=app.state.path)
+        return app
+
+
+class ReadOnlyEndpoint:
+    """Route the exact /readonly alias through the same authenticated MCP app.
+
+    This selects read-only behavior for a configured client connection; the
+    credential still works at the normal endpoint. Settings and other HTTP
+    routes are not aliased.
+    """
+
+    def __init__(self, app: ASGIApp, path: str) -> None:
+        self.app = app
+        self.path = path
+        self.readonly_path = f"{path.rstrip('/')}/readonly"
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        root = scope.get("root_path", "").rstrip("/")
+        if scope["type"] != "http" or scope["path"].rstrip("/") != (
+            root + self.readonly_path
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        from .read_only import read_only_request
+
+        path = root + self.path
+        scope = {**scope, "path": path, "raw_path": path.encode("utf-8")}
+        with read_only_request():
+            await self.app(scope, receive, send)
 
 
 @dataclass

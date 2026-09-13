@@ -276,9 +276,9 @@ def _execute_via(proxy: str, tool_name: str) -> str:
 
 def _read_only_mode() -> bool:
     """Whether Read Only Mode is on — consulted per request, like its filter."""
-    from ..config import get_global_settings
+    from ..read_only import is_read_only
 
-    return bool(get_global_settings().read_only_mode)
+    return is_read_only()
 
 
 def _advertised_routes(name: str, category: Capability) -> list[Capability]:
