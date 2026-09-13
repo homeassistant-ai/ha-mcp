@@ -155,6 +155,10 @@ ignore_missing_imports = true
 [tool.ruff]
 target-version = "py313"
 line-length = 88
+# Apply the excludes below to explicit paths too: lefthook passes
+# {staged_files} and Fast Checks passes the changed files, so without this the
+# vendored trees get reformatted or fail the format gate.
+force-exclude = true
 extend-exclude = [
     "tests/initial_test_state",
     # Vendored libraries — upstream's code style, not ours. Kept in sync
@@ -164,12 +168,8 @@ extend-exclude = [
     "src/ha_mcp/_vendor/mcp",
     "src/ha_mcp/_vendor/mcp_types",
     # Vendored skills submodule (src/ha_mcp/resources/skills-vendor) — upstream's
-    # code, shipped as package data. This covers the directory-scoped commands,
-    # `ruff check src/ ...` in CI and the ones in CONTRIBUTING.md. It does NOT
-    # affect lefthook, which passes {staged_files} as explicit paths that ruff
-    # lints regardless of extend-exclude (force-exclude is not set), and a
-    # submodule's contents are never staged in the superproject anyway. Kept in
-    # sync with PATHS_IGNORE in scripts/codeql_quality_gate.py.
+    # code, shipped as package data. Kept in sync with PATHS_IGNORE in
+    # scripts/codeql_quality_gate.py.
     "src/ha_mcp/resources/skills-vendor",
     # HA integration manifests must be strict JSON (no trailing commas);
     # ruff 0.15+ formats .json files as JSONC and inserts trailing commas
