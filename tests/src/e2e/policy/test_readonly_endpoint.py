@@ -100,3 +100,41 @@ async def test_readonly_endpoint_with_real_ha(
             )
         finally:
             await ha_client.close()
+
+
+@pytest.mark.embedded_only
+async def test_embedded_webhook_readonly_endpoint(ha_container_with_fresh_config):
+    from fastmcp import Client
+    from fastmcp.client.transports import StreamableHttpTransport
+
+    from ..utilities.assertions import parse_mcp_result
+    from .test_readonly_mode import _expect_read_only_blocked
+
+    url = ha_container_with_fresh_config["embedded_webhook_url"]
+    assert url
+    async with Client(StreamableHttpTransport(url=url + "/readonly")) as client:
+        names = {tool.name for tool in await client.list_tools()}
+        assert "ha_call_write_tool" not in names
+        assert "ha_call_delete_tool" not in names
+        assert "ha_call_service" not in names
+        overview = parse_mcp_result(
+            await client.call_tool("ha_get_overview", {"fields": ["read_only_mode"]})
+        )
+        assert overview["read_only_mode"] is True
+        await _expect_read_only_blocked(
+            client,
+            "ha_call_service",
+            {
+                "domain": "light",
+                "service": "turn_on",
+                "entity_id": "light.readonly_nonexistent_fixture",
+            },
+        )
+        await _expect_read_only_blocked(
+            client, "ha_manage_backup", {"scope": "snapshot", "action": "create"}
+        )
+    async with Client(StreamableHttpTransport(url=url)) as client:
+        overview = parse_mcp_result(
+            await client.call_tool("ha_get_overview", {"fields": ["read_only_mode"]})
+        )
+        assert overview.get("read_only_mode", False) is False

@@ -245,3 +245,13 @@ def test_readonly_endpoint_under_root_path(prefix_in_path):
         assert result["result"]["isError"] is True
         assert "READ_ONLY_MODE" in str(result)
         assert writes == []
+
+
+def test_theme_guidance_observes_readonly_connection():
+    from ha_mcp.dashboard_screenshot.theme_guard import _read_only_mode
+    from ha_mcp.read_only import read_only_request
+
+    assert _read_only_mode() is False
+    with read_only_request():
+        assert _read_only_mode() is True
+    assert _read_only_mode() is False

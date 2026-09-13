@@ -849,6 +849,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         timeout=aiohttp.ClientTimeout(connect=30, sock_connect=10, sock_read=300),
     )
 
+    registered = False
     try:
         async_register(
             hass,
@@ -858,13 +859,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _handle_webhook,
             allowed_methods=["POST", "GET"],
         )
+        registered = True
         register_readonly_webhook(hass, webhook_id, _handle_webhook)
     except Exception as err:
         _LOGGER.exception(
             "MCP Proxy: failed to register webhook endpoint /api/webhook/%s",
             masked_wh,
         )
-        _unregister_webhook(hass, webhook_id)
+        if registered:
+            _unregister_webhook(hass, webhook_id)
         await session.close()
         raise ConfigEntryError(f"Failed to register webhook endpoint: {err}") from err
 

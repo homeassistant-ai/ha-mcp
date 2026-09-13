@@ -7263,3 +7263,85 @@ class TestNoneAutoApproveMode:
         # The gate keys off "oauth" (absent here), so it never 401s — the body
         # is read and forwarded upstream (which raises the sentinel -> 502).
         request.read.assert_awaited_once()
+
+
+class TestReadOnlyWebhook:
+    @pytest.fixture
+    def mod(self):
+        mod = _import_mcp_proxy()
+        if not hasattr(mod, "register_readonly_webhook"):
+            pytest.skip("Read-only endpoint has not reached this proxy flavor")
+        return mod
+
+    @pytest.mark.parametrize("method", ["POST", "GET"])
+    async def test_forwarding_and_unload(self, mod, method):
+        hass = MagicMock()
+        hass.data = {}
+        session = MagicMock()
+        session.close = AsyncMock()
+        config = {
+            "target_url": "http://127.0.0.1:9583/private_aaaaaaaaaaaaaaaa",
+            "webhook_id": "mcp_test_readonly",
+        }
+        with (
+            patch.object(mod, "_read_config", return_value=config),
+            patch.object(
+                mod, "_setup_oauth_section", new=AsyncMock(return_value=False)
+            ),
+            patch.object(mod.aiohttp, "ClientSession", return_value=session),
+        ):
+            await mod.async_setup_entry(hass, MagicMock())
+        view = next(
+            call.args[0]
+            for call in hass.http.register_view.call_args_list
+            if call.args[0].url == "/api/webhook/{webhook_id}/readonly"
+        )
+        request = MagicMock()
+        request.method = method
+        request.headers = {}
+        request.read = AsyncMock(return_value=b"request-body")
+        # Stop at the wire boundary after observing the real forwarding arguments.
+        session.request.side_effect = mod.aiohttp.ClientError(
+            "test upstream unavailable"
+        )
+        await getattr(view, method.lower())(request, config["webhook_id"])
+        assert (
+            session.request.call_args.kwargs["url"]
+            == config["target_url"] + "/readonly"
+        )
+        assert session.request.call_args.kwargs["data"] == b"request-body"
+        session.request.reset_mock()
+        await view.post(request, "unrelated_webhook")
+        session.request.assert_not_called()
+        await mod.async_unload_entry(hass, MagicMock())
+        await view.post(request, config["webhook_id"])
+        session.request.assert_not_called()
+        session.close.assert_awaited_once()
+
+    @pytest.mark.parametrize("mode", ["ha_auth", "legacy"])
+    async def test_readonly_keeps_bearer_validation(self, mod, mode):
+        hass = MagicMock()
+        session = MagicMock()
+        provider = MagicMock()
+        provider.validate_bearer.return_value = False
+        provider.validate_request_detailed = AsyncMock(return_value=(False, "invalid"))
+        hass.data = {
+            mod.DOMAIN: {
+                "target_url": "http://localhost/private_test",
+                "webhook_id": "mcp_test",
+                "session": session,
+                "oauth": provider,
+                "oauth_mode": mode,
+            }
+        }
+        mod.register_readonly_webhook(hass, "mcp_test", mod._handle_webhook)
+        view = hass.http.register_view.call_args.args[0]
+        request = MagicMock()
+        request.headers = {}
+        request.read = AsyncMock(return_value=b"")
+        rejection = object()
+        oauth = importlib.import_module(mod.__name__ + ".oauth")
+        with patch.object(oauth, "build_unauthorized_response", return_value=rejection):
+            assert await view.post(request, "mcp_test") is rejection
+        session.request.assert_not_called()
+        request.read.assert_not_awaited()

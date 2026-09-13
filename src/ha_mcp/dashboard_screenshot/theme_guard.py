@@ -80,9 +80,9 @@ def _read_only_mode() -> bool:
     must know about it.
     """
     try:
-        from ..config import get_global_settings
+        from ..read_only import is_read_only
 
-        return bool(get_global_settings().read_only_mode)
+        return is_read_only()
     except Exception:  # pragma: no cover - settings must never break a read
         return False
 
@@ -428,7 +428,8 @@ class ThemeGuard:
                 "it: captures keep running there, but every theme write is "
                 "blocked at call time. Restore it from that account's own "
                 "session, Profile > General in the Home Assistant UI, or "
-                "turn Read Only Mode off first."
+                "use the normal endpoint without /readonly (and turn off the "
+                "global Read Only Mode setting if enabled)."
             )
         else:
             remedy = (

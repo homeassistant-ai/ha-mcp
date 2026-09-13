@@ -1,12 +1,15 @@
 {
-  "reason": "Issue 2433 adds two external_only cases that assemble an HTTP server against the isolated HA backend.",
+  "reason": "Issue 2433 adds two external_only HTTP cases and one embedded_only webhook case.",
   "deltas": {
-    "haos_stdio": 2,
-    "haos_inaddon": 2,
-    "haos_inaddon_no_tools": 2,
+    "haos_stdio": 3,
+    "haos_inaddon": 3,
+    "haos_inaddon_no_tools": 3,
     "embedded": 2,
     "embedded_no_tools": 2,
-    "haos_embedded": 2,
-    "haos_embedded_no_tools": 2
+    "haos_embedded": 3,
+    "haos_embedded_no_tools": 3,
+    "container": 1,
+    "container_no_tools": 1,
+    "haos": 1
   }
 }

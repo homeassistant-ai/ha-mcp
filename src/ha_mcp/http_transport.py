@@ -14,6 +14,7 @@ from uuid import uuid4
 import fastmcp
 from fastmcp import FastMCP
 from fastmcp.server.http import StarletteWithLifespan
+from starlette._utils import get_route_path
 from starlette.middleware import Middleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -109,16 +110,18 @@ class ReadOnlyEndpoint:
         self.readonly_path = f"{path.rstrip('/')}/readonly"
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        root = scope.get("root_path", "").rstrip("/")
-        if scope["type"] != "http" or scope["path"].rstrip("/") != (
-            root + self.readonly_path
+        if (
+            scope["type"] != "http"
+            or get_route_path(scope).rstrip("/") != self.readonly_path
         ):
             await self.app(scope, receive, send)
             return
 
         from .read_only import read_only_request
 
-        path = root + self.path
+        route_path = get_route_path(scope)
+        prefix = scope["path"][: -len(route_path)]
+        path = prefix + self.path
         scope = {**scope, "path": path, "raw_path": path.encode("utf-8")}
         with read_only_request():
             await self.app(scope, receive, send)
