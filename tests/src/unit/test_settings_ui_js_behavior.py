@@ -7384,13 +7384,12 @@ class TestExtraYamlWriteKeysNesting:
             settings_script,
             initial_html=MIN_DOM,
             fetch_map=payloads,
-            invoke="""
+            invoke=f"""
               await new Promise(r => setTimeout(r, 300));
               const input = document.querySelector('[name="adv:extra_yaml_write_keys"]');
-              input.value = %s;
-              input.dispatchEvent(new Event('change', {bubbles: true}));
-            """
-            % json.dumps(text),
+              input.value = {json.dumps(text)};
+              input.dispatchEvent(new Event('change', {{bubbles: true}}));
+            """,
         )
         _assert_clean_init(result)
         posts = [
