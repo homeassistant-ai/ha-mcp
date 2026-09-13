@@ -7314,24 +7314,92 @@ class TestExtraYamlWriteKeysNesting:
             dom,
         )
 
-    def test_row_rendered_as_text_input_when_both_gates_on(
-        self, settings_script: str
+    @pytest.mark.parametrize("editable", [True, False])
+    def test_row_renders_existing_keys_one_per_line(
+        self, settings_script: str, editable: bool
     ) -> None:
+        payloads = self._payloads(master_on=True, yaml_on=True)
+        payloads["/api/settings/advanced"]["json"]["fields"][0]["value"] = (
+            "alert2, whole_house_fan, energy_status"
+        )
+        field = payloads["/api/settings/advanced"]["json"]["fields"][0]
+        field["editable"] = editable
+        field["origin"] = "default" if editable else "env"
         result = run_script(
             settings_script,
             initial_html=MIN_DOM,
-            fetch_map=self._payloads(master_on=True, yaml_on=True),
-            invoke="await new Promise(r => setTimeout(r, 300));",
+            fetch_map=payloads,
+            invoke="""
+              await new Promise(r => setTimeout(r, 300));
+              const input = document.querySelector('[name="adv:extra_yaml_write_keys"]');
+              console.log('yaml-editor', input.tagName, input.rows, input.value, input.disabled);
+            """,
         )
         _assert_clean_init(result)
 
         assert self._rows(result.dom), (
             f"expected yaml-packages-sub row in DOM; tail: {result.dom[-2000:]}"
         )
-        # A free-text box, not a toggle – the whole point of the setting.
         assert 'name="adv:extra_yaml_write_keys"' in result.dom
+        assert any(
+            entry["args"]
+            == [
+                "yaml-editor",
+                "TEXTAREA",
+                4,
+                "alert2\nwhole_house_fan\nenergy_status",
+                not editable,
+            ]
+            for entry in result.console
+        )
         for row in self._rows(result.dom):
             assert "dimmed" not in row, f"unexpected dimmed with both gates on: {row}"
+
+    @pytest.mark.parametrize(
+        "text,expected",
+        [
+            (
+                "alert2\nwhole_house_fan\nenergy_status",
+                "alert2,whole_house_fan,energy_status",
+            ),
+            (
+                " alert2, whole_house_fan\r\n\nenergy_status, ",
+                "alert2,whole_house_fan,energy_status",
+            ),
+            (" \n,\n ", ""),
+        ],
+    )
+    def test_multiline_edit_saves_compatible_csv(
+        self, settings_script: str, text: str, expected: str
+    ) -> None:
+        payloads = self._payloads(master_on=True, yaml_on=True)
+        advanced = payloads["/api/settings/advanced"]
+        payloads["/api/settings/advanced"] = {
+            "byMethod": {
+                "GET": advanced,
+                "POST": {"status": 200, "json": {"restart_required": False}},
+            }
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=payloads,
+            invoke="""
+              await new Promise(r => setTimeout(r, 300));
+              const input = document.querySelector('[name="adv:extra_yaml_write_keys"]');
+              input.value = %s;
+              input.dispatchEvent(new Event('change', {bubbles: true}));
+            """
+            % json.dumps(text),
+        )
+        _assert_clean_init(result)
+        posts = [
+            call
+            for call in result.fetches_to("/api/settings/advanced")
+            if call["method"] == "POST"
+        ]
+        assert len(posts) == 1
+        assert json.loads(posts[0]["body"]) == {"extra_yaml_write_keys": expected}
 
     @pytest.mark.parametrize(
         "master_on,yaml_on", [(False, True), (True, False), (False, False)]
@@ -7351,6 +7419,9 @@ class TestExtraYamlWriteKeysNesting:
         assert rows, "expected yaml-packages-sub row"
         for row in rows:
             assert "dimmed" in row, f"expected dimmed row: {row}"
+        assert re.search(
+            r'<textarea[^>]*disabled[^>]*name="adv:extra_yaml_write_keys"', result.dom
+        )
 
 
 class TestFeatureGatedStubRow:

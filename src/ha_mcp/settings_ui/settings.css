@@ -539,6 +539,16 @@
   .feature-row.codemode-sub::before,
   .feature-row.yaml-packages-sub::before { left: 36px; }
 
+  .yaml-keys-editor { flex-direction: column; align-items: stretch; }
+  .yaml-keys-editor .feature-control { width: 100%; }
+  .yaml-keys-editor textarea {
+    box-sizing: border-box; width: 100%; min-height: 6rem; resize: vertical;
+    padding: 8px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    font: inherit; font-size: 0.875rem;
+  }
+  .yaml-keys-editor textarea:disabled { cursor: not-allowed; }
+
   /* ── ADVANCED SETTINGS ───────────────────────────────────────────────── */
   .adv-section-title {
     font-size: 0.75rem; font-weight: 500; color: var(--text-secondary);
