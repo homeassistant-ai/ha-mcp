@@ -389,3 +389,23 @@ def test_explicit_ha_logger_override_is_respected(monkeypatch, caplog):
         with TestClient(app, base_url="http://localhost"):
             assert diagnostic_logger.level == logging.WARNING
         assert diagnostic_logger.level == logging.WARNING
+
+
+@pytest.mark.parametrize("override_level", [logging.INFO, logging.WARNING])
+def test_ha_admin_override_during_diagnostics_survives_shutdown(
+    monkeypatch, caplog, override_level
+):
+    """HA pins service-set levels, including INFO equal to our temporary level."""
+    caplog.set_level(logging.WARNING, logger="ha_mcp.http_transport")
+    monkeypatch.setenv("HAMCP_HTTP_TRANSPORT_DIAGNOSTICS", "true")
+    diagnostic_logger = logging.getLogger("ha_mcp.http_transport")
+    app = HttpTransportFastMCP("test").http_app(path="/mcp", stateless_http=True)
+    # Model HA's set_log_levels: register the override, then use orig_setLevel.
+    # Keep the normal setter blocked through lifespan teardown as HassLogger does.
+    with monkeypatch.context() as overrides:
+        with TestClient(app, base_url="http://localhost"):
+            assert diagnostic_logger.level == logging.INFO
+            orig_set_level = diagnostic_logger.setLevel
+            overrides.setattr(diagnostic_logger, "setLevel", lambda level: None)
+            orig_set_level(override_level)
+        assert diagnostic_logger.level == override_level
