@@ -168,8 +168,8 @@ export function makeContext(snapshot) {
         source_id: "body",
         text: `${issue.title}\n\n${issue.body || ""}`,
         url: issue.html_url,
-        author: issue.user.login,
-        maintainer: isMaintainer(roles[issue.user.login]),
+        author: issue.user?.login ?? "ghost",
+        maintainer: !!issue.user && isMaintainer(roles[issue.user.login]),
       },
       ...comments
         .filter((c) => isHuman(c.user))
@@ -312,7 +312,9 @@ export function prose(text) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/@/g, "&#64;")
-    .replace(/([\\`*_{}\[\]()#!|])/g, "\\$1");
+    .replace(/([\\`*_{}\[\]()#!|])/g, "\\$1")
+    .replace(/\b([a-z][a-z\d+.-]*):\/\//gi, "$1[:]//")
+    .replace(/\bwww\./gi, "www[.]");
 }
 
 export function render(result, prepared) {

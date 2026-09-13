@@ -8,7 +8,7 @@ PR, or close an issue. CodeRabbit and Codex PR reviews keep their existing roles
 
 ## Execution and permissions
 
-Human issue openings, edits, reopenings, comments, and removals of `needs-info`
+Human issue openings, edits, reopenings, comment creations/edits/deletions, and removals of `needs-info`
 trigger collection. PR comments and bot events are excluded. Collection uses the
 workflow's read-only GitHub token, paginates comments and label history, and
 checks actual repository roles. The `maintain` role must be read from

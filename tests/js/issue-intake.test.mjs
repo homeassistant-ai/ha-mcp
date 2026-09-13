@@ -14,6 +14,94 @@ import {
 } from "../../.github/issue-intake/intake.mjs";
 
 const bot = "ha-mcp[bot]";
+
+test("deleted issue authors retain their report without maintainer authority", () => {
+  const s = snapshot();
+  s.issue.user = null;
+  const context = makeContext(s);
+  assert.equal(context.sources[0].author, "ghost");
+  assert.equal(context.sources[0].maintainer, false);
+});
+
+test("bare model URLs are not autolinks but source citations remain usable", () => {
+  const r = result();
+  r.summary[0].text = "See https://evil.test/path and www.evil.test";
+  const text = render(r, prepare(snapshot(), bot));
+  assert.ok(!text.includes("https://evil.test"));
+  assert.ok(!text.includes("www.evil.test"));
+  assert.ok(text.includes("[source](https://github.com/test/repo/issues/1)"));
+});
+
+test("a failed permission lookup does not skip later confirmed issues", async () => {
+  const yaml = readFileSync(
+    new URL("../../.github/workflows/close-needs-info.yml", import.meta.url),
+    "utf8",
+  );
+  const code = yaml
+    .split("script: |\n")[1]
+    .split("\n")
+    .map((line) => line.replace(/^ {12}/, ""))
+    .join("\n");
+  for (const status of [404, 500]) {
+    const closed = [];
+    const github = {
+      rest: {
+        issues: {
+          listForRepo: "issues",
+          listEvents: "events",
+          listComments: "comments",
+          createComment: async () => {},
+          removeLabel: async () => {},
+          update: async (p) => closed.push(p.issue_number),
+        },
+        repos: {
+          getCollaboratorPermissionLevel: async (p) => {
+            if (p.username === "removed")
+              throw Object.assign(Error("Lookup failed"), { status });
+            return { data: { role_name: "maintain" } };
+          },
+        },
+      },
+      paginate: async (kind, p) =>
+        kind === "issues"
+          ? [1, 2].map((number) => ({
+              number,
+              title: "Fixture",
+              user: user("reporter"),
+            }))
+          : kind === "comments"
+            ? []
+            : [
+                {
+                  id: 1,
+                  event: "labeled",
+                  label: { name: "needs-info" },
+                  actor: user(p.issue_number === 1 ? "removed" : "maintainer"),
+                  created_at: "2020-01-01T00:00:00Z",
+                },
+              ],
+    };
+    const run = new Function(
+      "github",
+      "context",
+      "core",
+      `return (async () => {${code}})()`,
+    )(
+      github,
+      { repo: { owner: "test", repo: "repo" } },
+      {
+        info() {},
+        warning() {},
+        setFailed(message) {
+          throw Error(message);
+        },
+      },
+    );
+    if (status === 500) await assert.rejects(run, /permission/i);
+    else await run;
+    assert.deepEqual(closed, [2]);
+  }
+});
 const user = (login) => ({ login, type: "User" });
 const comment = (id, login, body, extra = {}) => ({
   id,

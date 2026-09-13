@@ -4,7 +4,7 @@ on:
   issues:
     types: [opened, edited, reopened, unlabeled]
   issue_comment:
-    types: [created, edited]
+    types: [created, edited, deleted]
   workflow_dispatch:
     inputs:
       issue_number:
@@ -32,6 +32,7 @@ jobs:
     if: >-
       github.repository == 'homeassistant-ai/ha-mcp' &&
       !github.event.issue.pull_request &&
+      (!github.event.comment || github.event.comment.user.type != 'Bot') &&
       github.event.sender.type != 'Bot' && github.actor != 'ghhamcp' &&
       (github.event.action != 'unlabeled' || github.event.label.name == 'needs-info')
     runs-on: ubuntu-latest

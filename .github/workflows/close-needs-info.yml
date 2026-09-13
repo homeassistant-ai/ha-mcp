@@ -51,6 +51,7 @@ jobs:
             // already removed, so the daily query never returns it again and
             // nothing retries it. The failed step is the only signal left.
             const failedCloses = [];
+            const failedPermissionChecks = [];
 
             for (const issue of issues) {
               const issueNumber = issue.number;
@@ -80,11 +81,22 @@ jobs:
                 core.info('  Automated needs-info request — no reminders or automatic close');
                 continue;
               }
-              const permission = await github.rest.repos.getCollaboratorPermissionLevel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                username: latestLabel.actor.login,
-              });
+              let permission;
+              try {
+                permission = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  username: latestLabel.actor.login,
+                });
+              } catch (error) {
+                if (error.status === 404) {
+                  core.info('  Label actor no longer has repository access — skipping');
+                } else {
+                  core.warning(`  Permission lookup failed for issue #${issueNumber}`);
+                  failedPermissionChecks.push(issueNumber);
+                }
+                continue;
+              }
               if (!['maintain', 'admin'].includes(permission.data.role_name)) {
                 core.info('  needs-info has not been confirmed by a maintainer — skipping');
                 continue;
@@ -223,4 +235,7 @@ jobs:
 
             if (failedCloses.length > 0) {
               core.setFailed(`Failed to close ${failedCloses.length} issue(s): #${failedCloses.join(', #')}. Each is open with needs-info already removed and a closing comment posted — the daily query will never return it again, so close it (or re-apply needs-info) manually.`);
+            }
+            if (failedPermissionChecks.length > 0) {
+              core.setFailed(`Permission checks failed for issues #${failedPermissionChecks.join(', #')}; no actions were taken on those issues. Retry after restoring GitHub access.`);
             }
