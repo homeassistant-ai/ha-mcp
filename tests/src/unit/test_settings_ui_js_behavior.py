@@ -7346,9 +7346,9 @@ class TestExtraYamlWriteKeysNesting:
             == [
                 "yaml-editor",
                 "TEXTAREA",
-                4,
+                "4",
                 "alert2\nwhole_house_fan\nenergy_status",
-                not editable,
+                "false" if editable else "true",
             ]
             for entry in result.console
         )
