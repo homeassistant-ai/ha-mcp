@@ -15,7 +15,7 @@ on:
         description: Model for factual documentation only.
         type: choice
         default: gpt-5.6-terra
-        options: [gpt-5.6-luna, gpt-5.6-terra, gpt-5.6-sol]
+        options: [gpt-5.6-terra, gpt-5.6-sol]
 
 permissions:
   contents: read

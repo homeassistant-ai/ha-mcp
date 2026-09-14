@@ -16,7 +16,9 @@ checks actual repository roles. The `maintain` role must be read from
 
 Codex receives only the issue and human conversation, with source IDs and
 verified maintainer roles. It uses Terra with low reasoning by default. Manual
-dispatch can select Luna, Terra or Sol. The action has read-only sandboxing,
+dispatch can select Terra or Sol. Luna remains bench-only: its #2404 trial asked
+six irrelevant environment questions despite understanding the approved scope.
+The action has read-only sandboxing,
 shell disabled, hosted web search disabled, no command network, no GitHub token
 and no enabled hosted apps.
 The output is schema-validated; evidence quotes must exist in the cited source,
