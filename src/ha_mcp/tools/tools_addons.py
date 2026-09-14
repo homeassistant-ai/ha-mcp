@@ -1243,7 +1243,13 @@ async def list_available_addons(
             "name": addon.get("name"),
             "slug": addon.get("slug"),
             "description": addon.get("description"),
-            "version": addon.get("version"),
+            # A /store entry's `version` is the INSTALLED version and is None
+            # for anything not installed; `version_latest` is what you would
+            # get by installing it (supervisor/api/store.py). A store listing
+            # means the latter, so report that as `version` and keep the
+            # installed one alongside it.
+            "version": addon.get("version_latest"),
+            "version_installed": addon.get("version"),
             "available": addon.get("available", True),
             "installed": addon.get("installed", False),
             "repository": addon.get("repository"),

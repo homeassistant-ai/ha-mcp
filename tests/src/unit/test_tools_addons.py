@@ -26,6 +26,7 @@ from ha_mcp.tools.tools_addons import (
     _summarize_ws_messages,
     get_addon_info,
     list_addons,
+    list_available_addons,
 )
 
 # Standard mock return for a running addon with Ingress support
@@ -3241,6 +3242,53 @@ _MUSIC_STATS_RESPONSE = {
         "memory_limit": 8312754176,
     },
 }
+
+
+class TestListAvailableAddonsVersions:
+    """ha_get_app(source='available') reports the version you could install."""
+
+    @pytest.mark.asyncio
+    async def test_available_listing_reports_the_installable_version(self):
+        """Regression: a store listing showed null for anything not installed.
+
+        Supervisor's /store entries put the INSTALLED version in `version`
+        (None when the app is not installed) and the available one in
+        `version_latest` (supervisor/api/store.py). Reading `version` made the
+        version null for exactly the apps an "available" listing is for.
+        """
+        store = {
+            "success": True,
+            "result": {
+                "repositories": [],
+                "addons": [
+                    {
+                        "name": "Mosquitto broker",
+                        "slug": "core_mosquitto",
+                        "version_latest": "6.5.2",
+                        "version": "6.5.1",
+                        "installed": True,
+                    },
+                    {
+                        "name": "Never Installed",
+                        "slug": "core_never",
+                        "version_latest": "1.4.0",
+                        "version": None,
+                        "installed": False,
+                    },
+                ],
+            },
+        }
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            return_value=store,
+        ):
+            result = await list_available_addons(_make_mock_client())
+
+        by_slug = {entry["slug"]: entry for entry in result["addons"]}
+        # The point of the listing: what you would get if you installed it.
+        assert by_slug["core_never"]["version"] == "1.4.0"
+        assert by_slug["core_mosquitto"]["version"] == "6.5.2"
 
 
 class TestListAddonsStats:
