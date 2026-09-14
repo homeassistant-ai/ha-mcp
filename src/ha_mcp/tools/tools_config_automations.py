@@ -368,6 +368,15 @@ async def _resolve_post_write_automation_entity(
     return entity_id
 
 
+def _sync_post_write_automation_result(
+    response: dict[str, Any], entity_id: str | None
+) -> None:
+    """Record a successfully resolved entity and clear stale poll state."""
+    if entity_id:
+        response["entity_id"] = entity_id
+        response.pop("entity_not_verified", None)
+
+
 def _reject_enabled_in_config(config: Any) -> None:
     """Reject the runtime-only ``enabled`` key in a stored config body."""
     if isinstance(config, dict) and "enabled" in config:
@@ -1482,6 +1491,7 @@ class AutomationConfigTools:
             wait,
             result,
         )
+        _sync_post_write_automation_result(result, entity_id)
 
         if result.get("entity_not_verified"):
             result.setdefault("warnings", []).append(
