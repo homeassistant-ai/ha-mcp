@@ -380,10 +380,11 @@ def _validate_enabled_constraint(
     Registry-disabling (enabled=False) removes the entity from the HA
     state machine entirely, making it invisible in the UI and
     unqueryable via state APIs until re-enabled AND the integration is
-    reloaded.  For automations and scripts the correct way to
-    "disable" them is via their domain services (automation.turn_off /
-    script.turn_off) which simply prevent them from running while
-    keeping them visible and manageable.
+    reloaded.  For automations, use
+    ha_config_set_automation(identifier=..., enabled=...) to control their
+    runtime enabled state.  For scripts, script.turn_off only stops a
+    currently running execution; it does not disable the script, and Home
+    Assistant has no script runtime enable/disable service.
     """
     if enabled is False:
         blocked = [
@@ -391,7 +392,6 @@ def _validate_enabled_constraint(
         ]
         if blocked:
             _domain = blocked[0].split(".")[0]
-            _service_hint = f"{_domain}.turn_off"
             if _domain == "script":
                 message = (
                     "Cannot registry-disable script entities with "
@@ -399,26 +399,27 @@ def _validate_enabled_constraint(
                     "state machine and hides it from the UI until it is re-enabled "
                     "and scripts are reloaded. Use ha_call_service('script', "
                     f"'turn_off', entity_id='{blocked[0]}') only to stop a "
-                    "running script; it does not disable the script. Home Assistant "
-                    "has no script equivalent of automation.turn_off."
+                    "currently running execution; it does not disable the script. "
+                    "Home Assistant has no script runtime enable/disable service."
                 )
                 suggestions = [
-                    "Use script.turn_off only to stop a running script; it does not disable the script",
-                    "Registry-level hiding is not available for scripts; use script.turn_off only to stop a running script",
-                    "Automation enable/disable is available through ha_config_set_automation(identifier=..., enabled=...)",
+                    "Use script.turn_off only to stop a currently running execution; it does not disable the script",
+                    "Home Assistant has no script runtime enable/disable service",
                 ]
             else:
                 message = (
                     f"Cannot registry-disable {_domain} entities with "
                     "ha_set_entity(enabled=False). This removes the entity from the "
                     "state machine and hides it from the UI until it is re-enabled "
-                    f"AND the {_domain}s are reloaded. Use ha_call_service('{_domain}', "
-                    f"'turn_off', entity_id='{blocked[0]}') instead to disable it "
-                    "without removing it."
+                    f"AND the {_domain}s are reloaded. Use "
+                    f"ha_config_set_automation(identifier='{blocked[0]}', "
+                    "enabled=False) instead to disable it without removing it."
                 )
                 suggestions = [
-                    f"Use {_service_hint} to disable the {_domain} (keeps it visible and manageable)",
-                    f"Use {_domain}.turn_on to re-enable it later",
+                    "Use ha_config_set_automation(identifier=..., enabled=...) to "
+                    "disable the automation (keeps it visible and manageable)",
+                    "Use ha_config_set_automation(identifier=..., enabled=True) to "
+                    "re-enable it later",
                     "ha_set_entity(enabled=False) is for registry-level disable — it fully hides the entity",
                 ]
             raise_tool_error(
@@ -1628,7 +1629,8 @@ class EntityTools:
                     "NOT allowed for automation or script entities. For automations use "
                     "ha_config_set_automation(identifier=..., enabled=...)"
                     "; script.turn_off only stops "
-                    "a currently running script and does not disable the script."
+                    "a currently running execution and does not disable the script. "
+                    "Home Assistant has no script runtime enable/disable service."
                 ),
                 default=None,
             ),
@@ -1787,8 +1789,8 @@ class EntityTools:
         use ha_config_set_automation(identifier="automation.xxx", enabled=False)
         (or enabled=True to re-enable):
         For scripts, ha_call_service("script", "turn_off", entity_id="script.xxx")
-        only stops a currently running script; it does not disable the script.
-        Home Assistant has no equivalent runtime enable/disable service for scripts.
+        only stops a currently running execution; it does not disable the script.
+        Home Assistant has no script runtime enable/disable service.
         """
         try:
             entity_ids, is_bulk = _parse_set_entity_ids(entity_id)
