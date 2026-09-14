@@ -28,7 +28,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp==3.4.7",
+    "fastmcp==4.0.3",
     # Shared with the embedded HA process: admit Core's versions, including
     # compatible updates, instead of requiring it to keep our exact pin.
     # uv.lock selects standalone versions; HA's own constraints select
