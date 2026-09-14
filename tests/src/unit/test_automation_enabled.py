@@ -1,5 +1,6 @@
 """Focused tests for automation enable/disable service routing."""
 
+import json
 from typing import Any
 
 import pytest
@@ -35,8 +36,9 @@ class _FakeClient:
     async def call_service(
         self, domain: str, service: str, data: dict[str, Any]
     ) -> dict[str, Any]:
-        if self.service_error:
-            raise self.service_error
+        service_error = self.service_error
+        if service_error is not None:
+            raise service_error
         self.calls.append((domain, service, data))
         return {"success": True}
 
@@ -179,6 +181,55 @@ async def test_config_update_reports_runtime_state_failure_as_partial_success() 
     assert result["success"] is True
     assert result["enabled_applied"] is False
     assert "config was written" in result["warnings"][0]
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_standalone_enabled_attaches_skill_content(monkeypatch) -> None:
+    client = _FakeClient()
+    tools = tools_config_automations.AutomationConfigTools(client)
+
+    def attach_skill_content(
+        response, *, MandatoryBPS, canonical_files, referenced_files
+    ):
+        if MandatoryBPS:
+            response["skill_content"] = {"automation": "guidance"}
+
+    monkeypatch.setattr(
+        tools_config_automations, "attach_skill_content", attach_skill_content
+    )
+
+    result = await tools.ha_config_set_automation(
+        identifier="automation.morning",
+        enabled=True,
+        MandatoryBPS=True,
+        wait=False,
+    )
+
+    assert result["success"] is True
+    assert result["action"] == "set_enabled"
+    assert result["skill_content"] == {"automation": "guidance"}
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_standalone_enabled_service_failure_raises_tool_error() -> None:
+    client = _FakeClient()
+    client.service_error = RuntimeError("service unavailable")
+    tools = tools_config_automations.AutomationConfigTools(client)
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_automation(
+            identifier="automation.morning",
+            enabled=True,
+            MandatoryBPS=False,
+            wait=False,
+        )
+
+    error = json.loads(str(exc_info.value))
+    assert error["success"] is False
+    assert error["error"]["code"] == "INTERNAL_ERROR"
+    assert error["error"]["details"] == "service unavailable"
 
 
 @pytest.mark.unit

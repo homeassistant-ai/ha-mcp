@@ -935,6 +935,12 @@ class AutomationConfigTools:
                 wait,
             )
             if enabled_only_response is not None:
+                attach_skill_content(
+                    enabled_only_response,
+                    MandatoryBPS=MandatoryBPS,
+                    canonical_files=_AUTOMATION_SKILL_FILES,
+                    referenced_files=bp_warnings.referenced_files,
+                )
                 return enabled_only_response
 
             if python_transform is not None:
@@ -1231,6 +1237,16 @@ class AutomationConfigTools:
         try:
             await _set_automation_enabled(self._client, entity_id, enabled)
         except Exception as exc:
+            if response.get("action") == "set_enabled":
+                exception_to_structured_error(
+                    exc,
+                    context={
+                        "action": "set_enabled",
+                        "identifier": identifier,
+                        "entity_id": entity_id,
+                        "enabled": enabled,
+                    },
+                )
             response["enabled_requested"] = enabled
             response["enabled_applied"] = False
             if response.get("action") == "set_enabled":
