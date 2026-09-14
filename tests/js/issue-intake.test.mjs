@@ -15,6 +15,76 @@ import {
 
 const bot = "ha-mcp[bot]";
 
+test("needs-info issue closure never acts on pull requests returned by the issues API", async () => {
+  const yaml = readFileSync(
+    new URL("../../.github/workflows/close-needs-info.yml", import.meta.url),
+    "utf8",
+  );
+  const code = yaml
+    .split("script: |\n")[1]
+    .split("\n")
+    .map((line) => line.replace(/^ {12}/, ""))
+    .join("\n");
+  const calls = [];
+  const github = {
+    rest: {
+      issues: {
+        listForRepo: "issues",
+        listEvents: "events",
+        listComments: "comments",
+        createComment: async () => calls.push("comment"),
+        update: async () => calls.push("close"),
+        removeLabel: async () => calls.push("label"),
+      },
+      repos: {
+        getCollaboratorPermissionLevel: async () => ({
+          data: { role_name: "maintain" },
+        }),
+      },
+    },
+    paginate: async (kind) =>
+      kind === "issues"
+        ? [
+            {
+              number: 1,
+              title: "PR",
+              pull_request: {
+                url: "https://api.github.com/repos/test/repo/pulls/1",
+              },
+              user: user("reporter"),
+            },
+          ]
+        : kind === "comments"
+          ? []
+          : [
+              {
+                id: 1,
+                event: "labeled",
+                actor: user("maintainer"),
+                label: { name: "needs-info" },
+                created_at: "2020-01-01T00:00:00Z",
+              },
+            ],
+  };
+  await new Function(
+    "github",
+    "context",
+    "core",
+    `return (async () => {${code}})()`,
+  )(
+    github,
+    { repo: { owner: "test", repo: "repo" } },
+    {
+      info() {},
+      warning() {},
+      setFailed(message) {
+        throw Error(message);
+      },
+    },
+  );
+  assert.deepEqual(calls, []);
+});
+
 test("close retries deduplicate their notice and report failed label cleanup", async () => {
   const yaml = readFileSync(
     new URL("../../.github/workflows/close-needs-info.yml", import.meta.url),

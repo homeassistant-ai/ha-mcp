@@ -53,6 +53,8 @@ jobs:
             const failedLabelCleanups = [];
 
             for (const issue of issues) {
+              // The issues endpoint also returns pull requests with this label.
+              if (issue.pull_request) continue;
               const issueNumber = issue.number;
               core.info(`Checking issue #${issueNumber}: ${issue.title}`);
 
