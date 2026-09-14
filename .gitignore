@@ -81,6 +81,7 @@ reference-repos/
 archive/
 docs/review/
 docs/development/
+docs/superpowers/
 .local/
 local/
 worktree/
