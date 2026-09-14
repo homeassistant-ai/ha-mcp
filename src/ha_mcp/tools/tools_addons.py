@@ -2644,6 +2644,11 @@ class AddOnTools:
         Supervisor answers ``POST /store/reload`` with a bare ``ok``, so the
         only way to report what a reload actually discovered is to compare the
         store before and after.
+
+        Reads ``version_latest`` (Supervisor's ``app.latest_version``), never
+        ``version``: on a ``/store`` entry ``version`` is the *installed*
+        version and is ``None`` for anything not installed, so diffing it
+        would miss the newly published release a reload exists to find.
         """
         response = await _supervisor_api_call(self._client, "/store")
         result = response.get("result")
@@ -2657,7 +2662,7 @@ class AddOnTools:
                 continue
             snapshot[slug] = {
                 "name": addon.get("name"),
-                "version": addon.get("version"),
+                "version": addon.get("version_latest"),
                 "update_available": bool(addon.get("update_available", False)),
             }
         return snapshot
@@ -2670,7 +2675,9 @@ class AddOnTools:
 
         A slug absent from ``before`` is reported with ``version_before: None``
         rather than skipped: a newly discovered app is exactly the kind of
-        change a caller reloads the store to find.
+        change a caller reloads the store to find. That only holds when
+        ``before`` is a real reading of the store, which is why an unreadable
+        snapshot is ``None`` rather than ``{}`` and skips the diff entirely.
         """
         changed: list[dict[str, Any]] = []
         for slug, entry in sorted(after.items()):
@@ -2714,10 +2721,19 @@ class AddOnTools:
             self._raise_check_updates_error(error)
         after = await self._snapshot_store_or_warn(warnings, "after")
 
-        changed = self._diff_store_versions(before, after)
+        # Only a pair of real readings can be compared. Treating a failed read
+        # as an empty store would report every app as newly discovered.
+        if before is None or after is None:
+            changed: list[dict[str, Any]] = []
+            warnings.append(
+                "Skipped the changed-app comparison because the store could "
+                "not be read on both sides of the reload."
+            )
+        else:
+            changed = self._diff_store_versions(before, after)
         updates_available = [
             {"slug": slug, "name": entry.get("name"), "version": entry.get("version")}
-            for slug, entry in sorted(after.items())
+            for slug, entry in sorted((after or {}).items())
             if entry.get("update_available")
         ]
         result: dict[str, Any] = {
@@ -2738,12 +2754,14 @@ class AddOnTools:
 
     async def _snapshot_store_or_warn(
         self, warnings: list[str], when: str
-    ) -> dict[str, dict[str, Any]]:
-        """Snapshot the store, degrading to an empty map with a warning.
+    ) -> dict[str, dict[str, Any]] | None:
+        """Snapshot the store, degrading to ``None`` with a warning.
 
         The reload is the operation the caller asked for. A store read that
         fails around it costs detail in the result, so it must not turn a
-        completed reload into a tool-level failure.
+        completed reload into a tool-level failure. It returns ``None`` rather
+        than an empty map so the caller can tell "no apps" from "could not
+        look".
         """
         try:
             return await self._store_latest_versions()
@@ -2753,11 +2771,8 @@ class AddOnTools:
                 when,
                 error,
             )
-            warnings.append(
-                f"Could not read the app (add-on) store {when} the reload, so "
-                "the changed-app list may be incomplete."
-            )
-            return {}
+            warnings.append(f"Could not read the app (add-on) store {when} the reload.")
+            return None
 
     @staticmethod
     def _raise_check_updates_error(error: ToolError) -> NoReturn:
@@ -3742,7 +3757,8 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 "to discover the actual installed slug. Required for every mode "
                 "except the store-repository actions "
                 "(action='add_repository'/'remove_repository'), which use "
-                "'repository' instead and take no slug.",
+                "'repository' instead and take no slug, and the store-wide "
+                "action (action='check_updates'), which takes neither.",
                 default="",
             ),
         ] = "",

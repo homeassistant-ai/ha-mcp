@@ -5692,11 +5692,18 @@ def _store_payload(*addons):
     return {"success": True, "result": {"addons": list(addons)}}
 
 
-def _store_addon(slug, version, *, name=None, update_available=False):
+def _store_addon(slug, version_latest, *, name=None, update_available=False):
+    """Mirror a Supervisor ``/store`` entry.
+
+    ``version_latest`` is the available version; ``version`` is the *installed*
+    one and is None for anything not installed (supervisor/api/store.py). A
+    fixture that conflated them would hide a diff reading the wrong field.
+    """
     return {
         "slug": slug,
         "name": name or slug.replace("_", " ").title(),
-        "version": version,
+        "version_latest": version_latest,
+        "version": None,
         "update_available": update_available,
     }
 
@@ -5808,7 +5815,38 @@ class TestManageAddonCheckUpdates:
 
         assert result["success"] is True
         assert result["changed"] == []
-        assert len(result["warnings"]) == 2
+        # Two read failures plus the skipped-comparison note.
+        assert len(result["warnings"]) == 3
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failing_side", ["before", "after"])
+    async def test_one_sided_store_read_skips_the_comparison(self, failing_side):
+        """A half-read store cannot be diffed, and must not fake a diff.
+
+        Treating the unreadable side as an empty store would report every
+        installed app as newly discovered (or as vanished).
+        """
+        tools = self._tools()
+        populated = _store_payload(
+            _store_addon("core_mosquitto", "6.5.1"),
+            _store_addon("local_thing", "1.0.0"),
+        )
+        reads = {
+            "before": [ToolError("store unavailable"), populated],
+            "after": [populated, ToolError("store unavailable")],
+        }[failing_side]
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=[reads[0], {"success": True, "result": {}}, reads[1]],
+        ):
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(action="check_updates")
+            )
+
+        assert result["success"] is True
+        assert result["changed"] == []
+        assert any("could not be read" in w for w in result["warnings"]), result
 
     @pytest.mark.asyncio
     async def test_pending_supervisor_update_explains_itself(self):
