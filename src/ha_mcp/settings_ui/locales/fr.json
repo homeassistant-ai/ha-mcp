@@ -467,7 +467,7 @@
     "advanced.code_mode_saved_tools_path.label": "Chemin des outils enregistrés",
     "advanced.code_mode_saved_tools_path.help": "Fichier JSON utilisé pour conserver les outils personnalisés entre les redémarrages. Redémarrage requis.",
     "advanced.extra_yaml_write_keys.label": "Clés d'écriture YAML supplémentaires",
-    "advanced.extra_yaml_write_keys.help": "Clés de premier niveau séparées par des virgules que ha_config_set_yaml peut écrire en plus des clés intégrées, pour les intégrations YAML-first sur cette installation (p. ex. alert2). Les clés qui redéfinissent la propre frontière de confiance de Home Assistant ne peuvent jamais être ajoutées et sont ignorées. Nécessite le composant personnalisé 1.2.4 ou plus récent.",
+    "advanced.extra_yaml_write_keys.help": "Clés de premier niveau supplémentaires que ha_config_set_yaml peut écrire en plus de celles intégrées, pour les intégrations basées sur YAML sur cette installation (par ex. alert2). Entrez une clé par ligne ou séparez les clés par des virgules. Les clés qui redéfinissent la limite de confiance de Home Assistant ne peuvent jamais être ajoutées et sont ignorées. Nécessite le composant personnalisé 1.2.4 ou une version plus récente.",
     "advanced.sidecar_pin_port.label": "Port du sidecar de l'interface des paramètres",
     "advanced.sidecar_pin_port.help": "0 choisit un port libre au premier démarrage et le conserve pour les redémarrages ultérieurs ; 1024–65535 fixe un port préféré (revient à un port libre s'il est déjà pris). Redémarrage requis.",
     "advanced.enable_dev_mode.label": "Mode développeur",

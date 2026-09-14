@@ -467,7 +467,7 @@
     "advanced.code_mode_saved_tools_path.label": "Cesta k uloženým nástrojům",
     "advanced.code_mode_saved_tools_path.help": "Soubor JSON používaný k uchování vlastních nástrojů napříč restarty. Vyžaduje restart.",
     "advanced.extra_yaml_write_keys.label": "Další klíče pro zápis YAML",
-    "advanced.extra_yaml_write_keys.help": "Klíče nejvyšší úrovně oddělené čárkami, které ha_config_set_yaml může zapisovat navíc k vestavěným, pro integrace s prioritou YAML v této instalaci (např. alert2). Klíče, které předefinují vlastní hranici důvěry Home Assistant, nelze nikdy přidat a jsou ignorovány. Vyžaduje vlastní komponentu 1.2.4 nebo novější.",
+    "advanced.extra_yaml_write_keys.help": "Další klíče nejvyšší úrovně, které může ha_config_set_yaml zapisovat kromě vestavěných, pro integrace primárně využívající YAML na této instalaci (např. alert2). Zadejte jeden klíč na řádek nebo oddělte klíče čárkami. Klíče, které mění vlastní hranici důvěry Home Assistant, nelze nikdy přidat a jsou ignorovány. Vyžaduje vlastní komponentu (custom component) 1.2.4 nebo novější.",
     "advanced.sidecar_pin_port.label": "Port sidecaru uživatelského rozhraní nastavení",
     "advanced.sidecar_pin_port.help": "0 vybere volný port při prvním spuštění a ponechá jej pro pozdější restarty; 1024–65535 připne preferovaný port (pokud je obsazen, vrátí se k volnému). Vyžaduje restart.",
     "advanced.enable_dev_mode.label": "Režim vývojáře",

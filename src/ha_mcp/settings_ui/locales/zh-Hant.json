@@ -467,7 +467,7 @@
     "advanced.code_mode_saved_tools_path.label": "已儲存工具路徑",
     "advanced.code_mode_saved_tools_path.help": "用於在重新啟動之間持續保留自訂工具的 JSON 檔案。需要重新啟動。",
     "advanced.extra_yaml_write_keys.label": "額外的 YAML 寫入金鑰",
-    "advanced.extra_yaml_write_keys.help": "除了內建金鑰之外，ha_config_set_yaml 還可以寫入的以逗號分隔的頂層金鑰，用於此安裝中的 YAML 優先整合（例如 alert2）。重新定義 Home Assistant 自身信任邊界的金鑰永遠無法新增並將被忽略。需要自訂元件 1.2.4 或更新版本。",
+    "advanced.extra_yaml_write_keys.help": "除了內建的頂層鍵之外，ha_config_set_yaml 還可以為此安裝中的 YAML 優先整合（例如 alert2）寫入額外的頂層鍵。每行輸入一個鍵，或用逗號分隔鍵。重新定義 Home Assistant 自身信任邊界的鍵永遠無法被新增且將被忽略。需要自訂元件 1.2.4 或更新版本。",
     "advanced.sidecar_pin_port.label": "設定 UI sidecar 連接埠",
     "advanced.sidecar_pin_port.help": "0會在首次啟動時選取一個可用連接埠並在後續重新啟動時保留它；1024–65535則會固定偏好的連接埠（若已被佔用則會退回到可用連接埠）。需要重新啟動。",
     "advanced.enable_dev_mode.label": "開發者模式",

@@ -467,7 +467,7 @@
     "advanced.code_mode_saved_tools_path.label": "Ścieżka zapisanych narzędzi",
     "advanced.code_mode_saved_tools_path.help": "Plik JSON używany do zachowywania niestandardowych narzędzi po ponownym uruchomieniu. Wymaga ponownego uruchomienia.",
     "advanced.extra_yaml_write_keys.label": "Dodatkowe klucze zapisu YAML",
-    "advanced.extra_yaml_write_keys.help": "Klucze najwyższego poziomu oddzielone przecinkami, które ha_config_set_yaml może zapisywać oprócz wbudowanych, dla integracji opartych na YAML w tej instalacji (np. alert2). Klucze, które redefiniują własną granicę zaufania Home Assistant, nigdy nie mogą być dodane i są ignorowane. Wymaga niestandardowego komponentu w wersji 1.2.4 lub nowszej.",
+    "advanced.extra_yaml_write_keys.help": "Dodatkowe klucze najwyższego poziomu, które ha_config_set_yaml może zapisywać oprócz wbudowanych, dla integracji opartych na plikach YAML w tej instalacji (np. alert2). Wpisz jeden klucz w linii lub oddziel klucze przecinkami. Klucze redefiniujące własną granicę zaufania Home Assistant nigdy nie mogą zostać dodane i są ignorowane. Wymaga niestandardowego komponentu 1.2.4 lub nowszego.",
     "advanced.sidecar_pin_port.label": "Port sidecar interfejsu ustawień",
     "advanced.sidecar_pin_port.help": "0 wybiera wolny port przy pierwszym uruchomieniu i zachowuje go na kolejne restarty; 1024–65535 przypina preferowany port (wraca do wolnego, jeśli jest zajęty). Wymaga ponownego uruchomienia.",
     "advanced.enable_dev_mode.label": "Tryb dewelopera",

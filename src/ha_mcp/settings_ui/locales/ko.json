@@ -467,7 +467,7 @@
     "advanced.code_mode_saved_tools_path.label": "저장된 도구 경로",
     "advanced.code_mode_saved_tools_path.help": "다시 시작해도 사용자 지정 도구가 유지되도록 저장하는 JSON 파일입니다. 다시 시작해야 합니다.",
     "advanced.extra_yaml_write_keys.label": "추가 YAML 쓰기 허용 키",
-    "advanced.extra_yaml_write_keys.help": "이 설치본에서 YAML 우선으로 동작하는 통합 구성요소(예: alert2)를 위해, ha_config_set_yaml이 기본 허용 키 외에 추가로 쓸 수 있는 최상위 키를 쉼표로 구분해 입력합니다. Home Assistant 자체의 신뢰 경계를 다시 정의하는 키는 절대 추가할 수 없으며 무시됩니다. 사용자 지정 구성요소 1.2.4 이상이 필요합니다.",
+    "advanced.extra_yaml_write_keys.help": "이 설치에서 기본 키 외에 ha_config_set_yaml이 작성할 수 있는 추가 최상위 키입니다(예: alert2). 줄당 하나의 키를 입력하거나 쉼표로 구분하세요. Home Assistant 자체의 신뢰 경계를 재정의하는 키는 추가할 수 없으며 무시됩니다. 커스텀 구성 요소 1.2.4 버전 이상이 필요합니다.",
     "advanced.sidecar_pin_port.label": "설정 UI 사이드카 포트",
     "advanced.sidecar_pin_port.help": "0으로 두면 처음 시작할 때 빈 포트를 골라 이후 재시작에도 그대로 사용합니다. 1024~65535를 지정하면 선호 포트로 고정합니다(이미 사용 중이면 빈 포트로 대체). 다시 시작해야 합니다.",
     "advanced.enable_dev_mode.label": "개발자 모드",

@@ -467,7 +467,7 @@
     "advanced.code_mode_saved_tools_path.label": "Ruta de las herramientas guardadas",
     "advanced.code_mode_saved_tools_path.help": "Archivo JSON que se usa para conservar las herramientas personalizadas entre reinicios. Hay que reiniciar.",
     "advanced.extra_yaml_write_keys.label": "Claves YAML de escritura adicionales",
-    "advanced.extra_yaml_write_keys.help": "Claves de primer nivel separadas por comas que ha_config_set_yaml puede escribir además de las integradas, para integraciones basadas en YAML de esta instalación (p. ej. alert2). Las claves que redefinen la propia frontera de confianza de Home Assistant no se pueden añadir nunca y se ignoran. Requiere el componente personalizado 1.2.4 o posterior.",
+    "advanced.extra_yaml_write_keys.help": "Claves adicionales de nivel superior que ha_config_set_yaml puede escribir además de las integradas, para integraciones basadas en YAML en esta instalación (p. ej., alert2). Introduce una clave por línea o sepáralas con comas. Las claves que redefinen el límite de confianza propio de Home Assistant nunca se pueden añadir y se ignoran. Requiere el componente personalizado 1.2.4 o posterior.",
     "advanced.sidecar_pin_port.label": "Puerto del sidecar de la interfaz de ajustes",
     "advanced.sidecar_pin_port.help": "0 elige un puerto libre en el primer inicio y lo mantiene para reinicios posteriores; 1024–65535 fija un puerto preferido (recurre a uno libre si está ocupado). Se requiere reiniciar.",
     "advanced.enable_dev_mode.label": "Modo de desarrollo",

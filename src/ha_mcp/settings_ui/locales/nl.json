@@ -467,7 +467,7 @@
     "advanced.code_mode_saved_tools_path.label": "Pad voor opgeslagen tools",
     "advanced.code_mode_saved_tools_path.help": "JSON-bestand gebruikt om aangepaste tools te behouden na herstarts. Herstart vereist.",
     "advanced.extra_yaml_write_keys.label": "Extra YAML-schrijfsleutels",
-    "advanced.extra_yaml_write_keys.help": "Door komma's gescheiden top-level sleutels die ha_config_set_yaml kan schrijven naast de ingebouwde, voor YAML-first integraties op deze installatie (bijv. alert2). Sleutels die de eigen vertrouwensgrens van Home Assistant herdefiniëren, kunnen nooit worden toegevoegd en worden genegeerd. Vereist aangepaste component 1.2.4 of nieuwer.",
+    "advanced.extra_yaml_write_keys.help": "Extra sleutels op topniveau die ha_config_set_yaml kan schrijven naast de ingebouwde, voor YAML-first integraties op deze installatie (bijv. alert2). Voer één sleutel per regel in of scheid sleutels met komma's. Sleutels die de eigen vertrouwensgrens van Home Assistant herdefiniëren kunnen nooit worden toegevoegd en worden genegeerd. Vereist custom component 1.2.4 of nieuwere.",
     "advanced.sidecar_pin_port.label": "Instellingen UI sidecar-poort",
     "advanced.sidecar_pin_port.help": "0 kiest een vrije poort bij de eerste start en behoudt deze voor latere herstarts; 1024–65535 pint een voorkeurspoort (valt terug op een vrije als deze bezet is). Herstart vereist.",
     "advanced.enable_dev_mode.label": "Ontwikkelaarsmodus",
