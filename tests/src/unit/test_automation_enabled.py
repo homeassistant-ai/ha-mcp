@@ -252,6 +252,43 @@ async def test_standalone_enabled_preserves_connection_errors() -> None:
 
 @pytest.mark.unit
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("verification_result", "expected_warning"),
+    [({"state": "on"}, None), (None, "could not be verified")],
+)
+async def test_standalone_enabled_verifies_requested_state(
+    monkeypatch, verification_result, expected_warning
+) -> None:
+    client = _FakeClient()
+    client.states = [
+        {"entity_id": "automation.morning", "attributes": {"id": "morning-id"}}
+    ]
+    tools = tools_config_automations.AutomationConfigTools(client)
+    verification_calls: list[tuple[str, str]] = []
+
+    async def wait_for_state(client, entity_id, *, expected_state):
+        verification_calls.append((entity_id, expected_state))
+        return verification_result
+
+    monkeypatch.setattr(
+        tools_config_automations, "wait_for_state_change", wait_for_state
+    )
+
+    result = await tools.ha_config_set_automation(
+        identifier="automation.morning",
+        enabled=True,
+        MandatoryBPS=False,
+        wait=True,
+    )
+
+    assert result["enabled_applied"] is True
+    assert verification_calls == [("automation.morning", "on")]
+    if expected_warning is not None:
+        assert any(expected_warning in warning for warning in result["warnings"])
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
 async def test_standalone_prefixed_identifier_must_exist() -> None:
     client = _FakeClient()
     tools = tools_config_automations.AutomationConfigTools(client)
