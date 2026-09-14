@@ -43,7 +43,7 @@ has exited before publication credentials enter the environment.
 ## Public conversation and maintainer control
 
 One App-owned comment contains the current summary, translation if useful,
-agreed scope, and targeted questions. Source links distinguish reported claims
+agreed scope, extracted environment details, and targeted questions. Source links distinguish reported claims
 from independently verified facts. The collector ignores previous bot theories,
 including historical `ghhamcp` comments. The model cannot create arbitrary labels
 or questions: the publisher maps missing field IDs to fixed questions.
@@ -69,7 +69,12 @@ Before publishing, the workflow fetches the current conversation again. A new
 reply, closure, lock, or maintainer control invalidates the old model result;
 the queued event will process the new state. An identical source fingerprint
 does not call the model again. A pending marker keeps interrupted label writes
-retryable without creating a second comment. GitHub does not provide a
+retryable without creating a second comment. Label/final-patch failures with
+HTTP 429 or 5xx are retried twice with bounded backoff, rechecking human context
+before each attempt. Exhausted failures remain pending and fail the run for
+manual recovery; they must never be marked complete while a label write failed.
+Failed day-seven closures retain needs-info for the next daily run.
+GitHub does not provide a
 transaction spanning comments and labels; a narrow concurrent human write can
 still race the final API calls, so all publication remains scoped and reversible.
 

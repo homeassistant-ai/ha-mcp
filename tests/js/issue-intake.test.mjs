@@ -15,6 +15,148 @@ import {
 
 const bot = "ha-mcp[bot]";
 
+test("validated environment facts are visible with source citations", () => {
+  const text = render(result(), prepare(snapshot(), bot));
+  assert.match(text, /### Reported details/);
+  assert.match(text, /Client: Claude Desktop \[source\]/);
+});
+
+test("temporary label and final-patch failures recover without duplicate comments", async () => {
+  for (const stage of ["label", "final"]) {
+    const s = snapshot(),
+      api = new FakeGitHub(s);
+    const request = api.request.bind(api);
+    let failed = false;
+    api.request = (path, options = {}) => {
+      const target =
+        stage === "label"
+          ? path.endsWith("/labels")
+          : options.method === "PATCH" &&
+            !options.data.body.includes(" pending -->");
+      if (target && !failed) {
+        failed = true;
+        throw Object.assign(Error("Transient failure"), { status: 503 });
+      }
+      return request(path, options);
+    };
+    await publish(api, prepare(s, bot), result(), bot);
+    assert.equal(failed, true);
+    assert.equal(api.data.comments.length, 1);
+    assert.equal(api.data.issue.labels[0].name, "needs-info");
+    assert.equal(prepare(await collect(api, "test/repo", 1), bot).run, false);
+  }
+});
+
+test("exhausted transient writes stay pending for manual recovery", async () => {
+  const s = snapshot(),
+    api = new FakeGitHub(s);
+  const request = api.request.bind(api);
+  let attempts = 0;
+  api.request = (path, options = {}) => {
+    if (path.endsWith("/labels")) {
+      attempts += 1;
+      throw Object.assign(Error("Outage"), { status: 503 });
+    }
+    return request(path, options);
+  };
+  await assert.rejects(publish(api, prepare(s, bot), result(), bot), /Outage/);
+  assert.equal(attempts, 3);
+  assert.equal(api.data.comments.length, 1);
+  assert.match(api.data.comments[0].body, / pending -->/);
+  assert.equal(prepare(await collect(api, "test/repo", 1), bot).run, true);
+});
+
+test("a maintainer pause during backoff stops the retry", async () => {
+  const s = snapshot(),
+    api = new FakeGitHub(s);
+  const request = api.request.bind(api);
+  let attempts = 0;
+  api.request = (path, options = {}) => {
+    if (path.endsWith("/labels")) {
+      attempts += 1;
+      api.data.comments.push(comment(2, "maintainer", "/triage pause"));
+      throw Object.assign(Error("Temporary failure"), { status: 503 });
+    }
+    return request(path, options);
+  };
+  assert.match(await publish(api, prepare(s, bot), result(), bot), /skipped/);
+  assert.equal(attempts, 1);
+  assert.equal(api.data.issue.labels.length, 0);
+});
+
+test("failed day-seven closes retain needs-info for the next daily run", async () => {
+  const yaml = readFileSync(
+    new URL("../../.github/workflows/close-needs-info.yml", import.meta.url),
+    "utf8",
+  );
+  const code = yaml
+    .split("script: |\n")[1]
+    .split("\n")
+    .map((line) => line.replace(/^ {12}/, ""))
+    .join("\n");
+  const removed = [],
+    closed = [];
+  const github = {
+    rest: {
+      issues: {
+        listForRepo: "issues",
+        listEvents: "events",
+        listComments: "comments",
+        createComment: async () => {},
+        removeLabel: async (p) => removed.push(p.issue_number),
+        update: async (p) => {
+          if (p.issue_number === 1) throw Error("Temporary close error");
+          closed.push(p.issue_number);
+        },
+      },
+      repos: {
+        getCollaboratorPermissionLevel: async () => ({
+          data: { role_name: "maintain" },
+        }),
+      },
+    },
+    paginate: async (kind) =>
+      kind === "issues"
+        ? [1, 2].map((number) => ({
+            number,
+            title: "Fixture",
+            user: user("reporter"),
+          }))
+        : kind === "comments"
+          ? []
+          : [
+              {
+                id: 1,
+                event: "labeled",
+                actor: user("maintainer"),
+                label: { name: "needs-info" },
+                created_at: "2020-01-01T00:00:00Z",
+              },
+            ],
+  };
+  await assert.rejects(
+    new Function(
+      "github",
+      "context",
+      "core",
+      `return (async () => {${code}})()`,
+    )(
+      github,
+      { repo: { owner: "test", repo: "repo" } },
+      {
+        info() {},
+        warning() {},
+        setFailed(message) {
+          throw Error(message);
+        },
+      },
+    ),
+    /Failed to close/,
+  );
+  assert.deepEqual(closed, [2]);
+  assert.deepEqual(removed, [2]);
+});
+
 test("deleted issue authors retain their report without maintainer authority", () => {
   const s = snapshot();
   s.issue.user = null;

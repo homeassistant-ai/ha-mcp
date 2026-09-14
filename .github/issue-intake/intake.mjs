@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const policy = readFileSync(resolve(here, "instructions.md"), "utf8");
@@ -350,6 +351,18 @@ export function render(result, prepared) {
       "",
       ...result.agreed_scope.map(line),
     );
+  if (result.facts.length)
+    lines.push(
+      "",
+      "### Reported details",
+      "",
+      ...result.facts.map((fact) =>
+        line({
+          text: `${fact.field.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())}: ${fact.value}`,
+          evidence: fact.evidence,
+        }),
+      ),
+    );
   const missing = result.missing_fields.filter(
     (f) => !result.already_requested.includes(f),
   );
@@ -395,7 +408,7 @@ export function labelAction(snapshot, bot, result) {
   return null;
 }
 
-export async function publish(api, prepared, result, bot) {
+export async function publish(api, prepared, result, bot, attempt = 0) {
   const body = render(result, prepared);
   const latest = await collect(
     api,
@@ -434,20 +447,35 @@ export async function publish(api, prepared, result, bot) {
       user: { login: bot, type: "Bot" },
     });
   }
-  if (action === "add")
-    await api.request(`${base}/${latest.issue.number}/labels`, {
-      method: "POST",
-      data: { labels: ["needs-info"] },
-    });
-  if (action === "remove")
-    await api.request(`${base}/${latest.issue.number}/labels/needs-info`, {
-      method: "DELETE",
-    });
-  if (action)
-    await api.request(`${base}/comments/${ownComment(latest, bot).id}`, {
-      method: "PATCH",
-      data: { body },
-    });
+  try {
+    if (action === "add")
+      await api.request(`${base}/${latest.issue.number}/labels`, {
+        method: "POST",
+        data: { labels: ["needs-info"] },
+      });
+    if (action === "remove")
+      await api.request(`${base}/${latest.issue.number}/labels/needs-info`, {
+        method: "DELETE",
+      });
+    if (action)
+      await api.request(`${base}/comments/${ownComment(latest, bot).id}`, {
+        method: "PATCH",
+        data: { body },
+      });
+  } catch (error) {
+    // Only replay idempotent post-marker operations. Recollect on every
+    // attempt so intervening human replies, pauses and label overrides win.
+    // Never mark failed label work complete: exhausted retries remain pending
+    // and fail visibly for manual recovery, rather than being deduplicated away.
+    if (
+      attempt < 2 &&
+      (error.status === 429 || (error.status >= 500 && error.status <= 599))
+    ) {
+      await delay(1000 * (attempt + 1));
+      return publish(api, prepared, result, bot, attempt + 1);
+    }
+    throw error;
+  }
   return "Issue documentation updated";
 }
 

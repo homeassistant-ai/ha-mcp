@@ -45,11 +45,8 @@ jobs:
 
             core.info(`Found ${issues.length} open issues with needs-info label`);
 
-            // Failed closes are collected rather than thrown so one bad write
-            // does not skip the rest of the batch — but they must still fail
-            // the run: a rejected close leaves the issue open with needs-info
-            // already removed, so the daily query never returns it again and
-            // nothing retries it. The failed step is the only signal left.
+            // Process the whole batch, then fail visibly. A failed close keeps
+            // needs-info so the next daily run can retry it.
             const failedCloses = [];
             const failedPermissionChecks = [];
 
@@ -142,7 +139,7 @@ jobs:
                 continue;
               }
 
-              // --- Close path: comment first, then label removal, then close.
+              // --- Close path: comment first, then close, then label removal.
               // Never close silently — if the comment fails, leave the issue open.
               if (daysSince >= DAYS_BEFORE_CLOSE) {
                 core.info(`  Closing issue #${issueNumber} — ${DAYS_BEFORE_CLOSE} days without reply`);
@@ -163,17 +160,6 @@ jobs:
                 if (!commented) continue;
 
                 try {
-                  await github.rest.issues.removeLabel({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: issueNumber,
-                    name: 'needs-info',
-                  });
-                } catch (err) {
-                  if (err.status !== 404) core.warning(`  Failed to remove needs-info on #${issueNumber}: ${err.message}`);
-                }
-
-                try {
                   await github.rest.issues.update({
                     owner: context.repo.owner,
                     repo: context.repo.repo,
@@ -185,7 +171,19 @@ jobs:
                 } catch (err) {
                   core.warning(`  Failed to close #${issueNumber}: ${err.message}`);
                   failedCloses.push(issueNumber);
+                  continue;
                 }
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    name: 'needs-info',
+                  });
+                } catch (err) {
+                  if (err.status !== 404) core.warning(`  Failed to remove needs-info on #${issueNumber}: ${err.message}`);
+                }
+
                 continue;
               }
 
@@ -234,7 +232,7 @@ jobs:
             }
 
             if (failedCloses.length > 0) {
-              core.setFailed(`Failed to close ${failedCloses.length} issue(s): #${failedCloses.join(', #')}. Each is open with needs-info already removed and a closing comment posted — the daily query will never return it again, so close it (or re-apply needs-info) manually.`);
+              core.setFailed(`Failed to close ${failedCloses.length} issue(s): #${failedCloses.join(', #')}. Each remains open with needs-info retained for the next daily run; a closing notice was already posted.`);
             }
             if (failedPermissionChecks.length > 0) {
               core.setFailed(`Permission checks failed for issues #${failedPermissionChecks.join(', #')}; no actions were taken on those issues. Retry after restoring GitHub access.`);
