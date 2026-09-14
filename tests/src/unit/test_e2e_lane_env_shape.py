@@ -175,7 +175,7 @@ _ORDINARY_LANES: tuple[tuple[str, str], ...] = (
     (_CBETA, "e2e-tests-update-path"),
 )
 
-# The container no-tools lanes are whole-topology audits: the root pytest configuration's
+# The container no-tools lanes are whole-topology audits: pyproject.toml's
 # --maxfail=3 would stop them after three failures, which is exactly the run
 # that needs the full list. (The HAOS lanes already carry --maxfail=0 for their
 # own triage reasons, stated in their step comments.)
@@ -343,11 +343,11 @@ def test_ordinary_lane_does_not_carry_the_no_tools_env(
 def test_container_audit_lane_reports_the_full_failure_surface(
     workflow: str, job_id: str
 ) -> None:
-    """--maxfail=0 overrides the root pytest configuration's --maxfail=3 for the topology audits."""
+    """Override pyproject.toml's failure cap for whole-topology audits."""
     run = str(_pytest_step(workflow, job_id).get("run", ""))
     assert "--maxfail=0" in run, (
-        f"{workflow}::{job_id} stops after the root pytest configuration's --maxfail=3, so a "
-        "topology audit reports three failures instead of the full surface"
+        f"{workflow}::{job_id} stops after pyproject.toml's --maxfail=3, "
+        "so a topology audit reports three failures instead of the full surface"
     )
 
 

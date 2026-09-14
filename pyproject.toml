@@ -341,10 +341,9 @@ asyncio_default_test_loop_scope = "session"
 # Per-test timeout (pytest-timeout). A stuck server-side await otherwise
 # stalls the run silently until the JOB timeout - observed as a 22-minute
 # hang in test_zone_search_discovery on the HAOS in-addon backend. 300s is
-# ~10x the slowest legitimate test (~30s deliberate-timeout tests) while
-# session fixtures stay well under it. The signal method interrupts only
-# the hung test and raises inside the running coroutine, so the failure
-# traceback names the exact stuck await.
+# ~10x the slowest legitimate test (~30s deliberate-timeout tests). The signal
+# method interrupts only the hung test and raises inside the running coroutine,
+# so the failure traceback names the exact stuck await.
 timeout = 300
 timeout_method = "signal"
 # Bill the timeout to the TEST FUNCTION only. Session fixtures (container
@@ -366,10 +365,8 @@ filterwarnings = [
     # Allow specific non-critical warnings that don't affect functionality
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",
-    # Allow asyncio ResourceWarnings during test cleanup
+    # Allow all ResourceWarnings, including those emitted during test cleanup
     "ignore::ResourceWarning",
-    # Ignore testcontainers deprecation warnings (external library)
-    "ignore::DeprecationWarning:testcontainers",
 ]
 
 [dependency-groups]

@@ -479,7 +479,8 @@ jobs:
         # the self-referential haos_only embedded smoke module skips automatically.
         #
         # -n2 --dist loadscope: same per-worker QEMU/overlay parallelism as the
-        # other HAOS lanes (#1350); --maxfail=0 overrides the root pytest configuration's --maxfail=3
+        # other HAOS lanes (#1350); --maxfail=0 overrides
+        # pyproject.toml's --maxfail=3
         # so triage sees the full failure surface.
         run: |
           cd tests

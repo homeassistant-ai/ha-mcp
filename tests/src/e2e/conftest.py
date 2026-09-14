@@ -188,8 +188,8 @@ _EMBEDDED_READY_POLL_S = 5
 # fastmcp tree INSIDE the resource-constrained HAOS QEMU guest (no entrypoint
 # preinstall like the container path), so it needs the same generous budget the
 # per-test HAOS embedded smoke fixture uses (test_embedded_server_haos.py's
-# _READY_TIMEOUT_S). The root pytest configuration's timeout_func_only exempts this session-fixture
-# wait from the 300s per-test timeout.
+# _READY_TIMEOUT_S). pyproject.toml's timeout_func_only exempts this
+# session-fixture wait from the 300s per-test timeout.
 _HAOS_EMBEDDED_BRINGUP_TIMEOUT = 600
 
 # ``pip list --format=freeze`` snapshots written by the embedded backend's
