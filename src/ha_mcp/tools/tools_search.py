@@ -4265,17 +4265,15 @@ class SearchTools:
 
         # Surface Read Only Mode after projection so the flag survives any
         # fields= filter.
-        from ..read_only import is_read_only
+        from ..read_only import is_read_only, read_only_remedy_hint
 
         if is_read_only():
             projected["read_only_mode"] = True
             projected["read_only_mode_hint"] = (
                 "Read Only Mode is ON: write-capable tools are disabled and "
                 "all write or destructive operations are blocked "
-                "server-side. You can search, read, and analyze freely. To "
-                "allow changes, the user must use the normal MCP endpoint "
-                "without /readonly and turn off the global Read Only Mode "
-                "setting if it is enabled."
+                "server-side. You can search, read, and analyze freely. "
+                f"{read_only_remedy_hint()}"
             )
 
         # Surface the MCP server's own update status after projection.

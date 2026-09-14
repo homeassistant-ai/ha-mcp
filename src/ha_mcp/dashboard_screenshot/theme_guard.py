@@ -423,13 +423,14 @@ class ThemeGuard:
                 "> General in the Home Assistant UI."
             )
         elif _read_only_mode():
+            from ..read_only import read_only_remedy_hint
+
             remedy = (
                 "Server Read Only Mode is on, so ha-mcp will not restore "
                 "it: captures keep running there, but every theme write is "
                 "blocked at call time. Restore it from that account's own "
-                "session, Profile > General in the Home Assistant UI, or "
-                "use the normal endpoint without /readonly (and turn off the "
-                "global Read Only Mode setting if enabled)."
+                "session, Profile > General in the Home Assistant UI. "
+                f"{read_only_remedy_hint()}"
             )
         else:
             remedy = (

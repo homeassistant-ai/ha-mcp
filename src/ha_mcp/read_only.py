@@ -74,6 +74,22 @@ def read_only_request() -> Iterator[None]:
         _request_read_only.reset(token)
 
 
+def read_only_remedy_hint() -> str:
+    """User-facing guidance for lifting Read Only Mode.
+
+    Deliberately never names the ``/readonly`` endpoint suffix: #2433 wants
+    this restriction to hold even for an untrusted model that could talk a
+    user into dropping it. The global setting has no such escape-hatch risk,
+    so it stays nameable when it is the (or an) active source.
+    """
+    if get_global_settings().read_only_mode:
+        return (
+            "To allow changes, the user must turn off Read Only Mode in the "
+            "ha-mcp settings UI (Tools tab) or the add-on configuration."
+        )
+    return "This connection is read-only. If changes are needed, ask the user."
+
+
 class ReadOnlyExemption(NamedTuple):
     """One mixed read/write tool that stays enabled in read-only mode.
 
@@ -346,9 +362,7 @@ def _raise_read_only_error(
             suggestions=[
                 "Continue with read-only tools — searching, getting, and "
                 + "listing data all remain available.",
-                "To allow changes, the user must use the normal MCP endpoint "
-                + "without /readonly and turn off the global Read Only Mode "
-                + "setting if it is enabled.",
+                read_only_remedy_hint(),
             ],
             context=context,
         )

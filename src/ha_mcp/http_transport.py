@@ -14,13 +14,34 @@ from uuid import uuid4
 import fastmcp
 from fastmcp import FastMCP
 from fastmcp.server.http import StarletteWithLifespan
-from starlette._utils import get_route_path
 from starlette.middleware import Middleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .config import get_global_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _get_route_path(scope: Scope) -> str:
+    """Local copy of ``starlette._utils.get_route_path`` (private API).
+
+    Strips a mount's ``root_path`` prefix from ``scope["path"]``, the same
+    prefix Starlette's own routers use to resolve a sub-app's route. Vendored
+    because the source module is private and a minor Starlette bump could
+    move or change it without notice; keep this in sync with upstream if
+    scope's routing fields ever change.
+    """
+    path: str = scope["path"]
+    root_path = scope.get("root_path", "")
+    if not root_path:
+        return path
+    if not path.startswith(root_path):
+        return path
+    if path == root_path:
+        return ""
+    if path[len(root_path)] == "/":
+        return path[len(root_path) :]
+    return path
 
 
 @dataclass
@@ -112,14 +133,14 @@ class ReadOnlyEndpoint:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if (
             scope["type"] != "http"
-            or get_route_path(scope).rstrip("/") != self.readonly_path
+            or _get_route_path(scope).rstrip("/") != self.readonly_path
         ):
             await self.app(scope, receive, send)
             return
 
         from .read_only import read_only_request
 
-        route_path = get_route_path(scope)
+        route_path = _get_route_path(scope)
         prefix = scope["path"][: -len(route_path)]
         path = prefix + self.path
         scope = {**scope, "path": path, "raw_path": path.encode("utf-8")}
