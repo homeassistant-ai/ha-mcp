@@ -1591,6 +1591,7 @@ def run_main() -> int:
         # Bounded graceful drain keeps a retiring sidecar's exit inside
         # the parent's _OLD_SIDECAR_EXIT_WAIT window.
         timeout_graceful_shutdown=3,
+        ws="none",
     )
     server = uvicorn.Server(config)
 

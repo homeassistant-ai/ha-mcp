@@ -205,7 +205,12 @@ def _import_source(path: Path, node: ast.ImportFrom) -> Path | None:
         else (candidate.with_suffix(".py"), candidate / "__init__.py")
     )
     for option in candidates:
-        if option.is_file() and PACKAGE_ROOT in option.parents:
+        if (
+            option.is_file()
+            and PACKAGE_ROOT in option.parents
+            # Vendored libraries are not this repo's tool code.
+            and "_vendor" not in option.relative_to(PACKAGE_ROOT).parts
+        ):
             return option
     return None
 

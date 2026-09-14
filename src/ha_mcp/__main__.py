@@ -330,10 +330,10 @@ def _create_server() -> "HomeAssistantSmartMCPServer":
     from pydantic import ValidationError
 
     # Every deferred-``mcp`` entry point funnels through here before its
-    # Streamable-HTTP app is built -- ha-mcp-web, the add-on, and the
-    # ``fastmcp run fastmcp-http.json`` container path -- so default fastmcp's
-    # DNS-rebinding guard off once, here, for all of them. Direct-construction
-    # paths (_run_oauth_server, the in-process component server) call it themselves.
+    # Streamable-HTTP app is built -- ha-mcp-web and the add-on -- so default
+    # fastmcp's DNS-rebinding guard off once, here, for all of them.
+    # Direct-construction paths (_run_oauth_server, the in-process component
+    # server) call it themselves.
     from ha_mcp.transport_security import ensure_host_origin_guard_default_off
 
     ensure_host_origin_guard_default_off()
@@ -367,7 +367,7 @@ def _get_server() -> "HomeAssistantSmartMCPServer":
     return _server
 
 
-# For module-level access (e.g., fastmcp.json referencing ha_mcp.__main__:mcp)
+# For module-level access (homeassistant-addon/start.py imports ``mcp``)
 # This is accessed when the module is imported, so we need deferred creation
 class _DeferredMCP:
     """Wrapper that defers MCP creation until actually accessed."""

@@ -208,7 +208,10 @@ def _convert_all(
     # surface as the probe's own timeout, not as an opaque exec kill.
     report["tool_count"] = len(tools)
     for tool in tools:
-        schema = tool.inputSchema
+        # input_schema on SDK 2.x, inputSchema on 1.x.
+        schema = getattr(tool, "input_schema", None)
+        if schema is None:
+            schema = tool.inputSchema
         try:
             params = convert_parameters(None, tool, normalise_schema(schema, tool.name))
         except Exception as err:  # collecting, not suppressing

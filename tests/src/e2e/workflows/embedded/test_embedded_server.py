@@ -490,6 +490,7 @@ class TestEmbeddedServerEndToEnd:
         component's own conversion path in Home Assistant's own interpreter
         and owns that proof (#2361).
         """
+        # The SHARED SDK, as llm_api.py uses — not ha-mcp's vendored copy.
         from mcp.client.session import ClientSession
         from mcp.client.streamable_http import streamable_http_client
 

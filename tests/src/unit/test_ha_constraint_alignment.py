@@ -159,9 +159,9 @@ class TestMainExitCodes:
         assert checker.main(["--constraints-file", str(constraints)]) == 0
 
     def test_violation_exits_one(self, tmp_path):
-        # HA pinning fastmcp to a version our exact pin excludes -> rule 1.
+        # HA pinning python-dotenv to a version our exact pin excludes -> rule 1.
         constraints = tmp_path / "cons.txt"
-        constraints.write_text("fastmcp==0.0.1\n", encoding="utf-8")
+        constraints.write_text("python-dotenv==0.0.1\n", encoding="utf-8")
         assert checker.main(["--constraints-file", str(constraints)]) == 1
 
     def test_unparseable_constraints_exit_two(self, tmp_path):

@@ -106,6 +106,6 @@ jobs:
         env:
           LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
           RENOVATE_REPOSITORIES: ${{ github.repository }}
-          # Only this isolated generator may run; it cannot invoke a shell.
-          RENOVATE_ALLOWED_COMMANDS: '["^python3 -I scripts/vendor_websockets\\.py$"]'
+          # Only these isolated generators may run; they cannot invoke a shell.
+          RENOVATE_ALLOWED_COMMANDS: '["^python3 -I scripts/vendor_websockets\\.py$", "^python3 -I scripts/vendor_fastmcp\\.py$"]'
           RENOVATE_ALLOW_SHELL_EXECUTOR_FOR_POST_UPGRADE_COMMANDS: "false"

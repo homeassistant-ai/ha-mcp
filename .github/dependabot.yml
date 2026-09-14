@@ -45,12 +45,17 @@ updates:
       # single-shot `Monty(code, ...)` + `run_async(external_functions=...)`
       # API with a subprocess worker pool (`AsyncMonty` -> `checkout()` ->
       # `feed_run(external_lookup=...)`), which breaks every code path in
-      # src/ha_mcp/tools/tools_code.py. FastMCP's own code-mode extra still
-      # pins ==0.0.17 for the same reason, so nothing in the ecosystem is
-      # pulling us forward. Monty is 0.0.x, so every release is a patch by
-      # semver and there is no narrower update-type that holds the line.
+      # src/ha_mcp/tools/tools_code.py. The FastMCP version we vendor pins
+      # ==0.0.18 for its code-mode extra as well, so nothing is pulling us
+      # forward. Monty is 0.0.x, so every release is a patch by semver and
+      # there is no narrower update-type that holds the line.
       # Drop this entry when tools_code.py is ported to the pool API.
       - dependency-name: "pydantic-monty"
+      # A shared mcp stays on HA Core's 1.x line; ha-mcp's own 2.x SDK is
+      # vendored under src/ha_mcp/_vendor.
+      - dependency-name: "mcp"
+        update-types:
+          - "version-update:semver-major"
     groups:
       # Group dev dependencies together
       dev-dependencies:
@@ -66,7 +71,6 @@ updates:
       # Group production dependencies
       production-dependencies:
         patterns:
-          - "fastmcp"
           - "httpx"
           - "pydantic"
           - "websockets"

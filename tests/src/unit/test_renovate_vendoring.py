@@ -9,6 +9,7 @@ import yaml
 
 _ROOT = Path(__file__).resolve().parents[3]
 _COMMAND = "python3 -I scripts/vendor_websockets.py"
+_FASTMCP_COMMAND = "python3 -I scripts/vendor_fastmcp.py"
 
 
 def _configuration() -> tuple[dict, dict]:
@@ -47,11 +48,15 @@ def test_vendoring_hook_is_scoped_to_the_private_websockets_pin() -> None:
     ("command", "allowed"),
     [
         (_COMMAND, True),
+        (_FASTMCP_COMMAND, True),
         (_COMMAND + " --extra", False),
+        (_FASTMCP_COMMAND + " --extra", False),
         (_COMMAND + "; echo unsafe", False),
-        ("echo unsafe && " + _COMMAND, False),
+        ("echo unsafe && " + _FASTMCP_COMMAND, False),
         ("python3 -I scripts/vendor_websocketsXpy", False),
+        ("python3 -I scripts/vendor_fastmcpXpy", False),
         ("python3 scripts/vendor_websockets.py", False),
+        ("python3 scripts/vendor_fastmcp.py", False),
         ("python3 -I scripts/another_script.py", False),
     ],
 )

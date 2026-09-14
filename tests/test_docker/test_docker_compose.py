@@ -32,6 +32,13 @@ class TestDockerCompose:
         assert "HOMEASSISTANT_URL" in env_vars
         assert "HOMEASSISTANT_TOKEN" in env_vars
 
+    def test_service_serves_http(self):
+        """A detached service has no stdin, so it must not inherit stdio mode."""
+        with open("docker-compose.yml") as f:
+            ha_mcp = yaml.safe_load(f)["services"]["ha-mcp"]
+        assert ha_mcp["command"] == "ha-mcp-web"
+        assert "8086:8086" in ha_mcp["ports"]
+
     def test_data_dir_is_persisted_by_a_named_volume(self):
         """Verify the example compose keeps ``~/.ha-mcp`` on a named volume.
 
