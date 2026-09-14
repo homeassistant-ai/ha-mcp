@@ -1725,6 +1725,8 @@ class TestHaSetEntityRegistryDisableGuardrail:
         error_text = str(exc_info.value)
         assert "script" in error_text.lower()
         assert "turn_off" in error_text
+        assert "stop a running script" in error_text
+        assert "does not disable" in error_text
         mock_client.send_websocket_message.assert_not_called()
 
     @pytest.mark.asyncio
