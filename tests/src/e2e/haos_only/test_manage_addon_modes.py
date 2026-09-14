@@ -417,6 +417,14 @@ async def test_proxy_direct_port_inaddon(mcp_client: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ``check_updates`` passes timeout=300 to _supervisor_api_call, which allows a
+# local wait of 315s before any job-collision retry. The suite's default 300s
+# per-test ceiling would kill a legitimately slow repository reload before the
+# implementation reached its own timeout handling, so give it real headroom.
+_CHECK_UPDATES_TEST_TIMEOUT_S = 600
+
+
+@pytest.mark.timeout(_CHECK_UPDATES_TEST_TIMEOUT_S)
 async def test_check_updates_reloads_the_store(mcp_client: Any) -> None:
     """`check_updates` completes a real Supervisor store reload.
 
@@ -426,11 +434,11 @@ async def test_check_updates_reloads_the_store(mcp_client: Any) -> None:
     finds anything new depends on what upstream published, which is not
     something a test can pin.
     """
-    payload = await safe_call_tool(
-        mcp_client, "ha_manage_app", {"action": "check_updates"}
-    )
-    assert isinstance(payload, dict), f"Tool did not return a dict: {payload!r}"
-    assert payload.get("success") is True, payload
+    async with MCPAssertions(mcp_client) as mcp:
+        payload = await mcp.call_tool_success(
+            "ha_manage_app", {"action": "check_updates"}
+        )
+
     assert payload.get("action") == "check_updates", payload
     assert isinstance(payload.get("changed"), list), payload
     assert isinstance(payload.get("updates_available"), list), payload
@@ -442,16 +450,14 @@ async def test_check_updates_reloads_the_store(mcp_client: Any) -> None:
 async def test_check_updates_rejects_a_slug(mcp_client: Any) -> None:
     """Naming one app would misstate the scope of a store-wide reload."""
     slug = await _resolve_slug(mcp_client, NODERED_NAME)
-    payload = await safe_call_tool(
-        mcp_client,
-        "ha_manage_app",
-        {"action": "check_updates", "slug": slug},
-    )
-    assert isinstance(payload, dict), f"Tool did not return a dict: {payload!r}"
-    assert payload.get("success") is False, payload
-    error = payload.get("error")
-    assert isinstance(error, dict), payload
-    assert error.get("code") == "VALIDATION_FAILED", error
+    async with MCPAssertions(mcp_client) as mcp:
+        payload = await mcp.call_tool_failure(
+            "ha_manage_app",
+            {"action": "check_updates", "slug": slug},
+            expected_error="store-wide mode",
+        )
+
+    assert payload.get("error", {}).get("code") == "VALIDATION_FAILED", payload
 
 
 # ---------------------------------------------------------------------------

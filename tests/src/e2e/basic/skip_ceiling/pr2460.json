@@ -1,0 +1,9 @@
+{
+  "reason": "#2460 adds two tests to tests/src/e2e/haos_only/test_manage_addon_modes.py (the check_updates store reload and its slug rejection). The directory is auto-marked haos_only, so both RUN on every HAOS lane and add two collection-time skips on each lane that does not select the HAOS backend.",
+  "deltas": {
+    "container": 2,
+    "embedded": 2,
+    "container_no_tools": 2,
+    "embedded_no_tools": 2
+  }
+}
