@@ -346,6 +346,7 @@ class LabelTools:
                     f"Invalid areas parameter: {e}",
                 )
             )
+        return None  # py/mixed-returns: explicit terminal; raise_tool_error is NoReturn
 
     async def _apply_label_to_requested_areas(
         self,

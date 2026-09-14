@@ -560,6 +560,29 @@ class AreaTools:
             id_key = "floor_id"
         return message, result_key, id_key, operation, name
 
+    @staticmethod
+    def _label_verify_context(
+        *,
+        parsed_labels: list[str],
+        kind: str,
+        returned_id: str | None,
+        operation: str,
+        name: str | None,
+        write_committed: bool = False,
+    ) -> dict[str, Any]:
+        """Error context shared by both label-verification failure paths."""
+        ctx: dict[str, Any] = {
+            "operation": operation,
+            "kind": kind,
+            "area_id": returned_id,
+            "expected_labels": parsed_labels,
+        }
+        if write_committed:
+            ctx["write_committed"] = True
+        if name:
+            ctx["name"] = name
+        return ctx
+
     async def _verify_area_labels_written(
         self,
         *,
@@ -583,21 +606,19 @@ class AreaTools:
         except Exception as exc:
             # Write already succeeded; a transport failure on re-read must
             # not look like a failed create (retry would duplicate the area).
-            ctx: dict[str, Any] = {
-                "operation": operation,
-                "kind": kind,
-                "area_id": returned_id,
-                "expected_labels": parsed_labels,
-                "write_committed": True,
-            }
-            if name:
-                ctx["name"] = name
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
                     "Area write succeeded, but label verification failed",
                     details=str(exc),
-                    context=ctx,
+                    context=self._label_verify_context(
+                        parsed_labels=parsed_labels,
+                        kind=kind,
+                        returned_id=returned_id,
+                        operation=operation,
+                        name=name,
+                        write_committed=True,
+                    ),
                     suggestions=[
                         "The area write already committed; do not retry create.",
                         "Re-read with ha_list_floors_areas() before retrying labels.",
@@ -617,20 +638,18 @@ class AreaTools:
             )
         if found is not None and _label_id_set(found) == expected:
             return
-        ctx: dict[str, Any] = {
-            "operation": operation,
-            "kind": kind,
-            "area_id": returned_id,
-            "expected_labels": parsed_labels,
-        }
-        if name:
-            ctx["name"] = name
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
                 "Area write succeeded but the returned entry does not contain "
                 "the requested labels",
-                context=ctx,
+                context=self._label_verify_context(
+                    parsed_labels=parsed_labels,
+                    kind=kind,
+                    returned_id=returned_id,
+                    operation=operation,
+                    name=name,
+                ),
             )
         )
 
