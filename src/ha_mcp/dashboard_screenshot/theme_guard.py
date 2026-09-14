@@ -80,9 +80,9 @@ def _read_only_mode() -> bool:
     must know about it.
     """
     try:
-        from ..config import get_global_settings
+        from ..read_only import is_read_only
 
-        return bool(get_global_settings().read_only_mode)
+        return is_read_only()
     except Exception:  # pragma: no cover - settings must never break a read
         return False
 
@@ -423,12 +423,14 @@ class ThemeGuard:
                 "> General in the Home Assistant UI."
             )
         elif _read_only_mode():
+            from ..read_only import read_only_remedy_hint
+
             remedy = (
                 "Server Read Only Mode is on, so ha-mcp will not restore "
                 "it: captures keep running there, but every theme write is "
                 "blocked at call time. Restore it from that account's own "
-                "session, Profile > General in the Home Assistant UI, or "
-                "turn Read Only Mode off first."
+                "session, Profile > General in the Home Assistant UI. "
+                f"{read_only_remedy_hint()}"
             )
         else:
             remedy = (

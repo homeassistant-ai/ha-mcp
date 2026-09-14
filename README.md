@@ -376,6 +376,30 @@ For the HA app, the same option is documented in [`homeassistant-addon/DOCS.md`]
 
 ---
 
+### Read-only HTTP connections
+
+Append `/readonly` to the server's HTTP MCP endpoint to restrict that connection
+to the existing Read Only Mode while other clients keep normal access:
+
+```text
+Normal:     https://example.com/private_your_secret
+Read-only:  https://example.com/private_your_secret/readonly
+```
+
+OAuth and OIDC connections use the same login/provider: for example,
+`https://example.com/mcp/readonly`. No additional secret or server is required.
+Read-only connections hide write tools and block write calls, including calls
+through cached tools or search proxies. The global Read Only Mode setting still
+restricts both endpoints when enabled. Reconnect the client after changing its URL
+so it refreshes its tool list.
+
+This is a connection mode for automated agents, not a separate permission on the
+credential: the same credentials still work at the normal endpoint. Home Assistant
+webhook URLs also accept the suffix:
+`https://your-ha.example/api/webhook/<webhook-id>/readonly`. This requires the
+updated embedded integration or Webhook Proxy dev app (add-on), together with
+the updated MCP server.
+
 ## 🧪 Dev Channel
 
 Want early access to new features and fixes? Dev releases (`.devN`) are published on every push to master.

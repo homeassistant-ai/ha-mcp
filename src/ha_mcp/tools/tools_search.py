@@ -4265,15 +4265,15 @@ class SearchTools:
 
         # Surface Read Only Mode after projection so the flag survives any
         # fields= filter.
-        if get_global_settings().read_only_mode:
+        from ..read_only import is_read_only, read_only_remedy_hint
+
+        if is_read_only():
             projected["read_only_mode"] = True
             projected["read_only_mode_hint"] = (
                 "Read Only Mode is ON: write-capable tools are disabled and "
                 "all write or destructive operations are blocked "
-                "server-side. You can search, read, and analyze freely. To "
-                "allow changes, the user must turn off Read Only Mode in "
-                "the ha-mcp settings UI (Tools tab) or the add-on "
-                "configuration."
+                "server-side. You can search, read, and analyze freely. "
+                f"{read_only_remedy_hint()}"
             )
 
         # Surface the MCP server's own update status after projection.

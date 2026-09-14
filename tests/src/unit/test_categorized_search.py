@@ -29,7 +29,7 @@ from ha_mcp.transforms.categorized_search import (
 @pytest.fixture
 def read_only_on(monkeypatch):
     monkeypatch.setattr(
-        "ha_mcp.config.get_global_settings",
+        "ha_mcp.read_only.get_global_settings",
         lambda: SimpleNamespace(read_only_mode=True),
     )
 
