@@ -197,8 +197,8 @@ def test_connector_login_over_http_reaches_an_authenticated_tool_call(oauth_app)
     """Registration, consent, the SDK token route and a bearer MCP call, end to end.
 
     The provider tests call ``exchange_authorization_code`` directly; this drives
-    the SDK's RegistrationHandler, AuthorizationHandler and TokenHandler the way a
-    connector does, so a change in those handlers fails here.
+    the SDK's registration, authorization and token handlers and our consent route
+    the way a connector does, so a handler change that breaks the login fails here.
     """
     import base64
     import hashlib
@@ -229,6 +229,24 @@ def test_connector_login_over_http_reaches_an_authenticated_tool_call(oauth_app)
         assert registered.status_code == 201, registered.text
         client_id = registered.json()["client_id"]
 
+        # An SDK-built error redirect carries iss through the wrapped route.
+        rejected = client.get(
+            "/authorize",
+            params={
+                "response_type": "code",
+                "client_id": client_id,
+                "redirect_uri": redirect_uri,
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "state": "st-0",
+                "scope": "not-a-scope",
+            },
+        )
+        assert rejected.status_code == 302, rejected.text
+        error = parse_qs(urlparse(rejected.headers["location"]).query)
+        assert error["error"] == ["invalid_scope"]
+        assert error["iss"] == [f"{BASE_URL}/"]
+
         authorize = client.get(
             "/authorize",
             params={
@@ -248,6 +266,7 @@ def test_connector_login_over_http_reaches_an_authenticated_tool_call(oauth_app)
         assert consent.status_code == 303, consent.text
         callback = parse_qs(urlparse(consent.headers["location"]).query)
         assert callback["state"] == ["st-1"]
+        assert callback["iss"] == [f"{BASE_URL}/"]
 
         issued = client.post(
             "/token",

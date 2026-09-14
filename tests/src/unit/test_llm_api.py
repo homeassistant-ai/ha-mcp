@@ -1184,7 +1184,7 @@ class TestResultKeysMatchAcrossSdkLines:
         assert llm_api._tool_input_schema(tool) == schema
 
     def test_transport_errors_are_read_without_importing(self, monkeypatch):
-        """This runs on the event loop, where Home Assistant flags an import."""
+        """_transport_error_leaves runs on the event loop, where HA flags imports."""
         import sys
 
         def _no_import(name):

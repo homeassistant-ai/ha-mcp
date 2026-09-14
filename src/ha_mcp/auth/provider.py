@@ -58,9 +58,9 @@ REFRESH_TOKEN_EXPIRY_SECONDS = 7 * 24 * 60 * 60  # 7 days
 class _StampIssOnErrorRedirects:
     """ASGI wrapper that stamps ``iss`` on the error redirects of the app it wraps.
 
-    The SDK serves ``/authorize`` as an ASGI app (body-limit middleware around
-    the handler), so the stamp is applied to the response headers as they are
-    sent rather than to a returned ``Response``.
+    The SDK serves ``/authorize`` as an ASGI app, so the stamp is applied to the
+    headers as they are sent. A class, not a function, so Starlette's ``Route``
+    mounts it as raw ASGI instead of wrapping it in ``request_response``.
     """
 
     def __init__(self, app: ASGIApp, stamp: Callable[[str], str]) -> None:
@@ -444,8 +444,9 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         Get OAuth routes including custom consent form routes.
 
         This extends the base OAuth routes with:
-        - GET /authorize - Shows the consent form
-        - POST /authorize - Handles consent form submission
+        - /authorize - the SDK handler, its error redirects stamped with ``iss``;
+          success redirects to /consent
+        - GET/POST /consent - the consent form and its submission
         - Custom /.well-known/oauth-authorization-server with enhanced metadata
         """
         # Get base OAuth routes
