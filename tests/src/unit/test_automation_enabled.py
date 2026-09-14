@@ -1,13 +1,14 @@
 """Focused tests for automation enable/disable service routing."""
 
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from fastmcp.exceptions import ToolError
 
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
-from ha_mcp.tools import tools_config_automations
+from ha_mcp.tools import auto_backup, tools_config_automations
 
 
 class _FakeClient:
@@ -187,6 +188,9 @@ async def test_config_update_reports_runtime_state_failure_as_partial_success() 
 @pytest.mark.anyio
 async def test_standalone_enabled_attaches_skill_content(monkeypatch) -> None:
     client = _FakeClient()
+    client.states = [
+        {"entity_id": "automation.morning", "attributes": {"id": "morning-id"}}
+    ]
     tools = tools_config_automations.AutomationConfigTools(client)
 
     def attach_skill_content(
@@ -215,6 +219,9 @@ async def test_standalone_enabled_attaches_skill_content(monkeypatch) -> None:
 @pytest.mark.anyio
 async def test_standalone_enabled_service_failure_raises_tool_error() -> None:
     client = _FakeClient()
+    client.states = [
+        {"entity_id": "automation.morning", "attributes": {"id": "morning-id"}}
+    ]
     client.service_error = RuntimeError("service unavailable")
     tools = tools_config_automations.AutomationConfigTools(client)
 
@@ -241,6 +248,103 @@ async def test_standalone_enabled_preserves_connection_errors() -> None:
 
     with pytest.raises(HomeAssistantConnectionError):
         await tools._set_enabled_only("stored-id", False, wait=False)
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_standalone_prefixed_identifier_must_exist() -> None:
+    client = _FakeClient()
+    tools = tools_config_automations.AutomationConfigTools(client)
+
+    with pytest.raises(ToolError) as exc_info:
+        await tools._set_enabled_only("automation.missing", False, wait=False)
+
+    assert "not found" in str(exc_info.value).lower()
+    assert client.calls == []
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_raw_unique_id_creation_waits_for_registration_before_enabling(
+    monkeypatch,
+) -> None:
+    client = _FakeClient()
+    tools = tools_config_automations.AutomationConfigTools(client)
+    unique_id = "new-automation-id"
+    discovered_entity_id = "automation.generated_name"
+    discovered: list[str] = []
+
+    async def wait_for_unique_id(client, identifier):
+        discovered.append(identifier)
+        return discovered_entity_id
+
+    async def wait_for_entity(*_args, **_kwargs):
+        return True
+
+    async def wait_for_state(*_args, **_kwargs):
+        return {"state": "on"}
+
+    monkeypatch.setattr(
+        tools_config_automations,
+        "wait_for_automation_entity_by_unique_id",
+        wait_for_unique_id,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        tools_config_automations, "wait_for_entity_registered", wait_for_entity
+    )
+    monkeypatch.setattr(
+        tools_config_automations, "wait_for_state_change", wait_for_state
+    )
+
+    result = await tools._run_config_update(
+        {"alias": "Generated", "triggers": [], "actions": []},
+        unique_id,
+        None,
+        True,
+        tools_config_automations.BestPracticeCheckResult(),
+        {},
+        False,
+        enabled=True,
+    )
+
+    assert discovered == [unique_id]
+    assert result["automation_id"] == discovered_entity_id
+    assert result["enabled_applied"] is True
+    assert client.calls == [
+        ("automation", "turn_on", {"entity_id": discovered_entity_id})
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_standalone_runtime_toggle_skips_auto_backup(monkeypatch) -> None:
+    client = _FakeClient()
+    client.states = [
+        {"entity_id": "automation.morning", "attributes": {"id": "morning-id"}}
+    ]
+    tools = tools_config_automations.AutomationConfigTools(client)
+    snapshot_calls: list[tuple[str, str]] = []
+
+    class _BackupManager:
+        async def maybe_snapshot(self, domain, entity_id, **_kwargs):
+            snapshot_calls.append((domain, entity_id))
+
+    monkeypatch.setattr(
+        auto_backup,
+        "get_global_settings",
+        lambda: SimpleNamespace(enable_auto_backup=True),
+    )
+    monkeypatch.setattr(
+        auto_backup, "get_backup_manager", lambda *_args: _BackupManager()
+    )
+
+    result = await tools.ha_config_set_automation(
+        identifier="automation.morning", enabled=True, wait=False
+    )
+
+    assert result["enabled_applied"] is True
+    assert snapshot_calls == []
 
 
 @pytest.mark.unit
