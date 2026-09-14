@@ -119,11 +119,9 @@ export function validateResult(result, context) {
     if (!item.evidence.some((e) => sources.get(e.source_id)?.maintainer))
       throw Error("Agreed scope requires maintainer evidence");
   }
-  for (const values of [
-    result.facts.map((f) => f.field),
-    result.missing_fields,
-    result.already_requested,
-  ]) {
+  // Several affected tools or clients are legitimate separate sourced facts.
+  // Only the question/control field lists require uniqueness.
+  for (const values of [result.missing_fields, result.already_requested]) {
     if (new Set(values).size !== values.length) throw Error("Duplicate field");
   }
   if (result.facts.some((f) => result.missing_fields.includes(f.field)))

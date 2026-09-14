@@ -15,6 +15,20 @@ import {
 
 const bot = "ha-mcp[bot]";
 
+test("one fact category can contain multiple explicitly reported values", () => {
+  const s = snapshot();
+  s.issue.body += " Also reproduced with ChatGPT.";
+  const r = result();
+  r.facts.push({
+    field: "client",
+    value: "ChatGPT",
+    evidence: [{ source_id: "body", quote: "Also reproduced with ChatGPT." }],
+  });
+  const text = render(r, prepare(s, bot));
+  assert.match(text, /Client: Claude Desktop/);
+  assert.match(text, /Client: ChatGPT/);
+});
+
 test("validated environment facts are visible with source citations", () => {
   const text = render(result(), prepare(snapshot(), bot));
   assert.match(text, /### Reported details/);
