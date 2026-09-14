@@ -41,6 +41,8 @@ def test_issue_intake_event_and_credential_boundaries() -> None:
     )
     assert "concurrency" not in workflow
     assert admission["concurrency"]["cancel-in-progress"] is True
+    assert "github.run_id" in admission["concurrency"]["group"]
+    assert admission["steps"][0]["if"] == "github.event_name != 'workflow_dispatch'"
     job = workflow["jobs"]["document"]
     assert job["needs"] == "admit"
     assert job["concurrency"]["cancel-in-progress"] is False

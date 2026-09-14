@@ -32,12 +32,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 4
     concurrency:
-      group: issue-intake-admit-${{ github.repository }}-${{ github.event.issue.number || inputs.issue_number }}
+      # Automatic bursts share a group; an explicit dispatch keeps its model
+      # choice and forced rerun even if another comment arrives meanwhile.
+      group: issue-intake-admit-${{ github.repository }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event.issue.number }}
       cancel-in-progress: true
     outputs:
       run: ${{ steps.admission.outputs.run }}
     steps:
       - name: Coalesce issue activity before entering the auth queue
+        if: github.event_name != 'workflow_dispatch'
         run: sleep 15
       - name: Checkout trusted admission code
         timeout-minutes: 2
