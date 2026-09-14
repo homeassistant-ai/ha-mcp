@@ -354,7 +354,10 @@ export function prose(text) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/([\\`*_{}\[\]()#!|])/g, "\\$1")
-    .replace(/@/g, "&#64;")
+    // GitHub post-processes HTML entities and escaped hashes into mentions.
+    // A zero-width separator preserves display while preventing those links.
+    .replace(/@/g, "@\u200b")
+    .replace(/#(?=\w)/g, "#\u200b")
     .replace(/\b([a-z][a-z\d+.-]*):\/\//gi, "$1[:]//")
     .replace(/\bwww\./gi, "www[.]");
 }

@@ -122,7 +122,7 @@ test("translation requirement is a schema-enforced boolean", () => {
   validateResult(r, makeContext(fixture()));
 });
 test("mentions survive as display text without a broken numeric entity", () => {
-  assert.equal(prose("ping @alice on #2404"), "ping &#64;alice on \\#2404");
+  assert.equal(prose("ping @alice on #2404"), "ping @\u200balice on \\#\u200b2404");
 });
 test("reporter replies clear needs-info for bot and triager labels before the close deadline", async () => {
   const yaml = readFileSync(
