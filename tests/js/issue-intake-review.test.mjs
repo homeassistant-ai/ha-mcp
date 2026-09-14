@@ -111,6 +111,63 @@ test("fact values must occur in their evidence", () => {
     /facts\[0\].value/,
   );
 });
+
+test("an expired needs-info issue with a deleted reporter still has a close path", async () => {
+  const yaml = readFileSync(
+    new URL("../../.github/workflows/close-needs-info.yml", import.meta.url),
+    "utf8",
+  );
+  const code = yaml
+    .split("script: |\n")[1]
+    .split("\n")
+    .map((line) => line.replace(/^ {12}/, ""))
+    .join("\n");
+  const writes = [],
+    issue = { ...fixture().issue, user: null };
+  const github = {
+    rest: {
+      issues: {
+        listForRepo: "issues",
+        listEvents: "events",
+        listComments: "comments",
+        createComment: async () => writes.push("comment"),
+        update: async () => writes.push("close"),
+        removeLabel: async () => writes.push("remove"),
+      },
+    },
+    paginate: async (kind) =>
+      kind === "issues"
+        ? [issue]
+        : kind === "comments"
+          ? []
+          : [
+              {
+                id: 1,
+                event: "labeled",
+                actor: null,
+                label: { name: "needs-info" },
+                created_at: "2020-01-01T00:00:00Z",
+              },
+            ],
+  };
+  await new Function(
+    "github",
+    "context",
+    "core",
+    `return (async()=>{${code}})()`,
+  )(
+    github,
+    { repo: { owner: "test", repo: "repo" } },
+    {
+      info() {},
+      warning() {},
+      setFailed(message) {
+        throw Error(message);
+      },
+    },
+  );
+  assert.deepEqual(writes, ["comment", "close", "remove"]);
+});
 test("translation requirement is a schema-enforced boolean", () => {
   const r = answer();
   r.needs_translation = "English (US)";
@@ -122,7 +179,10 @@ test("translation requirement is a schema-enforced boolean", () => {
   validateResult(r, makeContext(fixture()));
 });
 test("mentions survive as display text without a broken numeric entity", () => {
-  assert.equal(prose("ping @alice on #2404"), "ping @\u200balice on \\#\u200b2404");
+  assert.equal(
+    prose("ping @alice on #2404"),
+    "ping @\u200balice on \\#\u200b2404",
+  );
 });
 test("reporter replies clear needs-info for bot and triager labels before the close deadline", async () => {
   const yaml = readFileSync(

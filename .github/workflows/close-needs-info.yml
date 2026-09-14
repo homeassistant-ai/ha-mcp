@@ -55,6 +55,7 @@ jobs:
               // The issues endpoint also returns pull requests with this label.
               if (issue.pull_request) continue;
               const issueNumber = issue.number;
+              const greeting = issue.user?.login ? `Hi @${issue.user.login}` : "Hello";
               core.info(`Checking issue #${issueNumber}: ${issue.title}`);
 
               const events = await github.paginate(github.rest.issues.listEvents, {
@@ -128,7 +129,7 @@ jobs:
                       owner: context.repo.owner,
                       repo: context.repo.repo,
                       issue_number: issueNumber,
-                      body: `Hi @${issue.user.login} — closing this issue as we haven't received the requested information after ${DAYS_BEFORE_CLOSE} days.\n\nFeel free to open a new issue once you have the details ready.\n\n*🤖 Automated by Issue Bot*\n${closingMarker}`,
+                      body: `${greeting} — closing this issue as we haven't received the requested information after ${DAYS_BEFORE_CLOSE} days.\n\nFeel free to open a new issue once you have the details ready.\n\n*🤖 Automated by Issue Bot*\n${closingMarker}`,
                     });
                     commented = true;
                   } catch (err) {
@@ -205,7 +206,7 @@ jobs:
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: issueNumber,
-                  body: `Hi @${issue.user.login} — ${notice}\n\nReplying with the requested details keeps it open.\n\n*🤖 Automated by Issue Bot*\n${warningMarker(day)}`,
+                  body: `${greeting} — ${notice}\n\nReplying with the requested details keeps it open.\n\n*🤖 Automated by Issue Bot*\n${warningMarker(day)}`,
                 });
                 core.info(`  Posted day-${day} reminder`);
               } catch (err) {
