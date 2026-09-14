@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import ssl
 from typing import Any
 
 import pytest
+from websockets.datastructures import Headers
+from websockets.exceptions import InvalidStatus, InvalidURI
+from websockets.http11 import Response
 
 from tests.src import haos_runtime
 
@@ -151,6 +155,148 @@ def _patch_ws_connect(monkeypatch: Any, websocket: _FakeWebSocket) -> None:
         "websockets.sync.client.connect",
         lambda *args, **kwargs: websocket,
     )
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def _status(code: int) -> InvalidStatus:
+    return InvalidStatus(Response(code, "status", Headers()))
+
+
+@pytest.mark.parametrize(
+    "transient",
+    [
+        TimeoutError("timed out while waiting for handshake response"),
+        ConnectionRefusedError("connection refused"),
+        _status(503),
+    ],
+    ids=["handshake-timeout", "refused", "proxy-503"],
+)
+def test_ws_connect_retries_until_core_accepts_the_handshake(
+    monkeypatch: Any, caplog: Any, transient: Exception
+) -> None:
+    """After a Core restart HTTP answers before the WebSocket handshake does."""
+    clock = _FakeClock()
+    monkeypatch.setattr(haos_runtime, "time", clock)
+    websocket = _FakeWebSocket(None)
+    attempts: list[float] = []
+
+    def connect(*args: Any, **kwargs: Any) -> _FakeWebSocket:
+        attempts.append(kwargs["open_timeout"])
+        if len(attempts) < 3:
+            raise transient
+        return websocket
+
+    monkeypatch.setattr("websockets.sync.client.connect", connect)
+    caplog.set_level("DEBUG", logger=haos_runtime.LOG.name)
+
+    haos_runtime.promote_home_assistant_http_config(
+        "https://127.0.0.1:18123", "token", verify_ssl=False
+    )
+
+    assert clock.sleeps == [2.0, 2.0]
+    assert attempts == [30.0, 30.0, 30.0]
+    assert websocket.sent[-1] == {"id": 1, "type": "http/config/promote"}
+    assert caplog.text.count("not ready yet") == 2
+
+
+def test_ws_connect_retry_stops_at_the_command_timeout(monkeypatch: Any) -> None:
+    """A Core that never accepts the handshake fails within the caller's budget."""
+    clock = _FakeClock()
+    monkeypatch.setattr(haos_runtime, "time", clock)
+    attempts: list[float] = []
+
+    def connect(*args: Any, **kwargs: Any) -> _FakeWebSocket:
+        attempts.append(kwargs["open_timeout"])
+        clock.now += kwargs["open_timeout"]
+        raise TimeoutError("timed out while waiting for handshake response")
+
+    monkeypatch.setattr("websockets.sync.client.connect", connect)
+
+    with pytest.raises(TimeoutError):
+        haos_runtime.promote_home_assistant_http_config(
+            "https://127.0.0.1:18123", "token", timeout=100.0, verify_ssl=False
+        )
+
+    # Three full 30 s attempts with 2 s pauses, then only the 4 s still left.
+    assert attempts == [30.0, 30.0, 30.0, 4.0]
+    assert clock.now == 100.0
+
+
+@pytest.mark.parametrize(
+    "permanent",
+    [
+        _status(403),
+        InvalidURI("wss://bad", "not a valid URI"),
+        ssl.SSLCertVerificationError("certificate verify failed"),
+    ],
+    ids=["forbidden", "invalid-uri", "bad-certificate"],
+)
+def test_ws_connect_fails_at_once_on_a_permanent_error(
+    monkeypatch: Any, permanent: Exception
+) -> None:
+    """A rejected status, URL or certificate never clears up by waiting."""
+    clock = _FakeClock()
+    monkeypatch.setattr(haos_runtime, "time", clock)
+    attempts: list[float] = []
+
+    def connect(*args: Any, **kwargs: Any) -> _FakeWebSocket:
+        attempts.append(kwargs["open_timeout"])
+        raise permanent
+
+    monkeypatch.setattr("websockets.sync.client.connect", connect)
+
+    with pytest.raises(type(permanent)):
+        haos_runtime.promote_home_assistant_http_config(
+            "https://127.0.0.1:18123", "token", verify_ssl=False
+        )
+
+    assert len(attempts) == 1
+    assert clock.sleeps == []
+
+
+def test_ws_command_shares_one_timeout_across_connect_and_reply(
+    monkeypatch: Any,
+) -> None:
+    """A slow handshake leaves the reply wait only what remains of ``timeout``."""
+    clock = _FakeClock()
+    monkeypatch.setattr(haos_runtime, "time", clock)
+
+    class _SilentCore(_FakeWebSocket):
+        def recv(self, timeout: float | None = None) -> str:
+            frame = next(self._frames, None)
+            if frame is None:
+                clock.now += timeout or 0.0
+                raise TimeoutError
+            return json.dumps(frame)
+
+    websocket = _SilentCore(
+        None, frames=[{"type": "auth_required"}, {"type": "auth_ok"}]
+    )
+
+    def connect(*args: Any, **kwargs: Any) -> _FakeWebSocket:
+        clock.now += 40.0
+        return websocket
+
+    monkeypatch.setattr("websockets.sync.client.connect", connect)
+
+    with pytest.raises(TimeoutError, match="got no response"):
+        haos_runtime.promote_home_assistant_http_config(
+            "https://127.0.0.1:18123", "token", timeout=60.0, verify_ssl=False
+        )
+
+    assert clock.now == 60.0
 
 
 def test_ws_command_requires_the_auth_required_handshake(monkeypatch: Any) -> None:

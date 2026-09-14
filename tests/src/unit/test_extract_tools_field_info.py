@@ -687,6 +687,11 @@ class TestImportResolution:
         assert self._source("from os import path") is None
         assert self._source("from pydantic import Field") is None
 
+    def test_a_vendored_library_import_is_declined(self):
+        """Vendored libraries live inside the package but are not its tools."""
+        assert (extract_tools.PACKAGE_ROOT / "_vendor" / "fastmcp" / "tools").is_dir()
+        assert self._source("from ha_mcp._vendor.fastmcp.tools import tool") is None
+
     def test_an_aliased_name_is_bound_under_its_local_spelling(self):
         scope = extract_tools.ModuleScope({}, {})
         extract_tools._apply_imports(

@@ -10,6 +10,7 @@ on:
       - tests/src/unit/test_renovate_vendoring.py
       - tests/src/unit/test_renovate_auto_merge.py
       - scripts/vendor_websockets.py
+      - scripts/vendor_fastmcp.py
       - tests/renovate/**
   workflow_dispatch:
 

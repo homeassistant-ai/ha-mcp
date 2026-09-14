@@ -1365,6 +1365,55 @@ def stage_embedded_server_feature_flags_in_qcow2(
         _shutil.rmtree(workdir, ignore_errors=True)
 
 
+def _ws_connect_error_is_transient(error: Exception) -> bool:
+    """A restarting Core refuses, times out, or answers 502-504 through a proxy."""
+    import websockets.exceptions
+
+    if isinstance(
+        error, ssl.SSLCertVerificationError | websockets.exceptions.InvalidURI
+    ):
+        return False
+    if isinstance(error, websockets.exceptions.InvalidStatus):
+        return error.response.status_code in (502, 503, 504)
+    return True
+
+
+def _connect_home_assistant_ws(
+    ws_url: str, ssl_context: ssl.SSLContext | None, deadline: float
+) -> Any:
+    """Open the Core WebSocket, retrying transient failures until ``deadline``.
+
+    Right after a Core restart the HTTP endpoints answer before the WebSocket
+    handshake does.
+    """
+    import websockets.exceptions
+    import websockets.sync.client
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"Timed out opening {ws_url}")
+        try:
+            return websockets.sync.client.connect(
+                ws_url,
+                max_size=None,
+                open_timeout=min(remaining, 30.0),
+                ssl=ssl_context,
+            )
+        except (
+            OSError,
+            TimeoutError,
+            websockets.exceptions.WebSocketException,
+        ) as error:
+            if (
+                not _ws_connect_error_is_transient(error)
+                or time.monotonic() + 2.0 >= deadline
+            ):
+                raise
+            LOG.debug("Core WebSocket %s not ready yet: %r", ws_url, error)
+            time.sleep(2.0)
+
+
 def _home_assistant_ws_command(
     base_url: str,
     token: str,
@@ -1373,9 +1422,8 @@ def _home_assistant_ws_command(
     timeout: float = 60.0,
     verify_ssl: bool = True,
 ) -> Any:
-    """Run one authenticated Home Assistant WebSocket command."""
-    import websockets.sync.client
-
+    """Run one authenticated Home Assistant WebSocket command within ``timeout``."""
+    deadline = time.monotonic() + timeout
     ws_url = (
         base_url.replace("http://", "ws://").replace("https://", "wss://")
         + "/api/websocket"
@@ -1387,26 +1435,20 @@ def _home_assistant_ws_command(
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
 
-    with websockets.sync.client.connect(
-        ws_url,
-        max_size=None,
-        open_timeout=min(timeout, 30.0),
-        ssl=ssl_context,
-    ) as ws:
-        first = json.loads(ws.recv())
+    with _connect_home_assistant_ws(ws_url, ssl_context, deadline) as ws:
+        first = json.loads(ws.recv(timeout=max(deadline - time.monotonic(), 0.0)))
         if first.get("type") != "auth_required":
             raise RuntimeError(f"WS handshake: expected auth_required, got {first!r}")
         ws.send(json.dumps({"type": "auth", "access_token": token}))
-        auth_resp = json.loads(ws.recv())
+        auth_resp = json.loads(ws.recv(timeout=max(deadline - time.monotonic(), 0.0)))
         if auth_resp.get("type") != "auth_ok":
             raise RuntimeError(f"WS auth rejected: {auth_resp}")
 
         msg_id = 1
         ws.send(json.dumps({"id": msg_id, **command}))
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        while (remaining := deadline - time.monotonic()) > 0:
             try:
-                raw = ws.recv(timeout=max(deadline - time.monotonic(), 1.0))
+                raw = ws.recv(timeout=remaining)
             except TimeoutError:
                 continue
             if not isinstance(raw, str):
