@@ -15,6 +15,28 @@ import {
 
 const bot = "ha-mcp[bot]";
 
+test("final comment patches use the full retry budget after the label succeeds", async () => {
+  const s = snapshot(),
+    api = new FakeGitHub(s);
+  const request = api.request.bind(api);
+  let finalAttempts = 0;
+  api.request = (path, options = {}) => {
+    if (
+      options.method === "PATCH" &&
+      !options.data.body.includes(" pending -->")
+    ) {
+      finalAttempts += 1;
+      if (finalAttempts < 3)
+        throw Object.assign(Error("Temporary patch failure"), { status: 503 });
+    }
+    return request(path, options);
+  };
+  await publish(api, prepare(s, bot), result(), bot);
+  assert.equal(finalAttempts, 3);
+  assert.equal(api.data.comments.length, 1);
+  assert.equal(prepare(await collect(api, "test/repo", 1), bot).run, false);
+});
+
 test("one fact category can contain multiple explicitly reported values", () => {
   const s = snapshot();
   s.issue.body += " Also reproduced with ChatGPT.";

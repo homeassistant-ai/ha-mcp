@@ -426,26 +426,28 @@ export async function publish(api, prepared, result, bot, attempt = 0) {
     : body;
   // Updating one owned comment is idempotent. A failed POST is not retried here;
   // the next run recollects comments before deciding whether to create one.
-  if (existing) {
-    if (existing.body !== pending)
-      await api.request(`${base}/comments/${existing.id}`, {
-        method: "PATCH",
-        data: { body: pending },
-      });
-  } else {
-    const created = await api.request(
-      `${base}/${latest.issue.number}/comments`,
-      { method: "POST", data: { body: pending } },
-    );
-    if (!Number.isSafeInteger(created?.id))
-      throw Error("Missing created comment ID");
-    latest.comments.push({
-      id: created.id,
-      body: pending,
-      user: { login: bot, type: "Bot" },
-    });
-  }
+  let retryableWrite = !!existing;
   try {
+    if (existing) {
+      if (existing.body !== pending)
+        await api.request(`${base}/comments/${existing.id}`, {
+          method: "PATCH",
+          data: { body: pending },
+        });
+    } else {
+      const created = await api.request(
+        `${base}/${latest.issue.number}/comments`,
+        { method: "POST", data: { body: pending } },
+      );
+      if (!Number.isSafeInteger(created?.id))
+        throw Error("Missing created comment ID");
+      latest.comments.push({
+        id: created.id,
+        body: pending,
+        user: { login: bot, type: "Bot" },
+      });
+      retryableWrite = true;
+    }
     if (action === "add")
       await api.request(`${base}/${latest.issue.number}/labels`, {
         method: "POST",
@@ -461,11 +463,12 @@ export async function publish(api, prepared, result, bot, attempt = 0) {
         data: { body },
       });
   } catch (error) {
-    // Only replay idempotent post-marker operations. Recollect on every
+    // Only replay known-owned comment patches and idempotent label writes. Recollect on every
     // attempt so intervening human replies, pauses and label overrides win.
     // Never mark failed label work complete: exhausted retries remain pending
     // and fail visibly for manual recovery, rather than being deduplicated away.
     if (
+      retryableWrite &&
       attempt < 2 &&
       (error.status === 429 || (error.status >= 500 && error.status <= 599))
     ) {
