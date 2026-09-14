@@ -182,6 +182,112 @@ async def test_authorization_redirect_iss_matches_served_issuer(oauth_app):
     assert served_issuer == f"{BASE_URL}/"
 
 
+def _mcp_rpc(client, token: str | None, method: str):
+    headers = {"Accept": "application/json, text/event-stream"}
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
+    return client.post(
+        "/mcp",
+        headers=headers,
+        json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {}},
+    )
+
+
+def test_connector_login_over_http_reaches_an_authenticated_tool_call(oauth_app):
+    """Registration, consent, the SDK token route and a bearer MCP call, end to end.
+
+    The provider tests call ``exchange_authorization_code`` directly; this drives
+    the SDK's RegistrationHandler, AuthorizationHandler and TokenHandler the way a
+    connector does, so a change in those handlers fails here.
+    """
+    import base64
+    import hashlib
+    import json
+    import secrets
+
+    from starlette.testclient import TestClient
+
+    redirect_uri = "https://claude.ai/api/mcp/auth_callback"
+    verifier = secrets.token_urlsafe(48)
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+        .decode()
+        .rstrip("=")
+    )
+
+    with TestClient(oauth_app, follow_redirects=False) as client:
+        registered = client.post(
+            "/register",
+            json={
+                "redirect_uris": [redirect_uri],
+                "token_endpoint_auth_method": "none",
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "client_name": "connector",
+            },
+        )
+        assert registered.status_code == 201, registered.text
+        client_id = registered.json()["client_id"]
+
+        authorize = client.get(
+            "/authorize",
+            params={
+                "response_type": "code",
+                "client_id": client_id,
+                "redirect_uri": redirect_uri,
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "state": "st-1",
+                "scope": "homeassistant",
+            },
+        )
+        assert authorize.status_code == 302, authorize.text
+        txn_id = parse_qs(urlparse(authorize.headers["location"]).query)["txn_id"][0]
+
+        consent = client.post("/consent", data={"txn_id": txn_id, "ha_token": "llat"})
+        assert consent.status_code == 303, consent.text
+        callback = parse_qs(urlparse(consent.headers["location"]).query)
+        assert callback["state"] == ["st-1"]
+
+        issued = client.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": callback["code"][0],
+                "redirect_uri": redirect_uri,
+                "client_id": client_id,
+                "code_verifier": verifier,
+            },
+        )
+        assert issued.status_code == 200, issued.text
+        tokens = issued.json()
+        assert tokens["token_type"].lower() == "bearer"
+
+        refreshed = client.post(
+            "/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": tokens["refresh_token"],
+                "client_id": client_id,
+            },
+        )
+        assert refreshed.status_code == 200, refreshed.text
+
+        assert _mcp_rpc(client, None, "tools/list").status_code == 401
+        listed = _mcp_rpc(client, refreshed.json()["access_token"], "tools/list")
+        assert listed.status_code == 200, listed.text
+        body = (
+            listed.json()
+            if listed.headers["content-type"].startswith("application/json")
+            else next(
+                json.loads(line[6:])
+                for line in listed.text.splitlines()
+                if line.startswith("data: ")
+            )
+        )
+        assert "result" in body, body
+
+
 def _iter_route_paths(routes):
     """Yield every Route ``path`` in an assembled app, descending into mounts."""
     for route in routes:

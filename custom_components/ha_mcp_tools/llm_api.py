@@ -51,6 +51,7 @@ import copy
 import importlib
 import logging
 import math
+import sys
 from collections import Counter
 from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -392,7 +393,9 @@ def _transport_error_leaves() -> tuple[type[BaseException], ...]:
     from our asyncio.timeout budget. HTTP-client errors and the protocol-level
     MCP error can also escape a session call UNWRAPPED (HA core's mcp
     integration catches both the same way); SDK 1.x raises ``httpx`` /
-    ``McpError``, 2.x raises ``httpx2`` / ``MCPError``, all imported lazily.
+    ``McpError``, 2.x raises ``httpx2`` / ``MCPError``. Read from ``sys.modules``:
+    the SDK already imported whichever it raised from, and this runs on the
+    event loop, where an import is a blocking call.
     """
     errors: list[type[BaseException]] = [TimeoutError, OSError]
     for module_name, attribute in (
@@ -401,9 +404,8 @@ def _transport_error_leaves() -> tuple[type[BaseException], ...]:
         ("mcp", "McpError"),
         ("mcp", "MCPError"),
     ):
-        try:
-            module = importlib.import_module(module_name)
-        except ImportError:
+        module = sys.modules.get(module_name)
+        if module is None:
             continue
         error_class = getattr(module, attribute, None)
         if isinstance(error_class, type) and error_class not in errors:

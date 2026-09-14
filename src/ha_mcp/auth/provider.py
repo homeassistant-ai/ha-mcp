@@ -16,15 +16,17 @@ import os
 import secrets
 import time
 from base64 import urlsafe_b64decode, urlsafe_b64encode
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from pydantic import AnyHttpUrl, ValidationError
+from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from ha_mcp._vendor.fastmcp.server.auth.auth import (
     AccessToken,  # FastMCP version has claims field
@@ -51,6 +53,34 @@ logger = logging.getLogger(__name__)
 AUTH_CODE_EXPIRY_SECONDS = 5 * 60  # 5 minutes
 ACCESS_TOKEN_EXPIRY_SECONDS = 60 * 60  # 1 hour
 REFRESH_TOKEN_EXPIRY_SECONDS = 7 * 24 * 60 * 60  # 7 days
+
+
+class _StampIssOnErrorRedirects:
+    """ASGI wrapper that stamps ``iss`` on the error redirects of the app it wraps.
+
+    The SDK serves ``/authorize`` as an ASGI app (body-limit middleware around
+    the handler), so the stamp is applied to the response headers as they are
+    sent rather than to a returned ``Response``.
+    """
+
+    def __init__(self, app: ASGIApp, stamp: Callable[[str], str]) -> None:
+        self.app = app
+        self.stamp = stamp
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        async def send_stamped(message: Message) -> None:
+            if message["type"] == "http.response.start" and message["status"] in (
+                302,
+                303,
+                307,
+            ):
+                headers = MutableHeaders(scope=message)
+                location = headers.get("location", "")
+                if location and "error" in parse_qs(urlparse(location).query):
+                    headers["location"] = self.stamp(location)
+            await send(message)
+
+        await self.app(scope, receive, send_stamped)
 
 
 class HomeAssistantCredentials:
@@ -397,11 +427,8 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         params.append(("iss", self._issuer()))
         return urlunparse(parsed._replace(query=urlencode(params)))
 
-    def _wrap_authorize_with_iss(
-        self, endpoint: "Callable[[Request], Awaitable[Response]]"
-    ) -> "Callable[[Request], Awaitable[Response]]":
-        """Wrap the SDK's ``/authorize`` endpoint to stamp ``iss`` on its
-        error redirects.
+    def _wrap_authorize_with_iss(self, endpoint: ASGIApp) -> ASGIApp:
+        """Wrap the SDK's ``/authorize`` app to stamp ``iss`` on its error redirects.
 
         The SDK's ``AuthorizationHandler`` builds OAuth error authorization
         responses (invalid scope, ``authorize()`` raising after redirect-URI
@@ -410,19 +437,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         is a same-origin redirect to the consent form (no ``error``), which is
         not an authorization response and stays untouched.
         """
-
-        async def authorize_with_iss(request: Request) -> Response:
-            response: Response = await endpoint(request)
-            location = response.headers.get("location", "")
-            if (
-                response.status_code in (302, 303, 307)
-                and location
-                and "error" in parse_qs(urlparse(location).query)
-            ):
-                response.headers["location"] = self._ensure_single_iss(location)
-            return response
-
-        return authorize_with_iss
+        return _StampIssOnErrorRedirects(endpoint, self._ensure_single_iss)
 
     def get_routes(self, mcp_path: str | None = None) -> list[Route]:
         """

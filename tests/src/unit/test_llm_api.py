@@ -1183,6 +1183,23 @@ class TestResultKeysMatchAcrossSdkLines:
         tool = v1.Tool(name="ha_x", inputSchema=schema)
         assert llm_api._tool_input_schema(tool) == schema
 
+    def test_transport_errors_are_read_without_importing(self, monkeypatch):
+        """This runs on the event loop, where Home Assistant flags an import."""
+        import sys
+
+        def _no_import(name):
+            raise AssertionError(f"imported {name} on the event loop")
+
+        monkeypatch.setattr(llm_api.importlib, "import_module", _no_import)
+        loaded = SimpleNamespace(HTTPError=type("HTTPError", (Exception,), {}))
+        monkeypatch.setitem(sys.modules, "httpx2", loaded)
+        monkeypatch.delitem(sys.modules, "mcp", raising=False)
+
+        leaves = llm_api._transport_error_leaves()
+
+        assert loaded.HTTPError in leaves
+        assert {TimeoutError, OSError} <= set(leaves)
+
 
 class TestExclusiveBoundNormalisation:
     """Issue #2361: an exclusive bound must not reach Core's schema conversion.

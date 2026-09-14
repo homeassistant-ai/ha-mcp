@@ -1838,19 +1838,36 @@ class TestRfc9207ResponseHygiene:
         assert params["code"] == ["abc"]
         assert params["state"] == ["s"]
 
+    @staticmethod
+    async def _location(app) -> str:
+        """Run an ASGI app (as the SDK serves ``/authorize``) and return Location."""
+        messages: list[dict] = []
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            messages.append(message)
+
+        await app(
+            {"type": "http", "method": "GET", "path": "/authorize", "headers": []},
+            receive,
+            send,
+        )
+        start = next(m for m in messages if m["type"] == "http.response.start")
+        return dict(start["headers"])[b"location"].decode()
+
     @pytest.mark.asyncio
     async def test_authorize_wrap_stamps_iss_on_error_redirect(self, provider):
         from starlette.responses import RedirectResponse
 
-        async def sdk_endpoint(request):
-            return RedirectResponse(
-                "https://client.example/cb?error=invalid_scope&state=s",
-                status_code=302,
-            )
+        sdk_app = RedirectResponse(
+            "https://client.example/cb?error=invalid_scope&state=s",
+            status_code=302,
+        )
 
-        wrapped = provider._wrap_authorize_with_iss(sdk_endpoint)
-        response = await wrapped(MagicMock())
-        params = parse_qs(urlparse(response.headers["location"]).query)
+        wrapped = provider._wrap_authorize_with_iss(sdk_app)
+        params = parse_qs(urlparse(await self._location(wrapped)).query)
         assert params["iss"] == [provider._issuer()]
         assert params["error"] == ["invalid_scope"]
         assert params["state"] == ["s"]
@@ -1861,9 +1878,7 @@ class TestRfc9207ResponseHygiene:
 
         consent_url = "http://localhost:8086/consent?txn_id=t1"
 
-        async def sdk_endpoint(request):
-            return RedirectResponse(consent_url, status_code=302)
-
-        wrapped = provider._wrap_authorize_with_iss(sdk_endpoint)
-        response = await wrapped(MagicMock())
-        assert response.headers["location"] == consent_url
+        wrapped = provider._wrap_authorize_with_iss(
+            RedirectResponse(consent_url, status_code=302)
+        )
+        assert await self._location(wrapped) == consent_url
