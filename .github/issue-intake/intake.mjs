@@ -96,6 +96,12 @@ export function validateSchema(value, spec = schema, path = "result") {
 
 export function validateResult(result, context) {
   validateSchema(result);
+  if (
+    !/^(english|en(?:-[a-z]{2})?)$/i.test(result.language.trim()) &&
+    !result.translation.length
+  ) {
+    throw Error("Non-English reports require an English translation");
+  }
   const sources = new Map(context.sources.map((s) => [s.source_id, s]));
   for (const item of [
     ...result.summary,

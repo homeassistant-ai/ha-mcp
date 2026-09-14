@@ -27,9 +27,21 @@ test("bare model URLs are not autolinks but source citations remain usable", () 
   const r = result();
   r.summary[0].text = "See https://evil.test/path and www.evil.test";
   const text = render(r, prepare(snapshot(), bot));
-  assert.ok(!text.includes("https://evil.test"));
-  assert.ok(!text.includes("www.evil.test"));
-  assert.ok(text.includes("[source](https://github.com/test/repo/issues/1)"));
+  assert.match(text, /https\[:\]\/\/evil\.test\/path/);
+  assert.match(text, /www\[\.\]evil\.test/);
+  assert.match(
+    text,
+    /\[source\]\(https:\/\/github\.com\/test\/repo\/issues\/1\)/,
+  );
+});
+
+test("non-English reports require an English translation", () => {
+  const r = result();
+  r.language = "Italian";
+  assert.throws(
+    () => validateResult(r, makeContext(snapshot())),
+    /translation/,
+  );
 });
 
 test("a failed permission lookup does not skip later confirmed issues", async () => {
