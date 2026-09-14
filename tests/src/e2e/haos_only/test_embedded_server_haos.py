@@ -66,7 +66,7 @@ _READY_TIMEOUT_S = 600
 _READY_POLL_S = 5
 
 # The module-scoped fixture's bring-up wait runs during the FIRST test item, so
-# that item's pytest-timeout must exceed the poll budget. pytest.ini's global
+# that item's pytest-timeout must exceed the poll budget. The root pytest configuration's global
 # timeout=300 is fine on the fast container lane (which never actually waits that
 # long) but would kill a legitimately slower HAOS install mid-poll; override it
 # to sit just above _READY_TIMEOUT_S. The fixture's own 600s AssertionError still

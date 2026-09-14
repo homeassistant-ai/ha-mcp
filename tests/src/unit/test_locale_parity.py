@@ -837,7 +837,7 @@ def test_connect_local_lan_quotes_the_bind_host_option() -> None:
     assert checked > 1, (
         "no translated catalog carries common.connect_local_lan at all — the "
         "check above covered only English, which is the 'guard that silently "
-        "stopped running' shape tests/pytest.ini exists to prevent"
+        "stopped running' shape guarded by the root pytest configuration"
     )
 
 

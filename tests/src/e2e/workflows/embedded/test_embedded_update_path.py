@@ -104,7 +104,7 @@ _API_READY_TIMEOUT_S = 120
 # is backend-agnostic and must run whatever E2E_BACKEND the CI job selects (its
 # dedicated job leaves it unset so the unavoidable autouse session backend boots
 # the cheap container variant) — those markers would skip it on some backends.
-# ``timeout``: pytest.ini sets ``timeout_func_only = true``, so this per-test
+# ``timeout``: the root pytest configuration sets ``timeout_func_only = true``, so this per-test
 # marker bills ONLY the test FUNCTION — fixture setup (the phase-1 bring-up and
 # its PyPI install) is never counted against it, and the fixture's own poll
 # deadlines self-enforce there. The ceiling therefore only needs to cover the
