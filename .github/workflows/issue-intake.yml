@@ -2,7 +2,7 @@ name: Document issue reports
 
 on:
   issues:
-    types: [opened, edited, reopened, unlabeled]
+    types: [opened, edited, reopened, labeled, unlabeled, locked, unlocked]
   issue_comment:
     types: [created, edited, deleted]
   workflow_dispatch:
@@ -21,22 +21,50 @@ permissions:
   contents: read
   issues: read
 
-# The same subscription refresh token is used by the other Codex callers.
-concurrency:
-  group: codex-auth-${{ github.repository }}
-  cancel-in-progress: false
-  queue: max
-
 jobs:
-  document:
+  admit:
     if: >-
       github.repository == 'homeassistant-ai/ha-mcp' &&
       !github.event.issue.pull_request &&
       (!github.event.comment || github.event.comment.user.type != 'Bot') &&
       github.event.sender.type != 'Bot' && github.actor != 'ghhamcp' &&
-      (github.event.action != 'unlabeled' || github.event.label.name == 'needs-info')
+      (!contains(fromJSON('["labeled","unlabeled"]'), github.event.action) || github.event.label.name == 'needs-info')
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    concurrency:
+      group: issue-intake-admit-${{ github.repository }}-${{ github.event.issue.number || inputs.issue_number }}
+      cancel-in-progress: true
+    outputs:
+      run: ${{ steps.admission.outputs.run }}
+    steps:
+      - name: Coalesce issue activity before entering the auth queue
+        run: sleep 15
+      - name: Checkout trusted admission code
+        timeout-minutes: 2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: .github
+      - name: Check command and dispatch admission
+        id: admission
+        timeout-minutes: 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HA_MCP_APP_SLUG: ${{ vars.HA_MCP_APP_SLUG }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: node .github/issue-intake/intake.mjs admit
+
+  document:
+    needs: admit
+    if: needs.admit.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 27
+    # Never cancel an active OAuth consumer to coalesce issue events.
+    concurrency:
+      group: codex-auth-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
     env:
       HA_MCP_APP_SLUG: ${{ vars.HA_MCP_APP_SLUG }}
     steps:

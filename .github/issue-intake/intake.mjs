@@ -50,7 +50,7 @@ const evidence = array(
 );
 const statement = object({ text: string(1200), evidence });
 export const schema = object({
-  language: string(60),
+  needs_translation: { type: "boolean" },
   summary: array(statement, 5, 1),
   translation: array(statement, 8),
   agreed_scope: array(statement, 5),
@@ -63,7 +63,10 @@ export const schema = object({
     fields.length,
   ),
   missing_fields: array({ type: "string", enum: fields }, fields.length),
-  already_requested: array({ type: "string", enum: fields }, fields.length),
+  already_requested: array(
+    object({ field: { type: "string", enum: fields }, evidence }),
+    fields.length,
+  ),
 });
 
 export function validateSchema(value, spec = schema, path = "result") {
@@ -85,6 +88,8 @@ export function validateSchema(value, spec = schema, path = "result") {
     )
       throw Error(`${path}: invalid array length`);
     value.forEach((v, i) => validateSchema(v, spec.items, `${path}[${i}]`));
+  } else if (spec.type === "boolean") {
+    if (typeof value !== "boolean") throw Error(`${path}: expected boolean`);
   } else if (
     typeof value !== "string" ||
     (spec.enum && !spec.enum.includes(value)) ||
@@ -97,23 +102,47 @@ export function validateSchema(value, spec = schema, path = "result") {
 
 export function validateResult(result, context) {
   validateSchema(result);
-  if (
-    !/^(english|en(?:-[a-z]{2})?)$/i.test(result.language.trim()) &&
-    !result.translation.length
-  ) {
+  if (result.needs_translation && !result.translation.length) {
     throw Error("Non-English reports require an English translation");
   }
   const sources = new Map(context.sources.map((s) => [s.source_id, s]));
-  for (const item of [
-    ...result.summary,
-    ...result.translation,
-    ...result.agreed_scope,
-    ...result.facts,
+  const normalize = (text) => text.replace(/\r\n/g, "\n");
+  for (const key of [
+    "summary",
+    "translation",
+    "agreed_scope",
+    "facts",
+    "already_requested",
   ]) {
-    for (const e of item.evidence) {
-      if (!sources.get(e.source_id)?.text.includes(e.quote) || !e.quote.trim())
-        throw Error("Evidence must quote a supplied source exactly");
+    for (const [index, item] of result[key].entries()) {
+      for (const [position, e] of item.evidence.entries()) {
+        const source = sources.get(e.source_id);
+        if (
+          !source ||
+          !normalize(source.text).includes(normalize(e.quote)) ||
+          !e.quote.trim()
+        )
+          throw Error(
+            `${key}[${index}].evidence[${position}]: quote does not match ${source ? e.source_id : "a supplied source_id"}`,
+          );
+      }
     }
+  }
+  for (const [index, fact] of result.facts.entries()) {
+    if (
+      !fact.evidence.some((e) =>
+        normalize(e.quote).includes(normalize(fact.value)),
+      )
+    )
+      throw Error(
+        `facts[${index}].value: must be an excerpt from its evidence`,
+      );
+  }
+  for (const [index, requested] of result.already_requested.entries()) {
+    if (!result.missing_fields.includes(requested.field))
+      throw Error(`already_requested[${index}]: must remain in missing_fields`);
+    if (!requested.evidence.some((e) => sources.get(e.source_id)?.maintainer))
+      throw Error(`already_requested[${index}]: requires maintainer evidence`);
   }
   for (const item of result.agreed_scope) {
     if (!item.evidence.some((e) => sources.get(e.source_id)?.maintainer))
@@ -121,7 +150,10 @@ export function validateResult(result, context) {
   }
   // Several affected tools or clients are legitimate separate sourced facts.
   // Only the question/control field lists require uniqueness.
-  for (const values of [result.missing_fields, result.already_requested]) {
+  for (const values of [
+    result.missing_fields,
+    result.already_requested.map((r) => r.field),
+  ]) {
     if (new Set(values).size !== values.length) throw Error("Duplicate field");
   }
   if (result.facts.some((f) => result.missing_fields.includes(f.field)))
@@ -130,13 +162,16 @@ export function validateResult(result, context) {
 }
 
 export class GitHub {
+  constructor(execute = execFileSync) {
+    this.execute = execute;
+  }
   request(endpoint, { method = "GET", data, paginate = false } = {}) {
     const args = ["api", endpoint, "--method", method];
     if (paginate) args.push("--paginate", "--slurp");
     if (data !== undefined) args.push("--input", "-");
     let output;
     try {
-      output = execFileSync("gh", args, {
+      output = this.execute("gh", args, {
         input: data === undefined ? undefined : JSON.stringify(data),
         encoding: "utf8",
         maxBuffer: 8 * 1024 * 1024,
@@ -147,7 +182,9 @@ export class GitHub {
       // Do not echo issue bodies, API payloads, or token-bearing stderr into logs.
       const status = /HTTP (\d+)/.exec(String(error.stderr ?? ""))?.[1];
       throw Object.assign(
-        Error(`GitHub ${method} failed${status ? ` (HTTP ${status})` : ""}`),
+        Error(
+          `GitHub ${method} ${endpoint} failed${status ? ` (HTTP ${status})` : ""}`,
+        ),
         { status: Number(status) },
       );
     }
@@ -316,8 +353,8 @@ export function prose(text) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/@/g, "&#64;")
     .replace(/([\\`*_{}\[\]()#!|])/g, "\\$1")
+    .replace(/@/g, "&#64;")
     .replace(/\b([a-z][a-z\d+.-]*):\/\//gi, "$1[:]//")
     .replace(/\bwww\./gi, "www[.]");
 }
@@ -362,7 +399,7 @@ export function render(result, prepared) {
       ),
     );
   const missing = result.missing_fields.filter(
-    (f) => !result.already_requested.includes(f),
+    (f) => !result.already_requested.some((r) => r.field === f),
   );
   if (missing.length) {
     lines.push(
@@ -416,8 +453,12 @@ export async function publish(api, prepared, result, bot, attempt = 0) {
   if (
     fingerprint(latest) !== prepared.digest ||
     !prepare(latest, bot, { force: true }).run
-  )
+  ) {
+    console.log(
+      "::warning::Context changed; publication skipped. A matching event or explicit refresh must process the current state.",
+    );
     return "Context changed; publication skipped";
+  }
   const existing = ownComment(latest, bot);
   const base = `repos/${latest.repository}/issues`;
   const action = labelAction(latest, bot, result);
@@ -480,34 +521,58 @@ export async function publish(api, prepared, result, bot, attempt = 0) {
   return "Issue documentation updated";
 }
 
-export async function main(command) {
-  const api = new GitHub();
-  const directory = resolve(".issue-intake");
-  const bot = `${process.env.HA_MCP_APP_SLUG}[bot]`;
+export async function main(command, options = {}) {
+  const api = options.api ?? new GitHub();
+  const env = options.env ?? process.env;
+  const directory = options.directory ?? resolve(".issue-intake");
+  const bot = `${env.HA_MCP_APP_SLUG}[bot]`;
   if (!/^[a-z0-9-]+\[bot\]$/.test(bot) || bot.startsWith("undefined"))
     throw Error("HA_MCP_APP_SLUG is required");
-  if (command === "collect") {
-    const event = JSON.parse(
-      readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"),
-    );
-    const number = Number(process.env.ISSUE_NUMBER || event.issue?.number);
-    if (event.issue?.pull_request || event.sender?.type === "Bot") return;
-    if (process.env.GITHUB_EVENT_NAME === "workflow_dispatch") {
+  if (command === "admit" || command === "collect") {
+    const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8"));
+    const number = Number(env.ISSUE_NUMBER || event.issue?.number);
+    const skip = (reason) => {
+      appendFileSync(env.GITHUB_OUTPUT, "run=false\n");
+      console.log(reason);
+    };
+    if (
+      event.issue?.pull_request ||
+      event.sender?.type === "Bot" ||
+      event.comment?.user?.type === "Bot"
+    )
+      return skip("Bot or PR event ignored");
+    if (
+      event.comment &&
+      /^\/triage (pause|resume|refresh)\s*$/.test(event.comment.body)
+    ) {
+      const actor = event.comment.user?.login;
+      if (!actor) return skip("Command author missing");
+      const permission = await api.request(
+        `repos/${env.GITHUB_REPOSITORY}/collaborators/${encodeURIComponent(actor)}/permission`,
+      );
+      if (!isMaintainer(permission.role_name))
+        return skip("Maintainer command ignored: insufficient role");
+    }
+    if (env.GITHUB_EVENT_NAME === "workflow_dispatch") {
       for (const actor of new Set([
-        process.env.GITHUB_ACTOR,
-        process.env.GITHUB_TRIGGERING_ACTOR,
+        env.GITHUB_ACTOR,
+        env.GITHUB_TRIGGERING_ACTOR,
       ])) {
         if (!actor) throw Error("Missing dispatch actor");
         const permission = await api.request(
-          `repos/${process.env.GITHUB_REPOSITORY}/collaborators/${encodeURIComponent(actor)}/permission`,
+          `repos/${env.GITHUB_REPOSITORY}/collaborators/${encodeURIComponent(actor)}/permission`,
         );
         if (!isMaintainer(permission.role_name))
           throw Error("Maintainer dispatch required");
       }
     }
-    const snapshot = await collect(api, process.env.GITHUB_REPOSITORY, number);
+    if (command === "admit") {
+      appendFileSync(env.GITHUB_OUTPUT, "run=true\n");
+      return;
+    }
+    const snapshot = await collect(api, env.GITHUB_REPOSITORY, number);
     const prepared = prepare(snapshot, bot, {
-      force: process.env.GITHUB_EVENT_NAME === "workflow_dispatch",
+      force: env.GITHUB_EVENT_NAME === "workflow_dispatch",
     });
     mkdirSync(directory, { recursive: true });
     if (prepared.run) {
@@ -518,19 +583,19 @@ export async function main(command) {
       writeFileSync(resolve(directory, "prompt.txt"), prompt(prepared.context));
       writeFileSync(resolve(directory, "schema.json"), JSON.stringify(schema));
     }
-    appendFileSync(process.env.GITHUB_OUTPUT, `run=${prepared.run}\n`);
+    appendFileSync(env.GITHUB_OUTPUT, `run=${prepared.run}\n`);
     console.log(prepared.run ? "Human context collected" : prepared.reason);
   } else if (command === "publish") {
-    if (process.env.TOKEN_APP_SLUG !== process.env.HA_MCP_APP_SLUG)
+    if (env.TOKEN_APP_SLUG !== env.HA_MCP_APP_SLUG)
       throw Error("Installation token belongs to a different App");
     const prepared = JSON.parse(
       readFileSync(resolve(directory, "prepared.json"), "utf8"),
     );
-    if (prepared.snapshot.repository !== process.env.GITHUB_REPOSITORY)
+    if (prepared.snapshot.repository !== env.GITHUB_REPOSITORY)
       throw Error("Publication repository mismatch");
-    const result = JSON.parse(readFileSync(process.env.OUTPUT_PATH, "utf8"));
+    const result = JSON.parse(readFileSync(env.OUTPUT_PATH, "utf8"));
     console.log(await publish(api, prepared, result, bot));
-  } else throw Error("Expected collect or publish");
+  } else throw Error("Expected admit, collect or publish");
 }
 
 if (

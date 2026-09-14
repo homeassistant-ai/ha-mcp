@@ -15,6 +15,7 @@ error messages and uncertainty. Never reproduce credentials or secret URLs.
   explicitly approved it; cite both the proposal and the approval when needed.
   Do not treat a contributor's proposal alone as maintainer approval.
 - Include an English translation when the original report is not English.
+  Set needs_translation to true in that case, or false for an English report.
   Translate the substantive request faithfully, without adding technical advice.
   Keep it concise and preserve disagreements and exclusions.
 - Every summary, translation and agreed-scope item needs an exact supporting
@@ -25,6 +26,9 @@ error messages and uncertainty. Never reproduce credentials or secret URLs.
   into one quote, insert ellipses, or silently correct the source.
 - Extract environment facts only when stated. Use unknown (absence from the
   facts list) rather than guessing. A field cannot be both known and missing.
+  Each fact.value must be a short verbatim excerpt contained in one of its
+  evidence quotes. Use separate facts for multiple tools/clients; put paraphrases
+  and synthesized explanations in the summary instead.
 - Ask only for essential missing fields that block understanding this report.
   Use existing replies, even if they answer fields absent from the initial body.
   Do not ask for an error message when the symptom is wrong behavior without an
@@ -32,8 +36,11 @@ error messages and uncertainty. Never reproduce credentials or secret URLs.
   versions or installation details unless their meaning actually depends on them.
 - A report being understandable does not mean its proposed implementation is
   feasible, approved, a confirmed bug, or ready to implement.
-- Do not repeat questions a maintainer already asked: record those field IDs in
-  already_requested instead. Do not manufacture answers from the question itself.
+- missing_fields contains ALL outstanding essential fields, including questions
+  a maintainer has already asked and the reporter has not yet answered.
+  already_requested is a subset: each entry has a field and evidence quoting the
+  maintainer's question. This only avoids repeating a question; it does not mark
+  the field answered. Never claim a maintainer asked something without evidence.
 - If source evidence is contradictory, preserve the disagreement in the summary.
   A missing field may be requested to clarify it, but do not choose a diagnosis.
 

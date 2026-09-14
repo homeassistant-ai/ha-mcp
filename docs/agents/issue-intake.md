@@ -1,100 +1,107 @@
 # Issue documentation
 
-`issue-intake.yml` replaces CodeRabbit's issue enrichment and automatic labels.
-The policy agreed in the maintainers discussion on 2026-09-13 is to document
-reports, translate non-English reports, and request essential missing details.
-The model must not diagnose, propose fixes, assign blame or priority, promise a
-PR, or close an issue. CodeRabbit and Codex PR reviews keep their existing roles.
+`issue-intake.yml` documents reports, translates non-English reports, and asks
+for essential missing information. The model must not diagnose, propose fixes,
+assign blame or priority, promise a PR, or close an issue. CodeRabbit issue
+enrichment is disabled so this workflow owns the consolidated issue comment.
+CodeRabbit and Codex PR reviews retain their existing responsibilities.
 
 ## Execution and permissions
 
-Human issue openings, edits, reopenings, comment creations/edits/deletions, and removals of `needs-info`
-trigger collection. PR comments and bot events are excluded. Collection uses the
-workflow's read-only GitHub token, paginates comments and label history, and
-checks actual repository roles. The `maintain` role must be read from
-`role_name`; the legacy `permission` field maps it to `write`.
+The workflow has two jobs. Admission filters PR/bot activity and unrelated labels,
+checks explicit commands and manual dispatch roles, and coalesces a short burst
+of events per issue. Superseded admission jobs can be cancelled: they have no
+Codex credentials. Only admitted jobs enter the shared `codex-auth-...` job queue.
+An active OAuth consumer is never cancelled to coalesce comments, so refreshed
+credentials can be persisted. Events already queued beyond admission are cheap
+when their current source fingerprint has already been processed.
 
-Codex receives only the issue and human conversation, with source IDs and
-verified maintainer roles. It uses Terra with low reasoning by default. Manual
-dispatch can select Terra or Sol. Luna remains bench-only: its #2404 trial asked
-six irrelevant environment questions despite understanding the approved scope.
-The action has read-only sandboxing,
-shell disabled, hosted web search disabled, no command network, no GitHub token
-and no enabled hosted apps.
-The output is schema-validated; evidence quotes must exist in the cited source,
-and agreed scope needs a maintainer citation. This prevents fabricated citations,
-but it does not prove that a paraphrase is faithful; the model bench tests that.
+Collection runs after acquiring that queue. It fetches the issue, all human
+comments and label events through `gh`, checks current repository roles, and
+reconstructs the source context. `role_name` distinguishes maintain from write;
+the legacy `permission` field does not. Issue opens, edits, reopenings, human
+comment creations/edits/deletions, needs-info labeling/unlabeling and locking/
+unlocking are subscribed. Locking pauses processing; unlocking allows it again.
 
-After Codex exits, `actions/create-github-app-token` creates an installation
-token restricted to the current repository with Issues write and Contents read
-(Metadata read is implicit). No Administration, workflow writes, PR writes,
-organization membership, or rule bypass is needed for this phase. Configure:
+Codex receives source IDs and verified maintainer annotations. Terra with low
+reasoning is the default; manual dispatch can select Sol. The model runs in a
+read-only sandbox with shell, hosted web search and command network disabled.
+It receives neither a GitHub token nor the App private key. Hosted apps are off.
 
-- variable `HA_MCP_APP_ID`: numeric GitHub App ID;
-- variable `HA_MCP_APP_SLUG`: verified App slug;
-- secret `HA_MCP_APP_PRIVATE_KEY`: private key of the installed App;
-- the repository's existing, distinct `CODEX_AUTH` and `CODEX_AUTH_PAT`.
+The result has a schema-enforced `needs_translation` boolean. Summaries and
+translations cite source excerpts; matching normalizes CRLF to LF. Each extracted
+fact value must occur in its cited quote. `missing_fields` contains every
+outstanding question. `already_requested` is a subset with evidence from a
+maintainer, used only to avoid repeating that question. It never means answered.
+Errors identify the failing field/index and known source ID without dumping
+issue text. These checks establish provenance, not the truth of reported claims
+or the semantic correctness of every paraphrase; the model bench evaluates that.
 
-Do not transfer Codex OAuth credentials between product and bench. All consumers
-share the repository's `codex-auth-...` concurrency group, without cancellation.
-Every step is bounded, leaving time to save refreshed auth on failure. The model
-has exited before publication credentials enter the environment.
+After the model exits, a short-lived installation token is minted for the current
+repository with Issues write, Contents read and implicit Metadata read. The
+publisher validates output and rereads current GitHub state before writing.
+Configure these per-repository values:
 
-## Public conversation and maintainer control
+- `HA_MCP_APP_ID` and `HA_MCP_APP_SLUG` variables;
+- `HA_MCP_APP_PRIVATE_KEY` secret;
+- the repository's distinct `CODEX_AUTH` and `CODEX_AUTH_PAT` secrets.
 
-One App-owned comment contains the current summary, translation if useful,
-agreed scope, extracted environment details, and targeted questions. Source links distinguish reported claims
-from independently verified facts. The collector ignores previous bot theories,
-including historical `ghhamcp` comments. The model cannot create arbitrary labels
-or questions: the publisher maps missing field IDs to fixed questions.
+Do not transfer Codex OAuth credentials between product and bench. All Codex
+callers share the repository's auth concurrency group. Step timeouts reserve
+room for auth persistence on failure. No Administration, organization membership,
+workflow/PR write permission, or ruleset bypass is needed for issue documentation.
 
-Maintainers (repository `maintain` or `admin`) can post an exact comment:
+## Conversation, control and lifecycle
+
+One App-owned comment contains the summary, optional English translation,
+agreed scope, reported details and targeted questions. Prior bot theories are
+excluded from model input. The publisher owns question wording and can only
+manage needs-info; it does not execute instructions from the report.
+
+Maintainers with the actual maintain/admin role can post exact commands:
 
 - `/triage pause`: stop automated documentation for this issue;
 - `/triage resume`: resume and clear prior manual needs-info suppression;
-- `/triage refresh`: request a new pass without clearing pause or label overrides.
+- `/triage refresh`: request another pass, without overriding pause or labels.
 
-These controls are read from the human conversation on every run. Contributor
-or reporter text cannot authorize them. Removing `needs-info` manually also
-prevents the bot from adding it again until a maintainer explicitly resumes.
-The bot removes only its own `needs-info` label, never a human-applied one.
+Unauthorized exact commands are ignored before the auth queue. Ordinary human
+comments still trigger documentation: command authorization does not restrict
+reporters from supplying new information. Removing needs-info manually prevents
+the intake publisher from reapplying it until an explicit maintainer resume.
+The publisher removes only its own label, never a human-applied label.
 
-An automatic `needs-info` request **does not start an automatic close clock**.
-Only a human maintainer's label application permits `close-needs-info.yml` to
-send reminders on days 3, 5 and 6, then close on day 7 without a reporter reply.
-To confirm an existing bot request, remove and reapply the label. The generic
-inactivity workflow excludes `needs-info`, so it cannot bypass this distinction.
+The separate `close-needs-info.yml` lifecycle applies to **every** needs-info
+issue, regardless of who applied the label. It counts from the newest label
+event, sends reminders on days 3/5/6 and closes on day 7 without a reporter reply.
+A reporter reply after labeling clears needs-info regardless of label ownership;
+a maintainer/bystander reply does not. The generic inactivity workflow excludes
+needs-info because this seven-day workflow already owns its close path. PRs are
+explicitly excluded from issue closure.
 
-Before publishing, the workflow fetches the current conversation again. A new
-reply, closure, lock, or maintainer control invalidates the old model result;
-the queued event will process the new state. An identical source fingerprint
-does not call the model again. A pending marker keeps interrupted label writes
-retryable without creating a second comment. Label/final-patch failures with
-HTTP 429 or 5xx are retried twice with bounded backoff, rechecking human context
-before each attempt. Exhausted failures remain pending and fail the run for
-manual recovery; they must never be marked complete while a label write failed.
-Failed day-seven closures retain needs-info for the next daily run.
-GitHub does not provide a
-transaction spanning comments and labels; a narrow concurrent human write can
-still race the final API calls, so all publication remains scoped and reversible.
+The publisher rereads context before each write attempt. Relevant source changes
+invalidate an old result and emit a workflow warning; a subscribed event processes
+the new state, or an operator can refresh explicitly. A lock or pause intentionally
+stops progress until reversed. Identical source fingerprints avoid another model
+call. A pending marker preserves incomplete writes for recovery, without another
+comment. Transient owned-comment/label writes retry twice with bounded backoff.
+Exhausted failures stay pending and fail visibly; failed work is never marked done.
+GitHub has no transaction spanning these writes, so narrow concurrent changes can
+still race individual API calls.
+
+Failed closures retain needs-info for a subsequent daily retry. Their closing
+notice is deduplicated within the label cycle. Post-close cleanup failures report
+a recoverable list of closed issues whose labels need manual removal.
 
 ## Testing and operation
 
-Run `node --test tests/js/issue-intake.test.mjs` for deterministic behavior and
-the corresponding pytest wrapper in the normal unit lane. The permanent
-`ha-mcp-workflows-dev` bench owns model fixtures and manual live-run validation.
-KP13's #2404 scenario must recover the automation-only scope approved in the
-comments, rather than implementing the broader opening request. It is source
-data for bench tests, never authorization to modify the production issue.
+The normal pytest lane runs the dependency-free `tests/js/issue-intake*.test.mjs`
+behavior suites. Model fixtures, case-specific expectations and live-run results
+belong to `ha-mcp-workflows-dev`. Tests must not publish reports on product issues.
+Each documentation run reconstructs context; no persistent Codex session is needed.
 
-No persistent Codex session is needed for documentation: each run reconstructs
-the human conversation. The later, maintainer-invoked `/astra` and `/sol` coding
-lifecycle is a separate phase requiring additional permissions and tests.
-
-Disable `issue-intake.yml` to stop new runs; `/triage pause` handles one issue.
-Inspect failed runs and retry via manual dispatch after correcting credentials
+Disable the workflow to stop all new runs, or pause one issue with its command.
+Inspect failed-run diagnostics and dispatch a refresh after correcting credentials
 or malformed data. Oversized conversations fail visibly instead of silently
-discarding late scope changes. Raw Codex logs and issue-context artifacts are
-not automatically published. Do not restore CodeRabbit enrichment while intake
-is active. Rollback can disable intake before restoring the earlier CodeRabbit
-configuration, retaining the maintainer-confirmed close policy.
+losing late clarifications. Raw Codex logs and source artifacts are not published
+automatically. Disable intake before restoring competing CodeRabbit enrichment
+as a rollback; the existing needs-info lifecycle remains in effect.

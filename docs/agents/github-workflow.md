@@ -65,7 +65,7 @@ Triage-state labels:
 |---|---|
 | `ready-to-implement` | Clear path with no unresolved decisions. |
 | `needs-choices` | Multiple approaches need stakeholder input. |
-| `needs-info` | Awaiting the reporter. Only a human maintainer label application starts reminders and day-7 closure; automated requests do not. See [issue intake](issue-intake.md). |
+| `needs-info` | Awaiting the reporter. Any label application starts reminders on days 3/5/6 and closure on day 7; a reporter reply after labeling removes it. See [issue intake](issue-intake.md). |
 | `priority: high/medium/low` | Relative priority. |
 | `triaged` | Historical marker from the retired triage bot. |
 | `triage-failed` | Historical failure marker from the retired triage bot. |

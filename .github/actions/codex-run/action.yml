@@ -34,9 +34,9 @@ inputs:
     required: false
     default: "false"
   web-search:
-    description: Hosted web search mode, independent of command network access (disabled, cached, or live).
+    description: Hosted web search override, independent of command network access. Empty preserves the CLI default.
     required: false
-    default: cached
+    default: ""
   passthrough-env:
     description: Newline-separated environment variable names explicitly granted to commands, e.g. GH_TOKEN. CODEX_* is reserved.
     required: false
@@ -135,9 +135,9 @@ runs:
           exit 1
         fi
         network_access="${NETWORK_ACCESS_INPUT:-false}"
-        web_search="${WEB_SEARCH_INPUT:-cached}"
+        web_search="${WEB_SEARCH_INPUT:-}"
         case "$web_search" in
-          disabled|cached|live) ;;
+          ""|disabled|cached|live) ;;
           *) echo '::error::web-search must be disabled, cached, or live.'; exit 1 ;;
         esac
         network_access="${network_access,,}"
@@ -376,13 +376,15 @@ runs:
           --profile "$CODEX_ACTION_PROFILE"
           --strict-config
           -c apps._default.enabled=false
-          -c "web_search=\"${CODEX_ACTION_WEB_SEARCH:-cached}\""
           --ephemeral
           --json
           --color never
           --cd "$CODEX_ACTION_WORKDIR"
           --output-last-message "$CODEX_ACTION_OUTPUT"
         )
+        if [[ -n "${CODEX_ACTION_WEB_SEARCH:-}" ]]; then
+          args+=(-c "web_search=\"$CODEX_ACTION_WEB_SEARCH\"")
+        fi
         if [[ -n "$MODEL_INPUT" ]]; then
           args+=(--model "$MODEL_INPUT")
         fi

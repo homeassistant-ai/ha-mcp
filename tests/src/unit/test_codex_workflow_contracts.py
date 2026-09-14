@@ -375,6 +375,11 @@ def test_default_capabilities_do_not_grant_network_or_extra_env(tmp_path):
     config = tomllib.loads(profile.read_text())
     assert config["permissions"]["ci-action"]["network"]["enabled"] is False
     assert config["shell_environment_policy"]["set"] == {}
+    assert "CODEX_ACTION_WEB_SEARCH=\n" in (tmp_path / "env").read_text()
+    assert (
+        load(".github/actions/codex-run/action.yml")["inputs"]["web-search"]["default"]
+        == ""
+    )
 
 
 def test_invalid_network_access_is_rejected(tmp_path):
@@ -384,7 +389,10 @@ def test_invalid_network_access_is_rejected(tmp_path):
 
 
 @pytest.mark.parametrize("status", [0, 124, 137, 42])
-def test_agent_returns_status_and_private_log_without_publishing(tmp_path, status):
+@pytest.mark.parametrize("web_search", ["", "disabled"])
+def test_agent_returns_status_and_private_log_without_publishing(
+    tmp_path, status, web_search
+):
     (tmp_path / "instructions").write_text("caller instructions")
     script = r"""
     timeout() { shift 3; "$@"; }
@@ -400,7 +408,7 @@ def test_agent_returns_status_and_private_log_without_publishing(tmp_path, statu
         CODEX_ACTION_INSTRUCTIONS=posix(tmp_path / "instructions"),
         CODEX_ACTION_SCHEMA="",
         CODEX_ACTION_ALLOW_SHELL="false",
-        CODEX_ACTION_WEB_SEARCH="disabled",
+        CODEX_ACTION_WEB_SEARCH=web_search,
         CODEX_ACTION_TIMEOUT_MINUTES="1",
         MODEL_INPUT="gpt-6-astra",
         REASONING_EFFORT_INPUT="low",
@@ -414,10 +422,12 @@ def test_agent_returns_status_and_private_log_without_publishing(tmp_path, statu
         "--strict-config",
         "--ephemeral",
         "apps._default.enabled=false",
-        'web_search="disabled"',
         "shell_tool",
     ]:
         assert flag in args
+    assert ('web_search="disabled"' in args) == bool(web_search)
+    if not web_search:
+        assert not any(arg.startswith("web_search=") for arg in args)
     assert (tmp_path / "stdin.txt").read_text() == "caller instructions"
     if status:
         assert b"::error::" in result.stdout

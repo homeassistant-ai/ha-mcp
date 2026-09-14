@@ -372,83 +372,13 @@ test("bare model URLs are not autolinks but source citations remain usable", () 
 
 test("non-English reports require an English translation", () => {
   const r = result();
-  r.language = "Italian";
+  r.needs_translation = true;
   assert.throws(
     () => validateResult(r, makeContext(snapshot())),
     /translation/,
   );
 });
 
-test("a failed permission lookup does not skip later confirmed issues", async () => {
-  const yaml = readFileSync(
-    new URL("../../.github/workflows/close-needs-info.yml", import.meta.url),
-    "utf8",
-  );
-  const code = yaml
-    .split("script: |\n")[1]
-    .split("\n")
-    .map((line) => line.replace(/^ {12}/, ""))
-    .join("\n");
-  for (const status of [404, 500]) {
-    const closed = [];
-    const github = {
-      rest: {
-        issues: {
-          listForRepo: "issues",
-          listEvents: "events",
-          listComments: "comments",
-          createComment: async () => {},
-          removeLabel: async () => {},
-          update: async (p) => closed.push(p.issue_number),
-        },
-        repos: {
-          getCollaboratorPermissionLevel: async (p) => {
-            if (p.username === "removed")
-              throw Object.assign(Error("Lookup failed"), { status });
-            return { data: { role_name: "maintain" } };
-          },
-        },
-      },
-      paginate: async (kind, p) =>
-        kind === "issues"
-          ? [1, 2].map((number) => ({
-              number,
-              title: "Fixture",
-              user: user("reporter"),
-            }))
-          : kind === "comments"
-            ? []
-            : [
-                {
-                  id: 1,
-                  event: "labeled",
-                  label: { name: "needs-info" },
-                  actor: user(p.issue_number === 1 ? "removed" : "maintainer"),
-                  created_at: "2020-01-01T00:00:00Z",
-                },
-              ],
-    };
-    const run = new Function(
-      "github",
-      "context",
-      "core",
-      `return (async () => {${code}})()`,
-    )(
-      github,
-      { repo: { owner: "test", repo: "repo" } },
-      {
-        info() {},
-        warning() {},
-        setFailed(message) {
-          throw Error(message);
-        },
-      },
-    );
-    if (status === 500) await assert.rejects(run, /permission/i);
-    else await run;
-    assert.deepEqual(closed, [2]);
-  }
-});
 const user = (login) => ({ login, type: "User" });
 const comment = (id, login, body, extra = {}) => ({
   id,
@@ -478,7 +408,7 @@ function snapshot() {
 }
 function result() {
   return {
-    language: "English",
+    needs_translation: false,
     summary: [
       {
         text: "The reporter says the dashboard call hangs.",
@@ -644,8 +574,22 @@ test("render neutralizes model mentions and links and avoids repeating questions
   const r = result();
   r.summary[0].text =
     "@maintainer ![track](https://evil.test) <script>payload</script>";
-  r.already_requested = ["install_method"];
-  const text = render(r, prepare(snapshot(), bot));
+  const s = snapshot();
+  s.comments.push(
+    comment(1, "maintainer", "Please provide installation method."),
+  );
+  r.already_requested = [
+    {
+      field: "install_method",
+      evidence: [
+        {
+          source_id: "comment-1",
+          quote: "Please provide installation method.",
+        },
+      ],
+    },
+  ];
+  const text = render(r, prepare(s, bot));
   assert.ok(!text.includes("@maintainer"));
   assert.ok(!text.includes("![track]"));
   assert.ok(!text.includes("<script>"));
@@ -766,7 +710,7 @@ test("collection rejects PRs and oversized context rather than dropping late rep
   await assert.rejects(collect(new FakeGitHub(s), "test/repo", 1), /budget/);
 });
 
-test("real close workflow requires a human maintainer label; bot requests never close", async () => {
+test("real close workflow ages needs-info regardless of who applied it", async () => {
   const yaml = readFileSync(
     new URL("../../.github/workflows/close-needs-info.yml", import.meta.url),
     "utf8",
@@ -777,8 +721,10 @@ test("real close workflow requires a human maintainer label; bot requests never 
     .map((line) => line.replace(/^ {12}/, ""))
     .join("\n");
   for (const [actor, role, closes] of [
-    [{ login: bot, type: "Bot" }, "admin", false],
-    [user("writer"), "write", false],
+    [{ login: bot, type: "Bot" }, "admin", true],
+    [user("writer"), "write", true],
+    [user("triager"), "triage", true],
+    [null, "none", true],
     [user("maintainer"), "maintain", true],
   ]) {
     const writes = [];

@@ -22,6 +22,6 @@ jobs:
           days-before-pr-stale: -1
           days-before-pr-close: -1
           exempt-all-assignees: true
-          # needs-info has its own explicitly maintainer-confirmed close policy.
+          # Every needs-info issue has its own seven-day lifecycle workflow.
           exempt-issue-labels: needs-info
           repo-token: ${{ secrets.GITHUB_TOKEN }}

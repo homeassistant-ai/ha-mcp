@@ -49,7 +49,6 @@ jobs:
             // Process the whole batch, then fail visibly. A failed close keeps
             // needs-info so the next daily run can retry it.
             const failedCloses = [];
-            const failedPermissionChecks = [];
             const failedLabelCleanups = [];
 
             for (const issue of issues) {
@@ -70,36 +69,6 @@ jobs:
               if (labelEvents.length === 0) {
                 // The label is on the issue, so an event should always exist.
                 core.warning(`  needs-info present but no labeled event found — skipping`);
-                continue;
-              }
-              // Automated documentation may request details, but only a
-              // maintainer's explicit label application starts a close clock.
-              // Removing and reapplying needs-info is the manual confirmation.
-              const latestLabel = [...labelEvents].sort((a, b) =>
-                new Date(a.created_at) - new Date(b.created_at) || a.id - b.id
-              ).at(-1);
-              if (latestLabel.actor?.type !== 'User' || latestLabel.actor.login === 'ghhamcp') {
-                core.info('  Automated needs-info request — no reminders or automatic close');
-                continue;
-              }
-              let permission;
-              try {
-                permission = await github.rest.repos.getCollaboratorPermissionLevel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  username: latestLabel.actor.login,
-                });
-              } catch (error) {
-                if (error.status === 404) {
-                  core.info('  Label actor no longer has repository access — skipping');
-                } else {
-                  core.warning(`  Permission lookup failed for issue #${issueNumber}`);
-                  failedPermissionChecks.push(issueNumber);
-                }
-                continue;
-              }
-              if (!['maintain', 'admin'].includes(permission.data.role_name)) {
-                core.info('  needs-info has not been confirmed by a maintainer — skipping');
                 continue;
               }
               // Newest by timestamp, not array position — the events endpoint
@@ -124,8 +93,8 @@ jobs:
               // path with the requested info still missing. Re-labeling after an
               // author reply restarts the whole schedule via the label event.
               const authorReplied = comments.some(c =>
-                c.user.type !== 'Bot' &&
-                c.user.login === issue.user.login &&
+                issue.user?.login && c.user?.type !== 'Bot' &&
+                c.user?.login === issue.user.login &&
                 new Date(c.created_at) > labeledDate
               );
               if (authorReplied) {
@@ -247,9 +216,7 @@ jobs:
             if (failedCloses.length > 0) {
               core.setFailed(`Failed to close ${failedCloses.length} issue(s): #${failedCloses.join(', #')}. Each remains open with needs-info retained for the next daily run; a closing notice was already posted.`);
             }
-            if (failedPermissionChecks.length > 0) {
-              core.setFailed(`Permission checks failed for issues #${failedPermissionChecks.join(', #')}; no actions were taken on those issues. Retry after restoring GitHub access.`);
-            }
+
             if (failedLabelCleanups.length > 0) {
               core.setFailed(`Post-close label cleanup failed for issues #${failedLabelCleanups.join(', #')}. These issues are closed; remove needs-info manually after restoring API access.`);
             }
