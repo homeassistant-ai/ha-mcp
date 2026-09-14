@@ -180,7 +180,7 @@ jobs:
               }
               const day = dueDays[dueDays.length - 1];
               const alreadyPosted = comments.some(c =>
-                c.user.login === BOT_LOGIN &&
+                c.user?.login === BOT_LOGIN &&
                 new Date(c.created_at) > labeledDate &&
                 c.body.includes(warningMarker(day))
               );

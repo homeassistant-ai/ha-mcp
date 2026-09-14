@@ -168,6 +168,74 @@ test("an expired needs-info issue with a deleted reporter still has a close path
   );
   assert.deepEqual(writes, ["comment", "close", "remove"]);
 });
+test("deleted comment authors do not interrupt reminders or later issues", async () => {
+  const yaml = readFileSync(
+    new URL("../../.github/workflows/close-needs-info.yml", import.meta.url),
+    "utf8",
+  );
+  const code = yaml
+    .split("script: |\n")[1]
+    .split("\n")
+    .map((line) => line.replace(/^ {12}/, ""))
+    .join("\n");
+  const writes = [];
+  const github = {
+    rest: {
+      issues: {
+        listForRepo: "issues",
+        listEvents: "events",
+        listComments: "comments",
+        createComment: async (args) => writes.push(args),
+        update: async () => assert.fail("No closure before day seven"),
+        removeLabel: async () => assert.fail("No reporter reply was supplied"),
+      },
+    },
+    paginate: async (kind, args) => {
+      if (kind === "issues")
+        return [1, 2].map((number) => ({ ...fixture().issue, number }));
+      if (kind === "events")
+        return [
+          {
+            event: "labeled",
+            label: { name: "needs-info" },
+            created_at: new Date(Date.now() - 3.5 * 86400000).toISOString(),
+          },
+        ];
+      return args.issue_number === 1
+        ? [
+            {
+              user: null,
+              created_at: new Date().toISOString(),
+              body: "<!-- needs-info-warning:3 -->",
+            },
+          ]
+        : [];
+    },
+  };
+  await new Function(
+    "github",
+    "context",
+    "core",
+    `return (async()=>{${code}})()`,
+  )(
+    github,
+    { repo: { owner: "test", repo: "repo" } },
+    {
+      info() {},
+      warning() {},
+      setFailed(message) {
+        throw Error(message);
+      },
+    },
+  );
+  assert.deepEqual(
+    writes.map((args) => args.issue_number),
+    [1, 2],
+  );
+  assert.ok(
+    writes.every((args) => args.body.includes("<!-- needs-info-warning:3 -->")),
+  );
+});
 test("translation requirement is a schema-enforced boolean", () => {
   const r = answer();
   r.needs_translation = "English (US)";
