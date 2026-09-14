@@ -1476,7 +1476,11 @@ class AutomationConfigTools:
             result.setdefault("warnings", []).append(warning)
 
         entity_id = await _resolve_post_write_automation_entity(
-            self._client, identifier, result.get("entity_id"), wait, result
+            self._client,
+            identifier or result.get("unique_id"),
+            result.get("entity_id"),
+            wait,
+            result,
         )
 
         if result.get("entity_not_verified"):

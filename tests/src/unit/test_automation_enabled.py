@@ -16,6 +16,7 @@ class _FakeClient:
         self.calls: list[tuple[str, str, dict[str, Any]]] = []
         self.upserted: list[dict[str, Any]] = []
         self.upsert_entity_id: str | None = None
+        self.upsert_unique_id: str | None = None
         self.states: list[dict[str, Any]] = []
         self.states_error: Exception | None = None
         self.service_error: Exception | None = None
@@ -27,7 +28,13 @@ class _FakeClient:
         **_: Any,
     ) -> dict[str, Any]:
         self.upserted.append(config)
-        return {"success": True, "entity_id": self.upsert_entity_id}
+        result: dict[str, Any] = {
+            "success": True,
+            "entity_id": self.upsert_entity_id,
+        }
+        if self.upsert_unique_id is not None:
+            result["unique_id"] = self.upsert_unique_id
+        return result
 
     async def get_states(self) -> list[dict[str, Any]]:
         if self.states_error:
@@ -350,6 +357,55 @@ async def test_raw_unique_id_creation_waits_for_registration_before_enabling(
     assert result["enabled_applied"] is True
     assert client.calls == [
         ("automation", "turn_on", {"entity_id": discovered_entity_id})
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_generated_creation_resolves_unique_id_before_enabling(monkeypatch) -> None:
+    client = _FakeClient()
+    client.upsert_unique_id = "generated-unique-id"
+    tools = tools_config_automations.AutomationConfigTools(client)
+    registration_calls: list[str] = []
+
+    async def wait_for_unique_id(client, identifier):
+        registration_calls.append(identifier)
+        return "automation.generated"
+
+    async def wait_for_entity(*_args, **_kwargs):
+        return True
+
+    async def wait_for_state(*_args, **_kwargs):
+        return {"state": "on"}
+
+    monkeypatch.setattr(
+        tools_config_automations,
+        "wait_for_automation_entity_by_unique_id",
+        wait_for_unique_id,
+    )
+    monkeypatch.setattr(
+        tools_config_automations, "wait_for_entity_registered", wait_for_entity
+    )
+    monkeypatch.setattr(
+        tools_config_automations, "wait_for_state_change", wait_for_state
+    )
+
+    result = await tools._run_config_update(
+        {"alias": "Generated", "triggers": [], "actions": []},
+        None,
+        None,
+        True,
+        tools_config_automations.BestPracticeCheckResult(),
+        {},
+        False,
+        enabled=True,
+    )
+
+    assert registration_calls == ["generated-unique-id"]
+    assert result["automation_id"] == "automation.generated"
+    assert result["enabled_applied"] is True
+    assert client.calls == [
+        ("automation", "turn_on", {"entity_id": "automation.generated"})
     ]
 
 
