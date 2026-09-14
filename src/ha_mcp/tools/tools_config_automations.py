@@ -63,8 +63,10 @@ from .util_helpers import (
     fetch_entity_category,
     merge_validation_meta,
     parse_json_param,
+    wait_for_automation_entity_by_unique_id,
     wait_for_entity_registered,
     wait_for_entity_removed,
+    wait_for_state_change,
 )
 
 logger = logging.getLogger(__name__)
@@ -319,6 +321,85 @@ def _detect_conflicting_root_keys(config: Any) -> list[str]:
     return warnings
 
 
+def _validate_automation_identifier(identifier: str | None) -> None:
+    """Validate an optional automation identifier before dispatch."""
+    if identifier is not None:
+        validate_identifier_not_empty(
+            identifier,
+            "identifier",
+            suggestions=[
+                "Omit identifier to create a new automation",
+                "Or pass a valid automation entity_id / unique_id to update",
+            ],
+            context={"action": "set"},
+        )
+
+
+def _skip_automation_runtime_backup(kwargs: dict[str, Any]) -> bool:
+    """Skip config snapshots for runtime-only enabled changes."""
+    return (
+        kwargs.get("enabled") is not None
+        and kwargs.get("config") is None
+        and kwargs.get("python_transform") is None
+    )
+
+
+async def _resolve_post_write_automation_entity(
+    client: Any,
+    identifier: str | None,
+    entity_id: str | None,
+    wait: bool,
+    response: dict[str, Any],
+) -> str | None:
+    """Resolve a raw unique ID after a write when registration may lag."""
+    if (
+        wait
+        and not entity_id
+        and identifier
+        and not identifier.startswith("automation.")
+    ):
+        try:
+            return await wait_for_automation_entity_by_unique_id(client, identifier)
+        except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+            response.setdefault("warnings", []).append(
+                f"Automation registration verification failed: {e}"
+            )
+    return entity_id
+
+
+def _sync_post_write_automation_result(
+    response: dict[str, Any], entity_id: str | None
+) -> None:
+    """Record a successfully resolved entity and clear stale poll state."""
+    if entity_id:
+        response["entity_id"] = entity_id
+        response.pop("entity_not_verified", None)
+
+
+def _reject_enabled_in_config(config: Any) -> None:
+    """Reject the runtime-only ``enabled`` key in a stored config body."""
+    if isinstance(config, dict) and "enabled" in config:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "'enabled' is a runtime-only tool parameter, not a valid "
+                "automation config key",
+                suggestions=[
+                    "Remove 'enabled' from config and pass enabled=True or False "
+                    "to ha_config_set_automation",
+                    "Use enabled=None to leave the current runtime state unchanged",
+                ],
+                context={"action": "set", "invalid_key": "enabled"},
+            )
+        )
+
+
+async def _set_automation_enabled(client: Any, entity_id: str, enabled: bool) -> Any:
+    """Set an automation's runtime enabled state through Home Assistant."""
+    service = "turn_on" if enabled else "turn_off"
+    return await client.call_service("automation", service, {"entity_id": entity_id})
+
+
 def _strip_redundant_identifier_echo(
     result: dict[str, Any],
     *,
@@ -396,6 +477,18 @@ class AutomationConfigTools:
             logger.debug(
                 f"Failed to resolve entity_id for automation {identifier}: {e}"
             )
+        return None
+
+    async def _resolve_automation_entity_id_strict(self, identifier: str) -> str | None:
+        """Resolve an identifier without hiding transport/authentication errors."""
+        states = await self._client.get_states()
+        for state in states:
+            state_entity_id = state.get("entity_id", "")
+            if state_entity_id.startswith("automation.") and (
+                state_entity_id == identifier
+                or state.get("attributes", {}).get("id") == identifier
+            ):
+                return str(state_entity_id)
         return None
 
     @tool(
@@ -524,7 +617,11 @@ class AutomationConfigTools:
             "title": "Create or Update Automation",
         },
     )
-    @with_auto_backup(domain="automation", id_fn=automation_backup_target)
+    @with_auto_backup(
+        domain="automation",
+        id_fn=automation_backup_target,
+        skip_fn=_skip_automation_runtime_backup,
+    )
     @log_tool_usage
     async def ha_config_set_automation(
         self,
@@ -604,6 +701,18 @@ class AutomationConfigTools:
                 default=True,
             ),
         ] = True,
+        enabled: Annotated[
+            bool | None,
+            Field(
+                description=(
+                    "Set the automation's runtime state after an optional config update. "
+                    "True turns it on, False turns it off, and None leaves the state unchanged. "
+                    "Can be used standalone with identifier and no config. This does not write "
+                    "enabled into the stored automation configuration."
+                ),
+                default=None,
+            ),
+        ] = None,
         MandatoryBPS: Annotated[
             bool,
             Field(default=True),
@@ -839,16 +948,7 @@ class AutomationConfigTools:
             # from the downstream lookup. The ``not identifier`` check
             # further down the python_transform branch still handles the
             # explicit ``identifier is None`` case for that mode.
-            if identifier is not None:
-                validate_identifier_not_empty(
-                    identifier,
-                    "identifier",
-                    suggestions=[
-                        "Omit identifier to create a new automation",
-                        "Or pass a valid automation entity_id / unique_id to update",
-                    ],
-                    context={"action": "set"},
-                )
+            _validate_automation_identifier(identifier)
             validate_write_modes(
                 "automation",
                 "identifier",
@@ -870,6 +970,23 @@ class AutomationConfigTools:
                 # wins, so it can still lock against a config it read itself.
                 config_hash = config_hash or taken.config_hash
 
+            enabled_only_response = await self._maybe_set_enabled_only(
+                identifier,
+                config,
+                python_transform,
+                category,
+                enabled,
+                wait,
+            )
+            if enabled_only_response is not None:
+                attach_skill_content(
+                    enabled_only_response,
+                    MandatoryBPS=MandatoryBPS,
+                    canonical_files=_AUTOMATION_SKILL_FILES,
+                    referenced_files=bp_warnings.referenced_files,
+                )
+                return enabled_only_response
+
             if python_transform is not None:
                 response, bp_warnings = await self._run_python_transform(
                     identifier,
@@ -877,6 +994,8 @@ class AutomationConfigTools:
                     python_transform,
                     category,
                     MandatoryBPS,
+                    enabled,
+                    wait,
                 )
                 return response
 
@@ -894,6 +1013,7 @@ class AutomationConfigTools:
                 )
 
             config_dict = self._parse_and_validate_config(config)
+            _reject_enabled_in_config(config_dict)
 
             # Extract category before sending to HA REST API (which rejects unknown keys).
             # Parameter takes precedence over config dict value.
@@ -949,6 +1069,7 @@ class AutomationConfigTools:
                 conflict_warnings,
                 resolved_id,
                 detached_blueprint,
+                enabled,
             )
 
         except ToolError as te:
@@ -1077,6 +1198,131 @@ class AutomationConfigTools:
         )
         return TakenControl(taken, blueprint_path, fetched_hash)
 
+    async def _maybe_set_enabled_only(
+        self,
+        identifier: str | None,
+        config: Any,
+        python_transform: str | None,
+        category: str | None,
+        enabled: bool | None,
+        wait: bool,
+    ) -> dict[str, Any] | None:
+        """Handle a standalone runtime state request, if one was supplied."""
+        if enabled is None or config is not None or python_transform is not None:
+            return None
+        if category is not None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "category requires a config update",
+                    suggestions=[
+                        "Pass config or python_transform when assigning a category",
+                        "Omit category for a standalone enabled state change",
+                    ],
+                    context={"action": "set_enabled", "category": category},
+                )
+            )
+        return await self._set_enabled_only(identifier, enabled, wait)
+
+    async def _set_enabled_only(
+        self, identifier: str | None, enabled: bool, wait: bool
+    ) -> dict[str, Any]:
+        """Set an existing automation's runtime state without replacing config."""
+        if not identifier:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "identifier is required when setting enabled without config",
+                    suggestions=[
+                        "Pass an automation entity_id or unique_id",
+                        "Use ha_search(domain_filter='automation') to find automations",
+                    ],
+                    context={"action": "set_enabled", "enabled": enabled},
+                )
+            )
+        entity_id = await self._resolve_automation_entity_id_strict(identifier)
+        if not entity_id:
+            await self._raise_automation_not_found(identifier)
+        assert entity_id is not None
+        response: dict[str, Any] = {
+            "success": True,
+            "action": "set_enabled",
+            "automation_id": entity_id,
+        }
+        await self._apply_enabled_state(
+            response,
+            entity_id,
+            enabled,
+            wait,
+            identifier=identifier,
+        )
+        return response
+
+    async def _apply_enabled_state(
+        self,
+        response: dict[str, Any],
+        entity_id: str | None,
+        enabled: bool | None,
+        wait: bool,
+        *,
+        identifier: str | None = None,
+    ) -> str | None:
+        """Apply an automation runtime state without changing its config body."""
+        if enabled is None:
+            return entity_id
+        if entity_id is None and identifier:
+            entity_id = await self._resolve_automation_entity_id(identifier)
+        if entity_id is None:
+            response.setdefault("warnings", []).append(
+                "Automation was written, but its entity_id could not be resolved; "
+                "the requested enabled state was not applied."
+            )
+            return None
+        try:
+            await _set_automation_enabled(self._client, entity_id, enabled)
+        except Exception as exc:
+            if response.get("action") == "set_enabled":
+                exception_to_structured_error(
+                    exc,
+                    context={
+                        "action": "set_enabled",
+                        "identifier": identifier,
+                        "entity_id": entity_id,
+                        "enabled": enabled,
+                    },
+                )
+            response["enabled_requested"] = enabled
+            response["enabled_applied"] = False
+            if response.get("action") == "set_enabled":
+                response["success"] = False
+                message = "The requested enabled state could not be applied"
+            else:
+                message = "Automation config was written, but the requested enabled state could not be applied"
+            response.setdefault("warnings", []).append(f"{message}: {exc}")
+            return entity_id
+        response["enabled"] = enabled
+        response["enabled_applied"] = True
+        if wait:
+            expected_state = "on" if enabled else "off"
+            try:
+                verified = await wait_for_state_change(
+                    self._client,
+                    entity_id,
+                    expected_state=expected_state,
+                )
+            except (HomeAssistantConnectionError, HomeAssistantAuthError) as exc:
+                response.setdefault("warnings", []).append(
+                    f"Automation {entity_id} was sent {expected_state}, but state "
+                    f"verification failed: {exc}"
+                )
+                return entity_id
+            if verified is None:
+                response.setdefault("warnings", []).append(
+                    f"Automation {entity_id} was sent {expected_state} but its state "
+                    "could not be verified before the timeout."
+                )
+        return entity_id
+
     async def _run_python_transform(
         self,
         identifier: str | None,
@@ -1084,6 +1330,8 @@ class AutomationConfigTools:
         python_transform: str,
         category: str | None,
         MandatoryBPS: bool,
+        enabled: bool | None,
+        wait: bool,
     ) -> tuple[dict[str, Any], BestPracticeCheckResult]:
         """Execute python_transform mode and return (response, bp_warnings)."""
         if not identifier:
@@ -1129,6 +1377,7 @@ class AutomationConfigTools:
             )
 
         # Pop category before sending to HA REST API (rejects unknown keys)
+        _reject_enabled_in_config(transformed_config)
         transform_category = transformed_config.pop("category", None)
         effective_category = category if category is not None else transform_category
 
@@ -1176,6 +1425,14 @@ class AutomationConfigTools:
                 "automation",
             )
 
+        entity_id = await self._apply_enabled_state(
+            result,
+            entity_id,
+            enabled,
+            wait,
+            identifier=identifier or result.get("unique_id"),
+        )
+
         response: dict[str, Any] = {
             "success": True,
             "action": "python_transform",
@@ -1207,6 +1464,7 @@ class AutomationConfigTools:
         conflict_warnings: list[str] | None = None,
         resolved_id: str | None = None,
         detached_blueprint: str | None = None,
+        enabled: bool | None = None,
     ) -> dict[str, Any]:
         """Execute config-replacement mode and return the tool response.
 
@@ -1225,6 +1483,15 @@ class AutomationConfigTools:
         for warning in conflict_warnings or []:
             result.setdefault("warnings", []).append(warning)
 
+        entity_id = await _resolve_post_write_automation_entity(
+            self._client,
+            identifier or result.get("unique_id"),
+            result.get("entity_id"),
+            wait,
+            result,
+        )
+        _sync_post_write_automation_result(result, entity_id)
+
         if result.get("entity_not_verified"):
             result.setdefault("warnings", []).append(
                 f"{NOT_VERIFIED_WARNING_PREFIX} "
@@ -1235,7 +1502,6 @@ class AutomationConfigTools:
             )
             result.pop("entity_not_verified", None)
 
-        entity_id = result.get("entity_id")
         if not entity_id and identifier and identifier.startswith("automation."):
             entity_id = identifier
         if wait and entity_id:
@@ -1261,6 +1527,14 @@ class AutomationConfigTools:
                 result,
                 "automation",
             )
+
+        entity_id = await self._apply_enabled_state(
+            result,
+            entity_id,
+            enabled,
+            wait,
+            identifier=identifier or result.get("unique_id"),
+        )
 
         if bp_warnings:
             result["best_practice_warnings"] = list(bp_warnings)
