@@ -138,6 +138,9 @@ class TestExemptionRules:
             ({"slug": "x", "action": "install"}, False),
             ({"slug": "x", "action": "stop"}, False),
             ({"action": "add_repository", "repository": "url"}, False),
+            # check_updates installs nothing, but it still drives a Supervisor
+            # job that rewrites cached store state — blocked like every action.
+            ({"action": "check_updates"}, False),
             ({"slug": "x", "options": {"a": 1}}, False),
             ({"slug": "x", "boot": "auto"}, False),
             ({"slug": "x", "auto_update": True}, False),

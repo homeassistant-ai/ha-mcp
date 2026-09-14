@@ -5687,6 +5687,168 @@ def _manage_addon_kwargs(**overrides):
     return base
 
 
+def _store_payload(*addons):
+    """Build a ``/store`` response carrying the given app (add-on) entries."""
+    return {"success": True, "result": {"addons": list(addons)}}
+
+
+def _store_addon(slug, version, *, name=None, update_available=False):
+    return {
+        "slug": slug,
+        "name": name or slug.replace("_", " ").title(),
+        "version": version,
+        "update_available": update_available,
+    }
+
+
+class TestManageAddonCheckUpdates:
+    """Store-wide mode: check_updates reloads the store via Supervisor."""
+
+    def _tools(self):
+        from ha_mcp.tools.tools_addons import AddOnTools
+
+        return AddOnTools(_make_mock_client())
+
+    @pytest.mark.asyncio
+    async def test_check_updates_posts_to_store_reload(self):
+        """The reload is a POST to /store/reload with the store-wide timeout."""
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=[
+                _store_payload(),
+                {"success": True, "result": {}},
+                _store_payload(),
+            ],
+        ) as mock_call:
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(action="check_updates")
+            )
+
+        assert result["success"] is True
+        assert result["action"] == "check_updates"
+        reload_call = mock_call.call_args_list[1]
+        assert reload_call.args[1] == "/store/reload"
+        assert reload_call.kwargs["method"] == "POST"
+        assert reload_call.kwargs["timeout"] == 300
+
+    @pytest.mark.asyncio
+    async def test_check_updates_reports_versions_the_reload_discovered(self):
+        """A reload that moves version_latest names the apps that changed."""
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=[
+                _store_payload(
+                    _store_addon("local_thing", "2026.09.14.1"),
+                    _store_addon("core_mosquitto", "6.5.1"),
+                ),
+                {"success": True, "result": {}},
+                _store_payload(
+                    _store_addon("local_thing", "2026.09.14.3"),
+                    _store_addon("core_mosquitto", "6.5.1"),
+                    _store_addon("new_app", "1.0.0"),
+                ),
+            ],
+        ):
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(action="check_updates")
+            )
+
+        changed = {entry["slug"]: entry for entry in result["changed"]}
+        assert set(changed) == {"local_thing", "new_app"}
+        assert changed["local_thing"]["version_before"] == "2026.09.14.1"
+        assert changed["local_thing"]["version_after"] == "2026.09.14.3"
+        # A slug absent before the reload is a discovery, not a skip.
+        assert changed["new_app"]["version_before"] is None
+
+    @pytest.mark.asyncio
+    async def test_check_updates_lists_apps_with_updates_available(self):
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=[
+                _store_payload(),
+                {"success": True, "result": {}},
+                _store_payload(
+                    _store_addon("core_mosquitto", "6.5.2", update_available=True),
+                    _store_addon("local_thing", "1.0.0"),
+                ),
+            ],
+        ):
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(action="check_updates")
+            )
+
+        assert [entry["slug"] for entry in result["updates_available"]] == [
+            "core_mosquitto"
+        ]
+        # The reload installs nothing; the message has to say so.
+        assert "action='update'" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_check_updates_survives_an_unreadable_store(self):
+        """A store read that fails costs detail, not the completed reload."""
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=[
+                ToolError("store unavailable"),
+                {"success": True, "result": {}},
+                ToolError("store unavailable"),
+            ],
+        ):
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(action="check_updates")
+            )
+
+        assert result["success"] is True
+        assert result["changed"] == []
+        assert len(result["warnings"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_pending_supervisor_update_explains_itself(self):
+        """Supervisor's own pending update is a known, actionable refusal."""
+        tools = self._tools()
+        detail = json.dumps(
+            {"error": {"message": "Supervisor needs to be updated first"}}
+        )
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                side_effect=[_store_payload(), ToolError(detail)],
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
+            await tools.manage_addon(**_manage_addon_kwargs(action="check_updates"))
+
+        assert "pending update" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("overrides", "expected"),
+        [
+            ({"slug": "core_mosquitto"}, "slug"),
+            ({"repository": "0f1cc410"}, "repository"),
+            ({"path": "/api/status"}, "path"),
+        ],
+    )
+    async def test_check_updates_rejects_narrower_scope(self, overrides, expected):
+        """Naming one app or repository would misstate the call's scope."""
+        tools = self._tools()
+        with pytest.raises(ToolError) as excinfo:
+            await tools.manage_addon(
+                **_manage_addon_kwargs(action="check_updates", **overrides)
+            )
+
+        assert expected in str(excinfo.value)
+
+
 class TestManageAddonRepositoryAction:
     """Store-repository mode: add_repository / remove_repository via Supervisor."""
 

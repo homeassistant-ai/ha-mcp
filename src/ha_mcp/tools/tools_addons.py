@@ -2557,6 +2557,18 @@ class AddOnTools:
         {"add_repository", "remove_repository"}
     )
 
+    # Store-wide actions take neither `slug` nor `repository`: they act on the
+    # whole store. `check_updates` mirrors the Home Assistant Apps UI overflow
+    # item of the same name (frontend `check_updates` ->
+    # `POST /store/reload`), which is the only way to make Supervisor re-scan
+    # local app (add-on) sources after their config.yaml changes.
+    _STORE_ACTIONS: ClassVar[frozenset[str]] = frozenset({"check_updates"})
+
+    # A reload re-reads every registered repository, including git pulls of
+    # remote ones, so it needs more than the 60-120s lifecycle timeouts. It
+    # builds no image, so it does not need the 1800s install/update budget.
+    _CHECK_UPDATES_TIMEOUT: ClassVar[int] = 300
+
     async def _reject_self_update_in_addon(self, slug: str) -> None:
         """Reject only the direct Supervisor update that would update this app.
 
@@ -2625,6 +2637,147 @@ class AddOnTools:
             "slug": slug,
             "message": f"App (add-on) {slug} {key} completed.",
         }
+
+    async def _store_latest_versions(self) -> dict[str, dict[str, Any]]:
+        """Snapshot the store's latest-known version per app (add-on) slug.
+
+        Supervisor answers ``POST /store/reload`` with a bare ``ok``, so the
+        only way to report what a reload actually discovered is to compare the
+        store before and after.
+        """
+        response = await _supervisor_api_call(self._client, "/store")
+        result = response.get("result")
+        addons = result.get("addons", []) if isinstance(result, dict) else []
+        snapshot: dict[str, dict[str, Any]] = {}
+        for addon in addons:
+            if not isinstance(addon, dict):
+                continue
+            slug = addon.get("slug")
+            if not isinstance(slug, str) or not slug:
+                continue
+            snapshot[slug] = {
+                "name": addon.get("name"),
+                "version": addon.get("version"),
+                "update_available": bool(addon.get("update_available", False)),
+            }
+        return snapshot
+
+    @staticmethod
+    def _diff_store_versions(
+        before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Return the apps (add-ons) whose latest-known version moved.
+
+        A slug absent from ``before`` is reported with ``version_before: None``
+        rather than skipped: a newly discovered app is exactly the kind of
+        change a caller reloads the store to find.
+        """
+        changed: list[dict[str, Any]] = []
+        for slug, entry in sorted(after.items()):
+            previous = before.get(slug, {})
+            if previous.get("version") == entry.get("version"):
+                continue
+            changed.append(
+                {
+                    "slug": slug,
+                    "name": entry.get("name"),
+                    "version_before": previous.get("version"),
+                    "version_after": entry.get("version"),
+                }
+            )
+        return changed
+
+    async def _execute_check_updates(self) -> dict[str, Any]:
+        """Reload the app (add-on) store so Supervisor re-scans its sources.
+
+        This is the programmatic form of the Apps UI overflow item "Check for
+        updates". It refreshes *available* metadata only and installs nothing;
+        a caller that wants the new version on disk still has to follow with
+        ``action="update"`` (or ``action="rebuild"`` for a local app whose
+        source changed underneath an unchanged version).
+
+        Reporting only ``version_latest`` movement would be misleading on its
+        own — that field advances on reload while the installed schema stays
+        stale — so the result names the apps that changed and leaves installing
+        to the caller.
+        """
+        warnings: list[str] = []
+        before = await self._snapshot_store_or_warn(warnings, "before")
+        try:
+            await _supervisor_api_call(
+                self._client,
+                "/store/reload",
+                method="POST",
+                timeout=self._CHECK_UPDATES_TIMEOUT,
+            )
+        except ToolError as error:
+            self._raise_check_updates_error(error)
+        after = await self._snapshot_store_or_warn(warnings, "after")
+
+        changed = self._diff_store_versions(before, after)
+        updates_available = [
+            {"slug": slug, "name": entry.get("name"), "version": entry.get("version")}
+            for slug, entry in sorted(after.items())
+            if entry.get("update_available")
+        ]
+        result: dict[str, Any] = {
+            "success": True,
+            "action": "check_updates",
+            "changed": changed,
+            "updates_available": updates_available,
+            "message": (
+                f"App (add-on) store reloaded; {len(changed)} app version(s) "
+                f"changed, {len(updates_available)} update(s) available. "
+                "This refreshes store metadata only — install with "
+                "action='update'."
+            ),
+        }
+        if warnings:
+            result["warnings"] = warnings
+        return result
+
+    async def _snapshot_store_or_warn(
+        self, warnings: list[str], when: str
+    ) -> dict[str, dict[str, Any]]:
+        """Snapshot the store, degrading to an empty map with a warning.
+
+        The reload is the operation the caller asked for. A store read that
+        fails around it costs detail in the result, so it must not turn a
+        completed reload into a tool-level failure.
+        """
+        try:
+            return await self._store_latest_versions()
+        except ToolError as error:
+            logger.info(
+                "Could not read the app (add-on) store %s the reload: %s",
+                when,
+                error,
+            )
+            warnings.append(
+                f"Could not read the app (add-on) store {when} the reload, so "
+                "the changed-app list may be incomplete."
+            )
+            return {}
+
+    @staticmethod
+    def _raise_check_updates_error(error: ToolError) -> NoReturn:
+        """Re-raise a failed store reload with guidance for its known causes."""
+        detail = AddOnTools._supervisor_error_text(str(error))
+        if "supervisor" in detail.lower() and "update" in detail.lower():
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Supervisor refused to reload the app (add-on) store "
+                    "because Supervisor itself has a pending update.",
+                    details=detail,
+                    suggestions=[
+                        "Update Supervisor first, then retry "
+                        "ha_manage_app(action='check_updates')",
+                        "Check Supervisor status with ha_get_system_health",
+                    ],
+                )
+            )
+        raise error
 
     async def _execute_repository_action(
         self, action: str, repository: str
@@ -3133,6 +3286,43 @@ class AddOnTools:
         return await self._execute_repository_action(action, repository)
 
     @staticmethod
+    def _reject_store_action_conflicts(
+        action: str,
+        *,
+        slug: str | None,
+        repository: str | None,
+        path: str | None,
+        config_data: dict[str, Any],
+        proxy_overrides: list[tuple[str, str]],
+    ) -> None:
+        """Raise if a store-wide action is combined with another mode's params.
+
+        ``check_updates`` reloads the whole store, so naming one app (add-on)
+        or one repository would silently suggest a narrower scope than the
+        call actually has.
+        """
+        conflicts = []
+        if slug:
+            conflicts.append("slug")
+        if repository:
+            conflicts.append("repository")
+        if path is not None:
+            conflicts.append("path")
+        if config_data:
+            conflicts.append("config parameters")
+        conflicts.extend(display for _, display in proxy_overrides)
+        if not conflicts:
+            return
+        raise_tool_error(
+            create_validation_error(
+                f"action='{action}' (store-wide mode) reloads the whole app "
+                f"(add-on) store and cannot be combined with "
+                f"{', '.join(conflicts)}. Pass only 'action'.",
+                parameter="action",
+            )
+        )
+
+    @staticmethod
     def _reject_action_mode_conflicts(
         action: str,
         path: str | None,
@@ -3316,6 +3506,20 @@ class AddOnTools:
             array_patch,
             request_headers,
         )
+
+        # Store-wide actions act on the whole store, so they take neither
+        # `slug` nor `repository`. Handle them before the slug requirement
+        # applies.
+        if action is not None and action.lower().strip() in self._STORE_ACTIONS:
+            self._reject_store_action_conflicts(
+                action,
+                slug=slug,
+                repository=repository,
+                path=path,
+                config_data=config_data,
+                proxy_overrides=proxy_overrides,
+            )
+            return await self._execute_check_updates()
 
         # Store-repository actions operate on the store, not an app (add-on), so they
         # take `repository` instead of `slug`. Handle them before the slug
@@ -3736,6 +3940,13 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 "Store-repository mode: 'add_repository' / 'remove_repository' "
                 "register or unregister a custom app store repository — these "
                 "use the 'repository' param instead of 'slug'. "
+                "Store-wide mode: 'check_updates' reloads the store so "
+                "Supervisor re-scans its repositories, mirroring the Apps UI "
+                "'Check for updates' item — it takes neither 'slug' nor "
+                "'repository', refreshes available metadata only, and installs "
+                "nothing (follow with action='update'). Required after editing "
+                "a local app's config.yaml, which Supervisor otherwise serves "
+                "from cache. "
                 "When ha-mcp runs as an app, it can update other apps but cannot "
                 "update its own running slug; update ha-mcp from the Home Assistant "
                 "Apps UI. "

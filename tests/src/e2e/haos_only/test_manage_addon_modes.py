@@ -413,6 +413,48 @@ async def test_proxy_direct_port_inaddon(mcp_client: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Store-wide mode (check_updates)
+# ---------------------------------------------------------------------------
+
+
+async def test_check_updates_reloads_the_store(mcp_client: Any) -> None:
+    """`check_updates` completes a real Supervisor store reload.
+
+    The bake registers real repositories, so this exercises the actual
+    ``POST /store/reload`` and the ``/store`` reads around it. It asserts the
+    result's shape rather than specific version movement: whether a reload
+    finds anything new depends on what upstream published, which is not
+    something a test can pin.
+    """
+    payload = await safe_call_tool(
+        mcp_client, "ha_manage_app", {"action": "check_updates"}
+    )
+    assert isinstance(payload, dict), f"Tool did not return a dict: {payload!r}"
+    assert payload.get("success") is True, payload
+    assert payload.get("action") == "check_updates", payload
+    assert isinstance(payload.get("changed"), list), payload
+    assert isinstance(payload.get("updates_available"), list), payload
+    # The reload refreshes metadata only; the message has to point at the
+    # follow-up install rather than implying one happened.
+    assert "action='update'" in str(payload.get("message")), payload
+
+
+async def test_check_updates_rejects_a_slug(mcp_client: Any) -> None:
+    """Naming one app would misstate the scope of a store-wide reload."""
+    slug = await _resolve_slug(mcp_client, NODERED_NAME)
+    payload = await safe_call_tool(
+        mcp_client,
+        "ha_manage_app",
+        {"action": "check_updates", "slug": slug},
+    )
+    assert isinstance(payload, dict), f"Tool did not return a dict: {payload!r}"
+    assert payload.get("success") is False, payload
+    error = payload.get("error")
+    assert isinstance(error, dict), payload
+    assert error.get("code") == "VALIDATION_FAILED", error
+
+
+# ---------------------------------------------------------------------------
 # Array-patch mode (Node-RED /flows)
 # ---------------------------------------------------------------------------
 
