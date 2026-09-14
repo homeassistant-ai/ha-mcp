@@ -5,6 +5,7 @@ Assignment is additive (existing area labels are kept) — replace-the-set
 lives on ``ha_set_area_or_floor(kind="area", labels=...)``.
 """
 
+import asyncio
 import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -263,6 +264,80 @@ class TestSetLabelAssignsAreas:
         updates = _area_updates(mock_client)
         assert [u["area_id"] for u in updates] == ["kitchen", "living_room"]
 
+    async def test_transport_failure_after_first_area_is_partial(
+        self, register_tools, mock_client
+    ):
+        async def ws_handler(msg: dict) -> dict:
+            msg_type = msg.get("type", "")
+            if msg_type == "config/label_registry/list":
+                return {"success": True, "result": []}
+            if msg_type == "config/label_registry/create":
+                return {
+                    "success": True,
+                    "result": {"label_id": "site_home", "name": "Site Home"},
+                }
+            if msg_type == "config/area_registry/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {"area_id": "kitchen", "name": "Kitchen", "labels": []},
+                        {"area_id": "living_room", "name": "Living", "labels": []},
+                    ],
+                }
+            if msg_type == "config/area_registry/update":
+                if msg.get("area_id") == "living_room":
+                    raise ConnectionError("ws dropped")
+                return {
+                    "success": True,
+                    "result": {k: v for k, v in msg.items() if k != "type"},
+                }
+            return {"success": True, "result": {}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+
+        with pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_label"](
+                name="Site Home", areas=["kitchen", "living_room"]
+            )
+
+        err = json.loads(str(excinfo.value))
+        assert err["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert err["partial"] is True
+        assert err["assigned_areas"] == ["kitchen"]
+        assert err["label_id"] == "site_home"
+        assert err["area_id"] == "living_room"
+        assert "ws dropped" in err["error"]["message"]
+
+    async def test_cancellation_during_assign_is_not_swallowed(
+        self, register_tools, mock_client
+    ):
+        async def ws_handler(msg: dict) -> dict:
+            msg_type = msg.get("type", "")
+            if msg_type == "config/label_registry/list":
+                return {"success": True, "result": []}
+            if msg_type == "config/label_registry/create":
+                return {
+                    "success": True,
+                    "result": {"label_id": "site_home", "name": "Site Home"},
+                }
+            if msg_type == "config/area_registry/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {"area_id": "kitchen", "name": "Kitchen", "labels": []},
+                    ],
+                }
+            if msg_type == "config/area_registry/update":
+                raise asyncio.CancelledError
+            return {"success": True, "result": {}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+
+        with pytest.raises(asyncio.CancelledError):
+            await register_tools["ha_config_set_label"](
+                name="Site Home", areas=["kitchen"]
+            )
+
     async def test_create_without_label_id_rejects_area_assign(
         self, register_tools, mock_client
     ):
@@ -328,8 +403,6 @@ class TestSetLabelAssignsAreas:
             )
         )
 
-        await register_tools["ha_config_set_label"](
-            name="Site Home", areas=["kitchen"]
-        )
+        await register_tools["ha_config_set_label"](name="Site Home", areas=["kitchen"])
 
         assert ("area_or_floor", "area:kitchen") in snaps

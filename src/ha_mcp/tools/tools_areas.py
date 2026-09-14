@@ -576,9 +576,34 @@ class AreaTools:
         expected = set(parsed_labels)
         if _label_id_set(data) == expected:
             return
-        listed = await self._client.send_websocket_message(
-            {"type": "config/area_registry/list"}
-        )
+        try:
+            listed = await self._client.send_websocket_message(
+                {"type": "config/area_registry/list"}
+            )
+        except Exception as exc:
+            # Write already succeeded; a transport failure on re-read must
+            # not look like a failed create (retry would duplicate the area).
+            ctx: dict[str, Any] = {
+                "operation": operation,
+                "kind": kind,
+                "area_id": returned_id,
+                "expected_labels": parsed_labels,
+                "write_committed": True,
+            }
+            if name:
+                ctx["name"] = name
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Area write succeeded, but label verification failed",
+                    details=str(exc),
+                    context=ctx,
+                    suggestions=[
+                        "The area write already committed; do not retry create.",
+                        "Re-read with ha_list_floors_areas() before retrying labels.",
+                    ],
+                )
+            )
         rows = listed.get("result") if listed.get("success") else None
         found: dict[str, Any] | None = None
         if isinstance(rows, list):

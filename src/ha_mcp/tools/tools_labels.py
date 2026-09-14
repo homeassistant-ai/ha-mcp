@@ -240,27 +240,34 @@ class LabelTools:
 
     def _reraise_assign_failure(
         self,
-        err: ToolError,
+        err: Exception,
         *,
         label_id: str,
         area_id: str,
         assigned: list[str],
     ) -> NoReturn:
         """Re-raise with partial progress when the inner error omitted it."""
-        try:
-            payload = json.loads(str(err))
-        except (TypeError, ValueError, json.JSONDecodeError):
-            payload = {}
-        if isinstance(payload, dict) and payload.get("partial") is True:
-            raise err
+        payload: dict[str, Any] = {}
+        if isinstance(err, ToolError):
+            try:
+                parsed = json.loads(str(err))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed = {}
+            if isinstance(parsed, dict):
+                payload = parsed
+                if payload.get("partial") is True:
+                    raise err
         message = ""
-        if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+        if isinstance(payload.get("error"), dict):
             message = str(payload["error"].get("message") or "")
+        if not message:
+            message = str(err) or (
+                f"Failed to assign label {label_id!r} to area {area_id!r}"
+            )
         self._raise_area_label_assign_failure(
             label_id=label_id,
             area_id=area_id,
-            message=message
-            or f"Failed to assign label {label_id!r} to area {area_id!r}",
+            message=message,
             assigned=assigned,
         )
 
@@ -320,7 +327,9 @@ class LabelTools:
         for area_id in unique:
             try:
                 await self._add_label_to_one_area(label_id, area_id, assigned)
-            except ToolError as err:
+            except Exception as err:
+                # Catch ordinary failures (transport, ToolError). Cancellation
+                # is BaseException and must propagate.
                 self._reraise_assign_failure(
                     err, label_id=label_id, area_id=area_id, assigned=assigned
                 )

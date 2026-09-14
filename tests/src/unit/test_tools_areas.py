@@ -641,3 +641,31 @@ class TestSetAreaLabels:
         assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "requested labels" in error_data["error"]["message"]
         assert error_data["expected_labels"] == ["site_home"]
+
+    async def test_verify_list_transport_failure_marks_write_committed(self, tools):
+        async def handler(msg):
+            msg_type = msg.get("type")
+            if msg_type == "config/label_registry/list":
+                return {"success": True, "result": [{"label_id": "site_home"}]}
+            if msg_type == "config/area_registry/create":
+                return {
+                    "success": True,
+                    "result": {"area_id": "kitchen", "name": "Kitchen"},
+                }
+            if msg_type == "config/area_registry/list":
+                raise ConnectionError("ws dropped")
+            return {"success": True, "result": {}}
+
+        tools._client.send_websocket_message.side_effect = handler
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_area_or_floor(
+                kind="area", name="Kitchen", labels=["site_home"]
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert error_data["write_committed"] is True
+        assert error_data["area_id"] == "kitchen"
+        assert error_data["expected_labels"] == ["site_home"]
+        assert "ws dropped" in error_data["error"]["details"]
