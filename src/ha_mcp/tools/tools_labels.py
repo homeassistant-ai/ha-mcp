@@ -7,13 +7,16 @@ ha_set_entity / ha_set_device / ha_set_area_or_floor, or pass areas= to
 ha_config_set_label.
 """
 
+import json
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..backup_manager import get_backup_manager
+from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .helpers import (
@@ -23,10 +26,17 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .tools_config_helpers import validate_registry_ids
+from .tools_config_helpers import _raise_if_unknown_area
 from .util_helpers import JSON_STRING_COERCION, parse_string_list_param
 
 logger = logging.getLogger(__name__)
+
+
+def _string_labels(entry: dict[str, Any] | None) -> list[str]:
+    """Return the string label IDs stored on a registry entry."""
+    if not isinstance(entry, dict):
+        return []
+    return [lbl for lbl in (entry.get("labels") or []) if isinstance(lbl, str)]
 
 
 class LabelTools:
@@ -102,14 +112,30 @@ class LabelTools:
             )
         )
 
-    async def _require_areas_exist(self, area_ids: list[str]) -> None:
-        """Reject empty or unknown area IDs before creating/updating a label.
+    async def _list_area_registry(
+        self, *, context: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Return the area registry, failing closed on a degraded envelope."""
+        list_result = await self._client.send_websocket_message(
+            {"type": "config/area_registry/list"}
+        )
+        areas = list_result.get("result") if list_result.get("success") else None
+        if not isinstance(areas, list):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Failed to retrieve area registry while assigning label",
+                    context=context,
+                    suggestions=[
+                        "Check Home Assistant connection",
+                        "Use ha_list_floors_areas() to list areas",
+                    ],
+                )
+            )
+        return areas
 
-        Home Assistant stores a dangling area_id nowhere here — the later
-        area-registry update would fail opaquely or no-op — so fail closed
-        up front. Empty strings are not the documented clear sentinel (that
-        is omitting ``areas``); they are invalid IDs.
-        """
+    def _unique_area_ids(self, area_ids: list[str]) -> list[str]:
+        """Reject empty IDs and return unique area IDs in caller order."""
         seen: set[str] = set()
         unique: list[str] = []
         for area_id in area_ids:
@@ -128,72 +154,175 @@ class LabelTools:
             if area_id not in seen:
                 seen.add(area_id)
                 unique.append(area_id)
+        return unique
+
+    async def _require_areas_exist(self, area_ids: list[str]) -> None:
+        """Reject empty or unknown area IDs before creating/updating a label.
+
+        Home Assistant stores a dangling area_id nowhere here — the later
+        area-registry update would fail opaquely or no-op — so fail closed
+        up front. Empty strings are not the documented clear sentinel (that
+        is omitting ``areas``); they are invalid IDs. All IDs are checked
+        against one registry snapshot (not N sequential list calls).
+        """
+        unique = self._unique_area_ids(area_ids)
+        areas = await self._list_area_registry(context={"areas": unique})
         for area_id in unique:
-            await validate_registry_ids(
-                self._client, area_id, None, None, fail_closed=True
+            _raise_if_unknown_area(areas, area_id)
+
+    async def _snapshot_areas_before_assign(self, area_ids: list[str]) -> None:
+        """Best-effort pre-write snapshot of each target area (label restore
+        cannot undo area assignments).
+        """
+        try:
+            mgr = get_backup_manager(self._client, get_global_settings())
+            for area_id in area_ids:
+                await mgr.maybe_snapshot(
+                    "area_or_floor",
+                    f"area:{area_id}",
+                    tool_name="ha_config_set_label",
+                )
+        except Exception:
+            logger.warning(
+                "Could not snapshot areas before label assignment",
+                extra={"areas": area_ids},
+                exc_info=True,
+            )
+
+    def _raise_area_label_assign_failure(
+        self,
+        *,
+        label_id: str,
+        area_id: str,
+        message: str,
+        assigned: list[str],
+    ) -> NoReturn:
+        """Raise SERVICE_CALL_FAILED including partial assignment progress."""
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                message,
+                context={
+                    "label_id": label_id,
+                    "area_id": area_id,
+                    "partial": True,
+                    "assigned_areas": assigned,
+                },
+                suggestions=[
+                    "The label write already succeeded; retry only the "
+                    "remaining area IDs (do not recreate the label).",
+                    "Use ha_set_area_or_floor(kind='area', labels=...) to "
+                    "replace an area's label set, or ha_list_floors_areas() "
+                    "to inspect current assignments.",
+                ],
+            )
+        )
+
+    def _area_from_registry(
+        self, areas: list[dict[str, Any]], area_id: str
+    ) -> dict[str, Any] | None:
+        for area in areas:
+            if isinstance(area, dict) and area.get("area_id") == area_id:
+                return area
+        return None
+
+    async def _confirm_area_has_label(
+        self, label_id: str, area_id: str, update_result: dict[str, Any]
+    ) -> bool:
+        """True when the update envelope or a fresh list contains ``label_id``."""
+        result = update_result.get("result")
+        if label_id in _string_labels(result if isinstance(result, dict) else None):
+            return True
+        areas = await self._list_area_registry(
+            context={"label_id": label_id, "area_id": area_id}
+        )
+        return label_id in _string_labels(self._area_from_registry(areas, area_id))
+
+    def _reraise_assign_failure(
+        self,
+        err: ToolError,
+        *,
+        label_id: str,
+        area_id: str,
+        assigned: list[str],
+    ) -> NoReturn:
+        """Re-raise with partial progress when the inner error omitted it."""
+        try:
+            payload = json.loads(str(err))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {}
+        if isinstance(payload, dict) and payload.get("partial") is True:
+            raise err
+        message = ""
+        if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+            message = str(payload["error"].get("message") or "")
+        self._raise_area_label_assign_failure(
+            label_id=label_id,
+            area_id=area_id,
+            message=message
+            or f"Failed to assign label {label_id!r} to area {area_id!r}",
+            assigned=assigned,
+        )
+
+    async def _add_label_to_one_area(
+        self, label_id: str, area_id: str, assigned: list[str]
+    ) -> None:
+        """Fresh read-modify-write for one area. HA has no atomic label-add."""
+        areas = await self._list_area_registry(
+            context={"label_id": label_id, "area_id": area_id}
+        )
+        area = self._area_from_registry(areas, area_id)
+        if area is None:
+            self._raise_area_label_assign_failure(
+                label_id=label_id,
+                area_id=area_id,
+                message=f"area_id={area_id!r} does not exist in the area registry.",
+                assigned=assigned,
+            )
+        current = _string_labels(area)
+        if label_id in current:
+            return
+        update = await self._client.send_websocket_message(
+            {
+                "type": "config/area_registry/update",
+                "area_id": area_id,
+                "labels": [*current, label_id],
+            }
+        )
+        if not update.get("success"):
+            self._raise_area_label_assign_failure(
+                label_id=label_id,
+                area_id=area_id,
+                message=(
+                    f"Failed to assign label {label_id!r} to area {area_id!r}: "
+                    f"{update.get('error', 'Unknown error')}"
+                ),
+                assigned=assigned,
+            )
+        if not await self._confirm_area_has_label(label_id, area_id, update):
+            self._raise_area_label_assign_failure(
+                label_id=label_id,
+                area_id=area_id,
+                message=(
+                    f"Area {area_id!r} update succeeded but label "
+                    f"{label_id!r} is not present on the area."
+                ),
+                assigned=assigned,
             )
 
     async def _add_label_to_areas(
         self, label_id: str, area_ids: list[str]
     ) -> list[str]:
         """Add ``label_id`` to each area's label set without removing others."""
-        list_result = await self._client.send_websocket_message(
-            {"type": "config/area_registry/list"}
-        )
-        areas = list_result.get("result") if list_result.get("success") else None
-        if not isinstance(areas, list):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.SERVICE_CALL_FAILED,
-                    "Failed to retrieve area registry while assigning label",
-                    context={"label_id": label_id, "areas": area_ids},
-                    suggestions=[
-                        "Check Home Assistant connection",
-                        "Use ha_list_floors_areas() to list areas",
-                    ],
-                )
-            )
-
-        by_id = {
-            a["area_id"]: a
-            for a in areas
-            if isinstance(a, dict) and isinstance(a.get("area_id"), str)
-        }
+        unique = list(dict.fromkeys(area_ids))
+        await self._snapshot_areas_before_assign(unique)
         assigned: list[str] = []
-        for area_id in dict.fromkeys(area_ids):
-            area = by_id.get(area_id)
-            if area is None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        f"area_id={area_id!r} does not exist in the area registry.",
-                        context={"area_id": area_id, "label_id": label_id},
-                        suggestions=[
-                            "Use ha_list_floors_areas() to list valid area IDs.",
-                        ],
-                    )
-                )
-            current = [
-                lbl for lbl in (area.get("labels") or []) if isinstance(lbl, str)
-            ]
-            if label_id in current:
-                assigned.append(area_id)
-                continue
-            update = await self._client.send_websocket_message(
-                {
-                    "type": "config/area_registry/update",
-                    "area_id": area_id,
-                    "labels": [*current, label_id],
-                }
-            )
-            if not update.get("success"):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to assign label {label_id!r} to area {area_id!r}: "
-                        f"{update.get('error', 'Unknown error')}",
-                        context={"label_id": label_id, "area_id": area_id},
-                    )
+        for area_id in unique:
+            try:
+                await self._add_label_to_one_area(label_id, area_id, assigned)
+            except ToolError as err:
+                self._reraise_assign_failure(
+                    err, label_id=label_id, area_id=area_id, assigned=assigned
                 )
             assigned.append(area_id)
         return assigned
@@ -217,9 +346,22 @@ class LabelTools:
         """Return assigned area IDs, or None when the caller omitted ``areas``."""
         if parsed_areas is None:
             return None
-        if parsed_areas and resolved_id:
-            return await self._add_label_to_areas(resolved_id, parsed_areas)
-        return []
+        if not parsed_areas:
+            return []
+        if not resolved_id:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Label write succeeded without a resolved label_id; "
+                    "area assignment was not applied.",
+                    context={"areas": parsed_areas},
+                    suggestions=[
+                        "Retry ha_config_get_label() to confirm the label, "
+                        "then assign with ha_set_area_or_floor(kind='area').",
+                    ],
+                )
+            )
+        return await self._add_label_to_areas(resolved_id, parsed_areas)
 
     def _raise_label_set_failure(
         self, result: dict[str, Any], action: str, name: str, label_id: str | None

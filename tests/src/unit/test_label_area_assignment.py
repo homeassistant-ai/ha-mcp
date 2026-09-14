@@ -5,6 +5,7 @@ Assignment is additive (existing area labels are kept) — replace-the-set
 lives on ``ha_set_area_or_floor(kind="area", labels=...)``.
 """
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -191,3 +192,144 @@ class TestSetLabelAssignsAreas:
         assert result["assigned_areas"] == []
         assert "config/area_registry/list" not in _sent_types(mock_client)
         assert "config/area_registry/update" not in _sent_types(mock_client)
+
+    async def test_two_areas_validated_from_one_list(self, register_tools, mock_client):
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=_ws_handler(
+                areas=[
+                    {"area_id": "kitchen", "name": "Kitchen", "labels": []},
+                    {"area_id": "living_room", "name": "Living", "labels": []},
+                ]
+            )
+        )
+
+        result = await register_tools["ha_config_set_label"](
+            name="Site Home", areas=["kitchen", "living_room"]
+        )
+
+        assert result["success"] is True
+        assert result["assigned_areas"] == ["kitchen", "living_room"]
+        lists_before_create = []
+        for call in mock_client.send_websocket_message.call_args_list:
+            msg_type = call.args[0].get("type")
+            if msg_type == "config/label_registry/create":
+                break
+            if msg_type == "config/area_registry/list":
+                lists_before_create.append(msg_type)
+        assert lists_before_create == ["config/area_registry/list"]
+
+    async def test_partial_area_assign_reports_completed(
+        self, register_tools, mock_client
+    ):
+        async def ws_handler(msg: dict) -> dict:
+            msg_type = msg.get("type", "")
+            if msg_type == "config/label_registry/list":
+                return {"success": True, "result": []}
+            if msg_type == "config/label_registry/create":
+                return {
+                    "success": True,
+                    "result": {"label_id": "site_home", "name": "Site Home"},
+                }
+            if msg_type == "config/area_registry/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {"area_id": "kitchen", "name": "Kitchen", "labels": []},
+                        {"area_id": "living_room", "name": "Living", "labels": []},
+                    ],
+                }
+            if msg_type == "config/area_registry/update":
+                if msg.get("area_id") == "living_room":
+                    return {"success": False, "error": "boom"}
+                return {
+                    "success": True,
+                    "result": {k: v for k, v in msg.items() if k != "type"},
+                }
+            return {"success": True, "result": {}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+
+        with pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_label"](
+                name="Site Home", areas=["kitchen", "living_room"]
+            )
+
+        err = json.loads(str(excinfo.value))
+        assert err["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert err["partial"] is True
+        assert err["assigned_areas"] == ["kitchen"]
+        assert err["label_id"] == "site_home"
+        assert err["area_id"] == "living_room"
+        updates = _area_updates(mock_client)
+        assert [u["area_id"] for u in updates] == ["kitchen", "living_room"]
+
+    async def test_create_without_label_id_rejects_area_assign(
+        self, register_tools, mock_client
+    ):
+        async def ws_handler(msg: dict) -> dict:
+            msg_type = msg.get("type", "")
+            if msg_type == "config/area_registry/list":
+                return {
+                    "success": True,
+                    "result": [{"area_id": "kitchen", "name": "Kitchen"}],
+                }
+            if msg_type == "config/label_registry/create":
+                return {"success": True, "result": {"name": "Site Home"}}
+            return {"success": True, "result": {}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+
+        with pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_label"](
+                name="Site Home", areas=["kitchen"]
+            )
+
+        err = json.loads(str(excinfo.value))
+        assert err["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "label_id" in err["error"]["message"]
+        assert _area_updates(mock_client) == []
+
+    async def test_each_area_is_listed_before_update(self, register_tools, mock_client):
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=_ws_handler(
+                areas=[
+                    {"area_id": "kitchen", "name": "Kitchen", "labels": []},
+                    {"area_id": "living_room", "name": "Living", "labels": []},
+                ]
+            )
+        )
+
+        await register_tools["ha_config_set_label"](
+            name="Site Home", areas=["kitchen", "living_room"]
+        )
+
+        types = _sent_types(mock_client)
+        first_update = types.index("config/area_registry/update")
+        second_update = types.index("config/area_registry/update", first_update + 1)
+        assert types[first_update - 1] == "config/area_registry/list"
+        assert types[second_update - 1] == "config/area_registry/list"
+
+    async def test_snapshots_target_areas_before_assign(
+        self, register_tools, mock_client, monkeypatch
+    ):
+        snaps: list[tuple[str, str]] = []
+
+        class FakeMgr:
+            async def maybe_snapshot(self, domain, entity_id, **kwargs):
+                snaps.append((domain, entity_id))
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_labels.get_backup_manager",
+            lambda *_a, **_k: FakeMgr(),
+        )
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=_ws_handler(
+                areas=[{"area_id": "kitchen", "name": "Kitchen", "labels": []}]
+            )
+        )
+
+        await register_tools["ha_config_set_label"](
+            name="Site Home", areas=["kitchen"]
+        )
+
+        assert ("area_or_floor", "area:kitchen") in snaps

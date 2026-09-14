@@ -35,6 +35,13 @@ from .util_helpers import (
 logger = logging.getLogger(__name__)
 
 
+def _label_id_set(entry: dict[str, Any] | None) -> set[str]:
+    """String label IDs stored on an area registry entry."""
+    if not isinstance(entry, dict):
+        return set()
+    return {lbl for lbl in (entry.get("labels") or []) if isinstance(lbl, str)}
+
+
 def _parse_projection_params(
     fields: str | list[str] | None,
     area_fields: str | list[str] | None,
@@ -553,6 +560,88 @@ class AreaTools:
             id_key = "floor_id"
         return message, result_key, id_key, operation, name
 
+    async def _verify_area_labels_written(
+        self,
+        *,
+        parsed_labels: list[str] | None,
+        kind: str,
+        data: dict[str, Any],
+        returned_id: str | None,
+        operation: str,
+        name: str | None,
+    ) -> None:
+        """Confirm HA stored the requested label set, not just a success ack."""
+        if kind != "area" or parsed_labels is None:
+            return
+        expected = set(parsed_labels)
+        if _label_id_set(data) == expected:
+            return
+        listed = await self._client.send_websocket_message(
+            {"type": "config/area_registry/list"}
+        )
+        rows = listed.get("result") if listed.get("success") else None
+        found: dict[str, Any] | None = None
+        if isinstance(rows, list):
+            found = next(
+                (
+                    a
+                    for a in rows
+                    if isinstance(a, dict) and a.get("area_id") == returned_id
+                ),
+                None,
+            )
+        if found is not None and _label_id_set(found) == expected:
+            return
+        ctx: dict[str, Any] = {
+            "operation": operation,
+            "kind": kind,
+            "area_id": returned_id,
+            "expected_labels": parsed_labels,
+        }
+        if name:
+            ctx["name"] = name
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Area write succeeded but the returned entry does not contain "
+                "the requested labels",
+                context=ctx,
+            )
+        )
+
+    async def _area_or_floor_write_success(
+        self,
+        result: dict[str, Any],
+        *,
+        result_key: str,
+        id_key: str,
+        identifier: str | None,
+        kind: str,
+        operation: str,
+        name: str | None,
+        parsed_labels: list[str] | None,
+    ) -> dict[str, Any]:
+        data = result.get("result", {})
+        if not isinstance(data, dict):
+            data = {}
+        returned_id = data.get(id_key, identifier)
+        await self._verify_area_labels_written(
+            parsed_labels=parsed_labels,
+            kind=kind,
+            data=data,
+            returned_id=returned_id if isinstance(returned_id, str) else identifier,
+            operation=operation,
+            name=name,
+        )
+        display_name = name or data.get("name", returned_id)
+        return {
+            "success": True,
+            result_key: data,
+            id_key: returned_id,
+            "kind": kind,
+            "message": f"Successfully {operation}d {kind}: {display_name}",
+        }
+
     # ============================================================
     # COMBINED SET / REMOVE
     # ============================================================
@@ -728,16 +817,16 @@ class AreaTools:
             result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
-                data = result.get("result", {})
-                returned_id = data.get(id_key, id)
-                display_name = name or data.get("name", returned_id)
-                return {
-                    "success": True,
-                    result_key: data,
-                    id_key: returned_id,
-                    "kind": kind,
-                    "message": f"Successfully {operation}d {kind}: {display_name}",
-                }
+                return await self._area_or_floor_write_success(
+                    result,
+                    result_key=result_key,
+                    id_key=id_key,
+                    identifier=id,
+                    kind=kind,
+                    operation=operation,
+                    name=name,
+                    parsed_labels=parsed_labels,
+                )
 
             error = result.get("error", {})
             error_msg = (

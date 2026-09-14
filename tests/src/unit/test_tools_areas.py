@@ -599,3 +599,45 @@ class TestSetAreaLabels:
 
         sent = self._write_message(tools)
         assert "labels" not in sent
+
+    async def test_labels_verified_from_write_result(self, tools):
+        tools._client.send_websocket_message.side_effect = self._ws_handler(
+            label_ids=("site_home",)
+        )
+
+        result = await tools.ha_set_area_or_floor(
+            kind="area", name="Kitchen", labels=["site_home"]
+        )
+
+        assert result["success"] is True
+        assert result["area"]["labels"] == ["site_home"]
+        assert "config/area_registry/list" not in self._sent_types(tools)
+
+    async def test_labels_missing_from_result_fail_after_reread(self, tools):
+        async def handler(msg):
+            msg_type = msg.get("type")
+            if msg_type == "config/label_registry/list":
+                return {"success": True, "result": [{"label_id": "site_home"}]}
+            if msg_type == "config/area_registry/create":
+                return {
+                    "success": True,
+                    "result": {"area_id": "kitchen", "name": "Kitchen"},
+                }
+            if msg_type == "config/area_registry/list":
+                return {
+                    "success": True,
+                    "result": [{"area_id": "kitchen", "name": "Kitchen", "labels": []}],
+                }
+            return {"success": True, "result": {}}
+
+        tools._client.send_websocket_message.side_effect = handler
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_area_or_floor(
+                kind="area", name="Kitchen", labels=["site_home"]
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "requested labels" in error_data["error"]["message"]
+        assert error_data["expected_labels"] == ["site_home"]
