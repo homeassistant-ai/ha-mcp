@@ -404,8 +404,8 @@ def _validate_enabled_constraint(
                 )
                 suggestions = [
                     "Use script.turn_off only to stop a running script; it does not disable the script",
-                    "Use ha_set_entity(enabled=False) only when registry-level hiding is intended",
-                    "Automation enable/disable is available through ha_config_set_automation(enabled=...)",
+                    "Registry-level hiding is not available for scripts; use script.turn_off only to stop a running script",
+                    "Automation enable/disable is available through ha_config_set_automation(identifier=..., enabled=...)",
                 ]
             else:
                 message = (
@@ -1626,7 +1626,8 @@ class EntityTools:
                     "removes the entity from the state machine and hides it from the UI. "
                     "A reload or restart is required to restore it after re-enabling. "
                     "NOT allowed for automation or script entities. For automations use "
-                    "automation.turn_off via ha_call_service(); script.turn_off only stops "
+                    "ha_config_set_automation(identifier=..., enabled=...)"
+                    "; script.turn_off only stops "
                     "a currently running script and does not disable the script."
                 ),
                 default=None,
@@ -1783,8 +1784,8 @@ class EntityTools:
         reloaded. This is NOT the same as "turning off" an entity.
 
         For automations and scripts, enabled=False is blocked. For automations,
-        use:
-        - ha_call_service("automation", "turn_off", entity_id="automation.xxx")
+        use ha_config_set_automation(identifier="automation.xxx", enabled=False)
+        (or enabled=True to re-enable):
         For scripts, ha_call_service("script", "turn_off", entity_id="script.xxx")
         only stops a currently running script; it does not disable the script.
         Home Assistant has no equivalent runtime enable/disable service for scripts.

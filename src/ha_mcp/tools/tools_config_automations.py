@@ -63,6 +63,7 @@ from .util_helpers import (
     fetch_entity_category,
     merge_validation_meta,
     parse_json_param,
+    wait_for_automation_entity_by_unique_id,
     wait_for_entity_registered,
     wait_for_entity_removed,
     wait_for_state_change,
@@ -334,6 +335,38 @@ def _validate_automation_identifier(identifier: str | None) -> None:
         )
 
 
+def _skip_automation_runtime_backup(kwargs: dict[str, Any]) -> bool:
+    """Skip config snapshots for runtime-only enabled changes."""
+    return (
+        kwargs.get("enabled") is not None
+        and kwargs.get("config") is None
+        and kwargs.get("python_transform") is None
+    )
+
+
+async def _resolve_post_write_automation_entity(
+    client: Any,
+    identifier: str | None,
+    entity_id: str | None,
+    wait: bool,
+    response: dict[str, Any],
+) -> str | None:
+    """Resolve a raw unique ID after a write when registration may lag."""
+    if (
+        wait
+        and not entity_id
+        and identifier
+        and not identifier.startswith("automation.")
+    ):
+        try:
+            return await wait_for_automation_entity_by_unique_id(client, identifier)
+        except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+            response.setdefault("warnings", []).append(
+                f"Automation registration verification failed: {e}"
+            )
+    return entity_id
+
+
 def _reject_enabled_in_config(config: Any) -> None:
     """Reject the runtime-only ``enabled`` key in a stored config body."""
     if isinstance(config, dict) and "enabled" in config:
@@ -439,15 +472,14 @@ class AutomationConfigTools:
 
     async def _resolve_automation_entity_id_strict(self, identifier: str) -> str | None:
         """Resolve an identifier without hiding transport/authentication errors."""
-        if identifier.startswith("automation."):
-            return identifier
         states = await self._client.get_states()
         for state in states:
-            if (
-                state.get("entity_id", "").startswith("automation.")
-                and state.get("attributes", {}).get("id") == identifier
+            state_entity_id = state.get("entity_id", "")
+            if state_entity_id.startswith("automation.") and (
+                state_entity_id == identifier
+                or state.get("attributes", {}).get("id") == identifier
             ):
-                return str(state["entity_id"])
+                return str(state_entity_id)
         return None
 
     @tool(
@@ -576,7 +608,11 @@ class AutomationConfigTools:
             "title": "Create or Update Automation",
         },
     )
-    @with_auto_backup(domain="automation", id_fn=automation_backup_target)
+    @with_auto_backup(
+        domain="automation",
+        id_fn=automation_backup_target,
+        skip_fn=_skip_automation_runtime_backup,
+    )
     @log_tool_usage
     async def ha_config_set_automation(
         self,
@@ -1438,6 +1474,10 @@ class AutomationConfigTools:
         for warning in conflict_warnings or []:
             result.setdefault("warnings", []).append(warning)
 
+        entity_id = await _resolve_post_write_automation_entity(
+            self._client, identifier, result.get("entity_id"), wait, result
+        )
+
         if result.get("entity_not_verified"):
             result.setdefault("warnings", []).append(
                 f"{NOT_VERIFIED_WARNING_PREFIX} "
@@ -1448,7 +1488,6 @@ class AutomationConfigTools:
             )
             result.pop("entity_not_verified", None)
 
-        entity_id = result.get("entity_id")
         if not entity_id and identifier and identifier.startswith("automation."):
             entity_id = identifier
         if wait and entity_id:
