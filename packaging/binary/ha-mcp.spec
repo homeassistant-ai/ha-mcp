@@ -80,9 +80,22 @@ packages_to_collect = [
     'typing_extensions',
 ]
 
+# Unused until the FastMCP 4 migration; collecting them imports mcp.cli, which
+# exits without typer and aborts all of ha_mcp's collection.
+_VENDORED_SDK_DIRS = ['_vendor/fastmcp', '_vendor/mcp', '_vendor/mcp_types']
+
+
+def _not_vendored_sdk(name):
+    return not name.startswith(('ha_mcp._vendor.fastmcp', 'ha_mcp._vendor.mcp'))
+
+
 for package in packages_to_collect:
     try:
-        tmp_ret = collect_all(package)
+        tmp_ret = collect_all(
+            package,
+            filter_submodules=_not_vendored_sdk,
+            exclude_datas=_VENDORED_SDK_DIRS if package == 'ha_mcp' else None,
+        )
         datas += tmp_ret[0]
         binaries += tmp_ret[1]
         hiddenimports += tmp_ret[2]
