@@ -34,6 +34,7 @@ jobs:
             const WARNING_DAYS = [3, 5, 6];
             const MS_PER_DAY = 86400000;
             const warningMarker = (day) => `<!-- needs-info-warning:${day} -->`;
+            const closingMarker = '<!-- needs-info-closing -->';
 
             const issues = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner,
@@ -49,6 +50,7 @@ jobs:
             // needs-info so the next daily run can retry it.
             const failedCloses = [];
             const failedPermissionChecks = [];
+            const failedLabelCleanups = [];
 
             for (const issue of issues) {
               const issueNumber = issue.number;
@@ -144,17 +146,23 @@ jobs:
               if (daysSince >= DAYS_BEFORE_CLOSE) {
                 core.info(`  Closing issue #${issueNumber} — ${DAYS_BEFORE_CLOSE} days without reply`);
 
-                let commented = false;
-                try {
-                  await github.rest.issues.createComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: issueNumber,
-                    body: `Hi @${issue.user.login} — closing this issue as we haven't received the requested information after ${DAYS_BEFORE_CLOSE} days.\n\nFeel free to open a new issue once you have the details ready.\n\n*🤖 Automated by Issue Bot*`,
-                  });
-                  commented = true;
-                } catch (err) {
-                  core.warning(`  Failed to post closing comment on #${issueNumber}: ${err.message} — skipping close`);
+                let commented = comments.some(c =>
+                  c.user?.login === BOT_LOGIN &&
+                  new Date(c.created_at) > labeledDate &&
+                  c.body.includes(closingMarker)
+                );
+                if (!commented) {
+                  try {
+                    await github.rest.issues.createComment({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: issueNumber,
+                      body: `Hi @${issue.user.login} — closing this issue as we haven't received the requested information after ${DAYS_BEFORE_CLOSE} days.\n\nFeel free to open a new issue once you have the details ready.\n\n*🤖 Automated by Issue Bot*\n${closingMarker}`,
+                    });
+                    commented = true;
+                  } catch (err) {
+                    core.warning(`  Failed to post closing comment on #${issueNumber}: ${err.message} — skipping close`);
+                  }
                 }
 
                 if (!commented) continue;
@@ -181,7 +189,10 @@ jobs:
                     name: 'needs-info',
                   });
                 } catch (err) {
-                  if (err.status !== 404) core.warning(`  Failed to remove needs-info on #${issueNumber}: ${err.message}`);
+                  if (err.status !== 404) {
+                    core.warning(`  Failed to remove needs-info on closed issue #${issueNumber}`);
+                    failedLabelCleanups.push(issueNumber);
+                  }
                 }
 
                 continue;
@@ -236,4 +247,7 @@ jobs:
             }
             if (failedPermissionChecks.length > 0) {
               core.setFailed(`Permission checks failed for issues #${failedPermissionChecks.join(', #')}; no actions were taken on those issues. Retry after restoring GitHub access.`);
+            }
+            if (failedLabelCleanups.length > 0) {
+              core.setFailed(`Post-close label cleanup failed for issues #${failedLabelCleanups.join(', #')}. These issues are closed; remove needs-info manually after restoring API access.`);
             }

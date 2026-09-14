@@ -15,6 +15,93 @@ import {
 
 const bot = "ha-mcp[bot]";
 
+test("close retries deduplicate their notice and report failed label cleanup", async () => {
+  const yaml = readFileSync(
+    new URL("../../.github/workflows/close-needs-info.yml", import.meta.url),
+    "utf8",
+  );
+  const code = yaml
+    .split("script: |\n")[1]
+    .split("\n")
+    .map((line) => line.replace(/^ {12}/, ""))
+    .join("\n");
+  const comments = [];
+  let failClose = true,
+    failCleanup = false,
+    closed = false;
+  const github = {
+    rest: {
+      issues: {
+        listForRepo: "issues",
+        listEvents: "events",
+        listComments: "comments",
+        createComment: async (p) =>
+          comments.push({
+            user: { login: "github-actions[bot]", type: "Bot" },
+            body: p.body,
+            created_at: new Date().toISOString(),
+          }),
+        update: async () => {
+          if (failClose) throw Error("Close failed");
+          closed = true;
+        },
+        removeLabel: async () => {
+          if (failCleanup)
+            throw Object.assign(Error("Cleanup failed"), { status: 500 });
+        },
+      },
+      repos: {
+        getCollaboratorPermissionLevel: async () => ({
+          data: { role_name: "maintain" },
+        }),
+      },
+    },
+    paginate: async (kind) =>
+      kind === "issues"
+        ? [{ number: 1, title: "Fixture", user: user("reporter") }]
+        : kind === "comments"
+          ? comments
+          : [
+              {
+                id: 1,
+                event: "labeled",
+                actor: user("maintainer"),
+                label: { name: "needs-info" },
+                created_at: "2020-01-01T00:00:00Z",
+              },
+            ],
+  };
+  const run = () =>
+    new Function(
+      "github",
+      "context",
+      "core",
+      `return (async () => {${code}})()`,
+    )(
+      github,
+      { repo: { owner: "test", repo: "repo" } },
+      {
+        info() {},
+        warning() {},
+        setFailed(message) {
+          throw Error(message);
+        },
+      },
+    );
+  await assert.rejects(run(), /Failed to close/);
+  await assert.rejects(run(), /Failed to close/);
+  assert.equal(
+    comments.length,
+    1,
+    "A retry must reuse the already posted closing notice",
+  );
+  failClose = false;
+  failCleanup = true;
+  await assert.rejects(run(), /label.*#1/i);
+  assert.equal(closed, true);
+  assert.equal(comments.length, 1);
+});
+
 test("final comment patches use the full retry budget after the label succeeds", async () => {
   const s = snapshot(),
     api = new FakeGitHub(s);
