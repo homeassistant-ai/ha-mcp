@@ -60,7 +60,7 @@ export const schema = object({
       value: string(300),
       evidence,
     }),
-    fields.length,
+    fields.length * 2,
   ),
   missing_fields: array({ type: "string", enum: fields }, fields.length),
   already_requested: array(

@@ -29,6 +29,12 @@ error messages and uncertainty. Never reproduce credentials or secret URLs.
   Each fact.value must be a short verbatim excerpt contained in one of its
   evidence quotes. Use separate facts for multiple tools/clients; put paraphrases
   and synthesized explanations in the summary instead.
+  Check every available field and include every explicitly stated concrete value:
+  install_method, ha_mcp_version, ha_version, client, transport, operating_system,
+  affected_tool, error, reproduction. Do not omit a known field just because its
+  source passage also supports another fact. "Unknown" or "not supplied" is not
+  a known value. Up to 18 fact rows allow multiple tools/clients without dropping
+  the installation method, versions or other environment details.
 - Ask only for essential missing fields that block understanding this report.
   Use existing replies, even if they answer fields absent from the initial body.
   Do not ask for an error message when the symptom is wrong behavior without an
