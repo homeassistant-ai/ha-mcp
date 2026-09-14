@@ -118,11 +118,12 @@ def _validate_cross_kind_params(
     level: int | None,
     floor_id: str | None,
     picture: str | None,
+    labels: list[str] | None = None,
 ) -> None:
     """Reject params that don't belong to *kind* before building a set message."""
     # Reject cross-kind params loudly so silent intent loss can't happen
     # (e.g., kind='floor' with picture='...' previously dropped the picture
-    # without a diagnostic).
+    # without a diagnostic). Floors have no labels in HA core.
     cross_kind_params: list[str] = []
     if kind == "area" and level is not None:
         cross_kind_params.append("level")
@@ -131,6 +132,8 @@ def _validate_cross_kind_params(
             cross_kind_params.append("floor_id")
         if picture is not None:
             cross_kind_params.append("picture")
+        if labels is not None:
+            cross_kind_params.append("labels")
     if cross_kind_params:
         raise_tool_error(
             create_error_response(
@@ -138,7 +141,7 @@ def _validate_cross_kind_params(
                 f"Parameter(s) {cross_kind_params} are not valid for kind={kind!r}",
                 context={"kind": kind, "invalid_parameters": cross_kind_params},
                 suggestions=[
-                    "For kind='area' use: name, id, floor_id, icon, aliases, picture",
+                    "For kind='area' use: name, id, floor_id, icon, aliases, picture, labels",
                     "For kind='floor' use: name, id, level, icon, aliases",
                 ],
             )
@@ -159,6 +162,7 @@ class AreaTools:
         icon: str | None,
         parsed_aliases: list[str] | None,
         picture: str | None,
+        parsed_labels: list[str] | None,
     ) -> dict[str, Any]:
         """Build a WebSocket message for updating an existing area."""
         message: dict[str, Any] = {
@@ -175,6 +179,8 @@ class AreaTools:
             message["aliases"] = parsed_aliases
         if picture is not None:
             message["picture"] = picture if picture else None
+        if parsed_labels is not None:
+            message["labels"] = parsed_labels
         return message
 
     @staticmethod
@@ -184,6 +190,7 @@ class AreaTools:
         icon: str | None,
         parsed_aliases: list[str] | None,
         picture: str | None,
+        parsed_labels: list[str] | None,
     ) -> dict[str, Any]:
         """Build a WebSocket message for creating a new area."""
         message: dict[str, Any] = {
@@ -198,6 +205,8 @@ class AreaTools:
             message["aliases"] = parsed_aliases
         if picture:
             message["picture"] = picture
+        if parsed_labels:
+            message["labels"] = parsed_labels
         return message
 
     @staticmethod
@@ -475,6 +484,7 @@ class AreaTools:
         icon: str | None,
         parsed_aliases: list[str] | None,
         picture: str | None,
+        parsed_labels: list[str] | None,
     ) -> tuple[dict[str, Any], str, str, str, str | None]:
         """Build the WS message plus (result_key, id_key, operation, name) for a set.
 
@@ -490,6 +500,7 @@ class AreaTools:
                     icon,
                     parsed_aliases,
                     picture,
+                    parsed_labels,
                 )
                 operation = "update"
             else:
@@ -508,6 +519,7 @@ class AreaTools:
                     icon,
                     parsed_aliases,
                     picture,
+                    parsed_labels,
                 )
                 operation = "create"
             result_key = "area"
@@ -622,16 +634,29 @@ class AreaTools:
                 default=None,
             ),
         ] = None,
+        labels: Annotated[
+            str | list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Label IDs when kind='area' (replaces the area's label set; "
+                    "empty list to clear). Omit to leave labels unchanged. "
+                    "Only valid when kind='area' — floors have no labels."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Create or update a Home Assistant area or floor.
 
-        Pass kind='area' (with optional floor_id, picture) or kind='floor' (with optional level).
+        Pass kind='area' (with optional floor_id, picture, labels) or kind='floor' (with optional level).
         Provide name only to create a new entry; provide id to update an existing one.
-        Cross-kind parameters (e.g., picture under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.
+        Cross-kind parameters (e.g., picture or labels under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.
 
         EXAMPLES:
         ha_set_area_or_floor(kind="area", name="Kitchen")
         ha_set_area_or_floor(kind="area", id="kitchen", floor_id="ground_floor")
+        ha_set_area_or_floor(kind="area", id="kitchen", labels=["site_home"])
         ha_set_area_or_floor(kind="floor", name="Basement", level=-1)
         ha_set_area_or_floor(kind="floor", id="ground_floor", level=0)
         """
@@ -647,7 +672,17 @@ class AreaTools:
                     )
                 )
 
-            _validate_cross_kind_params(kind, level, floor_id, picture)
+            try:
+                parsed_labels = parse_string_list_param(labels, "labels")
+            except ValueError as e:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid labels parameter: {e}",
+                    )
+                )
+
+            _validate_cross_kind_params(kind, level, floor_id, picture, parsed_labels)
 
             # ``None`` stays the documented "create-new" sentinel; explicit
             # empty/whitespace would silently route to the ``if id:`` create
@@ -673,15 +708,21 @@ class AreaTools:
                     icon,
                     parsed_aliases,
                     picture,
+                    parsed_labels,
                 )
             )
 
-            # Issue #2159: the area registry stores an unknown floor_id
-            # verbatim, orphaning the area. ``_validate_cross_kind_params``
-            # already rejected floor_id for kind='floor', so this only ever
-            # runs for areas; None and "" (clear) skip the lookup.
+            # Issue #2159: the area registry stores an unknown floor_id or
+            # label_id verbatim. ``_validate_cross_kind_params`` already
+            # rejected floor_id/labels for kind='floor', so this only ever
+            # runs for areas; None and "" / [] (clear) skip the lookup.
             await validate_registry_ids(
-                self._client, None, None, None, floor_id=floor_id, fail_closed=True
+                self._client,
+                None,
+                parsed_labels,
+                None,
+                floor_id=floor_id,
+                fail_closed=True,
             )
 
             result = await self._client.send_websocket_message(message)
@@ -728,6 +769,9 @@ class AreaTools:
             ]
             if kind == "area":
                 suggestions.append("If assigning to a floor, verify floor_id exists")
+                suggestions.append(
+                    "If assigning labels, verify label IDs with ha_config_get_label()"
+                )
             exception_to_structured_error(
                 e,
                 context={"operation": operation, "kind": kind, "name": name, "id": id},
