@@ -467,7 +467,7 @@
     "advanced.code_mode_saved_tools_path.label": "已保存工具路径",
     "advanced.code_mode_saved_tools_path.help": "用于在重启间持久化自定义工具的 JSON 文件。需重启。",
     "advanced.extra_yaml_write_keys.label": "额外的 YAML 可写键",
-    "advanced.extra_yaml_write_keys.help": "以逗号分隔的顶层键：除内置键外，ha_config_set_yaml 还可写入这些键，适用于本安装中以 YAML 为主的集成（例如 alert2）。重新定义 Home Assistant 自身信任边界的键始终无法添加，会被忽略。需要自定义组件 1.2.4 或更高版本。",
+    "advanced.extra_yaml_write_keys.help": "此安装中面向 YAML 优先的集成（例如 alert2）除内置键外，ha_config_set_yaml 还可写入的额外顶级键。每行输入一个键或用逗号分隔键。重新定义 Home Assistant 自身信任边界的键永远无法添加且将被忽略。需要自定义组件 1.2.4 或更新版本。",
     "advanced.sidecar_pin_port.label": "设置界面旁路服务端口",
     "advanced.sidecar_pin_port.help": "0 会在首次启动时选择一个空闲端口，并在后续重启中保留该端口；1024–65535 会固定一个首选端口（如果被占用，则回退到空闲端口）。需要重启。",
     "advanced.enable_dev_mode.label": "开发者模式",
