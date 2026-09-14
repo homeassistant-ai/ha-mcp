@@ -15,10 +15,10 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any, Literal
 
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import tool
-from fastmcp.tools.tool import ToolResult
 from pydantic import Field
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import ToolResult, tool
 
 from ..dashboard_screenshot.capture import (
     DEFAULT_HEIGHT,

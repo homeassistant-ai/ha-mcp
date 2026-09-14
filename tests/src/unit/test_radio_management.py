@@ -10,8 +10,8 @@ the Matter handler + enricher end to end against a mocked WebSocket client.
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_radio import HANDLERS, register_radio_tools
 from ha_mcp.tools.tools_registry import register_registry_tools
 

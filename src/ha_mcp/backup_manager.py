@@ -62,7 +62,8 @@ from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict
 
 import yaml  # type: ignore[import-untyped]
-from fastmcp.exceptions import ToolError
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .client.rest_client import HomeAssistantConnectionError, HomeAssistantError
 from .utils.data_paths import get_data_dir
@@ -2215,7 +2216,7 @@ async def _fetch_dashboard(client: Any, entity_id: str) -> Any:
     The component refuses YAML bodies, so those capture through legacy unchanged.
     Imported lazily to avoid an import cycle.
     """
-    from fastmcp.exceptions import ToolError
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
     from .tools.tools_config_dashboards import (
         _component_dashboard_config,

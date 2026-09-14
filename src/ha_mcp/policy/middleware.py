@@ -9,7 +9,12 @@ from typing import Any, NoReturn
 
 import anyio
 from anyio.to_thread import run_sync as run_in_thread
-from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
+
+from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
+    CallNext,
+    Middleware,
+    MiddlewareContext,
+)
 
 from ..errors import ErrorCode, create_error_response
 from ..renamed_tools import current_tool_name

@@ -10,8 +10,8 @@ the dispatcher enforces against the handler's ``SUPPORTED`` specs.
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_radio import register_radio_tools
 
 _IEEE = "00:11:22:33:44:55:66:77"

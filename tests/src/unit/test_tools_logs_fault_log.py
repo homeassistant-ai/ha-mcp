@@ -12,8 +12,8 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.log_common import DEFAULT_LOG_LIMIT
 from ha_mcp.tools.log_sources_fault import (
     FAULT_LOG_PATH,

@@ -5,8 +5,8 @@ import logging
 import re
 from typing import Any
 
-from fastmcp import Context
-from fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp import Context
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ...client.rest_client import HomeAssistantAPIError
 from ...errors import get_error_code, get_error_message

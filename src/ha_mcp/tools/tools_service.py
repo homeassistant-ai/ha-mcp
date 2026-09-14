@@ -8,10 +8,11 @@ import logging
 from typing import Annotated, Any, NamedTuple, NoReturn, NotRequired, TypedDict, cast
 
 import httpx
-from fastmcp import Context
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import tool
 from pydantic import ConfigDict, Field, SkipValidation, TypeAdapter, ValidationError
+
+from ha_mcp._vendor.fastmcp import Context
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..client.rest_client import (
     HomeAssistantAPIError,

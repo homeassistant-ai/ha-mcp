@@ -58,8 +58,12 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn
 
-from fastmcp.exceptions import ToolError
-from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
+    CallNext,
+    Middleware,
+    MiddlewareContext,
+)
 
 from ..errors import ErrorCode, create_entity_not_found_error, create_error_response
 from ..renamed_tools import current_tool_name
@@ -75,7 +79,7 @@ from .resolver import (
 )
 
 if TYPE_CHECKING:
-    from fastmcp.tools.tool import ToolResult
+    from ha_mcp._vendor.fastmcp.tools import ToolResult
 
 logger = logging.getLogger(__name__)
 

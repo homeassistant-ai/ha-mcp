@@ -15,7 +15,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp import FastMCP
+
+from ha_mcp._vendor.fastmcp import FastMCP
 
 # ---------------------------------------------------------------------------
 # Fixtures

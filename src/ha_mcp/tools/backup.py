@@ -21,9 +21,10 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Any, Literal, NoReturn, cast
 
-from fastmcp import Context
-from fastmcp.exceptions import ToolError
 from pydantic import Field
+
+from ha_mcp._vendor.fastmcp import Context
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..backup_manager import (
     LEGACY_PREFIX,
@@ -57,7 +58,7 @@ from .helpers import (
 )
 
 if TYPE_CHECKING:
-    from fastmcp import FastMCP
+    from ha_mcp._vendor.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 

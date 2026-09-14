@@ -11,7 +11,8 @@ renames (energy/get_prefs, energy/save_prefs) that mocks cannot.
 import logging
 
 import pytest
-from fastmcp.exceptions import ToolError
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..utilities.assertions import assert_mcp_success
 

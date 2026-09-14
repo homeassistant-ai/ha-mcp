@@ -22,11 +22,11 @@ from typing import Any, ClassVar, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
-from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from pydantic import ValidationError
 
 from ha_mcp import config
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.exceptions import ValidationError as FastMCPValidationError
 from ha_mcp.dashboard_screenshot.provision import EngineTarget
 
 _PNG = b"\x89PNG\r\n\x1a\nunit"
@@ -173,8 +173,7 @@ class TestStandaloneScreenshotTool:
     async def test_viewport_presets_registered_validation_and_schema(
         self, monkeypatch: Any
     ) -> None:
-        from fastmcp import FastMCP
-
+        from ha_mcp._vendor.fastmcp import FastMCP
         from ha_mcp.dashboard_screenshot.paths import DashboardRenderTarget
         from ha_mcp.tools import tools_dashboard_screenshot as mod
 
@@ -235,8 +234,7 @@ class TestStandaloneScreenshotTool:
     async def test_structured_target_returns_ordered_images_and_metadata(
         self, monkeypatch: Any
     ) -> None:
-        from fastmcp.tools.tool import ToolResult
-
+        from ha_mcp._vendor.fastmcp.tools import ToolResult
         from ha_mcp.dashboard_screenshot.paths import DashboardRenderTarget
         from ha_mcp.tools import tools_dashboard_screenshot as mod
 
@@ -1484,7 +1482,7 @@ def test_multiple_capture_content_and_metadata_stay_ordered() -> None:
     content = dashboard_image_content(captures)
     metadata = dashboard_screenshot_metadata(captures, "wall-panel/home")
 
-    assert [block.mimeType for block in content] == ["image/png", "image/png"]
+    assert [block.mime_type for block in content] == ["image/png", "image/png"]
     assert [item["content_index"] for item in metadata] == [0, 1]
     assert [item["viewport"]["preset"] for item in metadata] == [
         "mobile",
@@ -1565,7 +1563,7 @@ def test_non_png_native_content_preserves_mime(
         ]
     )
 
-    assert content[0].mimeType == mime_type
+    assert content[0].mime_type == mime_type
 
 
 class TestMaybeAttachScreenshot:
@@ -1639,8 +1637,7 @@ class TestMaybeAttachScreenshot:
     async def test_success_returns_toolresult_with_image(
         self, monkeypatch: Any
     ) -> None:
-        from fastmcp.tools.tool import ToolResult
-
+        from ha_mcp._vendor.fastmcp.tools import ToolResult
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools.tools_config_dashboards import _maybe_attach_screenshot
 
@@ -2200,8 +2197,7 @@ class TestPublicScreenshotOptionForwarding:
     async def test_get_include_screenshot_forwards_view_path(
         self, monkeypatch: Any
     ) -> None:
-        from fastmcp.tools.tool import ToolResult
-
+        from ha_mcp._vendor.fastmcp.tools import ToolResult
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools import tools_config_dashboards as dashboard_tools
 
@@ -2243,8 +2239,7 @@ class TestPublicScreenshotOptionForwarding:
     async def test_set_return_screenshot_forwards_view_path(
         self, monkeypatch: Any
     ) -> None:
-        from fastmcp.tools.tool import ToolResult
-
+        from ha_mcp._vendor.fastmcp.tools import ToolResult
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools import auto_backup
         from ha_mcp.tools import tools_config_dashboards as dashboard_tools
@@ -2299,8 +2294,7 @@ class TestPublicScreenshotOptionForwarding:
         self, monkeypatch: Any
     ) -> None:
         """A failed theme restore must surface in the config-tool response."""
-        from fastmcp.tools.tool import ToolResult
-
+        from ha_mcp._vendor.fastmcp.tools import ToolResult
         from ha_mcp.dashboard_screenshot import capture
         from ha_mcp.tools import tools_config_dashboards as dashboard_tools
 

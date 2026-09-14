@@ -10,8 +10,13 @@ The structured error format enables AI agents to:
 - Understand the context and details of failures
 """
 
+import logging
 from enum import StrEnum
 from typing import Any
+
+# Level FastMCP logs ha-mcp's ToolErrors at: user-facing failures, not server
+# bugs. A ToolError built without it logs at FastMCP's default, ERROR.
+TOOL_ERROR_LOG_LEVEL = logging.WARNING
 
 
 class ErrorCode(StrEnum):

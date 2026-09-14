@@ -16,7 +16,8 @@ Tests should handle both fully functional and partially disabled states.
 import logging
 
 import pytest
-from fastmcp.exceptions import ToolError
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ...utilities.assertions import (
     parse_mcp_result,

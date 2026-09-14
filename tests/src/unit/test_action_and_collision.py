@@ -17,7 +17,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 # ---------------------------------------------------------------------------
 # Fixtures — local copy of the pattern used by test_helper_field_persistence.py.

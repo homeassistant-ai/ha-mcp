@@ -109,8 +109,8 @@ async def test_readonly_endpoint_with_real_ha(
 
 @pytest.mark.embedded_only
 async def test_embedded_webhook_readonly_endpoint(ha_container_with_fresh_config):
-    from fastmcp import Client
-    from fastmcp.client.transports import StreamableHttpTransport
+    from ha_mcp._vendor.fastmcp import Client
+    from ha_mcp._vendor.fastmcp.client.transports import StreamableHttpTransport
 
     from ..utilities.assertions import parse_mcp_result
     from .test_readonly_mode import _expect_read_only_blocked

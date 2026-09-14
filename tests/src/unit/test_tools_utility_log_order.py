@@ -10,8 +10,8 @@ import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import ErrorLogPage, HomeAssistantConnectionError
 from ha_mcp.tools.tools_logs import LogTools
 

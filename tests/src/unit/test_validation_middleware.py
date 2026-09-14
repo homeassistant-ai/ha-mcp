@@ -3,9 +3,9 @@
 import json
 
 import pytest
-from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp import FastMCP
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.validation_middleware import ValidationErrorMiddleware
 
 
@@ -40,9 +40,12 @@ async def test_wrapped_fastmcp_validation_error_is_structured():
     ToolError. Version-independent: the wrapped error is synthesised, so this
     exercises the 3.4.3 code path even on older fastmcp.
     """
-    from fastmcp.exceptions import ValidationError as FastMCPValidationError
     from pydantic import BaseModel
     from pydantic import ValidationError as PydanticValidationError
+
+    from ha_mcp._vendor.fastmcp.exceptions import (
+        ValidationError as FastMCPValidationError,
+    )
 
     class _Args(BaseModel):
         config: dict

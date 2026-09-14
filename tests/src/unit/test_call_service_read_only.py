@@ -4,9 +4,9 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp import Client, FastMCP
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp import Client, FastMCP
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.config import get_global_settings
 from ha_mcp.read_only import ReadOnlyMiddleware, ReadOnlyToolsTransform
 from ha_mcp.tools.tools_service import ServiceTools, register_service_tools

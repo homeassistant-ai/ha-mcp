@@ -10,10 +10,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, cast
 
-from fastmcp import Context
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import tool
 from pydantic import Field
+
+from ha_mcp._vendor.fastmcp import Context
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..client.rest_client import (
     HomeAssistantAPIError,

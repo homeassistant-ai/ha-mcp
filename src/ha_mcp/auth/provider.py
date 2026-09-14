@@ -21,13 +21,18 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-from fastmcp.server.auth.auth import (
+from pydantic import AnyHttpUrl, ValidationError
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, RedirectResponse, Response
+from starlette.routing import Route
+
+from ha_mcp._vendor.fastmcp.server.auth.auth import (
     AccessToken,  # FastMCP version has claims field
     ClientRegistrationOptions,
     OAuthProvider,
     RevocationOptions,
 )
-from mcp.server.auth.provider import (
+from ha_mcp._vendor.mcp.server.auth.provider import (
     AuthorizationCode,
     AuthorizationParams,
     AuthorizeError,
@@ -35,11 +40,7 @@ from mcp.server.auth.provider import (
     TokenError,
     construct_redirect_uri,
 )
-from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
-from pydantic import AnyHttpUrl, ValidationError
-from starlette.requests import Request
-from starlette.responses import HTMLResponse, RedirectResponse, Response
-from starlette.routing import Route
+from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 from ..utils.data_paths import get_data_dir
 from .consent_form import create_consent_html, create_error_html
@@ -442,7 +443,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
 
         async def enhanced_metadata_handler(request: Request) -> Response:
             """Enhanced OAuth metadata handler with Claude.ai compatibility."""
-            from mcp.server.auth.routes import build_metadata
+            from ha_mcp._vendor.mcp.server.auth.routes import build_metadata
 
             # Get base metadata from MCP SDK
             metadata = build_metadata(
@@ -492,7 +493,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
                 isinstance(route, Route)
                 and route.path == "/.well-known/oauth-authorization-server"
             ):
-                from mcp.server.auth.routes import cors_middleware
+                from ha_mcp._vendor.mcp.server.auth.routes import cors_middleware
 
                 enhanced_routes.append(
                     Route(
@@ -520,7 +521,7 @@ class HomeAssistantOAuthProvider(OAuthProvider):
         # ChatGPT expects /.well-known/openid-configuration (OpenID Connect Discovery)
         # in addition to /.well-known/oauth-authorization-server (OAuth 2.1)
         # Per RFC 8414, many servers support both endpoints with identical metadata
-        from mcp.server.auth.routes import cors_middleware
+        from ha_mcp._vendor.mcp.server.auth.routes import cors_middleware
 
         enhanced_routes.append(
             Route(

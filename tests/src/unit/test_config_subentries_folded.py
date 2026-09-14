@@ -6,8 +6,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools.tools_config_helpers import register_config_helper_tools
 from ha_mcp.tools.tools_integrations import IntegrationTools

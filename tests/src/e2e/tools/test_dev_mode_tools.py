@@ -97,7 +97,7 @@ async def _dev_mode_server(dev_mode_enabled, ha_container_with_fresh_config):
 @pytest.fixture
 async def mcp_client_with_dev_mode(_dev_mode_server):
     """Create MCP client connected to the dev-mode-enabled server."""
-    from fastmcp import Client
+    from ha_mcp._vendor.fastmcp import Client
 
     mcp_client = Client(_dev_mode_server.mcp)
     async with mcp_client:
@@ -113,8 +113,7 @@ class TestDevModeAvailability:
         try:
             _reset_settings_state()
 
-            from fastmcp import Client
-
+            from ha_mcp._vendor.fastmcp import Client
             from ha_mcp.server import HomeAssistantSmartMCPServer
 
             server = HomeAssistantSmartMCPServer(

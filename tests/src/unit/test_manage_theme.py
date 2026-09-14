@@ -4,8 +4,8 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools.tools_themes import ThemesTools
 

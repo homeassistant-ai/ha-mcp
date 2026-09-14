@@ -400,7 +400,7 @@ class TestHandleSkillGuideCall:
 
     def test_unknown_skill_raises(self, server, populated_skills_dir):
         """An unknown skill name raises ToolError, not silent empty dict."""
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         with pytest.raises(ToolError):
             server._handle_skill_guide_call(
@@ -409,7 +409,7 @@ class TestHandleSkillGuideCall:
 
     def test_skill_traversal_raises(self, server, populated_skills_dir):
         """``../`` in the skill arg must not escape the skills dir."""
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         with pytest.raises(ToolError):
             server._handle_skill_guide_call(populated_skills_dir, "../..", None)
@@ -427,14 +427,14 @@ class TestHandleSkillGuideCall:
         every file under every bundled skill. That contradicts tier 1's
         "one skill at a time" contract. Reject with RESOURCE_NOT_FOUND.
         """
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         with pytest.raises(ToolError):
             server._handle_skill_guide_call(populated_skills_dir, skill, None)
 
     def test_file_traversal_raises(self, server, populated_skills_dir):
         """``../`` in the file arg must not escape the skill dir."""
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         with pytest.raises(ToolError):
             server._handle_skill_guide_call(
@@ -445,7 +445,7 @@ class TestHandleSkillGuideCall:
 
     def test_missing_file_raises(self, server, populated_skills_dir):
         """A file that doesn't exist in a valid skill raises rather than 404s."""
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         with pytest.raises(ToolError):
             server._handle_skill_guide_call(
@@ -484,14 +484,14 @@ class TestHandleSkillGuideCall:
 
     def test_degraded_mode_tier2_raises(self, server):
         """No skills dir → asking for a specific skill raises explicitly."""
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         with pytest.raises(ToolError):
             server._handle_skill_guide_call(None, "best-practices", None)
 
     def test_degraded_mode_tier3_raises(self, server):
         """No skills dir → asking for a file raises explicitly."""
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         with pytest.raises(ToolError):
             server._handle_skill_guide_call(None, "best-practices", "SKILL.md")
@@ -816,7 +816,7 @@ class TestHandleSkillGuideCallReadFailures:
     ):
         """`read_text` raising OSError must surface as ToolError with
         INTERNAL_ERROR, not as a success payload with empty content."""
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         original_read_text = Path.read_text
 
@@ -847,7 +847,7 @@ class TestHandleSkillGuideCallReadFailures:
         """`Path.resolve` raising OSError (rare; some platforms) must
         surface as ToolError, not bubble as INTERNAL_ERROR via
         fastmcp's generic wrapper."""
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         original_resolve = Path.resolve
 
@@ -907,7 +907,7 @@ class TestSymlinkRejection:
     def test_tier3_rejects_symlink_file(self, server, dir_with_symlink):
         """Tier 3 read on the symlink name must raise, not return the
         outside file's content."""
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         with pytest.raises(ToolError) as excinfo:
             server._handle_skill_guide_call(
@@ -947,7 +947,7 @@ class TestRegisterSkillsOrchestration:
         original_import = builtins.__import__
 
         def fake_import(name, *args, **kwargs):
-            if name == "fastmcp.server.providers.skills":
+            if name == "ha_mcp._vendor.fastmcp.server.providers.skills":
                 raise ImportError("simulated missing SkillsDirectoryProvider")
             return original_import(name, *args, **kwargs)
 

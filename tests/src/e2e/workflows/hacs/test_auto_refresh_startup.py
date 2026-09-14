@@ -48,9 +48,9 @@ from contextlib import suppress
 from pathlib import Path
 
 import pytest
-from fastmcp import Client
-from fastmcp.client.transports import StdioTransport
 
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp._vendor.fastmcp.client.transports import StdioTransport
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,

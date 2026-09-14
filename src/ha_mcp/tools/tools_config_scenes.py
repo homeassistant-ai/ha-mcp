@@ -11,9 +11,10 @@ import asyncio
 import logging
 from typing import Annotated, Any, NoReturn, cast
 
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import tool
 from pydantic import Field
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..client.rest_client import (
     HomeAssistantAPIError,

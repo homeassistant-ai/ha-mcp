@@ -16,12 +16,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from fastmcp.server.transforms import Transform
-from fastmcp.tools import Tool
+from ha_mcp._vendor.fastmcp.server.transforms import Transform
+from ha_mcp._vendor.fastmcp.tools import Tool
 
 if TYPE_CHECKING:
-    from fastmcp.server.transforms import GetToolNext
-    from fastmcp.utilities.versions import VersionSpec
+    from ha_mcp._vendor.fastmcp.server.transforms import GetToolNext
+    from ha_mcp._vendor.fastmcp.utilities.versions import VersionSpec
 
 
 class LiteDocstringsTransform(Transform):

@@ -514,8 +514,7 @@ class TestReviewRoundTwoGaps:
         """`ha_call_service(ws_command=...)` returns before the method's own
         try block, so without a handler of its own the raise escapes the tool
         unstructured."""
-        from fastmcp.exceptions import ToolError
-
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
         from ha_mcp.tools.tools_service import ServiceTools
 
         client = MagicMock()

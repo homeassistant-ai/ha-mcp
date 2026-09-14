@@ -9,13 +9,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from fastmcp.exceptions import ToolError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from ha_mcp import backup_manager as bm
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.backup_manager import BackupRestoreError, MandatoryBackupError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.settings_ui import _handlers_backups as ui

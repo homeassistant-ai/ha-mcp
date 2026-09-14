@@ -747,7 +747,7 @@ class TestTierOrder:
     ) -> None:
         """The File & YAML Tools gates raise rather than return; that is a
         missing entry, not a failure of the blueprint being asked for."""
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         async def refuse(_c: Any, _s: str, _d: dict[str, Any]) -> Any:
             raise ToolError("entry not set up")

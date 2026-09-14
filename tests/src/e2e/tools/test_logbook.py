@@ -6,8 +6,8 @@ import json
 import logging
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.error_log_parsing import _DEFAULT_TOP_N
 
 from ..utilities.assertions import MCPAssertions, safe_call_tool

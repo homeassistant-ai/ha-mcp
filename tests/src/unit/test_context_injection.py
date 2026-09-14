@@ -602,8 +602,7 @@ async def test_ha_get_automation_traces_empty_diagnostics_emits_progress() -> No
 
 @pytest.mark.asyncio
 async def test_ha_manage_backup_ctx_is_injected_not_exposed() -> None:
-    from fastmcp import FastMCP
-
+    from ha_mcp._vendor.fastmcp import FastMCP
     from ha_mcp.tools.backup import register_backup_tools
 
     mcp = FastMCP("test")

@@ -11,7 +11,7 @@ Consolidation and Module Size.
 
 from typing import Any, Literal, NoReturn
 
-from fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .._version import is_running_in_addon
 from ..client.rest_client import (

@@ -4,8 +4,8 @@ import asyncio
 import json
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.smart_search._entities import EntitySearchMixin
 from ha_mcp.visibility import resolver
 from ha_mcp.visibility.model import VisibilityConfig

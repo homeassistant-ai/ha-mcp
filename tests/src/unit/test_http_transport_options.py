@@ -4,11 +4,11 @@ import asyncio
 import json
 import logging
 
-import fastmcp
 import pytest
 from starlette.requests import ClientDisconnect, Request
 from starlette.testclient import TestClient
 
+from ha_mcp._vendor import fastmcp
 from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.http_transport import HttpTransportFastMCP, TransportDiagnostics
 from ha_mcp.utils.data_paths import get_data_dir

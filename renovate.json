@@ -61,7 +61,7 @@
       "datasourceTemplate": "{{{datasource}}}"
     },
     {
-      "description": "Vendored library pins have no stock package manager. The websockets package rule regenerates its private tree with scripts/vendor_websockets.py before committing; drift, manifest, and API tests remain merge gates.",
+      "description": "Vendored library pins have no stock package manager. The websockets package rule regenerates its private tree with scripts/vendor_websockets.py, and the vendored fastmcp rule regenerates the FastMCP / MCP SDK trees with scripts/vendor_fastmcp.py, before committing; drift, manifest, and API tests remain merge gates.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^src/ha_mcp/_vendor/requirements\\.txt$/"
@@ -134,6 +134,41 @@
         ],
         "fileFilters": [
           "src/ha_mcp/_vendor/websockets/**"
+        ],
+        "executionMode": "update",
+        "installTools": {
+          "python": {}
+        }
+      }
+    },
+    {
+      "description": "Regenerate the private FastMCP / MCP SDK trees with their pins; grouped because mcp pins mcp-types exactly.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDatasources": [
+        "pypi"
+      ],
+      "matchPackageNames": [
+        "fastmcp-slim",
+        "mcp",
+        "mcp-types"
+      ],
+      "matchFileNames": [
+        "src/ha_mcp/_vendor/requirements.txt"
+      ],
+      "groupName": "vendored fastmcp",
+      "constraints": {
+        "python": ">=3.13,<3.14"
+      },
+      "postUpgradeTasks": {
+        "commands": [
+          "python3 -I scripts/vendor_fastmcp.py"
+        ],
+        "fileFilters": [
+          "src/ha_mcp/_vendor/fastmcp/**",
+          "src/ha_mcp/_vendor/mcp/**",
+          "src/ha_mcp/_vendor/mcp_types/**"
         ],
         "executionMode": "update",
         "installTools": {

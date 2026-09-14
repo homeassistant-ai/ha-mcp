@@ -1,8 +1,11 @@
 # Vendored-library pins, bumped by the renovate custom manager that matches
 # this exact path (see renovate.json — no stock manager sees this file).
 #
-# Renovate runs scripts/vendor_websockets.py before committing a websockets
-# bump, including the source, license, and manifest in the same update.
-# tests/src/unit/test_vendored_websockets.py still rejects stale or altered trees.
+# Renovate runs scripts/vendor_websockets.py (websockets) or
+# scripts/vendor_fastmcp.py (fastmcp-slim, mcp, mcp-types) before committing
+# a bump; tests/src/unit/test_vendored_*.py reject stale or altered trees.
 # For a manual pin change, run the same generator and commit its outputs.
 websockets==17.1
+fastmcp-slim==4.0.3
+mcp==2.2.0
+mcp-types==2.2.0

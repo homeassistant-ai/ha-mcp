@@ -25,10 +25,10 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp import Client
-from fastmcp.exceptions import ToolError
 from test_constants import TEST_TOKEN
 
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.policy.handlers import build_policy_handlers
 from ha_mcp.server import HomeAssistantSmartMCPServer

@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.tools import tools_dev
 from ha_mcp.tools.tools_dev import (
@@ -1406,7 +1406,7 @@ def _fake_server_with_tools(tools, *, approval_queue=None):
             description="desc",
             title=None,
             annotations=SimpleNamespace(
-                readOnlyHint=None, destructiveHint=None, title=None
+                read_only_hint=None, destructive_hint=None, title=None
             ),
         )
         for name, tags in tools

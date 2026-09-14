@@ -12,9 +12,10 @@ import uuid
 from collections.abc import Callable
 from typing import Annotated, Any, Literal, NoReturn, TypedDict
 
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import tool
 from pydantic import AliasChoices, Field
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..client.rest_client import (
     HomeAssistantAPIError,

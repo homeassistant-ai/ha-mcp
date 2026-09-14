@@ -1,6 +1,6 @@
 """Test MCP server configuration and metadata."""
 
-from mcp.types import Icon
+from ha_mcp._vendor.mcp.types import Icon
 
 
 class TestServerIcons:
@@ -38,16 +38,16 @@ class TestServerIcons:
 
         valid_image_types = {"image/png", "image/svg+xml", "image/jpeg", "image/webp"}
         for i, icon in enumerate(SERVER_ICONS):
-            if icon.mimeType:
-                assert icon.mimeType in valid_image_types, (
-                    f"Icon at index {i} has invalid mimeType: {icon.mimeType}"
+            if icon.mime_type:
+                assert icon.mime_type in valid_image_types, (
+                    f"Icon at index {i} has invalid mimeType: {icon.mime_type}"
                 )
 
     def test_icons_include_svg_format(self):
         """Check that at least one SVG icon is included for scalability."""
         from ha_mcp.server import SERVER_ICONS
 
-        svg_icons = [icon for icon in SERVER_ICONS if icon.mimeType == "image/svg+xml"]
+        svg_icons = [icon for icon in SERVER_ICONS if icon.mime_type == "image/svg+xml"]
         assert len(svg_icons) > 0, (
             "Should include at least one SVG icon for scalability"
         )
@@ -56,7 +56,7 @@ class TestServerIcons:
         """Check that at least one raster icon (PNG) is included for compatibility."""
         from ha_mcp.server import SERVER_ICONS
 
-        raster_icons = [icon for icon in SERVER_ICONS if icon.mimeType == "image/png"]
+        raster_icons = [icon for icon in SERVER_ICONS if icon.mime_type == "image/png"]
         assert len(raster_icons) > 0, (
             "Should include at least one PNG icon for compatibility"
         )

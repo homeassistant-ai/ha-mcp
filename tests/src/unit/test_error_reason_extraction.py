@@ -9,8 +9,8 @@ surfaced or the caller falls back to its own generic prefix.
 import json
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.errors import ErrorCode, create_error_response
 from ha_mcp.tools.helpers import extract_structured_error_reason
 

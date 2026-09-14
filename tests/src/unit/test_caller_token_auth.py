@@ -23,7 +23,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 # --- Custom-component-side imports (must stub HA first) ---------------------
 
@@ -937,8 +938,7 @@ class TestExtraYamlKeysVersionGate:
 
     @pytest.mark.asyncio
     async def test_gate_blocks_on_older_component_via_bootstrap(self):
-        from fastmcp.exceptions import ToolError
-
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
         from ha_mcp.tools.tools_filesystem import assert_extra_yaml_keys_supported
 
         client = self._client("1.2.3")

@@ -18,8 +18,8 @@ from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.dashboard_screenshot.provision import EngineTarget
 from ha_mcp.dashboard_screenshot.theme_guard import (
     THEME_USER_DATA_KEY,

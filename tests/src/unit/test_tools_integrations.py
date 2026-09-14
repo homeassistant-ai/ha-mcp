@@ -9,8 +9,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantAPIError,
     HomeAssistantAuthError,
@@ -1940,10 +1940,10 @@ class TestSetIntegrationModes:
     async def test_set_integration_has_explicit_safety_annotations(self, tools):
         """The unified tool advertises its state-changing safety semantics."""
         annotations = tools.ha_set_integration.__fastmcp__.annotations
-        assert annotations.openWorldHint is False
-        assert annotations.destructiveHint is True
-        assert annotations.readOnlyHint is False
-        assert annotations.idempotentHint is False
+        assert annotations.open_world_hint is False
+        assert annotations.destructive_hint is True
+        assert annotations.read_only_hint is False
+        assert annotations.idempotent_hint is False
 
     # === Reconfigure mode ===
 

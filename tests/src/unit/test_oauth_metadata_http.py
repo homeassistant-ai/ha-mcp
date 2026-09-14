@@ -24,8 +24,8 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
-from fastmcp import FastMCP
 
+from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp.auth import HomeAssistantOAuthProvider
 
 BASE_URL = "http://localhost:8086"
@@ -65,7 +65,7 @@ def oauth_app(tmp_path, monkeypatch):
     # discovery preflight (and 421s a non-loopback Host) before the request
     # reaches our metadata route. The ``hasattr`` check keeps this a no-op on
     # fastmcp < 3.4.3, where the setting field does not exist.
-    import fastmcp
+    from ha_mcp._vendor import fastmcp
 
     monkeypatch.setenv("FASTMCP_HTTP_HOST_ORIGIN_PROTECTION", "false")
     if hasattr(fastmcp.settings, "http_host_origin_protection"):

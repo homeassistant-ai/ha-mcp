@@ -16,9 +16,10 @@ Feature Flag: Set ENABLE_SECURITY_POLICY_TOOL=true to enable this tool.
 import logging
 from typing import Annotated, Any, Literal
 
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import tool
 from pydantic import Field
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..policy.editing import PolicyCaller, get_policy, set_policy
 from .helpers import (

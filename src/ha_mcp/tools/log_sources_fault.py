@@ -22,7 +22,7 @@ component 2.1.4. Split out of ``log_sources`` under `.gemini/styleguide.md`
 
 from typing import Any, Literal, NoReturn
 
-from fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
