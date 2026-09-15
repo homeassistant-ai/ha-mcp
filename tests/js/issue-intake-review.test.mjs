@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runCloseWorkflow } from "./issue-intake-helpers.mjs";
 import {
   GitHub,
   main,
@@ -91,6 +92,19 @@ test("requested questions remain missing, require maintainer evidence, and retai
     () => validateResult(r, makeContext(s)),
     /already_requested\[0\].*maintainer/,
   );
+  s.roles.maintainer = "maintain";
+  r.already_requested[0].evidence[0].quote = "Invented maintainer request";
+  assert.throws(
+    () => validateResult(r, makeContext(s)),
+    /already_requested\[0\].evidence\[0\]/,
+  );
+  r.already_requested[0].evidence[0].quote =
+    "Please provide the installation method.";
+  r.already_requested.push(structuredClone(r.already_requested[0]));
+  assert.throws(
+    () => validateResult(r, makeContext(s)),
+    /already_requested\[1\].*duplicate field/,
+  );
 });
 test("CRLF evidence matches LF without weakening other quote checks", () => {
   const s = fixture(),
@@ -112,16 +126,27 @@ test("fact values must occur in their evidence", () => {
   );
 });
 
-test("an expired needs-info issue with a deleted reporter still has a close path", async () => {
-  const yaml = readFileSync(
-    new URL("../../.github/workflows/close-needs-info.yml", import.meta.url),
-    "utf8",
+test("cross-field validation errors identify the affected item", () => {
+  let r = answer();
+  r.agreed_scope = [
+    {
+      text: "The reporter proposed a scope.",
+      evidence: [{ source_id: "body", quote: "Client is Claude Desktop." }],
+    },
+  ];
+  assert.throws(
+    () => validateResult(r, makeContext(fixture())),
+    /agreed_scope\[0\]/,
   );
-  const code = yaml
-    .split("script: |\n")[1]
-    .split("\n")
-    .map((line) => line.replace(/^ {12}/, ""))
-    .join("\n");
+  r = answer();
+  r.missing_fields.push("client");
+  assert.throws(
+    () => validateResult(r, makeContext(fixture())),
+    /facts\[0\]\.field.*missing_fields\[1\]/,
+  );
+});
+
+test("an expired needs-info issue with a deleted reporter still has a close path", async () => {
   const writes = [],
     issue = { ...fixture().issue, user: null };
   const github = {
@@ -139,7 +164,13 @@ test("an expired needs-info issue with a deleted reporter still has a close path
       kind === "issues"
         ? [issue]
         : kind === "comments"
-          ? []
+          ? [
+              {
+                user: null,
+                body: "Comment from a deleted account",
+                created_at: "2026-01-02T00:00:00Z",
+              },
+            ]
           : [
               {
                 id: 1,
@@ -150,34 +181,10 @@ test("an expired needs-info issue with a deleted reporter still has a close path
               },
             ],
   };
-  await new Function(
-    "github",
-    "context",
-    "core",
-    `return (async()=>{${code}})()`,
-  )(
-    github,
-    { repo: { owner: "test", repo: "repo" } },
-    {
-      info() {},
-      warning() {},
-      setFailed(message) {
-        throw Error(message);
-      },
-    },
-  );
+  await runCloseWorkflow(github);
   assert.deepEqual(writes, ["comment", "close", "remove"]);
 });
 test("deleted comment authors do not interrupt reminders or later issues", async () => {
-  const yaml = readFileSync(
-    new URL("../../.github/workflows/close-needs-info.yml", import.meta.url),
-    "utf8",
-  );
-  const code = yaml
-    .split("script: |\n")[1]
-    .split("\n")
-    .map((line) => line.replace(/^ {12}/, ""))
-    .join("\n");
   const writes = [];
   const github = {
     rest: {
@@ -212,22 +219,7 @@ test("deleted comment authors do not interrupt reminders or later issues", async
         : [];
     },
   };
-  await new Function(
-    "github",
-    "context",
-    "core",
-    `return (async()=>{${code}})()`,
-  )(
-    github,
-    { repo: { owner: "test", repo: "repo" } },
-    {
-      info() {},
-      warning() {},
-      setFailed(message) {
-        throw Error(message);
-      },
-    },
-  );
+  await runCloseWorkflow(github);
   assert.deepEqual(
     writes.map((args) => args.issue_number),
     [1, 2],
@@ -235,6 +227,63 @@ test("deleted comment authors do not interrupt reminders or later issues", async
   assert.ok(
     writes.every((args) => args.body.includes("<!-- needs-info-warning:3 -->")),
   );
+});
+
+test("failed notices, reminders, and reply cleanup fail after the whole batch", async () => {
+  const attempted = [];
+  const now = Date.now();
+  const github = {
+    rest: {
+      issues: {
+        listForRepo: "issues",
+        listEvents: "events",
+        listComments: "comments",
+        createComment: async ({ issue_number }) => {
+          attempted.push(`comment-${issue_number}`);
+          throw Error("Comment unavailable");
+        },
+        update: async () =>
+          assert.fail("A failed closing notice must not close"),
+        removeLabel: async ({ issue_number }) => {
+          attempted.push(`remove-${issue_number}`);
+          throw Object.assign(Error("Label unavailable"), { status: 500 });
+        },
+      },
+    },
+    paginate: async (kind, args) => {
+      if (kind === "issues")
+        return [1, 2, 3].map((number) => ({
+          ...fixture().issue,
+          number,
+        }));
+      if (kind === "events") {
+        const age = args.issue_number === 1 ? 8 : 3.5;
+        return [
+          {
+            event: "labeled",
+            label: { name: "needs-info" },
+            created_at: new Date(now - age * 86400000).toISOString(),
+          },
+        ];
+      }
+      return args.issue_number === 3
+        ? [
+            {
+              user: { login: "reporter", type: "User" },
+              created_at: new Date(now).toISOString(),
+              body: "More details",
+            },
+          ]
+        : [];
+    },
+  };
+  await assert.rejects(runCloseWorkflow(github), (error) => {
+    assert.match(error.message, /closing notices.*#1/i);
+    assert.match(error.message, /reminders.*#2@day-3/i);
+    assert.match(error.message, /reporter replies.*#3/i);
+    return true;
+  });
+  assert.deepEqual(attempted, ["comment-1", "comment-2", "remove-3"]);
 });
 test("translation requirement is a schema-enforced boolean", () => {
   const r = answer();
@@ -253,15 +302,6 @@ test("mentions survive as display text without a broken numeric entity", () => {
   );
 });
 test("reporter replies clear needs-info for bot and triager labels before the close deadline", async () => {
-  const yaml = readFileSync(
-    new URL("../../.github/workflows/close-needs-info.yml", import.meta.url),
-    "utf8",
-  );
-  const code = yaml
-    .split("script: |\n")[1]
-    .split("\n")
-    .map((line) => line.replace(/^ {12}/, ""))
-    .join("\n");
   for (const actor of [
     { login: bot, type: "Bot" },
     { login: "triager", type: "User" },
@@ -299,22 +339,7 @@ test("reporter replies clear needs-info for bot and triager labels before the cl
                 },
               ],
     };
-    await new Function(
-      "github",
-      "context",
-      "core",
-      `return (async()=>{${code}})()`,
-    )(
-      github,
-      { repo: { owner: "test", repo: "repo" } },
-      {
-        info() {},
-        warning() {},
-        setFailed(message) {
-          throw Error(message);
-        },
-      },
-    );
+    await runCloseWorkflow(github);
     assert.deepEqual(writes, ["remove"]);
   }
 });
@@ -327,6 +352,35 @@ test("API errors identify their endpoint without echoing secret-bearing stderr",
     (error) => {
       assert.match(error.message, /GET repos\/test\/repo\/issues\/1.*403/);
       assert.doesNotMatch(error.message, /secret/);
+      return true;
+    },
+  );
+  const limited = new GitHub(() => {
+    throw Object.assign(Error("limited"), {
+      stderr: "HTTP 429\nRetry-After: 17\nprivate response",
+    });
+  });
+  assert.throws(
+    () => limited.request("repos/test/repo/issues/1"),
+    (error) => {
+      assert.equal(error.status, 429);
+      assert.equal(error.retryAfter, 17);
+      assert.doesNotMatch(error.message, /private/);
+      return true;
+    },
+  );
+});
+
+test("malformed GitHub JSON identifies the endpoint without echoing its body", () => {
+  const api = new GitHub(() => '{"body":"secret issue text",BROKEN}');
+  assert.throws(
+    () => api.request("repos/test/repo/issues/1"),
+    (error) => {
+      assert.match(
+        error.message,
+        /GET repos\/test\/repo\/issues\/1.*invalid JSON/,
+      );
+      assert.doesNotMatch(error.message, /secret|BROKEN/);
       return true;
     },
   );
@@ -376,23 +430,51 @@ test("main checks both dispatch actors and does not admit write-only rerunners",
     r.cleanup();
   }
 });
-test("unauthorized refresh is ignored before collection and OAuth admission", async () => {
+test("ordinary and unauthorized-command comments are admitted without permission lookups", async () => {
+  for (const comment of [
+    {
+      body: "More details",
+      user: { login: "reporter", type: "User" },
+    },
+    {
+      body: "/triage refresh",
+      user: { login: "reporter", type: "User" },
+    },
+    { body: "/triage pause", user: null },
+  ]) {
+    const r = runtime({
+      sender: { type: "User" },
+      issue: { number: 1 },
+      comment,
+    });
+    try {
+      await main("admit", r);
+      assert.match(readFileSync(r.env.GITHUB_OUTPUT, "utf8"), /run=true/);
+      assert.equal(r.calls.length, 0);
+    } finally {
+      r.cleanup();
+    }
+  }
+});
+
+test("bot comments are ignored even when the event sender is human", async () => {
   const r = runtime({
     sender: { type: "User" },
     issue: { number: 1 },
     comment: {
-      body: "/triage refresh",
-      user: { login: "reporter", type: "User" },
+      body: "Bot update",
+      user: { login: "automation[bot]", type: "Bot" },
     },
   });
   try {
     await main("admit", r);
     assert.match(readFileSync(r.env.GITHUB_OUTPUT, "utf8"), /run=false/);
-    assert.equal(r.calls.length, 1);
+    assert.equal(r.calls.length, 0);
   } finally {
     r.cleanup();
   }
 });
+
 test("main admits a maintainer refresh and filters bot or PR events", async () => {
   for (const [extra, expected] of [
     [{}, true],
@@ -417,10 +499,49 @@ test("main admits a maintainer refresh and filters bot or PR events", async () =
         readFileSync(r.env.GITHUB_OUTPUT, "utf8"),
         new RegExp(`run=${expected}`),
       );
+      assert.equal(r.calls.length, 0);
     } finally {
       r.cleanup();
     }
   }
+});
+
+test("dispatch maps removed collaborators to none", async () => {
+  const r = runtime({ sender: { type: "User" }, inputs: { issue_number: 1 } });
+  r.env.GITHUB_EVENT_NAME = "workflow_dispatch";
+  r.env.GITHUB_ACTOR = "removed";
+  r.env.GITHUB_TRIGGERING_ACTOR = "removed";
+  r.api.request = () => {
+    throw Object.assign(Error("not found"), { status: 404 });
+  };
+  try {
+    await assert.rejects(main("admit", r), /Maintainer dispatch required/);
+  } finally {
+    r.cleanup();
+  }
+});
+
+test("unauthorized triage commands cannot change context or its fingerprint", () => {
+  const s = fixture();
+  const before = prepare(s, bot);
+  s.comments.push({
+    id: 2,
+    user: { login: "reporter", type: "User" },
+    body: "The installation uses HACS.",
+    html_url: "https://github.com/test/repo/issues/1#issuecomment-2",
+    created_at: "2026-09-14T01:30:00Z",
+  });
+  const updated = prepare(s, bot);
+  assert.notEqual(updated.digest, before.digest);
+  s.comments.push({
+    id: 3,
+    user: { login: "reporter", type: "User" },
+    body: "/triage pause",
+    html_url: "https://github.com/test/repo/issues/1#issuecomment-3",
+    created_at: "2026-09-14T02:00:00Z",
+  });
+  assert.deepEqual(makeContext(s), updated.context);
+  assert.equal(prepare(s, bot).digest, updated.digest);
 });
 test("main rejects mismatched App and repository before any publication API call", async () => {
   const r = runtime({});

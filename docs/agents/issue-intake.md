@@ -9,7 +9,7 @@ CodeRabbit and Codex PR reviews retain their existing responsibilities.
 ## Execution and permissions
 
 The workflow has two jobs. Admission filters PR/bot activity and unrelated labels,
-checks explicit commands and manual dispatch roles, and coalesces a short burst
+checks manual dispatch roles, and coalesces a short burst
 of events per issue. Superseded admission jobs can be cancelled: they have no
 Codex credentials. Only admitted jobs enter the shared `codex-auth-...` job queue.
 An active OAuth consumer is never cancelled to coalesce comments, so refreshed
@@ -64,9 +64,10 @@ Maintainers with the actual maintain/admin role can post exact commands:
 - `/triage resume`: resume and clear prior manual needs-info suppression;
 - `/triage refresh`: request another pass, without overriding pause or labels.
 
-Unauthorized exact commands are ignored before the auth queue. Ordinary human
-comments still trigger documentation: command authorization does not restrict
-reporters from supplying new information. Removing needs-info manually prevents
+Unauthorized exact commands do not control the workflow and are excluded from
+model context. Their event remains admissible so it can process earlier human
+activity that it may have coalesced; an unchanged fingerprint avoids a redundant
+model call. Ordinary human comments still trigger documentation. Removing needs-info manually prevents
 the intake publisher from reapplying it until an explicit maintainer resume.
 The publisher removes only its own label, never a human-applied label.
 
@@ -78,7 +79,13 @@ a maintainer/bystander reply does not. The generic inactivity workflow excludes
 needs-info because this seven-day workflow already owns its close path. PRs are
 explicitly excluded from issue closure.
 
-The publisher rereads context before each write attempt. Relevant source changes
+Clearing needs-info acknowledges the reporter's reply; it does not assert that
+every requested field was answered. If later human activity still leaves an
+essential field missing, intake may apply needs-info again. That new label event
+starts a fresh seven-day cycle.
+
+The publisher rereads context once at the start of each publication attempt,
+before its owned-comment and label write sequence. Relevant source changes
 invalidate an old result and emit a workflow warning; a subscribed event processes
 the new state, or an operator can refresh explicitly. A lock or pause intentionally
 stops progress until reversed. Identical source fingerprints avoid another model
@@ -89,8 +96,9 @@ GitHub has no transaction spanning these writes, so narrow concurrent changes ca
 still race individual API calls.
 
 Failed closures retain needs-info for a subsequent daily retry. Their closing
-notice is deduplicated within the label cycle. Post-close cleanup failures report
-a recoverable list of closed issues whose labels need manual removal.
+notice is deduplicated within the label cycle. Failed reminders, closing notices,
+reply cleanup and post-close cleanup fail the batch after other issues are
+processed; cleanup failures identify the affected issues.
 
 ## Testing and operation
 
