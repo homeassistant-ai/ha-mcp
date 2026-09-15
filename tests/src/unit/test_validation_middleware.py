@@ -425,8 +425,7 @@ async def test_unknown_parameter_falls_back_when_schema_lookup_fails(lookup, cap
     async def get_tool(_name):
         if lookup == "raises":
             raise RuntimeError("lookup failed")
-        if lookup == "no_properties":
-            return SimpleNamespace(parameters={})
+        return SimpleNamespace(parameters={}) if lookup == "no_properties" else None
 
     context = SimpleNamespace(
         fastmcp_context=SimpleNamespace(fastmcp=SimpleNamespace(get_tool=get_tool)),
