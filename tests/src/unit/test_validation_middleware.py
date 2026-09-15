@@ -325,7 +325,7 @@ async def test_unknown_parameter_without_a_close_match_still_lists_valid_names()
         "`zzz`: unknown parameter. "
         "Valid parameters: url_path, list_only, force_reload, entity_id."
     )
-    assert body["error"]["context"]["valid_parameters"] == [
+    assert body["valid_parameters"] == [
         "url_path",
         "list_only",
         "force_reload",
