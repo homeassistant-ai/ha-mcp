@@ -150,6 +150,8 @@ class ValidationErrorMiddleware(Middleware):
                 if any(err["type"] == _UNKNOWN_ARGUMENT for err in errors)
                 else None
             )
+            # A parameter the call already supplied is never what a second,
+            # invented argument meant.
             supplied = (
                 getattr(getattr(context, "message", None), "arguments", None) or {}
             )

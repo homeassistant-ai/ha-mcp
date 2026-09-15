@@ -1086,6 +1086,8 @@ class DeepSearchMixin(SceneSearchMixin):
             )
             records[url_path] = {
                 "dashboard_url": url_path,
+                # Mirrors the ha_config_get_dashboard parameter name, so the
+                # value is passed back under the right argument (#2462).
                 "url_path": url_path,
                 "dashboard_title": title,
                 "score": 100,
@@ -1165,6 +1167,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     return [
                         {
                             "dashboard_url": url_path,
+                            # ha_config_get_dashboard's parameter name (#2462).
                             "url_path": url_path,
                             "dashboard_title": title,
                             "score": config_score,
