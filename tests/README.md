@@ -64,9 +64,10 @@ tests/
 │   ├── workflows/              # Complex scenarios
 │   └── error_handling/         # Error scenarios
 ├── initial_test_state/         # Clean HA config baseline
-├── test_env_manager.py         # Interactive test runner
-└── pytest.ini                 # Test configuration
+└── test_env_manager.py         # Interactive test runner
 ```
+
+Pytest configuration lives in the repository root `pyproject.toml` so every invocation uses the same markers and runtime settings.
 
 ## 🔧 Test Categories
 

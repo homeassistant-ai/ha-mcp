@@ -104,8 +104,8 @@ NUDGE_MARKER_TIMEOUT = (
 # lane could never have passed anyway, and the message says which it was.
 HACS_WS_READY_TIMEOUT = sum(RETRY_DELAYS) + DEFAULT_COMMAND_WAIT_TIMEOUT
 
-# pytest.ini caps every test FUNCTION at 300 s, which the readiness wait alone
-# can exceed on a genuinely broken HACS — and then the timeout kills the test
+# pyproject.toml caps every test FUNCTION at 300 s, which the readiness wait
+# alone can exceed on a genuinely broken HACS — then the timeout kills the test
 # before the helper's own message says which stage never came up. Each
 # positive lane therefore carries its own budget: readiness + the marker window
 # + slack for the launcher to start and stop. Derived, not a literal, so

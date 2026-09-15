@@ -211,6 +211,18 @@ class TestScriptWaitParameter:
     @pytest.fixture
     def mock_client(self):
         client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {
+                        "entity_id": "script.test_script",
+                        "unique_id": "test_script",
+                        "platform": "script",
+                    }
+                ],
+            }
+        )
         client.upsert_script_config = AsyncMock(
             return_value={"success": True, "script_id": "test_script"}
         )
