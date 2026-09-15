@@ -25,7 +25,7 @@ from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 
 @pytest.fixture(autouse=True)
 def no_registration_retry(monkeypatch):
-    """Polling budgets are covered with fake time in test_entity_registration."""
+    """Use one lookup by default; polling tests opt in with registration_clock."""
     monkeypatch.setattr(entity_registration, "RESOLVE_TIMEOUT", 0)
 
 
@@ -108,7 +108,7 @@ class TestScriptPostWriteWait:
         assert result["success"] is True
         registered.assert_awaited_once_with(tools._client, "script.current_name")
         lookup.assert_awaited_with(tools._client, "storage_key", domain="script")
-        assert registration_clock.now == pytest.approx(0.6)
+        assert lookup.await_count == 4
 
     async def test_wait_false_without_category_skips_lookup_and_wait(
         self, tools, write_arguments, monkeypatch
@@ -184,7 +184,10 @@ class TestScriptPostWriteWait:
 
         assert result["success"] is True
         registered.assert_awaited_once_with(tools._client, "script.caller_alias")
-        assert registration_clock.now == pytest.approx(0 if api_failure else 1.0)
+        if api_failure:
+            assert lookup.await_count == 1
+        else:
+            assert lookup.await_count > 1
 
 
 class TestScriptToolsValidation:
@@ -857,13 +860,19 @@ class TestSetScriptCategoryValidation:
 
     @pytest.mark.parametrize("transform", [False, True])
     async def test_category_targets_renamed_entity(
-        self, transform_tools, mock_client, sequence_config, transform, monkeypatch
+        self,
+        transform_tools,
+        mock_client,
+        sequence_config,
+        transform,
+        monkeypatch,
+        registration_clock,
     ):
         """A registry-renamed script gets its category on the CURRENT entity.
 
         The storage key stays the registry unique_id after a rename, so the
         resolver must be asked for the entity_id instead of constructing
-        ``script.<storage_key>``.
+        ``script.<storage_key>``. Registration is delayed in both write modes.
         """
         mock_client.send_websocket_message = AsyncMock(
             side_effect=self._ws_handler("lighting")
@@ -872,20 +881,6 @@ class TestSetScriptCategoryValidation:
             "success": True,
             "script_id": "storage_key",
         }
-        clock = SimpleNamespace(now=0.0)
-
-        async def sleep(delay):
-            clock.now += delay
-
-        monkeypatch.setattr(entity_registration, "RESOLVE_TIMEOUT", 1.0)
-        monkeypatch.setattr(
-            entity_registration, "time", SimpleNamespace(monotonic=lambda: clock.now)
-        )
-        monkeypatch.setattr(
-            entity_registration,
-            "asyncio",
-            SimpleNamespace(sleep=sleep, timeout=asyncio.timeout),
-        )
         registered = AsyncMock(return_value=True)
         monkeypatch.setattr(
             "ha_mcp.tools.tools_config_scripts.wait_for_entity_registered", registered
@@ -928,7 +923,7 @@ class TestSetScriptCategoryValidation:
             if c[0][0].get("type") == "config/entity_registry/update"
         )
         assert update_call["entity_id"] == "script.renamed_alias"
-        assert clock.now == pytest.approx(0.6)
+        assert lookup.await_count == 4
         lookup.assert_awaited_with(mock_client, "storage_key", domain="script")
         registered.assert_awaited_once_with(mock_client, "script.renamed_alias")
 

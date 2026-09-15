@@ -773,7 +773,7 @@ class TestLifecycleWriteWarningsShape:
         )
         client.get_services = AsyncMock(return_value=[])
         client.get_states = AsyncMock(return_value=[])
-        # _resolve_scene_entity_id: empty registry → falls back to
+        # Entity resolution: empty registry → falls back to
         # f"scene.{scene_id}" which matches what wait_for_entity_registered
         # is patched to receive.
         client.send_websocket_message = AsyncMock(

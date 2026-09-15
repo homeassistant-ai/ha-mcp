@@ -59,9 +59,14 @@ async def test_delayed_registration_returns_actual_entity_after_three_misses(
     lookup = AsyncMock(side_effect=rows if component else None, return_value=None)
     monkeypatch.setattr(registration, "fetch_entity_lookup_via_component", lookup)
     if not component:
-        client.send_websocket_message.side_effect = [
-            {"success": True, "result": row} for row in rows
-        ]
+        pending = iter(rows)
+
+        async def registry_read(message):
+            if message["type"] == "config/entity_registry/get":
+                return {"success": False}
+            return {"success": True, "result": next(pending)}
+
+        client.send_websocket_message.side_effect = registry_read
 
     result = await registration.resolve_entity_id_after_write(
         client, "storage_key", domain, timeout=1.0, poll_interval=0.2
@@ -74,7 +79,9 @@ async def test_delayed_registration_returns_actual_entity_after_three_misses(
     if component:
         client.send_websocket_message.assert_not_awaited()
     else:
-        assert client.send_websocket_message.await_count == 4
+        assert client.send_websocket_message.await_count == (
+            8 if domain == "script" else 4
+        )
         client.send_websocket_message.assert_awaited_with(
             {"type": "config/entity_registry/list"}
         )
@@ -98,7 +105,7 @@ async def test_component_disappearing_during_registration_uses_legacy(
         == f"{domain}.friendly_name"
     )
     assert clock.now == pytest.approx(0.2)
-    client.send_websocket_message.assert_awaited_once()
+    assert client.send_websocket_message.await_count == (2 if domain == "script" else 1)
 
 
 @pytest.mark.parametrize("domain", ["scene", "script"])
@@ -139,7 +146,9 @@ async def test_immediate_match_returns_without_sleep_or_extra_lookup(
     )
     assert clock.sleeps == []
     lookup.assert_awaited_once()
-    assert client.send_websocket_message.await_count == (0 if component else 1)
+    assert client.send_websocket_message.await_count == (
+        0 if component else (2 if domain == "script" else 1)
+    )
 
 
 @pytest.mark.parametrize("domain", ["scene", "script"])
@@ -209,6 +218,77 @@ async def test_zero_budget_performs_one_lookup(monkeypatch, client, clock):
     )
     lookup.assert_awaited_once()
     assert clock.sleeps == []
+
+
+async def test_script_registry_get_avoids_full_listing(monkeypatch, client, clock):
+    monkeypatch.setattr(
+        registration, "fetch_entity_lookup_via_component", AsyncMock(return_value=None)
+    )
+    client.send_websocket_message.return_value = {
+        "success": True,
+        "result": entry("script", entity_id="script.storage_key"),
+    }
+
+    assert (
+        await registration.resolve_entity_id_after_write(
+            client, "storage_key", "script"
+        )
+        == "script.storage_key"
+    )
+    client.send_websocket_message.assert_awaited_once_with(
+        {"type": "config/entity_registry/get", "entity_id": "script.storage_key"}
+    )
+    assert clock.sleeps == []
+
+
+@pytest.mark.parametrize(
+    "mismatch", [{"unique_id": "other_key"}, {"platform": "other"}]
+)
+async def test_script_get_collision_still_resolves_by_storage_key(
+    monkeypatch, client, clock, mismatch
+):
+    monkeypatch.setattr(
+        registration, "fetch_entity_lookup_via_component", AsyncMock(return_value=None)
+    )
+    client.send_websocket_message.side_effect = [
+        {"success": True, "result": {**entry("script"), **mismatch}},
+        {"success": True, "result": [entry("script", "script.renamed")]},
+    ]
+    assert (
+        await registration.resolve_entity_id_after_write(
+            client, "storage_key", "script"
+        )
+        == "script.renamed"
+    )
+
+
+async def test_registry_rejection_keeps_diagnostic_detail(monkeypatch, client, caplog):
+    monkeypatch.setattr(
+        registration, "fetch_entity_lookup_via_component", AsyncMock(return_value=None)
+    )
+    client.send_websocket_message.return_value = {
+        "success": False,
+        "error": "Admin permission required",
+        "error_code": "unauthorized",
+    }
+    assert (
+        await registration.resolve_entity_id_after_write(client, "storage_key", "scene")
+        == "scene.storage_key"
+    )
+    assert "Admin permission required" in caplog.text
+    assert "unauthorized" in caplog.text
+
+
+async def test_exhausted_budget_logs_fallback(monkeypatch, client, clock, caplog):
+    monkeypatch.setattr(
+        registration, "fetch_entity_lookup_via_component", AsyncMock(return_value=[])
+    )
+    with caplog.at_level("DEBUG", logger=registration.__name__):
+        await registration.resolve_entity_id_after_write(
+            client, "storage_key", "scene", timeout=0.4
+        )
+    assert "budget exhausted" in caplog.text
+    assert "scene.storage_key" in caplog.text
 
 
 @pytest.mark.parametrize("registered", [False, True])

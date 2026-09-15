@@ -960,7 +960,11 @@ class ConfigScriptTools:
         wait: bool,
         category: str | None,
     ) -> None:
-        """Resolve, wait, and apply a category for either script write mode."""
+        """Resolve, wait, and apply a category for either script write mode.
+
+        Match the upsert's storage key, which can differ from the caller's
+        entity ID after a registry rename. Keep the caller's ID as fallback.
+        """
         if not wait and not category:
             return
         storage_key = result.get("script_id") or resolved_key or script_id
@@ -998,11 +1002,7 @@ class ConfigScriptTools:
         wait: bool,
         effective_category: str | None = None,
     ) -> dict[str, Any]:
-        """Upsert a transformed script config and build the tool response.
-
-        Extracted verbatim from ``ha_config_set_script``'s python_transform
-        branch (the post-``_check_best_practices`` tail).
-        """
+        """Upsert, refresh the hash, finalize wait/category, and build the response."""
         # Save transformed config. ``_fetch_and_verify_hash`` already
         # resolved the storage key; pass it as the write target so the
         # upsert skips the redundant re-resolve (issue #1813 Phase 0).
@@ -1068,11 +1068,7 @@ class ConfigScriptTools:
         MandatoryBPS: bool,
         detached_blueprint: str | None = None,
     ) -> dict[str, Any]:
-        """Validate references, upsert, wait, and build the tool response.
-
-        Extracted verbatim from ``ha_config_set_script``'s full-config branch
-        (the post-``_check_best_practices`` tail).
-        """
+        """Validate references, upsert, finalize wait/category, and build the response."""
         # Cross-check literal service and entity references against
         # the live registries. Soft warnings only — the write still
         # happens, even when references don't resolve (#940).

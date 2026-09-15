@@ -5,7 +5,9 @@ scene CRUD tools (issue #995). Mirrors test_tools_config_scripts.py shape;
 the key shape difference is that scene ``entities`` is a dict, not a list.
 """
 
+import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -52,7 +54,7 @@ def mock_client():
     # validate_config_references reaches for these — keep them empty-but-callable.
     client.get_services = AsyncMock(return_value=[])
     client.get_states = AsyncMock(return_value=[])
-    # Default registry list returns empty — _resolve_scene_entity_id falls
+    # Default registry list returns empty — entity resolution falls
     # back to f"scene.{scene_id}". Individual tests override as needed.
     client.send_websocket_message = AsyncMock(
         return_value={"success": True, "result": []}
@@ -90,6 +92,7 @@ def tools(mock_client, monkeypatch):
     # for ``_resolve_scene_entity_id``. Patch to 0 in tests so the
     # fallback paths don't multiply unit-test wall-clock time.
     monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
+    # Post-write paths do one lookup; polling tests opt into a fake-clock budget.
     monkeypatch.setattr(entity_registration, "RESOLVE_TIMEOUT", 0)
     return ConfigSceneTools(mock_client)
 
@@ -108,13 +111,32 @@ class TestScenePostWriteRegistration:
         config = {"name": "Friendly Name", "entities": {}}
         mock_client.get_scene_config.return_value = config
         tools._validate_category_id = AsyncMock()
+        clock = SimpleNamespace(now=0.0)
+
+        async def sleep(delay):
+            clock.now += delay
+
+        monkeypatch.setattr(entity_registration, "RESOLVE_TIMEOUT", 1.0)
+        monkeypatch.setattr(
+            entity_registration, "time", SimpleNamespace(monotonic=lambda: clock.now)
+        )
+        monkeypatch.setattr(
+            entity_registration,
+            "asyncio",
+            SimpleNamespace(sleep=sleep, timeout=asyncio.timeout),
+        )
         lookup = AsyncMock(
-            return_value=[
-                {
-                    "entity_id": "scene.friendly_name",
-                    "unique_id": "test_scene",
-                    "platform": "homeassistant",
-                }
+            side_effect=[
+                [],
+                [],
+                [],
+                [
+                    {
+                        "entity_id": "scene.friendly_name",
+                        "unique_id": "test_scene",
+                        "platform": "homeassistant",
+                    }
+                ],
             ]
         )
         monkeypatch.setattr(
@@ -142,7 +164,8 @@ class TestScenePostWriteRegistration:
             registered.assert_awaited_once_with(mock_client, "scene.friendly_name")
         if category:
             assert category_update.await_args.args[1] == "scene.friendly_name"
-        lookup.assert_awaited_once_with(mock_client, "test_scene", domain="scene")
+        assert lookup.await_count == 4
+        lookup.assert_awaited_with(mock_client, "test_scene", domain="scene")
 
     @pytest.mark.parametrize("transform", [False, True])
     async def test_no_lookup_when_wait_and_category_are_unused(

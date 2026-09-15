@@ -21,9 +21,9 @@ RESOLVE_TIMEOUT = 5.0
 
 
 def _matching_entity_id(
-    entries: list[dict[str, Any]], storage_key: str, domain: str
+    entries: list[dict[str, Any]], storage_key: str, domain: Literal["scene", "script"]
 ) -> str | None:
-    """Match the storage key in its owning platform, including component rows."""
+    """UI scenes belong to platform homeassistant; scripts belong to script."""
     platform = "homeassistant" if domain == "scene" else "script"
     for entry in entries:
         entity_id = entry.get("entity_id") or ""
@@ -36,17 +36,34 @@ def _matching_entity_id(
     return None
 
 
-async def _lookup_entity_id(client: Any, storage_key: str, domain: str) -> str | None:
+async def _lookup_entity_id(
+    client: Any, storage_key: str, domain: Literal["scene", "script"]
+) -> str | None:
     """Read once; an unavailable component falls back to the legacy registry."""
     matches = await fetch_entity_lookup_via_component(
         client, storage_key, domain=domain
     )
     if matches is None:
+        if domain == "script":
+            direct = await client.send_websocket_message(
+                {
+                    "type": "config/entity_registry/get",
+                    "entity_id": f"script.{storage_key}",
+                }
+            )
+            row = direct.get("result")
+            if direct.get("success") and isinstance(row, dict):
+                entity_id = _matching_entity_id([row], storage_key, domain)
+                if entity_id is not None:
+                    return entity_id
         listing = await client.send_websocket_message(
             {"type": "config/entity_registry/list"}
         )
         if listing.get("success") is False:
-            raise HomeAssistantAPIError("Entity registry lookup failed")
+            raise HomeAssistantAPIError(
+                f"Entity registry lookup failed: {listing.get('error')} "
+                f"(code={listing.get('error_code')})"
+            )
         matches = listing.get("result") or []
     return _matching_entity_id(matches, storage_key, domain)
 
@@ -64,11 +81,12 @@ async def resolve_entity_id_after_write(
 
     An empty registry read can precede asynchronous registration even inside
     the component. Retry against one deadline, checking component availability
-    on every attempt. The budget includes in-flight lookups and sleeps; known
-    API failures retain the best-effort constructed fallback. Cancellation and
-    programming errors propagate. A zero budget requests a single lookup.
-    ``fallback_entity_id`` preserves a caller's renamed script ID on failure;
-    the storage key is still used for every registry match.
+    on every attempt. A positive budget includes in-flight lookups and sleeps;
+    zero requests one lookup without a time limit, for test fixtures. Known
+    API failures retain the best-effort fallback. Errors escaping the component
+    adapter propagate unless listed below; cancellation always propagates.
+    ``fallback_entity_id`` overrides the constructed ID on failure; registry
+    matching always uses the storage key.
 
     Config reads and removals must use their existing resolution paths. Bulk
     writes with neither a state wait nor a category update should skip this
@@ -76,6 +94,7 @@ async def resolve_entity_id_after_write(
     tests without extending production waits.
     """
     storage_key = storage_key.removeprefix(f"{domain}.")
+    fallback = fallback_entity_id or f"{domain}.{storage_key}"
     budget = RESOLVE_TIMEOUT if timeout is None else timeout
     deadline = time.monotonic() + budget
     try:
@@ -95,8 +114,20 @@ async def resolve_entity_id_after_write(
         HomeAssistantAPIError,
         HomeAssistantAuthError,
         HomeAssistantConnectionError,
-    ):
-        logger.debug(
-            "Post-write registry resolve failed for %s.%s", domain, storage_key
+    ) as exc:
+        logger.warning(
+            "Post-write registry resolve failed for %s.%s (%s: %s); using %s",
+            domain,
+            storage_key,
+            type(exc).__name__,
+            exc,
+            fallback,
         )
-    return fallback_entity_id or f"{domain}.{storage_key}"
+    else:
+        logger.debug(
+            "Post-write registry budget exhausted for %s.%s; using %s",
+            domain,
+            storage_key,
+            fallback,
+        )
+    return fallback
