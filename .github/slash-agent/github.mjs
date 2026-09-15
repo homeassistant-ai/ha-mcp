@@ -277,14 +277,17 @@ export function collect(api, number, app) {
     ? api.pages(`commits/${head}/check-runs?filter=latest`, "check_runs")
     : [];
   const statuses = pr ? api.pages(`commits/${head}/statuses`) : [];
-  const checks = checkRuns.map((c) => ({
-    name: c.name,
-    appId: c.app?.id,
-    complete: c.status === "completed",
-    ok: ["success", "neutral", "skipped"].includes(c.conclusion),
-    url: c.details_url,
-    id: c.id,
-  }));
+  // Coalesced, secretless wakeups are signals, not tests of the PR's code.
+  const checks = checkRuns
+    .filter((c) => !(c.app?.id === 15368 && c.name === "Slash review event"))
+    .map((c) => ({
+      name: c.name,
+      appId: c.app?.id,
+      complete: c.status === "completed",
+      ok: ["success", "neutral", "skipped"].includes(c.conclusion),
+      url: c.details_url,
+      id: c.id,
+    }));
   const contexts = new Set();
   for (const s of statuses) {
     if (contexts.has(s.context)) continue;

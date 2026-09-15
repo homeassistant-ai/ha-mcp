@@ -11,8 +11,13 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: slash-review-event-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   notify:
+    name: Slash review event
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:

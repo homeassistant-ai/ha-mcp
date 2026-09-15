@@ -687,6 +687,23 @@ test("maximum accepted ASCII task and memory can round-trip through a checkpoint
   assert.equal(stateFrom([{ id: 100, user: bot, body }], APP).task, state.task);
 });
 
+test("superseded review wakeups do not look like failing product checks", () => {
+  const api = new FakeAPI();
+  start(api);
+  green(api);
+  api.checks.push({
+    id: 5,
+    name: "Slash review event",
+    app: { id: 15368 },
+    status: "completed",
+    conclusion: "cancelled",
+  });
+  assert.equal(
+    prepare(api, { number: 10, automatic: true }, APP).decision.mode,
+    "ready",
+  );
+});
+
 test("review replies must target supplied trusted unresolved threads", () => {
   const api = new FakeAPI();
   const snapshot = collect(api, 9, APP);
