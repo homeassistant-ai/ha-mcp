@@ -3,19 +3,14 @@
 Two consumers in the automation/script/scene family pay for a whole-collection
 fetch to answer a single question:
 
-- The set/remove/post-write resolvers (``_resolve_scene_entity_id`` /
-  ``_resolve_automation_entity_id``) map a storage id (a scene's ``unique_id``,
-  an automation's config id) to its live ``entity_id`` — the scene resolver by
-  dumping the ENTIRE ``config/entity_registry/list`` (with a 0.2 s sleep + retry
-  to absorb post-upsert registration lag), the automation resolver by scanning
-  the WHOLE ``get_states()`` state machine. When the component advertises
-  ``entity_lookup``, a single ``ha_mcp_tools/entity_lookup(unique_id=, domain=)``
-  frame returns just the matching registry entries — a hit is authoritative the
-  instant it returns (no settle). An in-process read removes the network latency
-  but NOT HA's async entity-registration lag, so the scene resolver still
-  rechecks an EMPTY result ONCE after the same short delay before its naive
-  fallback (the automation resolver has no post-upsert lag exposure — its only
-  routed call site resolves an already-registered entity before a delete).
+- Entity resolution maps storage keys to live registry entity IDs.
+  ``entity_registration.resolve_entity_id_after_write`` polls after scene/script
+  writes against one deadline. ``_resolve_scene_entity_id`` uses a single retry
+  before scene removal; ``_resolve_automation_entity_id`` resolves an existing
+  entity before deletion. The component's ``entity_lookup`` returns only matching
+  rows instead of a full registry/state listing. A hit is authoritative at once,
+  but an empty read can precede HA's asynchronous entity registration even when
+  performed in-process, so post-write callers must continue polling.
 - The reference validator (``validate_config_references``) fetches BOTH
   ``client.get_services()`` and ``client.get_states()`` on every automation/script
   write purely to build a name index. When the component advertises
@@ -40,16 +35,11 @@ path runs, NEVER propagated out of the read. Neither consumer's legacy path dies
 identically on a pooled-WS drop, so propagating would abort work the legacy path
 still completes:
 
-- ``fetch_entity_lookup_via_component``'s consumers degrade gracefully. The scene
-  resolver's ``config/entity_registry/list`` dump rides
-  ``client.send_websocket_message``, which answers a command HA rejected with
-  ``{"success": False}``, so the resolver walks its retry loop to the naive
-  ``scene.{id}`` fallback (a dead transport raises there instead, #1947) - and
-  the automation resolver scans REST
-  ``get_states()`` and additionally catches broadly → ``None``. Its only routed
-  call sites run AFTER a scene/automation upsert commits or BEFORE a REST delete,
-  so an escaping transport error would report a landed write as failed / abort a
-  delete the REST path would have finished.
+- ``fetch_entity_lookup_via_component`` consumers fall back to the legacy
+  WebSocket registry bridge or REST state reads. The post-write resolver catches
+  known API/transport failures and retains a best-effort entity ID; later wait
+  and category operations report any verification or assignment failure. Removal
+  resolvers retain their own error policies.
 - ``fetch_reference_data_via_component``'s legacy path is the REST
   ``get_services()`` / ``get_states()`` pair; an escaping transport error would
   make ``validate_config_references`` hit its swallow-all fetch guard and skip
@@ -58,9 +48,9 @@ still completes:
 **GET-path invariant:** the automation/script/scene *config-get* tools must never
 route through the component — their in-process ``raw_config`` freshness lags the
 config file between a write and the next completed reload. The resolvers gate the
-whole component branch (caps probe included) behind an explicit ``allow_component``
-flag that only the set/remove/post-write call sites pass, so a get never even
-probes caps. ``TestConfigGetSeam`` pins this.
+whole component branch (caps probe included) behind ``allow_component`` for
+removals. The dedicated post-write resolver is never called from a config-get.
+``TestConfigGetSeam`` pins this.
 """
 
 from __future__ import annotations
