@@ -3289,6 +3289,10 @@ class TestListAvailableAddonsVersions:
         # The point of the listing: what you would get if you installed it.
         assert by_slug["core_never"]["version"] == "1.4.0"
         assert by_slug["core_mosquitto"]["version"] == "6.5.2"
+        # The installed version is kept alongside it, so "is this one current?"
+        # stays answerable — null for an app that is not installed at all.
+        assert by_slug["core_mosquitto"]["version_installed"] == "6.5.1"
+        assert by_slug["core_never"]["version_installed"] is None
 
 
 class TestListAddonsStats:
@@ -5862,9 +5866,13 @@ class TestManageAddonCheckUpdates:
             )
 
         assert result["success"] is True
-        assert result["changed"] == []
-        # Two read failures plus the skipped-comparison note.
-        assert len(result["warnings"]) == 3
+        # Null, not []: nothing was measured, so "0 changed" would be a lie
+        # the caller cannot distinguish from a genuinely quiet reload.
+        assert result["changed"] is None
+        assert result["updates_available"] is None
+        assert "unknown" in result["message"]
+        # Two read failures, the skipped comparison, the unlistable updates.
+        assert len(result["warnings"]) == 4
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("failing_side", ["before", "after"])
@@ -5872,7 +5880,7 @@ class TestManageAddonCheckUpdates:
         """A half-read store cannot be diffed, and must not fake a diff.
 
         Treating the unreadable side as an empty store would report every
-        installed app as newly discovered (or as vanished).
+        installed app as newly discovered, or every one of them as vanished.
         """
         tools = self._tools()
         populated = _store_payload(
@@ -5893,8 +5901,109 @@ class TestManageAddonCheckUpdates:
             )
 
         assert result["success"] is True
-        assert result["changed"] == []
+        assert result["changed"] is None
         assert any("could not be read" in w for w in result["warnings"]), result
+        # Updates come from the after-read alone, so they survive a failed
+        # before-read and are unknown only when the after-read is the one lost.
+        if failing_side == "after":
+            assert result["updates_available"] is None
+        else:
+            assert result["updates_available"] == []
+
+    @pytest.mark.asyncio
+    async def test_check_updates_reports_an_app_that_left_the_store(self):
+        """A slug gone after the reload is a change, not silence.
+
+        A removed or unreachable repository takes its apps with it. Reporting
+        only the arrivals would leave the caller believing a vanished app is
+        still installable.
+        """
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=[
+                _store_payload(
+                    _store_addon("core_mosquitto", "6.5.1"),
+                    _store_addon("gone_app", "1.0.0"),
+                ),
+                {"success": True, "result": {}},
+                _store_payload(_store_addon("core_mosquitto", "6.5.1")),
+            ],
+        ):
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(action="check_updates")
+            )
+
+        changed = {entry["slug"]: entry for entry in result["changed"]}
+        assert set(changed) == {"gone_app"}
+        assert changed["gone_app"]["version_before"] == "1.0.0"
+        assert changed["gone_app"]["version_after"] is None
+
+    @pytest.mark.asyncio
+    async def test_an_unrecognised_reload_failure_is_re_raised(self):
+        """A failed reload stays a failure; only known causes get relabelled.
+
+        Without this the fallthrough could regress to swallowing the error and
+        returning success for a reload that never happened.
+        """
+        tools = self._tools()
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                side_effect=[_store_payload(), ToolError("connection refused")],
+            ) as mock_call,
+            pytest.raises(ToolError) as excinfo,
+        ):
+            await tools.manage_addon(**_manage_addon_kwargs(action="check_updates"))
+
+        assert "connection refused" in str(excinfo.value)
+        assert "pending update" not in str(excinfo.value)
+        # The store read, the reload, and nothing after it.
+        assert mock_call.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_an_app_update_failure_is_not_relabelled_as_supervisor(self):
+        """ "supervisor" plus "update" in an error is not the refusal we mean.
+
+        Supervisor's own wording is "supervisor needs to be updated first"
+        (jobs/decorator.py); a broader match hijacks unrelated failures.
+        """
+        tools = self._tools()
+        detail = json.dumps(
+            {"error": {"message": "failed to update app core_mosquitto on supervisor"}}
+        )
+        with (
+            patch(
+                "ha_mcp.tools.tools_addons._supervisor_api_call",
+                new_callable=AsyncMock,
+                side_effect=[_store_payload(), ToolError(detail)],
+            ),
+            pytest.raises(ToolError) as excinfo,
+        ):
+            await tools.manage_addon(**_manage_addon_kwargs(action="check_updates"))
+
+        assert "pending update" not in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_a_failed_store_read_carries_its_cause(self):
+        """The warning has to say why, or every failure looks identical."""
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=[
+                ToolError(json.dumps({"error": {"message": "401 Unauthorized"}})),
+                {"success": True, "result": {}},
+                _store_payload(),
+            ],
+        ):
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(action="check_updates")
+            )
+
+        assert any("401 Unauthorized" in w for w in result["warnings"]), result
 
     @pytest.mark.asyncio
     async def test_pending_supervisor_update_explains_itself(self):
@@ -5922,6 +6031,9 @@ class TestManageAddonCheckUpdates:
             ({"slug": "core_mosquitto"}, "slug"),
             ({"repository": "0f1cc410"}, "repository"),
             ({"path": "/api/status"}, "path"),
+            ({"boot": "auto"}, "config parameters"),
+            ({"options": {"k": "v"}}, "config parameters"),
+            ({"websocket": True}, "websocket"),
         ],
     )
     async def test_check_updates_rejects_narrower_scope(self, overrides, expected):

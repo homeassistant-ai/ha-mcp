@@ -2566,8 +2566,10 @@ class AddOnTools:
     # Store-wide actions take neither `slug` nor `repository`: they act on the
     # whole store. `check_updates` mirrors the Home Assistant Apps UI overflow
     # item of the same name (frontend `check_updates` ->
-    # `POST /store/reload`), which is the only way to make Supervisor re-scan
-    # local app (add-on) sources after their config.yaml changes.
+    # `POST /store/reload`), which re-scans local app (add-on) sources on
+    # demand after their config.yaml changes. Supervisor also reloads the
+    # store on its own every three hours (misc/tasks.py RUN_RELOAD_APPS), so
+    # this buys promptness, not a capability nothing else has.
     _STORE_ACTIONS: ClassVar[frozenset[str]] = frozenset({"check_updates"})
 
     # A reload re-reads every registered repository, including git pulls of
@@ -2679,23 +2681,31 @@ class AddOnTools:
     ) -> list[dict[str, Any]]:
         """Return the apps (add-ons) whose latest-known version moved.
 
-        A slug absent from ``before`` is reported with ``version_before: None``
-        rather than skipped: a newly discovered app is exactly the kind of
-        change a caller reloads the store to find. That only holds when
-        ``before`` is a real reading of the store, which is why an unreadable
-        snapshot is ``None`` rather than ``{}`` and skips the diff entirely.
+        Both directions of appearance are changes a caller reloads the store
+        to find, so both are reported and the null side says which it is:
+        ``version_before: None`` is newly discovered, ``version_after: None``
+        is gone from the store (its repository was removed or is unreachable).
+        That only holds when each snapshot is a real reading of the store,
+        which is why an unreadable one is ``None`` rather than ``{}`` and
+        skips the diff entirely.
         """
         changed: list[dict[str, Any]] = []
-        for slug, entry in sorted(after.items()):
-            previous = before.get(slug, {})
-            if previous.get("version") == entry.get("version"):
+        for slug in sorted(before.keys() | after.keys()):
+            previous = before.get(slug)
+            current = after.get(slug)
+            if (
+                previous is not None
+                and current is not None
+                and previous.get("version") == current.get("version")
+            ):
                 continue
+            known = current if current is not None else previous
             changed.append(
                 {
                     "slug": slug,
-                    "name": entry.get("name"),
-                    "version_before": previous.get("version"),
-                    "version_after": entry.get("version"),
+                    "name": (known or {}).get("name"),
+                    "version_before": (previous or {}).get("version"),
+                    "version_after": (current or {}).get("version"),
                 }
             )
         return changed
@@ -2709,10 +2719,11 @@ class AddOnTools:
         ``action="update"`` (or ``action="rebuild"`` for a local app whose
         source changed underneath an unchanged version).
 
-        Reporting only ``version_latest`` movement would be misleading on its
-        own — that field advances on reload while the installed schema stays
-        stale — so the result names the apps that changed and leaves installing
-        to the caller.
+        ``changed`` and ``updates_available`` describe *store* metadata, not
+        anything on disk: a slug listed here still runs its old version until
+        the caller installs it. Either field is ``None`` when the store could
+        not be read to measure it — never ``[]``, which would claim nothing
+        was found.
         """
         warnings: list[str] = []
         before = await self._snapshot_store_or_warn(warnings, "before")
@@ -2727,31 +2738,54 @@ class AddOnTools:
             self._raise_check_updates_error(error)
         after = await self._snapshot_store_or_warn(warnings, "after")
 
-        # Only a pair of real readings can be compared. Treating a failed read
-        # as an empty store would report every app as newly discovered.
+        # Only a pair of real readings can be compared, and only a real
+        # `after` reading can list updates. An unmeasured count reported as 0
+        # reads as "looked and found nothing", so each unmeasured field stays
+        # None and the message says it is unknown rather than zero.
+        changed: list[dict[str, Any]] | None = None
         if before is None or after is None:
-            changed: list[dict[str, Any]] = []
             warnings.append(
                 "Skipped the changed-app comparison because the store could "
                 "not be read on both sides of the reload."
             )
         else:
             changed = self._diff_store_versions(before, after)
-        updates_available = [
-            {"slug": slug, "name": entry.get("name"), "version": entry.get("version")}
-            for slug, entry in sorted((after or {}).items())
-            if entry.get("update_available")
-        ]
+        updates_available: list[dict[str, Any]] | None = None
+        if after is None:
+            warnings.append(
+                "Could not list available updates because the store could not "
+                "be read after the reload."
+            )
+        else:
+            updates_available = [
+                {
+                    "slug": slug,
+                    "name": entry.get("name"),
+                    "version": entry.get("version"),
+                }
+                for slug, entry in sorted(after.items())
+                if entry.get("update_available")
+            ]
+        changed_text = (
+            "changed apps unknown"
+            if changed is None
+            else f"{len(changed)} app version(s) changed"
+        )
+        updates_text = (
+            "available updates unknown"
+            if updates_available is None
+            else f"{len(updates_available)} update(s) available"
+        )
         result: dict[str, Any] = {
             "success": True,
             "action": "check_updates",
             "changed": changed,
             "updates_available": updates_available,
             "message": (
-                f"App (add-on) store reloaded; {len(changed)} app version(s) "
-                f"changed, {len(updates_available)} update(s) available. "
-                "This refreshes store metadata only — install with "
-                "action='update'."
+                f"App (add-on) store reloaded; {changed_text}, {updates_text}. "
+                "This refreshes store metadata only — install a new version "
+                "with action='update', or action='rebuild' for a local app "
+                "whose source changed but whose version did not."
             ),
         }
         if warnings:
@@ -2772,19 +2806,28 @@ class AddOnTools:
         try:
             return await self._store_latest_versions()
         except ToolError as error:
-            logger.info(
+            detail = AddOnTools._supervisor_error_text(str(error))
+            logger.warning(
                 "Could not read the app (add-on) store %s the reload: %s",
                 when,
-                error,
+                detail,
             )
-            warnings.append(f"Could not read the app (add-on) store {when} the reload.")
+            # Carry the cause: without it an auth failure and an unreachable
+            # Supervisor read identically in the result.
+            warnings.append(
+                f"Could not read the app (add-on) store {when} the reload: {detail}"
+            )
             return None
 
     @staticmethod
     def _raise_check_updates_error(error: ToolError) -> NoReturn:
         """Re-raise a failed store reload with guidance for its known causes."""
         detail = AddOnTools._supervisor_error_text(str(error))
-        if "supervisor" in detail.lower() and "update" in detail.lower():
+        # Supervisor's own wording for this refusal (jobs/decorator.py):
+        # "'<job>' blocked from execution, supervisor needs to be updated
+        # first". Matching on "supervisor" + "update" anywhere would relabel
+        # unrelated app-update failures with this guidance.
+        if "needs to be updated first" in detail.lower():
             # Built outside the list: an implicit concatenation inside a list
             # literal reads as a missing comma (py/implicit-string-concatenation-in-list).
             retry_suggestion = (
@@ -3533,9 +3576,7 @@ class AddOnTools:
             request_headers,
         )
 
-        # Store-wide actions act on the whole store, so they take neither
-        # `slug` nor `repository`. Handle them before the slug requirement
-        # applies.
+        # Handled before the slug requirement below, which they never meet.
         if action is not None and action.lower().strip() in self._STORE_ACTIONS:
             self._reject_store_action_conflicts(
                 action,
@@ -3696,7 +3737,12 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             Literal["installed", "available"] | None,
             Field(
                 description="App (add-on) source: 'installed' (default) for currently installed apps, "
-                "'available' for apps in the store that can be installed.",
+                "'available' for apps in the store that can be installed. "
+                "With source='available', 'version' is the version you would "
+                "get by installing (Supervisor's version_latest) and "
+                "'version_installed' is the running one, null when the app is "
+                "not installed — so compare the two, not 'version' alone, to "
+                "tell whether an installed app is current.",
                 default=None,
             ),
         ] = None,
@@ -3971,9 +4017,13 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 "Supervisor re-scans its repositories, mirroring the Apps UI "
                 "'Check for updates' item — it takes neither 'slug' nor "
                 "'repository', refreshes available metadata only, and installs "
-                "nothing (follow with action='update'). Required after editing "
-                "a local app's config.yaml, which Supervisor otherwise serves "
-                "from cache. "
+                "nothing. Use it to pick up an edited local app's config.yaml "
+                "on demand instead of waiting for Supervisor's own reload "
+                "(every 3h). Follow with action='update' to install a new "
+                "version, or action='rebuild' for a local app whose source "
+                "changed but whose version did not. Returns 'changed' and "
+                "'updates_available', each null (not empty) if the store "
+                "could not be read to measure it — check 'warnings'. "
                 "When ha-mcp runs as an app, it can update other apps but cannot "
                 "update its own running slug; update ha-mcp from the Home Assistant "
                 "Apps UI. "

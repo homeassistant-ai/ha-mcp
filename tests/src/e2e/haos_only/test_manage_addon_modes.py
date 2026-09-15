@@ -440,6 +440,10 @@ async def test_check_updates_reloads_the_store(mcp_client: Any) -> None:
         )
 
     assert payload.get("action") == "check_updates", payload
+    # A healthy bake reads the store on both sides, so both fields are real
+    # lists and nothing degraded. Without this the store reads could fail
+    # outright — they only warn — and the test would still pass on nulls.
+    assert "warnings" not in payload, payload
     assert isinstance(payload.get("changed"), list), payload
     assert isinstance(payload.get("updates_available"), list), payload
     # The reload refreshes metadata only; the message has to point at the
@@ -448,12 +452,16 @@ async def test_check_updates_reloads_the_store(mcp_client: Any) -> None:
 
 
 async def test_check_updates_rejects_a_slug(mcp_client: Any) -> None:
-    """Naming one app would misstate the scope of a store-wide reload."""
-    slug = await _resolve_slug(mcp_client, NODERED_NAME)
+    """Naming one app would misstate the scope of a store-wide reload.
+
+    Any literal slug does: the conflict is rejected before the slug is
+    resolved, so resolving a real one would only add a dependency on the
+    bake's app list.
+    """
     async with MCPAssertions(mcp_client) as mcp:
         payload = await mcp.call_tool_failure(
             "ha_manage_app",
-            {"action": "check_updates", "slug": slug},
+            {"action": "check_updates", "slug": "core_mosquitto"},
             expected_error="store-wide mode",
         )
 
