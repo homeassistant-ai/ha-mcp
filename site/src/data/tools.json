@@ -7,7 +7,7 @@
       "properties": {
         "source": {
           "type": "Literal['installed', 'available'] | None",
-          "description": "App (add-on) source: 'installed' (default) for currently installed apps, 'available' for apps in the store that can be installed.",
+          "description": "App (add-on) source: 'installed' (default) for currently installed apps, 'available' for apps in the store that can be installed. With source='available', 'version' is the version you would get by installing (Supervisor's version_latest) and 'version_installed' is the running one, null when the app is not installed — so compare the two, not 'version' alone, to tell whether an installed app is current.",
           "default": null
         },
         "slug": {
@@ -50,7 +50,7 @@
       "properties": {
         "slug": {
           "type": "str",
-          "description": "App (add-on) slug (e.g., '<prefix>_nodered', '<prefix>_frigate'). Slug prefixes vary by app repository — call ha_get_app() to discover the actual installed slug. Required for every mode except the store-repository actions (action='add_repository'/'remove_repository'), which use 'repository' instead and take no slug.",
+          "description": "App (add-on) slug (e.g., '<prefix>_nodered', '<prefix>_frigate'). Slug prefixes vary by app repository — call ha_get_app() to discover the actual installed slug. Required for every mode except the store-repository actions (action='add_repository'/'remove_repository'), which use 'repository' instead and take no slug, and the store-wide action (action='check_updates'), which takes neither.",
           "default": ""
         },
         "path": {
@@ -155,7 +155,7 @@
         },
         "action": {
           "type": "str | None",
-          "description": "Lifecycle mode: run a Supervisor app (add-on) action. One of 'install', 'uninstall', 'start', 'stop', 'restart', 'rebuild', 'update'. 'install'/'update' require the app's repository to be registered (it appears in ha_get_app(source='available')). Store-repository mode: 'add_repository' / 'remove_repository' register or unregister a custom app store repository — these use the 'repository' param instead of 'slug'. When ha-mcp runs as an app, it can update other apps but cannot update its own running slug; update ha-mcp from the Home Assistant Apps UI. Mutually exclusive with path / config parameters / array_patch. HA OS / Supervised only.",
+          "description": "Lifecycle mode: run a Supervisor app (add-on) action. One of 'install', 'uninstall', 'start', 'stop', 'restart', 'rebuild', 'update'. 'install'/'update' require the app's repository to be registered (it appears in ha_get_app(source='available')). Store-repository mode: 'add_repository' / 'remove_repository' register or unregister a custom app store repository — these use the 'repository' param instead of 'slug'. Store-wide mode: 'check_updates' reloads the store so Supervisor re-scans its repositories, mirroring the Apps UI 'Check for updates' item — it takes neither 'slug' nor 'repository', refreshes available metadata only, and installs nothing. Use it to pick up an edited local app's config.yaml on demand instead of waiting for Supervisor's own reload (every 3h). Follow with action='update' to install a new version, or action='rebuild' for a local app whose source changed but whose version did not. Returns 'changed' and 'updates_available', each null (not empty) if the store could not be read to measure it — check 'warnings'. When ha-mcp runs as an app, it can update other apps but cannot update its own running slug; update ha-mcp from the Home Assistant Apps UI. Mutually exclusive with path / config parameters / array_patch. HA OS / Supervised only.",
           "default": null
         },
         "repository": {
