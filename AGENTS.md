@@ -145,9 +145,12 @@ The minimal setup is `uv sync --group dev`; run stdio with `uv run ha-mcp` and H
 
 Tools are lazy-discovered from `tools_*.py`; shared business logic belongs in service modules; WebSocket-backed operations verify state changes; and tools wait for logical completion when possible. Read the [architecture map](docs/agents/development.md#architecture) and the [code review style guide](.gemini/styleguide.md) before structural code changes.
 
-## Code Comments
+## Code Conventions
 
-Comment only non-obvious logic. Code should be self-documenting; too many comments is an anti-pattern.
+- Comment only non-obvious logic. Code should be self-documenting; too many comments is an anti-pattern.
+- Type-hint every function signature, and use async/await consistently for I/O.
+- Keep modules focused. Around 1,000 lines (Pylint's `max-module-lines` default) signals a module spanning several concerns; split along responsibilities and update internal imports and test patch targets together, since internal module paths are not a public MCP tool contract.
+- Never edit `CHANGELOG.md` by hand; semantic-release generates it.
 
 ## Terminology: apps, not add-ons
 
@@ -155,7 +158,7 @@ In user- and agent-facing text, write **app (add-on)** on first mention and **ap
 
 ## Writing MCP Tools
 
-Before adding or modifying a tool, read [`.gemini/styleguide.md`](.gemini/styleguide.md). It owns tool naming, decorator order, tags, safety annotations, `ToolError` handling, return shapes, docstrings, consolidation, module size, and progressive disclosure.
+Before adding or modifying a tool, read [`.gemini/styleguide.md`](.gemini/styleguide.md). It owns tool naming, decorator order, tags, safety annotations, `ToolError` handling, return shapes, docstrings, consolidation, and progressive disclosure.
 
 ## Tool Waiting Behavior
 
