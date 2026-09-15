@@ -10,7 +10,6 @@ on:
         PR Validation Pipeline,
         HAOS E2E Tests,
         CodeQL Code Quality,
-        Codex PR Review Delivery,
       ]
     types: [completed]
   status:

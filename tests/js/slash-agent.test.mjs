@@ -443,6 +443,27 @@ test("checkpoint identity cannot be forged by a human or another bot", () => {
   );
 });
 
+test("a failed PR creation recovers its owned branch without requiring more code changes", () => {
+  const api = new FakeAPI();
+  const write = api.write.bind(api);
+  let failOnce = true;
+  api.write = (path, data, method) => {
+    if (path === "pulls" && failOnce) {
+      failOnce = false;
+      throw Error("Temporary PR creation failure");
+    }
+    return write(path, data, method);
+  };
+  assert.throws(() => start(api), /Temporary/);
+  const plan = prepare(api, { number: 9, automatic: true }, APP);
+  const work = artifact();
+  work.result.outcome = "unchanged";
+  work.changes = [];
+  const state = publish(api, plan, work, APP, { runId: "43" });
+  assert.equal(state.pr, 10);
+  assert.equal(api.pr.head.sha, B);
+});
+
 test("patch validator rejects traversal, workflow edits, credentials, symlinks and oversized data", () => {
   for (const path of [
     "../outside",

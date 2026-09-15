@@ -314,6 +314,8 @@ runs:
           echo "CODEX_ACTION_WEB_SEARCH=$web_search"
           echo "CODEX_ACTION_TIMEOUT_MINUTES=$TIMEOUT_MINUTES_INPUT"
           echo "CODEX_ACTION_PROFILE=$profile_name"
+          printf 'CODEX_ACTION_READONLY_PATHS='
+          printf '%s\n' "${readonly_paths[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))'
         } >> "$GITHUB_ENV"
         {
           echo "output-path=$output_path"
@@ -386,6 +388,16 @@ runs:
           _ \
           "$CODEX_HOME/auth.json" \
           "${{ steps.prepare.outputs.original-auth-path }}"
+
+        # Test the selected profile itself, not file mode bits or a prompt promise.
+        while IFS= read -r protected_path; do
+          codex sandbox \
+            --profile "$CODEX_ACTION_PROFILE" \
+            --permission-profile "$CODEX_ACTION_PROFILE" \
+            --cd "$CODEX_ACTION_WORKDIR" -- \
+            bash -c 'if [[ -d "$1" ]]; then ! touch "$1/.codex-write-probe-$$" 2>/dev/null; else ! { : >> "$1"; } 2>/dev/null; fi' \
+            _ "$protected_path"
+        done < <(jq -r '.[]' <<< "${CODEX_ACTION_READONLY_PATHS:-[]}")
 
     - id: agent
       name: Run Codex

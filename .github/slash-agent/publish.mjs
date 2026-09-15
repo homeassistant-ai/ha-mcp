@@ -121,6 +121,8 @@ export function publish(
   if (!/^[a-f0-9-]{36}$/.test(artifact.threadId ?? ""))
     throw Error("Invalid Codex session ID");
   const { result, changes } = artifact;
+  if ((result.outcome === "changed") !== changes.length > 0)
+    throw Error("Model outcome disagrees with patch contents");
   state.rounds += 1;
   state.summary = `${result.summary}\n\nTests: ${result.tests}\n\nContinuation: ${result.memory}`;
   if (state.summary.length > 12000)
@@ -177,7 +179,10 @@ export function publish(
       });
     head = commit.sha;
   }
-  if (!state.pr && changes.length) {
+  const ownedBranch =
+    fresh.session &&
+    api.optional(`git/ref/heads/${encodeURIComponent(state.branch)}`);
+  if (!state.pr && (changes.length || ownedBranch)) {
     assertCurrent(api, plan, app, head);
     const matches = api.pages(
       `pulls?state=open&head=${encodeURIComponent(api.repository.split("/")[0] + ":" + state.branch)}`,
