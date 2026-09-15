@@ -209,11 +209,15 @@ class LabelTools:
                     "assigned_areas": assigned,
                 },
                 suggestions=[
-                    "The label write already succeeded; retry only the "
-                    "remaining area IDs (do not recreate the label).",
-                    "Use ha_set_area_or_floor(kind='area', labels=...) to "
-                    "replace an area's label set, or ha_list_floors_areas() "
-                    "to inspect current assignments.",
+                    (
+                        "The label write already succeeded; retry only the "
+                        + "remaining area IDs (do not recreate the label)."
+                    ),
+                    (
+                        "Use ha_set_area_or_floor(kind='area', labels=...) to "
+                        + "replace an area's label set, or "
+                        + "ha_list_floors_areas() to inspect current assignments."
+                    ),
                 ],
             )
         )
@@ -375,7 +379,7 @@ class LabelTools:
 
     def _raise_label_set_failure(
         self, result: dict[str, Any], action: str, name: str, label_id: str | None
-    ) -> None:
+    ) -> NoReturn:
         """Raise for a failed label_registry create/update.
 
         The unknown-id case is caught up front by ``_require_existing_label``.
@@ -669,11 +673,11 @@ class LabelTools:
                 name, label_id, color, icon, description
             )
             result = await self._client.send_websocket_message(message)
-            if not result.get("success"):
-                self._raise_label_set_failure(result, action, name, label_id)
-            return await self._label_set_success_response(
-                result, action, name, label_id, parsed_areas
-            )
+            if result.get("success"):
+                return await self._label_set_success_response(
+                    result, action, name, label_id, parsed_areas
+                )
+            self._raise_label_set_failure(result, action, name, label_id)
 
         except ToolError:
             raise
