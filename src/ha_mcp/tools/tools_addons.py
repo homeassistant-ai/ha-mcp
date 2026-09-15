@@ -2660,14 +2660,37 @@ class AddOnTools:
         """
         response = await _supervisor_api_call(self._client, "/store")
         result = response.get("result")
-        addons = result.get("addons", []) if isinstance(result, dict) else []
+        addons = result.get("addons") if isinstance(result, dict) else None
+        # A partial snapshot is worse than no snapshot: the diff walks both
+        # sides, so every slug missing from a truncated reading comes back as
+        # an app that left the store. Refuse the whole reading instead, which
+        # degrades to None and skips the comparison with a warning.
+        if not isinstance(addons, list):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Supervisor's /store response carried no readable app "
+                    "(add-on) list.",
+                    details=(
+                        f"expected a list at result.addons, got {type(addons).__name__}"
+                    ),
+                )
+            )
         snapshot: dict[str, dict[str, Any]] = {}
         for addon in addons:
-            if not isinstance(addon, dict):
-                continue
-            slug = addon.get("slug")
+            slug = addon.get("slug") if isinstance(addon, dict) else None
             if not isinstance(slug, str) or not slug:
-                continue
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.SERVICE_CALL_FAILED,
+                        "Supervisor's /store response carried an app (add-on) "
+                        "entry with no usable slug.",
+                        details=(
+                            "every entry needs a non-empty string slug to be "
+                            "comparable across a reload"
+                        ),
+                    )
+                )
             snapshot[slug] = {
                 "name": addon.get("name"),
                 "version": addon.get("version_latest"),

@@ -5988,6 +5988,49 @@ class TestManageAddonCheckUpdates:
         assert "pending update" not in str(excinfo.value)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("bad_result", "label"),
+        [
+            ({"result": {}}, "addons key missing"),
+            ({"result": {"addons": None}}, "addons null"),
+            ({"result": {"addons": {}}}, "addons not a list"),
+            ({"result": {"addons": [{"name": "No Slug"}]}}, "entry without slug"),
+            ({"result": {"addons": [{"slug": "", "name": "Blank"}]}}, "blank slug"),
+            ({"result": {"addons": ["not-a-mapping"]}}, "entry not a mapping"),
+        ],
+    )
+    async def test_a_malformed_store_reading_is_refused_not_partially_used(
+        self, bad_result, label
+    ):
+        """A truncated reading must not pass for a real one.
+
+        The diff walks both snapshots, so a slug missing from a partial
+        reading would be reported as an app that left the store. Refusing the
+        whole reading degrades it to None, which skips the comparison. A null
+        `addons` would otherwise raise TypeError straight through
+        _snapshot_store_or_warn, which only catches ToolError.
+        """
+        tools = self._tools()
+        with patch(
+            "ha_mcp.tools.tools_addons._supervisor_api_call",
+            new_callable=AsyncMock,
+            side_effect=[
+                _store_payload(_store_addon("core_mosquitto", "6.5.1")),
+                {"success": True, "result": {}},
+                bad_result,
+            ],
+        ):
+            result = await tools.manage_addon(
+                **_manage_addon_kwargs(action="check_updates")
+            )
+
+        assert result["success"] is True, label
+        # Not [] — nothing was comparable, and core_mosquitto has not vanished.
+        assert result["changed"] is None, label
+        assert result["updates_available"] is None, label
+        assert any("could not be read" in w for w in result["warnings"]), label
+
+    @pytest.mark.asyncio
     async def test_a_failed_store_read_carries_its_cause(self):
         """The warning has to say why, or every failure looks identical."""
         tools = self._tools()
