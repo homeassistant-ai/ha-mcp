@@ -284,10 +284,7 @@ def _make_dashboard_like_mcp() -> FastMCP:
 @pytest.mark.asyncio
 async def test_unknown_parameter_names_closest_valid_parameter():
     """Invented argument names get a did-you-mean hint and the valid parameter
-    list rather than pydantic's bare "Unexpected keyword argument" (#2462: a
-    model sent ``dashboard_url`` / ``force`` for ``url_path`` /
-    ``force_reload``). A shared word must qualify on its own — difflib alone
-    rates ``dashboard_url`` against ``url_path`` far below any usable cutoff."""
+    list instead of pydantic's bare "Unexpected keyword argument" (#2462)."""
     mcp = _make_dashboard_like_mcp()
     with pytest.raises(ToolError) as exc_info:
         await mcp.call_tool(

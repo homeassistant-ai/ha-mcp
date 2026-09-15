@@ -44,16 +44,11 @@ _TYPE_HINTS: dict[str, str] = {
     ),
 }
 
-# Pydantic's error type for an argument the tool signature does not declare.
 _UNKNOWN_ARGUMENT = "unexpected_keyword_argument"
 
 
 async def _tool_parameter_names(context: MiddlewareContext | None) -> list[str] | None:
-    """Return the called tool's declared parameter names, or None if unknown.
-
-    The names only enrich the error message, so a failed lookup falls back to
-    pydantic's own wording rather than masking the validation error.
-    """
+    """Return the called tool's declared parameter names, or None if unavailable."""
     fastmcp_context = getattr(context, "fastmcp_context", None)
     tool_name = getattr(getattr(context, "message", None), "name", None)
     if fastmcp_context is None or not tool_name:
@@ -68,13 +63,11 @@ async def _tool_parameter_names(context: MiddlewareContext | None) -> list[str] 
 
 
 def _closest_parameter(unknown: str, candidates: Sequence[str]) -> str | None:
-    """Pick the declared parameter an invented argument name most likely meant.
+    """Return the declared parameter an invented argument name most likely meant.
 
-    Models rename parameters more often than they misspell them: difflib rates
-    ``dashboard_url`` against ``url_path`` at 0.29, far below any usable
-    cutoff. A shared underscore-separated word therefore qualifies a candidate
-    on its own; the similarity ratio ranks candidates and catches plain typos
-    such as ``entitiy_id``.
+    A shared underscore-separated word qualifies a candidate because models
+    rename rather than misspell (``dashboard_url`` for ``url_path``); the
+    similarity ratio ranks candidates and catches plain typos.
     """
     unknown_lower = unknown.lower()
     words = set(unknown_lower.split("_")) - {""}
@@ -130,8 +123,6 @@ class ValidationErrorMiddleware(Middleware):
                 if any(err["type"] == _UNKNOWN_ARGUMENT for err in errors)
                 else None
             )
-            # A parameter the call already supplied is never the intended
-            # target of a second, invented argument.
             supplied = getattr(getattr(context, "message", None), "arguments", None)
             unclaimed = [p for p in valid_parameters or () if p not in (supplied or {})]
 

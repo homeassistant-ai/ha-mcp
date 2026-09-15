@@ -179,9 +179,7 @@ class TestDashboardFailure:
         assert failed is False
 
     async def test_one_dashboard_match_record_names_url_path(self) -> None:
-        """A legacy-walk match carries ``url_path`` beside ``dashboard_url`` —
-        the ha_config_get_dashboard parameter name, so a caller does not reuse
-        ``dashboard_url`` as an argument (#2462)."""
+        """A legacy-walk match carries ``url_path`` beside ``dashboard_url`` (#2462)."""
         client = MagicMock()
         client.send_websocket_message = AsyncMock(
             return_value={"result": {"views": [{"title": "marker"}]}}
@@ -381,8 +379,6 @@ class TestDashboardBucketViaComponent:
         for rec in dashboards:
             assert rec["score"] == 100
             assert rec["match_in_config"] is True
-            # The record names the ha_config_get_dashboard parameter too, so a
-            # caller does not reuse ``dashboard_url`` as an argument (#2462).
             assert rec["url_path"] == rec["dashboard_url"]
         by_url = {d["dashboard_url"]: d for d in dashboards}
         assert by_url["energy"]["dashboard_title"] == "Energy Registry"
