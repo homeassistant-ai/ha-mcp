@@ -125,11 +125,13 @@ conditions fails, fix it now or let it go—do not file an issue merely to
 “track” it. Bot nits are fixed or dismissed in the current review, not
 converted into backlog noise.
 
-Do not use “non-blocking,” “post-merge follow-up,” “nice to have,”
-“pre-existing,” or similar phrasing to hide a legitimate current finding.
-This list is non-exhaustive: match the intent, and remember that pre-existing
-problems are the point of the Boy Scout rule. State the finding and let the
-user decide scope.
+Do not use “out of scope,” “non-blocking,” “post-merge follow-up,” “nice to
+have,” “pre-existing,” or similar phrasing to hide a legitimate current
+finding. This list is non-exhaustive: match the intent, and remember that
+pre-existing problems are the point of the Boy Scout rule. Scope is the
+user's call: state the finding and ask explicitly, with the specific reason,
+before deferring or dropping it: “I think this is out of scope because [X].
+Fix here or defer?”
 
 ## CI/CD Workflows
 
