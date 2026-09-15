@@ -8,7 +8,6 @@ import {
   command,
   decide,
   digest,
-  feedbackHash,
   renderState,
   stateFrom,
   validateChanges,

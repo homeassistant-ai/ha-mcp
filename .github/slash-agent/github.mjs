@@ -4,7 +4,6 @@ import {
   digest,
   maintainer,
   ORIGIN_MARKER,
-  REVIEW_BOTS,
   stateFrom,
   trustedReview,
 } from "./core.mjs";
