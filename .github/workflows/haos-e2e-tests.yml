@@ -292,8 +292,8 @@ jobs:
         # worker amortizes its boot cost. 4-vCPU/16-GB runner fits 2x
         # QEMU at -smp 2 -m 4096 each (#1350).
         #
-        # --maxfail=0 overrides pytest.ini's --maxfail=3 so we see the full
-        # failure surface for triage — early-terminating loses signal.
+        # --maxfail=0 overrides pyproject.toml's --maxfail=3 so we see the
+        # full failure surface for triage — early-terminating loses signal.
         run: |
           cd tests
           # Dispatch inputs reach the shell through env (below), never by
@@ -512,7 +512,8 @@ jobs:
         # the 3 self-referential haos_only embedded smoke tests skip automatically.
         #
         # -n2 --dist loadscope: same per-worker QEMU/overlay parallelism as the
-        # other HAOS lanes (#1350); --maxfail=0 overrides pytest.ini's --maxfail=3
+        # other HAOS lanes (#1350); --maxfail=0 overrides
+        # pyproject.toml's --maxfail=3
         # so triage sees the full failure surface.
         run: |
           cd tests
@@ -1207,7 +1208,8 @@ jobs:
         # entry alone — the #2292 topology.
         #
         # -n2 --dist loadscope: same per-worker QEMU/overlay parallelism as the
-        # other HAOS lanes (#1350); --maxfail=0 overrides pytest.ini's --maxfail=3
+        # other HAOS lanes (#1350); --maxfail=0 overrides
+        # pyproject.toml's --maxfail=3
         # so triage sees the full failure surface.
         run: |
           cd tests
