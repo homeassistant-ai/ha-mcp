@@ -109,7 +109,7 @@ export function validateResult(result, context) {
     );
   }
   const sources = new Map(context.sources.map((s) => [s.source_id, s]));
-  const normalize = (text) => text.replace(/\r\n/g, "\n");
+  const normalize = (text) => text.replace(/\r\n?/g, "\n");
   for (const key of [
     "summary",
     "translation",

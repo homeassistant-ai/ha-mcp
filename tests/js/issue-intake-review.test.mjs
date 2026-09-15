@@ -116,6 +116,12 @@ test("CRLF evidence matches LF without weakening other quote checks", () => {
     () => validateResult(r, makeContext(s)),
     /summary\[0\].evidence\[0\].*body/,
   );
+  const carriage = fixture(),
+    carriageResult = answer();
+  carriage.issue.body = "Client is Claude Desktop.\rVersion 8.4.3.";
+  carriageResult.summary[0].evidence[0].quote =
+    "Client is Claude Desktop.\nVersion 8.4.3.";
+  validateResult(carriageResult, makeContext(carriage));
 });
 test("fact values must occur in their evidence", () => {
   const r = answer();
