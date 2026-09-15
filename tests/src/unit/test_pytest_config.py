@@ -1,5 +1,6 @@
 """Regression guards for pytest configuration discovery."""
 
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).parents[3]
@@ -8,18 +9,31 @@ TESTS_ROOT = ROOT / "tests"
 
 def test_tests_tree_has_no_nested_pytest_configuration() -> None:
     """Keep every test invocation on the root ``pyproject.toml`` config."""
-    nested_configs = list(TESTS_ROOT.rglob("pytest.ini"))
-    nested_configs.extend(TESTS_ROOT.rglob(".pytest.ini"))
+    always_config_names = (
+        "pytest.toml",
+        ".pytest.toml",
+        "pytest.ini",
+        ".pytest.ini",
+    )
+    nested_configs = [
+        path for filename in always_config_names for path in TESTS_ROOT.rglob(filename)
+    ]
+
+    for path in TESTS_ROOT.rglob("pyproject.toml"):
+        config = tomllib.loads(path.read_text(encoding="utf-8"))
+        tool_config = config.get("tool", {})
+        if isinstance(tool_config, dict) and "pytest" in tool_config:
+            nested_configs.append(path)
 
     section_configs = {
-        "pyproject.toml": "[tool.pytest.ini_options]",
         "tox.ini": "[pytest]",
         "setup.cfg": "[tool:pytest]",
     }
     for filename, section in section_configs.items():
         for path in TESTS_ROOT.rglob(filename):
             lines = path.read_text(encoding="utf-8").splitlines()
-            if section in {line.strip() for line in lines}:
+            headers = {line.split("#", 1)[0].split(";", 1)[0].strip() for line in lines}
+            if section in headers:
                 nested_configs.append(path)
 
     relative_configs = sorted(
