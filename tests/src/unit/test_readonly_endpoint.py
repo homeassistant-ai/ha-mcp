@@ -4,10 +4,10 @@ import asyncio
 import json
 from concurrent.futures import ThreadPoolExecutor
 
-import fastmcp
 import pytest
 from starlette.testclient import TestClient
 
+from ha_mcp._vendor import fastmcp
 from ha_mcp.config import get_global_settings, reset_global_settings
 from ha_mcp.http_transport import HttpTransportFastMCP
 from ha_mcp.read_only import ReadOnlyMiddleware, ReadOnlyToolsTransform

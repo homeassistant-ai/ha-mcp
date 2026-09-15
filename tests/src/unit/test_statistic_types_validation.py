@@ -10,8 +10,8 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_history import HistoryTools
 
 

@@ -10,8 +10,8 @@ import json
 import logging
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.errors import ErrorCode, create_error_response, create_validation_error
 from ha_mcp.tools.helpers import exception_to_structured_error, raise_tool_error
 

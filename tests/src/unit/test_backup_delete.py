@@ -31,8 +31,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.errors import ErrorCode
 from ha_mcp.tools.backup import delete_backup
 

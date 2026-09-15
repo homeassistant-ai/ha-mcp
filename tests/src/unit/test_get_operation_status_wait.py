@@ -12,9 +12,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
-from fastmcp.exceptions import ValidationError as FastMCPValidationError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.exceptions import ValidationError as FastMCPValidationError
 from ha_mcp.tools.device_control import DeviceControlTools
 from ha_mcp.utils.operation_manager import DeviceOperation, OperationStatus
 
@@ -277,8 +277,7 @@ async def test_failed_mid_poll_raises_service_call_failed() -> None:
 @pytest.mark.asyncio
 async def test_registered_status_tool_accepts_fractional_timeout() -> None:
     """The MCP boundary preserves a fractional timeout for follow-up calls."""
-    from fastmcp import FastMCP
-
+    from ha_mcp._vendor.fastmcp import FastMCP
     from ha_mcp.tools.tools_service import register_service_tools
 
     device_tools = MagicMock()
@@ -308,8 +307,7 @@ async def test_registered_status_tool_rejects_non_finite_timeout(
     invalid_timeout: float | str,
 ) -> None:
     """The public polling window must always have a finite deadline."""
-    from fastmcp import FastMCP
-
+    from ha_mcp._vendor.fastmcp import FastMCP
     from ha_mcp.tools.tools_service import register_service_tools
 
     device_tools = MagicMock()

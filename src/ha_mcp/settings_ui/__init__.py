@@ -74,7 +74,7 @@ from ._tools_meta import (
 )
 
 if TYPE_CHECKING:
-    from fastmcp import FastMCP
+    from ha_mcp._vendor.fastmcp import FastMCP
 
     from ..config import Settings
     from ..server import HomeAssistantSmartMCPServer

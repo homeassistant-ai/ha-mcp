@@ -10,7 +10,7 @@ import logging
 import time
 from typing import Any
 
-from fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
 from .helpers import exception_to_structured_error, log_tool_usage, raise_tool_error

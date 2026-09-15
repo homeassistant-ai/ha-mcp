@@ -20,8 +20,8 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantConnectionError,

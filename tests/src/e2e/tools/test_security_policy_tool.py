@@ -17,8 +17,9 @@ import os
 from typing import Any
 
 import pytest
-from fastmcp import Client
-from fastmcp.exceptions import ToolError
+
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..utilities.assertions import (
     MCPAssertions,
@@ -132,7 +133,7 @@ class TestSecurityPolicyToolAvailability:
     async def test_only_get_and_set_are_exposed(self, mcp_client_with_policy_tool):
         """The approval queue must not be reachable through this tool."""
         tools = {t.name: t for t in await mcp_client_with_policy_tool.list_tools()}
-        schema = tools[TOOL_NAME].inputSchema
+        schema = tools[TOOL_NAME].input_schema
         actions = schema["properties"]["action"]["enum"]
         assert set(actions) == {"get", "set"}
 

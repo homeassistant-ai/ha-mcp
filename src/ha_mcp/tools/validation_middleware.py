@@ -13,9 +13,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastmcp.exceptions import ValidationError as FastMCPValidationError
-from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 from pydantic import ValidationError as PydanticValidationError
+
+from ha_mcp._vendor.fastmcp.exceptions import ValidationError as FastMCPValidationError
+from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
+    CallNext,
+    Middleware,
+    MiddlewareContext,
+)
 
 from ..errors import create_validation_error
 from .helpers import raise_tool_error

@@ -27,10 +27,10 @@ class _FakeContentBlock:
 @dataclass
 class _FakeToolResult:
     """Stand-in for a FastMCP ToolResult — has a ``.content`` list of
-    blocks plus optional ``isError`` flag."""
+    blocks plus optional ``is_error`` flag."""
 
     content: list[Any]
-    isError: bool = False
+    is_error: bool = False
 
 
 class TestBasicTypePassthrough:
@@ -135,12 +135,12 @@ class TestToolResultExtraction:
         assert result == "plain text"
 
     def test_tool_result_with_is_error_returns_error_dict(self):
-        """isError=True wraps the payload in ``{"error": ...}`` so
+        """is_error=True wraps the payload in ``{"error": ...}`` so
         sandbox code can branch on the failure."""
         result = _extract_tool_result(
             _FakeToolResult(
                 content=[_FakeContentBlock(text=json.dumps({"detail": "boom"}))],
-                isError=True,
+                is_error=True,
             )
         )
         assert isinstance(result, dict)

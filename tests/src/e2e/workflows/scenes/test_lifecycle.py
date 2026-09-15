@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from ...utilities.assertions import safe_call_tool
+from ...utilities.assertions import MCPAssertions, safe_call_tool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -304,26 +304,10 @@ class TestSceneLifecycle:
     async def test_scene_rename_decouples_entity_id_from_storage_key(
         self, mcp_client, cleanup_tracker
     ):
-        """End-to-end coverage for the ``_resolve_scene_entity_id`` flow.
+        """Scene writes wait on the name-derived ID, while reads use the key.
 
-        HA derives a scene's ``entity_id`` from the ``name`` slug rather than
-        the storage key. A scene upserted with
-        ``scene_id='night_light_led_desk_strip'`` and
-        ``name='LED Desk Strip Night Light'`` lands at
-        ``scene.led_desk_strip_night_light`` while the registry's
-        ``unique_id`` stays ``night_light_led_desk_strip``. This test:
-
-        1. Creates the scene with the diverging shape.
-        2. Re-fetches via the storage scene_id and confirms the get works
-           (the resolver resolves the entity_id under the hood for category
-           lookup; a wrong resolver would surface as a missing/blank
-           ``category`` field rather than a 404, but the smoke is the
-           same).
-        3. Verifies python_transform with config_hash works against the
-           storage scene_id even though the entity_id differs — locks the
-           wait-and-category path in the python_transform branch that
-           BAT validation surfaced as broken before ``_resolve_scene_entity_id``
-           landed.
+        Both full-config and transform writes exercise post-write resolution;
+        config reads and removal exercise the legacy scene resolver.
         """
         scene_id = "night_light_led_desk_strip"
         # entity_id below is what HA actually derives from this name
@@ -332,21 +316,21 @@ class TestSceneLifecycle:
         cleanup_tracker.track("scene", f"scene.{scene_id}")  # belt-and-suspenders
 
         # 1. Create with diverging name vs scene_id
-        create_data = await safe_call_tool(
-            mcp_client,
-            "ha_config_set_scene",
-            {
-                "scene_id": scene_id,
-                "config": {
-                    "name": "LED Desk Strip Night Light",
-                    "icon": "mdi:weather-night",
-                    "entities": {
-                        "light.bed_light": {"state": "on", "brightness": 30},
+        async with MCPAssertions(mcp_client) as mcp:
+            create_data = await mcp.call_tool_success(
+                "ha_config_set_scene",
+                {
+                    "scene_id": scene_id,
+                    "config": {
+                        "name": "LED Desk Strip Night Light",
+                        "icon": "mdi:weather-night",
+                        "entities": {
+                            "light.bed_light": {"state": "on", "brightness": 30},
+                        },
                     },
+                    "wait": True,
                 },
-                "wait": True,
-            },
-        )
+            )
         assert create_data.get("success") is True, f"Scene create failed: {create_data}"
         # No 'not yet queryable' warning means the resolver picked up the
         # real entity_id correctly — the regression KP13 surfaced via BAT.
@@ -354,30 +338,39 @@ class TestSceneLifecycle:
             "not yet queryable" in w.lower() for w in create_data.get("warnings", [])
         ), f"Resolver fell back to scene.{scene_id}; create_data={create_data}"
 
+        # wait=True must finish with the name-derived entity queryable.
+        # The tool's wait is the completion signal under test: an exception to
+        # tests/AGENTS.md's polling rule. A test-side retry would hide early return.
+        async with MCPAssertions(mcp_client) as mcp:
+            state_data = await mcp.call_tool_success(
+                "ha_get_state", {"entity_id": expected_entity_id}
+            )
+        assert state_data["data"]["entity_id"] == expected_entity_id
+
         # 2. Get via the storage scene_id — this drives the resolver to
         # find the actual entity_id under the hood for category fetch.
-        get_data = await safe_call_tool(
-            mcp_client, "ha_config_get_scene", {"scene_id": scene_id}
-        )
+        async with MCPAssertions(mcp_client) as mcp:
+            get_data = await mcp.call_tool_success(
+                "ha_config_get_scene", {"scene_id": scene_id}
+            )
         assert get_data.get("success") is True, f"Get failed: {get_data}"
         config_hash = get_data.get("config_hash")
         assert config_hash, "Get must return a config_hash"
 
         # 3. python_transform with the storage scene_id must succeed —
-        # this exercises the wait-and-category branch in the transform
-        # path, which uses _resolve_scene_entity_id internally.
-        transform_data = await safe_call_tool(
-            mcp_client,
-            "ha_config_set_scene",
-            {
-                "scene_id": scene_id,
-                "python_transform": (
-                    "config['entities']['light.bed_light']['brightness'] = 60"
-                ),
-                "config_hash": config_hash,
-                "wait": True,
-            },
-        )
+        # this exercises post-write resolution and waiting in the transform path.
+        async with MCPAssertions(mcp_client) as mcp:
+            transform_data = await mcp.call_tool_success(
+                "ha_config_set_scene",
+                {
+                    "scene_id": scene_id,
+                    "python_transform": (
+                        "config['entities']['light.bed_light']['brightness'] = 60"
+                    ),
+                    "config_hash": config_hash,
+                    "wait": True,
+                },
+            )
         assert transform_data.get("success") is True, (
             f"Transform failed: {transform_data}"
         )
@@ -386,11 +379,11 @@ class TestSceneLifecycle:
         ), f"Resolver fell back on transform path; transform_data={transform_data}"
 
         # Cleanup via remove uses the same resolver under the hood.
-        remove_data = await safe_call_tool(
-            mcp_client,
-            "ha_config_remove_scene",
-            {"scene_id": scene_id, "wait": False},
-        )
+        async with MCPAssertions(mcp_client) as mcp:
+            remove_data = await mcp.call_tool_success(
+                "ha_config_remove_scene",
+                {"scene_id": scene_id, "wait": False},
+            )
         assert remove_data.get("success") is True, f"Remove failed: {remove_data}"
 
     async def test_deep_search_to_get_scene_round_trip_on_renamed_scene(

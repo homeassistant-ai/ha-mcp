@@ -15,8 +15,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
 
 

@@ -54,13 +54,12 @@ async def test_skills_bootstrap_instructions(mcp_client):
     """Test that MCP server instructions contain skill guidance (bootstrap prompt).
 
     Verifies the observable behavior: the instructions field in the MCP
-    InitializeResult contains skill blocks built from SKILL.md frontmatter.
+    negotiation result contains skill blocks built from SKILL.md frontmatter.
     If instructions are None, skills failed to load silently — the exact
     regression from missing skills-vendor.
     """
-    result = mcp_client.initialize_result
-    assert result is not None, "MCP client has no InitializeResult"
-    instructions = result.instructions
+    # Era-neutral: the 2026-07-28 protocol has no InitializeResult.
+    instructions = mcp_client.instructions
     assert instructions is not None, (
         "Server instructions are None — skills were not loaded. " + SKILLS_MISSING_HINT
     )
@@ -243,7 +242,7 @@ async def test_skill_guide_tier3_reads_content(mcp_client):
 @pytest.mark.asyncio
 async def test_skill_guide_rejects_unknown_skill(mcp_client):
     """Unknown skill names raise a ToolError, not return a silent empty dict."""
-    from fastmcp.exceptions import ToolError
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
     with pytest.raises(ToolError):
         await mcp_client.call_tool(SKILL_TOOL_NAME, {"skill": "does-not-exist"})
@@ -252,7 +251,7 @@ async def test_skill_guide_rejects_unknown_skill(mcp_client):
 @pytest.mark.asyncio
 async def test_skill_guide_rejects_path_traversal(mcp_client):
     """Path-traversal in either arg must raise rather than escape the skills dir."""
-    from fastmcp.exceptions import ToolError
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
     # Traversal in the skill arg.
     with pytest.raises(ToolError):

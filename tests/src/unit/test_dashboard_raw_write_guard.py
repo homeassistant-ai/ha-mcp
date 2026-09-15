@@ -1,7 +1,8 @@
 """Native edits keep the dedicated dashboard tool's backup and policy boundary."""
 
 import pytest
-from fastmcp.exceptions import ToolError
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .test_call_service_ws_command import _make_tools
 

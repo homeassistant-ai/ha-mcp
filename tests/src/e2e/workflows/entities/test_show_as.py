@@ -5,7 +5,8 @@ E2E tests for ha_set_entity device_class (Show As) and per-domain options round-
 import logging
 
 import pytest
-from fastmcp.exceptions import ToolError
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ...utilities.assertions import assert_mcp_success
 

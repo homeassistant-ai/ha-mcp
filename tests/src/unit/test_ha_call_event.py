@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_service import ServiceTools
 

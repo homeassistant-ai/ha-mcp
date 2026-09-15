@@ -18,10 +18,10 @@ from typing import Annotated, Any, ClassVar, Literal, NoReturn
 from urllib.parse import unquote, urlsplit
 
 import httpx
-from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from ha_mcp._vendor import websockets
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.websockets.asyncio.client import ClientConnection
 
 from .._version import is_running_in_addon

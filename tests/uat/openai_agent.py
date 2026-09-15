@@ -23,8 +23,9 @@ import sys
 from pathlib import Path
 
 import openai
-from fastmcp import Client as MCPClient
-from mcp.types import Tool as MCPTool
+
+from ha_mcp._vendor.fastmcp import Client as MCPClient
+from ha_mcp._vendor.mcp.types import Tool as MCPTool
 
 # Allow `python tests/uat/openai_agent.py` (subprocess path from run_uat.py)
 # to resolve the `uat` namespace package.
@@ -113,7 +114,7 @@ logger = logging.getLogger("uat.openai_agent")
 
 def mcp_tool_to_openai(tool: MCPTool) -> dict:
     """Convert an MCP tool definition to OpenAI function-calling format."""
-    parameters = tool.inputSchema or {"type": "object", "properties": {}}
+    parameters = tool.input_schema or {"type": "object", "properties": {}}
     return {
         "type": "function",
         "function": {

@@ -44,10 +44,10 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from fastmcp import Client
-from fastmcp.exceptions import ToolError
 from test_constants import TEST_TOKEN
 
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.server import HomeAssistantSmartMCPServer
 
@@ -334,7 +334,7 @@ async def test_non_png_format_survives_full_mcp_transport(
 
     images = _image_blocks(result)
     assert len(images) == 1
-    assert images[0].mimeType == "image/bmp"
+    assert images[0].mime_type == "image/bmp"
     raw = base64.b64decode(images[0].data)
     assert raw[:2] == b"BM"
     assert struct.unpack("<II", raw[18:26]) == (64, 64)

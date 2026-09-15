@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from fastmcp.exceptions import ToolError
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 # The vendored classes — the same ones tools_addons raises/catches; the
 # shared site-packages websockets is a DIFFERENT set of classes that

@@ -106,7 +106,7 @@ def _restore_fastmcp_host_origin_guard():
     attr = "http_host_origin_protection"
     prev_env = os.environ.get(env_key)
     try:
-        import fastmcp
+        from ha_mcp._vendor import fastmcp
 
         settings = getattr(fastmcp, "settings", None)
     except ImportError:

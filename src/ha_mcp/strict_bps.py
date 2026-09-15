@@ -35,8 +35,13 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Annotated, Any, NoReturn
 
-from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 from pydantic import Field, ValidationError
+
+from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
+    CallNext,
+    Middleware,
+    MiddlewareContext,
+)
 
 from .errors import ErrorCode, create_error_response
 from .tools.helpers import raise_tool_error

@@ -5,8 +5,8 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from fastmcp.utilities.types import Image
-from mcp.types import ImageContent
+from ha_mcp._vendor.fastmcp.utilities.types import Image
+from ha_mcp._vendor.mcp.types import ImageContent
 
 from ..errors import ErrorCode, create_error_response
 from ..tools.helpers import raise_tool_error

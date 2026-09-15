@@ -22,9 +22,10 @@ import time
 import weakref
 from typing import Annotated, Any, NoReturn
 
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import tool
 from pydantic import Field
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup

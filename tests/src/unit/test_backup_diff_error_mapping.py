@@ -22,8 +22,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.errors import ErrorCode
 
 # A well-formed auto-backup name so the pre-dispatch ``_require`` guard passes

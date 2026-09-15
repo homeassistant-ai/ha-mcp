@@ -9,8 +9,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 
 _SID = "notify_on_door"

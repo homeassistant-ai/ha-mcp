@@ -28,14 +28,44 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp==3.4.7",
+    # fastmcp/mcp/mcp-types are vendored (scripts/vendor_fastmcp.py) so HA
+    # Core's own mcp 1.x pin can't conflict. Below: their runtime requirements.
+    "anyio>=4.10; python_version >= '3.14'",
+    "anyio>=4.9; python_version < '3.14'",
+    "authlib>=1.6.11",
+    "cyclopts>=4.0.0",
+    "exceptiongroup>=1.2.2",
+    "griffelib>=2.0.0",
+    "httpx2>=2.5.0",
+    "joserfc>=1.5.0",
+    "jsonref>=1.1.0",
+    "jsonschema>=4.20.0",
+    "jsonschema-path>=0.3.4",
+    "openapi-pydantic>=0.5.1",
+    "opentelemetry-api>=1.28.0",
+    "platformdirs>=4.0.0",
+    "py-key-value-aio[filetree,keyring,memory]>=0.4.4,<0.5.0",
+    "pydantic-settings>=2.0.0",
+    "pyjwt[crypto]>=2.10.1",
+    "pyperclip>=1.9.0",
+    "python-multipart>=0.0.26",
+    "pywin32>=311; sys_platform == 'win32'",
+    "pyyaml>=6.0,<7.0",
+    "rich>=13.9.4",
+    "sse-starlette>=3.0.0",
+    "starlette>=1.0.1",
+    "typing-extensions>=4.13.0",
+    "typing-inspection>=0.4.1",
+    "uncalled-for>=0.4.0",
+    "uvicorn>=0.35; sys_platform != 'emscripten'",
+    "watchfiles>=1.0.0",
     # Shared with the embedded HA process: admit Core's versions, including
     # compatible updates, instead of requiring it to keep our exact pin.
     # uv.lock selects standalone versions; HA's own constraints select
     # the embedded versions. Check both the HACS minimum and current Core
     # before raising these floors; standalone lock updates can move independently.
     "httpx[socks]>=0.28.1,<0.29",
-    "pydantic>=2.13.4,<3",
+    "pydantic[email]>=2.13.4,<3",
     "python-dotenv==1.2.3",
     "truststore==0.10.4",
     # websockets is deliberately ABSENT from this list: ha-mcp ships its own
@@ -46,9 +76,9 @@ dependencies = [
     # conflicting version demands and any of their installs can replace or
     # tear it in place (#2135/#2146); a declared dependency here would make
     # ha-mcp PIN that contested copy, which is what forced the in-place
-    # replacements. A shared copy can still arrive transitively (fastmcp
-    # declares one), so what keeps us off it is the vendored import path,
-    # not the absence of this line — and the embedded no-stomp e2e guard is
+    # replacements. Home Assistant's environment carries a shared copy anyway
+    # (Core and other integrations install it), so what keeps us off it is the
+    # vendored import path, not the absence of this line — and the embedded no-stomp e2e guard is
     # what proves no install of ours ever replaces the shared copy.
     # Range (not a hard pin) so the resolver can satisfy Home Assistant's own
     # cryptography constraint when ha-mcp is installed into the HA venv for
@@ -118,7 +148,6 @@ explicit_package_bases = true
 
 [[tool.mypy.overrides]]
 module = [
-    "fastmcp.*",
     "jq",
     "pydantic_monty",
     "pydantic_monty.*",
@@ -257,36 +286,117 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-python_files = ["test_*.py", "*_test.py"]
+python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-# See tests/pytest.ini: an empty parametrize list is a guard that stopped
-# running, and the default mark hides it as a skip the summary ignores.
+# A parametrize list that resolves to nothing is a guard that silently stopped
+# running: pytest reports "got empty parameter set", and the summary counts it
+# as neither a failure nor a real skip. Make it a collection error instead.
 empty_parameter_set_mark = "fail_at_collect"
+
+# Command line options
 addopts = [
     "--strict-markers",
     "--strict-config",
     "--verbose",
     "--tb=short",
+    "--maxfail=3",
+    "-ra",
+    "--durations=10",
 ]
+
+# Test markers
 markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "integration: marks tests as integration tests",
-    "unit: marks tests as unit tests",
+    # Test speed
+    "slow: marks tests as slow (use -m 'not slow' to skip)",
+    "addon_disruptive: restarts the server-under-test's own process (addon self-restart); must never run concurrently with other tests on lanes where the MCP server is out-of-process - the lane workflow runs these in a single-worker phase AFTER the parallel run",
+
+    # Test types
+    "unit: unit tests (isolated, fast)",
+    "integration: integration tests requiring external services",
+    "e2e: end-to-end tests with full system",
+    "performance: performance and load tests",
+
+    # E2E test categories
     "automation: automation lifecycle tests",
+    "blueprint: blueprint management tests",
     "calendar: calendar event management tests",
     "device: device control tests",
     "script: script orchestration tests",
     "helper: helper integration tests",
+    "integrations: integration management tests (config entries)",
+    "labels: label management tests",
+    "registry: entity and device registry tests",
+    "services: service discovery tests",
+    "todo: todo/shopping list management tests",
     "convenience: convenience tools tests (scene, weather, energy, docs)",
+    "updates: update management tools tests",
+    "system: system management tests (restart, reload, health)",
+    "themes: frontend theme management tests",
     "error_handling: error handling and edge case tests",
     "cleanup: tests that create entities needing cleanup",
-    "performance: performance measurement and regression tests",
-    "external_only: in-process-server tiers only; skips inaddon, stdio, container-embedded, and HAOS-embedded servers",
-    "inaddon_only: only runs on HAOS inaddon tier",
+    "area: area management tests",
+    "floor: floor management tests",
+    "zone: zone management tests",
+    "group: entity group management tests",
+    "hacs: HACS (Home Assistant Community Store) tests",
+    "update_path: component (stable tag + working tree) x new-server in-process update-path e2e (dedicated lane; runs only with E2E_UPDATE_PATH=1; #1783/#1785)",
+    "core: core tool tests (state, service, bulk control, history, templates)",
+    "config: configuration management tests (helpers, labels)",
+    "filesystem: filesystem access tools tests",
+    "haos_only: skip unless HAOS_TEST_IMAGE_PATH is set (HAOS-QEMU backend required; #1281)",
     "beta_haos_only: beta HAOS image lanes with Supervisor/Core version expectations configured",
+    "container_only: skip when HAOS backend is active (testcontainer-specific behavior; #1281)",
+    "embedded_only: only the embedded testcontainer backend (E2E_BACKEND=embedded), the one lane that installs ha-mcp into the HA image (#2245)",
+    "external_only: in-process-server tiers only - skip for inaddon, stdio, container-embedded, and HAOS-embedded servers; #1349, #1527, #2233",
+    "inaddon_only: HAOS inaddon mode only - exercises is_running_in_addon()=True paths; #1349",
+    "haos_stdio_only: HAOS stdio mode only - exercises the installed ha-mcp command over a real stdio subprocess transport; #2233",
+    "haos_tls: final HAOS embedded scenario that restarts Core with HTTPS in the existing worker VM, then restores HTTP; #2241",
+    "haos_embedded_only: HAOS embedded mode only (HAOS_TEST_MODE=embedded) - the server shares Home Assistant's process and event loop; #2357",
+    "not_on_embedded: skip on the embedded backend (E2E_BACKEND=embedded) - provably redundant with the lane's own in-process ha_mcp_server session backend; #1527",
+    "not_on_haos_embedded: skip on the haos_embedded backend (HAOS_TEST_MODE=embedded) - provably redundant with the lane's own session backend, which enables the entry once and drives the in-process server for the whole suite; #1527",
+    "requires_tools_entry: needs the File & YAML Tools config entry - skipped on E2E_NO_TOOLS_ENTRY=1 lanes (#2292)",
+    "no_tools_only: runs only on E2E_NO_TOOLS_ENTRY=1 lanes (#2292)",
 ]
+
+# Async support - session-scoped loop lets session-scoped fixtures
+# (mcp_server, mcp_client, ha_client) share one event loop with tests.
+# Without this, each test gets a new loop and session-scoped httpx
+# clients fail with "Event loop is closed".
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+
+# Per-test timeout (pytest-timeout). A stuck server-side await otherwise
+# stalls the run silently until the JOB timeout - observed as a 22-minute
+# hang in test_zone_search_discovery on the HAOS in-addon backend. 300s is
+# ~10x the slowest legitimate test (~30s deliberate-timeout tests). The signal
+# method interrupts only the hung test and raises inside the running coroutine,
+# so the failure traceback names the exact stuck await.
+timeout = 300
+timeout_method = "signal"
+# Bill the timeout to the TEST FUNCTION only. Session fixtures (container
+# boot, the embedded backend's server bring-up, HAOS staging) legitimately
+# exceed 300s and were being killed mid-setup on the first test per worker,
+# preempting their own diagnostics. Runaway fixtures are still bounded by
+# the CI job timeouts.
+timeout_func_only = true
+
+# Log capture
+log_cli = true
+log_cli_level = "INFO"
+log_cli_format = "%(asctime)s [%(levelname)8s] %(name)s: %(message)s"
+log_cli_date_format = "%Y-%m-%d %H:%M:%S"
+
+# Treat warnings as errors to enforce clean tests
+filterwarnings = [
+    "error",
+    # Allow specific non-critical warnings that don't affect functionality
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+    # Allow all ResourceWarnings, including those emitted during test cleanup
+    "ignore::ResourceWarning",
+]
 
 [dependency-groups]
 dev = [
@@ -306,7 +416,8 @@ dev = [
     # it is NOT a runtime dependency (see the note in [project.dependencies]).
     "websockets>=15.0.1",
     "docker>=7.1.0",
-    "httpx2>=2.4.0",
+    # Shared SDK for the component's llm_api.py tests; mirrors HA Core's 1.x line.
+    "mcp>=1.26.0,<2",
     "mypy>=1.17.0",
     "openai>=1.0.0",
     "jsonschema>=4.25.1",

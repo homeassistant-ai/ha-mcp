@@ -7,8 +7,10 @@ import time
 from typing import Any
 
 import httpx
-from fastmcp import Client
-from fastmcp.client.transports import StreamableHttpTransport
+import httpx2
+
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp._vendor.fastmcp.client.transports import StreamableHttpTransport
 
 from .assertions import parse_mcp_result
 from .wait_helpers import _POLLING_TRANSIENT_ERRORS
@@ -16,7 +18,10 @@ from .wait_helpers import _POLLING_TRANSIENT_ERRORS
 LOG = logging.getLogger(__name__)
 TRANSIENT_ADDON_ERRORS = (
     *_POLLING_TRANSIENT_ERRORS,
+    # The settings/Supervisor requests below use httpx; FastMCP's client
+    # transport raises httpx2 errors.
     httpx.HTTPError,
+    httpx2.HTTPError,
     json.JSONDecodeError,
 )
 

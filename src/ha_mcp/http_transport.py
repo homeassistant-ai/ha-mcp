@@ -11,11 +11,12 @@ from time import monotonic
 from typing import Any
 from uuid import uuid4
 
-import fastmcp
-from fastmcp import FastMCP
-from fastmcp.server.http import StarletteWithLifespan
 from starlette.middleware import Middleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from ha_mcp._vendor import fastmcp
+from ha_mcp._vendor.fastmcp import FastMCP
+from ha_mcp._vendor.fastmcp.server.http import StarletteWithLifespan
 
 from .config import get_global_settings
 

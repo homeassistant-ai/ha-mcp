@@ -42,8 +42,7 @@ from ha_mcp.browser_landing import (  # noqa: E402
 from ha_mcp.log_filters import install_sdk_log_filters  # noqa: E402
 
 if TYPE_CHECKING:
-    from fastmcp import FastMCP
-
+    from ha_mcp._vendor.fastmcp import FastMCP
     from ha_mcp.client.rest_client import HomeAssistantClient
     from ha_mcp.config import Settings
     from ha_mcp.server import HomeAssistantSmartMCPServer
@@ -68,8 +67,7 @@ class OAuthProxyClient:
 
     def _get_oauth_client(self) -> "HomeAssistantClient":
         """Get the OAuth client for the current request context."""
-        from fastmcp.server.dependencies import get_access_token
-
+        from ha_mcp._vendor.fastmcp.server.dependencies import get_access_token
         from ha_mcp.client.rest_client import (
             HomeAssistantAuthError,
             HomeAssistantClient,
@@ -293,7 +291,7 @@ def _validate_standard_credentials(settings: "Settings") -> None:
 
 def _get_show_banner() -> bool:
     """Check if server banner should be shown (respects FASTMCP_SHOW_SERVER_BANNER env var)."""
-    import fastmcp
+    from ha_mcp._vendor import fastmcp
 
     return fastmcp.settings.show_server_banner
 
@@ -321,7 +319,11 @@ def _http_run_kwargs(host: str, port: int, path: str) -> dict[str, Any]:
         "path": path,
         "stateless_http": True,
         "show_banner": _get_show_banner(),
-        "uvicorn_config": {"log_config": _get_timestamped_uvicorn_log_config()},
+        # ws="none": uvicorn's default imports the shared websockets package.
+        "uvicorn_config": {
+            "log_config": _get_timestamped_uvicorn_log_config(),
+            "ws": "none",
+        },
     }
 
 
@@ -441,8 +443,7 @@ def _setup_logging(log_level_str: str, force: bool = True) -> None:
     """
     log_level = getattr(logging, log_level_str)
 
-    import fastmcp
-
+    from ha_mcp._vendor import fastmcp
     from ha_mcp.utils.usage_logger import preserve_startup_collector
 
     with preserve_startup_collector():

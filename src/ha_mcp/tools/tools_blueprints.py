@@ -10,9 +10,10 @@ live in ``blueprint_write``; the YAML-text tier ladder in ``blueprint_sources``.
 import logging
 from typing import Annotated, Any, Literal, NamedTuple, NoReturn
 
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import tool
 from pydantic import Field
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..client.rest_client import HomeAssistantConnectionError
 from ..errors import ErrorCode, create_error_response

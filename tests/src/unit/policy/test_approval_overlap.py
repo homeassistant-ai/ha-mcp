@@ -16,10 +16,10 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
-from fastmcp import Client, FastMCP
-from fastmcp.client.client import CallToolResult
-from mcp.types import TextContent
 
+from ha_mcp._vendor.fastmcp import Client, FastMCP
+from ha_mcp._vendor.fastmcp.client.client import CallToolResult
+from ha_mcp._vendor.mcp.types import TextContent
 from ha_mcp.policy.approval_queue import ApprovalQueue
 from ha_mcp.policy.middleware import PolicyMiddleware
 from ha_mcp.policy.model import Policy, Rule

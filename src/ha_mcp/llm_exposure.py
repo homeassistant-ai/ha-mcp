@@ -35,12 +35,12 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from fastmcp.server.middleware import Middleware
+from ha_mcp._vendor.fastmcp.server.middleware import Middleware
 
 if TYPE_CHECKING:
-    from fastmcp.server.middleware import CallNext, MiddlewareContext
-    from fastmcp.tools import Tool
-    from mcp import types as mt
+    from ha_mcp._vendor.fastmcp.server.middleware import CallNext, MiddlewareContext
+    from ha_mcp._vendor.fastmcp.tools import Tool
+    from ha_mcp._vendor.mcp import types as mt
 
 logger = logging.getLogger(__name__)
 

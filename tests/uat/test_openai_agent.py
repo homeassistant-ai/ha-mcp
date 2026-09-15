@@ -65,7 +65,7 @@ class TestToolConversion:
         mcp_tool = MagicMock()
         mcp_tool.name = "search_entities"
         mcp_tool.description = "Search for entities"
-        mcp_tool.inputSchema = {
+        mcp_tool.input_schema = {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Search term"},
@@ -95,7 +95,7 @@ class TestToolConversion:
         mcp_tool = MagicMock()
         mcp_tool.name = "get_version"
         mcp_tool.description = "Get HA version"
-        mcp_tool.inputSchema = None
+        mcp_tool.input_schema = None
 
         result = openai_agent.mcp_tool_to_openai(mcp_tool)
 

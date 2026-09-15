@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 if TYPE_CHECKING:
-    from fastmcp import Client
+    from ha_mcp._vendor.fastmcp import Client
 
 
 async def _retry(fn, attempts: int = 3, delay: float = 2.0) -> Any | None:

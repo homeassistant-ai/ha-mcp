@@ -13,8 +13,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.read_only import (
     _ADDON_CONFIG_WRITE_PARAMS,
     READ_ONLY_EXEMPT_TOOLS,
@@ -26,7 +26,9 @@ from ha_mcp.read_only import (
 
 
 def make_tool(name: str, read_only: bool | None):
-    annotations = None if read_only is None else SimpleNamespace(readOnlyHint=read_only)
+    annotations = (
+        None if read_only is None else SimpleNamespace(read_only_hint=read_only)
+    )
     return SimpleNamespace(name=name, annotations=annotations)
 
 

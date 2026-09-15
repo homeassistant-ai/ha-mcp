@@ -17,9 +17,10 @@ import sys
 from typing import Annotated, Any, Literal
 
 import httpx
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import tool
 from pydantic import Field
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import tool
 
 from .._version import get_version, is_dev_version, is_embedded, is_running_in_addon
 from ..client.rest_client import (

@@ -5,14 +5,12 @@ import logging
 from ha_mcp.log_filters import (
     SessionDisconnectLogFilter,
     StatelessSessionLogFilter,
-    ToolValidationLogFilter,
     install_sdk_log_filters,
 )
 
 _TARGET_LOGGERS = {
     "mcp.server.streamable_http": StatelessSessionLogFilter,
     "mcp.server.streamable_http_manager": SessionDisconnectLogFilter,
-    "fastmcp.server.server": ToolValidationLogFilter,
 }
 
 

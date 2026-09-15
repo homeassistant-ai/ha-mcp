@@ -80,7 +80,7 @@ def test_retries_until_the_link_comes_up() -> None:
     This is the regression: before the gate existed, the very first HA-backed
     call took this failure and the test carrying it had no reason to retry.
     """
-    from fastmcp.exceptions import ToolError
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
     attempts: list[int] = []
 
@@ -211,8 +211,7 @@ def test_transient_set_covers_the_canonical_polling_errors() -> None:
     ``haos_runtime`` is imported bare by the e2e tests, so it cannot import
     the e2e package to reuse the tuple directly — this pins the copy instead.
     """
-    from fastmcp.exceptions import ToolError
-
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
     from tests.src.e2e.utilities.wait_helpers import _POLLING_TRANSIENT_ERRORS
 
     transient = _addon_link_transient_errors()

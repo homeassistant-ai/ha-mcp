@@ -679,7 +679,9 @@ class TestToolCall:
         session.call_tool.assert_awaited_once_with(
             "ha_search", {"query": "kitchen light"}
         )
-        result.model_dump.assert_called_once_with(exclude_unset=True, exclude_none=True)
+        result.model_dump.assert_called_once_with(
+            exclude_unset=True, exclude_none=True, by_alias=True
+        )
         assert out == {"content": [{"type": "text", "text": "ok"}]}
 
     async def test_transport_error_raises_homeassistanterror(self, monkeypatch):
@@ -915,8 +917,8 @@ class TestLoopbackHttpClientTimeout:
 class TestPreRenameSdkFallback:
     async def test_falls_back_to_deprecated_client_name(self, monkeypatch):
         """On a pre-rename SDK, _mcp_session must fall back to the deprecated client name."""
-        # A pip-spec override can install an older ha-mcp whose fastmcp pins
-        # a pre-rename mcp SDK: mcp.client.streamable_http then exposes only
+        # A third-party pin can force the shared mcp below 1.24, where
+        # mcp.client.streamable_http exposes only
         # streamablehttp_client. _mcp_session must import-fall-back to it and
         # wire the session identically. Faked at the sys.modules level so the
         # REAL import selection in _mcp_session runs (the other tests patch
@@ -1031,6 +1033,172 @@ class TestPreRenameSdkFallback:
             assert client.timeout.read is not None
         finally:
             await client.aclose()
+
+
+class TestSdkV2Compat:
+    """Home Assistant's shared SDK may be on the 2.x line."""
+
+    async def test_v2_transport_gets_an_httpx2_client(self, monkeypatch):
+        import sys
+        from types import ModuleType
+
+        import httpx2
+
+        opened: dict[str, Any] = {}
+
+        @asynccontextmanager
+        async def _v2_client(url, *, http_client=None):
+            opened["http_client"] = http_client
+            yield "read-stream", "write-stream"  # 2.x yields two streams
+
+        fake_transport = ModuleType("mcp.client.streamable_http")
+        fake_transport.streamable_http_client = _v2_client  # type: ignore[attr-defined]
+        fake_transport.httpx2 = httpx2  # type: ignore[attr-defined]
+
+        class _FakeClientSession:
+            def __init__(self, read_stream, write_stream):
+                opened["streams"] = (read_stream, write_stream)
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc_info):
+                return False
+
+            async def initialize(self):
+                return SimpleNamespace(instructions="v2")
+
+        fake_session_mod = ModuleType("mcp.client.session")
+        fake_session_mod.ClientSession = _FakeClientSession  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "mcp.client.streamable_http", fake_transport)
+        monkeypatch.setitem(sys.modules, "mcp.client.session", fake_session_mod)
+
+        async with llm_api._mcp_session("http://127.0.0.1:9584/private_x"):
+            client = opened["http_client"]
+            assert isinstance(client, httpx2.AsyncClient)
+            assert client.trust_env is False
+            assert client.timeout == httpx2.Timeout(llm_api._CALL_TOOL_TIMEOUT_SECONDS)
+        assert opened["streams"] == ("read-stream", "write-stream")
+
+    def test_v2_error_classes_are_transport_errors(self, monkeypatch):
+        import sys
+        from types import ModuleType
+
+        import httpx2
+
+        class MCPError(Exception):
+            pass
+
+        fake_mcp = ModuleType("mcp")
+        fake_mcp.MCPError = MCPError  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "mcp", fake_mcp)
+
+        leaves = llm_api._transport_error_leaves()
+        assert MCPError in leaves
+        assert httpx2.HTTPError in leaves
+        assert llm_api._is_transport_failure(httpx2.ConnectError("refused"))
+
+    def test_tool_input_schema_reads_either_field_name(self):
+        schema = {"type": "object"}
+        assert (
+            llm_api._tool_input_schema(SimpleNamespace(input_schema=schema)) is schema
+        )
+        assert llm_api._tool_input_schema(SimpleNamespace(inputSchema=schema)) is schema
+
+    async def test_v2_call_result_keeps_camel_case_keys(self, monkeypatch):
+        from ha_mcp._vendor.mcp.types import CallToolResult, TextContent
+
+        result = CallToolResult(
+            content=[TextContent(type="text", text="ok")],
+            structured_content={"success": True},
+            is_error=False,
+        )
+        _fake_session(monkeypatch, call_result=result)
+
+        dumped = await llm_api._forward_tool_call(
+            _make_hass(), "http://127.0.0.1:9584/private_x", "ha_search", {}
+        )
+
+        assert dumped["structuredContent"] == {"success": True}
+        assert dumped["isError"] is False
+        assert "is_error" not in dumped
+
+
+class TestResultKeysMatchAcrossSdkLines:
+    """Agents get the same result keys whichever SDK Home Assistant has."""
+
+    @staticmethod
+    def _results():
+        import mcp.types as v1
+
+        from ha_mcp._vendor.mcp import types as v2
+
+        v1_result = v1.CallToolResult(
+            content=[v1.TextContent(type="text", text="ok")],
+            structuredContent={"success": True},
+            isError=False,
+            _meta={"trace": "t"},
+        )
+        v2_result = v2.CallToolResult(
+            content=[v2.TextContent(type="text", text="ok")],
+            structured_content={"success": True},
+            is_error=False,
+            meta={"trace": "t"},
+        )
+        return v1_result, v2_result
+
+    async def test_forwarded_results_have_identical_keys(self, monkeypatch):
+        dumped = []
+        for result in self._results():
+            _fake_session(monkeypatch, call_result=result)
+            dumped.append(
+                await llm_api._forward_tool_call(
+                    _make_hass(), "http://127.0.0.1:9584/private_x", "ha_search", {}
+                )
+            )
+        assert dumped[0] == dumped[1]
+        assert set(dumped[0]) == {"content", "structuredContent", "isError", "meta"}
+
+    async def test_tool_payload_and_metadata_values_are_not_renamed(self, monkeypatch):
+        from ha_mcp._vendor.mcp import types as v2
+
+        payload = {"attributes": {"_meta": 1, "meta": 2}}
+        result = v2.CallToolResult(
+            content=[v2.TextContent(type="text", text="ok", meta={"_meta": "x"})],
+            structured_content=payload,
+            meta={"nested": {"_meta": "y"}},
+        )
+        _fake_session(monkeypatch, call_result=result)
+        dumped = await llm_api._forward_tool_call(
+            _make_hass(), "http://127.0.0.1:9584/private_x", "ha_search", {}
+        )
+        assert dumped["structuredContent"] == payload
+        assert dumped["meta"] == {"nested": {"_meta": "y"}}
+        assert dumped["content"][0]["meta"] == {"_meta": "x"}
+
+    def test_tool_input_schema_reads_a_real_v1_tool(self):
+        import mcp.types as v1
+
+        schema = {"type": "object", "properties": {}}
+        tool = v1.Tool(name="ha_x", inputSchema=schema)
+        assert llm_api._tool_input_schema(tool) == schema
+
+    def test_transport_errors_are_read_without_importing(self, monkeypatch):
+        """_transport_error_leaves runs on the event loop, where HA flags imports."""
+        import sys
+
+        def _no_import(name):
+            raise AssertionError(f"imported {name} on the event loop")
+
+        monkeypatch.setattr(llm_api.importlib, "import_module", _no_import)
+        loaded = SimpleNamespace(HTTPError=type("HTTPError", (Exception,), {}))
+        monkeypatch.setitem(sys.modules, "httpx2", loaded)
+        monkeypatch.delitem(sys.modules, "mcp", raising=False)
+
+        leaves = llm_api._transport_error_leaves()
+
+        assert loaded.HTTPError in leaves
+        assert {TimeoutError, OSError} <= set(leaves)
 
 
 class TestExclusiveBoundNormalisation:

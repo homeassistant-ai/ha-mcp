@@ -5,15 +5,189 @@ These tests verify the input validation and error handling of the script tools,
 especially for blueprint-based scripts (issue #466).
 """
 
+import asyncio
 import json
 import logging
+from types import SimpleNamespace
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.client.rest_client import (
+    HomeAssistantAPIError,
+    HomeAssistantConnectionError,
+)
+from ha_mcp.tools import entity_registration
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
+
+
+@pytest.fixture(autouse=True)
+def no_registration_retry(monkeypatch):
+    """Use one lookup by default; polling tests opt in with registration_clock."""
+    monkeypatch.setattr(entity_registration, "RESOLVE_TIMEOUT", 0)
+
+
+@pytest.fixture
+def registration_clock(monkeypatch):
+    clock = SimpleNamespace(now=0.0)
+
+    async def sleep(delay):
+        clock.now += delay
+
+    monkeypatch.setattr(entity_registration, "RESOLVE_TIMEOUT", 1.0)
+    monkeypatch.setattr(
+        entity_registration, "time", SimpleNamespace(monotonic=lambda: clock.now)
+    )
+    monkeypatch.setattr(
+        entity_registration,
+        "asyncio",
+        SimpleNamespace(sleep=sleep, timeout=asyncio.timeout),
+    )
+    return clock
+
+
+class TestScriptPostWriteWait:
+    @pytest.fixture
+    def tools(self):
+        client = MagicMock()
+        client.upsert_script_config = AsyncMock(
+            return_value={"success": True, "script_id": "storage_key"}
+        )
+        client.get_services = AsyncMock(return_value=[])
+        client.get_states = AsyncMock(return_value=[])
+        client.get_entity_state = AsyncMock(return_value={"state": "off"})
+        tools = ConfigScriptTools(client)
+        tools._fetch_and_verify_hash = AsyncMock(
+            return_value=({"sequence": [{"delay": 1}]}, "storage_key")
+        )
+        tools._get_script_config_internal = AsyncMock(
+            return_value=({}, "newhash", "storage_key")
+        )
+        return tools
+
+    @pytest.fixture(params=[False, True], ids=["full_config", "transform"])
+    def write_arguments(self, request):
+        if request.param:
+            return {
+                "python_transform": "config['mode'] = 'single'",
+                "config_hash": "prior_hash",
+            }
+        return {"config": {"sequence": [{"delay": 1}]}}
+
+    async def test_wait_without_category_uses_delayed_registered_entity(
+        self, tools, write_arguments, monkeypatch, registration_clock
+    ):
+        lookup = AsyncMock(
+            side_effect=[
+                [],
+                [],
+                [],
+                [
+                    {
+                        "entity_id": "script.current_name",
+                        "unique_id": "storage_key",
+                        "platform": "script",
+                    }
+                ],
+            ]
+        )
+        monkeypatch.setattr(
+            entity_registration, "fetch_entity_lookup_via_component", lookup
+        )
+        registered = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_config_scripts.wait_for_entity_registered", registered
+        )
+
+        result = await tools.ha_config_set_script(
+            script_id="caller_alias", **write_arguments
+        )
+
+        assert result["success"] is True
+        registered.assert_awaited_once_with(tools._client, "script.current_name")
+        lookup.assert_awaited_with(tools._client, "storage_key", domain="script")
+        assert lookup.await_count == 4
+
+    async def test_wait_false_without_category_skips_lookup_and_wait(
+        self, tools, write_arguments, monkeypatch
+    ):
+        lookup = AsyncMock()
+        registered = AsyncMock()
+        monkeypatch.setattr(
+            entity_registration, "fetch_entity_lookup_via_component", lookup
+        )
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_config_scripts.wait_for_entity_registered", registered
+        )
+
+        result = await tools.ha_config_set_script(
+            script_id="caller_alias", wait=False, **write_arguments
+        )
+
+        assert result["success"] is True
+        lookup.assert_not_awaited()
+        registered.assert_not_awaited()
+
+    @pytest.mark.parametrize("connection_failure", [False, True])
+    async def test_wait_failure_keeps_write_success_and_warning(
+        self, tools, write_arguments, monkeypatch, connection_failure
+    ):
+        monkeypatch.setattr(
+            entity_registration,
+            "fetch_entity_lookup_via_component",
+            AsyncMock(return_value=[]),
+        )
+        registered = AsyncMock(
+            return_value=False,
+            side_effect=HomeAssistantConnectionError("offline")
+            if connection_failure
+            else None,
+        )
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_config_scripts.wait_for_entity_registered", registered
+        )
+
+        result = await tools.ha_config_set_script(
+            script_id="caller_alias", **write_arguments
+        )
+
+        assert result["success"] is True
+        warning = "verification failed" if connection_failure else "not yet queryable"
+        assert any(warning in item for item in result["warnings"])
+
+    @pytest.mark.parametrize("api_failure", [False, True])
+    @pytest.mark.parametrize("caller", ["caller_alias", "script.caller_alias"])
+    async def test_lookup_failure_preserves_caller_alias_for_wait(
+        self,
+        tools,
+        write_arguments,
+        monkeypatch,
+        registration_clock,
+        api_failure,
+        caller,
+    ):
+        lookup = AsyncMock(
+            return_value=[],
+            side_effect=HomeAssistantAPIError("offline") if api_failure else None,
+        )
+        monkeypatch.setattr(
+            entity_registration, "fetch_entity_lookup_via_component", lookup
+        )
+        registered = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_config_scripts.wait_for_entity_registered", registered
+        )
+
+        result = await tools.ha_config_set_script(script_id=caller, **write_arguments)
+
+        assert result["success"] is True
+        registered.assert_awaited_once_with(tools._client, "script.caller_alias")
+        if api_failure:
+            assert lookup.await_count == 1
+        else:
+            assert lookup.await_count > 1
 
 
 class TestScriptToolsValidation:
@@ -23,6 +197,9 @@ class TestScriptToolsValidation:
     def mock_client(self):
         """Create a mock Home Assistant client."""
         client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
         client.upsert_script_config = AsyncMock(
             return_value={"success": True, "script_id": "test_script"}
         )
@@ -320,6 +497,10 @@ class TestScriptUpsertResolvedThreading:
     @pytest.fixture
     def mock_client(self):
         client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
+        client.get_entity_state = AsyncMock(return_value={"state": "off"})
         # get_script_config resolves the alias "renamed_script" to storage key
         # "storage_key" (mirrors a UI-renamed script), returning the REST
         # envelope shape ha_config_set_script's fetch consumes.
@@ -527,6 +708,17 @@ class TestSetScriptCategoryValidation:
                     "success": True,
                     "result": [{"category_id": cid} for cid in category_ids],
                 }
+            if msg.get("type") == "config/entity_registry/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "entity_id": "script.test_script",
+                            "unique_id": "test_script",
+                            "platform": "script",
+                        }
+                    ],
+                }
             return {"success": True, "result": {"categories": {}}}
 
         return handler
@@ -666,29 +858,62 @@ class TestSetScriptCategoryValidation:
         assert category_updates
         assert category_updates[0]["categories"] == {"script": "lighting"}
 
-    async def test_transform_category_targets_renamed_entity(
-        self, transform_tools, mock_client
+    @pytest.mark.parametrize("transform", [False, True])
+    async def test_category_targets_renamed_entity(
+        self,
+        transform_tools,
+        mock_client,
+        sequence_config,
+        transform,
+        monkeypatch,
+        registration_clock,
     ):
         """A registry-renamed script gets its category on the CURRENT entity.
 
         The storage key stays the registry unique_id after a rename, so the
         resolver must be asked for the entity_id instead of constructing
-        ``script.<storage_key>``.
+        ``script.<storage_key>``. Registration is delayed in both write modes.
         """
         mock_client.send_websocket_message = AsyncMock(
             side_effect=self._ws_handler("lighting")
         )
+        mock_client.upsert_script_config.return_value = {
+            "success": True,
+            "script_id": "storage_key",
+        }
+        registered = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_config_scripts.wait_for_entity_registered", registered
+        )
+        arguments = (
+            {
+                "python_transform": "config['mode'] = 'single'",
+                "config_hash": "prior_hash",
+            }
+            if transform
+            else {"config": sequence_config}
+        )
 
         with patch(
-            "ha_mcp.tools.tools_config_scripts.fetch_entity_lookup_via_component",
+            "ha_mcp.tools.entity_registration.fetch_entity_lookup_via_component",
             new_callable=AsyncMock,
-            return_value=[{"entity_id": "script.renamed_target"}],
-        ):
+            side_effect=[
+                [],
+                [],
+                [],
+                [
+                    {
+                        "entity_id": "script.renamed_alias",
+                        "unique_id": "storage_key",
+                        "platform": "script",
+                    }
+                ],
+            ],
+        ) as lookup:
             result = await transform_tools.ha_config_set_script(
-                script_id="test_script",
-                python_transform="config['mode'] = 'single'",
-                config_hash="prior_hash",
+                script_id="renamed_alias",
                 category="lighting",
+                **arguments,
             )
 
         assert result["success"] is True
@@ -697,7 +922,10 @@ class TestSetScriptCategoryValidation:
             for c in mock_client.send_websocket_message.call_args_list
             if c[0][0].get("type") == "config/entity_registry/update"
         )
-        assert update_call["entity_id"] == "script.renamed_target"
+        assert update_call["entity_id"] == "script.renamed_alias"
+        assert lookup.await_count == 4
+        lookup.assert_awaited_with(mock_client, "storage_key", domain="script")
+        registered.assert_awaited_once_with(mock_client, "script.renamed_alias")
 
 
 class TestScriptEntityResolutionFallbacks:
@@ -708,6 +936,7 @@ class TestScriptEntityResolutionFallbacks:
     @pytest.fixture
     def mock_client(self):
         client = MagicMock()
+        client.get_entity_state = AsyncMock(return_value={"state": "off"})
         client.upsert_script_config = AsyncMock(
             return_value={"success": True, "script_id": "test_script"}
         )
@@ -760,7 +989,7 @@ class TestScriptEntityResolutionFallbacks:
         mock_client.send_websocket_message = AsyncMock(side_effect=handler)
 
         with patch(
-            "ha_mcp.tools.tools_config_scripts.fetch_entity_lookup_via_component",
+            "ha_mcp.tools.entity_registration.fetch_entity_lookup_via_component",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -786,7 +1015,7 @@ class TestScriptEntityResolutionFallbacks:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_scripts.fetch_entity_lookup_via_component",
+            "ha_mcp.tools.entity_registration.fetch_entity_lookup_via_component",
             new_callable=AsyncMock,
         ) as lookup:
             result = await tools.ha_config_set_script(

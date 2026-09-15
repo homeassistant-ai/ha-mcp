@@ -132,7 +132,7 @@ New tools belong in `src/ha_mcp/tools/tools_<domain>.py` with a
 `register_<domain>_tools()` function. The registry auto-discovers it; do not
 add manual central registration.
 
-`@tool` from `fastmcp.tools` must be the outermost decorator, above
+`@tool` from `ha_mcp._vendor.fastmcp.tools` must be the outermost decorator, above
 `@log_tool_usage`, so the final method keeps `__fastmcp__`.
 `register_tool_methods()` discovers decorated methods and adds them to the
 server.
@@ -152,7 +152,7 @@ those carry the rule without a net under them.
 ```python
 from typing import Any
 
-from fastmcp.tools import tool
+from ha_mcp._vendor.fastmcp.tools import tool
 
 from .helpers import log_tool_usage, register_tool_methods
 
@@ -187,7 +187,7 @@ payloads. In exception blocks, `exception_to_structured_error()` raises by
 default:
 
 ```python
-from fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .helpers import exception_to_structured_error
 

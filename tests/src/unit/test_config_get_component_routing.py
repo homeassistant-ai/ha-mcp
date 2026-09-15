@@ -34,8 +34,8 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools import component_api
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools

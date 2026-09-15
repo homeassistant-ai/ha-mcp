@@ -503,8 +503,7 @@ class TestSmartEntitySearchPropagation:
     async def test_get_states_failure_propagates_as_tool_error(self):
         from unittest.mock import AsyncMock
 
-        from fastmcp.exceptions import ToolError
-
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
         from ha_mcp.tools.smart_search import SmartSearchTools
 
         mock_client = AsyncMock()

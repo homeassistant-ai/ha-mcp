@@ -247,7 +247,8 @@ class TestDashboardResourceValidation:
         """Test that invalid resource type is rejected at schema level."""
         logger.info("Starting invalid resource type test")
         import pytest
-        from fastmcp.exceptions import ToolError
+
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         # FastMCP validates Literal types at schema level, raising ToolError
         with pytest.raises(ToolError) as exc_info:

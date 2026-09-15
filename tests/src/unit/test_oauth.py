@@ -147,7 +147,7 @@ class TestHomeAssistantOAuthProvider:
     @pytest.mark.asyncio
     async def test_register_client(self, provider):
         """Test client registration."""
-        from mcp.shared.auth import OAuthClientInformationFull
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         client_info = OAuthClientInformationFull(
             client_id="test-client-123",
@@ -166,7 +166,7 @@ class TestHomeAssistantOAuthProvider:
     @pytest.mark.asyncio
     async def test_register_client_validates_scopes(self, provider):
         """Test client registration validates scopes against valid_scopes."""
-        from mcp.shared.auth import OAuthClientInformationFull
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         client_info = OAuthClientInformationFull(
             client_id="test-client",
@@ -180,7 +180,7 @@ class TestHomeAssistantOAuthProvider:
     @pytest.mark.asyncio
     async def test_register_client_without_scopes_gets_defaults(self, provider):
         """Test client registration without scopes gets all valid scopes (ChatGPT compat)."""
-        from mcp.shared.auth import OAuthClientInformationFull
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         # ChatGPT registers without specifying scopes
         client_info = OAuthClientInformationFull(
@@ -205,9 +205,10 @@ class TestHomeAssistantOAuthProvider:
     @pytest.mark.asyncio
     async def test_authorize_redirects_to_consent(self, provider):
         """Test authorize redirects to consent form."""
-        from mcp.server.auth.provider import AuthorizationParams
-        from mcp.shared.auth import OAuthClientInformationFull
         from pydantic import AnyHttpUrl
+
+        from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationParams
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         # Register client first
         client_info = OAuthClientInformationFull(
@@ -238,9 +239,13 @@ class TestHomeAssistantOAuthProvider:
     @pytest.mark.asyncio
     async def test_authorize_unregistered_client_fails(self, provider):
         """Test authorizing unregistered client raises error."""
-        from mcp.server.auth.provider import AuthorizationParams, AuthorizeError
-        from mcp.shared.auth import OAuthClientInformationFull
         from pydantic import AnyHttpUrl
+
+        from ha_mcp._vendor.mcp.server.auth.provider import (
+            AuthorizationParams,
+            AuthorizeError,
+        )
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         client_info = OAuthClientInformationFull(
             client_id="unregistered-client",
@@ -263,9 +268,10 @@ class TestHomeAssistantOAuthProvider:
     @pytest.mark.asyncio
     async def test_exchange_authorization_code(self, provider):
         """Test exchanging auth code for tokens with stateless credentials."""
-        from mcp.server.auth.provider import AuthorizationCode
-        from mcp.shared.auth import OAuthClientInformationFull
         from pydantic import AnyHttpUrl
+
+        from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationCode
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         # Register client
         client_info = OAuthClientInformationFull(
@@ -365,8 +371,8 @@ class TestHomeAssistantOAuthProvider:
     @pytest.mark.asyncio
     async def test_refresh_token_exchange(self, provider):
         """Test refresh token exchange produces valid stateless access token."""
-        from mcp.server.auth.provider import RefreshToken
-        from mcp.shared.auth import OAuthClientInformationFull
+        from ha_mcp._vendor.mcp.server.auth.provider import RefreshToken
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         client_info = OAuthClientInformationFull(
             client_id="test-client",
@@ -407,7 +413,7 @@ class TestHomeAssistantOAuthProvider:
     @pytest.mark.asyncio
     async def test_revoke_token_is_noop(self, provider):
         """Test that revocation is a no-op for stateless tokens (LLAT is the boundary)."""
-        from mcp.server.auth.provider import RefreshToken
+        from ha_mcp._vendor.mcp.server.auth.provider import RefreshToken
 
         refresh = RefreshToken(
             token=provider._encode_token(
@@ -522,7 +528,7 @@ class TestOAuthRoutes:
     @pytest.mark.asyncio
     async def test_consent_get_success(self, provider, mock_request):
         """Test consent form GET with valid transaction."""
-        from mcp.shared.auth import OAuthClientInformationFull
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         # Register client and create pending authorization
         client_info = OAuthClientInformationFull(
@@ -606,7 +612,7 @@ class TestOAuthRoutes:
     @pytest.mark.asyncio
     async def test_consent_post_success(self, provider, mock_request):
         """Test consent form POST with valid token."""
-        from mcp.shared.auth import OAuthClientInformationFull
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         # Register client
         client_info = OAuthClientInformationFull(
@@ -681,9 +687,10 @@ class TestEndToEndOAuthFlow:
     @pytest.mark.asyncio
     async def test_complete_oauth_flow(self, provider):
         """Test complete OAuth flow from registration to token usage."""
-        from mcp.server.auth.provider import AuthorizationParams
-        from mcp.shared.auth import OAuthClientInformationFull
         from pydantic import AnyHttpUrl
+
+        from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationParams
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         # Step 1: Client registration
         client_info = OAuthClientInformationFull(
@@ -729,7 +736,7 @@ class TestEndToEndOAuthFlow:
         )
 
         # Create auth code (simulates consent POST creating the code)
-        from mcp.server.auth.provider import AuthorizationCode
+        from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationCode
 
         auth_code_value = "e2e-auth-code-123"
         auth_code = AuthorizationCode(
@@ -807,9 +814,10 @@ class TestStatelessTokenResilience:
     @pytest.mark.asyncio
     async def test_tokens_survive_provider_restart(self):
         """HMAC secret is persisted — tokens issued by provider1 are valid on provider2."""
-        from mcp.server.auth.provider import AuthorizationCode
-        from mcp.shared.auth import OAuthClientInformationFull
         from pydantic import AnyHttpUrl
+
+        from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationCode
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         # Provider 1: complete a full OAuth flow
         provider1 = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
@@ -868,9 +876,10 @@ class TestStatelessTokenResilience:
     @pytest.mark.asyncio
     async def test_tokens_invalidated_when_secret_lost(self, tmp_path):
         """Tokens are rejected when the HMAC secret file is deleted (fresh secret generated)."""
-        from mcp.server.auth.provider import AuthorizationCode
-        from mcp.shared.auth import OAuthClientInformationFull
         from pydantic import AnyHttpUrl
+
+        from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationCode
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         provider1 = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
 
@@ -910,9 +919,10 @@ class TestStatelessTokenResilience:
     @pytest.mark.asyncio
     async def test_chained_refresh_same_instance(self):
         """Chained refresh tokens work within the same provider instance."""
-        from mcp.server.auth.provider import AuthorizationCode
-        from mcp.shared.auth import OAuthClientInformationFull
         from pydantic import AnyHttpUrl
+
+        from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationCode
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
         client_info = OAuthClientInformationFull(
@@ -960,7 +970,7 @@ class TestStatelessTokenResilience:
     @pytest.mark.asyncio
     async def test_expired_refresh_token_rejected(self):
         """Stateless refresh tokens with expired 'exp' are rejected."""
-        from mcp.shared.auth import OAuthClientInformationFull
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
         client_info = OAuthClientInformationFull(
@@ -983,7 +993,7 @@ class TestStatelessTokenResilience:
     @pytest.mark.asyncio
     async def test_refresh_token_wrong_client_rejected(self):
         """Refresh token issued for client A is rejected when presented by client B."""
-        from mcp.shared.auth import OAuthClientInformationFull
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
         client_a = OAuthClientInformationFull(
@@ -1011,8 +1021,8 @@ class TestStatelessTokenResilience:
     @pytest.mark.asyncio
     async def test_corrupt_refresh_token_fails_gracefully(self):
         """exchange_refresh_token raises TokenError for non-decodable refresh tokens."""
-        from mcp.server.auth.provider import RefreshToken, TokenError
-        from mcp.shared.auth import OAuthClientInformationFull
+        from ha_mcp._vendor.mcp.server.auth.provider import RefreshToken, TokenError
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
         client_info = OAuthClientInformationFull(
@@ -1036,9 +1046,10 @@ class TestStatelessTokenResilience:
     @pytest.mark.asyncio
     async def test_revocation_does_not_invalidate_stateless_tokens(self):
         """Revoking a stateless token is a no-op; the token remains decodable."""
-        from mcp.server.auth.provider import AuthorizationCode
-        from mcp.shared.auth import OAuthClientInformationFull
         from pydantic import AnyHttpUrl
+
+        from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationCode
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         provider = HomeAssistantOAuthProvider(base_url="http://localhost:8086")
         client_info = OAuthClientInformationFull(
@@ -1160,7 +1171,7 @@ class TestOAuthProxyClient:
     @pytest.fixture
     def mock_access_token(self):
         """Create a mock access token with claims (no ha_url - SSRF fix)."""
-        from fastmcp.server.auth.auth import AccessToken
+        from ha_mcp._vendor.fastmcp.server.auth.auth import AccessToken
 
         return AccessToken(
             token="encoded-token-123",
@@ -1196,7 +1207,7 @@ class TestOAuthProxyClient:
         # Mock get_access_token to return our mock token
         with (
             patch(
-                "fastmcp.server.dependencies.get_access_token",
+                "ha_mcp._vendor.fastmcp.server.dependencies.get_access_token",
                 return_value=mock_access_token,
             ),
             patch("ha_mcp.client.rest_client.HomeAssistantClient") as mock_ha_client,
@@ -1224,7 +1235,7 @@ class TestOAuthProxyClient:
 
         with (
             patch(
-                "fastmcp.server.dependencies.get_access_token",
+                "ha_mcp._vendor.fastmcp.server.dependencies.get_access_token",
                 return_value=mock_access_token,
             ),
             patch("ha_mcp.client.rest_client.HomeAssistantClient") as mock_ha_client,
@@ -1248,16 +1259,18 @@ class TestOAuthProxyClient:
 
         # Mock get_access_token to return None
         with (
-            patch("fastmcp.server.dependencies.get_access_token", return_value=None),
+            patch(
+                "ha_mcp._vendor.fastmcp.server.dependencies.get_access_token",
+                return_value=None,
+            ),
             pytest.raises(HomeAssistantAuthError, match="No OAuth token"),
         ):
             _ = proxy.get_state
 
     def test_oauth_proxy_client_missing_claims_raises_error(self):
         """Test that OAuthProxyClient raises error when token has no claims."""
-        from fastmcp.server.auth.auth import AccessToken
-
         from ha_mcp.__main__ import OAuthProxyClient
+        from ha_mcp._vendor.fastmcp.server.auth.auth import AccessToken
         from ha_mcp.client.rest_client import HomeAssistantAuthError
 
         # Token without claims
@@ -1273,7 +1286,7 @@ class TestOAuthProxyClient:
 
         with (
             patch(
-                "fastmcp.server.dependencies.get_access_token",
+                "ha_mcp._vendor.fastmcp.server.dependencies.get_access_token",
                 return_value=token_no_claims,
             ),
             pytest.raises(
@@ -1291,7 +1304,7 @@ class TestOAuthProxyClient:
 
         with (
             patch(
-                "fastmcp.server.dependencies.get_access_token",
+                "ha_mcp._vendor.fastmcp.server.dependencies.get_access_token",
                 return_value=mock_access_token,
             ),
             patch("ha_mcp.client.rest_client.HomeAssistantClient") as mock_ha_client,
@@ -1321,7 +1334,7 @@ class TestOAuthProxyClient:
 
         with (
             patch(
-                "fastmcp.server.dependencies.get_access_token",
+                "ha_mcp._vendor.fastmcp.server.dependencies.get_access_token",
                 return_value=mock_access_token,
             ),
             patch(
@@ -1508,7 +1521,7 @@ class TestDCRPersistence:
 
     @pytest.fixture
     def client_info(self):
-        from mcp.shared.auth import OAuthClientInformationFull
+        from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
         return OAuthClientInformationFull(
             client_id="chatgpt-client-abc",
@@ -1825,19 +1838,36 @@ class TestRfc9207ResponseHygiene:
         assert params["code"] == ["abc"]
         assert params["state"] == ["s"]
 
+    @staticmethod
+    async def _location(app) -> str:
+        """Run an ASGI app (as the SDK serves ``/authorize``) and return Location."""
+        messages: list[dict] = []
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            messages.append(message)
+
+        await app(
+            {"type": "http", "method": "GET", "path": "/authorize", "headers": []},
+            receive,
+            send,
+        )
+        start = next(m for m in messages if m["type"] == "http.response.start")
+        return dict(start["headers"])[b"location"].decode()
+
     @pytest.mark.asyncio
     async def test_authorize_wrap_stamps_iss_on_error_redirect(self, provider):
         from starlette.responses import RedirectResponse
 
-        async def sdk_endpoint(request):
-            return RedirectResponse(
-                "https://client.example/cb?error=invalid_scope&state=s",
-                status_code=302,
-            )
+        sdk_app = RedirectResponse(
+            "https://client.example/cb?error=invalid_scope&state=s",
+            status_code=302,
+        )
 
-        wrapped = provider._wrap_authorize_with_iss(sdk_endpoint)
-        response = await wrapped(MagicMock())
-        params = parse_qs(urlparse(response.headers["location"]).query)
+        wrapped = provider._wrap_authorize_with_iss(sdk_app)
+        params = parse_qs(urlparse(await self._location(wrapped)).query)
         assert params["iss"] == [provider._issuer()]
         assert params["error"] == ["invalid_scope"]
         assert params["state"] == ["s"]
@@ -1848,9 +1878,7 @@ class TestRfc9207ResponseHygiene:
 
         consent_url = "http://localhost:8086/consent?txn_id=t1"
 
-        async def sdk_endpoint(request):
-            return RedirectResponse(consent_url, status_code=302)
-
-        wrapped = provider._wrap_authorize_with_iss(sdk_endpoint)
-        response = await wrapped(MagicMock())
-        assert response.headers["location"] == consent_url
+        wrapped = provider._wrap_authorize_with_iss(
+            RedirectResponse(consent_url, status_code=302)
+        )
+        assert await self._location(wrapped) == consent_url

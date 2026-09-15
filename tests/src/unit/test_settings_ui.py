@@ -4628,9 +4628,8 @@ class TestFsCustomPathsEndpoints:
         # The payload is built via create_error_response so the test exercises
         # the REAL serialization: a single suggestion lands under the singular
         # "suggestion" key only (the plural list needs two or more).
-        from fastmcp.exceptions import ToolError
-
         import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
         from ha_mcp.errors import ErrorCode, create_error_response
         from ha_mcp.settings_ui import build_settings_handlers
 
@@ -4663,9 +4662,8 @@ class TestFsCustomPathsEndpoints:
     async def test_get_falls_back_on_json_that_is_not_an_envelope(self, monkeypatch):
         # A ToolError whose string parses as JSON but is not the structured
         # error envelope must NOT be embedded bare — the generic prefix applies.
-        from fastmcp.exceptions import ToolError
-
         import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
         from ha_mcp.settings_ui import build_settings_handlers
 
         monkeypatch.setattr(tf, "is_filesystem_tools_enabled", lambda: True)
@@ -4684,9 +4682,8 @@ class TestFsCustomPathsEndpoints:
     async def test_save_surfaces_structured_tool_error_message(self, monkeypatch):
         # The save path carries the same extraction: a user fixing custom paths
         # while the entry is missing hits POST, not GET (#1996).
-        from fastmcp.exceptions import ToolError
-
         import ha_mcp.tools.tools_filesystem as tf
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
         from ha_mcp.errors import ErrorCode, create_error_response
         from ha_mcp.settings_ui import build_settings_handlers
 

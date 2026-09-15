@@ -34,8 +34,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.errors import ErrorCode
 from ha_mcp.strict_bps import (
     STRICT_BPS_GATED_TOOLS,
@@ -534,7 +534,7 @@ def test_gated_tools_set_matches_expected_six():
 
 @pytest.mark.parametrize("tool_name", sorted(STRICT_BPS_GATED_TOOLS))
 def test_gated_tool_declares_key_and_maps_first_canonical_file(tool_name: str):
-    from fastmcp.tools import Tool
+    from ha_mcp._vendor.fastmcp.tools import Tool
 
     module_name, const_name = GATED_TOOL_MODULES[tool_name]
     module = importlib.import_module(f"ha_mcp.tools.{module_name}")

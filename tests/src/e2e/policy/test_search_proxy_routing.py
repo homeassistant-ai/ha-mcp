@@ -20,10 +20,10 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from fastmcp import Client
-from fastmcp.exceptions import ToolError
 from test_constants import TEST_TOKEN
 
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.server import HomeAssistantSmartMCPServer
 from ha_mcp.utils.data_paths import get_data_dir

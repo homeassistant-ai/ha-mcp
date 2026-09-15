@@ -26,7 +26,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 # ---------------------------------------------------------------------------
 # Fixtures (mirror test_helper_field_persistence.py — kept local to avoid

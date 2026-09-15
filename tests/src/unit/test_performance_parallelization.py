@@ -11,8 +11,8 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.smart_search import SmartSearchTools
 
 

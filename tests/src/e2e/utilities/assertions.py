@@ -9,7 +9,7 @@ import json
 import logging
 from typing import Any
 
-from fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 logger = logging.getLogger(__name__)
 
