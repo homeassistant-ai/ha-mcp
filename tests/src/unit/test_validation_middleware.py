@@ -263,3 +263,68 @@ async def test_tool_error_from_tool_body_passes_through_unconverted():
 
     body = json.loads(str(exc_info.value))
     assert body["error"]["code"] == "ENTITY_NOT_FOUND"
+
+
+def _make_dashboard_like_mcp() -> FastMCP:
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_test_get_dashboard(
+        url_path: str | None = None,
+        list_only: bool = False,
+        force_reload: bool = False,
+        entity_id: str | None = None,
+    ) -> dict:
+        return {"ok": True}
+
+    return mcp
+
+
+@pytest.mark.asyncio
+async def test_unknown_parameter_names_closest_valid_parameter():
+    """Invented argument names get a did-you-mean hint and the valid parameter
+    list rather than pydantic's bare "Unexpected keyword argument" (#2462: a
+    model sent ``dashboard_url`` / ``force`` for ``url_path`` /
+    ``force_reload``). A shared word must qualify on its own — difflib alone
+    rates ``dashboard_url`` against ``url_path`` far below any usable cutoff."""
+    mcp = _make_dashboard_like_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool(
+            "ha_test_get_dashboard", {"dashboard_url": "my-dashboard", "force": True}
+        )
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "`dashboard_url`: unknown parameter, did you mean `url_path`?" in msg
+    assert "`force`: unknown parameter, did you mean `force_reload`?" in msg
+    assert msg.endswith(
+        "Valid parameters: url_path, list_only, force_reload, entity_id."
+    )
+
+
+@pytest.mark.asyncio
+async def test_unknown_parameter_typo_suggests_by_similarity():
+    """A plain misspelling with no whole shared word still gets its match."""
+    mcp = _make_dashboard_like_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool("ha_test_get_dashboard", {"entitiy_id": "light.x"})
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "`entitiy_id`: unknown parameter, did you mean `entity_id`?" in msg
+
+
+@pytest.mark.asyncio
+async def test_unknown_parameter_without_a_close_match_still_lists_valid_names():
+    """No guess is offered when nothing resembles the name, and a parameter the
+    call already supplied is never suggested for a second argument."""
+    mcp = _make_dashboard_like_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool(
+            "ha_test_get_dashboard",
+            {"url_path": "my-dashboard", "zzz": 1, "dashboard_url": "my-dashboard"},
+        )
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "`zzz`: unknown parameter" in msg
+    assert "did you mean" not in msg
+    assert "Valid parameters: url_path, list_only, force_reload, entity_id." in msg

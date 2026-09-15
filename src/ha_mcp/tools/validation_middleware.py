@@ -5,12 +5,16 @@ a dict is required), FastMCP surfaces a validation error with a raw message like
 "Input should be a valid dictionary" -- a bare ``pydantic.ValidationError`` on
 older FastMCP, or a ``fastmcp.exceptions.ValidationError`` wrapping it (chained
 via ``from e``) on FastMCP >= 3.4.3. This middleware intercepts either shape and
-converts it to ha-mcp's structured format with actionable guidance.
+converts it to ha-mcp's structured format with actionable guidance. An argument
+name the tool does not declare is answered with the closest declared parameter
+and the full parameter list.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
+from difflib import SequenceMatcher
 from typing import Any
 
 from pydantic import ValidationError as PydanticValidationError
@@ -39,6 +43,50 @@ _TYPE_HINTS: dict[str, str] = {
         "expected a JSON array. Pass [...] directly, not a JSON-encoded string."
     ),
 }
+
+# Pydantic's error type for an argument the tool signature does not declare.
+_UNKNOWN_ARGUMENT = "unexpected_keyword_argument"
+
+
+async def _tool_parameter_names(context: MiddlewareContext | None) -> list[str] | None:
+    """Return the called tool's declared parameter names, or None if unknown.
+
+    The names only enrich the error message, so a failed lookup falls back to
+    pydantic's own wording rather than masking the validation error.
+    """
+    fastmcp_context = getattr(context, "fastmcp_context", None)
+    tool_name = getattr(getattr(context, "message", None), "name", None)
+    if fastmcp_context is None or not tool_name:
+        return None
+    try:
+        tool = await fastmcp_context.fastmcp.get_tool(tool_name)
+    except Exception:
+        logger.debug("Parameter lookup for %s failed", tool_name, exc_info=True)
+        return None
+    properties = tool.parameters.get("properties") if tool is not None else None
+    return list(properties) if isinstance(properties, dict) else None
+
+
+def _closest_parameter(unknown: str, candidates: Sequence[str]) -> str | None:
+    """Pick the declared parameter an invented argument name most likely meant.
+
+    Models rename parameters more often than they misspell them: difflib rates
+    ``dashboard_url`` against ``url_path`` at 0.29, far below any usable
+    cutoff. A shared underscore-separated word therefore qualifies a candidate
+    on its own; the similarity ratio ranks candidates and catches plain typos
+    such as ``entitiy_id``.
+    """
+    unknown_lower = unknown.lower()
+    words = set(unknown_lower.split("_")) - {""}
+    best: tuple[int, float, str] | None = None
+    for candidate in candidates:
+        shared = len(words & set(candidate.lower().split("_")))
+        ratio = SequenceMatcher(None, unknown_lower, candidate.lower()).ratio()
+        if not shared and ratio < 0.6:
+            continue
+        if best is None or (shared, ratio) > best[:2]:
+            best = (shared, ratio, candidate)
+    return best[2] if best else None
 
 
 class ValidationErrorMiddleware(Middleware):
@@ -77,18 +125,47 @@ class ValidationErrorMiddleware(Middleware):
                     key = ""
                 grouped.setdefault(key, []).append(err)
 
+            valid_parameters = (
+                await _tool_parameter_names(context)
+                if any(err["type"] == _UNKNOWN_ARGUMENT for err in errors)
+                else None
+            )
+            # A parameter the call already supplied is never the intended
+            # target of a second, invented argument.
+            supplied = getattr(getattr(context, "message", None), "arguments", None)
+            unclaimed = [p for p in valid_parameters or () if p not in (supplied or {})]
+
             parts: list[str] = []
             for param, errs in grouped.items():
-                # Prefer an actionable container hint when any arm produced one
-                # (dict_type/list_type); else fall back to the first raw message.
-                hint = next(
-                    (_TYPE_HINTS[e["type"]] for e in errs if e["type"] in _TYPE_HINTS),
-                    errs[0]["msg"],
-                )
+                if (
+                    valid_parameters is not None
+                    and errs[0]["type"] == _UNKNOWN_ARGUMENT
+                ):
+                    hint = "unknown parameter"
+                    match = _closest_parameter(param, unclaimed)
+                    if match:
+                        hint += f", did you mean `{match}`?"
+                else:
+                    # Prefer an actionable container hint when any arm produced
+                    # one (dict_type/list_type); else the first raw message.
+                    hint = next(
+                        (
+                            _TYPE_HINTS[e["type"]]
+                            for e in errs
+                            if e["type"] in _TYPE_HINTS
+                        ),
+                        errs[0]["msg"],
+                    )
                 parts.append(f"`{param}`: {hint}" if param else hint)
+            message = "; ".join(parts) if parts else "Invalid argument types."
+            if valid_parameters:
+                separator = " " if message.endswith("?") else ". "
+                message += (
+                    f"{separator}Valid parameters: {', '.join(valid_parameters)}."
+                )
             raise_tool_error(
                 create_validation_error(
-                    "; ".join(parts) if parts else "Invalid argument types.",
+                    message,
                     details=", ".join(dict.fromkeys(err["type"] for err in errors)),
                 )
             )
