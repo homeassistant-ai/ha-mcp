@@ -264,7 +264,7 @@ and retry safety through `readOnlyHint`, `destructiveHint`, and
 
 ## Documentation Standards
 
-1. **Comments**: Only for non-obvious logic - too many comments is an anti-pattern (code should be self-documenting)
+1. **Comments**: The rule is canonical in [`AGENTS.md` → Code Comments](../AGENTS.md#code-comments). Flag comments that restate what the code already says.
 2. **CHANGELOG.md**: Auto-generated via semantic-release (don't edit manually)
 3. **Apps, not add-ons**: Follow the canonical terminology and identifier exceptions in [the development reference](../docs/agents/development.md#terminology-apps-not-add-ons). Flag MEDIUM severity when new user-facing text uses the retired product term by itself.
 

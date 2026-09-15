@@ -145,6 +145,10 @@ The minimal setup is `uv sync --group dev`; run stdio with `uv run ha-mcp` and H
 
 Tools are lazy-discovered from `tools_*.py`; shared business logic belongs in service modules; WebSocket-backed operations verify state changes; and tools wait for logical completion when possible. Read the [architecture map](docs/agents/development.md#architecture) and the [code review style guide](.gemini/styleguide.md) before structural code changes.
 
+## Code Comments
+
+Comment only non-obvious logic. Code should be self-documenting; too many comments is an anti-pattern.
+
 ## Terminology: apps, not add-ons
 
 In user- and agent-facing text, write **app (add-on)** on first mention and **app** afterwards. Identifiers require case-by-case verification; established slugs, paths, labels, API routes, and compatibility text may retain the old spelling. The exact exceptions live in the [development reference](docs/agents/development.md#terminology-apps-not-add-ons).
