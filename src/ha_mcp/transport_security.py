@@ -60,10 +60,7 @@ def ensure_host_origin_guard_default_off() -> None:
     choice wins). A failed mutation is logged at WARNING and left retryable -- it
     is not recorded as done -- so a later reload re-attempts it.
     """
-    try:
-        import fastmcp
-    except Exception:  # pragma: no cover - fastmcp is a hard dependency
-        return
+    from ha_mcp._vendor import fastmcp
 
     settings = getattr(fastmcp, "settings", None)
     if settings is None or not hasattr(settings, _HOST_ORIGIN_PROTECTION_ATTR):

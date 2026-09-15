@@ -12,8 +12,8 @@ import sys
 import time
 from typing import Any, Literal, NoReturn, overload
 
-from fastmcp import Context
-from fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp import Context
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
@@ -23,6 +23,7 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import HomeAssistantWebSocketClient
 from ..errors import (
+    TOOL_ERROR_LOG_LEVEL,
     ErrorCode,
     create_auth_error,
     create_connection_error,
@@ -61,7 +62,10 @@ def raise_tool_error(error_response: dict[str, Any]) -> NoReturn:
         ... )
         >>> raise_tool_error(error)  # Raises ToolError with isError=true
     """
-    raise ToolError(json.dumps(error_response, indent=2, default=str))
+    raise ToolError(
+        json.dumps(error_response, indent=2, default=str),
+        log_level=TOOL_ERROR_LOG_LEVEL,
+    )
 
 
 def extract_tool_error_message(te: ToolError) -> str:

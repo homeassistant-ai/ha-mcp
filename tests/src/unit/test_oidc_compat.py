@@ -11,23 +11,23 @@ from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from fastmcp.server.auth.oauth_proxy.models import (
-    JTIMapping,
-    ProxyDCRClient,
-    RefreshTokenMetadata,
-    UpstreamTokenSet,
-)
-from fastmcp.server.auth.oidc_proxy import OIDCConfiguration, OIDCProxy
-from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
 from key_value.aio.stores.memory import MemoryStore
-from mcp.server.auth.handlers.register import RegistrationHandler
-from mcp.server.auth.provider import AuthorizationParams
-from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.testclient import TestClient
 
+from ha_mcp._vendor.fastmcp.server.auth.oauth_proxy.models import (
+    JTIMapping,
+    ProxyDCRClient,
+    RefreshTokenMetadata,
+    UpstreamTokenSet,
+)
+from ha_mcp._vendor.fastmcp.server.auth.oidc_proxy import OIDCConfiguration, OIDCProxy
+from ha_mcp._vendor.fastmcp.server.auth.providers.jwt import StaticTokenVerifier
+from ha_mcp._vendor.mcp.server.auth.handlers.register import RegistrationHandler
+from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationParams
+from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 from ha_mcp.auth.oidc_compat import HaMcpOIDCProxy
 
 

@@ -7,8 +7,8 @@ from copy import deepcopy
 from typing import Any
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.dashboard_screenshot.paths import (
     DashboardRenderTarget,
     dashboard_render_paths,

@@ -91,8 +91,7 @@ class TestStatelessSessionLogFilter:
         from ha_mcp import __main__ as ha_main
 
         sdk_logger = logging.getLogger("mcp.server.streamable_http")
-        # _setup_logging also attaches ToolValidationLogFilter to the
-        # fastmcp.server.server logger; save/restore it too or it leaks.
+        # Save/restore the fastmcp server logger's filters too so nothing leaks.
         fastmcp_logger = logging.getLogger("fastmcp.server.server")
         saved_sdk_filters = sdk_logger.filters[:]
         saved_fastmcp_filters = fastmcp_logger.filters[:]

@@ -11,8 +11,8 @@ success envelopes and that the destructive/required/conditional gates raise
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_radio import register_radio_tools
 
 

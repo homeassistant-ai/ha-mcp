@@ -33,8 +33,8 @@ def _make_fake_tool(
 ) -> SimpleNamespace:
     """Stand-in for a FastMCP Tool object — only the attrs the handler reads."""
     annotations = SimpleNamespace(
-        readOnlyHint=read_only or None,
-        destructiveHint=destructive or None,
+        read_only_hint=read_only or None,
+        destructive_hint=destructive or None,
     )
     return SimpleNamespace(
         name=name,

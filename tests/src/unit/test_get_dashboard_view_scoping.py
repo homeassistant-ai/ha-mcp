@@ -17,8 +17,8 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_config_dashboards import DashboardConfigTools
 from ha_mcp.utils.config_hash import compute_config_hash
 

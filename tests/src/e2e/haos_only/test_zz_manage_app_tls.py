@@ -17,9 +17,9 @@ from typing import Any
 
 import httpx
 import pytest
-from fastmcp import Client
-from fastmcp.client.transports import StreamableHttpTransport
 
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp._vendor.fastmcp.client.transports import StreamableHttpTransport
 from ha_mcp.client import HomeAssistantClient
 from ha_mcp.tools.tools_addons import _resolve_http_route
 from tests.src.haos_runtime import (

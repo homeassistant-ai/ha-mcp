@@ -24,8 +24,8 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantAPIError
 from ha_mcp.tools.config_entry_flow_form import (
     _extract_schema_field_names,

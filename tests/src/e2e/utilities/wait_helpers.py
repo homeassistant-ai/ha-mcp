@@ -14,8 +14,9 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 import websockets
-from fastmcp.exceptions import ClientError, FastMCPError
-from mcp import McpError
+import websockets.exceptions
+
+from ha_mcp._vendor.fastmcp.exceptions import ClientError, FastMCPError, McpError
 
 from .assertions import parse_mcp_result, safe_call_tool
 

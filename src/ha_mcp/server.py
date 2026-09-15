@@ -14,8 +14,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
 import yaml  # type: ignore[import-untyped]
-from mcp.types import Icon
 from pydantic import Field
+
+from ha_mcp._vendor.mcp.types import Icon
 
 from .config import _PACKAGE_VERSION, get_global_settings
 from .errors import ErrorCode, create_error_response
@@ -66,11 +67,11 @@ _SKILL_GUIDE_MANDATORYBPS_HINT = (
 SERVER_ICONS = [
     Icon(
         src="https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/packaging/mcpb/icon.svg",
-        mimeType="image/svg+xml",
+        mime_type="image/svg+xml",
     ),
     Icon(
         src="https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/packaging/mcpb/icon-128.png",
-        mimeType="image/png",
+        mime_type="image/png",
         sizes=["128x128"],
     ),
 ]
@@ -1503,7 +1504,9 @@ class HomeAssistantSmartMCPServer:
             )
         else:
             try:
-                from fastmcp.server.providers.skills import SkillsDirectoryProvider
+                from ha_mcp._vendor.fastmcp.server.providers.skills import (
+                    SkillsDirectoryProvider,
+                )
             except ImportError:
                 logger.warning(
                     "SkillsDirectoryProvider not available in fastmcp; "

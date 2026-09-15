@@ -1,4 +1,4 @@
-"""MCP SDK / fastmcp log-noise filters shared across every HTTP launcher.
+"""MCP SDK log-noise filters shared across every HTTP launcher.
 
 Extracted from :mod:`ha_mcp.__main__` for the same reason as
 :mod:`ha_mcp.browser_landing`: the in-process server (the ``ha_mcp_tools``
@@ -17,8 +17,6 @@ from __future__ import annotations
 import logging
 
 import anyio
-from fastmcp.exceptions import ToolError
-from pydantic import ValidationError as PydanticValidationError
 
 
 class StatelessSessionLogFilter(logging.Filter):
@@ -52,37 +50,6 @@ class StatelessSessionLogFilter(logging.Filter):
             return True
         # Drop the stateless teardown noise; keep everything else.
         return "Terminating session: None" not in message
-
-
-class ToolValidationLogFilter(logging.Filter):
-    """Demote fastmcp tool-failure tracebacks to single-line warnings.
-
-    Pydantic ValidationError and tool-raised ToolError aren't server bugs,
-    so the traceback through fastmcp/pydantic internals is just noise. The
-    structured error detail is preserved in the WARNING message; stack is
-    intentionally dropped because these are user-input errors, not bugs.
-    """
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        """Demote a known-benign validation/tool-error record to WARNING."""
-        if record.name != "fastmcp.server.server" or not record.exc_info:
-            return True
-
-        msg = record.getMessage()
-        err = record.exc_info[1]
-        if "Error validating tool" in msg and isinstance(err, PydanticValidationError):
-            record.msg = f"{msg}: {err.errors(include_url=False)}"
-        elif "Error calling tool" in msg and isinstance(err, ToolError):
-            record.msg = f"{msg}: {err}"
-        else:
-            return True
-
-        record.args = ()
-        record.levelno = logging.WARNING
-        record.levelname = "WARNING"
-        record.exc_info = None
-        record.exc_text = None
-        return True
 
 
 _DISCONNECT_TEARDOWN_ERRORS = (anyio.ClosedResourceError, anyio.BrokenResourceError)
@@ -140,8 +107,7 @@ class SessionDisconnectLogFilter(logging.Filter):
     stateful session runners of mcp/server/streamable_http_manager.py) -- it
     just logs it as an alarming ERROR-level traceback. That's an expected
     race in a stateless HTTP protocol (the client already gave up), not a
-    server bug, so demote it the same way ToolValidationLogFilter demotes
-    other known-benign failures. Any other exception on this logger -- an
+    server bug, so demote it. Any other exception on this logger -- an
     actual crash -- is left untouched.
     """
 
@@ -194,7 +160,7 @@ def _add_filter_once(logger_name: str, filter_cls: type[logging.Filter]) -> None
 
 
 def install_sdk_log_filters() -> None:
-    """Attach the demotion filters above to their target SDK/fastmcp loggers.
+    """Attach the suppression/demotion filters above to their MCP SDK loggers.
 
     Every HTTP launcher must call this: the CLI (``ha_mcp.__main__``), the
     Home Assistant app's ``start.py``, and the in-process embedded server
@@ -204,4 +170,3 @@ def install_sdk_log_filters() -> None:
     """
     _add_filter_once("mcp.server.streamable_http", StatelessSessionLogFilter)
     _add_filter_once("mcp.server.streamable_http_manager", SessionDisconnectLogFilter)
-    _add_filter_once("fastmcp.server.server", ToolValidationLogFilter)

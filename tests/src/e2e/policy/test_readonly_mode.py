@@ -24,10 +24,10 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from fastmcp import Client
-from fastmcp.exceptions import ToolError
 from test_constants import TEST_TOKEN
 
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.read_only import READ_ONLY_EXEMPT_TOOLS, is_read_safe
 from ha_mcp.server import HomeAssistantSmartMCPServer
@@ -614,8 +614,10 @@ async def test_inaddon_read_only_mode_blocks_radio_writes(
     import time
 
     import httpx
-    from fastmcp.client.transports import StreamableHttpTransport
+    import httpx2
     from haos_runtime import HA_MCP_TEST_SECRET_PATH, wait_for_addon_mcp_ready
+
+    from ha_mcp._vendor.fastmcp.client.transports import StreamableHttpTransport
 
     container_info = ha_container_with_fresh_config
     addon_mcp_url = container_info.get("addon_mcp_url")
@@ -623,7 +625,15 @@ async def test_inaddon_read_only_mode_blocks_radio_writes(
     # The settings UI is mounted at the secret-path root (see TestSettingsUiRestartReal).
     base = addon_mcp_url.split("/mcp", 1)[0]
     settings = f"{base}{HA_MCP_TEST_SECRET_PATH}/api/settings"
-    _transient = (AssertionError, TimeoutError, OSError, httpx.HTTPError, RuntimeError)
+    # httpx for the settings POSTs, httpx2 for FastMCP's client transport.
+    _transient = (
+        AssertionError,
+        TimeoutError,
+        OSError,
+        httpx.HTTPError,
+        httpx2.HTTPError,
+        RuntimeError,
+    )
 
     async def _set_read_only(enabled: bool) -> None:
         """POST the flag (handler merges into Supervisor options) + self-restart

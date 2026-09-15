@@ -5,8 +5,8 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools import tools_resources
 from ha_mcp.tools.tools_resources import (
     _ALLOWED_DATA_URI_PREFIXES,
@@ -1287,7 +1287,7 @@ class TestToolRegistration:
         tools = ResourceTools(MagicMock())
         # Access the __fastmcp__ metadata set by @tool decorator
         metadata = tools.ha_config_set_dashboard_resource.__fastmcp__
-        assert metadata.annotations.destructiveHint is True
+        assert metadata.annotations.destructive_hint is True
 
 
 class TestConstants:

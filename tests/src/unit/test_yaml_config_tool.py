@@ -144,7 +144,7 @@ async def test_storage_collision_blocks_dispatch(monkeypatch):
     )
 
     # ToolError is raised — capture it
-    from fastmcp.exceptions import ToolError
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
     with pytest.raises(ToolError):
         await fn(
@@ -203,7 +203,7 @@ async def test_ws_returns_bare_list_blocks_collision(monkeypatch):
         return_value=[{"url_path": "energy-dash", "mode": "storage", "id": "abc"}]
     )
 
-    from fastmcp.exceptions import ToolError
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
     with pytest.raises(ToolError):
         await fn(
@@ -289,9 +289,8 @@ async def test_disabled_key_rejects_client_side(monkeypatch, key, flag):
     """With the per-key flag OFF, the wrapper must reject before the
     call ever reaches the custom component. The other PACKAGES_ONLY
     keys with their flag ON keep working in the same test process."""
-    from fastmcp.exceptions import ToolError
-
     from ha_mcp import config as ha_mcp_config
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
     # Leave the other two flags ON so we can confirm the reject is
     # per-key, not a blanket "all packages disabled" mode.
@@ -403,9 +402,8 @@ async def test_relative_packages_path_is_normalized_and_gated(monkeypatch):
     """``./packages/x.yaml`` normalises to ``packages/x.yaml`` (matching the
     component's os.path.normpath + fnmatch classification), so the disabled-key
     gate fires client-side for it too — not only the bare ``packages/`` spelling."""
-    from fastmcp.exceptions import ToolError
-
     from ha_mcp import config as ha_mcp_config
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
     monkeypatch.delenv("ENABLE_YAML_PACKAGES_AUTOMATION", raising=False)
     monkeypatch.setattr(ha_mcp_config, "_settings", None)
@@ -426,9 +424,8 @@ async def test_disabled_key_remove_action_rejected_before_dispatch(monkeypatch):
     """The gate fires for ``remove`` too (which carries no content), before any
     dispatch — so it can't be bypassed by choosing an action that skips the
     content-required check."""
-    from fastmcp.exceptions import ToolError
-
     from ha_mcp import config as ha_mcp_config
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
     monkeypatch.delenv("ENABLE_YAML_PACKAGES_SCENE", raising=False)
     monkeypatch.setattr(ha_mcp_config, "_settings", None)
@@ -798,9 +795,8 @@ async def test_extra_keys_rejected_on_old_component(monkeypatch, reported):
     rather than letting the component's strict schema reject the whole
     call with an opaque "extra keys not allowed". An unreportable version
     fails closed for the same reason."""
-    from fastmcp.exceptions import ToolError
-
     from ha_mcp import config as ha_mcp_config
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
     monkeypatch.setenv("HA_MCP_EXTRA_YAML_KEYS", "alert2")
     monkeypatch.setattr(ha_mcp_config, "_settings", None)

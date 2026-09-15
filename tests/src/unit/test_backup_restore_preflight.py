@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 import yaml
-from fastmcp.exceptions import ToolError
 
 from ha_mcp import backup_manager as bm
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .test_backup_diff_error_mapping import _dispatcher
 from .test_backup_restore_consumers import response_for, run_restore

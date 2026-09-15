@@ -28,8 +28,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.helpers import validate_identifier_not_empty
 
 # ---------------------------------------------------------------------------

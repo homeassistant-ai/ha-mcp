@@ -1,12 +1,14 @@
 """End-to-end reproduction of the #2239 dependency-downgrade incident.
 
-A third-party custom integration pins ``mcp==1.14.1`` in its manifest. Home
-Assistant reinstalls that pin into the one shared site-packages tree at every
-startup, dropping ``mcp`` below the floor fastmcp declares — and the in-process
-server's first ``ha_mcp`` import then dies on a name ``mcp.types`` no longer
-exports. fastmcp swallows that ``ImportError`` and re-raises the generic hint
-"FastMCP server support is not installed", which names neither the package, nor
-the version, nor the integration that moved it.
+A third-party custom integration pins a shared dependency below ha-mcp's floor
+in its manifest. Home Assistant reinstalls that pin into the one shared
+site-packages tree at every startup, and the in-process server's first
+``ha_mcp`` import then dies. fastmcp swallows that ``ImportError`` and re-raises
+the generic hint "FastMCP server support is not installed", which names neither
+the package, nor the version, nor the integration that moved it.
+
+#2239 itself pinned ``mcp``, which ha-mcp now vendors, so this reproduces it
+with ``uncalled-for==0.2.0``: it lacks names the vendored FastMCP imports.
 
 This test boots a Home Assistant container in exactly that state and asserts
 the two surfaces the fix adds both name the whole causal chain:
@@ -25,13 +27,13 @@ lane.
 
 **How the corruption is staged, and why it survives.** The wrapped entrypoint
 installs the checkout's wheel plus its whole dependency tree, then downgrades
-``mcp`` alone (``--no-deps``, so nothing else in the tree moves) before HA's
+the pinned package alone (``--no-deps``, so nothing else moves) before HA's
 ``/init``. The seeded config entry then pins ``pip_spec`` to the exact version
 that wheel installed and stores the same spec as ``last_pip_spec``, which is
 what puts ``_async_ensure_package`` on its FAST path: an unchanged, non-URL,
 already-satisfied index spec is handed to HA's requirements manager, which
 runs no pip at all. That is the production shape of this incident — a
-force-install would re-resolve the graph and quietly repair ``mcp``, which is
+force-install would re-resolve the graph and quietly repair the pin, which is
 precisely why the bug only bites installs that have nothing left to install.
 ``test_the_pinned_downgrade_survived_bring_up`` re-reads the version afterwards
 so a future change to that branch surfaces as "the repro premise broke" rather
@@ -94,11 +96,12 @@ _SERVER_PORT = 9584
 # the fast path — see the module docstring.
 _DATA_LAST_PIP_SPEC = "last_pip_spec"
 
-# The pin from the incident report. Any version below fastmcp's floor would do;
-# this one is the reported value, so the assertions read as the real story.
-_PINNED_MCP_VERSION = "1.14.1"
+# Below ha-mcp's uncalled-for>=0.4.0 floor and missing CallArgument, which the
+# vendored FastMCP imports — so the import genuinely fails.
+_PINNED_PACKAGE = "uncalled-for"
+_PINNED_VERSION = "0.2.0"
 _PINNER_DOMAIN = "fake_pinner"
-_PINNER_NAME = "Fake MCP Pinner"
+_PINNER_NAME = "Fake Dependency Pinner"
 
 # The entrypoint's pip work (manifest requirements, the ha-mcp wheel + its whole
 # dependency tree, the downgrade) all runs BEFORE HA's /init, so /api/ liveness
@@ -126,13 +129,13 @@ _SUCCESS_NEEDLE = "HA-MCP in-process server is listening on"
 # Opening clause of _async_warn_on_dependency_conflicts' WARNING.
 _PREFLIGHT_NEEDLE = "the installed dependency tree is inconsistent"
 
-_MCP_VERSION_PROBE = """
+_PINNED_VERSION_PROBE = f"""
 from importlib.metadata import PackageNotFoundError, version
 
 try:
-    print("MCP_VERSION " + version("mcp"))
+    print("PINNED_VERSION " + version({_PINNED_PACKAGE!r}))
 except PackageNotFoundError:
-    print("MCP_VERSION <not-installed>")
+    print("PINNED_VERSION <not-installed>")
 """
 
 
@@ -203,13 +206,13 @@ def _manifest_requirements(config_path: Path) -> list[str]:
 
 
 def _entrypoint(config_path: Path, wheel_name: str) -> list[str]:
-    """The wrapped entrypoint: install, downgrade ``mcp``, then hand over to /init.
+    """The wrapped entrypoint: install, downgrade the pin, then hand over to /init.
 
     Every step is ``&&``-chained, so a failure surfaces as a non-zero container
     exit rather than as an HA that boots into a half-staged environment.
     """
     quoted_wheel = shlex.quote(f"/config/{wheel_name}")
-    pinned = shlex.quote(f"mcp=={_PINNED_MCP_VERSION}")
+    pinned = shlex.quote(f"{_PINNED_PACKAGE}=={_PINNED_VERSION}")
     commands: list[str] = []
 
     requirements = _manifest_requirements(config_path)
@@ -240,9 +243,8 @@ def _entrypoint(config_path: Path, wheel_name: str) -> list[str]:
     )
 
     # The downgrade runs WITHOUT HA's constraints file on purpose: a constraint
-    # on mcp would veto the very version this scenario needs installed. It also
-    # runs with --no-deps, so the only thing that moves in the tree is mcp
-    # itself — the incident's shape, and the one variable the assertions name.
+    # on the package would veto the very version this scenario needs. It also
+    # runs with --no-deps, so the pinned package is the only thing that moves.
     commands.append(
         f"(env -u PIP_EXTRA_INDEX_URL pip install --no-cache-dir --no-deps "
         f"--only-binary=:all: {pinned} "
@@ -252,7 +254,7 @@ def _entrypoint(config_path: Path, wheel_name: str) -> list[str]:
 
 
 def _seed_pinning_integration(config_path: Path) -> None:
-    """Drop a custom integration whose manifest pins ``mcp``.
+    """Drop a custom integration whose manifest pins the shared dependency.
 
     Never set up by Home Assistant (no config entry, absent from
     ``configuration.yaml``), so its requirement is never installed by HA — the
@@ -270,7 +272,7 @@ def _seed_pinning_integration(config_path: Path) -> None:
                 "codeowners": [],
                 "documentation": "https://example.invalid/fake-pinner",
                 "iot_class": "local_polling",
-                "requirements": [f"mcp=={_PINNED_MCP_VERSION}"],
+                "requirements": [f"{_PINNED_PACKAGE}=={_PINNED_VERSION}"],
                 "version": "1.0.0",
             },
             indent=2,
@@ -278,7 +280,7 @@ def _seed_pinning_integration(config_path: Path) -> None:
         encoding="utf-8",
     )
     (domain_dir / "__init__.py").write_text(
-        '"""Inert stand-in for a third-party integration that pins mcp (#2239)."""\n\n'
+        '"""Inert stand-in for a third-party integration with a bad pin (#2239)."""\n\n'
         "async def async_setup(hass, config):\n"
         '    """Never called: nothing configures this integration."""\n'
         "    return True\n",
@@ -414,9 +416,9 @@ def _wait_for_bringup_outcome(log_file: Path, container: Any) -> str:
                     "the in-process server started successfully, so the #2239 "
                     "repro premise is gone: either the seeded pin no longer "
                     "reaches _async_ensure_package's fast path (something "
-                    "reinstalled the dependency tree and repaired mcp) or "
-                    f"mcp {_PINNED_MCP_VERSION} no longer breaks the fastmcp "
-                    "import. Re-read the fast-path rationale in this module's "
+                    "reinstalled the dependency tree and repaired the pin) or "
+                    f"{_PINNED_PACKAGE} {_PINNED_VERSION} no longer breaks the "
+                    "fastmcp import. Re-read the fast-path rationale in this module's "
                     f"docstring.\nContainer logs:\n{_dump_logs(container)}"
                 )
         time.sleep(_LOG_POLL_S)
@@ -429,7 +431,7 @@ def _wait_for_bringup_outcome(log_file: Path, container: Any) -> str:
 
 @pytest.fixture(scope="module")
 def conflicted_ha():
-    """Boot HA with the ha-mcp tree installed and ``mcp`` pinned back to 1.14.1.
+    """Boot HA with the ha-mcp tree installed and the shared dependency pinned back.
 
     Yields a dict once the in-process server's bring-up has failed, carrying
     the full ``home-assistant.log`` text plus the container handle.
@@ -495,17 +497,17 @@ def _failure_detail(log_text: str) -> str:
 
 class TestEmbeddedDependencyConflict:
     def test_the_pinned_downgrade_survived_bring_up(self, conflicted_ha):
-        """``mcp`` is still at the pinned version after bring-up ran.
+        """The pinned package is still at the pinned version after bring-up ran.
 
         The premise every other assertion rests on. If a future change puts
-        bring-up back on a force-installing path, the resolver repairs ``mcp``
+        bring-up back on a force-installing path, the resolver repairs the pin
         on the way past and the conflict this module is about never exists —
         which must read as "the scenario stopped reproducing", not as a
         confusing failure about missing message text.
         """
-        output = _in_container(conflicted_ha["container"], _MCP_VERSION_PROBE)
-        assert f"MCP_VERSION {_PINNED_MCP_VERSION}" in output, (
-            f"expected mcp {_PINNED_MCP_VERSION} to still be installed after "
+        output = _in_container(conflicted_ha["container"], _PINNED_VERSION_PROBE)
+        assert f"PINNED_VERSION {_PINNED_VERSION}" in output, (
+            f"expected {_PINNED_PACKAGE} {_PINNED_VERSION} to still be installed after "
             f"bring-up, got {output.strip()!r} — something reinstalled the "
             "dependency tree, so this module's environment no longer "
             "reproduces #2239 (see the fast-path rationale in the module "
@@ -537,27 +539,28 @@ class TestEmbeddedDependencyConflict:
         # Package + installed version + the requirement it violates + who
         # declared that requirement, in one sentence.
         violation = re.search(
-            rf"Installed mcp {re.escape(_PINNED_MCP_VERSION)} does not satisfy "
-            r"'([^']+)' required by (\S+)",
+            rf"Installed {re.escape(_PINNED_PACKAGE)} {re.escape(_PINNED_VERSION)} "
+            r"does not satisfy '([^']+)' required by (\S+)",
             detail,
         )
         assert violation is not None, (
-            "the failure detail does not name the installed mcp version and "
-            f"the requirement it violates:\n{detail}"
+            f"the failure detail does not name the installed {_PINNED_PACKAGE} "
+            f"version and the requirement it violates:\n{detail}"
         )
         requirement, required_by = violation.groups()
         assert re.search(r"\d", requirement), (
             f"the violated requirement {requirement!r} carries no version, so "
             "the message does not tell the user which one they need"
         )
-        assert required_by.startswith("fastmcp"), (
-            "expected the mcp floor to be attributed to a fastmcp "
-            f"distribution, got {required_by!r} — if the dependency graph "
-            f"changed, update this assertion:\n{detail}"
+        assert required_by.startswith("ha-mcp"), (
+            f"expected the {_PINNED_PACKAGE} floor to be attributed to ha-mcp, "
+            f"got {required_by!r} — if the dependency graph changed, update "
+            f"this assertion:\n{detail}"
         )
 
         # The integration that keeps putting the wrong version back.
-        assert f"({_PINNER_DOMAIN}) pins 'mcp=={_PINNED_MCP_VERSION}'" in detail, (
+        pin = f"({_PINNER_DOMAIN}) pins '{_PINNED_PACKAGE}=={_PINNED_VERSION}'"
+        assert pin in detail, (
             "the failure detail does not name the pinning custom integration "
             f"or its manifest requirement:\n{detail}"
         )
@@ -586,10 +589,12 @@ class TestEmbeddedDependencyConflict:
         assert "WARNING" in warning, (
             f"the pre-flight audit did not log at WARNING:\n{warning}"
         )
-        assert f"Installed mcp {_PINNED_MCP_VERSION} does not satisfy" in warning, (
+        conflict = f"Installed {_PINNED_PACKAGE} {_PINNED_VERSION} does not satisfy"
+        assert conflict in warning, (
             f"the pre-flight warning does not name the conflict:\n{warning}"
         )
-        assert f"({_PINNER_DOMAIN}) pins 'mcp=={_PINNED_MCP_VERSION}'" in warning, (
+        pin = f"({_PINNER_DOMAIN}) pins '{_PINNED_PACKAGE}=={_PINNED_VERSION}'"
+        assert pin in warning, (
             f"the pre-flight warning does not name the pinning integration:\n{warning}"
         )
         # The audit reports no root exception (there is none yet); the failure

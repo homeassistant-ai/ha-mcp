@@ -15,7 +15,7 @@ import hmac
 import logging
 from typing import Any, cast
 
-from fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash

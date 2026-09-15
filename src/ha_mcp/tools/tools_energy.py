@@ -30,9 +30,10 @@ import logging
 from collections.abc import Callable
 from typing import Annotated, Any, Literal, cast
 
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import tool
 from pydantic import Field
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..errors import ErrorCode, create_error_response
 from ..utils.config_hash import compute_config_hash

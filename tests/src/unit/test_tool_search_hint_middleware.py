@@ -9,9 +9,9 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from fastmcp import FastMCP
-from fastmcp.exceptions import NotFoundError, ToolError
 
+from ha_mcp._vendor.fastmcp import FastMCP
+from ha_mcp._vendor.fastmcp.exceptions import NotFoundError, ToolError
 from ha_mcp.tools.tool_search_hint_middleware import ToolSearchHintMiddleware
 
 

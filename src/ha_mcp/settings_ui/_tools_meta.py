@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple, NotRequired, TypedDict
 from ..transforms import categorize_capability
 
 if TYPE_CHECKING:
-    from fastmcp import FastMCP
+    from ha_mcp._vendor.fastmcp import FastMCP
 
     from ..config import Settings
     from ..server import HomeAssistantSmartMCPServer
@@ -305,12 +305,8 @@ async def _get_tool_metadata(
     for tool in registered:
         tags = sorted(tool.tags) if tool.tags else []
         primary = primary_tag(tags)
-        read_only = bool(
-            tool.annotations and getattr(tool.annotations, "readOnlyHint", None)
-        )
-        destructive = bool(
-            tool.annotations and getattr(tool.annotations, "destructiveHint", None)
-        )
+        read_only = bool(tool.annotations and tool.annotations.read_only_hint)
+        destructive = bool(tool.annotations and tool.annotations.destructive_hint)
         title = getattr(tool, "title", None) or tool.name
         if tool.annotations and getattr(tool.annotations, "title", None):
             title = tool.annotations.title

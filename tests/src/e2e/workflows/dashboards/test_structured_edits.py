@@ -8,8 +8,9 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from fastmcp.exceptions import ToolError
 from ruamel.yaml import YAML
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ...utilities.assertions import (
     MCPAssertions,

@@ -22,9 +22,9 @@ Requires Docker (testcontainers); runs in CI.
 from __future__ import annotations
 
 import pytest
-from fastmcp import Client
 from test_constants import TEST_TOKEN
 
+from ha_mcp._vendor.fastmcp import Client
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.redaction import REDACTED_SET, is_sentinel
 from ha_mcp.server import HomeAssistantSmartMCPServer

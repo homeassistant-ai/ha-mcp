@@ -17,7 +17,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
-from fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
 from .component_config_entries import fetch_domain_unique_ids

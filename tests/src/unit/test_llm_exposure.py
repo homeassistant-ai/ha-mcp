@@ -14,9 +14,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from fastmcp.tools import Tool
 
 from ha_mcp import llm_exposure
+from ha_mcp._vendor.fastmcp.tools import Tool
 from ha_mcp.llm_exposure import (
     LLM_API_CONFIG_KEY,
     META_EXPOSED_KEY,

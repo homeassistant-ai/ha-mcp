@@ -3,9 +3,9 @@
 import json
 
 import pytest
-from fastmcp.exceptions import ToolError
 from starlette.requests import Request
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.settings_ui import _handlers_backups as ui
 from ha_mcp.tools.backup import _edits_delete
 

@@ -48,7 +48,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent.parent))  # tests/src/ for haos_runtime
 
 from doomed_run import DoomedRunDetector
-from fastmcp import Client
 from haos_runtime import (
     HA_MCP_DEV_ADDON_SLUG,
     HA_MCP_SERVER_DOMAIN,
@@ -77,6 +76,7 @@ from haos_runtime import (
     wait_for_addon_mcp_ready,
 )
 
+from ha_mcp._vendor.fastmcp import Client
 from ha_mcp.client import HomeAssistantClient
 from ha_mcp.config import get_global_settings
 from ha_mcp.server import HomeAssistantSmartMCPServer
@@ -3081,7 +3081,7 @@ async def mcp_client(
         return
 
     if backend in ("haos_inaddon", "embedded", "haos_embedded"):
-        from fastmcp.client.transports import StreamableHttpTransport
+        from ha_mcp._vendor.fastmcp.client.transports import StreamableHttpTransport
 
         if backend in ("embedded", "haos_embedded"):
             server_url = container_info.get("embedded_webhook_url")
@@ -3155,7 +3155,7 @@ def _stdio_env(container_info: dict[str, Any], config_dir: Path) -> dict[str, st
 
 def _stdio_client(container_info: dict[str, Any], config_dir: Path) -> Client:
     """Return a FastMCP client backed by the installed stdio entry point."""
-    from fastmcp.client.transports import StdioTransport
+    from ha_mcp._vendor.fastmcp.client.transports import StdioTransport
 
     transport = StdioTransport(
         command="ha-mcp",

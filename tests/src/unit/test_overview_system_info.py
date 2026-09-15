@@ -382,7 +382,7 @@ class TestHaGetOverviewFieldsProjection:
         """
         import json
 
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         with pytest.raises(ToolError) as exc_info:
             await overview_tool(fields=123)
@@ -393,7 +393,7 @@ class TestHaGetOverviewFieldsProjection:
     @pytest.mark.asyncio
     async def test_bad_json_fields_raises_tool_error(self, overview_tool):
         """fields='[\"' (malformed JSON) raises ToolError."""
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         with pytest.raises(ToolError):
             await overview_tool(fields='["')

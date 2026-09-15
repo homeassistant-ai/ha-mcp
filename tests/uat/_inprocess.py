@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from fastmcp import Client
+    from ha_mcp._vendor.fastmcp import Client
 
 
 @contextlib.asynccontextmanager
@@ -32,9 +32,8 @@ async def inprocess_mcp_client(ha_url: str, ha_token: str) -> AsyncIterator[Clie
     Not safe for concurrent use: ``os.environ`` and ``ha_mcp.config._settings``
     are process-global, so overlapping callers would race on both.
     """
-    from fastmcp import Client
-
     import ha_mcp.config
+    from ha_mcp._vendor.fastmcp import Client
     from ha_mcp.client import HomeAssistantClient
     from ha_mcp.client.websocket_client import websocket_manager
     from ha_mcp.server import HomeAssistantSmartMCPServer

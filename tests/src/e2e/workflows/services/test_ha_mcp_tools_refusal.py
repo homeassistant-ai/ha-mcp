@@ -75,7 +75,7 @@ async def mcp_client_for_refusal(
         yield mcp_client
         return
 
-    from fastmcp import Client
+    from ha_mcp._vendor.fastmcp import Client
 
     client = Client(mcp_server.mcp)
     async with client:

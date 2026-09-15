@@ -388,7 +388,7 @@ class TestDashboardErrorHandling:
         """Test deleting non-existent dashboard raises ToolError with RESOURCE_NOT_FOUND."""
         logger.info("Starting delete nonexistent dashboard test")
 
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         with pytest.raises(ToolError) as exc_info:
             await mcp_client.call_tool(
