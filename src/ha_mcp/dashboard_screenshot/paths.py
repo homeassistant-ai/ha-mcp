@@ -34,7 +34,7 @@ _DECODE_URI_RESERVED_VIEW_CHARS = frozenset("$&+,:;=")
 class DashboardRenderTarget:
     """Resolved frontend route and audit metadata for a screenshot request."""
 
-    dashboard_url_path: str
+    url_path: str
     view_path: str | None
     render_path: str
     view_index: int | None
@@ -152,7 +152,7 @@ def _render_path_metadata(
         render_path = _normalize_dashboard_path(f"{base_path}/{fallback_suffix}")
 
     metadata: dict[str, Any] = {
-        "dashboard_url_path": base_path,
+        "url_path": base_path,
         "view_index": index,
         "view_path": stable_path,
         "title": view_config.get("title"),
@@ -181,7 +181,7 @@ def dashboard_render_paths(
         return (
             [
                 {
-                    "dashboard_url_path": base_path,
+                    "url_path": base_path,
                     "view_index": None,
                     "view_path": None,
                     "title": None,
@@ -252,7 +252,7 @@ def _fallback_view_target(
     """Build one verified numeric fallback target for an unusable named path."""
     fallback_suffix = _numeric_fallback_suffix(view_index, views)
     return DashboardRenderTarget(
-        dashboard_url_path=base_path,
+        url_path=base_path,
         view_path=view_path,
         render_path=_normalize_dashboard_path(f"{base_path}/{fallback_suffix}"),
         view_index=view_index,
@@ -264,11 +264,9 @@ def _fallback_view_target(
     )
 
 
-async def fetch_dashboard_render_config(
-    client: Any, dashboard_url_path: str
-) -> dict[str, Any]:
+async def fetch_dashboard_render_config(client: Any, url_path: str) -> dict[str, Any]:
     """Fetch a Lovelace dashboard config for stable view-path resolution."""
-    base_path = dashboard_frontend_path(dashboard_url_path)
+    base_path = dashboard_frontend_path(url_path)
     request: dict[str, Any] = {"type": "lovelace/config", "force": True}
     if base_path != "lovelace":
         request["url_path"] = base_path
@@ -281,10 +279,9 @@ async def fetch_dashboard_render_config(
         raise_tool_error(
             create_error_response(
                 ErrorCode.CONNECTION_FAILED,
-                f"Could not load dashboard '{dashboard_url_path}' for view-path "
-                "resolution.",
+                f"Could not load dashboard '{url_path}' for view-path resolution.",
                 details=str(exc),
-                context={"dashboard_url_path": dashboard_url_path},
+                context={"url_path": url_path},
                 suggestions=[
                     "Check the Home Assistant connection",
                     "Retry with legacy dashboard_path if you already know the frontend route",
@@ -310,8 +307,8 @@ async def fetch_dashboard_render_config(
             raise_tool_error(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
-                    f"Could not load dashboard '{dashboard_url_path}': {message}",
-                    context={"dashboard_url_path": dashboard_url_path},
+                    f"Could not load dashboard '{url_path}': {message}",
+                    context={"url_path": url_path},
                     suggestions=[
                         "Use ha_config_get_dashboard(list_only=True) to list dashboard URL paths"
                     ],
@@ -320,9 +317,9 @@ async def fetch_dashboard_render_config(
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
-                f"Failed to load dashboard '{dashboard_url_path}': {message}",
+                f"Failed to load dashboard '{url_path}': {message}",
                 context={
-                    "dashboard_url_path": dashboard_url_path,
+                    "url_path": url_path,
                     "home_assistant_error_code": error_code or None,
                 },
                 suggestions=[
@@ -337,9 +334,9 @@ async def fetch_dashboard_render_config(
         raise_tool_error(
             create_error_response(
                 ErrorCode.SERVICE_CALL_FAILED,
-                f"Dashboard '{dashboard_url_path}' returned an invalid config payload.",
+                f"Dashboard '{url_path}' returned an invalid config payload.",
                 context={
-                    "dashboard_url_path": dashboard_url_path,
+                    "url_path": url_path,
                     "payload_type": type(config).__name__,
                 },
             )
@@ -348,7 +345,7 @@ async def fetch_dashboard_render_config(
 
 
 def match_dashboard_view(
-    dashboard_url_path: str,
+    url_path: str,
     config: dict[str, Any],
     view_path: str,
     *,
@@ -382,7 +379,7 @@ def match_dashboard_view(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 "Strategy dashboards do not expose static named view paths.",
                 context={
-                    "dashboard_url_path": dashboard_url_path,
+                    "url_path": url_path,
                     "view_path": view_path,
                 },
                 suggestions=list(strategy_suggestions),
@@ -408,7 +405,7 @@ def match_dashboard_view(
                 ErrorCode.RESOURCE_NOT_FOUND,
                 f"Dashboard view path '{view_path}' is {reason}.",
                 context={
-                    "dashboard_url_path": dashboard_url_path,
+                    "url_path": url_path,
                     "view_path": view_path,
                     "available_view_paths": available,
                 },
@@ -419,12 +416,12 @@ def match_dashboard_view(
 
 
 def resolve_dashboard_view(
-    dashboard_url_path: str,
+    url_path: str,
     config: dict[str, Any],
     view_path: str | None,
 ) -> DashboardRenderTarget:
     """Resolve one named Lovelace view to a canonical frontend route."""
-    base_path = dashboard_frontend_path(dashboard_url_path)
+    base_path = dashboard_frontend_path(url_path)
     if view_path is None:
         views = config.get("views")
         has_static_views = isinstance(views, list) and bool(views)
@@ -444,7 +441,7 @@ def resolve_dashboard_view(
                 "only the base route is available."
             )
         return DashboardRenderTarget(
-            dashboard_url_path=base_path,
+            url_path=base_path,
             view_path=None,
             render_path=base_path,
             view_index=None,
@@ -452,7 +449,7 @@ def resolve_dashboard_view(
             warnings=(warning,),
         )
 
-    view_index, _ = match_dashboard_view(dashboard_url_path, config, view_path)
+    view_index, _ = match_dashboard_view(url_path, config, view_path)
     cleaned_view_path = view_path
     views = config.get("views")
     if not isinstance(views, list):
@@ -477,7 +474,7 @@ def resolve_dashboard_view(
             ),
         )
     return DashboardRenderTarget(
-        dashboard_url_path=base_path,
+        url_path=base_path,
         view_path=cleaned_view_path,
         render_path=render_path,
         view_index=view_index,
@@ -497,7 +494,7 @@ async def _resolve_legacy_dashboard_target(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
                 f"Raw view suffix '{parts[1]}' is reserved by Home Assistant.",
-                context={"dashboard_url_path": dashboard_root},
+                context={"url_path": dashboard_root},
             )
         )
     validated_config = await _validate_legacy_dashboard_root(client, render_path)
@@ -505,7 +502,7 @@ async def _resolve_legacy_dashboard_target(
         raw_view = parts[1] if len(parts) > 1 else None
         numeric_index = _numeric_view_index(raw_view) if raw_view is not None else None
         return DashboardRenderTarget(
-            dashboard_url_path="lovelace",
+            url_path="lovelace",
             view_path=None,
             render_path=render_path,
             view_index=numeric_index,
@@ -521,7 +518,7 @@ async def _resolve_legacy_dashboard_target(
     raw_view = parts[1]
     if "strategy" in validated_config:
         return DashboardRenderTarget(
-            dashboard_url_path=dashboard_root,
+            url_path=dashboard_root,
             view_path=None,
             render_path=render_path,
             view_index=None,
@@ -545,7 +542,7 @@ async def _resolve_legacy_dashboard_target(
                     ErrorCode.RESOURCE_NOT_FOUND,
                     f"Dashboard view path '{raw_view}' was not found.",
                     context={
-                        "dashboard_url_path": dashboard_root,
+                        "url_path": dashboard_root,
                         "view_path": raw_view,
                         "available_view_paths": [
                             path
@@ -562,7 +559,7 @@ async def _resolve_legacy_dashboard_target(
         duplicate_count = sum(_configured_view_path(view) == raw_view for view in views)
         if duplicate_count > 1:
             return DashboardRenderTarget(
-                dashboard_url_path=dashboard_root,
+                url_path=dashboard_root,
                 view_path=raw_view,
                 render_path=_normalize_dashboard_path(f"{dashboard_root}/{raw_view}"),
                 view_index=view_index,
@@ -584,7 +581,7 @@ async def _resolve_legacy_dashboard_target(
                 ErrorCode.RESOURCE_NOT_FOUND,
                 f"Dashboard view index '{raw_view}' was not found.",
                 context={
-                    "dashboard_url_path": dashboard_root,
+                    "url_path": dashboard_root,
                     "view_index": numeric_index,
                     "available_view_count": len(views)
                     if isinstance(views, list)
@@ -606,10 +603,10 @@ async def _resolve_legacy_dashboard_target(
     if not warnings:
         warnings.append(
             f"Numeric view index '{render_path}' is fragile; assign the view a "
-            "unique views[].path and use dashboard_url_path/view_path addressing."
+            "unique views[].path and use url_path/view_path addressing."
         )
     return DashboardRenderTarget(
-        dashboard_url_path=dashboard_root,
+        url_path=dashboard_root,
         view_path=None,
         render_path=render_path,
         view_index=view_index,
@@ -622,44 +619,44 @@ async def resolve_dashboard_render_target(
     client: Any,
     *,
     dashboard_path: str | None,
-    dashboard_url_path: str | None,
+    url_path: str | None,
     view_path: str | None,
 ) -> DashboardRenderTarget:
     """Resolve legacy raw or structured screenshot addressing."""
-    if dashboard_path is not None and dashboard_url_path is not None:
+    if dashboard_path is not None and url_path is not None:
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "Use dashboard_path or dashboard_url_path/view_path, not both.",
+                "Use dashboard_path or url_path/view_path, not both.",
                 context={
                     "dashboard_path": dashboard_path,
-                    "dashboard_url_path": dashboard_url_path,
+                    "url_path": url_path,
                     "view_path": view_path,
                 },
             )
         )
-    if dashboard_url_path is None:
+    if url_path is None:
         if view_path is not None:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_MISSING_PARAMETER,
-                    "dashboard_url_path is required when view_path is supplied.",
+                    "url_path is required when view_path is supplied.",
                     context={"view_path": view_path},
                 )
             )
         return await _resolve_legacy_dashboard_target(client, dashboard_path)
 
-    if not dashboard_url_path.strip():
+    if not url_path.strip():
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                "dashboard_url_path cannot be empty.",
-                context={"dashboard_url_path": dashboard_url_path},
+                "url_path cannot be empty.",
+                context={"url_path": url_path},
             )
         )
-    if dashboard_frontend_path(dashboard_url_path) == "lovelace" and view_path is None:
+    if dashboard_frontend_path(url_path) == "lovelace" and view_path is None:
         return DashboardRenderTarget(
-            dashboard_url_path="lovelace",
+            url_path="lovelace",
             view_path=None,
             render_path="lovelace",
             view_index=None,
@@ -669,8 +666,8 @@ async def resolve_dashboard_render_target(
                 "renders the first view visible to Puppet's Home Assistant user.",
             ),
         )
-    config = await fetch_dashboard_render_config(client, dashboard_url_path)
-    return resolve_dashboard_view(dashboard_url_path, config, view_path)
+    config = await fetch_dashboard_render_config(client, url_path)
+    return resolve_dashboard_view(url_path, config, view_path)
 
 
 async def _validate_legacy_dashboard_root(
@@ -715,12 +712,12 @@ async def _numeric_view_warning(
     parts = render_path.split("/", maxsplit=1)
     if len(parts) < 2:
         return []
-    dashboard_url_path, raw_view = parts
+    url_path, raw_view = parts
     index = _numeric_view_index(raw_view)
     if index is None:
         return []
     if config is None:
-        config = await fetch_dashboard_render_config(client, dashboard_url_path)
+        config = await fetch_dashboard_render_config(client, url_path)
     views = config.get("views")
     if not isinstance(views, list):
         return []
@@ -740,12 +737,10 @@ async def _numeric_view_warning(
     ]
     if matching_paths.count(stable_path) != 1:
         return []
-    canonical = _safe_named_render_path(
-        dashboard_frontend_path(dashboard_url_path), stable_path
-    )
+    canonical = _safe_named_render_path(dashboard_frontend_path(url_path), stable_path)
     if canonical is None:
         return []
     return [
         f"Numeric view index '{render_path}' is fragile; use the stable render "
-        + f"path '{canonical}' or dashboard_url_path/view_path addressing."
+        + f"path '{canonical}' or url_path/view_path addressing."
     ]

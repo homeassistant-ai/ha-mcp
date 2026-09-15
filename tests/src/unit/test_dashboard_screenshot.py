@@ -179,7 +179,7 @@ class TestStandaloneScreenshotTool:
 
         async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
             return DashboardRenderTarget(
-                dashboard_url_path="wall-panel",
+                url_path="wall-panel",
                 view_path=None,
                 render_path="wall-panel",
                 view_index=None,
@@ -206,7 +206,7 @@ class TestStandaloneScreenshotTool:
 
         await tool.run(
             {
-                "dashboard_url_path": "wall-panel",
+                "url_path": "wall-panel",
                 "width": 2560,
                 "viewport_presets": None,
             }
@@ -216,7 +216,7 @@ class TestStandaloneScreenshotTool:
 
         await tool.run(
             {
-                "dashboard_url_path": "wall-panel",
+                "url_path": "wall-panel",
                 "viewport_presets": '["mobile"]',
             }
         )
@@ -240,7 +240,7 @@ class TestStandaloneScreenshotTool:
 
         async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
             return DashboardRenderTarget(
-                dashboard_url_path="wall-panel",
+                url_path="wall-panel",
                 view_path="home",
                 render_path="wall-panel/home",
                 view_index=0,
@@ -259,7 +259,7 @@ class TestStandaloneScreenshotTool:
         result = await mod.DashboardScreenshotTools(
             object()
         ).ha_get_dashboard_screenshot(
-            dashboard_url_path="wall-panel",
+            url_path="wall-panel",
             view_path="home",
             viewport_presets=["mobile", "desktop"],
         )
@@ -281,7 +281,7 @@ class TestStandaloneScreenshotTool:
 
         async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
             return DashboardRenderTarget(
-                dashboard_url_path="wall-panel",
+                url_path="wall-panel",
                 view_path="home",
                 render_path="wall-panel/home",
                 view_index=0,
@@ -297,7 +297,7 @@ class TestStandaloneScreenshotTool:
 
         result = await mod.DashboardScreenshotTools(
             object()
-        ).ha_get_dashboard_screenshot(dashboard_url_path="wall-panel", view_path="home")
+        ).ha_get_dashboard_screenshot(url_path="wall-panel", view_path="home")
 
         assert "theme restore failed (unit)" in result.structured_content["warnings"]
 
@@ -310,7 +310,7 @@ class TestStandaloneScreenshotTool:
 
         async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
             return DashboardRenderTarget(
-                dashboard_url_path="wall-panel",
+                url_path="wall-panel",
                 view_path="home",
                 render_path="wall-panel/home",
                 view_index=0,
@@ -330,7 +330,7 @@ class TestStandaloneScreenshotTool:
 
         with pytest.raises(ToolError) as exc_info:
             await mod.DashboardScreenshotTools(object()).ha_get_dashboard_screenshot(
-                dashboard_url_path="wall-panel", view_path="home"
+                url_path="wall-panel", view_path="home"
             )
 
         payload = json.loads(str(exc_info.value))
@@ -345,7 +345,7 @@ class TestStandaloneScreenshotTool:
 
         async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
             return DashboardRenderTarget(
-                dashboard_url_path="wall-panel",
+                url_path="wall-panel",
                 view_path="home",
                 render_path="wall-panel/home",
                 view_index=0,
@@ -363,7 +363,7 @@ class TestStandaloneScreenshotTool:
         result = await mod.DashboardScreenshotTools(
             object()
         ).ha_get_dashboard_screenshot(
-            dashboard_url_path="wall-panel", view_path="home", full_page=True
+            url_path="wall-panel", view_path="home", full_page=True
         )
 
         assert any(
@@ -384,7 +384,7 @@ class TestStandaloneScreenshotTool:
 
         async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
             return DashboardRenderTarget(
-                dashboard_url_path="wall-panel",
+                url_path="wall-panel",
                 view_path="home",
                 render_path="wall-panel/home",
                 view_index=0,
@@ -408,7 +408,7 @@ class TestStandaloneScreenshotTool:
         result = await mod.DashboardScreenshotTools(
             object()
         ).ha_get_dashboard_screenshot(
-            dashboard_url_path="wall-panel",
+            url_path="wall-panel",
             view_path="home",
             viewport_presets=["mobile", "desktop"],
         )
@@ -427,7 +427,7 @@ class TestStandaloneScreenshotTool:
 
         async def resolve(*_a: Any, **_kw: Any) -> DashboardRenderTarget:
             return DashboardRenderTarget(
-                dashboard_url_path="wall-panel",
+                url_path="wall-panel",
                 view_path="home",
                 render_path="wall-panel/home",
                 view_index=0,
@@ -442,7 +442,7 @@ class TestStandaloneScreenshotTool:
 
         with pytest.raises(ToolError) as exc_info:
             await mod.DashboardScreenshotTools(object()).ha_get_dashboard_screenshot(
-                dashboard_url_path="wall-panel",
+                url_path="wall-panel",
                 view_path="home",
             )
 

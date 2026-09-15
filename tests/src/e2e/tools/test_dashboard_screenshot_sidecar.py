@@ -363,14 +363,14 @@ async def test_structured_named_view_returns_ordered_responsive_images(
             )
         )
         assert setup.get("success"), f"dashboard create failed: {setup}"
-        assert setup["render_paths"][0]["dashboard_url_path"] == url_path
+        assert setup["render_paths"][0]["url_path"] == url_path
         assert setup["render_paths"][0]["view_path"] == "home"
         request_count = len(fake_engine.requests)
 
         result = await screenshot_mcp_client.call_tool(
             "ha_get_dashboard_screenshot",
             {
-                "dashboard_url_path": url_path,
+                "url_path": url_path,
                 "view_path": "home",
                 "viewport_presets": ["mobile", "desktop"],
                 "theme": "backend-selected-theme",
@@ -534,7 +534,7 @@ async def test_get_dashboard_include_screenshot(
         )
         payload = _parse_payload(result)
         assert payload.get("success"), f"get_dashboard failed: {payload}"
-        assert payload["render_paths"][0]["dashboard_url_path"] == url_path
+        assert payload["render_paths"][0]["url_path"] == url_path
         assert payload["render_paths"][0]["view_path"] == "overview"
         png = _extract_png_bytes(result)
         assert png is not None, (
@@ -573,7 +573,7 @@ async def test_set_dashboard_return_screenshot(
         )
         payload = _parse_payload(result)
         assert payload.get("success"), f"set_dashboard failed: {payload}"
-        assert payload["render_paths"][0]["dashboard_url_path"] == url_path
+        assert payload["render_paths"][0]["url_path"] == url_path
         assert payload["render_paths"][0]["view_path"] == "overview"
         png = _extract_png_bytes(result)
         assert png is not None, (
