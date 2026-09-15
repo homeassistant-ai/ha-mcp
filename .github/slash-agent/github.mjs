@@ -223,6 +223,8 @@ export function collect(api, number, app) {
   if (root !== number) issue = api.get(`issues/${root}`);
   const rootComments = api.pages(`issues/${root}/comments`);
   const session = stateFrom(rootComments, app);
+  if (root !== number && !session)
+    throw Error("PR origin has no owned session checkpoint");
   if (session && session.root !== root)
     throw Error("Session belongs to another issue");
   if (session?.pr) {
@@ -318,6 +320,7 @@ export function collect(api, number, app) {
       state: c.state,
     }));
   const snapshot = {
+    app,
     repository: api.repository,
     root,
     issue,

@@ -86,6 +86,7 @@ For an accepted inline finding, implement the fix, reply with evidence, resolve 
 - Never commit directly to `master` or `main` except for a documentation-only adjustment.
 - Never push or open a pull request without explicit user permission.
 - Open every pull request as a draft. Mark it ready only when explicitly asked, after refreshing its description and verifying required CI and reviews.
+- For the slash controller, a maintainer's `/astra <task>` or `/sol <task>` explicitly authorizes the documented issue-to-PR lifecycle through readiness, including review replies and thread resolution. It does not authorize merging or requesting reviewers.
 - Never merge, close, delete branches, publish, release, or otherwise finalize work without explicit approval for that exact action.
 - Preserve the pull-request template headings and generated review sections.
 - Make routine, reversible implementation decisions autonomously. Ask before a choice materially changes scope, public behavior, architecture, or review surface; do not create competing pull requests without approval.

@@ -17,7 +17,20 @@ function save(api, state, app) {
   else state.commentId = api.write(`issues/${state.root}/comments`, data).id;
 }
 
-function assertCurrent(api, plan, app, expectedHead) {
+function threadSignature(thread) {
+  return {
+    id: thread.id,
+    isResolved: thread.isResolved,
+    comments: thread.comments.map((c) => ({
+      id: c.id,
+      body: c.body,
+      updated_at: c.updated_at,
+      user: c.user && { login: c.user.login, type: c.user.type },
+    })),
+  };
+}
+
+function assertCurrent(api, plan, app, expectedHead, checkThreads = true) {
   const current = collect(api, plan.snapshot.root, app);
   const command = current.comments.find(
     (c) => c.id === plan.decision.latest.id,
@@ -29,6 +42,10 @@ function assertCurrent(api, plan, app, expectedHead) {
     current.issue.body !== plan.snapshot.issue.body ||
     digest(current.sourceComments) !== digest(plan.snapshot.sourceComments) ||
     digest(current.feedback) !== digest(plan.snapshot.feedback) ||
+    digest(current.roles) !== digest(plan.snapshot.roles) ||
+    (checkThreads &&
+      digest(current.threads.map(threadSignature)) !==
+        digest(plan.snapshot.threads.map(threadSignature))) ||
     (plan.snapshot.pr && current.pr?.body !== plan.snapshot.pr.body) ||
     current.head !== expectedHead ||
     !command ||
@@ -45,6 +62,54 @@ function assertCurrent(api, plan, app, expectedHead) {
   if (laterControl)
     throw Error("A newer maintainer command superseded this run");
   return current;
+}
+
+function respond(api, plan, app, state, result, runId, head) {
+  for (const response of result.responses) {
+    const current = assertCurrent(api, plan, app, head, false);
+    validateResult({ ...result, responses: [response] }, current);
+    const original = plan.snapshot.threads.find(
+      (t) => t.id === response.thread_id,
+    );
+    const thread = current.threads.find((t) => t.id === response.thread_id);
+    if (digest(threadSignature(thread)) !== digest(threadSignature(original)))
+      throw Error("Review thread changed before response");
+    const marker = `<!-- slash-response:${runId}:${digest(response).slice(0, 16)} -->`;
+    const reply = api.write(
+      `pulls/${state.pr}/comments/${thread.comments[0].id}/replies`,
+      { body: `${prose(response.body)}\n\n${marker}` },
+    );
+    if (response.resolve) {
+      const expected = { ...thread, comments: [...thread.comments, reply] };
+      const after = assertCurrent(api, plan, app, head, false).threads.find(
+        (t) => t.id === response.thread_id,
+      );
+      if (
+        !after ||
+        digest(threadSignature(after)) !== digest(threadSignature(expected))
+      )
+        throw Error("Review thread changed before resolution");
+      api.graphql(
+        "mutation($id:ID!) { resolveReviewThread(input:{threadId:$id}) { thread { id } } }",
+        { id: response.thread_id },
+      );
+    }
+  }
+  if (result.responses.length) {
+    const marker = `<!-- slash-review-summary:${runId} -->`;
+    const existing = api
+      .pages(`issues/${state.pr}/comments`)
+      .some(
+        (c) =>
+          c.user?.type === "Bot" &&
+          c.user.login === `${app}[bot]` &&
+          c.body?.includes(marker),
+      );
+    if (!existing)
+      api.write(`issues/${state.pr}/comments`, {
+        body: `Review update: ${prose(result.summary)}\n\nTests: ${prose(result.tests)}\n\n${result.outcome === "blocked" ? "A maintainer decision is needed; use a new slash command to continue." : "Addressed findings are explained in their threads."}\n\n${marker}`,
+      });
+  }
 }
 
 function description(result, root) {
@@ -131,6 +196,7 @@ export function publish(
     if (changes.length || result.responses.some((r) => r.resolve))
       throw Error("Blocked output cannot publish code or resolve findings");
     state.status = "blocked";
+    if (state.pr) respond(api, plan, app, state, result, runId, fresh.head);
     save(api, state, app);
     return state;
   }
@@ -209,33 +275,8 @@ export function publish(
     save(api, state, app);
   }
   if (state.pr) {
-    const current = assertCurrent(api, plan, app, head);
-    for (const response of result.responses) {
-      const original = fresh.threads.find((t) => t.id === response.thread_id);
-      const thread = current.threads.find((t) => t.id === response.thread_id);
-      if (
-        !thread ||
-        thread.isResolved ||
-        digest(thread.comments) !== digest(original.comments)
-      )
-        throw Error("Review thread changed before response");
-      const marker = `<!-- slash-response:${runId}:${digest(response).slice(0, 16)} -->`;
-      if (
-        !thread.comments.some(
-          (c) => c.user?.login === `${app}[bot]` && c.body?.includes(marker),
-        )
-      ) {
-        api.write(
-          `pulls/${state.pr}/comments/${thread.comments[0].id}/replies`,
-          { body: `${prose(response.body)}\n\n${marker}` },
-        );
-      }
-      if (response.resolve)
-        api.graphql(
-          "mutation($id:ID!) { resolveReviewThread(input:{threadId:$id}) { thread { id } } }",
-          { id: response.thread_id },
-        );
-    }
+    assertCurrent(api, plan, app, head);
+    respond(api, plan, app, state, result, runId, head);
     if (
       fresh.pr?.user?.type === "Bot" &&
       fresh.pr.user.login === `${app}[bot]`

@@ -40,7 +40,7 @@ export function stateFrom(comments, app) {
     );
   if (!owned.length) return null;
   const encoded = owned[0].body.split(STATE_MARKER)[1].split(" -->")[0];
-  if (!/^[A-Za-z0-9_-]{1,30000}$/.test(encoded))
+  if (!/^[A-Za-z0-9_-]{1,50000}$/.test(encoded))
     throw Error("Invalid slash checkpoint");
   const state = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
   if (
@@ -53,6 +53,8 @@ export function stateFrom(comments, app) {
     !Number.isSafeInteger(state.commandId) ||
     typeof state.summary !== "string" ||
     state.summary.length > 12000 ||
+    typeof state.task !== "string" ||
+    state.task.length > 12000 ||
     typeof state.branch !== "string" ||
     typeof state.status !== "string"
   )
@@ -62,24 +64,35 @@ export function stateFrom(comments, app) {
 
 export function renderState(state, repository) {
   const { commentId, ...saved } = state;
+  const encoded = Buffer.from(JSON.stringify(saved)).toString("base64url");
+  if (encoded.length > 50000)
+    throw Error("Slash checkpoint exceeds the encoded size limit");
   const link = state.pr
     ? `\n\nPR: https://github.com/${repository}/pull/${state.pr}`
     : "";
-  return (
+  const body =
     `Slash agent: **${state.status}**${link}\n\n${prose(state.summary || "Preparing the requested work.")}\n\n` +
     `Round ${state.rounds}/${MAX_ROUNDS}. Maintainers can use \`/astra pause\`, \`/astra resume\`, or a new \`/sol <request>\`.\n\n` +
-    `${STATE_MARKER}${Buffer.from(JSON.stringify(saved)).toString("base64url")} -->`
-  );
+    `${STATE_MARKER}${encoded} -->`;
+  if (body.length > 65000)
+    throw Error("Slash checkpoint exceeds GitHub's comment size limit");
+  return body;
 }
 
 export function feedbackHash(snapshot) {
   return digest({
-    body: snapshot.issue.body,
-    source: snapshot.sourceComments,
+    // Reporter material stays in context and the stale-publication guard, but
+    // cannot authorize a paid turn through an unrelated CI/status event.
     feedback: snapshot.feedback,
     threads: snapshot.threads
       .filter((t) => !t.isResolved)
-      .map((t) => ({ id: t.id, comments: t.comments })),
+      .map((t) => ({
+        id: t.id,
+        comments: t.comments.filter((c) =>
+          trustedReview(c.user, snapshot.roles),
+        ),
+      }))
+      .filter((t) => t.comments.length),
   });
 }
 
@@ -124,6 +137,14 @@ export function decide(snapshot, trigger) {
   );
   const latest = commands.at(-1);
   const previous = snapshot.session;
+  if (
+    previous &&
+    latest &&
+    latest.id !== previous.commandId &&
+    latest.updated_at <= previous.commandUpdatedAt &&
+    trigger.commandId !== latest.id
+  )
+    return { mode: "idle" };
   if (!latest || (!previous && command(latest.body).action !== "work"))
     return { mode: "idle" };
   const parsed = command(latest.body);
@@ -236,7 +257,10 @@ export function validateResult(result, snapshot) {
     const thread = snapshot.threads.find(
       (t) => t.id === r.thread_id && !t.isResolved,
     );
-    if (!thread || !trustedReview(thread.comments[0]?.user, snapshot.roles))
+    if (
+      !thread ||
+      !thread.comments.some((c) => trustedReview(c.user, snapshot.roles))
+    )
       throw Error("Response targets an unauthorized review thread");
     seen.add(r.thread_id);
   }
@@ -247,7 +271,7 @@ export function safePath(path) {
   if (
     typeof path !== "string" ||
     path.length > 300 ||
-    !/^[A-Za-z0-9_./ -]+$/.test(path) ||
+    /[\\:\x00-\x1f\x7f]/.test(path) ||
     path.startsWith("/") ||
     path
       .split("/")

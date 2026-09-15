@@ -161,6 +161,11 @@ class FakeAPI {
       );
       return {};
     }
+    if (path === "issues/10/comments") {
+      const comment = { id: 1000 + this.prComments.length, user: bot, ...data };
+      this.prComments.push(comment);
+      return comment;
+    }
     if (path === "git/blobs" || path === "git/trees")
       return { sha: digest(data).slice(0, 40) };
     if (path === "git/commits") {
@@ -203,12 +208,13 @@ class FakeAPI {
       return this.pr;
     }
     if (path.includes("/replies")) {
-      this.reviewThreads[0].comments.push({
+      const reply = {
         id: 901,
         user: bot,
         body: data.body,
-      });
-      return {};
+      };
+      this.reviewThreads[0].comments.push(reply);
+      return reply;
     }
     throw Error(`Unexpected write ${path}`);
   }
@@ -343,6 +349,40 @@ test("a new CI failure resumes work, while pending checks do not consume a turn"
   );
 });
 
+test("an agent reply left unresolved does not trigger another coding turn itself", () => {
+  const api = new FakeAPI();
+  start(api);
+  api.reviewThreads = [
+    {
+      id: "thread-1",
+      isResolved: false,
+      comments: [{ id: 900, body: "Please clarify", user }],
+    },
+  ];
+  const plan = prepare(api, { number: 10, automatic: true }, APP);
+  const work = artifact();
+  work.changes = [];
+  work.result.outcome = "unchanged";
+  work.result.responses = [
+    {
+      thread_id: "thread-1",
+      body: "The current test covers the stated behavior; please clarify the remaining concern.",
+      resolve: false,
+    },
+  ];
+  publish(api, plan, work, APP, { runId: "43" });
+  assert.equal(prepare(api, { number: 10, automatic: true }, APP), null);
+  api.reviewThreads[0].comments.push({
+    id: 902,
+    body: "Please add the missing type validation",
+    user,
+  });
+  assert.equal(
+    prepare(api, { number: 10, automatic: true }, APP).decision.mode,
+    "code",
+  );
+});
+
 test("pause, resume, role revocation and iteration cap survive separate runs", () => {
   const api = new FakeAPI();
   start(api);
@@ -390,6 +430,21 @@ test("stale work, repo/App mismatch and protected branches perform no publicatio
   api.branches["agents/issue-9"] = A;
   api.protected = true;
   assert.throws(() => initial(api), /Protected/);
+});
+
+test("revoking the active command author cannot revive an older maintainer task", () => {
+  const api = new FakeAPI();
+  api.comments.unshift({
+    ...api.command,
+    id: 2,
+    user: { login: "other", type: "User" },
+    updated_at: "2026-09-14T10:00:00Z",
+    body: "/sol an older task",
+  });
+  api.roles.other = "maintain";
+  start(api);
+  api.roles.maintainer = "write";
+  assert.equal(prepare(api, { number: 10, automatic: true }, APP), null);
 });
 
 test("failed worker leaves a blocked checkpoint and cannot loop automatically", () => {
@@ -500,6 +555,136 @@ test("patch validator rejects traversal, workflow edits, credentials, symlinks a
       ]),
     /limit/,
   );
+});
+
+test("ordinary reporter content cannot consume a coding turn through a later CI event", () => {
+  const api = new FakeAPI();
+  start(api);
+  api.issue.body += " Reporter edited the opening request";
+  const contributor = { login: "contributor", type: "User" };
+  api.comments.push({
+    id: 500,
+    user: contributor,
+    body: "Another suggestion",
+    updated_at: "2026-09-15T13:00:00Z",
+  });
+  api.reviewThreads = [
+    {
+      id: "outsider",
+      isResolved: false,
+      comments: [
+        { id: 501, user: contributor, body: "Please do unrelated work" },
+      ],
+    },
+  ];
+  assert.equal(
+    Boolean(prepare(api, { number: 10, automatic: true }, APP)),
+    false,
+  );
+});
+
+test("a maintainer can authorize feedback in a contributor-opened thread", () => {
+  const api = new FakeAPI();
+  start(api);
+  api.reviewThreads = [
+    {
+      id: "mixed",
+      isResolved: false,
+      comments: [
+        {
+          id: 700,
+          user: { login: "contributor", type: "User" },
+          body: "Suggestion",
+        },
+        { id: 701, user, body: "Please implement this correction" },
+      ],
+    },
+  ];
+  const snapshot = collect(api, 10, APP),
+    result = response();
+  result.responses = [
+    {
+      thread_id: "mixed",
+      body: "Correction verified by a regression.",
+      resolve: true,
+    },
+  ];
+  assert.doesNotThrow(() => validateResult(result, snapshot));
+});
+
+test("blocked review work posts its clarification and one PR summary without resolving", () => {
+  const api = new FakeAPI();
+  start(api);
+  api.reviewThreads = [
+    {
+      id: "clarify",
+      isResolved: false,
+      comments: [{ id: 800, user, body: "Please choose a new scope" }],
+    },
+  ];
+  const plan = prepare(api, { number: 10, automatic: true }, APP),
+    work = artifact();
+  work.changes = [];
+  work.result.outcome = "blocked";
+  work.result.responses = [
+    {
+      thread_id: "clarify",
+      body: "Which of the two behaviors should be supported?",
+      resolve: false,
+    },
+  ];
+  const state = publish(api, plan, work, APP, { runId: "43" });
+  assert.equal(state.status, "blocked");
+  assert.equal(api.reviewThreads[0].comments.length, 2);
+  assert.equal(api.prComments.length, 1);
+  assert.equal(api.reviewThreads[0].isResolved, false);
+});
+
+test("inline feedback edited while blobs are prepared prevents a branch update", () => {
+  const api = new FakeAPI();
+  start(api);
+  api.reviewThreads = [
+    {
+      id: "change",
+      isResolved: false,
+      comments: [{ id: 800, user, body: "Fix this" }],
+    },
+  ];
+  const plan = prepare(api, { number: 10, automatic: true }, APP);
+  const write = api.write.bind(api);
+  api.write = (path, data, method) => {
+    const value = write(path, data, method);
+    if (path === "git/blobs")
+      api.reviewThreads[0].comments[0].body =
+        "Withdrawn; do not implement this";
+    return value;
+  };
+  assert.throws(
+    () => publish(api, plan, artifact(), APP, { runId: "43" }),
+    /changed/,
+  );
+  assert.ok(!api.calls.some((c) => c.path.startsWith("git/refs/heads/")));
+});
+
+test("valid tracked asset and Unicode filenames are accepted", () => {
+  for (const path of [
+    "custom_components/ha_mcp_tools/brand/dark_icon@2x.png",
+    "docs/éclairage (FR).md",
+  ]) {
+    assert.doesNotThrow(() =>
+      validateChanges([{ path, mode: "100644", content: "" }]),
+    );
+  }
+});
+
+test("maximum accepted ASCII task and memory can round-trip through a checkpoint", () => {
+  const api = new FakeAPI();
+  const state = start(api);
+  state.task = "t".repeat(12000);
+  state.summary = "s".repeat(12000);
+  const body = renderState(state, api.repository);
+  assert.ok(body.length < 65536);
+  assert.equal(stateFrom([{ id: 100, user: bot, body }], APP).task, state.task);
 });
 
 test("review replies must target supplied trusted unresolved threads", () => {

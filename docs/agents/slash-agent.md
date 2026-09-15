@@ -5,6 +5,9 @@ starts coding work on an issue or a same-repository PR. Actual `maintain` and
 `admin` roles are checked through GitHub; `write`, `triage`, author association,
 quoted commands and bot comments do not authorize a task. Manual dispatch names
 an existing command comment and verifies both the dispatcher and rerunning actor.
+The command explicitly authorizes this lifecycle through readiness, including
+publication and review replies. A separate ready command is not needed; pause
+remains available before the readiness transition.
 
 The model mapping is fixed: Astra uses `gpt-6-astra`, Sol uses `gpt-5.6-sol`.
 An issue starts `agents/issue-N` from the default branch and creates a draft PR.
@@ -65,10 +68,14 @@ artifact to execute. CI workflow completions and status changes are also signals
 The controller fetches current checks and feedback itself. Old issue-bot guesses
 are excluded; review suggestions are hypotheses to validate, including collapsed
 review bodies. The model can propose evidence-backed replies and resolution only
-for supplied, unresolved threads from maintainers or the supported review bots.
+for supplied, unresolved threads containing maintainer or supported review-bot
+feedback, even when someone else opened the thread. Clarifications are posted
+before blocking, and review rounds receive one summary on the PR itself.
 
-Pending checks do not consume a coding turn. A new failing head or new feedback
-can trigger another turn. A session gets at most four automatic coding turns per
+Pending checks do not consume a coding turn. A new failing head or new authorized
+feedback can trigger another turn. Reporter edits and ordinary contributor text
+remain context but cannot spend a turn through a later CI/status event. A session
+gets at most four automatic coding turns per
 command. A new task or `/astra resume` (or `/sol resume`) resets that budget;
 `/astra pause` or `/sol pause` stops continuation. Revoking maintainer authority
 also stops admission. Failed workers and exhausted budgets leave an explicit

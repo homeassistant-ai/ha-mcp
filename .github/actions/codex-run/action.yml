@@ -204,7 +204,11 @@ runs:
             "$GITHUB_WORKSPACE/"*) ;;
             *) echo '::error::read-only-paths must stay inside GITHUB_WORKSPACE.'; exit 1 ;;
           esac
-          readonly_paths+=("$protected_path")
+          protected_duplicate=false
+          for protected_existing in "${readonly_paths[@]}"; do
+            if [[ "$protected_existing" == "$protected_path" ]]; then protected_duplicate=true; break; fi
+          done
+          if [[ "$protected_duplicate" == false ]]; then readonly_paths+=("$protected_path"); fi
         done <<< "${READ_ONLY_PATHS_INPUT:-}"
 
         credential_root="$RUNNER_TEMP/codex-action-state"

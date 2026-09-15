@@ -320,7 +320,7 @@ def test_read_only_paths_protect_controller_and_git_metadata(tmp_path):
         tmp_path,
         SANDBOX_INPUT="workspace-write",
         WORKING_DIRECTORY_INPUT="source",
-        READ_ONLY_PATHS_INPUT="control\nsource/.git",
+        READ_ONLY_PATHS_INPUT="control\n./control\nsource/.git",
     )
     assert result.returncode == 0, result.stderr.decode()
     profile = next(tmp_path.glob("codex-action-state/home.*/*.config.toml"))
