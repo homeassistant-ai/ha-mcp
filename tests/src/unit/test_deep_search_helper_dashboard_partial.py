@@ -380,8 +380,8 @@ class TestDashboardBucketViaComponent:
             assert rec["score"] == 100
             assert rec["match_in_config"] is True
         by_url = {d["url_path"]: d for d in dashboards}
-        assert by_url["energy"]["dashboard_title"] == "Energy Registry"
-        assert by_url["default"]["dashboard_title"] == "Default Dashboard"
+        assert by_url["energy"]["title"] == "Energy Registry"
+        assert by_url["default"]["title"] == "Default Dashboard"
         assert not result.get("partial")
 
     async def test_component_yaml_skipped_falls_back_to_legacy(self) -> None:

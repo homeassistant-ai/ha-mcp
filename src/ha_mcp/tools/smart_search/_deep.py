@@ -1086,7 +1086,7 @@ class DeepSearchMixin(SceneSearchMixin):
             )
             records[url_path] = {
                 "url_path": url_path,
-                "dashboard_title": title,
+                "title": title,
                 "score": 100,
                 "match_in_config": True,
                 # Dashboards are not a search/related item type, so this is
@@ -1164,7 +1164,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     return [
                         {
                             "url_path": url_path,
-                            "dashboard_title": title,
+                            "title": title,
                             "score": config_score,
                             "match_in_config": True,
                             "match_in_references": False,

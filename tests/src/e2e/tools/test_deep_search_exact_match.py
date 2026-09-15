@@ -182,7 +182,7 @@ async def test_deep_search_dashboard_type(mcp_client):
         # Verify the match is from our test dashboard
         found = any(
             d.get("url_path") == "deep-search-test-dash"
-            or d.get("dashboard_title") == "Deep Search Test"
+            or d.get("title") == "Deep Search Test"
             for d in dashboards
         )
         assert found, "Should find our specific test dashboard"

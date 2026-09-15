@@ -1178,7 +1178,7 @@ def _dashboard_split_serviceable(req: _ResolvedSearch, caps: Any) -> bool:
 class _DashboardLeg:
     """The dashboards surface's contribution to a component-served ha_search.
 
-    ``records`` are legacy-shaped (``url_path`` / ``dashboard_title`` /
+    ``records`` are legacy-shaped (``url_path`` / ``title`` /
     ``score``), NOT component records — they never pass through
     ``_normalize_component_config_record``. ``failed`` is the leg's own
     "not scanned" count, reported with the deep path's wording. ``error`` is
