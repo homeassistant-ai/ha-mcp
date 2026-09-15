@@ -2785,6 +2785,12 @@ class AddOnTools:
         """Re-raise a failed store reload with guidance for its known causes."""
         detail = AddOnTools._supervisor_error_text(str(error))
         if "supervisor" in detail.lower() and "update" in detail.lower():
+            # Built outside the list: an implicit concatenation inside a list
+            # literal reads as a missing comma (py/implicit-string-concatenation-in-list).
+            retry_suggestion = (
+                "Update Supervisor first, then retry "
+                "ha_manage_app(action='check_updates')"
+            )
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
@@ -2792,8 +2798,7 @@ class AddOnTools:
                     "because Supervisor itself has a pending update.",
                     details=detail,
                     suggestions=[
-                        "Update Supervisor first, then retry "
-                        "ha_manage_app(action='check_updates')",
+                        retry_suggestion,
                         "Check Supervisor status with ha_get_system_health",
                     ],
                 )
