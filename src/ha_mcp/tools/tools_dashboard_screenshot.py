@@ -38,6 +38,7 @@ from ..dashboard_screenshot.content import (
     dashboard_screenshot_warnings,
 )
 from ..dashboard_screenshot.paths import (
+    DashboardRenderTarget,
     resolve_dashboard_render_target,
 )
 from ..errors import ErrorCode, create_error_response
@@ -50,7 +51,7 @@ logger = logging.getLogger(__name__)
 def _package_screenshot_result(
     *,
     captures: list[Any],
-    target: Any,
+    target: DashboardRenderTarget,
     capture_failures: list[dict[str, Any]],
     capture_warnings: list[str],
 ) -> ToolResult:

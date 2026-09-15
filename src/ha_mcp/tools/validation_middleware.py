@@ -19,6 +19,7 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from pydantic import ValidationError as PydanticValidationError
+from pydantic_core import ErrorDetails
 
 from ha_mcp._vendor.fastmcp.exceptions import ValidationError as FastMCPValidationError
 from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
@@ -63,7 +64,13 @@ async def _tool_parameter_names(context: MiddlewareContext | None) -> list[str] 
             exc_info=True,
         )
         return None
-    properties = tool.parameters.get("properties") if tool is not None else None
+    if tool is None:
+        logger.warning(
+            "Parameter lookup for %s returned no tool; unknown-argument hint omitted",
+            tool_name,
+        )
+        return None
+    properties = tool.parameters.get("properties")
     if not isinstance(properties, dict):
         logger.warning(
             "No parameter schema for %s; unknown-argument hint omitted", tool_name
@@ -77,20 +84,23 @@ def _closest_parameter(unknown: str, candidates: Sequence[str]) -> str | None:
 
     A candidate qualifies by sharing an underscore-separated word with the name
     (``dashboard_url`` for ``url_path``) or by a similarity ratio of at least
-    0.6 (typos). Shared words rank first; the ratio breaks ties.
+    0.6 (typos). A declared name the invented one ends with ranks first
+    (``dashboard_url_path`` for ``url_path``), then more shared words; the ratio
+    breaks ties.
     """
     unknown_lower = unknown.lower()
     words = set(unknown_lower.split("_")) - {""}
-    best: tuple[int, float, str] | None = None
+    best: tuple[bool, int, float, str] | None = None
     for candidate in candidates:
         candidate_lower = candidate.lower()
         shared = len(words & set(candidate_lower.split("_")))
         ratio = SequenceMatcher(None, unknown_lower, candidate_lower).ratio()
         if not shared and ratio < 0.6:
             continue
-        if best is None or (shared, ratio) > best[:2]:
-            best = (shared, ratio, candidate)
-    return best[2] if best else None
+        suffix = unknown_lower.endswith(f"_{candidate_lower}")
+        if best is None or (suffix, shared, ratio) > best[:3]:
+            best = (suffix, shared, ratio, candidate)
+    return best[3] if best else None
 
 
 def _unknown_argument_hint(param: str, unclaimed: Sequence[str]) -> str:
@@ -101,8 +111,8 @@ def _unknown_argument_hint(param: str, unclaimed: Sequence[str]) -> str:
     )
 
 
-def _type_hint(errs: list[Any]) -> str:
-    """Prefer an actionable container hint (dict_type/list_type); else the raw message."""
+def _type_hint(errs: Sequence[ErrorDetails]) -> str:
+    """Prefer a dict_type/list_type hint; else the first error's raw message."""
     return next(
         (_TYPE_HINTS[e["type"]] for e in errs if e["type"] in _TYPE_HINTS),
         errs[0]["msg"],
@@ -136,7 +146,7 @@ class ValidationErrorMiddleware(Middleware):
             # `param.list[str]` instead of `param` (#1601). We keep the param
             # name plus any numeric list indices (so a bad element still reports
             # `monday.1`) but drop the non-numeric union-arm tags.
-            grouped: dict[str, list[Any]] = {}
+            grouped: dict[str, list[ErrorDetails]] = {}
             for err in errors:
                 loc = [str(p) for p in err.get("loc", ()) if p != "__root__"]
                 if loc:
@@ -150,12 +160,13 @@ class ValidationErrorMiddleware(Middleware):
                 if any(err["type"] == _UNKNOWN_ARGUMENT for err in errors)
                 else None
             )
-            # A parameter the call already supplied is never what a second,
-            # invented argument meant.
-            supplied = (
-                getattr(getattr(context, "message", None), "arguments", None) or {}
-            )
-            unclaimed = [p for p in valid_parameters or () if p not in supplied]
+            unclaimed: list[str] = []
+            if valid_parameters is not None:
+                # Skip parameters the call already supplied: a second, invented
+                # argument almost never means one of them.
+                message_obj = getattr(context, "message", None)
+                supplied = getattr(message_obj, "arguments", None) or {}
+                unclaimed = [p for p in valid_parameters if p not in supplied]
 
             parts: list[str] = []
             for param, errs in grouped.items():
@@ -168,19 +179,17 @@ class ValidationErrorMiddleware(Middleware):
                     hint = _type_hint(errs)
                 parts.append(f"`{param}`: {hint}" if param else hint)
             message = "; ".join(parts) if parts else "Invalid argument types."
+            error_context: dict[str, Any] | None = None
             if valid_parameters is not None:
                 separator = " " if message.endswith((".", "?")) else ". "
                 listing = ", ".join(valid_parameters) or "none"
                 message += f"{separator}Valid parameters: {listing}."
+                error_context = {"valid_parameters": valid_parameters}
             raise_tool_error(
                 create_validation_error(
                     message,
                     details=", ".join(dict.fromkeys(err["type"] for err in errors)),
-                    context=(
-                        {"valid_parameters": valid_parameters}
-                        if valid_parameters is not None
-                        else None
-                    ),
+                    context=error_context,
                 )
             )
         return result

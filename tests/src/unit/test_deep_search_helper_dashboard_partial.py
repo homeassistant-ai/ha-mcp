@@ -191,7 +191,9 @@ class TestDashboardFailure:
         assert failed is False
         assert len(matches) == 1
         assert matches[0]["url_path"] == "my-dashboard"
+        assert matches[0]["title"] == "My Dashboard"
         assert "dashboard_url" not in matches[0]
+        assert "dashboard_title" not in matches[0]
 
     async def test_one_dashboard_raise_signals_failed(self) -> None:
         """A raised config fetch returns ``failed=True`` rather than swallowing

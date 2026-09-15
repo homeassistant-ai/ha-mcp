@@ -8,7 +8,10 @@ import pytest
 
 from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.validation_middleware import ValidationErrorMiddleware
+from ha_mcp.tools.validation_middleware import (
+    ValidationErrorMiddleware,
+    _closest_parameter,
+)
 
 
 def _make_mcp() -> FastMCP:
@@ -82,6 +85,8 @@ async def test_string_for_dict_gives_actionable_message():
     msg = body["error"]["message"]
     assert "config" in msg
     assert "JSON object" in msg
+    assert "Valid parameters" not in msg
+    assert "valid_parameters" not in body
 
 
 @pytest.mark.asyncio
@@ -387,9 +392,15 @@ async def test_unknown_parameter_on_a_tool_without_parameters():
 
 
 def test_shared_word_outranks_closer_spelling():
-    from ha_mcp.tools.validation_middleware import _closest_parameter
-
     assert _closest_parameter("force", ["forced", "force_reload"]) == "force_reload"
+
+
+def test_trailing_declared_name_outranks_closer_spelling():
+    """A prefixed name points at the parameter it ends with: the renamed
+    screenshot argument ``dashboard_url_path`` means ``url_path``, not the
+    closer-spelled legacy ``dashboard_path``."""
+    screenshot_parameters = ["dashboard_path", "url_path", "view_path", "width"]
+    assert _closest_parameter("dashboard_url_path", screenshot_parameters) == "url_path"
 
 
 def _unknown_argument_error():
@@ -406,7 +417,7 @@ def _unknown_argument_error():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("lookup", ["raises", "returns_none"])
+@pytest.mark.parametrize("lookup", ["raises", "returns_none", "no_properties"])
 async def test_unknown_parameter_falls_back_when_schema_lookup_fails(lookup, caplog):
     """A failed schema lookup keeps pydantic's wording, adds no parameter list,
     and logs a warning instead of breaking the structured error."""
@@ -414,6 +425,8 @@ async def test_unknown_parameter_falls_back_when_schema_lookup_fails(lookup, cap
     async def get_tool(_name):
         if lookup == "raises":
             raise RuntimeError("lookup failed")
+        if lookup == "no_properties":
+            return SimpleNamespace(parameters={})
 
     context = SimpleNamespace(
         fastmcp_context=SimpleNamespace(fastmcp=SimpleNamespace(get_tool=get_tool)),
@@ -464,8 +477,18 @@ async def test_unknown_parameter_hint_through_the_search_proxy():
             },
             raise_on_error=False,
         )
+        supplied = await client.call_tool(
+            "ha_call_read_tool",
+            {
+                "name": "ha_test_get_dashboard",
+                "arguments": {"url_path": "my-dashboard", "dashboard_url": "x"},
+            },
+            raise_on_error=False,
+        )
 
     assert result.is_error
     text = result.content[0].text
     assert "`dashboard_url`: unknown parameter, did you mean `url_path`?" in text
     assert "Valid parameters: url_path, force_reload." in text
+    assert supplied.is_error
+    assert "did you mean" not in supplied.content[0].text
