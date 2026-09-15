@@ -5,6 +5,11 @@ starts coding work on an issue or a same-repository PR. Actual `maintain` and
 `admin` roles are checked through GitHub; `write`, `triage`, author association,
 quoted commands and bot comments do not authorize a task. Manual dispatch names
 an existing command comment and verifies both the dispatcher and rerunning actor.
+The current body and last editor are fetched together through GraphQL. Edited
+commands use the editor's current role, so write-role users cannot borrow the
+original author's maintainer authority. Missing editor metadata fails closed.
+This is necessary because [GitHub allows write-role collaborators to edit other
+people's comments](https://docs.github.com/en/communities/moderating-comments-and-conversations/managing-disruptive-comments#editing-a-comment).
 The command explicitly authorizes this lifecycle through readiness, including
 publication and review replies. A separate ready command is not needed; pause
 remains available before the readiness transition.
@@ -44,8 +49,9 @@ HA_MCP_APP_PRIVATE_KEY/CODEX_AUTH/CODEX_AUTH_PAT secrets. Product and bench reta
 separate Codex OAuth credentials.
 
 The worker may change at most 80 regular files totalling 2 MiB. Publication
-rejects traversal, symlinks/submodules, credential paths and `.github/`, `.codex/`
-or `.claude/` changes. Workflow/agent infrastructure changes require a separate
+rejects traversal, symlinks/submodules, credential paths, root/scoped `AGENTS.md`
+and `CLAUDE.md`, and `.github/`, `.codex/` or `.claude/` changes. These protected
+entrypoints require a separate
 human-controlled PR with the appropriate permissions. The read-only gh token is
 available to model commands; only the OAuth and publication credentials are
 isolated from those commands.
@@ -56,6 +62,8 @@ An App-owned checkpoint comment stores the task, chosen model, linked branch/PR,
 last processed head, review digest, iteration count and compact continuation
 notes. For issue-originated PRs, the PR body points back to that checkpoint.
 The App's identity and the session/PR association are checked on every run.
+An edited checkpoint must still have the App as its last editor. Manual edits
+to checkpoint contents are rejected; use slash commands for changes instead.
 Each new worker reconstructs context from GitHub and the checkpoint. This is
 durable task persistence, not a restored Codex CLI transcript; credentials and
 raw transcripts are never uploaded. Plan/result artifacts expire after one day,
@@ -88,11 +96,17 @@ The controller then marks a draft ready. This does not supply or dismiss human
 approval; branch rules still govern merging. Ambiguous PR associations, unknown
 mergeability, missing checks, or unresolved threads wait for a later event or
 explicit command.
+After a clarification-only round, the publisher reevaluates readiness immediately
+so a final thread resolution does not depend on another CI notification.
 
 GitHub has no transaction spanning comments, refs and PR creation. Publication
 reserves an owned checkpoint first and refuses stale source or concurrent branch
-updates. A failure after a partial write remains visible; inspect the branch/PR
-and send a new command to reconcile it. Do not delete an ownership checkpoint
+updates. Replies use stable markers tied to the command, code head and external
+feedback; retries reuse their App-owned reply. The pending review-summary key
+survives a failure during resolution, summary creation or final checkpoint save,
+so recovery does not duplicate replies or summaries. A partial publication stays
+resumable within the iteration budget; inspect a failure and send a new command
+when intervention is needed. Do not delete an ownership checkpoint
 while its branch is in use. Pause or disable the workflow to stop new work;
 avoid cancelling an active OAuth consumer before its auth-persistence step.
 

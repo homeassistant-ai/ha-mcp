@@ -1,9 +1,12 @@
 import { prose } from "../issue-intake/intake.mjs";
 import {
   checksReady,
+  decide,
   digest,
   feedbackHash,
   ORIGIN_MARKER,
+  principal,
+  trustedComment,
   renderState,
   validateChanges,
   validateResult,
@@ -25,6 +28,9 @@ function threadSignature(thread) {
       id: c.id,
       body: c.body,
       updated_at: c.updated_at,
+      edited_at: c.edited_at ?? null,
+      editor: c.editor ?? null,
+      editingVerified: c.editingVerified === true,
       user: c.user && { login: c.user.login, type: c.user.type },
     })),
   };
@@ -50,12 +56,14 @@ function assertCurrent(api, plan, app, expectedHead, checkThreads = true) {
     current.head !== expectedHead ||
     !command ||
     command.updated_at !== plan.decision.latest.updated_at ||
-    !["maintain", "admin"].includes(current.roles[command.user.login])
+    principal(command)?.type !== "User" ||
+    !trustedComment(command, current.roles)
   )
     throw Error("Source/head/authorization changed during publication");
   const laterControl = current.comments.some(
     (c) =>
-      ["maintain", "admin"].includes(current.roles[c.user?.login]) &&
+      principal(c)?.type === "User" &&
+      trustedComment(c, current.roles) &&
       /^\/(astra|sol)\s+/.test(c.body ?? "") &&
       c.updated_at > command.updated_at,
   );
@@ -64,7 +72,24 @@ function assertCurrent(api, plan, app, expectedHead, checkThreads = true) {
   return current;
 }
 
-function respond(api, plan, app, state, result, runId, head) {
+function ownedComment(comment, app) {
+  return (
+    comment.user?.type === "Bot" &&
+    comment.user.login === `${app}[bot]` &&
+    principal(comment)?.type === "Bot" &&
+    principal(comment).login === `${app}[bot]`
+  );
+}
+
+function externalThread(thread, app) {
+  return threadSignature({
+    ...thread,
+    isResolved: false,
+    comments: thread.comments.filter((c) => !ownedComment(c, app)),
+  });
+}
+
+function respond(api, plan, app, state, result, head) {
   for (const response of result.responses) {
     const current = assertCurrent(api, plan, app, head, false);
     validateResult({ ...result, responses: [response] }, current);
@@ -72,15 +97,44 @@ function respond(api, plan, app, state, result, runId, head) {
       (t) => t.id === response.thread_id,
     );
     const thread = current.threads.find((t) => t.id === response.thread_id);
-    if (digest(threadSignature(thread)) !== digest(threadSignature(original)))
+    if (
+      digest(externalThread(thread, app)) !==
+      digest(externalThread(original, app))
+    )
       throw Error("Review thread changed before response");
-    const marker = `<!-- slash-response:${runId}:${digest(response).slice(0, 16)} -->`;
-    const reply = api.write(
-      `pulls/${state.pr}/comments/${thread.comments[0].id}/replies`,
-      { body: `${prose(response.body)}\n\n${marker}` },
+    // This key survives a fresh workflow run after partial publication. Only
+    // external feedback, command revision or code changes require a new reply.
+    const marker = `<!-- slash-response:${digest({
+      head,
+      command: state.commandId,
+      revision: state.commandUpdatedAt,
+      source: externalThread(original, app),
+    })} -->`;
+    const body = `${prose(response.body)}\n\n${marker}`;
+    const existing = thread.comments.find(
+      (c) => ownedComment(c, app) && c.body.includes(marker),
     );
+    let reply = existing;
+    if (!existing)
+      reply = api.edits([
+        api.write(
+          `pulls/${state.pr}/comments/${thread.comments[0].id}/replies`,
+          { body },
+        ),
+      ])[0];
+    else if (existing.body !== body)
+      reply = api.edits([
+        api.write(`pulls/comments/${existing.id}`, { body }, "PATCH"),
+      ])[0];
+    if (!ownedComment(reply, app) || reply.body !== body)
+      throw Error("Published reply changed before verification");
     if (response.resolve) {
-      const expected = { ...thread, comments: [...thread.comments, reply] };
+      const expected = {
+        ...thread,
+        comments: existing
+          ? thread.comments.map((c) => (c.id === existing.id ? reply : c))
+          : [...thread.comments, reply],
+      };
       const after = assertCurrent(api, plan, app, head, false).threads.find(
         (t) => t.id === response.thread_id,
       );
@@ -95,20 +149,18 @@ function respond(api, plan, app, state, result, runId, head) {
       );
     }
   }
-  if (result.responses.length) {
-    const marker = `<!-- slash-review-summary:${runId} -->`;
+  if (state.pendingSummary) {
+    const marker = `<!-- slash-review-summary:${state.pendingSummary} -->`;
     const existing = api
-      .pages(`issues/${state.pr}/comments`)
-      .some(
-        (c) =>
-          c.user?.type === "Bot" &&
-          c.user.login === `${app}[bot]` &&
-          c.body?.includes(marker),
-      );
+      .edits(api.pages(`issues/${state.pr}/comments`))
+      .find((c) => ownedComment(c, app) && c.body.includes(marker));
+    const body = `Review update: ${prose(result.summary)}\n\nTests: ${prose(result.tests)}\n\n${result.outcome === "blocked" ? "A maintainer decision is needed; use a new slash command to continue." : "Addressed findings are explained in their threads."}\n\n${marker}`;
     if (!existing)
       api.write(`issues/${state.pr}/comments`, {
-        body: `Review update: ${prose(result.summary)}\n\nTests: ${prose(result.tests)}\n\n${result.outcome === "blocked" ? "A maintainer decision is needed; use a new slash command to continue." : "Addressed findings are explained in their threads."}\n\n${marker}`,
+        body,
       });
+    else if (existing.body !== body)
+      api.write(`issues/comments/${existing.id}`, { body }, "PATCH");
   }
 }
 
@@ -153,6 +205,12 @@ export function publish(
     summary: fresh.session?.summary ?? "",
     status: "working",
   };
+  if (
+    fresh.session &&
+    (state.commandId !== fresh.session.commandId ||
+      state.commandUpdatedAt !== fresh.session.commandUpdatedAt)
+  )
+    delete state.pendingSummary;
   if (d.mode === "pause" || d.mode === "limit") {
     state.status = d.mode === "pause" ? "paused" : "blocked";
     state.summary =
@@ -192,11 +250,23 @@ export function publish(
   state.summary = `${result.summary}\n\nTests: ${result.tests}\n\nContinuation: ${result.memory}`;
   if (state.summary.length > 12000)
     throw Error("Continuation checkpoint is too large");
+  if (result.responses.length && !state.pendingSummary)
+    state.pendingSummary = digest({
+      command: state.commandId,
+      revision: state.commandUpdatedAt,
+      head: fresh.head,
+      feedback: d.feedback,
+    });
   if (result.outcome === "blocked") {
     if (changes.length || result.responses.some((r) => r.resolve))
       throw Error("Blocked output cannot publish code or resolve findings");
+    if (state.pr && state.pendingSummary) {
+      state.status = "publishing";
+      save(api, state, app);
+      respond(api, plan, app, state, result, fresh.head);
+      delete state.pendingSummary;
+    }
     state.status = "blocked";
-    if (state.pr) respond(api, plan, app, state, result, runId, fresh.head);
     save(api, state, app);
     return state;
   }
@@ -276,7 +346,8 @@ export function publish(
   }
   if (state.pr) {
     assertCurrent(api, plan, app, head);
-    respond(api, plan, app, state, result, runId, head);
+    respond(api, plan, app, state, result, head);
+    delete state.pendingSummary;
     if (
       fresh.pr?.user?.type === "Bot" &&
       fresh.pr.user.login === `${app}[bot]`
@@ -309,5 +380,19 @@ export function publish(
     state.summary +=
       "\n\nNo code changes were produced, so no PR was created. A maintainer can clarify with a new slash command.";
   save(api, state, app);
+  if (state.pr) {
+    const current = collect(api, state.root, app);
+    // A clarification-only round can finish after the final CI event. Complete
+    // readiness here instead of depending on a future unrelated notification.
+    if (decide(current, { automatic: true }).mode === "ready") {
+      if (current.pr.draft)
+        api.graphql(
+          "mutation($id:ID!) { markPullRequestReadyForReview(input:{pullRequestId:$id}) { pullRequest { id } } }",
+          { id: current.pr.node_id },
+        );
+      state.status = "ready";
+      save(api, state, app);
+    }
+  }
   return state;
 }

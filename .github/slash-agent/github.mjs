@@ -4,9 +4,25 @@ import {
   digest,
   maintainer,
   ORIGIN_MARKER,
+  principal,
   stateFrom,
+  trustedComment,
   trustedReview,
 } from "./core.mjs";
+
+export function actor(value) {
+  if (!value) return null;
+  const type = ["User", "Bot"].includes(value.__typename)
+    ? value.__typename
+    : "Other";
+  return {
+    type,
+    login:
+      type === "Bot" && !value.login.endsWith("[bot]")
+        ? `${value.login}[bot]`
+        : value.login,
+  };
+}
 
 export class API extends GitHub {
   constructor(repository, options) {
@@ -58,6 +74,45 @@ export class API extends GitHub {
     if (response.errors?.length) throw Error("GitHub GraphQL request failed");
     return response.data;
   }
+  edits(comments) {
+    const output = [];
+    for (let offset = 0; offset < comments.length; offset += 100) {
+      const batch = comments.slice(offset, offset + 100);
+      if (batch.some((c) => typeof c.node_id !== "string"))
+        throw Error("Comment identity is missing");
+      const fields =
+        "id body updatedAt lastEditedAt editor { login __typename } author { login __typename }";
+      const nodes = this.graphql(
+        `query($ids:[ID!]!) { nodes(ids:$ids) {
+        ... on IssueComment { ${fields} }
+        ... on PullRequestReview { ${fields} }
+        ... on PullRequestReviewComment { ${fields} }
+      } }`,
+        { ids: batch.map((c) => c.node_id) },
+      ).nodes;
+      const byId = new Map(nodes.filter(Boolean).map((n) => [n.id, n]));
+      for (const comment of batch) {
+        const node = byId.get(comment.node_id);
+        if (
+          !node ||
+          typeof node.body !== "string" ||
+          !Object.hasOwn(node, "lastEditedAt") ||
+          !Object.hasOwn(node, "editor")
+        )
+          throw Error("Comment edit metadata is unavailable");
+        output.push({
+          ...comment,
+          body: node.body,
+          updated_at: node.updatedAt,
+          edited_at: node.lastEditedAt,
+          editor: actor(node.editor),
+          user: actor(node.author),
+          editingVerified: true,
+        });
+      }
+    }
+    return output;
+  }
   threads(number) {
     const [owner, name] = this.repository.split("/");
     const nodes = [];
@@ -68,7 +123,7 @@ export class API extends GitHub {
         repository(owner:$owner,name:$name) { pullRequest(number:$number) {
           reviewThreads(first:100,after:$cursor) { pageInfo { hasNextPage endCursor }
             nodes { id isResolved comments(first:100) { pageInfo { hasNextPage endCursor }
-              nodes { databaseId body updatedAt author { login __typename } } } }
+              nodes { databaseId body updatedAt lastEditedAt editor { login __typename } author { login __typename } } } }
           }
         } }
       }`,
@@ -81,7 +136,7 @@ export class API extends GitHub {
           const more = this.graphql(
             `query($id:ID!,$cursor:String!) { node(id:$id) {
             ... on PullRequestReviewThread { comments(first:100,after:$cursor) {
-              pageInfo { hasNextPage endCursor } nodes { databaseId body updatedAt author { login __typename } }
+              pageInfo { hasNextPage endCursor } nodes { databaseId body updatedAt lastEditedAt editor { login __typename } author { login __typename } }
             } }
           } }`,
             { id: thread.id, cursor: page.endCursor },
@@ -97,12 +152,11 @@ export class API extends GitHub {
             id: c.databaseId,
             body: c.body,
             updated_at: c.updatedAt,
-            user: c.author
-              ? {
-                  login: c.author.login,
-                  type: c.author.__typename === "Bot" ? "Bot" : "User",
-                }
-              : null,
+            user: actor(c.author),
+            editor: actor(c.editor),
+            edited_at: c.lastEditedAt,
+            editingVerified:
+              Object.hasOwn(c, "lastEditedAt") && Object.hasOwn(c, "editor"),
           })),
         });
       }
@@ -141,26 +195,27 @@ export function eventTarget(api, event, eventName, env) {
       !event.comment?.id
     )
       return null;
-    const current = api.optional(`issues/comments/${event.comment.id}`);
+    const found = api.optional(`issues/comments/${event.comment.id}`);
+    const current = found ? api.edits([found])[0] : null;
     if (
       !current ||
       current.issue_url?.split("/").at(-1) !== String(event.issue.number)
     )
       return null;
+    const authority = principal(current);
+    const roles = {
+      [authority?.login]:
+        authority?.type === "User" ? api.role(authority.login) : "none",
+    };
     const isCommand =
       current.user?.type === "User" &&
       current.user.login !== "ghhamcp" &&
-      maintainer(api.role(current.user.login)) &&
+      authority?.type === "User" &&
+      trustedComment(current, roles) &&
       command(current.body);
     if (
       !isCommand &&
-      (!event.issue.pull_request ||
-        !trustedReview(current.user, {
-          [current.user?.login]:
-            current.user?.type === "User"
-              ? api.role(current.user.login)
-              : "none",
-        }))
+      (!event.issue.pull_request || !trustedComment(current, roles))
     )
       return null;
     return {
@@ -221,10 +276,12 @@ export function collect(api, number, app) {
     if (origin) root = Number(origin[1]);
   }
   if (root !== number) issue = api.get(`issues/${root}`);
-  const rootComments = api.pages(`issues/${root}/comments`);
+  const rootComments = api.edits(api.pages(`issues/${root}/comments`));
   const session = stateFrom(rootComments, app);
   if (root !== number && !session)
     throw Error("PR origin has no owned session checkpoint");
+  if (root !== number && session.branch !== pr.head.ref)
+    throw Error("PR branch does not match its owned session checkpoint");
   if (session && session.root !== root)
     throw Error("Session belongs to another issue");
   if (session?.pr) {
@@ -233,9 +290,11 @@ export function collect(api, number, app) {
     pr ??= api.get(`pulls/${session.pr}`);
   }
   const comments = rootComments.concat(
-    pr && pr.number !== root ? api.pages(`issues/${pr.number}/comments`) : [],
+    pr && pr.number !== root
+      ? api.edits(api.pages(`issues/${pr.number}/comments`))
+      : [],
   );
-  const reviews = pr ? api.pages(`pulls/${pr.number}/reviews`) : [];
+  const reviews = pr ? api.edits(api.pages(`pulls/${pr.number}/reviews`)) : [];
   const threads = pr ? api.threads(pr.number) : [];
   const roles = {};
   for (const item of [
@@ -243,8 +302,10 @@ export function collect(api, number, app) {
     ...reviews,
     ...threads.flatMap((t) => t.comments),
   ]) {
-    if (item.user?.type === "User" && !Object.hasOwn(roles, item.user.login))
-      roles[item.user.login] = api.role(item.user.login);
+    for (const identity of [item.user, item.editor]) {
+      if (identity?.type === "User" && !Object.hasOwn(roles, identity.login))
+        roles[identity.login] = api.role(identity.login);
+    }
   }
   const metadata = api.request(api.root);
   const base = pr?.base.ref ?? metadata.default_branch;
@@ -311,7 +372,8 @@ export function collect(api, number, app) {
       body: c.body,
       updated_at: c.updated_at,
       author: c.user.login,
-      maintainer: maintainer(roles[c.user.login]),
+      editor: c.editor?.login ?? null,
+      maintainer: principal(c)?.type === "User" && trustedComment(c, roles),
     }));
   // Issue-enrichment theories and bot progress/acknowledgment comments are not
   // coding instructions. Supported bots contribute formal PR reviews/threads.
@@ -321,12 +383,12 @@ export function collect(api, number, app) {
     ),
     ...reviews,
   ]
-    .filter((c) => trustedReview(c.user, roles))
+    .filter((c) => trustedComment(c, roles))
     .map((c) => ({
       id: c.id,
       body: c.body,
       updated_at: c.updated_at ?? c.submitted_at,
-      author: c.user.login,
+      author: principal(c).login,
       state: c.state,
     }));
   const snapshot = {

@@ -17,6 +17,14 @@ export const trustedReview = (user, roles) =>
     user.login !== "ghhamcp" &&
     maintainer(roles[user.login])) ||
   (user?.type === "Bot" && REVIEW_BOTS.includes(user.login));
+export const principal = (comment) =>
+  comment?.editingVerified === true
+    ? comment.edited_at || comment.editor
+      ? comment.editor
+      : comment.user
+    : null;
+export const trustedComment = (comment, roles) =>
+  trustedReview(principal(comment), roles);
 
 export function command(body) {
   const match = /^\/(astra|sol)[ \t]+(\S[\s\S]*)$/.exec((body ?? "").trim());
@@ -41,6 +49,13 @@ export function stateFrom(comments, app) {
       "Multiple slash session checkpoints; reconcile them before resuming",
     );
   if (!owned.length) return null;
+  if (
+    principal(owned[0])?.type !== "Bot" ||
+    principal(owned[0]).login !== `${app}[bot]`
+  )
+    throw Error(
+      "Slash checkpoint was modified outside the App or its editor is unknown",
+    );
   const encoded = owned[0].body.split(STATE_MARKER)[1].split(" -->")[0];
   if (!/^[A-Za-z0-9_-]{1,50000}$/.test(encoded))
     throw Error("Invalid slash checkpoint");
@@ -90,9 +105,7 @@ export function feedbackHash(snapshot) {
       .filter((t) => !t.isResolved)
       .map((t) => ({
         id: t.id,
-        comments: t.comments.filter((c) =>
-          trustedReview(c.user, snapshot.roles),
-        ),
+        comments: t.comments.filter((c) => trustedComment(c, snapshot.roles)),
       }))
       .filter((t) => t.comments.length),
   });
@@ -132,7 +145,8 @@ export function decide(snapshot, trigger) {
     (c) =>
       c.user?.type === "User" &&
       c.user.login !== "ghhamcp" &&
-      maintainer(snapshot.roles[c.user.login]) &&
+      principal(c)?.type === "User" &&
+      trustedComment(c, snapshot.roles) &&
       command(c.body),
   );
   commands.sort(
@@ -181,6 +195,7 @@ export function decide(snapshot, trigger) {
     previous?.checkedHead !== snapshot.head;
   if (
     !changed &&
+    previous.status !== "publishing" &&
     !newFailure &&
     previous.handled === feedback &&
     previous.lastHead === snapshot.head
@@ -262,7 +277,7 @@ export function validateResult(result, snapshot) {
     );
     if (
       !thread ||
-      !thread.comments.some((c) => trustedReview(c.user, snapshot.roles))
+      !thread.comments.some((c) => trustedComment(c, snapshot.roles))
     )
       throw Error("Response targets an unauthorized review thread");
     seen.add(r.thread_id);
@@ -282,6 +297,7 @@ export function safePath(path) {
         (p) => !p || p === "." || p === ".." || p.toLowerCase() === ".git",
       ) ||
     /^(\.github|\.codex|\.claude)(\/|$)/i.test(path) ||
+    /(^|\/)(AGENTS|CLAUDE)\.md$/i.test(path) ||
     /(^|\/)(\.env(?:\..*)?|auth\.json)$/i.test(path)
   )
     throw Error("Patch contains a prohibited path");

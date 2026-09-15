@@ -25,7 +25,8 @@ Implement and run relevant tests. For a bug, demonstrate the failing regression
 before fixing it. Check available CI failures using gh; do not claim success for
 checks you did not run. Do not modify .github/, .codex/, .claude/, credentials,
 symlinks or submodules: these need a separate human-controlled change. Do not
-modify Git metadata. Leave all intended file changes in the working tree.
+modify Git metadata or root/scoped AGENTS.md and CLAUDE.md entrypoints. Leave
+all intended file changes in the working tree.
 
 Return JSON matching the provided schema. Include an accurate title, summary,
 test evidence and a compact memory checkpoint for a later fresh worker. The

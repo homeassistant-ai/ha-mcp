@@ -13,7 +13,11 @@ import {
   validateChanges,
   validateResult,
 } from "../../.github/slash-agent/core.mjs";
-import { collect, eventTarget } from "../../.github/slash-agent/github.mjs";
+import {
+  API,
+  collect,
+  eventTarget,
+} from "../../.github/slash-agent/github.mjs";
 import { prepare, prompt } from "../../.github/slash-agent/main.mjs";
 import { publish } from "../../.github/slash-agent/publish.mjs";
 import { packageWork } from "../../.github/slash-agent/worker.mjs";
@@ -131,6 +135,16 @@ class FakeAPI {
   role(login) {
     return this.roles[login] ?? "none";
   }
+  edits(comments) {
+    return structuredClone(
+      comments.map((c) => ({
+        editingVerified: true,
+        edited_at: null,
+        editor: null,
+        ...c,
+      })),
+    );
+  }
   pages(path) {
     if (path === "issues/9/comments") return structuredClone(this.comments);
     if (path === "issues/10/comments") return structuredClone(this.prComments);
@@ -144,12 +158,24 @@ class FakeAPI {
     throw Error(`Unexpected list ${path}`);
   }
   threads() {
-    return structuredClone(this.reviewThreads);
+    return structuredClone(
+      this.reviewThreads.map((t) => ({
+        ...t,
+        comments: this.edits(t.comments),
+      })),
+    );
   }
   write(path, data, method = "POST") {
     this.calls.push({ path, data: structuredClone(data), method });
     if (path === "issues/9/comments") {
-      const c = { id: 100, user: bot, ...data };
+      const c = {
+        id: 100,
+        user: bot,
+        editingVerified: true,
+        edited_at: null,
+        editor: null,
+        ...data,
+      };
       this.comments.push(c);
       return c;
     }
@@ -157,12 +183,32 @@ class FakeAPI {
       Object.assign(
         this.comments.find((c) => c.id === 100),
         data,
+        {
+          editingVerified: true,
+          editor: bot,
+          edited_at: "2026-09-15T12:00:00Z",
+        },
       );
       return {};
     }
     if (path === "issues/10/comments") {
       const comment = { id: 1000 + this.prComments.length, user: bot, ...data };
       this.prComments.push(comment);
+      return comment;
+    }
+    if (/^(issues|pulls)\/comments\/\d+$/.test(path)) {
+      const id = Number(path.split("/").at(-1));
+      const comment = [
+        ...this.prComments,
+        ...this.reviewThreads.flatMap((t) => t.comments),
+      ].find((c) => c.id === id);
+      assert.ok(comment);
+      Object.assign(comment, data, {
+        editor: bot,
+        edited_at: "2026-09-15T14:00:00Z",
+        updated_at: "2026-09-15T14:00:00Z",
+        editingVerified: true,
+      });
       return comment;
     }
     if (path === "git/blobs" || path === "git/trees")
@@ -616,6 +662,194 @@ test("old issue-bot theories are excluded while formal PR review findings remain
   );
 });
 
+test("a write-role editor cannot borrow the original maintainer's command authority", () => {
+  const api = new FakeAPI();
+  api.command.editor = { login: "contributor", type: "User" };
+  api.command.edited_at = "2026-09-15T10:00:00Z";
+  api.command.body = "/astra an unauthorized edited task";
+  assert.equal(Boolean(initial(api)), false);
+});
+
+test("a checkpoint edited outside the App cannot become durable task authority", () => {
+  const api = new FakeAPI();
+  start(api);
+  const checkpoint = api.comments.find((c) => c.user.login === "ha-mcp[bot]");
+  checkpoint.editor = { login: "contributor", type: "User" };
+  checkpoint.edited_at = "2026-09-15T11:00:00Z";
+  assert.throws(() => stateFrom(api.comments, APP), /editor|outside|modified/);
+});
+
+test("an authenticated maintainer edit uses the editor as the command principal", () => {
+  const api = new FakeAPI();
+  api.command.user = { login: "contributor", type: "User" };
+  api.command.editor = user;
+  api.command.edited_at = "2026-09-15T11:00:00Z";
+  const plan = initial(api);
+  assert.equal(plan.decision.mode, "code");
+  assert.match(prompt(plan), /"author":"maintainer"/);
+});
+
+test("GitHub edit metadata supplies the coherent body and normalizes Bot identities", () => {
+  const api = new API("test/repo", (_binary, _args, options) => {
+    const request = JSON.parse(options.input);
+    assert.deepEqual(request.variables.ids, ["comment-1", "comment-2"]);
+    return JSON.stringify({
+      data: {
+        nodes: [
+          {
+            id: "comment-1",
+            body: "/astra edited content",
+            updatedAt: "2026-09-15T12:00:00Z",
+            lastEditedAt: "2026-09-15T12:00:00Z",
+            author: { login: "maintainer", __typename: "User" },
+            editor: { login: "contributor", __typename: "User" },
+          },
+          {
+            id: "comment-2",
+            body: "Review finding",
+            updatedAt: "2026-09-15T12:00:00Z",
+            lastEditedAt: null,
+            author: { login: "coderabbitai", __typename: "Bot" },
+            editor: null,
+          },
+        ],
+      },
+    });
+  });
+  const comments = api.edits([
+    { node_id: "comment-1", body: "old body" },
+    { node_id: "comment-2" },
+  ]);
+  assert.equal(comments[0].body, "/astra edited content");
+  assert.equal(comments[0].editor.login, "contributor");
+  assert.equal(comments[1].user.login, "coderabbitai[bot]");
+  assert.ok(comments.every((c) => c.editingVerified));
+});
+
+test("missing edit metadata fails closed instead of trusting the original author", () => {
+  const api = new API("test/repo", () =>
+    JSON.stringify({
+      data: {
+        nodes: [
+          {
+            id: "comment-1",
+            body: "/astra forged",
+            author: { login: "maintainer", __typename: "User" },
+          },
+        ],
+      },
+    }),
+  );
+  assert.throws(() => api.edits([{ node_id: "comment-1" }]), /metadata/);
+});
+
+for (const stage of ["resolution", "summary", "checkpoint"]) {
+  test(`review publication resumes after a ${stage} failure without duplicate replies or summaries`, () => {
+    const api = new FakeAPI();
+    start(api);
+    api.reviewThreads = [
+      {
+        id: "retry",
+        isResolved: false,
+        comments: [{ id: 800, user, body: "Explain this fix" }],
+      },
+    ];
+    const plan = prepare(api, { number: 10, automatic: true }, APP),
+      work = artifact();
+    work.changes = [];
+    work.result.outcome = "unchanged";
+    work.result.responses = [
+      {
+        thread_id: "retry",
+        body: "Verified by the existing regression.",
+        resolve: true,
+      },
+    ];
+    let failOnce = true;
+    const write = api.write.bind(api),
+      graphql = api.graphql.bind(api);
+    api.graphql = (query, variables) => {
+      if (
+        stage === "resolution" &&
+        failOnce &&
+        query.includes("resolveReviewThread")
+      ) {
+        failOnce = false;
+        throw Error("Injected resolution failure");
+      }
+      return graphql(query, variables);
+    };
+    api.write = (path, data, method) => {
+      if (
+        stage === "checkpoint" &&
+        failOnce &&
+        path === "issues/comments/100" &&
+        data.body.includes("**waiting**")
+      ) {
+        failOnce = false;
+        throw Error("Injected checkpoint failure");
+      }
+      const value = write(path, data, method);
+      if (stage === "summary" && failOnce && path === "issues/10/comments") {
+        failOnce = false;
+        throw Error("Injected summary failure");
+      }
+      return value;
+    };
+    assert.throws(
+      () => publish(api, plan, work, APP, { runId: "43" }),
+      /Injected/,
+    );
+    const next = prepare(api, { number: 10, automatic: true }, APP);
+    assert.ok(next, "Partially published work must remain resumable");
+    if (stage !== "resolution") work.result.responses = [];
+    else
+      work.result.responses[0].body =
+        "Clarified evidence from the regression after retry.";
+    work.result.summary =
+      "Recovered review publication with verified evidence.";
+    publish(api, next, work, APP, { runId: "44" });
+    assert.equal(api.reviewThreads[0].comments.length, 2);
+    assert.equal(api.prComments.length, 1);
+    assert.equal(stateFrom(api.comments, APP).status, "waiting");
+  });
+}
+
+test("a no-code review resolution becomes ready when its checks already passed", () => {
+  const api = new FakeAPI();
+  start(api);
+  green(api);
+  api.reviewThreads = [
+    {
+      id: "explain",
+      isResolved: false,
+      comments: [{ id: 800, user, body: "Explain the existing test" }],
+    },
+  ];
+  const plan = prepare(api, { number: 10, automatic: true }, APP),
+    work = artifact();
+  work.changes = [];
+  work.result.outcome = "unchanged";
+  work.result.responses = [
+    {
+      thread_id: "explain",
+      body: "The existing regression covers it.",
+      resolve: true,
+    },
+  ];
+  publish(api, plan, work, APP, { runId: "43" });
+  assert.equal(api.pr.draft, false);
+});
+
+test("automatic agent-instruction entrypoints require a human-controlled patch", () => {
+  for (const path of ["AGENTS.md", "src/AGENTS.md", "src/nested/CLAUDE.md"]) {
+    assert.throws(
+      () => validateChanges([{ path, mode: "100644", content: "" }]),
+      /path/,
+    );
+  }
+});
+
 test("a maintainer can authorize feedback in a contributor-opened thread", () => {
   const api = new FakeAPI();
   start(api);
@@ -717,7 +951,10 @@ test("maximum accepted ASCII task and memory can round-trip through a checkpoint
   state.summary = "s".repeat(12000);
   const body = renderState(state, api.repository);
   assert.ok(body.length < 65536);
-  assert.equal(stateFrom([{ id: 100, user: bot, body }], APP).task, state.task);
+  assert.equal(
+    stateFrom([{ id: 100, user: bot, body, editingVerified: true }], APP).task,
+    state.task,
+  );
 });
 
 test("superseded review wakeups do not look like failing product checks", () => {

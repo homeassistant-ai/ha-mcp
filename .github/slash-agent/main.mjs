@@ -6,7 +6,7 @@ import {
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { decide, resultSchema } from "./core.mjs";
+import { decide, principal, resultSchema } from "./core.mjs";
 import { API, collect, eventTarget, snapshotGuard } from "./github.mjs";
 import { packageWork } from "./worker.mjs";
 import { publish } from "./publish.mjs";
@@ -29,7 +29,7 @@ export function prepare(api, trigger, app) {
 
 export function prompt(plan) {
   const { snapshot: s, decision: d } = plan;
-  return `${readFileSync(resolve(here, "instructions.md"), "utf8")}\n\nAuthenticated maintainer task:\n${JSON.stringify({ author: d.latest.user.login, task: d.task })}\n\nSource material:\n${JSON.stringify(
+  return `${readFileSync(resolve(here, "instructions.md"), "utf8")}\n\nAuthenticated maintainer task:\n${JSON.stringify({ author: principal(d.latest).login, task: d.task })}\n\nSource material:\n${JSON.stringify(
     {
       repository: s.repository,
       issue: { number: s.root, title: s.issue.title, body: s.issue.body },
