@@ -18,6 +18,7 @@ under Starlette's first-match-wins routing, would not change the served body) is
 also caught.
 """
 
+import json
 import time
 from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs, urlparse
@@ -73,6 +74,11 @@ def oauth_app(tmp_path, monkeypatch):
 
     server = FastMCP("test")
     server.auth = HomeAssistantOAuthProvider(base_url=BASE_URL)
+
+    @server.tool
+    def ping() -> str:
+        return "pong"
+
     app = server.http_app(path="/mcp", stateless_http=True)
     # Expose the provider that served the document so a test can cross-check it
     # against what that same instance puts on an authorization response.
@@ -182,14 +188,24 @@ async def test_authorization_redirect_iss_matches_served_issuer(oauth_app):
     assert served_issuer == f"{BASE_URL}/"
 
 
-def _mcp_rpc(client, token: str | None, method: str):
+def _mcp_rpc(client, token: str | None, method: str, params: dict | None = None):
     headers = {"Accept": "application/json, text/event-stream"}
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
     return client.post(
         "/mcp",
         headers=headers,
-        json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {}},
+        json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}},
+    )
+
+
+def _rpc_body(response):
+    if response.headers["content-type"].startswith("application/json"):
+        return response.json()
+    return next(
+        json.loads(line[6:])
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
     )
 
 
@@ -202,7 +218,6 @@ def test_connector_login_over_http_reaches_an_authenticated_tool_call(oauth_app)
     """
     import base64
     import hashlib
-    import json
     import secrets
 
     from starlette.testclient import TestClient
@@ -292,19 +307,13 @@ def test_connector_login_over_http_reaches_an_authenticated_tool_call(oauth_app)
         )
         assert refreshed.status_code == 200, refreshed.text
 
-        assert _mcp_rpc(client, None, "tools/list").status_code == 401
-        listed = _mcp_rpc(client, refreshed.json()["access_token"], "tools/list")
-        assert listed.status_code == 200, listed.text
-        body = (
-            listed.json()
-            if listed.headers["content-type"].startswith("application/json")
-            else next(
-                json.loads(line[6:])
-                for line in listed.text.splitlines()
-                if line.startswith("data: ")
-            )
-        )
-        assert "result" in body, body
+        call = {"name": "ping", "arguments": {}}
+        assert _mcp_rpc(client, None, "tools/call", call).status_code == 401
+        called = _mcp_rpc(client, refreshed.json()["access_token"], "tools/call", call)
+        assert called.status_code == 200, called.text
+        body = _rpc_body(called)
+        assert body["result"]["isError"] is False, body
+        assert body["result"]["content"][0]["text"] == "pong", body
 
 
 def _iter_route_paths(routes):

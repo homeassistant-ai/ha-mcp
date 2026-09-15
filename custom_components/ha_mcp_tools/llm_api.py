@@ -418,8 +418,9 @@ def _transport_errors() -> tuple[type[BaseException], ...]:
 
     Evaluated at exception time (an ``except`` expression is), so whichever
     HTTP/MCP module raised is already in ``sys.modules`` for
-    :func:`_transport_error_leaves` to find. Includes ExceptionGroup because the SDK's anyio task groups wrap
-    in-session failures — but a caught group must still pass
+    :func:`_transport_error_leaves` to find. Includes ExceptionGroup because
+    the SDK's anyio task groups wrap in-session failures — but a caught group
+    must still pass
     :func:`_is_transport_failure` before being mapped to a friendly error,
     or a genuine bug that happened inside the task group would be relabeled
     as a transport failure (review finding).
