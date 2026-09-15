@@ -35,6 +35,13 @@ from .util_helpers import (
 logger = logging.getLogger(__name__)
 
 
+def _label_id_set(entry: dict[str, Any] | None) -> set[str]:
+    """String label IDs stored on an area registry entry."""
+    if not isinstance(entry, dict):
+        return set()
+    return {lbl for lbl in (entry.get("labels") or []) if isinstance(lbl, str)}
+
+
 def _parse_projection_params(
     fields: str | list[str] | None,
     area_fields: str | list[str] | None,
@@ -118,11 +125,12 @@ def _validate_cross_kind_params(
     level: int | None,
     floor_id: str | None,
     picture: str | None,
+    labels: list[str] | None = None,
 ) -> None:
     """Reject params that don't belong to *kind* before building a set message."""
     # Reject cross-kind params loudly so silent intent loss can't happen
     # (e.g., kind='floor' with picture='...' previously dropped the picture
-    # without a diagnostic).
+    # without a diagnostic). Floors have no labels in HA core.
     cross_kind_params: list[str] = []
     if kind == "area" and level is not None:
         cross_kind_params.append("level")
@@ -131,6 +139,8 @@ def _validate_cross_kind_params(
             cross_kind_params.append("floor_id")
         if picture is not None:
             cross_kind_params.append("picture")
+        if labels is not None:
+            cross_kind_params.append("labels")
     if cross_kind_params:
         raise_tool_error(
             create_error_response(
@@ -138,7 +148,7 @@ def _validate_cross_kind_params(
                 f"Parameter(s) {cross_kind_params} are not valid for kind={kind!r}",
                 context={"kind": kind, "invalid_parameters": cross_kind_params},
                 suggestions=[
-                    "For kind='area' use: name, id, floor_id, icon, aliases, picture",
+                    "For kind='area' use: name, id, floor_id, icon, aliases, picture, labels",
                     "For kind='floor' use: name, id, level, icon, aliases",
                 ],
             )
@@ -159,6 +169,7 @@ class AreaTools:
         icon: str | None,
         parsed_aliases: list[str] | None,
         picture: str | None,
+        parsed_labels: list[str] | None,
     ) -> dict[str, Any]:
         """Build a WebSocket message for updating an existing area."""
         message: dict[str, Any] = {
@@ -175,6 +186,8 @@ class AreaTools:
             message["aliases"] = parsed_aliases
         if picture is not None:
             message["picture"] = picture if picture else None
+        if parsed_labels is not None:
+            message["labels"] = parsed_labels
         return message
 
     @staticmethod
@@ -184,6 +197,7 @@ class AreaTools:
         icon: str | None,
         parsed_aliases: list[str] | None,
         picture: str | None,
+        parsed_labels: list[str] | None,
     ) -> dict[str, Any]:
         """Build a WebSocket message for creating a new area."""
         message: dict[str, Any] = {
@@ -198,6 +212,8 @@ class AreaTools:
             message["aliases"] = parsed_aliases
         if picture:
             message["picture"] = picture
+        if parsed_labels:
+            message["labels"] = parsed_labels
         return message
 
     @staticmethod
@@ -475,6 +491,7 @@ class AreaTools:
         icon: str | None,
         parsed_aliases: list[str] | None,
         picture: str | None,
+        parsed_labels: list[str] | None,
     ) -> tuple[dict[str, Any], str, str, str, str | None]:
         """Build the WS message plus (result_key, id_key, operation, name) for a set.
 
@@ -490,6 +507,7 @@ class AreaTools:
                     icon,
                     parsed_aliases,
                     picture,
+                    parsed_labels,
                 )
                 operation = "update"
             else:
@@ -508,6 +526,7 @@ class AreaTools:
                     icon,
                     parsed_aliases,
                     picture,
+                    parsed_labels,
                 )
                 operation = "create"
             result_key = "area"
@@ -540,6 +559,132 @@ class AreaTools:
             result_key = "floor"
             id_key = "floor_id"
         return message, result_key, id_key, operation, name
+
+    @staticmethod
+    def _label_verify_context(
+        *,
+        parsed_labels: list[str],
+        kind: str,
+        returned_id: str | None,
+        operation: str,
+        name: str | None,
+        write_committed: bool = False,
+    ) -> dict[str, Any]:
+        """Error context shared by both label-verification failure paths."""
+        ctx: dict[str, Any] = {
+            "operation": operation,
+            "kind": kind,
+            "area_id": returned_id,
+            "expected_labels": parsed_labels,
+        }
+        if write_committed:
+            ctx["write_committed"] = True
+        if name:
+            ctx["name"] = name
+        return ctx
+
+    async def _verify_area_labels_written(
+        self,
+        *,
+        parsed_labels: list[str] | None,
+        kind: str,
+        data: dict[str, Any],
+        returned_id: str | None,
+        operation: str,
+        name: str | None,
+    ) -> None:
+        """Confirm HA stored the requested label set, not just a success ack."""
+        if kind != "area" or parsed_labels is None:
+            return
+        expected = set(parsed_labels)
+        if _label_id_set(data) == expected:
+            return
+        try:
+            listed = await self._client.send_websocket_message(
+                {"type": "config/area_registry/list"}
+            )
+        except Exception as exc:
+            # Write already succeeded; a transport failure on re-read must
+            # not look like a failed create (retry would duplicate the area).
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Area write succeeded, but label verification failed",
+                    details=str(exc),
+                    context=self._label_verify_context(
+                        parsed_labels=parsed_labels,
+                        kind=kind,
+                        returned_id=returned_id,
+                        operation=operation,
+                        name=name,
+                        write_committed=True,
+                    ),
+                    suggestions=[
+                        "The area write already committed; do not retry create.",
+                        "Re-read with ha_list_floors_areas() before retrying labels.",
+                    ],
+                )
+            )
+        rows = listed.get("result") if listed.get("success") else None
+        found: dict[str, Any] | None = None
+        if isinstance(rows, list):
+            found = next(
+                (
+                    a
+                    for a in rows
+                    if isinstance(a, dict) and a.get("area_id") == returned_id
+                ),
+                None,
+            )
+        if found is not None and _label_id_set(found) == expected:
+            return
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                "Area write succeeded but the returned entry does not contain "
+                "the requested labels",
+                context=self._label_verify_context(
+                    parsed_labels=parsed_labels,
+                    kind=kind,
+                    returned_id=returned_id,
+                    operation=operation,
+                    name=name,
+                ),
+            )
+        )
+
+    async def _area_or_floor_write_success(
+        self,
+        result: dict[str, Any],
+        *,
+        result_key: str,
+        id_key: str,
+        identifier: str | None,
+        kind: str,
+        operation: str,
+        name: str | None,
+        parsed_labels: list[str] | None,
+    ) -> dict[str, Any]:
+        data = result.get("result", {})
+        if not isinstance(data, dict):
+            data = {}
+        returned_id = data.get(id_key, identifier)
+        await self._verify_area_labels_written(
+            parsed_labels=parsed_labels,
+            kind=kind,
+            data=data,
+            returned_id=returned_id if isinstance(returned_id, str) else identifier,
+            operation=operation,
+            name=name,
+        )
+        display_name = name or data.get("name", returned_id)
+        return {
+            "success": True,
+            result_key: data,
+            id_key: returned_id,
+            "kind": kind,
+            "message": f"Successfully {operation}d {kind}: {display_name}",
+        }
 
     # ============================================================
     # COMBINED SET / REMOVE
@@ -622,16 +767,29 @@ class AreaTools:
                 default=None,
             ),
         ] = None,
+        labels: Annotated[
+            str | list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Label IDs when kind='area' (replaces the area's label set; "
+                    "empty list to clear). Omit to leave labels unchanged. "
+                    "Only valid when kind='area' — floors have no labels."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Create or update a Home Assistant area or floor.
 
-        Pass kind='area' (with optional floor_id, picture) or kind='floor' (with optional level).
+        Pass kind='area' (with optional floor_id, picture, labels) or kind='floor' (with optional level).
         Provide name only to create a new entry; provide id to update an existing one.
-        Cross-kind parameters (e.g., picture under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.
+        Cross-kind parameters (e.g., picture or labels under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.
 
         EXAMPLES:
         ha_set_area_or_floor(kind="area", name="Kitchen")
         ha_set_area_or_floor(kind="area", id="kitchen", floor_id="ground_floor")
+        ha_set_area_or_floor(kind="area", id="kitchen", labels=["site_home"])
         ha_set_area_or_floor(kind="floor", name="Basement", level=-1)
         ha_set_area_or_floor(kind="floor", id="ground_floor", level=0)
         """
@@ -647,7 +805,17 @@ class AreaTools:
                     )
                 )
 
-            _validate_cross_kind_params(kind, level, floor_id, picture)
+            try:
+                parsed_labels = parse_string_list_param(labels, "labels")
+            except ValueError as e:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        f"Invalid labels parameter: {e}",
+                    )
+                )
+
+            _validate_cross_kind_params(kind, level, floor_id, picture, parsed_labels)
 
             # ``None`` stays the documented "create-new" sentinel; explicit
             # empty/whitespace would silently route to the ``if id:`` create
@@ -673,30 +841,36 @@ class AreaTools:
                     icon,
                     parsed_aliases,
                     picture,
+                    parsed_labels,
                 )
             )
 
-            # Issue #2159: the area registry stores an unknown floor_id
-            # verbatim, orphaning the area. ``_validate_cross_kind_params``
-            # already rejected floor_id for kind='floor', so this only ever
-            # runs for areas; None and "" (clear) skip the lookup.
+            # Issue #2159: the area registry stores an unknown floor_id or
+            # label_id verbatim. ``_validate_cross_kind_params`` already
+            # rejected floor_id/labels for kind='floor', so this only ever
+            # runs for areas; None and "" / [] (clear) skip the lookup.
             await validate_registry_ids(
-                self._client, None, None, None, floor_id=floor_id, fail_closed=True
+                self._client,
+                None,
+                parsed_labels,
+                None,
+                floor_id=floor_id,
+                fail_closed=True,
             )
 
             result = await self._client.send_websocket_message(message)
 
             if result.get("success"):
-                data = result.get("result", {})
-                returned_id = data.get(id_key, id)
-                display_name = name or data.get("name", returned_id)
-                return {
-                    "success": True,
-                    result_key: data,
-                    id_key: returned_id,
-                    "kind": kind,
-                    "message": f"Successfully {operation}d {kind}: {display_name}",
-                }
+                return await self._area_or_floor_write_success(
+                    result,
+                    result_key=result_key,
+                    id_key=id_key,
+                    identifier=id,
+                    kind=kind,
+                    operation=operation,
+                    name=name,
+                    parsed_labels=parsed_labels,
+                )
 
             error = result.get("error", {})
             error_msg = (
@@ -728,6 +902,9 @@ class AreaTools:
             ]
             if kind == "area":
                 suggestions.append("If assigning to a floor, verify floor_id exists")
+                suggestions.append(
+                    "If assigning labels, verify label IDs with ha_config_get_label()"
+                )
             exception_to_structured_error(
                 e,
                 context={"operation": operation, "kind": kind, "name": name, "id": id},

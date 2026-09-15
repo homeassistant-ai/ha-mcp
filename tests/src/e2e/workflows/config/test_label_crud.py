@@ -8,6 +8,7 @@ Tests the complete lifecycle of labels including:
 """
 
 import logging
+import uuid
 
 import pytest
 
@@ -563,3 +564,58 @@ async def test_multiple_labels_lifecycle(mcp_client, cleanup_tracker):
     for label_id in label_ids:
         assert label_id not in list_label_ids, f"Label {label_id} should be deleted"
     logger.info("All label deletions verified")
+
+
+@pytest.mark.asyncio
+@pytest.mark.config
+async def test_set_label_assigns_to_area(mcp_client, cleanup_tracker):
+    """ha_config_set_label(areas=...) adds the label onto existing areas."""
+    suffix = uuid.uuid4().hex[:8]
+    area_name = f"E2E Label Assign Area {suffix}"
+    label_name = f"E2E Label Assign Tag {suffix}"
+    area_id = None
+    label_id = None
+    try:
+        area_result = await mcp_client.call_tool(
+            "ha_set_area_or_floor",
+            {"kind": "area", "name": area_name},
+        )
+        area_data = assert_mcp_success(area_result, "Create area for label assign")
+        area_id = area_data.get("area_id")
+        assert area_id, f"Missing area_id: {area_data}"
+        cleanup_tracker.track("area", area_id)
+
+        label_result = await mcp_client.call_tool(
+            "ha_config_set_label",
+            {"name": label_name, "areas": [area_id]},
+        )
+        label_data = assert_mcp_success(label_result, "Create label and assign to area")
+        label_id = label_data.get("label_id")
+        assert label_id, f"Missing label_id: {label_data}"
+        cleanup_tracker.track("label", label_id)
+        assert area_id in (label_data.get("assigned_areas") or []), label_data
+
+        list_result = await mcp_client.call_tool("ha_list_floors_areas", {})
+        list_data = assert_mcp_success(list_result, "List areas after label assign")
+        nested = [a for f in list_data.get("floors", []) for a in f.get("areas", [])]
+        areas = (
+            nested
+            + list_data.get("unassigned_areas", [])
+            + list_data.get("orphaned_areas", [])
+        )
+        found = next((a for a in areas if a.get("area_id") == area_id), None)
+        assert found is not None, f"Area {area_id} not in list"
+        assert label_id in (found.get("labels") or []), found.get("labels")
+    finally:
+        if area_id:
+            await safe_call_tool(
+                mcp_client,
+                "ha_remove_area_or_floor",
+                {"kind": "area", "id": area_id},
+            )
+        if label_id:
+            await safe_call_tool(
+                mcp_client,
+                "ha_config_remove_label",
+                {"label_id": label_id},
+            )

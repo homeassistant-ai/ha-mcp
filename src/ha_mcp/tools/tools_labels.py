@@ -2,16 +2,21 @@
 Label management tools for Home Assistant.
 
 This module provides tools for listing, creating, updating, and deleting
-Home Assistant labels. To assign labels to entities, use ha_set_entity(labels=...).
+Home Assistant labels. To assign labels to entities, devices, or areas, use
+ha_set_entity / ha_set_device / ha_set_area_or_floor, or pass areas= to
+ha_config_set_label.
 """
 
+import json
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import tool
 from pydantic import Field
 
+from ..backup_manager import get_backup_manager
+from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .helpers import (
@@ -21,8 +26,17 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
+from .tools_config_helpers import _raise_if_unknown_area
+from .util_helpers import JSON_STRING_COERCION, parse_string_list_param
 
 logger = logging.getLogger(__name__)
+
+
+def _string_labels(entry: dict[str, Any] | None) -> list[str]:
+    """Return the string label IDs stored on a registry entry."""
+    if not isinstance(entry, dict):
+        return []
+    return [lbl for lbl in (entry.get("labels") or []) if isinstance(lbl, str)]
 
 
 class LabelTools:
@@ -98,6 +112,381 @@ class LabelTools:
             )
         )
 
+    async def _list_area_registry(
+        self, *, context: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Return the area registry, failing closed on a degraded envelope."""
+        list_result = await self._client.send_websocket_message(
+            {"type": "config/area_registry/list"}
+        )
+        areas = list_result.get("result") if list_result.get("success") else None
+        if not isinstance(areas, list):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Failed to retrieve area registry while assigning label",
+                    context=context,
+                    suggestions=[
+                        "Check Home Assistant connection",
+                        "Use ha_list_floors_areas() to list areas",
+                    ],
+                )
+            )
+        return areas
+
+    def _unique_area_ids(self, area_ids: list[str]) -> list[str]:
+        """Reject empty IDs and return unique area IDs in caller order."""
+        seen: set[str] = set()
+        unique: list[str] = []
+        for area_id in area_ids:
+            if not area_id:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "areas must be a list of non-empty area IDs",
+                        context={"areas": area_ids},
+                        suggestions=[
+                            "Use ha_list_floors_areas() to list valid area IDs.",
+                            "Omit areas to leave area assignments unchanged.",
+                        ],
+                    )
+                )
+            if area_id not in seen:
+                seen.add(area_id)
+                unique.append(area_id)
+        return unique
+
+    async def _require_areas_exist(self, area_ids: list[str]) -> None:
+        """Reject empty or unknown area IDs before creating/updating a label.
+
+        Home Assistant stores a dangling area_id nowhere here — the later
+        area-registry update would fail opaquely or no-op — so fail closed
+        up front. Empty strings are not the documented clear sentinel (that
+        is omitting ``areas``); they are invalid IDs. All IDs are checked
+        against one registry snapshot (not N sequential list calls).
+        """
+        unique = self._unique_area_ids(area_ids)
+        areas = await self._list_area_registry(context={"areas": unique})
+        for area_id in unique:
+            _raise_if_unknown_area(areas, area_id)
+
+    async def _snapshot_areas_before_assign(self, area_ids: list[str]) -> None:
+        """Best-effort pre-write snapshot of each target area (label restore
+        cannot undo area assignments).
+        """
+        try:
+            mgr = get_backup_manager(self._client, get_global_settings())
+            for area_id in area_ids:
+                await mgr.maybe_snapshot(
+                    "area_or_floor",
+                    f"area:{area_id}",
+                    tool_name="ha_config_set_label",
+                )
+        except Exception:
+            logger.warning(
+                "Could not snapshot areas before label assignment",
+                extra={"areas": area_ids},
+                exc_info=True,
+            )
+
+    def _raise_area_label_assign_failure(
+        self,
+        *,
+        label_id: str,
+        area_id: str,
+        message: str,
+        assigned: list[str],
+    ) -> NoReturn:
+        """Raise SERVICE_CALL_FAILED including partial assignment progress."""
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                message,
+                context={
+                    "label_id": label_id,
+                    "area_id": area_id,
+                    "partial": True,
+                    "assigned_areas": assigned,
+                },
+                suggestions=[
+                    (
+                        "The label write already succeeded; retry only the "
+                        + "remaining area IDs (do not recreate the label)."
+                    ),
+                    (
+                        "Use ha_set_area_or_floor(kind='area', labels=...) to "
+                        + "replace an area's label set, or "
+                        + "ha_list_floors_areas() to inspect current assignments."
+                    ),
+                ],
+            )
+        )
+
+    def _area_from_registry(
+        self, areas: list[dict[str, Any]], area_id: str
+    ) -> dict[str, Any] | None:
+        for area in areas:
+            if isinstance(area, dict) and area.get("area_id") == area_id:
+                return area
+        return None
+
+    async def _confirm_area_has_label(
+        self, label_id: str, area_id: str, update_result: dict[str, Any]
+    ) -> bool:
+        """True when the update envelope or a fresh list contains ``label_id``."""
+        result = update_result.get("result")
+        if label_id in _string_labels(result if isinstance(result, dict) else None):
+            return True
+        areas = await self._list_area_registry(
+            context={"label_id": label_id, "area_id": area_id}
+        )
+        return label_id in _string_labels(self._area_from_registry(areas, area_id))
+
+    def _reraise_assign_failure(
+        self,
+        err: Exception,
+        *,
+        label_id: str,
+        area_id: str,
+        assigned: list[str],
+    ) -> NoReturn:
+        """Re-raise with partial progress when the inner error omitted it."""
+        payload: dict[str, Any] = {}
+        if isinstance(err, ToolError):
+            try:
+                parsed = json.loads(str(err))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed = {}
+            if isinstance(parsed, dict):
+                payload = parsed
+                if payload.get("partial") is True:
+                    raise err
+        message = ""
+        if isinstance(payload.get("error"), dict):
+            message = str(payload["error"].get("message") or "")
+        if not message:
+            message = str(err) or (
+                f"Failed to assign label {label_id!r} to area {area_id!r}"
+            )
+        self._raise_area_label_assign_failure(
+            label_id=label_id,
+            area_id=area_id,
+            message=message,
+            assigned=assigned,
+        )
+
+    async def _add_label_to_one_area(
+        self, label_id: str, area_id: str, assigned: list[str]
+    ) -> None:
+        """Fresh read-modify-write for one area. HA has no atomic label-add."""
+        areas = await self._list_area_registry(
+            context={"label_id": label_id, "area_id": area_id}
+        )
+        area = self._area_from_registry(areas, area_id)
+        if area is None:
+            self._raise_area_label_assign_failure(
+                label_id=label_id,
+                area_id=area_id,
+                message=f"area_id={area_id!r} does not exist in the area registry.",
+                assigned=assigned,
+            )
+        current = _string_labels(area)
+        if label_id in current:
+            return
+        update = await self._client.send_websocket_message(
+            {
+                "type": "config/area_registry/update",
+                "area_id": area_id,
+                "labels": [*current, label_id],
+            }
+        )
+        if not update.get("success"):
+            self._raise_area_label_assign_failure(
+                label_id=label_id,
+                area_id=area_id,
+                message=(
+                    f"Failed to assign label {label_id!r} to area {area_id!r}: "
+                    f"{update.get('error', 'Unknown error')}"
+                ),
+                assigned=assigned,
+            )
+        if not await self._confirm_area_has_label(label_id, area_id, update):
+            self._raise_area_label_assign_failure(
+                label_id=label_id,
+                area_id=area_id,
+                message=(
+                    f"Area {area_id!r} update succeeded but label "
+                    f"{label_id!r} is not present on the area."
+                ),
+                assigned=assigned,
+            )
+
+    async def _add_label_to_areas(
+        self, label_id: str, area_ids: list[str]
+    ) -> list[str]:
+        """Add ``label_id`` to each area's label set without removing others."""
+        unique = list(dict.fromkeys(area_ids))
+        await self._snapshot_areas_before_assign(unique)
+        assigned: list[str] = []
+        for area_id in unique:
+            try:
+                await self._add_label_to_one_area(label_id, area_id, assigned)
+            except Exception as err:
+                # Catch ordinary failures (transport, ToolError). Cancellation
+                # is BaseException and must propagate.
+                self._reraise_assign_failure(
+                    err, label_id=label_id, area_id=area_id, assigned=assigned
+                )
+            assigned.append(area_id)
+        return assigned
+
+    def _parse_areas_param(self, areas: str | list[str] | None) -> list[str] | None:
+        try:
+            return parse_string_list_param(areas, "areas")
+        except ValueError as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid areas parameter: {e}",
+                )
+            )
+        return None  # py/mixed-returns: explicit terminal; raise_tool_error is NoReturn
+
+    async def _apply_label_to_requested_areas(
+        self,
+        parsed_areas: list[str] | None,
+        resolved_id: str | None,
+    ) -> list[str] | None:
+        """Return assigned area IDs, or None when the caller omitted ``areas``."""
+        if parsed_areas is None:
+            return None
+        if not parsed_areas:
+            return []
+        if not resolved_id:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    "Label write succeeded without a resolved label_id; "
+                    "area assignment was not applied.",
+                    context={"areas": parsed_areas},
+                    suggestions=[
+                        "Retry ha_config_get_label() to confirm the label, "
+                        "then assign with ha_set_area_or_floor(kind='area').",
+                    ],
+                )
+            )
+        return await self._add_label_to_areas(resolved_id, parsed_areas)
+
+    def _raise_label_set_failure(
+        self, result: dict[str, Any], action: str, name: str, label_id: str | None
+    ) -> NoReturn:
+        """Raise for a failed label_registry create/update.
+
+        The unknown-id case is caught up front by ``_require_existing_label``.
+        This substring match only catches HA error texts containing
+        ``"not found"``/``"doesn't exist"``; HA's label update does NOT emit
+        those for an unknown/deleted id (it surfaces ``"Unknown error"``), so
+        it is a best-effort guard for other/future phrasings only.
+        """
+        error_str = str(result.get("error", "")).lower()
+        if "not found" in error_str or "doesn't exist" in error_str:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    f"Label not found: {label_id}",
+                    context={"name": name, "label_id": label_id},
+                    suggestions=[
+                        "Use ha_config_get_label() without label_id to see all labels",
+                    ],
+                )
+            )
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.SERVICE_CALL_FAILED,
+                f"Failed to {action} label: {result.get('error', 'Unknown error')}",
+                context={"name": name, "label_id": label_id},
+            )
+        )
+
+    async def _prepare_label_write(
+        self,
+        name: str,
+        label_id: str | None,
+        areas: str | list[str] | None,
+    ) -> list[str] | None:
+        """Validate create/update discriminator and optional area targets."""
+        # ``None`` stays the documented "create-new" sentinel; explicit
+        # empty/whitespace is rejected so the create/update discriminator
+        # cannot silently route an intended update to create.
+        if label_id is not None:
+            validate_identifier_not_empty(
+                label_id,
+                "label_id",
+                suggestions=[
+                    "Omit label_id entirely to create a new label",
+                    "Pass a valid label_id to update an existing label",
+                ],
+                context={"action": "set", "name": name},
+            )
+            # Strict update-only contract (issue #1860): routing to
+            # label_registry/update with an unknown id returns an opaque
+            # "Unknown error", and label_registry/create cannot honor a
+            # caller-supplied id (HA derives it from the name). Verify the
+            # id exists up front and return actionable guidance instead of
+            # dispatching an update that fails cryptically.
+            await self._require_existing_label(label_id, name)
+        parsed_areas = self._parse_areas_param(areas)
+        if parsed_areas:
+            await self._require_areas_exist(parsed_areas)
+        return parsed_areas
+
+    def _build_label_set_message(
+        self,
+        name: str,
+        label_id: str | None,
+        color: str | None,
+        icon: str | None,
+        description: str | None,
+    ) -> tuple[str, dict[str, Any]]:
+        action = "update" if label_id else "create"
+        message: dict[str, Any] = {
+            "type": f"config/label_registry/{action}",
+            "name": name,
+        }
+        if action == "update":
+            message["label_id"] = label_id
+        if color is not None:
+            message["color"] = color
+        if icon is not None:
+            message["icon"] = icon
+        if description is not None:
+            message["description"] = description
+        return action, message
+
+    async def _label_set_success_response(
+        self,
+        result: dict[str, Any],
+        action: str,
+        name: str,
+        label_id: str | None,
+        parsed_areas: list[str] | None,
+    ) -> dict[str, Any]:
+        label_data = result.get("result", {})
+        action_past = "created" if action == "create" else "updated"
+        resolved_id = label_data.get("label_id") or label_id
+        assigned_areas = await self._apply_label_to_requested_areas(
+            parsed_areas, resolved_id
+        )
+        payload: dict[str, Any] = {
+            "success": True,
+            "label_id": resolved_id,
+            "label_data": label_data,
+            "message": f"Successfully {action_past} label: {name}",
+        }
+        if assigned_areas is not None:
+            payload["assigned_areas"] = assigned_areas
+        return payload
+
     @tool(
         name="ha_config_get_label",
         tags={"Labels & Categories"},
@@ -134,7 +523,9 @@ class LabelTools:
         - Get specific label: ha_config_get_label("my_label_id")
 
         Use ha_config_set_label() to create or update labels.
-        Use ha_set_entity(labels=["label1", "label2"]) to assign labels to entities.
+        Use ha_set_entity(labels=["label1", "label2"]) to assign labels to entities,
+        ha_set_device(labels=[...]) for devices, or
+        ha_set_area_or_floor(kind="area", labels=[...]) for areas.
         """
         try:
             # ``None`` stays the documented "list-all" sentinel; explicit
@@ -243,6 +634,17 @@ class LabelTools:
                 default=None,
             ),
         ] = None,
+        areas: Annotated[
+            str | list[str] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Area IDs to apply this label to (adds the label without "
+                    "removing existing ones). Omit to leave area assignments unchanged."
+                ),
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """
         Create or update a Home Assistant label.
@@ -258,87 +660,24 @@ class LabelTools:
         - Create label with icon: ha_config_set_label("Battery Powered", icon="mdi:battery")
         - Create full label: ha_config_set_label("Security", color="red", icon="mdi:shield", description="Security-related devices")
         - Update label: ha_config_set_label("Updated Name", label_id="my_label_id", color="blue")
+        - Create and apply to areas: ha_config_set_label("Site Home", areas=["kitchen", "living_room"])
 
-        After creating a label, use ha_set_entity(labels=["label_id"]) to assign it to entities.
+        After creating a label, use ha_set_entity(labels=["label_id"]) to assign it to entities,
+        ha_set_device(labels=["label_id"]) for devices, or
+        ha_set_area_or_floor(kind="area", labels=["label_id"]) for areas (replaces the area's set).
+        Pass areas=["kitchen"] here to add the label onto those areas without replacing others.
         """
         try:
-            # ``None`` stays the documented "create-new" sentinel; explicit
-            # empty/whitespace is rejected so the create/update discriminator
-            # below cannot silently route an intended update to create.
-            if label_id is not None:
-                validate_identifier_not_empty(
-                    label_id,
-                    "label_id",
-                    suggestions=[
-                        "Omit label_id entirely to create a new label",
-                        "Pass a valid label_id to update an existing label",
-                    ],
-                    context={"action": "set", "name": name},
-                )
-                # Strict update-only contract (issue #1860): routing to
-                # label_registry/update with an unknown id returns an opaque
-                # "Unknown error", and label_registry/create cannot honor a
-                # caller-supplied id (HA derives it from the name). Verify the
-                # id exists up front and return actionable guidance instead of
-                # dispatching an update that fails cryptically.
-                await self._require_existing_label(label_id, name)
-            action = "update" if label_id else "create"
-
-            message: dict[str, Any] = {
-                "type": f"config/label_registry/{action}",
-                "name": name,
-            }
-
-            if action == "update":
-                message["label_id"] = label_id
-                # Note: name is always provided as it's a required parameter
-                # The validation of at least one field is satisfied by name being required
-
-            if color is not None:
-                message["color"] = color
-            if icon is not None:
-                message["icon"] = icon
-            if description is not None:
-                message["description"] = description
-
+            parsed_areas = await self._prepare_label_write(name, label_id, areas)
+            action, message = self._build_label_set_message(
+                name, label_id, color, icon, description
+            )
             result = await self._client.send_websocket_message(message)
-
             if result.get("success"):
-                label_data = result.get("result", {})
-                action_past = "created" if action == "create" else "updated"
-                return {
-                    "success": True,
-                    "label_id": label_data.get("label_id"),
-                    "label_data": label_data,
-                    "message": f"Successfully {action_past} label: {name}",
-                }
-            else:
-                # The unknown-id case is caught up front by
-                # _require_existing_label. This substring match only catches HA
-                # error texts containing "not found"/"doesn't exist"; HA's label
-                # update does NOT emit those for an unknown/deleted id (it
-                # surfaces "Unknown error"), so it is a best-effort guard for
-                # other/future phrasings only — the check-then-update delete race
-                # is not handled here and still surfaces as SERVICE_CALL_FAILED.
-                error_str = str(result.get("error", "")).lower()
-                if "not found" in error_str or "doesn't exist" in error_str:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.RESOURCE_NOT_FOUND,
-                            f"Label not found: {label_id}",
-                            context={"name": name, "label_id": label_id},
-                            suggestions=[
-                                "Use ha_config_get_label() without label_id to see all labels",
-                            ],
-                        )
-                    )
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.SERVICE_CALL_FAILED,
-                        f"Failed to {action} label: {result.get('error', 'Unknown error')}",
-                        context={"name": name, "label_id": label_id},
-                    )
+                return await self._label_set_success_response(
+                    result, action, name, label_id, parsed_areas
                 )
+            self._raise_label_set_failure(result, action, name, label_id)
 
         except ToolError:
             raise

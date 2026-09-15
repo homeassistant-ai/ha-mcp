@@ -233,6 +233,77 @@ class TestAreaLifecycle:
         assert delete_data.get("success"), f"Failed to delete area: {delete_data}"
         logger.info("Area cleanup completed")
 
+    async def test_area_with_labels(self, mcp_client, cleanup_tracker):
+        """Create an area with labels and verify the set is stored (issue #2455)."""
+        area_name = generate_unique_name("test_label_area")
+        label_name = generate_unique_name("e2e_area_lbl")
+        logger.info(f"Testing area with labels: {area_name}")
+        area_id = None
+        label_id = None
+        try:
+            label_result = await mcp_client.call_tool(
+                "ha_config_set_label",
+                {"name": label_name},
+            )
+            label_data = parse_mcp_result(label_result)
+            assert label_data.get("success"), f"Failed to create label: {label_data}"
+            label_id = label_data.get("label_id")
+            assert label_id, f"No label_id returned: {label_data}"
+            cleanup_tracker.track("label", label_id)
+
+            create_result = await mcp_client.call_tool(
+                "ha_set_area_or_floor",
+                {
+                    "kind": "area",
+                    "name": area_name,
+                    "labels": [label_id],
+                },
+            )
+            create_data = parse_mcp_result(create_result)
+            assert create_data.get("success"), f"Failed to create area: {create_data}"
+            area_id = create_data.get("area_id")
+            cleanup_tracker.track("area", area_id)
+
+            list_result = await mcp_client.call_tool("ha_list_floors_areas", {})
+            list_data = parse_mcp_result(list_result)
+            areas = _flatten_areas(list_data)
+            found_area = next((a for a in areas if a.get("area_id") == area_id), None)
+            assert found_area is not None, f"Area not found: {area_id}"
+            assert label_id in (found_area.get("labels") or []), (
+                f"Label {label_id} not found on area: {found_area.get('labels')}"
+            )
+
+            clear_result = await mcp_client.call_tool(
+                "ha_set_area_or_floor",
+                {"kind": "area", "id": area_id, "labels": []},
+            )
+            clear_data = parse_mcp_result(clear_result)
+            assert clear_data.get("success"), f"Failed to clear labels: {clear_data}"
+
+            list_result = await mcp_client.call_tool("ha_list_floors_areas", {})
+            list_data = parse_mcp_result(list_result)
+            found_area = next(
+                (a for a in _flatten_areas(list_data) if a.get("area_id") == area_id),
+                None,
+            )
+            assert found_area is not None
+            assert not (found_area.get("labels") or []), (
+                f"Expected empty labels after clear, got {found_area.get('labels')}"
+            )
+        finally:
+            if area_id:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_remove_area_or_floor",
+                    {"kind": "area", "id": area_id},
+                )
+            if label_id:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_config_remove_label",
+                    {"label_id": label_id},
+                )
+
 
 @pytest.mark.floor
 class TestFloorLifecycle:
