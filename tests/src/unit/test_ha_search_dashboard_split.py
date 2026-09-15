@@ -275,7 +275,7 @@ class TestMergeWindowHelper:
         }
 
         windowed, dashboards = _merge_dashboard_window(
-            req, component_result, [{"dashboard_url": "energy", "score": 90}]
+            req, component_result, [{"url_path": "energy", "score": 90}]
         )
 
         assert "scripts" not in windowed
@@ -283,7 +283,7 @@ class TestMergeWindowHelper:
         assert "helpers" not in windowed
         # The dashboards bucket is the leg's, never the component's.
         assert "dashboards" not in windowed
-        assert [d["dashboard_url"] for d in dashboards] == ["energy"]
+        assert [d["url_path"] for d in dashboards] == ["energy"]
         assert windowed["config_total_matches"] == 2
 
 
@@ -316,7 +316,7 @@ class TestDashboardSplitRoute:
         assert [a["entity_id"] for a in resp["automations"]] == [
             "automation.kitchen_lights"
         ]
-        assert [d["dashboard_url"] for d in resp["dashboards"]] == ["energy"]
+        assert [d["url_path"] for d in resp["dashboards"]] == ["energy"]
         assert resp["config_total_matches"] == 2
         assert resp["count"] == 2
         assert resp["partial"] is False
@@ -488,7 +488,7 @@ class TestDashboardSplitPagination:
         assert request["limit"] == 4
         # Merged order: automation(100), dashboard(100), automation(80),
         # automation(60) — on the score tie the mirrored component tiebreak
-        # sorts "automation.first" before the "energy" dashboard_url, so
+        # sorts "automation.first" before the "energy" url_path, so
         # page [2:4] is the 80 then the 60 automation.
         assert [a["entity_id"] for a in resp["automations"]] == [
             "automation.second",
@@ -626,7 +626,7 @@ class TestDashboardSplitIncludeConfig:
                 include_config=False,
             )
 
-        assert [d["dashboard_url"] for d in resp["dashboards"]] == ["default"]
+        assert [d["url_path"] for d in resp["dashboards"]] == ["default"]
         assert "config" not in resp["dashboards"][0]
 
     @pytest.mark.asyncio
@@ -768,7 +768,7 @@ class TestDashboardSplitComponentLegFailure:
         assert client.get_states_calls == 1
         # Exactly one "energy" record: the legacy path produced it, and the
         # split leg's copy was dropped rather than merged on top.
-        assert [d["dashboard_url"] for d in resp["dashboards"]] == ["energy"]
+        assert [d["url_path"] for d in resp["dashboards"]] == ["energy"]
 
     @pytest.mark.asyncio
     async def test_component_error_cancels_slow_dashboard_leg(

@@ -181,14 +181,11 @@ async def test_deep_search_dashboard_type(mcp_client):
 
         # Verify the match is from our test dashboard
         found = any(
-            d.get("dashboard_url") == "deep-search-test-dash"
+            d.get("url_path") == "deep-search-test-dash"
             or d.get("dashboard_title") == "Deep Search Test"
             for d in dashboards
         )
         assert found, "Should find our specific test dashboard"
-        assert all(d.get("url_path") == d.get("dashboard_url") for d in dashboards), (
-            f"Dashboard records must carry url_path (#2462): {dashboards}"
-        )
         logger.info(f"Dashboard search found {len(dashboards)} matching dashboard(s)")
 
         # Issue #2008: the dashboard surface is legacy-only, so the request

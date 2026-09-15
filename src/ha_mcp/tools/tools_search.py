@@ -1178,8 +1178,8 @@ def _dashboard_split_serviceable(req: _ResolvedSearch, caps: Any) -> bool:
 class _DashboardLeg:
     """The dashboards surface's contribution to a component-served ha_search.
 
-    ``records`` are legacy-shaped (``dashboard_url`` / ``url_path`` /
-    ``dashboard_title`` / ``score``), NOT component records — they never pass through
+    ``records`` are legacy-shaped (``url_path`` / ``dashboard_title`` /
+    ``score``), NOT component records — they never pass through
     ``_normalize_component_config_record``. ``failed`` is the leg's own
     "not scanned" count, reported with the deep path's wording. ``error`` is
     set only when the leg raised, in which case the bucket is empty and the
@@ -1226,13 +1226,13 @@ def _merge_sort_key(record: dict[str, Any]) -> str:
     the wire records unchanged, so the merge reproduces the exact order that
     decided window membership. Dashboard records are outside the component
     corpus, so any deterministic key places them consistently across pages —
-    ``dashboard_url`` extends the same chain.
+    ``url_path`` extends the same chain.
     """
     return str(
         record.get("entity_id")
         or record.get("id")
         or record.get("name")
-        or record.get("dashboard_url")
+        or record.get("url_path")
         or ""
     )
 
