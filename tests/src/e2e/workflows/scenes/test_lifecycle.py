@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from ...utilities.assertions import safe_call_tool
+from ...utilities.assertions import MCPAssertions, safe_call_tool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -353,6 +353,14 @@ class TestSceneLifecycle:
         assert not any(
             "not yet queryable" in w.lower() for w in create_data.get("warnings", [])
         ), f"Resolver fell back to scene.{scene_id}; create_data={create_data}"
+
+        # wait=True must finish with the name-derived entity queryable.
+        # Do not add a test-side retry that could hide early tool completion.
+        async with MCPAssertions(mcp_client) as mcp:
+            state_data = await mcp.call_tool_success(
+                "ha_get_state", {"entity_id": expected_entity_id}
+            )
+        assert state_data["data"]["entity_id"] == expected_entity_id
 
         # 2. Get via the storage scene_id — this drives the resolver to
         # find the actual entity_id under the hood for category fetch.

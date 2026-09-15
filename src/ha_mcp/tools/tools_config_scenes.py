@@ -32,6 +32,7 @@ from ..utils.python_sandbox import (
 )
 from .auto_backup import with_auto_backup
 from .component_config_reads import fetch_entity_lookup_via_component
+from .entity_registration import resolve_entity_id_after_write
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -133,10 +134,13 @@ class ConfigSceneTools:
     async def _resolve_scene_entity_id(
         self, scene_id: str, *, allow_component: bool = False
     ) -> str:
-        """Resolve a scene's actual entity_id via the entity registry.
+        """Resolve a scene's actual entity_id for config reads and removals.
 
-        Unlike scripts (where ``entity_id == 'script.<storage_key>'``), HA
-        derives a scene's entity_id from the ``name`` field. So a scene
+        Post-write wait/category paths use ``resolve_entity_id_after_write``
+        instead: this legacy single retry is insufficient for registration
+        under load (#2426). Keep read/removal timing unchanged.
+
+        HA derives a scene's entity_id from the ``name`` field. So a scene
         upserted with ``scene_id='night_light_led_desk_strip'`` and
         ``name='LED Desk Strip Night Light'`` lands at entity_id
         ``scene.led_desk_strip_night_light`` while the storage key (and the
@@ -871,8 +875,10 @@ class ConfigSceneTools:
         # post-upsert finalisation the full-config branch runs. Without
         # these, ``wait`` and ``category`` are silently dropped on
         # python_transform calls.
-        entity_id = await self._resolve_scene_entity_id(
-            resolved_id, allow_component=True
+        entity_id = (
+            await resolve_entity_id_after_write(self._client, resolved_id, "scene")
+            if wait or category
+            else f"scene.{resolved_id}"
         )
         if wait:
             try:
@@ -1152,8 +1158,10 @@ class ConfigSceneTools:
         # Resolve actual entity_id via registry — HA derives scene
         # entity_ids from the 'name' slug, not the scene_id storage key,
         # so f"scene.{scene_id}" is wrong whenever a name is supplied.
-        entity_id = await self._resolve_scene_entity_id(
-            resolved_id, allow_component=True
+        entity_id = (
+            await resolve_entity_id_after_write(self._client, resolved_id, "scene")
+            if wait or effective_category
+            else f"scene.{resolved_id}"
         )
 
         # Wait for scene to be queryable

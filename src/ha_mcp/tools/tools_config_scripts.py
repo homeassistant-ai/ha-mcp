@@ -38,7 +38,7 @@ from .blueprint_substitute import (
     take_control_config,
     validate_write_modes,
 )
-from .component_config_reads import fetch_entity_lookup_via_component
+from .entity_registration import resolve_entity_id_after_write
 from .helpers import (
     exception_to_structured_error,
     log_tool_usage,
@@ -952,45 +952,8 @@ class ConfigScriptTools:
         return transformed_config, resolved_id
 
     async def _resolve_script_entity_id(self, storage_key: str) -> str:
-        """Resolve a script storage key to its current entity_id.
-
-        Normally ``script.<storage_key>``, but a registry rename decouples
-        the entity_id from the storage key while the registry entry keeps
-        ``unique_id == storage_key``. Component lookup first, then a
-        registry-get fast path, then a registry-list scan; the constructed id
-        is the last resort (fresh creates resolve here before registration).
-        """
-        constructed = f"script.{storage_key}"
-        try:
-            matches = await fetch_entity_lookup_via_component(
-                self._client, storage_key, domain="script"
-            )
-            if matches is not None:
-                for match in matches:
-                    entity_id = match.get("entity_id") or ""
-                    if entity_id.startswith("script."):
-                        return str(entity_id)
-                return constructed
-            result = await self._client.send_websocket_message(
-                {"type": "config/entity_registry/get", "entity_id": constructed}
-            )
-            if isinstance(result, dict) and result.get("success"):
-                return constructed
-            listing = await self._client.send_websocket_message(
-                {"type": "config/entity_registry/list"}
-            )
-            entries = (listing.get("result") or []) if isinstance(listing, dict) else []
-            for entry in entries:
-                if (
-                    isinstance(entry, dict)
-                    and entry.get("platform") == "script"
-                    and entry.get("unique_id") == storage_key
-                    and str(entry.get("entity_id", "")).startswith("script.")
-                ):
-                    return str(entry["entity_id"])
-        except Exception as e:
-            logger.debug(f"Failed to resolve entity_id for script {storage_key}: {e}")
-        return constructed
+        """Wait for the current registry ID, including registry-renamed scripts."""
+        return await resolve_entity_id_after_write(self._client, storage_key, "script")
 
     async def _commit_script_transform(
         self,
@@ -1024,9 +987,10 @@ class ConfigScriptTools:
         # full-config branch — issue #2159). Resolve the storage key first: a
         # registry-renamed script no longer lives at script.<storage_key>.
         if effective_category:
+            storage_key = result.get("script_id") or resolved_id or script_id
             await apply_entity_category(
                 self._client,
-                await self._resolve_script_entity_id(script_id),
+                await self._resolve_script_entity_id(storage_key),
                 effective_category,
                 "script",
                 result,
@@ -1099,7 +1063,8 @@ class ConfigScriptTools:
         # cost. A registry-renamed script no longer lives at
         # script.<storage_key>; fresh creates fall back to the constructed id.
         if wait or effective_category:
-            entity_id = await self._resolve_script_entity_id(script_id)
+            storage_key = result.get("script_id") or resolved_key or script_id
+            entity_id = await self._resolve_script_entity_id(storage_key)
         else:
             entity_id = f"script.{script_id}"
         if wait:

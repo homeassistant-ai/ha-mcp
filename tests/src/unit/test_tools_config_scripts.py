@@ -5,15 +5,24 @@ These tests verify the input validation and error handling of the script tools,
 especially for blueprint-based scripts (issue #466).
 """
 
+import asyncio
 import json
 import logging
+from types import SimpleNamespace
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.tools import entity_registration
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
+
+
+@pytest.fixture(autouse=True)
+def no_registration_retry(monkeypatch):
+    """Polling budgets are covered with fake time in test_entity_registration."""
+    monkeypatch.setattr(entity_registration, "RESOLVE_TIMEOUT", 0)
 
 
 class TestScriptToolsValidation:
@@ -23,6 +32,9 @@ class TestScriptToolsValidation:
     def mock_client(self):
         """Create a mock Home Assistant client."""
         client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
         client.upsert_script_config = AsyncMock(
             return_value={"success": True, "script_id": "test_script"}
         )
@@ -527,6 +539,17 @@ class TestSetScriptCategoryValidation:
                     "success": True,
                     "result": [{"category_id": cid} for cid in category_ids],
                 }
+            if msg.get("type") == "config/entity_registry/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "entity_id": "script.test_script",
+                            "unique_id": "test_script",
+                            "platform": "script",
+                        }
+                    ],
+                }
             return {"success": True, "result": {"categories": {}}}
 
         return handler
@@ -666,8 +689,9 @@ class TestSetScriptCategoryValidation:
         assert category_updates
         assert category_updates[0]["categories"] == {"script": "lighting"}
 
-    async def test_transform_category_targets_renamed_entity(
-        self, transform_tools, mock_client
+    @pytest.mark.parametrize("transform", [False, True])
+    async def test_category_targets_renamed_entity(
+        self, transform_tools, mock_client, sequence_config, transform, monkeypatch
     ):
         """A registry-renamed script gets its category on the CURRENT entity.
 
@@ -678,17 +702,57 @@ class TestSetScriptCategoryValidation:
         mock_client.send_websocket_message = AsyncMock(
             side_effect=self._ws_handler("lighting")
         )
+        mock_client.upsert_script_config.return_value = {
+            "success": True,
+            "script_id": "storage_key",
+        }
+        clock = SimpleNamespace(now=0.0)
+
+        async def sleep(delay):
+            clock.now += delay
+
+        monkeypatch.setattr(entity_registration, "RESOLVE_TIMEOUT", 1.0)
+        monkeypatch.setattr(
+            entity_registration, "time", SimpleNamespace(monotonic=lambda: clock.now)
+        )
+        monkeypatch.setattr(
+            entity_registration,
+            "asyncio",
+            SimpleNamespace(sleep=sleep, timeout=asyncio.timeout),
+        )
+        registered = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_config_scripts.wait_for_entity_registered", registered
+        )
+        arguments = (
+            {
+                "python_transform": "config['mode'] = 'single'",
+                "config_hash": "prior_hash",
+            }
+            if transform
+            else {"config": sequence_config}
+        )
 
         with patch(
-            "ha_mcp.tools.tools_config_scripts.fetch_entity_lookup_via_component",
+            "ha_mcp.tools.entity_registration.fetch_entity_lookup_via_component",
             new_callable=AsyncMock,
-            return_value=[{"entity_id": "script.renamed_target"}],
-        ):
+            side_effect=[
+                [],
+                [],
+                [],
+                [
+                    {
+                        "entity_id": "script.renamed_alias",
+                        "unique_id": "storage_key",
+                        "platform": "script",
+                    }
+                ],
+            ],
+        ) as lookup:
             result = await transform_tools.ha_config_set_script(
-                script_id="test_script",
-                python_transform="config['mode'] = 'single'",
-                config_hash="prior_hash",
+                script_id="renamed_alias",
                 category="lighting",
+                **arguments,
             )
 
         assert result["success"] is True
@@ -697,7 +761,11 @@ class TestSetScriptCategoryValidation:
             for c in mock_client.send_websocket_message.call_args_list
             if c[0][0].get("type") == "config/entity_registry/update"
         )
-        assert update_call["entity_id"] == "script.renamed_target"
+        assert update_call["entity_id"] == "script.renamed_alias"
+        assert clock.now == pytest.approx(0.6)
+        lookup.assert_awaited_with(mock_client, "storage_key", domain="script")
+        if not transform:
+            registered.assert_awaited_once_with(mock_client, "script.renamed_alias")
 
 
 class TestScriptEntityResolutionFallbacks:
@@ -760,7 +828,7 @@ class TestScriptEntityResolutionFallbacks:
         mock_client.send_websocket_message = AsyncMock(side_effect=handler)
 
         with patch(
-            "ha_mcp.tools.tools_config_scripts.fetch_entity_lookup_via_component",
+            "ha_mcp.tools.entity_registration.fetch_entity_lookup_via_component",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -786,7 +854,7 @@ class TestScriptEntityResolutionFallbacks:
         )
 
         with patch(
-            "ha_mcp.tools.tools_config_scripts.fetch_entity_lookup_via_component",
+            "ha_mcp.tools.entity_registration.fetch_entity_lookup_via_component",
             new_callable=AsyncMock,
         ) as lookup:
             result = await tools.ha_config_set_script(

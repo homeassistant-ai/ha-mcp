@@ -18,6 +18,7 @@ from ha_mcp.client.rest_client import (
     SceneResolution,
     SceneStorageConfigNotFoundError,
 )
+from ha_mcp.tools import entity_registration
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
 
@@ -89,7 +90,87 @@ def tools(mock_client, monkeypatch):
     # for ``_resolve_scene_entity_id``. Patch to 0 in tests so the
     # fallback paths don't multiply unit-test wall-clock time.
     monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
+    monkeypatch.setattr(entity_registration, "RESOLVE_TIMEOUT", 0)
     return ConfigSceneTools(mock_client)
+
+
+class TestScenePostWriteRegistration:
+    """Both write modes must use the actual entity for waits and categories."""
+
+    @pytest.mark.parametrize("transform", [False, True])
+    @pytest.mark.parametrize("wait,category", [(True, None), (False, "lighting")])
+    async def test_consumers_receive_registered_entity(
+        self, tools, mock_client, monkeypatch, transform, wait, category
+    ):
+        from ha_mcp.tools import tools_config_scenes as scene_mod
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        config = {"name": "Friendly Name", "entities": {}}
+        mock_client.get_scene_config.return_value = config
+        tools._validate_category_id = AsyncMock()
+        lookup = AsyncMock(
+            return_value=[
+                {
+                    "entity_id": "scene.friendly_name",
+                    "unique_id": "test_scene",
+                    "platform": "homeassistant",
+                }
+            ]
+        )
+        monkeypatch.setattr(
+            entity_registration, "fetch_entity_lookup_via_component", lookup
+        )
+        registered = AsyncMock(return_value=True)
+        category_update = AsyncMock()
+        monkeypatch.setattr(scene_mod, "wait_for_entity_registered", registered)
+        monkeypatch.setattr(scene_mod, "apply_entity_category", category_update)
+        arguments = (
+            {
+                "python_transform": "config['name'] = 'Friendly Name'",
+                "config_hash": compute_config_hash(config),
+            }
+            if transform
+            else {"config": config}
+        )
+
+        result = await tools.ha_config_set_scene(
+            scene_id="test_scene", wait=wait, category=category, **arguments
+        )
+
+        assert result["success"] is True
+        if wait:
+            registered.assert_awaited_once_with(mock_client, "scene.friendly_name")
+        if category:
+            assert category_update.await_args.args[1] == "scene.friendly_name"
+        lookup.assert_awaited_once_with(mock_client, "test_scene", domain="scene")
+
+    @pytest.mark.parametrize("transform", [False, True])
+    async def test_no_lookup_when_wait_and_category_are_unused(
+        self, tools, mock_client, monkeypatch, transform
+    ):
+        from ha_mcp.utils.config_hash import compute_config_hash
+
+        config = {"name": "Friendly Name", "entities": {}}
+        mock_client.get_scene_config.return_value = config
+        lookup = AsyncMock()
+        monkeypatch.setattr(
+            entity_registration, "fetch_entity_lookup_via_component", lookup
+        )
+        arguments = (
+            {
+                "python_transform": "config['name'] = 'Friendly Name'",
+                "config_hash": compute_config_hash(config),
+            }
+            if transform
+            else {"config": config}
+        )
+
+        result = await tools.ha_config_set_scene(
+            scene_id="test_scene", wait=False, **arguments
+        )
+
+        assert result["success"] is True
+        lookup.assert_not_awaited()
 
 
 class TestSceneToolsValidation:
@@ -273,12 +354,13 @@ class TestScenePythonTransform:
         seed_hash = compute_config_hash(seed)
 
         # Stub the resolver so we don't depend on registry plumbing here.
-        # ``allow_component`` is accepted (the set path passes it) but ignored —
-        # this stub short-circuits registry resolution entirely.
-        async def _stub_resolve(scene_id, *, allow_component=False):
+        async def _stub_resolve(client, scene_id, domain):
             return f"scene.{scene_id}"
 
-        monkeypatch.setattr(tools, "_resolve_scene_entity_id", _stub_resolve)
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_config_scenes.resolve_entity_id_after_write",
+            _stub_resolve,
+        )
 
         # B9: _validate_category_id pre-flights against the category registry.
         # Wire send_websocket_message to recognise the list call and surface
