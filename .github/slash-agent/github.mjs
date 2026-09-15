@@ -150,6 +150,7 @@ export function eventTarget(api, event, eventName, env) {
       return null;
     const isCommand =
       current.user?.type === "User" &&
+      current.user.login !== "ghhamcp" &&
       maintainer(api.role(current.user.login)) &&
       command(current.body);
     if (
@@ -313,7 +314,14 @@ export function collect(api, number, app) {
       author: c.user.login,
       maintainer: maintainer(roles[c.user.login]),
     }));
-  const feedback = [...comments, ...reviews]
+  // Issue-enrichment theories and bot progress/acknowledgment comments are not
+  // coding instructions. Supported bots contribute formal PR reviews/threads.
+  const feedback = [
+    ...comments.filter(
+      (c) => c.user?.type === "User" && c.user.login !== "ghhamcp",
+    ),
+    ...reviews,
+  ]
     .filter((c) => trustedReview(c.user, roles))
     .map((c) => ({
       id: c.id,

@@ -13,7 +13,9 @@ export const digest = (value) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const maintainer = (role) => ["maintain", "admin"].includes(role);
 export const trustedReview = (user, roles) =>
-  (user?.type === "User" && maintainer(roles[user.login])) ||
+  (user?.type === "User" &&
+    user.login !== "ghhamcp" &&
+    maintainer(roles[user.login])) ||
   (user?.type === "Bot" && REVIEW_BOTS.includes(user.login));
 
 export function command(body) {
@@ -129,6 +131,7 @@ export function decide(snapshot, trigger) {
   const commands = snapshot.comments.filter(
     (c) =>
       c.user?.type === "User" &&
+      c.user.login !== "ghhamcp" &&
       maintainer(snapshot.roles[c.user.login]) &&
       command(c.body),
   );

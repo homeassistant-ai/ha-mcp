@@ -15,7 +15,7 @@ import {
   validateResult,
 } from "../../.github/slash-agent/core.mjs";
 import { collect, eventTarget } from "../../.github/slash-agent/github.mjs";
-import { prepare } from "../../.github/slash-agent/main.mjs";
+import { prepare, prompt } from "../../.github/slash-agent/main.mjs";
 import { publish } from "../../.github/slash-agent/publish.mjs";
 import { packageWork } from "../../.github/slash-agent/worker.mjs";
 
@@ -580,6 +580,40 @@ test("ordinary reporter content cannot consume a coding turn through a later CI 
   assert.equal(
     Boolean(prepare(api, { number: 10, automatic: true }, APP)),
     false,
+  );
+});
+
+test("old issue-bot theories are excluded while formal PR review findings remain available", () => {
+  const api = new FakeAPI();
+  api.roles.ghhamcp = "maintain";
+  api.comments.push({
+    id: 600,
+    user: { login: "coderabbitai[bot]", type: "Bot" },
+    body: "POISONED_ISSUE_THEORY",
+    updated_at: "2026-09-14T10:00:00Z",
+  });
+  api.comments.push({
+    id: 601,
+    user: { login: "ghhamcp", type: "User" },
+    body: "LEGACY_BOT_THEORY",
+    updated_at: "2026-09-14T10:00:00Z",
+  });
+  const text = prompt(initial(api));
+  assert.ok(
+    !text.includes("POISONED_ISSUE_THEORY") &&
+      !text.includes("LEGACY_BOT_THEORY"),
+  );
+  start(api);
+  api.reviews.push({
+    id: 700,
+    user: { login: "coderabbitai[bot]", type: "Bot" },
+    body: "ACTUAL_REVIEW_FINDING",
+    submitted_at: "2026-09-15T13:00:00Z",
+  });
+  assert.ok(
+    prompt(prepare(api, { number: 10, automatic: true }, APP)).includes(
+      "ACTUAL_REVIEW_FINDING",
+    ),
   );
 });
 
