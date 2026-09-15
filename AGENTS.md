@@ -71,6 +71,8 @@ The detailed label taxonomy, issue-analysis query, bot behavior, review commands
 
 Before changing automated issue documentation, read the [issue-intake policy and controls](docs/agents/issue-intake.md) for source handling, maintainer overrides, permissions, and bench validation.
 
+Before changing maintainer-invoked coding automation, read the [slash-agent lifecycle](docs/agents/slash-agent.md) for authorization, continuation, publication and readiness.
+
 ### Automated Code Review
 
 After every push, inspect human and automated feedback. Codex and CodeRabbit findings are hypotheses: verify them against current source, tests, and contracts. Human feedback has priority. Read every CodeRabbit review body in full because collapsed outside-diff and nitpick findings may create no unresolved thread.

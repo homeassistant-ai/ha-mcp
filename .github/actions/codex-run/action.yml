@@ -25,6 +25,10 @@ inputs:
     description: Codex filesystem sandbox (read-only or workspace-write).
     required: false
     default: read-only
+  read-only-paths:
+    description: Newline-separated existing workspace paths kept readable but not writable, even with workspace-write.
+    required: false
+    default: ""
   allow-shell:
     description: Whether Codex may execute shell commands. Disable for attacker-controlled context.
     required: false
@@ -100,6 +104,7 @@ runs:
         INSTRUCTIONS_FILE_INPUT: ${{ inputs.instructions-file }}
         WORKING_DIRECTORY_INPUT: ${{ inputs.working-directory }}
         SANDBOX_INPUT: ${{ inputs.sandbox }}
+        READ_ONLY_PATHS_INPUT: ${{ inputs.read-only-paths }}
         ALLOW_SHELL_INPUT: ${{ inputs.allow-shell }}
         NETWORK_ACCESS_INPUT: ${{ inputs.network-access }}
         WEB_SEARCH_INPUT: ${{ inputs.web-search }}
@@ -185,6 +190,22 @@ runs:
           echo "::error::working-directory does not point to a directory."
           exit 1
         fi
+
+        readonly_paths=()
+        while IFS= read -r protected_input; do
+          protected_input="${protected_input%$'\r'}"
+          [[ -n "$protected_input" ]] || continue
+          case "$protected_input" in
+            /*) protected_candidate="$protected_input" ;;
+            *) protected_candidate="$GITHUB_WORKSPACE/$protected_input" ;;
+          esac
+          protected_path="$(realpath -e "$protected_candidate")"
+          case "$protected_path/" in
+            "$GITHUB_WORKSPACE/"*) ;;
+            *) echo '::error::read-only-paths must stay inside GITHUB_WORKSPACE.'; exit 1 ;;
+          esac
+          readonly_paths+=("$protected_path")
+        done <<< "${READ_ONLY_PATHS_INPUT:-}"
 
         credential_root="$RUNNER_TEMP/codex-action-state"
         mkdir -p "$credential_root"
@@ -273,6 +294,10 @@ runs:
           printf 'extends = "%s"\n\n' "$parent_profile"
           printf '[permissions.%s.filesystem]\n' "$profile_name"
           printf '"%s" = "deny"\n' "$credential_root"
+          for protected_path in "${readonly_paths[@]}"; do
+            jq -rn --arg path "$protected_path" '$path | @json' | tr -d '\n'
+            printf ' = "read"\n'
+          done
           printf '\n[permissions.%s.network]\n' "$profile_name"
           printf 'enabled = %s\n' "$network_access"
         } > "$profile_path"
