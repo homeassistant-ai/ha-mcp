@@ -413,6 +413,62 @@ async def test_proxy_direct_port_inaddon(mcp_client: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Store-wide mode (check_updates)
+# ---------------------------------------------------------------------------
+
+
+# ``check_updates`` passes timeout=300 to _supervisor_api_call, which allows a
+# local wait of 315s before any job-collision retry. The suite's default 300s
+# per-test ceiling would kill a legitimately slow repository reload before the
+# implementation reached its own timeout handling, so give it real headroom.
+_CHECK_UPDATES_TEST_TIMEOUT_S = 600
+
+
+@pytest.mark.timeout(_CHECK_UPDATES_TEST_TIMEOUT_S)
+async def test_check_updates_reloads_the_store(mcp_client: Any) -> None:
+    """`check_updates` completes a real Supervisor store reload.
+
+    The bake registers real repositories, so this exercises the actual
+    ``POST /store/reload`` and the ``/store`` reads around it. It asserts the
+    result's shape rather than specific version movement: whether a reload
+    finds anything new depends on what upstream published, which is not
+    something a test can pin.
+    """
+    async with MCPAssertions(mcp_client) as mcp:
+        payload = await mcp.call_tool_success(
+            "ha_manage_app", {"action": "check_updates"}
+        )
+
+    assert payload.get("action") == "check_updates", payload
+    # A healthy bake reads the store on both sides, so both fields are real
+    # lists and nothing degraded. Without this the store reads could fail
+    # outright — they only warn — and the test would still pass on nulls.
+    assert "warnings" not in payload, payload
+    assert isinstance(payload.get("changed"), list), payload
+    assert isinstance(payload.get("updates_available"), list), payload
+    # The reload refreshes metadata only; the message has to point at the
+    # follow-up install rather than implying one happened.
+    assert "action='update'" in str(payload.get("message")), payload
+
+
+async def test_check_updates_rejects_a_slug(mcp_client: Any) -> None:
+    """Naming one app would misstate the scope of a store-wide reload.
+
+    Any literal slug does: the conflict is rejected before the slug is
+    resolved, so resolving a real one would only add a dependency on the
+    bake's app list.
+    """
+    async with MCPAssertions(mcp_client) as mcp:
+        payload = await mcp.call_tool_failure(
+            "ha_manage_app",
+            {"action": "check_updates", "slug": "core_mosquitto"},
+            expected_error="store-wide mode",
+        )
+
+    assert payload.get("error", {}).get("code") == "VALIDATION_FAILED", payload
+
+
+# ---------------------------------------------------------------------------
 # Array-patch mode (Node-RED /flows)
 # ---------------------------------------------------------------------------
 
