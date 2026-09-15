@@ -793,6 +793,7 @@ class ConfigScriptTools:
                     python_transform,
                     bp_warnings,
                     MandatoryBPS,
+                    wait,
                     effective_category,
                 )
 
@@ -951,9 +952,40 @@ class ConfigScriptTools:
             )
         return transformed_config, resolved_id
 
-    async def _resolve_script_entity_id(self, storage_key: str) -> str:
-        """Wait for the current registry ID, including registry-renamed scripts."""
-        return await resolve_entity_id_after_write(self._client, storage_key, "script")
+    async def _finalize_script_write(
+        self,
+        result: dict[str, Any],
+        script_id: str,
+        resolved_key: str | None,
+        wait: bool,
+        category: str | None,
+    ) -> None:
+        """Resolve, wait, and apply a category for either script write mode."""
+        if not wait and not category:
+            return
+        storage_key = result.get("script_id") or resolved_key or script_id
+        entity_id = await resolve_entity_id_after_write(
+            self._client,
+            storage_key,
+            "script",
+            fallback_entity_id=f"script.{script_id.removeprefix('script.')}",
+        )
+        if wait:
+            try:
+                registered = await wait_for_entity_registered(self._client, entity_id)
+                if not registered:
+                    result.setdefault("warnings", []).append(
+                        f"Script saved but {entity_id} not yet queryable. "
+                        "It may take a moment to become available."
+                    )
+            except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+                result.setdefault("warnings", []).append(
+                    f"Script saved but verification failed: {e}"
+                )
+        if category:
+            await apply_entity_category(
+                self._client, entity_id, category, "script", result, "script"
+            )
 
     async def _commit_script_transform(
         self,
@@ -963,6 +995,7 @@ class ConfigScriptTools:
         python_transform: str,
         bp_warnings: BestPracticeCheckResult,
         MandatoryBPS: bool,
+        wait: bool,
         effective_category: str | None = None,
     ) -> dict[str, Any]:
         """Upsert a transformed script config and build the tool response.
@@ -983,19 +1016,9 @@ class ConfigScriptTools:
         # Re-fetch to get authoritative hash (HA may normalize after save)
         _, new_config_hash, _ = await self._get_script_config_internal(script_id)
 
-        # Apply category to entity registry if provided (parity with the
-        # full-config branch — issue #2159). Resolve the storage key first: a
-        # registry-renamed script no longer lives at script.<storage_key>.
-        if effective_category:
-            storage_key = result.get("script_id") or resolved_id or script_id
-            await apply_entity_category(
-                self._client,
-                await self._resolve_script_entity_id(storage_key),
-                effective_category,
-                "script",
-                result,
-                "script",
-            )
+        await self._finalize_script_write(
+            result, script_id, resolved_id, wait, effective_category
+        )
 
         response: dict[str, Any] = {
             "success": True,
@@ -1057,39 +1080,9 @@ class ConfigScriptTools:
 
         result = await self._upsert_script(config_dict, script_id, resolved_key)
 
-        # Resolve the storage key only when the entity_id is consumed (the
-        # wait poll or the category write): with wait=False and no category —
-        # the documented bulk path — the resolution round-trips would be pure
-        # cost. A registry-renamed script no longer lives at
-        # script.<storage_key>; fresh creates fall back to the constructed id.
-        if wait or effective_category:
-            storage_key = result.get("script_id") or resolved_key or script_id
-            entity_id = await self._resolve_script_entity_id(storage_key)
-        else:
-            entity_id = f"script.{script_id}"
-        if wait:
-            try:
-                registered = await wait_for_entity_registered(self._client, entity_id)
-                if not registered:
-                    result.setdefault("warnings", []).append(
-                        f"Script saved but {entity_id} not yet queryable. "
-                        "It may take a moment to become available."
-                    )
-            except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
-                result.setdefault("warnings", []).append(
-                    f"Script saved but verification failed: {e}"
-                )
-
-        # Apply category to entity registry if provided
-        if effective_category and entity_id:
-            await apply_entity_category(
-                self._client,
-                entity_id,
-                effective_category,
-                "script",
-                result,
-                "script",
-            )
+        await self._finalize_script_write(
+            result, script_id, resolved_key, wait, effective_category
+        )
 
         if bp_warnings:
             result["best_practice_warnings"] = list(bp_warnings)

@@ -91,9 +91,12 @@ async def test_component_disappearing_during_registration_uses_legacy(
         "result": [entry(domain)],
     }
 
-    assert await registration.resolve_entity_id_after_write(
-        client, "storage_key", domain, timeout=1.0
-    ) == f"{domain}.friendly_name"
+    assert (
+        await registration.resolve_entity_id_after_write(
+            client, "storage_key", domain, timeout=1.0
+        )
+        == f"{domain}.friendly_name"
+    )
     assert clock.now == pytest.approx(0.2)
     client.send_websocket_message.assert_awaited_once()
 
@@ -106,9 +109,12 @@ async def test_absence_uses_whole_budget_then_constructed_fallback(
     lookup = AsyncMock(return_value=[] if component else None)
     monkeypatch.setattr(registration, "fetch_entity_lookup_via_component", lookup)
 
-    assert await registration.resolve_entity_id_after_write(
-        client, "storage_key", domain, timeout=0.55, poll_interval=0.2
-    ) == f"{domain}.storage_key"
+    assert (
+        await registration.resolve_entity_id_after_write(
+            client, "storage_key", domain, timeout=0.55, poll_interval=0.2
+        )
+        == f"{domain}.storage_key"
+    )
     assert clock.now == pytest.approx(0.55)
     assert clock.sleeps == pytest.approx([0.2, 0.2, 0.15])
     if component:
@@ -127,9 +133,10 @@ async def test_immediate_match_returns_without_sleep_or_extra_lookup(
         "result": [entry(domain)],
     }
 
-    assert await registration.resolve_entity_id_after_write(
-        client, "storage_key", domain
-    ) == f"{domain}.friendly_name"
+    assert (
+        await registration.resolve_entity_id_after_write(client, "storage_key", domain)
+        == f"{domain}.friendly_name"
+    )
     assert clock.sleeps == []
     lookup.assert_awaited_once()
     assert client.send_websocket_message.await_count == (0 if component else 1)
@@ -154,9 +161,10 @@ async def test_lookup_ignores_wrong_domain_platform_and_colliding_entity_id(
     )
     client.send_websocket_message.return_value = {"success": True, "result": rows}
 
-    assert await registration.resolve_entity_id_after_write(
-        client, "storage_key", domain
-    ) == f"{domain}.friendly_name"
+    assert (
+        await registration.resolve_entity_id_after_write(client, "storage_key", domain)
+        == f"{domain}.friendly_name"
+    )
 
 
 @pytest.mark.parametrize("domain", ["scene", "script"])
@@ -164,9 +172,10 @@ async def test_component_ignores_wrong_domain(monkeypatch, client, clock, domain
     lookup = AsyncMock(side_effect=[[entry("light")], [entry(domain)]])
     monkeypatch.setattr(registration, "fetch_entity_lookup_via_component", lookup)
 
-    assert await registration.resolve_entity_id_after_write(
-        client, "storage_key", domain
-    ) == f"{domain}.friendly_name"
+    assert (
+        await registration.resolve_entity_id_after_write(client, "storage_key", domain)
+        == f"{domain}.friendly_name"
+    )
     assert clock.now == pytest.approx(0.2)
     client.send_websocket_message.assert_not_awaited()
 
@@ -178,9 +187,12 @@ async def test_lookup_duration_consumes_registration_budget(monkeypatch, client,
 
     monkeypatch.setattr(registration, "fetch_entity_lookup_via_component", lookup)
 
-    assert await registration.resolve_entity_id_after_write(
-        client, "storage_key", "scene", timeout=0.4
-    ) == "scene.storage_key"
+    assert (
+        await registration.resolve_entity_id_after_write(
+            client, "storage_key", "scene", timeout=0.4
+        )
+        == "scene.storage_key"
+    )
     assert clock.now == pytest.approx(0.4)
     assert clock.sleeps == pytest.approx([0.1])
 
@@ -189,11 +201,36 @@ async def test_zero_budget_performs_one_lookup(monkeypatch, client, clock):
     lookup = AsyncMock(return_value=[])
     monkeypatch.setattr(registration, "fetch_entity_lookup_via_component", lookup)
 
-    assert await registration.resolve_entity_id_after_write(
-        client, "storage_key", "scene", timeout=0
-    ) == "scene.storage_key"
+    assert (
+        await registration.resolve_entity_id_after_write(
+            client, "storage_key", "scene", timeout=0
+        )
+        == "scene.storage_key"
+    )
     lookup.assert_awaited_once()
     assert clock.sleeps == []
+
+
+@pytest.mark.parametrize("registered", [False, True])
+async def test_caller_fallback_waits_for_registration_budget(
+    monkeypatch, client, clock, registered
+):
+    lookup = AsyncMock(
+        side_effect=[[], [], [], [entry("script")]] if registered else None,
+        return_value=[],
+    )
+    monkeypatch.setattr(registration, "fetch_entity_lookup_via_component", lookup)
+
+    result = await registration.resolve_entity_id_after_write(
+        client,
+        "storage_key",
+        "script",
+        timeout=0.8,
+        fallback_entity_id="script.caller_alias",
+    )
+
+    assert result == ("script.friendly_name" if registered else "script.caller_alias")
+    assert clock.now == pytest.approx(0.6 if registered else 0.8)
 
 
 @pytest.mark.parametrize("component", [True, False])
@@ -237,7 +274,8 @@ async def test_programming_errors_and_cancellation_propagate(
 
 @pytest.mark.parametrize("component", [True, False])
 @pytest.mark.parametrize(
-    "error", [HomeAssistantAPIError, HomeAssistantAuthError, HomeAssistantConnectionError]
+    "error",
+    [HomeAssistantAPIError, HomeAssistantAuthError, HomeAssistantConnectionError],
 )
 async def test_api_failure_returns_fallback_without_retry(
     monkeypatch, client, clock, component, error
@@ -249,7 +287,8 @@ async def test_api_failure_returns_fallback_without_retry(
     if not component:
         client.send_websocket_message.side_effect = error("offline")
 
-    assert await registration.resolve_entity_id_after_write(
-        client, "storage_key", "scene"
-    ) == "scene.storage_key"
+    assert (
+        await registration.resolve_entity_id_after_write(client, "storage_key", "scene")
+        == "scene.storage_key"
+    )
     assert clock.sleeps == []

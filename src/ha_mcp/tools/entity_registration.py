@@ -38,7 +38,9 @@ def _matching_entity_id(
 
 async def _lookup_entity_id(client: Any, storage_key: str, domain: str) -> str | None:
     """Read once; an unavailable component falls back to the legacy registry."""
-    matches = await fetch_entity_lookup_via_component(client, storage_key, domain=domain)
+    matches = await fetch_entity_lookup_via_component(
+        client, storage_key, domain=domain
+    )
     if matches is None:
         listing = await client.send_websocket_message(
             {"type": "config/entity_registry/list"}
@@ -56,6 +58,7 @@ async def resolve_entity_id_after_write(
     *,
     timeout: float | None = None,
     poll_interval: float = 0.2,
+    fallback_entity_id: str | None = None,
 ) -> str:
     """Poll for the actual entity ID before a post-write wait/category update.
 
@@ -64,6 +67,8 @@ async def resolve_entity_id_after_write(
     on every attempt. The budget includes in-flight lookups and sleeps; known
     API failures retain the best-effort constructed fallback. Cancellation and
     programming errors propagate. A zero budget requests a single lookup.
+    ``fallback_entity_id`` preserves a caller's renamed script ID on failure;
+    the storage key is still used for every registry match.
 
     Config reads and removals must use their existing resolution paths. Bulk
     writes with neither a state wait nor a category update should skip this
@@ -91,5 +96,7 @@ async def resolve_entity_id_after_write(
         HomeAssistantAuthError,
         HomeAssistantConnectionError,
     ):
-        logger.debug("Post-write registry resolve failed for %s.%s", domain, storage_key)
-    return f"{domain}.{storage_key}"
+        logger.debug(
+            "Post-write registry resolve failed for %s.%s", domain, storage_key
+        )
+    return fallback_entity_id or f"{domain}.{storage_key}"
