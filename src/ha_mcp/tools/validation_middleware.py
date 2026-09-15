@@ -1,13 +1,14 @@
-"""FastMCP middleware that converts Pydantic validation errors to structured ToolErrors.
+"""FastMCP middleware that converts argument-validation errors to structured ToolErrors.
 
 When a model passes the wrong type for a tool parameter (e.g. a JSON string where
 a dict is required), FastMCP surfaces a validation error with a raw message like
 "Input should be a valid dictionary" -- a bare ``pydantic.ValidationError`` on
 older FastMCP, or a ``fastmcp.exceptions.ValidationError`` wrapping it (chained
 via ``from e``) on FastMCP >= 3.4.3. This middleware intercepts either shape and
-converts it to ha-mcp's structured format with actionable guidance. An argument
-name the tool does not declare is answered with the closest declared parameter
-and the full parameter list.
+converts it to ha-mcp's structured format with actionable guidance. When the
+tool's schema can be read, an argument name the tool does not declare is
+reported with the closest declared parameter, if one resembles it, and the full
+parameter list.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Maps Pydantic error types to model-readable fix hints.
 # FastMCP uses non-strict Pydantic: scalar mismatches (bool, int) are coerced
-# rather than rejected, so only dict_type and list_type fire in practice.
+# rather than rejected, so only dict_type and list_type fire among type errors.
 _TYPE_HINTS: dict[str, str] = {
     "dict_type": (
         "expected a JSON object. "
@@ -56,25 +57,35 @@ async def _tool_parameter_names(context: MiddlewareContext | None) -> list[str] 
     try:
         tool = await fastmcp_context.fastmcp.get_tool(tool_name)
     except Exception:
-        logger.debug("Parameter lookup for %s failed", tool_name, exc_info=True)
+        logger.warning(
+            "Parameter lookup for %s failed; unknown-argument hint omitted",
+            tool_name,
+            exc_info=True,
+        )
         return None
     properties = tool.parameters.get("properties") if tool is not None else None
-    return list(properties) if isinstance(properties, dict) else None
+    if not isinstance(properties, dict):
+        logger.warning(
+            "No parameter schema for %s; unknown-argument hint omitted", tool_name
+        )
+        return None
+    return list(properties)
 
 
 def _closest_parameter(unknown: str, candidates: Sequence[str]) -> str | None:
     """Return the declared parameter an invented argument name most likely meant.
 
-    A shared underscore-separated word qualifies a candidate because models
-    rename rather than misspell (``dashboard_url`` for ``url_path``); the
-    similarity ratio ranks candidates and catches plain typos.
+    A candidate qualifies by sharing an underscore-separated word with the name
+    (``dashboard_url`` for ``url_path``) or by a similarity ratio of at least
+    0.6 (typos). Shared words rank first; the ratio breaks ties.
     """
     unknown_lower = unknown.lower()
     words = set(unknown_lower.split("_")) - {""}
     best: tuple[int, float, str] | None = None
     for candidate in candidates:
-        shared = len(words & set(candidate.lower().split("_")))
-        ratio = SequenceMatcher(None, unknown_lower, candidate.lower()).ratio()
+        candidate_lower = candidate.lower()
+        shared = len(words & set(candidate_lower.split("_")))
+        ratio = SequenceMatcher(None, unknown_lower, candidate_lower).ratio()
         if not shared and ratio < 0.6:
             continue
         if best is None or (shared, ratio) > best[:2]:
@@ -82,8 +93,24 @@ def _closest_parameter(unknown: str, candidates: Sequence[str]) -> str | None:
     return best[2] if best else None
 
 
+def _unknown_argument_hint(param: str, unclaimed: Sequence[str]) -> str:
+    """Name an undeclared argument, suggesting the parameter it likely meant."""
+    match = _closest_parameter(param, unclaimed)
+    return (
+        f"unknown parameter, did you mean `{match}`?" if match else "unknown parameter"
+    )
+
+
+def _type_hint(errs: list[Any]) -> str:
+    """Prefer an actionable container hint (dict_type/list_type); else the raw message."""
+    return next(
+        (_TYPE_HINTS[e["type"]] for e in errs if e["type"] in _TYPE_HINTS),
+        errs[0]["msg"],
+    )
+
+
 class ValidationErrorMiddleware(Middleware):
-    """Convert PydanticValidationError from argument validation into ToolErrors."""
+    """Convert argument-validation failures into structured ToolErrors."""
 
     async def on_call_tool(
         self, context: MiddlewareContext, call_next: CallNext
@@ -123,8 +150,10 @@ class ValidationErrorMiddleware(Middleware):
                 if any(err["type"] == _UNKNOWN_ARGUMENT for err in errors)
                 else None
             )
-            supplied = getattr(getattr(context, "message", None), "arguments", None)
-            unclaimed = [p for p in valid_parameters or () if p not in (supplied or {})]
+            supplied = (
+                getattr(getattr(context, "message", None), "arguments", None) or {}
+            )
+            unclaimed = [p for p in valid_parameters or () if p not in supplied]
 
             parts: list[str] = []
             for param, errs in grouped.items():
@@ -132,32 +161,24 @@ class ValidationErrorMiddleware(Middleware):
                     valid_parameters is not None
                     and errs[0]["type"] == _UNKNOWN_ARGUMENT
                 ):
-                    hint = "unknown parameter"
-                    match = _closest_parameter(param, unclaimed)
-                    if match:
-                        hint += f", did you mean `{match}`?"
+                    hint = _unknown_argument_hint(param, unclaimed)
                 else:
-                    # Prefer an actionable container hint when any arm produced
-                    # one (dict_type/list_type); else the first raw message.
-                    hint = next(
-                        (
-                            _TYPE_HINTS[e["type"]]
-                            for e in errs
-                            if e["type"] in _TYPE_HINTS
-                        ),
-                        errs[0]["msg"],
-                    )
+                    hint = _type_hint(errs)
                 parts.append(f"`{param}`: {hint}" if param else hint)
             message = "; ".join(parts) if parts else "Invalid argument types."
-            if valid_parameters:
-                separator = " " if message.endswith("?") else ". "
-                message += (
-                    f"{separator}Valid parameters: {', '.join(valid_parameters)}."
-                )
+            if valid_parameters is not None:
+                separator = " " if message.endswith((".", "?")) else ". "
+                listing = ", ".join(valid_parameters) or "none"
+                message += f"{separator}Valid parameters: {listing}."
             raise_tool_error(
                 create_validation_error(
                     message,
                     details=", ".join(dict.fromkeys(err["type"] for err in errors)),
+                    context=(
+                        {"valid_parameters": valid_parameters}
+                        if valid_parameters is not None
+                        else None
+                    ),
                 )
             )
         return result
