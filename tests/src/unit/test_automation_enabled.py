@@ -5,8 +5,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools import auto_backup, tools_config_automations
 
@@ -362,7 +362,9 @@ async def test_raw_unique_id_creation_waits_for_registration_before_enabling(
 
 @pytest.mark.unit
 @pytest.mark.anyio
-async def test_generated_creation_resolves_unique_id_before_enabling(monkeypatch) -> None:
+async def test_generated_creation_resolves_unique_id_before_enabling(
+    monkeypatch,
+) -> None:
     client = _FakeClient()
     client.upsert_unique_id = "generated-unique-id"
     tools = tools_config_automations.AutomationConfigTools(client)
