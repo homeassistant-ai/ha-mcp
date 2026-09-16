@@ -11,7 +11,11 @@ from typing import Any
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.backup_manager import _restore_area_or_floor
+from ha_mcp.backup_manager import (
+    BackupRestoreError,
+    _restore_area_or_floor,
+    _restore_template_entity_id,
+)
 from ha_mcp.tools.tools_areas import AreaTools
 from ha_mcp.tools.tools_config_helpers import (
     _apply_create_entity_registry,
@@ -189,11 +193,21 @@ async def test_bulk_and_single_entity_adds_share_coordination() -> None:
 
 
 @pytest.mark.asyncio
-async def test_area_replacement_waits_for_inflight_add() -> None:
+async def test_area_replacement_waits_for_inflight_add(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     registry = Registry()
     entered = asyncio.Event()
     release = asyncio.Event()
-    replacement_validated = asyncio.Event()
+    replacement_waiting = asyncio.Event()
+
+    @asynccontextmanager
+    async def observed_lock(registry: str, resource_id: str) -> AsyncIterator[None]:
+        replacement_waiting.set()
+        async with registry_update_lock(registry, resource_id):
+            yield
+
+    monkeypatch.setattr("ha_mcp.tools.tools_areas.registry_update_lock", observed_lock)
 
     async def send(message: dict[str, Any]) -> dict[str, Any]:
         if (
@@ -202,8 +216,6 @@ async def test_area_replacement_waits_for_inflight_add() -> None:
         ):
             entered.set()
             await release.wait()
-        if message["type"] == "config/label_registry/list":
-            replacement_validated.set()
         return await registry.send_websocket_message(message)
 
     client = SimpleNamespace(send_websocket_message=send)
@@ -216,10 +228,7 @@ async def test_area_replacement_waits_for_inflight_add() -> None:
                 kind="area", id="target", labels=["blue"]
             )
         )
-        await asyncio.wait_for(replacement_validated.wait(), 1)
-        # Let validation return and the replacement reach the pending write.
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await asyncio.wait_for(replacement_waiting.wait(), 1)
         assert registry.labels["target"] == ["existing"]
     finally:
         release.set()
@@ -355,3 +364,135 @@ async def test_area_revalidates_references_after_lock_wait(
         == "VALIDATION_INVALID_PARAMETER"
     )
     assert updates == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["sensor.created", "sensor.restored"])
+async def test_template_restore_verifies_before_concurrent_name_update(
+    target: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row: dict[str, Any] = {"entity_id": "sensor.created", "name": None}
+    verifying = asyncio.Event()
+    release = asyncio.Event()
+    updating = asyncio.Event()
+    written = False
+
+    async def created(client: Any, entry_id: str) -> dict[str, Any]:
+        if written:
+            verifying.set()
+            await release.wait()
+        return dict(row)
+
+    async def collision(client: Any, target: str, **kwargs: Any) -> None:
+        return None
+
+    async def restore_send(client: Any, message: dict[str, Any]) -> dict[str, Any]:
+        nonlocal written
+        row["entity_id"] = message.get("new_entity_id", row["entity_id"])
+        row["name"] = message.get("name", row["name"])
+        written = True
+        return dict(row)
+
+    async def entity_send(message: dict[str, Any]) -> dict[str, Any]:
+        assert message["type"] == "config/entity_registry/update"
+        assert message["entity_id"] == row["entity_id"]
+        row["name"] = message["name"]
+        return {"success": True, "result": {"entity_entry": dict(row)}}
+
+    monkeypatch.setattr("ha_mcp.backup_manager._created_template_entity", created)
+    monkeypatch.setattr(
+        "ha_mcp.backup_manager._check_template_entity_collision", collision
+    )
+    monkeypatch.setattr("ha_mcp.backup_manager._ws_send", restore_send)
+    client = SimpleNamespace(send_websocket_message=entity_send)
+
+    async def rename() -> dict[str, Any]:
+        updating.set()
+        return await EntityTools(client).ha_set_entity(
+            entity_id=target, name="Later name"
+        )
+
+    first = asyncio.create_task(
+        _restore_template_entity_id(
+            client, "entry", {"entity_id": target, "name": "Saved name"}
+        )
+    )
+    second = None
+    try:
+        await asyncio.wait_for(verifying.wait(), 1)
+        second = asyncio.create_task(rename())
+        await asyncio.wait_for(updating.wait(), 1)
+        blocked = not second.done()
+    finally:
+        release.set()
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                first, *([second] if second is not None else []), return_exceptions=True
+            ),
+            1,
+        )
+    assert blocked, "Name update interleaved with restore verification"
+    assert results[0] == {
+        "created_entity_id": "sensor.created",
+        "restored_entity_id": target,
+    }
+    assert isinstance(results[1], dict) and results[1]["success"]
+    assert row["name"] == "Later name"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["name", "entity_id"])
+async def test_template_restore_rereads_after_lock_wait(
+    field: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, target = "sensor.created", "sensor.restored"
+    row: dict[str, Any] = {"entity_id": source, "name": "Saved name"}
+    waiting = asyncio.Event()
+    writes: list[dict[str, Any]] = []
+
+    @asynccontextmanager
+    async def observed_lock(registry: str, resource_id: str) -> AsyncIterator[None]:
+        waiting.set()
+        async with registry_update_lock(registry, resource_id):
+            yield
+
+    async def created(client: Any, entry_id: str) -> dict[str, Any]:
+        return dict(row)
+
+    async def collision(client: Any, target: str, **kwargs: Any) -> None:
+        return None
+
+    async def send(client: Any, message: dict[str, Any]) -> dict[str, Any]:
+        writes.append(message)
+        row["entity_id"] = message.get("new_entity_id", row["entity_id"])
+        row["name"] = message.get("name", row["name"])
+        return dict(row)
+
+    monkeypatch.setattr("ha_mcp.backup_manager.registry_update_lock", observed_lock)
+    monkeypatch.setattr("ha_mcp.backup_manager._created_template_entity", created)
+    monkeypatch.setattr(
+        "ha_mcp.backup_manager._check_template_entity_collision", collision
+    )
+    monkeypatch.setattr("ha_mcp.backup_manager._ws_send", send)
+    async with registry_update_lock("entity", source):
+        pending = asyncio.create_task(
+            _restore_template_entity_id(
+                SimpleNamespace(), "entry", {"entity_id": target, "name": "Saved name"}
+            )
+        )
+        try:
+            await asyncio.wait_for(waiting.wait(), 1)
+            row[field] = "sensor.changed" if field == "entity_id" else "Changed name"
+        except BaseException:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+            raise
+
+    if field == "entity_id":
+        with pytest.raises(BackupRestoreError) as excinfo:
+            await asyncio.wait_for(pending, 1)
+        assert excinfo.value.outcome["reason"] == "entity_identity_mismatch"
+        assert writes == []
+    else:
+        await asyncio.wait_for(pending, 1)
+        assert row == {"entity_id": target, "name": "Saved name"}
