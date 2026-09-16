@@ -162,6 +162,31 @@ class TestSetLabelAssignsAreas:
         err = json.loads(str(excinfo.value))
         assert err["unknown_area_ids"] == ["ghost_room", "phantom"]
 
+    async def test_area_registry_failure_keeps_ha_error_detail(
+        self, register_tools, mock_client
+    ):
+        async def ws_handler(msg: dict) -> dict:
+            if msg.get("type") == "config/area_registry/list":
+                return {
+                    "success": False,
+                    "error": {"code": "unauthorized", "message": "not authorized"},
+                }
+            return {"success": True, "result": []}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+
+        with pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_label"](
+                name="Site Home", areas=["kitchen"]
+            )
+
+        err = json.loads(str(excinfo.value))
+        assert err["error"]["code"] == "SERVICE_CALL_FAILED"
+        # Without HA's own message an auth rejection reads exactly like a
+        # protocol error, and the caller retries the wrong thing.
+        assert err["error"]["details"] == "not authorized"
+        assert "config/label_registry/create" not in _sent_types(mock_client)
+
     async def test_empty_area_id_rejected(self, register_tools, mock_client):
         mock_client.send_websocket_message = AsyncMock(side_effect=_ws_handler())
 

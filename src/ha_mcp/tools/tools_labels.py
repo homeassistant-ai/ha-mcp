@@ -18,7 +18,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..backup_manager import get_backup_manager
 from ..config import get_global_settings
-from ..errors import ErrorCode, create_error_response
+from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
@@ -27,7 +27,11 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .util_helpers import JSON_STRING_COERCION, parse_string_list_param
+from .util_helpers import (
+    JSON_STRING_COERCION,
+    parse_string_list_param,
+    websocket_error_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -136,10 +140,19 @@ class LabelTools:
         )
         areas = list_result.get("result") if list_result.get("success") else None
         if not isinstance(areas, list):
+            # An auth rejection, a protocol error and a malformed payload all
+            # land here; without HA's own message they are indistinguishable.
+            details = (
+                websocket_error_message(list_result.get("error"))
+                if not list_result.get("success")
+                else "unexpected result type: "
+                + type(list_result.get("result")).__name__
+            )
             raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
                     "Failed to retrieve area registry while assigning label",
+                    details=details,
                     context=context,
                     suggestions=[
                         "Check Home Assistant connection",
@@ -319,7 +332,8 @@ class LabelTools:
                     },
                     indent=2,
                     default=str,
-                )
+                ),
+                log_level=TOOL_ERROR_LOG_LEVEL,
             ) from err
 
         # Transport and programmer errors: let the shared classifier pick the
@@ -331,7 +345,10 @@ class LabelTools:
             raise_error=False,
             suggestions=list(_PARTIAL_RETRY_SUGGESTIONS),
         )
-        raise ToolError(json.dumps(response, indent=2, default=str)) from err
+        raise ToolError(
+            json.dumps(response, indent=2, default=str),
+            log_level=TOOL_ERROR_LOG_LEVEL,
+        ) from err
 
     @staticmethod
     def _parsed_structured_error(err: ToolError) -> dict[str, Any] | None:
