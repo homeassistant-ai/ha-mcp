@@ -44,10 +44,10 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from fastmcp import Client
-from fastmcp.exceptions import ToolError
 from test_constants import TEST_TOKEN
 
+from ha_mcp._vendor.fastmcp import Client
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.server import HomeAssistantSmartMCPServer
 
@@ -334,7 +334,7 @@ async def test_non_png_format_survives_full_mcp_transport(
 
     images = _image_blocks(result)
     assert len(images) == 1
-    assert images[0].mimeType == "image/bmp"
+    assert images[0].mime_type == "image/bmp"
     raw = base64.b64decode(images[0].data)
     assert raw[:2] == b"BM"
     assert struct.unpack("<II", raw[18:26]) == (64, 64)
@@ -363,14 +363,14 @@ async def test_structured_named_view_returns_ordered_responsive_images(
             )
         )
         assert setup.get("success"), f"dashboard create failed: {setup}"
-        assert setup["render_paths"][0]["dashboard_url_path"] == url_path
+        assert setup["render_paths"][0]["url_path"] == url_path
         assert setup["render_paths"][0]["view_path"] == "home"
         request_count = len(fake_engine.requests)
 
         result = await screenshot_mcp_client.call_tool(
             "ha_get_dashboard_screenshot",
             {
-                "dashboard_url_path": url_path,
+                "url_path": url_path,
                 "view_path": "home",
                 "viewport_presets": ["mobile", "desktop"],
                 "theme": "backend-selected-theme",
@@ -534,7 +534,7 @@ async def test_get_dashboard_include_screenshot(
         )
         payload = _parse_payload(result)
         assert payload.get("success"), f"get_dashboard failed: {payload}"
-        assert payload["render_paths"][0]["dashboard_url_path"] == url_path
+        assert payload["render_paths"][0]["url_path"] == url_path
         assert payload["render_paths"][0]["view_path"] == "overview"
         png = _extract_png_bytes(result)
         assert png is not None, (
@@ -573,7 +573,7 @@ async def test_set_dashboard_return_screenshot(
         )
         payload = _parse_payload(result)
         assert payload.get("success"), f"set_dashboard failed: {payload}"
-        assert payload["render_paths"][0]["dashboard_url_path"] == url_path
+        assert payload["render_paths"][0]["url_path"] == url_path
         assert payload["render_paths"][0]["view_path"] == "overview"
         png = _extract_png_bytes(result)
         assert png is not None, (

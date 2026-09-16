@@ -120,8 +120,7 @@ def _all_registered_tools() -> dict[str, Any]:
     container param on a beta tool would silently escape the guardrail in default
     CI, where the beta master toggle is off. Env is restored afterward.
     """
-    from fastmcp import FastMCP
-
+    from ha_mcp._vendor.fastmcp import FastMCP
     from ha_mcp.config import FEATURE_FLAG_FIELDS, _reset_global_settings
     from ha_mcp.tools.registry import EXPLICIT_MODULES
     from ha_mcp.utils.data_paths import get_data_dir

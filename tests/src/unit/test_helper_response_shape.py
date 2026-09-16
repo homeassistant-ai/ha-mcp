@@ -694,10 +694,15 @@ class TestLifecycleWriteWarningsShape:
         return GroupTools(client)
 
     @pytest.fixture
-    def scripts_tools(self):
+    def scripts_tools(self, monkeypatch):
+        from ha_mcp.tools import entity_registration
         from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 
+        monkeypatch.setattr(entity_registration, "RESOLVE_TIMEOUT", 0)
         client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"success": True, "result": []}
+        )
         client.upsert_script_config = AsyncMock(
             return_value={"script_id": "test_script"}
         )
@@ -734,11 +739,13 @@ class TestLifecycleWriteWarningsShape:
 
     @pytest.fixture
     def scenes_tools(self, monkeypatch):
+        from ha_mcp.tools import entity_registration
         from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
         # Issue #1168 R3 blocker 1 sleep — zero it so registry-miss
         # retry doesn't stretch the unit-test wall clock.
         monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
+        monkeypatch.setattr(entity_registration, "RESOLVE_TIMEOUT", 0)
 
         client = MagicMock()
         client.upsert_scene_config = AsyncMock(return_value={"scene_id": "test_scene"})
@@ -766,7 +773,7 @@ class TestLifecycleWriteWarningsShape:
         )
         client.get_services = AsyncMock(return_value=[])
         client.get_states = AsyncMock(return_value=[])
-        # _resolve_scene_entity_id: empty registry → falls back to
+        # Entity resolution: empty registry → falls back to
         # f"scene.{scene_id}" which matches what wait_for_entity_registered
         # is patched to receive.
         client.send_websocket_message = AsyncMock(

@@ -29,7 +29,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 # ---------------------------------------------------------------------------
 # Fixtures — mirror test_action_and_collision.py to avoid cross-file fixture

@@ -262,7 +262,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
           place so the traceback reads correctly; search keeps every block
           that mentions the term; offset/limit page through the assembled
           text. Reads through the "HA-MCP File & YAML Tools"
-          entry (component >= 2.1.4).
+          entry (component >= 2.2.0).
 
         **Prefer source='system' for triage.** It returns HA's own deduplicated
         system_log entries with counts, first_occurred and full tracebacks; of

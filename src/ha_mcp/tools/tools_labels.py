@@ -11,9 +11,10 @@ import json
 import logging
 from typing import Annotated, Any, NoReturn
 
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import tool
 from pydantic import Field
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..backup_manager import get_backup_manager
 from ..config import get_global_settings

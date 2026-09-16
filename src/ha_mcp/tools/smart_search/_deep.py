@@ -5,8 +5,8 @@ import logging
 import re
 from typing import Any
 
-from fastmcp import Context
-from fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp import Context
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ...client.rest_client import HomeAssistantAPIError
 from ...errors import get_error_code, get_error_message
@@ -1085,8 +1085,8 @@ class DeepSearchMixin(SceneSearchMixin):
                 else (match.get("title") or url_path)
             )
             records[url_path] = {
-                "dashboard_url": url_path,
-                "dashboard_title": title,
+                "url_path": url_path,
+                "title": title,
                 "score": 100,
                 "match_in_config": True,
                 # Dashboards are not a search/related item type, so this is
@@ -1163,8 +1163,8 @@ class DeepSearchMixin(SceneSearchMixin):
                 if config_score >= threshold:
                     return [
                         {
-                            "dashboard_url": url_path,
-                            "dashboard_title": title,
+                            "url_path": url_path,
+                            "title": title,
                             "score": config_score,
                             "match_in_config": True,
                             "match_in_references": False,

@@ -12,8 +12,8 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_bug_report import register_bug_report_tools
 
 

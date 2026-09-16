@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, NoReturn
 
-from fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response, get_error_code, get_error_message
 from .helpers import extract_tool_error_message, raise_tool_error

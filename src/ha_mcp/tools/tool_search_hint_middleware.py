@@ -26,8 +26,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastmcp.exceptions import NotFoundError
-from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
+from ha_mcp._vendor.fastmcp.exceptions import NotFoundError
+from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
+    CallNext,
+    Middleware,
+    MiddlewareContext,
+)
 
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response

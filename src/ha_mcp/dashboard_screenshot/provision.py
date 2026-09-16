@@ -27,7 +27,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from fastmcp.exceptions import ToolError
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..errors import ErrorCode, create_error_response
 from ..tools.helpers import raise_tool_error

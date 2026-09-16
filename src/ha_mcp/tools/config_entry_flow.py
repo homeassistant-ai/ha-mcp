@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any, ClassVar, Literal
 
-from fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
     HomeAssistantAPIError,

@@ -23,8 +23,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantCommandError
 from ha_mcp.tools import backup as backup_module
 from ha_mcp.tools import component_api

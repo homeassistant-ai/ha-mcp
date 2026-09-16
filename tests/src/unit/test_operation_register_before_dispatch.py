@@ -11,8 +11,8 @@ unrelated event for the same entity cannot spuriously complete it.
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.device_control import DeviceControlTools
 from ha_mcp.utils.operation_manager import (
     OperationStatus,

@@ -10,10 +10,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, cast
 
-from fastmcp import Context
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import tool
 from pydantic import Field
+
+from ha_mcp._vendor.fastmcp import Context
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
@@ -1177,7 +1178,7 @@ def _dashboard_split_serviceable(req: _ResolvedSearch, caps: Any) -> bool:
 class _DashboardLeg:
     """The dashboards surface's contribution to a component-served ha_search.
 
-    ``records`` are legacy-shaped (``dashboard_url`` / ``dashboard_title`` /
+    ``records`` are legacy-shaped (``url_path`` / ``title`` /
     ``score``), NOT component records — they never pass through
     ``_normalize_component_config_record``. ``failed`` is the leg's own
     "not scanned" count, reported with the deep path's wording. ``error`` is
@@ -1225,13 +1226,13 @@ def _merge_sort_key(record: dict[str, Any]) -> str:
     the wire records unchanged, so the merge reproduces the exact order that
     decided window membership. Dashboard records are outside the component
     corpus, so any deterministic key places them consistently across pages —
-    ``dashboard_url`` extends the same chain.
+    ``url_path`` extends the same chain.
     """
     return str(
         record.get("entity_id")
         or record.get("id")
         or record.get("name")
-        or record.get("dashboard_url")
+        or record.get("url_path")
         or ""
     )
 

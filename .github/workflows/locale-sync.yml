@@ -131,7 +131,7 @@ jobs:
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.12.9"
+        version: "0.12.11"
 
     - name: Install dependencies
       run: uv sync --dev
@@ -194,9 +194,9 @@ jobs:
       # Runs even with no diff: a clean no-op run over a tree a hand edit
       # broke must still go red. Skipped after a partial run — the state is
       # incomplete by construction and the job already fails for it.
-      # --maxfail=0 overrides pytest.ini's --maxfail=3: a systemic failure
-      # must name every string, not the first three. The junitxml assertion
-      # closes the fail-open hole where a renamed env var or refactored
+      # --maxfail=0 overrides pyproject.toml's --maxfail=3: a systemic
+      # failure must name every string, not the first three. The junitxml
+      # assertion closes the fail-open hole where a renamed env var or refactored
       # marker skips every gated test and pytest exits 0 having verified
       # nothing (test_locale_sync_gate_shape.py pins the wiring pre-merge;
       # this asserts it at run time).

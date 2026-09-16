@@ -12,8 +12,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools import tools_config_automations
 from ha_mcp.tools.auto_backup import automation_backup_target
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools

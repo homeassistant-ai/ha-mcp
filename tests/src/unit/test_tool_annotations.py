@@ -452,11 +452,11 @@ class TestToolAnnotations:
         missing = sum(
             1
             for c in constructions
-            if not any(kw.arg == "openWorldHint" for kw in c.keywords)
+            if not any(kw.arg == "open_world_hint" for kw in c.keywords)
         )
         assert missing == 0, (
             f"{missing} of {len(constructions)} ToolAnnotations(...) in "
-            "categorized_search.py omit openWorldHint; the runtime search proxies "
+            "categorized_search.py omit open_world_hint; the runtime search proxies "
             "would inherit the MCP default. Set it explicitly on each proxy."
         )
 

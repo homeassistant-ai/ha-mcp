@@ -31,7 +31,7 @@ def _is_write_or_destructive(tool: Any) -> bool:
     ann = getattr(tool, "annotations", None)
     # No annotations = treat as potentially write (safe default for the
     # UI, matches the runtime gate which doesn't skip read-only).
-    return ann is None or getattr(ann, "readOnlyHint", None) is not True
+    return ann is None or ann.read_only_hint is not True
 
 
 def _extract_arg_paths(parameters: dict[str, Any]) -> list[dict[str, Any]]:

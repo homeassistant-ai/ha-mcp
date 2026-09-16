@@ -7,9 +7,9 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
 from ha_mcp import backup_manager as bm
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools import auto_backup
 from ha_mcp.tools.tools_integrations import IntegrationTools
 

@@ -2316,3 +2316,56 @@ class TestWebsocketsProbeBranches:
 
         assert state["shared_metadata_version"] is None
         assert "shared_metadata_error" not in state
+
+
+class TestExtractClientInfoUserAgentFallback:
+    """Older-protocol clients over stateless HTTP send client info only in
+    initialize, so the request's User-Agent identifies them instead."""
+
+    @pytest.fixture
+    def headers(self, monkeypatch):
+        from ha_mcp.tools import tools_bug_report
+
+        current: dict[str, str] = {}
+        monkeypatch.setattr(
+            tools_bug_report, "get_http_headers", lambda include=None: current
+        )
+        return current
+
+    def _ctx_without_client_params(self):
+        return SimpleNamespace(session=SimpleNamespace(client_params=None))
+
+    def test_parses_product_and_version(self, headers):
+        headers["user-agent"] = "claude-code/2.1.4 (external, cli)"
+        assert _extract_client_info(self._ctx_without_client_params()) == {
+            "name": "claude-code",
+            "version": "2.1.4",
+            "title": "from HTTP User-Agent",
+        }
+
+    def test_product_without_version(self, headers):
+        headers["user-agent"] = "SomeClient"
+        assert _extract_client_info(self._ctx_without_client_params()) == {
+            "name": "SomeClient",
+            "version": "unknown",
+            "title": "from HTTP User-Agent",
+        }
+
+    def test_no_user_agent_returns_empty(self, headers):
+        assert _extract_client_info(self._ctx_without_client_params()) == {}
+
+    def test_client_params_win_over_user_agent(self, headers):
+        headers["user-agent"] = "python-httpx/0.28.1"
+        client_info = SimpleNamespace(name="Cursor", version="1.0", title=None)
+        ctx = SimpleNamespace(
+            session=SimpleNamespace(
+                client_params=SimpleNamespace(client_info=client_info)
+            )
+        )
+        assert _extract_client_info(ctx)["name"] == "Cursor"
+
+
+def test_extract_client_info_outside_an_http_request_returns_empty():
+    """stdio has no HTTP request, so there is no User-Agent to fall back to."""
+    ctx = SimpleNamespace(session=SimpleNamespace(client_params=None))
+    assert _extract_client_info(ctx) == {}

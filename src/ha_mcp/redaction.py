@@ -41,7 +41,11 @@ import threading
 from collections.abc import Iterable, Sequence
 from typing import Any
 
-from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
+from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
+    CallNext,
+    Middleware,
+    MiddlewareContext,
+)
 
 from .config import get_global_settings
 

@@ -33,9 +33,9 @@ read-only middleware exactly like any MCP client's call.
 The server runs on its own worker thread behind a loopback HTTP listener, and
 ``ha_mcp`` must never be imported in the HA main process (see
 :mod:`embedded_server`), so this module talks real MCP to the server over
-loopback streamable HTTP. The ``mcp`` client SDK arrives with the
-runtime-installed ha-mcp package (a fastmcp dependency), so every SDK import
-here is lazy and the first one runs on the executor.
+loopback streamable HTTP with Home Assistant's shared ``mcp`` SDK (the manifest
+requires ``mcp>=1.24.0``, so 1.x or 2.x), never ha-mcp's vendored copy. Every SDK import here
+is lazy and the first one runs on the executor.
 
 The tool list is fetched fresh on every ``async_get_api_instance`` call (once
 per conversation turn): exposure toggles and runtime-registered custom tools
@@ -51,6 +51,7 @@ import copy
 import importlib
 import logging
 import math
+import sys
 from collections import Counter
 from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -389,28 +390,37 @@ def _transport_error_leaves() -> tuple[type[BaseException], ...]:
     """Return the non-group exception classes a loopback exchange can raise.
 
     OSError covers a refused/dropped loopback connect; TimeoutError comes
-    from our asyncio.timeout budget. httpx errors and protocol-level McpError
-    can also escape a session call UNWRAPPED (HA core's mcp integration
-    catches both the same way), but neither class is importable at module
-    level — both arrive with the runtime-installed server package — hence a
-    function instead of a module constant.
+    from our asyncio.timeout budget. HTTP-client errors and the protocol-level
+    MCP error can also escape a session call UNWRAPPED (HA core's mcp
+    integration catches both the same way); SDK 1.x raises ``httpx`` /
+    ``McpError``, 2.x raises ``httpx2`` / ``MCPError``. Read from ``sys.modules``:
+    the SDK already imported whichever it raised from, and this runs on the
+    event loop, where an import is a blocking call.
     """
-    errors: tuple[type[BaseException], ...] = (TimeoutError, OSError)
-    try:
-        import httpx
-        from mcp import McpError
-    except ImportError:  # pragma: no cover - SDK-less builds never open a session
-        return errors
-    return (*errors, httpx.HTTPError, McpError)
+    errors: list[type[BaseException]] = [TimeoutError, OSError]
+    for module_name, attribute in (
+        ("httpx", "HTTPError"),
+        ("httpx2", "HTTPError"),
+        ("mcp", "McpError"),
+        ("mcp", "MCPError"),
+    ):
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        error_class = getattr(module, attribute, None)
+        if isinstance(error_class, type) and error_class not in errors:
+            errors.append(error_class)
+    return tuple(errors)
 
 
 def _transport_errors() -> tuple[type[BaseException], ...]:
     """Return the ``except`` target for one loopback MCP exchange.
 
-    Evaluated at exception time (an ``except`` expression is), so the lazy
-    imports in :func:`_transport_error_leaves` have already succeeded by
-    then. Includes ExceptionGroup because the SDK's anyio task groups wrap
-    in-session failures — but a caught group must still pass
+    Evaluated at exception time (an ``except`` expression is), so whichever
+    HTTP/MCP module raised is already in ``sys.modules`` for
+    :func:`_transport_error_leaves` to find. Includes ExceptionGroup because
+    the SDK's anyio task groups wrap in-session failures — but a caught group
+    must still pass
     :func:`_is_transport_failure` before being mapped to a friendly error,
     or a genuine bug that happened inside the task group would be relabeled
     as a transport failure (review finding).
@@ -547,34 +557,40 @@ async def _mcp_session(
     """
     from mcp.client.session import ClientSession
 
+    sdk_transport = importlib.import_module("mcp.client.streamable_http")
+
     async with AsyncExitStack() as stack:
-        try:
-            from mcp.client.streamable_http import streamable_http_client
-        except ImportError:
-            # Pre-rename SDK (an older ha-mcp resolved by a pip-spec override
-            # pins an older fastmcp/mcp): same call shape, deprecated name,
+        streamable_http_client = getattr(sdk_transport, "streamable_http_client", None)
+        if streamable_http_client is None:
+            # Pre-1.24 SDK (a third-party pin forcing the shared mcp below the
+            # manifest's floor): same call shape, deprecated name,
             # and no http_client kwarg — but it does accept a factory for the
             # client it builds internally, so _loopback_httpx_client_factory
             # keeps this fallback on the same verify=False/trust_env=False
             # posture as the canonical path below.
-            from mcp.client.streamable_http import streamablehttp_client
-
-            transport = streamablehttp_client(
+            transport = sdk_transport.streamablehttp_client(
                 url=url, httpx_client_factory=_loopback_httpx_client_factory
             )
         else:
-            import httpx
-
+            # SDK 1.x takes an httpx client, 2.x an httpx2 one: use the library
+            # the transport module itself imported.
+            http_lib = getattr(sdk_transport, "httpx2", None) or getattr(
+                sdk_transport, "httpx", None
+            )
+            if http_lib is None:
+                http_lib = importlib.import_module("httpx")
             http_client = await stack.enter_async_context(
-                httpx.AsyncClient(
+                http_lib.AsyncClient(
                     verify=False,
                     trust_env=False,
-                    timeout=httpx.Timeout(_CALL_TOOL_TIMEOUT_SECONDS),
+                    timeout=http_lib.Timeout(_CALL_TOOL_TIMEOUT_SECONDS),
                 )
             )
             transport = streamable_http_client(url=url, http_client=http_client)
 
-        read_stream, write_stream, _ = await stack.enter_async_context(transport)
+        # 1.x yields (read, write, get_session_id); 2.x yields (read, write).
+        streams = await stack.enter_async_context(transport)
+        read_stream, write_stream = streams[0], streams[1]
         session = await stack.enter_async_context(
             ClientSession(read_stream, write_stream)
         )
@@ -673,8 +689,30 @@ async def _forward_tool_call(
     # Full CallToolResult (content blocks, structuredContent, isError) —
     # the same shape HA core's mcp integration hands to agents; ha-mcp
     # signals tool failure via isError + structured error JSON, which the
-    # agent reads and reacts to like any tool output.
-    return result.model_dump(exclude_unset=True, exclude_none=True)
+    # agent reads and reacts to like any tool output. Dumped by alias (2.x
+    # fields are snake_case) with ``meta`` kept at its 1.x key, so both SDK
+    # lines hand agents the same keys.
+    dumped = result.model_dump(exclude_unset=True, exclude_none=True, by_alias=True)
+    return cast("JsonObjectType", _meta_as_field_name(dumped))
+
+
+def _meta_as_field_name(dumped: dict[str, Any]) -> dict[str, Any]:
+    """Rename ``_meta`` to ``meta`` on the SDK models only, never in tool payloads."""
+    models: list[Any] = [dumped]
+    for block in dumped.get("content", []):
+        models += [block, block.get("resource") if isinstance(block, dict) else None]
+    for model in models:
+        if isinstance(model, dict) and "_meta" in model:
+            model["meta"] = model.pop("_meta")
+    return dumped
+
+
+def _tool_input_schema(tool: Any) -> Any:
+    """``input_schema`` on SDK 2.x, ``inputSchema`` on 1.x."""
+    schema = getattr(tool, "input_schema", None)
+    if schema is None:
+        schema = getattr(tool, "inputSchema", None)
+    return schema
 
 
 def _search_score(query_words: list[str], name: str, description: str) -> int:
@@ -868,7 +906,7 @@ class HaMcpLlmApi(llm.API):
         """Mirror every exposed tool directly (full-catalog mode)."""
         tools: list[llm.Tool] = []
         for tool in exposed:
-            schema = _normalise_schema(tool.inputSchema, tool.name)
+            schema = _normalise_schema(_tool_input_schema(tool), tool.name)
             parameters = self._convert_parameters(tool, schema)
             if parameters is None:
                 continue
@@ -896,7 +934,7 @@ class HaMcpLlmApi(llm.API):
             # recorded no mutating call at all. A
             # converter that wrote back would corrupt the catalog entry, so
             # re-check this before pointing the component at a third one.
-            schema = _normalise_schema(tool.inputSchema, tool.name)
+            schema = _normalise_schema(_tool_input_schema(tool), tool.name)
             catalog.append(
                 {
                     "name": tool.name,

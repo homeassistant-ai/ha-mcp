@@ -26,9 +26,12 @@ def _print_errors(errors: list[str]) -> None:
 def _test_critical_imports(errors: list[str]) -> int:
     print("\n[1/4] Testing critical library imports...")
     critical_imports = [
-        ("fastmcp", "FastMCP framework"),
+        ("ha_mcp._vendor.fastmcp", "FastMCP framework (vendored)"),
+        ("ha_mcp._vendor.mcp", "MCP SDK (vendored)"),
+        ("ha_mcp._vendor.mcp_types", "MCP protocol types (vendored)"),
         ("griffe", "FastMCP API introspection"),
         ("httpx", "HTTP client"),
+        ("httpx2", "FastMCP HTTP client"),
         ("pydantic", "Data validation"),
         ("click", "CLI framework"),
         ("ha_mcp._vendor.websockets", "WebSocket support (vendored)"),

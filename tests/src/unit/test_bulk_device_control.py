@@ -5,8 +5,8 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.errors import ErrorCode, create_error_response
 from ha_mcp.tools.device_control import DeviceControlTools
 
@@ -203,8 +203,7 @@ class TestRegisteredBulkToolCompatibility:
 
     @staticmethod
     async def _registered_tool(device_tools):
-        from fastmcp import FastMCP
-
+        from ha_mcp._vendor.fastmcp import FastMCP
         from ha_mcp.tools.tools_service import register_service_tools
 
         mcp = FastMCP("test")

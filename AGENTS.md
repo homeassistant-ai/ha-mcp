@@ -125,11 +125,13 @@ conditions fails, fix it now or let it go—do not file an issue merely to
 “track” it. Bot nits are fixed or dismissed in the current review, not
 converted into backlog noise.
 
-Do not use “non-blocking,” “post-merge follow-up,” “nice to have,”
-“pre-existing,” or similar phrasing to hide a legitimate current finding.
-This list is non-exhaustive: match the intent, and remember that pre-existing
-problems are the point of the Boy Scout rule. State the finding and let the
-user decide scope.
+Do not use “out of scope,” “non-blocking,” “post-merge follow-up,” “nice to
+have,” “pre-existing,” or similar phrasing to hide a legitimate current
+finding. This list is non-exhaustive: match the intent, and remember that
+pre-existing problems are the point of the Boy Scout rule. Scope is the
+user's call: state the finding and ask explicitly, with the specific reason,
+before deferring or dropping it: “I think this is out of scope because [X].
+Fix here or defer?”
 
 ## CI/CD Workflows
 
@@ -143,13 +145,20 @@ The minimal setup is `uv sync --group dev`; run stdio with `uv run ha-mcp` and H
 
 Tools are lazy-discovered from `tools_*.py`; shared business logic belongs in service modules; WebSocket-backed operations verify state changes; and tools wait for logical completion when possible. Read the [architecture map](docs/agents/development.md#architecture) and the [code review style guide](.gemini/styleguide.md) before structural code changes.
 
+## Code Conventions
+
+- Comment only non-obvious logic. Code should be self-documenting; too many comments is an anti-pattern.
+- In Python, type-hint every function signature and use async/await consistently for I/O.
+- Keep modules focused. Around 1,000 lines (Pylint's `max-module-lines` default) signals a module spanning several concerns; split along responsibilities and update internal imports and test patch targets together, since internal module paths are not a public MCP tool contract.
+- Never hand-edit the root `CHANGELOG.md` or its `homeassistant-addon/CHANGELOG.md` copy; semantic-release generates both. The webhook-proxy app changelogs are maintained by hand per their scoped `AGENTS.md`.
+
 ## Terminology: apps, not add-ons
 
 In user- and agent-facing text, write **app (add-on)** on first mention and **app** afterwards. Identifiers require case-by-case verification; established slugs, paths, labels, API routes, and compatibility text may retain the old spelling. The exact exceptions live in the [development reference](docs/agents/development.md#terminology-apps-not-add-ons).
 
 ## Writing MCP Tools
 
-Before adding or modifying a tool, read [`.gemini/styleguide.md`](.gemini/styleguide.md). It owns tool naming, decorator order, tags, safety annotations, `ToolError` handling, return shapes, docstrings, consolidation, module size, and progressive disclosure.
+Before adding or modifying a tool, read [`.gemini/styleguide.md`](.gemini/styleguide.md). It owns tool naming, decorator order, tags, safety annotations, `ToolError` handling, return shapes, docstrings, consolidation, and progressive disclosure.
 
 ## Tool Waiting Behavior
 

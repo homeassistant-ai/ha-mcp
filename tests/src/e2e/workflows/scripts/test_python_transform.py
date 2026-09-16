@@ -47,6 +47,16 @@ async def test_python_transform_simple_update(mcp_client, ha_client):
     assert result["action"] == "python_transform"
     assert result["config_hash"] is not None
 
+    assert not any(
+        "not yet queryable" in warning or "verification failed" in warning
+        for warning in result.get("warnings", [])
+    )
+    # The transform's default wait=True is the completion signal under test.
+    state = await mcp.call_tool_success(
+        "ha_get_state", {"entity_id": "script.test_py_transform"}
+    )
+    assert state["data"]["entity_id"] == "script.test_py_transform"
+
     # ``config`` is the script body, so no second unwrap.
     verify = await mcp.call_tool_success(
         "ha_config_get_script", {"script_id": "test_py_transform"}

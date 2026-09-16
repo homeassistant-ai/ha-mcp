@@ -18,8 +18,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
@@ -1119,7 +1119,7 @@ class TestDashboardSearchTypesGate:
             resp = await ha_search(query="energy", search_types=["dashboard"])
 
         assert resp["success"] is True
-        assert resp["dashboards"][0]["dashboard_url"] == "energy"
+        assert resp["dashboards"][0]["url_path"] == "energy"
         assert not resp.get("partial")
         assert resp.get("warnings", []) == []
         # Zero legacy lovelace round-trips.

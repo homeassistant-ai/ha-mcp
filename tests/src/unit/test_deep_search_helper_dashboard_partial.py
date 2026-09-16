@@ -178,6 +178,23 @@ class TestDashboardFailure:
         assert matches == []
         assert failed is False
 
+    async def test_one_dashboard_match_record_names_url_path(self) -> None:
+        """A legacy-walk match names the dashboard by ``url_path`` (#2462)."""
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={"result": {"views": [{"title": "marker"}]}}
+        )
+        tools = _make_tools(client)
+        matches, failed = await tools._search_one_dashboard(
+            "my-dashboard", "My Dashboard", "marker", True, asyncio.Semaphore(4)
+        )
+        assert failed is False
+        assert len(matches) == 1
+        assert matches[0]["url_path"] == "my-dashboard"
+        assert matches[0]["title"] == "My Dashboard"
+        assert "dashboard_url" not in matches[0]
+        assert "dashboard_title" not in matches[0]
+
     async def test_one_dashboard_raise_signals_failed(self) -> None:
         """A raised config fetch returns ``failed=True`` rather than swallowing
         to a silent empty list."""
@@ -360,13 +377,13 @@ class TestDashboardBucketViaComponent:
             )
 
         dashboards = result["dashboards"]
-        assert {d["dashboard_url"] for d in dashboards} == {"energy", "default"}
+        assert {d["url_path"] for d in dashboards} == {"energy", "default"}
         for rec in dashboards:
             assert rec["score"] == 100
             assert rec["match_in_config"] is True
-        by_url = {d["dashboard_url"]: d for d in dashboards}
-        assert by_url["energy"]["dashboard_title"] == "Energy Registry"
-        assert by_url["default"]["dashboard_title"] == "Default Dashboard"
+        by_url = {d["url_path"]: d for d in dashboards}
+        assert by_url["energy"]["title"] == "Energy Registry"
+        assert by_url["default"]["title"] == "Default Dashboard"
         assert not result.get("partial")
 
     async def test_component_yaml_skipped_falls_back_to_legacy(self) -> None:

@@ -8,8 +8,8 @@ that returns images directly to the LLM for visual analysis.
 import logging
 from typing import Any
 
-from fastmcp.tools import tool
-from fastmcp.utilities.types import Image
+from ha_mcp._vendor.fastmcp.tools import tool
+from ha_mcp._vendor.fastmcp.utilities.types import Image
 
 from .helpers import log_tool_usage, register_tool_methods
 

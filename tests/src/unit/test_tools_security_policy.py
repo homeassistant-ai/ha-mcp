@@ -14,8 +14,8 @@ from typing import get_args
 from unittest.mock import MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.config import reset_global_settings
 from ha_mcp.tools.tools_security_policy import (
     FEATURE_FLAG,

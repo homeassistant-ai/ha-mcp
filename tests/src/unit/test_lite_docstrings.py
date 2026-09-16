@@ -31,9 +31,9 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.tools import Tool
-from mcp.types import ToolAnnotations
 
+from ha_mcp._vendor.fastmcp.tools import Tool
+from ha_mcp._vendor.mcp.types import ToolAnnotations
 from ha_mcp.transforms import LiteDocstringsTransform
 from ha_mcp.utils import skill_loader
 
@@ -75,7 +75,7 @@ def _make_tool(name: str, *, description: str = "") -> Tool:
         fn=noop,
         name=name,
         description=description,
-        annotations=ToolAnnotations(readOnlyHint=True),
+        annotations=ToolAnnotations(read_only_hint=True),
     )
 
 

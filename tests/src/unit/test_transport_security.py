@@ -14,11 +14,11 @@ Global-state cleanup (env var + settings singleton) is handled by the autouse
 
 import os
 
-import fastmcp
 import httpx
 import pytest
-from fastmcp import FastMCP
 
+from ha_mcp._vendor import fastmcp
+from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp.transport_security import (
     HOST_ORIGIN_PROTECTION_ENV,
     ensure_host_origin_guard_default_off,

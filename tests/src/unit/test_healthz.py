@@ -2,10 +2,10 @@
 
 import httpx
 import pytest
-from fastmcp import FastMCP
 
 from ha_mcp import browser_landing
 from ha_mcp.__main__ import ProbeAccessLogFilter, _healthz_enabled
+from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp.browser_landing import register_healthz
 
 

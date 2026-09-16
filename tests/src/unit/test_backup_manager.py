@@ -21,9 +21,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import yaml
-from fastmcp.exceptions import ToolError
 
 from ha_mcp import backup_manager as bm
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.backup_manager import (
     _MAX_PATCH_OPS,
     SCHEMA_VERSION,
@@ -360,9 +360,8 @@ class TestFetcherIdResolution:
         # HA's "Unknown config specified" for an unresolved url_path (also the
         # brand-new-dashboard create path) must map to None ("nothing to back
         # up"), not propagate as a hard failure.
-        from fastmcp.exceptions import ToolError
-
         import ha_mcp.tools.tools_config_dashboards as dash
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         async def fake_resolve(_client: Any, _identifier: str) -> Any:
             return None, None  # no registry match -> fall through with raw id
@@ -407,9 +406,8 @@ class TestFetcherIdResolution:
     ) -> None:
         # A non-not-found failure must propagate (so maybe_snapshot logs a
         # WARNING) rather than be misclassified as "nothing to back up".
-        from fastmcp.exceptions import ToolError
-
         import ha_mcp.tools.tools_config_dashboards as dash
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         async def fake_resolve(_client: Any, _identifier: str) -> Any:
             return None, None
@@ -2275,9 +2273,8 @@ class TestYamlHandler:
         """A component predating extra_allowed_keys must produce the same
         actionable update prompt as the write path, not the opaque
         "extra keys not allowed" schema rejection from Home Assistant."""
-        from fastmcp.exceptions import ToolError
-
         from ha_mcp import config as ha_mcp_config
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
         from ha_mcp.tools import tools_filesystem as fsmod
 
         monkeypatch.setenv("HA_MCP_EXTRA_YAML_KEYS", "alert2")
@@ -3154,8 +3151,7 @@ class TestLegacyList:
         # legacy read must still degrade instead of failing wholesale, and the
         # surfaced reason must be the human message, not the raw JSON envelope
         # (#1996 exercise path).
-        from fastmcp.exceptions import ToolError
-
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
         from ha_mcp.errors import ErrorCode, create_error_response
 
         payload = json.dumps(

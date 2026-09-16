@@ -1948,8 +1948,9 @@ def _addon_link_transient_leaves() -> tuple[type[BaseException], ...]:
     """
     import anyio
     import httpx
-    from fastmcp.exceptions import ClientError, FastMCPError
-    from mcp import McpError
+    import httpx2
+
+    from ha_mcp._vendor.fastmcp.exceptions import ClientError, FastMCPError, McpError
 
     return (
         McpError,
@@ -1959,6 +1960,8 @@ def _addon_link_transient_leaves() -> tuple[type[BaseException], ...]:
         OSError,
         TimeoutError,
         httpx.HTTPError,
+        # FastMCP's client transport raises httpx2 errors.
+        httpx2.HTTPError,
         # Cancelling a stalled attempt tears the streamable-HTTP memory
         # streams down mid-read. These are plain Exceptions, not OSError.
         anyio.ClosedResourceError,
@@ -2021,8 +2024,8 @@ def _probe_addon_ha_link(addon_mcp_url: str, budget: float) -> None:
     """
     import asyncio
 
-    from fastmcp import Client
-    from fastmcp.client.transports import StreamableHttpTransport
+    from ha_mcp._vendor.fastmcp import Client
+    from ha_mcp._vendor.fastmcp.client.transports import StreamableHttpTransport
 
     inner = max(budget * 0.8, budget - 2.0)
 

@@ -16,9 +16,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 from pydantic import TypeAdapter
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import ErrorLogPage, HomeAssistantAuthError
 from ha_mcp.tools.error_log_parsing import (
     _DEFAULT_TOP_N,
@@ -151,7 +151,7 @@ def _get_tool_param_annotation(tool_name: str, param_name: str) -> Any:
     TypeAdapter from the registered fn's signature, so the annotation read here
     is exactly what validates inbound MCP traffic.
     """
-    from fastmcp import FastMCP
+    from ha_mcp._vendor.fastmcp import FastMCP
 
     async def _inner() -> Any:
         mcp = FastMCP("test")

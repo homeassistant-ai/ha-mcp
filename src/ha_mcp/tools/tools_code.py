@@ -30,8 +30,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastmcp.exceptions import ToolError
-from fastmcp.server.context import Context
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.server.context import Context
 
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
@@ -621,9 +621,7 @@ def _extract_tool_result(result: Any) -> Any:
     elif isinstance(result, list):
         content = result
 
-    is_error = bool(
-        getattr(result, "isError", False) or getattr(result, "is_error", False)
-    )
+    is_error = bool(getattr(result, "is_error", False))
 
     if content:
         texts = _collect_content_texts(content)

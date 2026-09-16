@@ -11,8 +11,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools import tools_search
 from ha_mcp.tools.smart_search._deep import DeepSearchMixin
 from ha_mcp.tools.smart_search._scenes import SceneSearchMixin

@@ -980,7 +980,7 @@ class TestFlowHelperRouting:
 
     async def test_flow_helper_create_requires_name(self, register_tools, mock_client):
         """Flow helper create without name (neither top-level nor in config) errors."""
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         with pytest.raises(ToolError):
             await register_tools["ha_config_set_helper"](
@@ -1031,7 +1031,7 @@ class TestFlowHelperRouting:
         Silent-ignore would mislead agents into thinking the payload took effect.
         Empty dict and empty string are tolerated (explicit 'nothing').
         """
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         # Non-empty config on simple type → reject
         with pytest.raises(ToolError) as excinfo:
@@ -1321,7 +1321,7 @@ class TestOptionalNameOnUpdate:
         """Creating a helper without name still fails (but at the tool logic, not Pydantic)."""
         # No mocking needed: create path raises ToolError before any WS call
         # when name is missing.
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         with pytest.raises(ToolError, match="name is required for create"):
             await register_tools["ha_config_set_helper"](

@@ -8,8 +8,20 @@ import pytest
 import yaml
 
 _ROOT = Path(__file__).resolve().parents[3]
-_COMMAND = "python3 -I scripts/vendor_websockets.py"
+_PIN_FILE = "src/ha_mcp/_vendor/requirements.txt"
+_WEBSOCKETS_COMMAND = "python3 -I scripts/vendor_websockets.py"
 _FASTMCP_COMMAND = "python3 -I scripts/vendor_fastmcp.py"
+_HOOKS = {
+    _WEBSOCKETS_COMMAND: (["websockets"], ["src/ha_mcp/_vendor/websockets/**"]),
+    _FASTMCP_COMMAND: (
+        ["fastmcp-slim", "mcp", "mcp-types"],
+        [
+            "src/ha_mcp/_vendor/fastmcp/**",
+            "src/ha_mcp/_vendor/mcp/**",
+            "src/ha_mcp/_vendor/mcp_types/**",
+        ],
+    ),
+}
 
 
 def _configuration() -> tuple[dict, dict]:
@@ -23,35 +35,48 @@ def _configuration() -> tuple[dict, dict]:
     return config, action["env"]
 
 
-def test_vendoring_hook_is_scoped_to_the_private_websockets_pin() -> None:
+def test_each_vendoring_hook_is_scoped_to_its_private_pins() -> None:
     config, _ = _configuration()
-    rules = [rule for rule in config["packageRules"] if "postUpgradeTasks" in rule]
-    assert len(rules) == 1, "the vendored pin needs one regeneration hook"
-    rule = rules[0]
-    assert rule["matchManagers"] == ["custom.regex"]
-    assert rule["matchDatasources"] == ["pypi"]
-    assert rule["matchPackageNames"] == ["websockets"]
-    assert rule["matchFileNames"] == ["src/ha_mcp/_vendor/requirements.txt"]
-    assert rule["postUpgradeTasks"]["commands"] == [_COMMAND]
-    assert rule["postUpgradeTasks"]["fileFilters"] == [
-        "src/ha_mcp/_vendor/websockets/**"
-    ]
-    assert rule["postUpgradeTasks"]["installTools"] == {"python": {}}
-    assert rule["constraints"]["python"] == ">=3.13,<3.14"
-    # Update mode retains the matched upgrade's Python constraint in 44.50.1.
-    assert rule["postUpgradeTasks"]["executionMode"] == "update"
-    assert "minimumReleaseAge" not in rule
-    assert "schedule" not in rule
+    rules = {
+        rule["postUpgradeTasks"]["commands"][0]: rule
+        for rule in config["packageRules"]
+        if "postUpgradeTasks" in rule
+    }
+    assert set(rules) == set(_HOOKS), "one regeneration hook per vendoring script"
+    for command, (packages, file_filters) in _HOOKS.items():
+        rule = rules[command]
+        assert rule["matchManagers"] == ["custom.regex"]
+        assert rule["matchDatasources"] == ["pypi"]
+        assert rule["matchPackageNames"] == packages
+        assert rule["matchFileNames"] == [_PIN_FILE]
+        assert rule["postUpgradeTasks"]["commands"] == [command]
+        assert rule["postUpgradeTasks"]["fileFilters"] == file_filters
+        assert rule["postUpgradeTasks"]["installTools"] == {"python": {}}
+        assert rule["constraints"]["python"] == ">=3.13,<3.14"
+        # Update mode retains the matched upgrade's Python constraint in 44.50.1.
+        assert rule["postUpgradeTasks"]["executionMode"] == "update"
+        assert "minimumReleaseAge" not in rule
+        assert "schedule" not in rule
+
+
+def test_vendored_fastmcp_packages_update_together() -> None:
+    config, _ = _configuration()
+    rule = next(
+        r
+        for r in config["packageRules"]
+        if r.get("postUpgradeTasks", {}).get("commands") == [_FASTMCP_COMMAND]
+    )
+    assert rule["groupName"] == "vendored fastmcp"
 
 
 @pytest.mark.parametrize(
     ("command", "allowed"),
     [
-        (_COMMAND, True),
+        (_WEBSOCKETS_COMMAND, True),
         (_FASTMCP_COMMAND, True),
-        (_COMMAND + " --extra", False),
+        (_WEBSOCKETS_COMMAND + " --extra", False),
         (_FASTMCP_COMMAND + " --extra", False),
-        (_COMMAND + "; echo unsafe", False),
+        (_WEBSOCKETS_COMMAND + "; echo unsafe", False),
         ("echo unsafe && " + _FASTMCP_COMMAND, False),
         ("python3 -I scripts/vendor_websocketsXpy", False),
         ("python3 -I scripts/vendor_fastmcpXpy", False),
@@ -60,7 +85,7 @@ def test_vendoring_hook_is_scoped_to_the_private_websockets_pin() -> None:
         ("python3 -I scripts/another_script.py", False),
     ],
 )
-def test_only_the_exact_vendoring_command_is_authorized(
+def test_only_the_exact_vendoring_commands_are_authorized(
     command: str, allowed: bool
 ) -> None:
     _, env = _configuration()

@@ -26,6 +26,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 from ha_mcp._vendor import websockets
 from ha_mcp._vendor.websockets.asyncio.client import ClientConnection
 from ha_mcp._vendor.websockets.exceptions import (
@@ -195,7 +197,16 @@ class TestNoSharedWebsocketsImports:
             "any integration's install (#2135/#2146)"
         )
 
-    def test_embedded_listener_loads_no_websocket_protocol(self):
+    @pytest.mark.parametrize(
+        "launcher",
+        [
+            "custom_components/ha_mcp_tools/embedded_server.py",
+            "src/ha_mcp/__main__.py",
+            "src/ha_mcp/stdio_settings_sidecar.py",
+            "homeassistant-addon/start.py",
+        ],
+    )
+    def test_every_http_launcher_loads_no_websocket_protocol(self, launcher):
         """uvicorn must not be told to load a WebSocket protocol.
 
         uvicorn resolves its ``ws`` class EAGERLY in ``Config.load()``, and
@@ -207,13 +218,13 @@ class TestNoSharedWebsocketsImports:
         exists to make impossible. The MCP app serves Streamable HTTP and
         registers no WebSocket route, so "none" costs nothing.
         """
-        source = (
-            _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "embedded_server.py"
-        ).read_text(encoding="utf-8")
-        ws_settings = re.findall(r"""\bws\s*=\s*["']([^"']+)["']""", source)
-        assert ws_settings, "no uvicorn ws= setting found — did the call move?"
+        source = (_REPO_ROOT / launcher).read_text(encoding="utf-8")
+        ws_settings = re.findall(
+            r"""(?:\bws\s*=\s*|["']ws["']\s*:\s*)["']([^"']+)["']""", source
+        )
+        assert ws_settings, f"no uvicorn ws setting found in {launcher}"
         assert set(ws_settings) == {"none"}, (
-            f"embedded_server configures uvicorn with ws={ws_settings} — every "
+            f"{launcher} configures uvicorn with ws={ws_settings} — every "
             "value but 'none' eagerly imports the shared websockets package "
             "(#2135/#2146)"
         )

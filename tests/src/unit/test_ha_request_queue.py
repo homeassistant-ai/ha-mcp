@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import anyio
 import pytest
-from fastmcp.exceptions import ToolError
 
 import ha_mcp.ha_request_queue as queue_module
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 HomeAssistantRequestQueueMiddleware = queue_module.HomeAssistantRequestQueueMiddleware
 

@@ -28,10 +28,11 @@ REPO_ROOT = TESTS_DIR.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(TESTS_DIR))
 
-from fastmcp import Client  # noqa: E402
 from test_constants import HA_TEST_IMAGE, TEST_TOKEN  # noqa: E402
 from uat._inprocess import inprocess_mcp_client  # noqa: E402
 from uat.ha_wait import wait_for_ha_ready  # noqa: E402
+
+from ha_mcp._vendor.fastmcp import Client  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

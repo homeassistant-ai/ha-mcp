@@ -1,12 +1,17 @@
 """Unit tests for ValidationErrorMiddleware."""
 
 import json
+import logging
+from types import SimpleNamespace
 
 import pytest
-from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError
 
-from ha_mcp.tools.validation_middleware import ValidationErrorMiddleware
+from ha_mcp._vendor.fastmcp import FastMCP
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.tools.validation_middleware import (
+    ValidationErrorMiddleware,
+    _closest_parameter,
+)
 
 
 def _make_mcp() -> FastMCP:
@@ -40,9 +45,12 @@ async def test_wrapped_fastmcp_validation_error_is_structured():
     ToolError. Version-independent: the wrapped error is synthesised, so this
     exercises the 3.4.3 code path even on older fastmcp.
     """
-    from fastmcp.exceptions import ValidationError as FastMCPValidationError
     from pydantic import BaseModel
     from pydantic import ValidationError as PydanticValidationError
+
+    from ha_mcp._vendor.fastmcp.exceptions import (
+        ValidationError as FastMCPValidationError,
+    )
 
     class _Args(BaseModel):
         config: dict
@@ -77,6 +85,8 @@ async def test_string_for_dict_gives_actionable_message():
     msg = body["error"]["message"]
     assert "config" in msg
     assert "JSON object" in msg
+    assert "Valid parameters" not in msg
+    assert "valid_parameters" not in body
 
 
 @pytest.mark.asyncio
@@ -260,3 +270,224 @@ async def test_tool_error_from_tool_body_passes_through_unconverted():
 
     body = json.loads(str(exc_info.value))
     assert body["error"]["code"] == "ENTITY_NOT_FOUND"
+
+
+def _make_dashboard_like_mcp() -> FastMCP:
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_test_get_dashboard(
+        url_path: str | None = None,
+        list_only: bool = False,
+        force_reload: bool = False,
+        entity_id: str | None = None,
+    ) -> dict:
+        return {"ok": True}
+
+    return mcp
+
+
+@pytest.mark.asyncio
+async def test_unknown_parameter_names_closest_valid_parameter():
+    """Invented argument names get a did-you-mean hint and the valid parameter
+    list instead of pydantic's bare "Unexpected keyword argument" (#2462)."""
+    mcp = _make_dashboard_like_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool(
+            "ha_test_get_dashboard", {"dashboard_url": "my-dashboard", "force": True}
+        )
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "`dashboard_url`: unknown parameter, did you mean `url_path`?" in msg
+    assert "`force`: unknown parameter, did you mean `force_reload`?" in msg
+    assert msg.endswith(
+        "Valid parameters: url_path, list_only, force_reload, entity_id."
+    )
+
+
+@pytest.mark.asyncio
+async def test_unknown_parameter_typo_suggests_by_similarity():
+    """A plain misspelling with no whole shared word still gets its match."""
+    mcp = _make_dashboard_like_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool("ha_test_get_dashboard", {"entitiy_id": "light.x"})
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "`entitiy_id`: unknown parameter, did you mean `entity_id`?" in msg
+
+
+@pytest.mark.asyncio
+async def test_unknown_parameter_without_a_close_match_still_lists_valid_names():
+    """No guess is offered when nothing resembles the name."""
+    mcp = _make_dashboard_like_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool("ha_test_get_dashboard", {"zzz": 1})
+
+    body = json.loads(str(exc_info.value))
+    msg = body["error"]["message"]
+    assert msg == (
+        "`zzz`: unknown parameter. "
+        "Valid parameters: url_path, list_only, force_reload, entity_id."
+    )
+    assert body["valid_parameters"] == [
+        "url_path",
+        "list_only",
+        "force_reload",
+        "entity_id",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_supplied_parameter_is_never_suggested():
+    """A parameter the call already supplied is not offered for a second argument."""
+    mcp = _make_dashboard_like_mcp()
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool(
+            "ha_test_get_dashboard",
+            {"url_path": "my-dashboard", "dashboard_url": "my-dashboard"},
+        )
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "`dashboard_url`: unknown parameter." in msg
+    assert "did you mean" not in msg
+
+
+@pytest.mark.asyncio
+async def test_type_error_and_unknown_parameter_in_one_call():
+    """Both hint kinds share one message without a doubled sentence terminator."""
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_test_config_tool(config: dict, entity_id: str | None = None) -> dict:
+        return {"ok": True}
+
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool(
+            "ha_test_config_tool", {"config": '{"a": 1}', "entitiy_id": "light.x"}
+        )
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert "`config`: expected a JSON object." in msg
+    assert "`entitiy_id`: unknown parameter, did you mean `entity_id`?" in msg
+    assert "Valid parameters: config, entity_id." in msg
+    assert ".." not in msg
+
+
+@pytest.mark.asyncio
+async def test_unknown_parameter_on_a_tool_without_parameters():
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool()
+    async def ha_test_no_params() -> dict:
+        return {"ok": True}
+
+    with pytest.raises(ToolError) as exc_info:
+        await mcp.call_tool("ha_test_no_params", {"entity_id": "light.x"})
+
+    msg = json.loads(str(exc_info.value))["error"]["message"]
+    assert msg.endswith("Valid parameters: none.")
+
+
+def test_shared_word_outranks_closer_spelling():
+    assert _closest_parameter("force", ["forced", "force_reload"]) == "force_reload"
+
+
+def test_trailing_declared_name_outranks_closer_spelling():
+    """A prefixed name points at the parameter it ends with: the renamed
+    screenshot argument ``dashboard_url_path`` means ``url_path``, not the
+    closer-spelled legacy ``dashboard_path``."""
+    screenshot_parameters = ["dashboard_path", "url_path", "view_path", "width"]
+    assert _closest_parameter("dashboard_url_path", screenshot_parameters) == "url_path"
+
+
+def _unknown_argument_error():
+    from pydantic import ValidationError as PydanticValidationError
+    from pydantic import validate_call
+
+    @validate_call
+    def _target(entity_id: str | None = None) -> None:
+        return None
+
+    with pytest.raises(PydanticValidationError) as info:
+        _target(entitiy_id="light.x")
+    return info.value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookup", ["raises", "returns_none", "no_properties"])
+async def test_unknown_parameter_falls_back_when_schema_lookup_fails(lookup, caplog):
+    """A failed schema lookup keeps pydantic's wording, adds no parameter list,
+    and logs a warning instead of breaking the structured error."""
+
+    async def get_tool(_name):
+        if lookup == "raises":
+            raise RuntimeError("lookup failed")
+        return SimpleNamespace(parameters={}) if lookup == "no_properties" else None
+
+    context = SimpleNamespace(
+        fastmcp_context=SimpleNamespace(fastmcp=SimpleNamespace(get_tool=get_tool)),
+        message=SimpleNamespace(name="ha_test_tool", arguments={"entitiy_id": "x"}),
+    )
+    error = _unknown_argument_error()
+
+    async def _raise(_context):
+        raise error
+
+    with (
+        caplog.at_level(logging.WARNING, logger="ha_mcp.tools.validation_middleware"),
+        pytest.raises(ToolError) as exc_info,
+    ):
+        await ValidationErrorMiddleware().on_call_tool(context, _raise)
+
+    body = json.loads(str(exc_info.value))
+    assert body["success"] is False
+    msg = body["error"]["message"]
+    assert "`entitiy_id`: Unexpected keyword argument" in msg
+    assert "Valid parameters" not in msg
+    assert "unknown-argument hint omitted" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_unknown_parameter_hint_through_the_search_proxy():
+    """Through ha_call_read_tool the hint names the inner tool's parameters."""
+    from ha_mcp._vendor.fastmcp import Client
+    from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
+
+    mcp = FastMCP("test")
+    mcp.add_middleware(ValidationErrorMiddleware())
+
+    @mcp.tool(annotations={"readOnlyHint": True})
+    async def ha_test_get_dashboard(
+        url_path: str | None = None, force_reload: bool = False
+    ) -> dict:
+        return {"ok": True}
+
+    mcp.add_transform(CategorizedSearchTransform())
+
+    async with Client(mcp) as client:
+        result = await client.call_tool(
+            "ha_call_read_tool",
+            {
+                "name": "ha_test_get_dashboard",
+                "arguments": {"dashboard_url": "my-dashboard"},
+            },
+            raise_on_error=False,
+        )
+        supplied = await client.call_tool(
+            "ha_call_read_tool",
+            {
+                "name": "ha_test_get_dashboard",
+                "arguments": {"url_path": "my-dashboard", "dashboard_url": "x"},
+            },
+            raise_on_error=False,
+        )
+
+    assert result.is_error
+    text = result.content[0].text
+    assert "`dashboard_url`: unknown parameter, did you mean `url_path`?" in text
+    assert "Valid parameters: url_path, force_reload." in text
+    assert supplied.is_error
+    assert "did you mean" not in supplied.content[0].text

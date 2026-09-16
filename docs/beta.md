@@ -234,7 +234,7 @@ render-settle is generous, but a heavy chart card may still come back blank;
 raise `wait_ms` on the standalone `ha_get_dashboard_screenshot` tool for those.
 
 **Prefer stable view addressing.** The standalone tool accepts
-`dashboard_url_path` plus the view's configured `views[].path`; dashboard get
+`url_path` plus the view's configured `views[].path`; dashboard get
 responses expose `render_paths` for every static view. The legacy raw
 `dashboard_path` remains supported, but a numeric route such as `lovelace/0`
 returns a warning when that view has a stable named path. Strategy dashboards

@@ -30,7 +30,7 @@ def _get_tool_parameters(
     register_fn: Callable[..., Any], tool_name: str
 ) -> dict[str, Any]:
     """Return the complete JSON schema for a freshly registered MCP tool."""
-    from fastmcp import FastMCP
+    from ha_mcp._vendor.fastmcp import FastMCP
 
     async def _inner() -> dict[str, Any]:
         """Register the tool and retrieve its complete schema asynchronously."""
