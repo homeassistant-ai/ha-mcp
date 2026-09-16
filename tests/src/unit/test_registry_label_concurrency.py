@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from ha_mcp.tools.tools_areas import AreaTools
 from ha_mcp.tools.tools_entities import EntityTools
 from ha_mcp.tools.tools_labels import LabelTools
 
@@ -13,7 +14,8 @@ from ha_mcp.tools.tools_labels import LabelTools
 class Registry:
     """Model HA's whole-list label writes with a yield after each fresh read."""
 
-    def __init__(self):
+    def __init__(self, *, echo_labels=True):
+        self.echo_labels = echo_labels
         self.labels = {"target": ["existing"]}
 
     async def send_websocket_message(self, message):
@@ -43,6 +45,8 @@ class Registry:
             key = message.get("area_id", "target")
             self.labels[key] = list(message["labels"])
             result = {**message, "labels": list(self.labels[key])}
+            if command == "config/area_registry/update" and not self.echo_labels:
+                result = {"area_id": key}
             if command == "config/entity_registry/update":
                 result = {"entity_entry": result}
             return {"success": True, "result": result}
@@ -74,8 +78,9 @@ async def update_entity(client, labels, operation):
 
 
 @pytest.mark.asyncio
-async def test_concurrent_area_adds_preserve_both_labels():
-    registry = Registry()
+@pytest.mark.parametrize("echo_labels", [True, False])
+async def test_concurrent_area_adds_preserve_both_labels(echo_labels):
+    registry = Registry(echo_labels=echo_labels)
     await asyncio.gather(
         add_area(registry.client(), "red"),
         add_area(registry.client(), "blue"),
@@ -145,3 +150,60 @@ async def test_failed_area_write_releases_resource_for_next_call(error):
     assert registry.labels == before
     await asyncio.wait_for(add_area(registry.client(), "blue"), 1)
     assert set(registry.labels["target"]) == {"existing", "blue"}
+
+
+@pytest.mark.asyncio
+async def test_bulk_and_single_entity_adds_share_coordination():
+    registry = Registry()
+    results = await asyncio.gather(
+        EntityTools(registry.client()).ha_set_entity(
+            entity_id=["light.target"], labels=["red"], label_operation="add"
+        ),
+        EntityTools(registry.client()).ha_set_entity(
+            entity_id="light.target", labels=["blue"], label_operation="add"
+        ),
+    )
+    assert all(result["success"] for result in results)
+    assert set(registry.labels["target"]) == {"existing", "red", "blue"}
+
+
+@pytest.mark.asyncio
+async def test_area_replacement_waits_for_inflight_add():
+    registry = Registry()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    replacement_validated = asyncio.Event()
+
+    async def send(message):
+        if (
+            message["type"] == "config/area_registry/update"
+            and "red" in message["labels"]
+        ):
+            entered.set()
+            await release.wait()
+        if message["type"] == "config/label_registry/list":
+            replacement_validated.set()
+        return await registry.send_websocket_message(message)
+
+    client = SimpleNamespace(send_websocket_message=send)
+    first = asyncio.create_task(add_area(client, "red"))
+    second = None
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        second = asyncio.create_task(
+            AreaTools(client).ha_set_area_or_floor(
+                kind="area", id="target", labels=["blue"]
+            )
+        )
+        await asyncio.wait_for(replacement_validated.wait(), 1)
+        # Let validation return and the replacement reach the pending write.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert registry.labels["target"] == ["existing"]
+    finally:
+        release.set()
+        await first
+        if second is not None:
+            result = await second
+            assert result["success"]
+    assert registry.labels["target"] == ["blue"]

@@ -155,6 +155,8 @@ Concrete owners worth preserving in the map are
 `utils/config_hash.py` is the shared optimistic-locking implementation for
 automation, script, scene, dashboard, and energy configuration.
 
+Registry label updates follow the shared [concurrency strategy](../registry-label-concurrency.md).
+
 Key patterns:
 
 - The registry discovers `tools_*.py` modules and `register_*_tools()`

@@ -19,6 +19,7 @@ from ha_mcp._vendor.fastmcp.tools import tool
 from ..backup_manager import get_backup_manager
 from ..config import get_global_settings
 from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
+from ..utils.registry_update_lock import registry_update_lock
 from .auto_backup import with_auto_backup
 from .helpers import (
     exception_to_structured_error,
@@ -375,47 +376,48 @@ class LabelTools:
         self, label_id: str, area_id: str, assigned: list[str]
     ) -> None:
         """Fresh read-modify-write for one area. HA has no atomic label-add."""
-        areas = await self._list_area_registry(
-            context={"label_id": label_id, "area_id": area_id}
-        )
-        area = self._area_from_registry(areas, area_id)
-        if area is None:
-            self._raise_area_label_assign_failure(
-                label_id=label_id,
-                area_id=area_id,
-                message=f"area_id={area_id!r} does not exist in the area registry.",
-                assigned=assigned,
+        async with registry_update_lock("area", area_id):
+            areas = await self._list_area_registry(
+                context={"label_id": label_id, "area_id": area_id}
             )
-        current = _string_labels(area)
-        if label_id in current:
-            return
-        update = await self._client.send_websocket_message(
-            {
-                "type": "config/area_registry/update",
-                "area_id": area_id,
-                "labels": [*current, label_id],
-            }
-        )
-        if not update.get("success"):
-            self._raise_area_label_assign_failure(
-                label_id=label_id,
-                area_id=area_id,
-                message=(
-                    f"Failed to assign label {label_id!r} to area {area_id!r}: "
-                    f"{update.get('error', 'Unknown error')}"
-                ),
-                assigned=assigned,
+            area = self._area_from_registry(areas, area_id)
+            if area is None:
+                self._raise_area_label_assign_failure(
+                    label_id=label_id,
+                    area_id=area_id,
+                    message=f"area_id={area_id!r} does not exist in the area registry.",
+                    assigned=assigned,
+                )
+            current = _string_labels(area)
+            if label_id in current:
+                return
+            update = await self._client.send_websocket_message(
+                {
+                    "type": "config/area_registry/update",
+                    "area_id": area_id,
+                    "labels": [*current, label_id],
+                }
             )
-        if not await self._confirm_area_has_label(label_id, area_id, update):
-            self._raise_area_label_assign_failure(
-                label_id=label_id,
-                area_id=area_id,
-                message=(
-                    f"Area {area_id!r} update succeeded but label "
-                    f"{label_id!r} is not present on the area."
-                ),
-                assigned=assigned,
-            )
+            if not update.get("success"):
+                self._raise_area_label_assign_failure(
+                    label_id=label_id,
+                    area_id=area_id,
+                    message=(
+                        f"Failed to assign label {label_id!r} to area {area_id!r}: "
+                        f"{update.get('error', 'Unknown error')}"
+                    ),
+                    assigned=assigned,
+                )
+            if not await self._confirm_area_has_label(label_id, area_id, update):
+                self._raise_area_label_assign_failure(
+                    label_id=label_id,
+                    area_id=area_id,
+                    message=(
+                        f"Area {area_id!r} update succeeded but label "
+                        f"{label_id!r} is not present on the area."
+                    ),
+                    assigned=assigned,
+                )
 
     async def _add_label_to_areas(
         self, label_id: str, area_ids: list[str]
