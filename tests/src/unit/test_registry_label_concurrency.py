@@ -1,8 +1,10 @@
 """Concurrent registry label writes must not overwrite another additive call."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -21,11 +23,11 @@ from ha_mcp.tools.tools_labels import LabelTools
 class Registry:
     """Model HA's whole-list label writes with a yield after each fresh read."""
 
-    def __init__(self, *, echo_labels=True):
+    def __init__(self, *, echo_labels: bool = True) -> None:
         self.echo_labels = echo_labels
-        self.labels = {"target": ["existing"]}
+        self.labels: dict[str, list[str]] = {"target": ["existing"]}
 
-    async def send_websocket_message(self, message):
+    async def send_websocket_message(self, message: dict[str, Any]) -> dict[str, Any]:
         command = message["type"]
         if command == "config/label_registry/list":
             return {
@@ -35,7 +37,7 @@ class Registry:
                 ],
             }
         if command == "config/entity_registry/get":
-            result = {
+            result: Any = {
                 "entity_id": message["entity_id"],
                 "labels": list(self.labels["target"]),
             }
@@ -59,16 +61,20 @@ class Registry:
             return {"success": True, "result": result}
         raise AssertionError(f"Unexpected WS message: {message}")
 
-    def client(self):
+    def client(self) -> SimpleNamespace:
         # Different tool/client objects still address the same registry.
         return SimpleNamespace(send_websocket_message=self.send_websocket_message)
 
 
-async def add_area(client, label, resource="target"):
+async def add_area(
+    client: SimpleNamespace, label: str, resource: str = "target"
+) -> None:
     await LabelTools(client)._add_label_to_one_area(label, resource, [])
 
 
-async def update_entity(client, labels, operation):
+async def update_entity(
+    client: SimpleNamespace, labels: list[str], operation: str
+) -> dict[str, Any]:
     return await EntityTools(client)._update_single_entity(
         entity_id="light.target",
         area_id=None,
@@ -86,7 +92,7 @@ async def update_entity(client, labels, operation):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("echo_labels", [True, False])
-async def test_concurrent_area_adds_preserve_both_labels(echo_labels):
+async def test_concurrent_area_adds_preserve_both_labels(echo_labels: bool) -> None:
     registry = Registry(echo_labels=echo_labels)
     await asyncio.gather(
         add_area(registry.client(), "red"),
@@ -104,7 +110,9 @@ async def test_concurrent_area_adds_preserve_both_labels(echo_labels):
         (["blue"], "set", {"blue"}),
     ],
 )
-async def test_concurrent_entity_label_operations(labels, operation, expected):
+async def test_concurrent_entity_label_operations(
+    labels: list[str], operation: str, expected: set[str]
+) -> None:
     registry = Registry()
     await asyncio.gather(
         update_entity(registry.client(), ["red"], "add"),
@@ -114,13 +122,13 @@ async def test_concurrent_entity_label_operations(labels, operation, expected):
 
 
 @pytest.mark.asyncio
-async def test_different_areas_can_progress_independently():
+async def test_different_areas_can_progress_independently() -> None:
     registry = Registry()
     registry.labels["other"] = []
     entered = asyncio.Event()
     release = asyncio.Event()
 
-    async def send(message):
+    async def send(message: dict[str, Any]) -> dict[str, Any]:
         if (
             message["type"] == "config/area_registry/update"
             and message["area_id"] == "target"
@@ -138,16 +146,18 @@ async def test_different_areas_can_progress_independently():
         assert registry.labels["other"] == ["blue"]
     finally:
         release.set()
-        await first
+        await asyncio.wait_for(first, 1)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", [TimeoutError, asyncio.CancelledError])
-async def test_failed_area_write_releases_resource_for_next_call(error):
+async def test_failed_area_write_releases_resource_for_next_call(
+    error: type[BaseException],
+) -> None:
     registry = Registry()
     before = deepcopy(registry.labels)
 
-    async def send(message):
+    async def send(message: dict[str, Any]) -> dict[str, Any]:
         if message["type"] == "config/area_registry/update":
             raise error()
         return await registry.send_websocket_message(message)
@@ -160,7 +170,7 @@ async def test_failed_area_write_releases_resource_for_next_call(error):
 
 
 @pytest.mark.asyncio
-async def test_bulk_and_single_entity_adds_share_coordination():
+async def test_bulk_and_single_entity_adds_share_coordination() -> None:
     registry = Registry()
     results = await asyncio.gather(
         EntityTools(registry.client()).ha_set_entity(
@@ -175,13 +185,13 @@ async def test_bulk_and_single_entity_adds_share_coordination():
 
 
 @pytest.mark.asyncio
-async def test_area_replacement_waits_for_inflight_add():
+async def test_area_replacement_waits_for_inflight_add() -> None:
     registry = Registry()
     entered = asyncio.Event()
     release = asyncio.Event()
     replacement_validated = asyncio.Event()
 
-    async def send(message):
+    async def send(message: dict[str, Any]) -> dict[str, Any]:
         if (
             message["type"] == "config/area_registry/update"
             and "red" in message["labels"]
@@ -209,9 +219,9 @@ async def test_area_replacement_waits_for_inflight_add():
         assert registry.labels["target"] == ["existing"]
     finally:
         release.set()
-        await first
+        await asyncio.wait_for(first, 1)
         if second is not None:
-            result = await second
+            result = await asyncio.wait_for(second, 1)
             assert result["success"]
     assert registry.labels["target"] == ["blue"]
 
@@ -255,13 +265,17 @@ async def test_area_replacement_waits_for_inflight_add():
         "area-restore",
     ],
 )
-async def test_other_replacements_wait_for_inflight_add(kind, replace, monkeypatch):
+async def test_other_replacements_wait_for_inflight_add(
+    kind: str,
+    replace: Callable[[SimpleNamespace], Awaitable[Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     registry = Registry()
     entered = asyncio.Event()
     release = asyncio.Event()
     replacing = asyncio.Event()
 
-    async def send(message):
+    async def send(message: dict[str, Any]) -> dict[str, Any]:
         if message["type"].endswith("/update") and "red" in message.get("labels", []):
             entered.set()
             await release.wait()
@@ -269,12 +283,12 @@ async def test_other_replacements_wait_for_inflight_add(kind, replace, monkeypat
 
     client = SimpleNamespace(send_websocket_message=send)
 
-    async def backup_send(_client, message):
+    async def backup_send(_client: SimpleNamespace, message: dict[str, Any]) -> Any:
         return (await send(message))["result"]
 
     monkeypatch.setattr("ha_mcp.backup_manager._ws_send", backup_send)
 
-    async def replacement():
+    async def replacement() -> None:
         replacing.set()
         await replace(client)
 
@@ -291,7 +305,7 @@ async def test_other_replacements_wait_for_inflight_add(kind, replace, monkeypat
         assert registry.labels["target"] == ["existing"]
     finally:
         release.set()
-        await first
+        await asyncio.wait_for(first, 1)
         if second is not None:
-            await second
+            await asyncio.wait_for(second, 1)
     assert registry.labels["target"] == ["blue"]
