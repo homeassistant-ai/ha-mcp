@@ -255,7 +255,7 @@ async def test_area_replacement_waits_for_inflight_add():
         "area-restore",
     ],
 )
-async def test_other_replacements_wait_for_inflight_add(kind, replace):
+async def test_other_replacements_wait_for_inflight_add(kind, replace, monkeypatch):
     registry = Registry()
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -268,6 +268,11 @@ async def test_other_replacements_wait_for_inflight_add(kind, replace):
         return await registry.send_websocket_message(message)
 
     client = SimpleNamespace(send_websocket_message=send)
+
+    async def backup_send(_client, message):
+        return (await send(message))["result"]
+
+    monkeypatch.setattr("ha_mcp.backup_manager._ws_send", backup_send)
 
     async def replacement():
         replacing.set()
