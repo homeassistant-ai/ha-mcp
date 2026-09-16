@@ -593,7 +593,19 @@ class AreaTools:
         operation: str,
         name: str | None,
     ) -> None:
-        """Confirm HA stored the requested label set, not just a success ack."""
+        """Confirm HA stored the requested label set, not just a success ack.
+
+        Home Assistant answers an area create/update with ``success`` even when
+        it dropped label IDs it did not recognise, so the ack alone is not
+        evidence the set was applied. The response entry is checked first; the
+        registry is re-read only when that entry disagrees, which also covers
+        an ack that carries no labels at all.
+
+        Both failure paths report ``write_committed: True``: the area write
+        itself has already landed by the time this runs, so a caller that
+        retries a create would end up with a duplicate area. Only the labels
+        are still open, and those are fixed with ha_set_area_or_floor.
+        """
         if kind != "area" or parsed_labels is None:
             return
         expected = set(parsed_labels)
@@ -649,7 +661,20 @@ class AreaTools:
                     returned_id=returned_id,
                     operation=operation,
                     name=name,
+                    write_committed=True,
                 ),
+                suggestions=[
+                    "The area write already committed; do not retry create.",
+                    (
+                        "Apply the labels on their own with ha_set_area_or_floor("
+                        + f"kind='area', id={returned_id!r}, "
+                        + f"labels={parsed_labels!r})."
+                    ),
+                    (
+                        "Verify the label IDs exist with ha_config_get_label() "
+                        + "— Home Assistant drops unknown ones silently."
+                    ),
+                ],
             )
         )
 
@@ -845,8 +870,11 @@ class AreaTools:
                 )
             )
 
-            # Issue #2159: the area registry stores an unknown floor_id or
-            # label_id verbatim. ``_validate_cross_kind_params`` already
+            # Issue #2159: the area registry stores an unknown floor_id
+            # verbatim, and an unknown label_id is dropped on the way in
+            # (HA filters the set through the label registry) — both end as a
+            # success envelope that does not match what was asked for, so
+            # validate before writing. ``_validate_cross_kind_params`` already
             # rejected floor_id/labels for kind='floor', so this only ever
             # runs for areas; None and "" / [] (clear) skip the lookup.
             await validate_registry_ids(

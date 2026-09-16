@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastmcp.exceptions import ToolError
 
+from ha_mcp.client.rest_client import HomeAssistantConnectionError
+
 
 @pytest.fixture
 def mock_client():
@@ -134,10 +136,31 @@ class TestSetLabelAssignsAreas:
                 name="Site Home", areas=["ghost_room"]
             )
 
-        msg = str(excinfo.value)
-        assert "VALIDATION_INVALID_PARAMETER" in msg
-        assert "ghost_room" in msg
+        err = json.loads(str(excinfo.value))
+        assert err["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert err["unknown_area_ids"] == ["ghost_room"]
+        assert err["areas"] == ["ghost_room"]
+        # The shared single-area helper suggests area_id="" to clear; this tool
+        # has no area_id parameter, so that advice must not leak in here.
+        assert all("area_id=" not in s for s in err["error"].get("suggestions", [])), (
+            err["error"].get("suggestions")
+        )
         assert "config/label_registry/create" not in _sent_types(mock_client)
+
+    async def test_all_unknown_areas_reported_at_once(
+        self, register_tools, mock_client
+    ):
+        mock_client.send_websocket_message = AsyncMock(
+            side_effect=_ws_handler(areas=[{"area_id": "kitchen"}])
+        )
+
+        with pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_label"](
+                name="Site Home", areas=["ghost_room", "kitchen", "phantom"]
+            )
+
+        err = json.loads(str(excinfo.value))
+        assert err["unknown_area_ids"] == ["ghost_room", "phantom"]
 
     async def test_empty_area_id_rejected(self, register_tools, mock_client):
         mock_client.send_websocket_message = AsyncMock(side_effect=_ws_handler())
@@ -286,7 +309,7 @@ class TestSetLabelAssignsAreas:
                 }
             if msg_type == "config/area_registry/update":
                 if msg.get("area_id") == "living_room":
-                    raise ConnectionError("ws dropped")
+                    raise HomeAssistantConnectionError("ws dropped")
                 return {
                     "success": True,
                     "result": {k: v for k, v in msg.items() if k != "type"},
@@ -301,12 +324,95 @@ class TestSetLabelAssignsAreas:
             )
 
         err = json.loads(str(excinfo.value))
-        assert err["error"]["code"] == "SERVICE_CALL_FAILED"
+        # A dropped connection stays a connection error — collapsing it into
+        # SERVICE_CALL_FAILED would hide the one recovery that helps.
+        assert err["error"]["code"] == "CONNECTION_FAILED"
         assert err["partial"] is True
         assert err["assigned_areas"] == ["kitchen"]
         assert err["label_id"] == "site_home"
         assert err["area_id"] == "living_room"
         assert "ws dropped" in err["error"]["message"]
+        assert any(
+            "do not recreate the label" in s
+            for s in err["error"].get("suggestions", [])
+        ), err["error"].get("suggestions")
+
+    async def test_timeout_during_assign_keeps_timeout_classification(
+        self, register_tools, mock_client
+    ):
+        async def ws_handler(msg: dict) -> dict:
+            msg_type = msg.get("type", "")
+            if msg_type == "config/label_registry/list":
+                return {"success": True, "result": []}
+            if msg_type == "config/label_registry/create":
+                return {
+                    "success": True,
+                    "result": {"label_id": "site_home", "name": "Site Home"},
+                }
+            if msg_type == "config/area_registry/list":
+                return {
+                    "success": True,
+                    "result": [{"area_id": "kitchen", "name": "Kitchen", "labels": []}],
+                }
+            if msg_type == "config/area_registry/update":
+                raise TimeoutError("area update timed out")
+            return {"success": True, "result": {}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+
+        with pytest.raises(ToolError) as excinfo:
+            await register_tools["ha_config_set_label"](
+                name="Site Home", areas=["kitchen"]
+            )
+
+        err = json.loads(str(excinfo.value))
+        assert err["error"]["code"] == "TIMEOUT_OPERATION"
+        assert err["partial"] is True
+        assert err["assigned_areas"] == []
+
+    async def test_reread_confirms_label_when_update_omits_labels(
+        self, register_tools, mock_client
+    ):
+        """HA may ack the update without echoing labels — re-read decides."""
+        stored: list[str] = []
+
+        async def ws_handler(msg: dict) -> dict:
+            msg_type = msg.get("type", "")
+            if msg_type == "config/label_registry/list":
+                return {"success": True, "result": []}
+            if msg_type == "config/label_registry/create":
+                return {
+                    "success": True,
+                    "result": {"label_id": "site_home", "name": "Site Home"},
+                }
+            if msg_type == "config/area_registry/list":
+                return {
+                    "success": True,
+                    "result": [
+                        {
+                            "area_id": "kitchen",
+                            "name": "Kitchen",
+                            "labels": list(stored),
+                        }
+                    ],
+                }
+            if msg_type == "config/area_registry/update":
+                stored.extend(msg.get("labels", []))
+                # Success envelope with no labels echoed back.
+                return {"success": True, "result": {"area_id": "kitchen"}}
+            return {"success": True, "result": {}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=ws_handler)
+
+        result = await register_tools["ha_config_set_label"](
+            name="Site Home", areas=["kitchen"]
+        )
+
+        assert result["success"] is True
+        assert result["assigned_areas"] == ["kitchen"]
+        types = _sent_types(mock_client)
+        last_update = len(types) - 1 - types[::-1].index("config/area_registry/update")
+        assert "config/area_registry/list" in types[last_update + 1 :]
 
     async def test_cancellation_during_assign_is_not_swallowed(
         self, register_tools, mock_client

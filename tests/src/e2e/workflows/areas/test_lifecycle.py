@@ -234,12 +234,19 @@ class TestAreaLifecycle:
         logger.info("Area cleanup completed")
 
     async def test_area_with_labels(self, mcp_client, cleanup_tracker):
-        """Create an area with labels and verify the set is stored (issue #2455)."""
+        """Create an area with labels and verify the set is stored (issue #2455).
+
+        Covers all three transitions of a replacing write: empty to non-empty,
+        non-empty to a *different* non-empty set (the one a tool that only
+        appends would fail), and non-empty back to empty.
+        """
         area_name = generate_unique_name("test_label_area")
         label_name = generate_unique_name("e2e_area_lbl")
+        second_label_name = generate_unique_name("e2e_area_lbl2")
         logger.info(f"Testing area with labels: {area_name}")
         area_id = None
         label_id = None
+        second_label_id = None
         try:
             label_result = await mcp_client.call_tool(
                 "ha_config_set_label",
@@ -273,6 +280,39 @@ class TestAreaLifecycle:
                 f"Label {label_id} not found on area: {found_area.get('labels')}"
             )
 
+            second_label_result = await mcp_client.call_tool(
+                "ha_config_set_label",
+                {"name": second_label_name},
+            )
+            second_label_data = parse_mcp_result(second_label_result)
+            assert second_label_data.get("success"), (
+                f"Failed to create second label: {second_label_data}"
+            )
+            second_label_id = second_label_data.get("label_id")
+            assert second_label_id, f"No label_id returned: {second_label_data}"
+            cleanup_tracker.track("label", second_label_id)
+
+            replace_result = await mcp_client.call_tool(
+                "ha_set_area_or_floor",
+                {"kind": "area", "id": area_id, "labels": [second_label_id]},
+            )
+            replace_data = parse_mcp_result(replace_result)
+            assert replace_data.get("success"), (
+                f"Failed to replace labels: {replace_data}"
+            )
+
+            list_result = await mcp_client.call_tool("ha_list_floors_areas", {})
+            list_data = parse_mcp_result(list_result)
+            found_area = next(
+                (a for a in _flatten_areas(list_data) if a.get("area_id") == area_id),
+                None,
+            )
+            assert found_area is not None
+            assert (found_area.get("labels") or []) == [second_label_id], (
+                "Replacing a non-empty label set must swap it, not merge: "
+                f"{found_area.get('labels')}"
+            )
+
             clear_result = await mcp_client.call_tool(
                 "ha_set_area_or_floor",
                 {"kind": "area", "id": area_id, "labels": []},
@@ -297,12 +337,13 @@ class TestAreaLifecycle:
                     "ha_remove_area_or_floor",
                     {"kind": "area", "id": area_id},
                 )
-            if label_id:
-                await safe_call_tool(
-                    mcp_client,
-                    "ha_config_remove_label",
-                    {"label_id": label_id},
-                )
+            for created_label in (label_id, second_label_id):
+                if created_label:
+                    await safe_call_tool(
+                        mcp_client,
+                        "ha_config_remove_label",
+                        {"label_id": created_label},
+                    )
 
 
 @pytest.mark.floor

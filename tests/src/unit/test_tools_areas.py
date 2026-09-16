@@ -483,7 +483,21 @@ class TestSetAreaLabels:
     """Area labels replace the existing set (issue #2455); floors reject labels."""
 
     @staticmethod
-    def _ws_handler(*, label_ids=(), floor_ids=()):
+    def _ws_handler(*, label_ids=(), floor_ids=(), areas=None, echo_labels=True):
+        """Answer the registry calls ``ha_set_area_or_floor`` makes.
+
+        ``config/area_registry/list`` must answer with a LIST: it is the
+        post-write verification re-read, and a dict there silently sent every
+        test down the "could not verify" branch instead of the path it meant
+        to cover. ``echo_labels=False`` models HA acknowledging the write
+        without echoing the stored labels, which is what forces that re-read.
+        """
+        area_rows = (
+            areas
+            if areas is not None
+            else [{"area_id": "kitchen", "name": "Kitchen", "labels": []}]
+        )
+
         async def handler(msg):
             msg_type = msg.get("type")
             if msg_type == "config/label_registry/list":
@@ -496,14 +510,12 @@ class TestSetAreaLabels:
                     "success": True,
                     "result": [{"floor_id": fid} for fid in floor_ids],
                 }
-            return {
-                "success": True,
-                "result": {
-                    "area_id": "kitchen",
-                    "name": "Kitchen",
-                    "labels": msg.get("labels", []),
-                },
-            }
+            if msg_type == "config/area_registry/list":
+                return {"success": True, "result": area_rows}
+            entry = {"area_id": "kitchen", "name": "Kitchen"}
+            if echo_labels:
+                entry["labels"] = msg.get("labels", [])
+            return {"success": True, "result": entry}
 
         return handler
 
@@ -641,6 +653,32 @@ class TestSetAreaLabels:
         assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
         assert "requested labels" in error_data["error"]["message"]
         assert error_data["expected_labels"] == ["site_home"]
+        # The area itself exists at this point — only the labels are missing,
+        # so a caller must fix the labels, not retry the create.
+        assert error_data["write_committed"] is True
+        assert error_data["area_id"] == "kitchen"
+        assert any(
+            "ha_set_area_or_floor" in s
+            for s in error_data["error"].get("suggestions", [])
+        ), error_data["error"].get("suggestions")
+
+    async def test_labels_confirmed_by_reread_when_result_omits_them(self, tools):
+        tools._client.send_websocket_message.side_effect = self._ws_handler(
+            label_ids=("site_home",),
+            echo_labels=False,
+            areas=[{"area_id": "kitchen", "name": "Kitchen", "labels": ["site_home"]}],
+        )
+
+        result = await tools.ha_set_area_or_floor(
+            kind="area", name="Kitchen", labels=["site_home"]
+        )
+
+        assert result["success"] is True
+        assert self._sent_types(tools) == [
+            "config/label_registry/list",
+            "config/area_registry/create",
+            "config/area_registry/list",
+        ]
 
     async def test_verify_list_transport_failure_marks_write_committed(self, tools):
         async def handler(msg):

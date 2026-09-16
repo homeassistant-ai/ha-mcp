@@ -569,16 +569,32 @@ async def test_multiple_labels_lifecycle(mcp_client, cleanup_tracker):
 @pytest.mark.asyncio
 @pytest.mark.config
 async def test_set_label_assigns_to_area(mcp_client, cleanup_tracker):
-    """ha_config_set_label(areas=...) adds the label onto existing areas."""
+    """ha_config_set_label(areas=...) adds onto an area that already has labels.
+
+    The area starts out carrying a different label: assignment is additive, so
+    the pre-existing one has to survive. Starting from an empty label set would
+    pass just as well against a tool that replaces the set.
+    """
     suffix = uuid.uuid4().hex[:8]
     area_name = f"E2E Label Assign Area {suffix}"
+    existing_label_name = f"E2E Label Assign Kept {suffix}"
     label_name = f"E2E Label Assign Tag {suffix}"
     area_id = None
     label_id = None
+    existing_label_id = None
     try:
+        existing_result = await mcp_client.call_tool(
+            "ha_config_set_label",
+            {"name": existing_label_name},
+        )
+        existing_data = assert_mcp_success(existing_result, "Create pre-existing label")
+        existing_label_id = existing_data.get("label_id")
+        assert existing_label_id, f"Missing label_id: {existing_data}"
+        cleanup_tracker.track("label", existing_label_id)
+
         area_result = await mcp_client.call_tool(
             "ha_set_area_or_floor",
-            {"kind": "area", "name": area_name},
+            {"kind": "area", "name": area_name, "labels": [existing_label_id]},
         )
         area_data = assert_mcp_success(area_result, "Create area for label assign")
         area_id = area_data.get("area_id")
@@ -605,7 +621,11 @@ async def test_set_label_assigns_to_area(mcp_client, cleanup_tracker):
         )
         found = next((a for a in areas if a.get("area_id") == area_id), None)
         assert found is not None, f"Area {area_id} not in list"
-        assert label_id in (found.get("labels") or []), found.get("labels")
+        labels = found.get("labels") or []
+        assert label_id in labels, labels
+        assert existing_label_id in labels, (
+            f"Assignment dropped the pre-existing label {existing_label_id}: {labels}"
+        )
     finally:
         if area_id:
             await safe_call_tool(
@@ -613,9 +633,10 @@ async def test_set_label_assigns_to_area(mcp_client, cleanup_tracker):
                 "ha_remove_area_or_floor",
                 {"kind": "area", "id": area_id},
             )
-        if label_id:
-            await safe_call_tool(
-                mcp_client,
-                "ha_config_remove_label",
-                {"label_id": label_id},
-            )
+        for created_label in (label_id, existing_label_id):
+            if created_label:
+                await safe_call_tool(
+                    mcp_client,
+                    "ha_config_remove_label",
+                    {"label_id": created_label},
+                )

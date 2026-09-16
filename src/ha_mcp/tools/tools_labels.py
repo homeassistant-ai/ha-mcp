@@ -26,10 +26,24 @@ from .helpers import (
     register_tool_methods,
     validate_identifier_not_empty,
 )
-from .tools_config_helpers import _raise_if_unknown_area
 from .util_helpers import JSON_STRING_COERCION, parse_string_list_param
 
 logger = logging.getLogger(__name__)
+
+# Appended to any failure raised out of the per-area assignment loop: the label
+# itself is already written at that point, so "retry the call" is the one thing
+# the caller must not do.
+_PARTIAL_RETRY_SUGGESTIONS = [
+    (
+        "The label write already succeeded; retry only the remaining area "
+        + "IDs (do not recreate the label)."
+    ),
+    (
+        "Use ha_set_area_or_floor(kind='area', labels=...) to replace an "
+        + "area's label set, or ha_list_floors_areas() to inspect current "
+        + "assignments."
+    ),
+]
 
 
 def _string_labels(entry: dict[str, Any] | None) -> list[str]:
@@ -163,12 +177,37 @@ class LabelTools:
         area-registry update would fail opaquely or no-op — so fail closed
         up front. Empty strings are not the documented clear sentinel (that
         is omitting ``areas``); they are invalid IDs. All IDs are checked
-        against one registry snapshot (not N sequential list calls).
+        against one registry snapshot (not N sequential list calls), and every
+        unknown ID is reported at once so a caller fixing a multi-area call
+        does not need one round trip per typo.
+
+        The error is raised here rather than through the shared
+        ``_raise_if_unknown_area`` helper because that one speaks for tools
+        with a single ``area_id`` parameter and suggests ``area_id=""`` to
+        clear it — advice this tool has no parameter for.
         """
         unique = self._unique_area_ids(area_ids)
         areas = await self._list_area_registry(context={"areas": unique})
-        for area_id in unique:
-            _raise_if_unknown_area(areas, area_id)
+        known: set[str] = {
+            area["area_id"]
+            for area in areas
+            if isinstance(area, dict) and isinstance(area.get("area_id"), str)
+        }
+        unknown = [area_id for area_id in unique if area_id not in known]
+        if unknown:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "areas contains area IDs that do not exist in the area "
+                    f"registry: {', '.join(repr(a) for a in unknown)}",
+                    context={"areas": unique, "unknown_area_ids": unknown},
+                    suggestions=[
+                        "Use ha_list_floors_areas() to list valid area IDs.",
+                        "Omit areas to leave area assignments unchanged.",
+                        f"Available area_ids: {sorted(known)}",
+                    ],
+                )
+            )
 
     async def _snapshot_areas_before_assign(self, area_ids: list[str]) -> None:
         """Best-effort pre-write snapshot of each target area (label restore
@@ -208,17 +247,7 @@ class LabelTools:
                     "partial": True,
                     "assigned_areas": assigned,
                 },
-                suggestions=[
-                    (
-                        "The label write already succeeded; retry only the "
-                        + "remaining area IDs (do not recreate the label)."
-                    ),
-                    (
-                        "Use ha_set_area_or_floor(kind='area', labels=...) to "
-                        + "replace an area's label set, or "
-                        + "ha_list_floors_areas() to inspect current assignments."
-                    ),
-                ],
+                suggestions=list(_PARTIAL_RETRY_SUGGESTIONS),
             )
         )
 
@@ -250,30 +279,79 @@ class LabelTools:
         area_id: str,
         assigned: list[str],
     ) -> NoReturn:
-        """Re-raise with partial progress when the inner error omitted it."""
-        payload: dict[str, Any] = {}
+        """Re-raise the failure with partial progress, keeping its own code.
+
+        The label write and every earlier area update are already committed, so
+        the error has to carry ``partial`` / ``assigned_areas`` on the way out.
+        What it must not lose on the way is *why* the loop stopped: a timeout,
+        an auth rejection and a bug in this module need three different
+        recoveries, so the original error code and suggestions are preserved
+        and the partial-progress fields are merged in rather than replacing
+        everything with SERVICE_CALL_FAILED.
+        """
+        progress: dict[str, Any] = {
+            "label_id": label_id,
+            "area_id": area_id,
+            "partial": True,
+            "assigned_areas": assigned,
+        }
         if isinstance(err, ToolError):
-            try:
-                parsed = json.loads(str(err))
-            except (TypeError, ValueError, json.JSONDecodeError):
-                parsed = {}
-            if isinstance(parsed, dict):
-                payload = parsed
-                if payload.get("partial") is True:
-                    raise err
-        message = ""
-        if isinstance(payload.get("error"), dict):
-            message = str(payload["error"].get("message") or "")
-        if not message:
-            message = str(err) or (
-                f"Failed to assign label {label_id!r} to area {area_id!r}"
-            )
-        self._raise_area_label_assign_failure(
-            label_id=label_id,
-            area_id=area_id,
-            message=message,
-            assigned=assigned,
+            parsed = self._parsed_structured_error(err)
+            if parsed is None:
+                # Not our structured JSON — there is no code to preserve.
+                self._raise_area_label_assign_failure(
+                    label_id=label_id,
+                    area_id=area_id,
+                    message=str(err)
+                    or f"Failed to assign label {label_id!r} to area {area_id!r}",
+                    assigned=assigned,
+                )
+            if parsed.get("partial") is True:
+                # Raised by _raise_area_label_assign_failure — already complete.
+                raise err
+            raise ToolError(
+                json.dumps(
+                    {
+                        **parsed,
+                        **progress,
+                        "error": self._with_retry_suggestions(parsed),
+                    },
+                    indent=2,
+                    default=str,
+                )
+            ) from err
+
+        # Transport and programmer errors: let the shared classifier pick the
+        # code (CONNECTION_TIMEOUT, AUTHENTICATION_FAILED, …) and log the
+        # traceback, then chain the cause instead of flattening it.
+        response = exception_to_structured_error(
+            err,
+            progress,
+            raise_error=False,
+            suggestions=list(_PARTIAL_RETRY_SUGGESTIONS),
         )
+        raise ToolError(json.dumps(response, indent=2, default=str)) from err
+
+    @staticmethod
+    def _parsed_structured_error(err: ToolError) -> dict[str, Any] | None:
+        """Return the tool's structured JSON payload, or None if it isn't one."""
+        try:
+            parsed = json.loads(str(err))
+        except (TypeError, ValueError):
+            return None
+        if isinstance(parsed, dict) and isinstance(parsed.get("error"), dict):
+            return parsed
+        return None
+
+    @staticmethod
+    def _with_retry_suggestions(parsed: dict[str, Any]) -> dict[str, Any]:
+        """Append the partial-retry hints to an error's own suggestions."""
+        original: dict[str, Any] = parsed["error"]
+        existing = original.get("suggestions") or (
+            [original["suggestion"]] if original.get("suggestion") else []
+        )
+        combined = [*existing, *_PARTIAL_RETRY_SUGGESTIONS]
+        return {**original, "suggestion": combined[0], "suggestions": combined}
 
     async def _add_label_to_one_area(
         self, label_id: str, area_id: str, assigned: list[str]
@@ -640,7 +718,10 @@ class LabelTools:
             Field(
                 description=(
                     "Area IDs to apply this label to (adds the label without "
-                    "removing existing ones). Omit to leave area assignments unchanged."
+                    "removing existing ones). Omit to leave area assignments "
+                    "unchanged; an empty list is a no-op (assigns nothing and "
+                    "removes nothing). To clear an area's labels use "
+                    "ha_set_area_or_floor(kind='area', labels=[])."
                 ),
                 default=None,
             ),
