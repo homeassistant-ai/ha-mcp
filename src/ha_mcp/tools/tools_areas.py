@@ -7,6 +7,7 @@ Home Assistant areas and floors - essential organizational features for smart ho
 
 import asyncio
 import logging
+from contextlib import nullcontext
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -15,6 +16,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..errors import ErrorCode, create_error_response, create_validation_error
+from ..utils.registry_update_lock import registry_update_lock
 from .auto_backup import with_auto_backup
 from .component_registries import fetch_registries_via_component
 from .helpers import (
@@ -887,19 +889,22 @@ class AreaTools:
                 fail_closed=True,
             )
 
-            result = await self._client.send_websocket_message(message)
+            async with (
+                registry_update_lock(kind, id) if id is not None else nullcontext()
+            ):
+                result = await self._client.send_websocket_message(message)
 
-            if result.get("success"):
-                return await self._area_or_floor_write_success(
-                    result,
-                    result_key=result_key,
-                    id_key=id_key,
-                    identifier=id,
-                    kind=kind,
-                    operation=operation,
-                    name=name,
-                    parsed_labels=parsed_labels,
-                )
+                if result.get("success"):
+                    return await self._area_or_floor_write_success(
+                        result,
+                        result_key=result_key,
+                        id_key=id_key,
+                        identifier=id,
+                        kind=kind,
+                        operation=operation,
+                        name=name,
+                        parsed_labels=parsed_labels,
+                    )
 
             error = result.get("error", {})
             error_msg = (
