@@ -25,6 +25,10 @@ inputs:
     description: Codex filesystem sandbox (read-only or workspace-write).
     required: false
     default: read-only
+  read-only-paths:
+    description: Newline-separated existing workspace paths kept readable but not writable, even with workspace-write.
+    required: false
+    default: ""
   allow-shell:
     description: Whether Codex may execute shell commands. Disable for attacker-controlled context.
     required: false
@@ -100,6 +104,7 @@ runs:
         INSTRUCTIONS_FILE_INPUT: ${{ inputs.instructions-file }}
         WORKING_DIRECTORY_INPUT: ${{ inputs.working-directory }}
         SANDBOX_INPUT: ${{ inputs.sandbox }}
+        READ_ONLY_PATHS_INPUT: ${{ inputs.read-only-paths }}
         ALLOW_SHELL_INPUT: ${{ inputs.allow-shell }}
         NETWORK_ACCESS_INPUT: ${{ inputs.network-access }}
         WEB_SEARCH_INPUT: ${{ inputs.web-search }}
@@ -185,6 +190,26 @@ runs:
           echo "::error::working-directory does not point to a directory."
           exit 1
         fi
+
+        readonly_paths=()
+        while IFS= read -r protected_input; do
+          protected_input="${protected_input%$'\r'}"
+          [[ -n "$protected_input" ]] || continue
+          case "$protected_input" in
+            /*) protected_candidate="$protected_input" ;;
+            *) protected_candidate="$GITHUB_WORKSPACE/$protected_input" ;;
+          esac
+          protected_path="$(realpath -e "$protected_candidate")"
+          case "$protected_path/" in
+            "$GITHUB_WORKSPACE/"*) ;;
+            *) echo '::error::read-only-paths must stay inside GITHUB_WORKSPACE.'; exit 1 ;;
+          esac
+          protected_duplicate=false
+          for protected_existing in "${readonly_paths[@]}"; do
+            if [[ "$protected_existing" == "$protected_path" ]]; then protected_duplicate=true; break; fi
+          done
+          if [[ "$protected_duplicate" == false ]]; then readonly_paths+=("$protected_path"); fi
+        done <<< "${READ_ONLY_PATHS_INPUT:-}"
 
         credential_root="$RUNNER_TEMP/codex-action-state"
         mkdir -p "$credential_root"
@@ -273,6 +298,10 @@ runs:
           printf 'extends = "%s"\n\n' "$parent_profile"
           printf '[permissions.%s.filesystem]\n' "$profile_name"
           printf '"%s" = "deny"\n' "$credential_root"
+          for protected_path in "${readonly_paths[@]}"; do
+            jq -rn --arg path "$protected_path" '$path | @json' | tr -d '\n'
+            printf ' = "read"\n'
+          done
           printf '\n[permissions.%s.network]\n' "$profile_name"
           printf 'enabled = %s\n' "$network_access"
         } > "$profile_path"
@@ -289,6 +318,8 @@ runs:
           echo "CODEX_ACTION_WEB_SEARCH=$web_search"
           echo "CODEX_ACTION_TIMEOUT_MINUTES=$TIMEOUT_MINUTES_INPUT"
           echo "CODEX_ACTION_PROFILE=$profile_name"
+          printf 'CODEX_ACTION_READONLY_PATHS='
+          printf '%s\n' "${readonly_paths[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))'
         } >> "$GITHUB_ENV"
         {
           echo "output-path=$output_path"
@@ -361,6 +392,16 @@ runs:
           _ \
           "$CODEX_HOME/auth.json" \
           "${{ steps.prepare.outputs.original-auth-path }}"
+
+        # Test the selected profile itself, not file mode bits or a prompt promise.
+        while IFS= read -r protected_path; do
+          codex sandbox \
+            --profile "$CODEX_ACTION_PROFILE" \
+            --permission-profile "$CODEX_ACTION_PROFILE" \
+            --cd "$CODEX_ACTION_WORKDIR" -- \
+            bash -c 'if [[ -d "$1" ]]; then ! touch "$1/.codex-write-probe-$$" 2>/dev/null; else ! { : >> "$1"; } 2>/dev/null; fi' \
+            _ "$protected_path"
+        done < <(jq -r '.[]' <<< "${CODEX_ACTION_READONLY_PATHS:-[]}")
 
     - id: agent
       name: Run Codex

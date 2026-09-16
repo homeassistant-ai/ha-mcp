@@ -71,6 +71,8 @@ The detailed label taxonomy, issue-analysis query, bot behavior, review commands
 
 Before changing automated issue documentation, read the [issue-intake policy and controls](docs/agents/issue-intake.md) for source handling, maintainer overrides, permissions, and bench validation.
 
+Before changing maintainer-invoked coding automation, read the [slash-agent lifecycle](docs/agents/slash-agent.md) for authorization, continuation, publication and readiness.
+
 ### Automated Code Review
 
 After every push, inspect human and automated feedback. Codex and CodeRabbit findings are hypotheses: verify them against current source, tests, and contracts. Human feedback has priority. Read every CodeRabbit review body in full because collapsed outside-diff and nitpick findings may create no unresolved thread.
@@ -84,6 +86,7 @@ For an accepted inline finding, implement the fix, reply with evidence, resolve 
 - Never commit directly to `master` or `main` except for a documentation-only adjustment.
 - Never push or open a pull request without explicit user permission.
 - Open every pull request as a draft. Mark it ready only when explicitly asked, after refreshing its description and verifying required CI and reviews.
+- For the slash controller, a maintainer's `/astra <task>` or `/sol <task>` explicitly authorizes the documented issue-to-PR lifecycle through readiness, including review replies and thread resolution. It does not authorize merging or requesting reviewers.
 - Never merge, close, delete branches, publish, release, or otherwise finalize work without explicit approval for that exact action.
 - Preserve the pull-request template headings and generated review sections.
 - Make routine, reversible implementation decisions autonomously. Ask before a choice materially changes scope, public behavior, architecture, or review surface; do not create competing pull requests without approval.
