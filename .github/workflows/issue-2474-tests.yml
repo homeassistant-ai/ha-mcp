@@ -1,0 +1,75 @@
+name: Issue 2474 preflight
+on:
+  push:
+    branches: [test/issue-2474-registry-labels]
+permissions:
+  contents: read
+env:
+  PYTHON_VERSION: "3.13"
+  UV_CACHE_DIR: /tmp/.uv-cache
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    container:
+      # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
+      image: ghcr.io/astral-sh/uv:0.12.15-python3.13-trixie-slim
+    # Bumped 5 → 8 for the issue #2027 regression tests, which spawn real
+    # subprocesses — including a full stdio server session — costing tens
+    # of seconds on a slow runner. 8 → 10 after #2360: pytest alone is ~3.6
+    # min and the `npm ci` step swung from 1s to 4 min during an npm registry
+    # incident, so 8 left no room for one slow install.
+    timeout-minutes: 10
+
+    steps:
+    - name: Restore apt download cache
+      # Cache apt downloads used by this containerized job.
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: /var/cache/apt/archives
+        key: apt-trixie-git-jq-v1
+
+    - name: Install git and jq for workflow contract tests
+      run: |
+        # Keep cached .debs after install so the cache stays warm for
+        # future runs (default Debian behaviour deletes them).
+        rm -f /etc/apt/apt.conf.d/docker-clean
+        echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
+          > /etc/apt/apt.conf.d/keep-downloaded
+        apt-get update -qq
+        apt-get install -y -qq git jq >/dev/null
+
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+        submodules: true
+
+    - name: Set up Node.js
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      with:
+        # Corepack is bundled only through Node 24; `corepack npm ci` enforces packageManager.
+        node-version: "24"
+        cache: npm
+        cache-dependency-path: tests/js/package-lock.json
+
+    - name: Install Python dependencies
+      run: uv sync --all-extras --dev
+
+    - name: Install JS test dependencies (jsdom, esbuild)
+      # `npm ci` enforces package-lock.json — same reproducibility
+      # discipline as uv.lock on the Python side. setup-node caches npm's
+      # download cache; node_modules is intentionally recreated by npm ci.
+      run: cd tests/js && corepack npm ci
+
+    - name: Run unit tests
+      run: uv run pytest tests/src/unit/test_registry_label_concurrency.py --tb=short -v
+
+    - name: Run add-on structure tests
+      # tests/addon/ validates add-on packaging / config.yaml structure (e.g.
+      # the backup-filename-safe name guard, #1707) — previously these ran
+      # nowhere in CI. Excludes test_addon_startup.py, which spins up real
+      # Docker containers (testcontainers) this lint/unit runner doesn't have.
+      run: >-
+        uv run pytest tests/addon/ -n auto --tb=short -v
+        --ignore=tests/addon/test_addon_startup.py
+
