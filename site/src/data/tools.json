@@ -237,7 +237,7 @@
   {
     "name": "ha_set_area_or_floor",
     "title": "Create or Update Area or Floor",
-    "description": "Create or update a Home Assistant area or floor.\n\nPass kind='area' (with optional floor_id, picture) or kind='floor' (with optional level).\nProvide name only to create a new entry; provide id to update an existing one.\nCross-kind parameters (e.g., picture under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.\n\nEXAMPLES:\nha_set_area_or_floor(kind=\"area\", name=\"Kitchen\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", floor_id=\"ground_floor\")\nha_set_area_or_floor(kind=\"floor\", name=\"Basement\", level=-1)\nha_set_area_or_floor(kind=\"floor\", id=\"ground_floor\", level=0)",
+    "description": "Create or update a Home Assistant area or floor.\n\nPass kind='area' (with optional floor_id, picture, labels) or kind='floor' (with optional level).\nProvide name only to create a new entry; provide id to update an existing one.\nCross-kind parameters (e.g., picture or labels under kind='floor') are rejected with VALIDATION_INVALID_PARAMETER.\n\nEXAMPLES:\nha_set_area_or_floor(kind=\"area\", name=\"Kitchen\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", floor_id=\"ground_floor\")\nha_set_area_or_floor(kind=\"area\", id=\"kitchen\", labels=[\"site_home\"])\nha_set_area_or_floor(kind=\"floor\", name=\"Basement\", level=-1)\nha_set_area_or_floor(kind=\"floor\", id=\"ground_floor\", level=0)",
     "inputSchema": {
       "properties": {
         "kind": {
@@ -277,6 +277,11 @@
         "picture": {
           "type": "str | None",
           "description": "Picture URL when kind='area' (empty string to remove). Only valid when kind='area'.",
+          "default": null
+        },
+        "labels": {
+          "type": "str | list[str] | None",
+          "description": "Label IDs when kind='area' (replaces the area's label set; empty list to clear). Omit to leave labels unchanged. Only valid when kind='area' — floors have no labels.",
           "default": null
         }
       },
@@ -2880,7 +2885,7 @@
   {
     "name": "ha_config_get_label",
     "title": "Get Label",
-    "description": "Get label info - list all labels or get a specific one by ID.\n\nWithout a label_id: Lists all Home Assistant labels with their configurations.\nWith a label_id: Returns configuration for that specific label.\n\nLABEL PROPERTIES:\n- ID (label_id), Name\n- Color (optional), Icon (optional), Description (optional)\n\nEXAMPLES:\n- List all labels: ha_config_get_label()\n- Get specific label: ha_config_get_label(\"my_label_id\")\n\nUse ha_config_set_label() to create or update labels.\nUse ha_set_entity(labels=[\"label1\", \"label2\"]) to assign labels to entities.",
+    "description": "Get label info - list all labels or get a specific one by ID.\n\nWithout a label_id: Lists all Home Assistant labels with their configurations.\nWith a label_id: Returns configuration for that specific label.\n\nLABEL PROPERTIES:\n- ID (label_id), Name\n- Color (optional), Icon (optional), Description (optional)\n\nEXAMPLES:\n- List all labels: ha_config_get_label()\n- Get specific label: ha_config_get_label(\"my_label_id\")\n\nUse ha_config_set_label() to create or update labels.\nUse ha_set_entity(labels=[\"label1\", \"label2\"]) to assign labels to entities,\nha_set_device(labels=[...]) for devices, or\nha_set_area_or_floor(kind=\"area\", labels=[...]) for areas.",
     "inputSchema": {
       "properties": {
         "label_id": {
@@ -2997,7 +3002,7 @@
   {
     "name": "ha_config_set_label",
     "title": "Create or Update Label",
-    "description": "Create or update a Home Assistant label.\n\nCreates a new label if label_id is not provided, or updates an existing label if label_id is provided.\n\nLabels are a flexible tagging system that can be applied to entities,\ndevices, and areas for organization and automation purposes.\n\nEXAMPLES:\n- Create simple label: ha_config_set_label(\"Critical\")\n- Create colored label: ha_config_set_label(\"Outdoor\", color=\"green\")\n- Create label with icon: ha_config_set_label(\"Battery Powered\", icon=\"mdi:battery\")\n- Create full label: ha_config_set_label(\"Security\", color=\"red\", icon=\"mdi:shield\", description=\"Security-related devices\")\n- Update label: ha_config_set_label(\"Updated Name\", label_id=\"my_label_id\", color=\"blue\")\n\nAfter creating a label, use ha_set_entity(labels=[\"label_id\"]) to assign it to entities.",
+    "description": "Create or update a Home Assistant label.\n\nCreates a new label if label_id is not provided, or updates an existing label if label_id is provided.\n\nLabels are a flexible tagging system that can be applied to entities,\ndevices, and areas for organization and automation purposes.\n\nEXAMPLES:\n- Create simple label: ha_config_set_label(\"Critical\")\n- Create colored label: ha_config_set_label(\"Outdoor\", color=\"green\")\n- Create label with icon: ha_config_set_label(\"Battery Powered\", icon=\"mdi:battery\")\n- Create full label: ha_config_set_label(\"Security\", color=\"red\", icon=\"mdi:shield\", description=\"Security-related devices\")\n- Update label: ha_config_set_label(\"Updated Name\", label_id=\"my_label_id\", color=\"blue\")\n- Create and apply to areas: ha_config_set_label(\"Site Home\", areas=[\"kitchen\", \"living_room\"])\n\nAfter creating a label, use ha_set_entity(labels=[\"label_id\"]) to assign it to entities,\nha_set_device(labels=[\"label_id\"]) for devices, or\nha_set_area_or_floor(kind=\"area\", labels=[\"label_id\"]) for areas (replaces the area's set).\nPass areas=[\"kitchen\"] here to add the label onto those areas without replacing others.",
     "inputSchema": {
       "properties": {
         "name": {
@@ -3022,6 +3027,11 @@
         "description": {
           "type": "str | None",
           "description": "Description of the label's purpose",
+          "default": null
+        },
+        "areas": {
+          "type": "str | list[str] | None",
+          "description": "Area IDs to apply this label to (adds the label without removing existing ones). Omit to leave area assignments unchanged; an empty list is a no-op (assigns nothing and removes nothing). To clear an area's labels use ha_set_area_or_floor(kind='area', labels=[]).",
           "default": null
         }
       },
