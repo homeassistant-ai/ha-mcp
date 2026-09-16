@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { runCloseWorkflow } from "./issue-intake-helpers.mjs";
 import {
   collect,
   control,
@@ -16,15 +16,6 @@ import {
 const bot = "ha-mcp[bot]";
 
 test("needs-info issue closure never acts on pull requests returned by the issues API", async () => {
-  const yaml = readFileSync(
-    new URL("../../.github/workflows/close-needs-info.yml", import.meta.url),
-    "utf8",
-  );
-  const code = yaml
-    .split("script: |\n")[1]
-    .split("\n")
-    .map((line) => line.replace(/^ {12}/, ""))
-    .join("\n");
   const calls = [];
   const github = {
     rest: {
@@ -35,11 +26,6 @@ test("needs-info issue closure never acts on pull requests returned by the issue
         createComment: async () => calls.push("comment"),
         update: async () => calls.push("close"),
         removeLabel: async () => calls.push("label"),
-      },
-      repos: {
-        getCollaboratorPermissionLevel: async () => ({
-          data: { role_name: "maintain" },
-        }),
       },
     },
     paginate: async (kind) =>
@@ -66,35 +52,11 @@ test("needs-info issue closure never acts on pull requests returned by the issue
               },
             ],
   };
-  await new Function(
-    "github",
-    "context",
-    "core",
-    `return (async () => {${code}})()`,
-  )(
-    github,
-    { repo: { owner: "test", repo: "repo" } },
-    {
-      info() {},
-      warning() {},
-      setFailed(message) {
-        throw Error(message);
-      },
-    },
-  );
+  await runCloseWorkflow(github);
   assert.deepEqual(calls, []);
 });
 
 test("close retries deduplicate their notice and report failed label cleanup", async () => {
-  const yaml = readFileSync(
-    new URL("../../.github/workflows/close-needs-info.yml", import.meta.url),
-    "utf8",
-  );
-  const code = yaml
-    .split("script: |\n")[1]
-    .split("\n")
-    .map((line) => line.replace(/^ {12}/, ""))
-    .join("\n");
   const comments = [];
   let failClose = true,
     failCleanup = false,
@@ -120,11 +82,6 @@ test("close retries deduplicate their notice and report failed label cleanup", a
             throw Object.assign(Error("Cleanup failed"), { status: 500 });
         },
       },
-      repos: {
-        getCollaboratorPermissionLevel: async () => ({
-          data: { role_name: "maintain" },
-        }),
-      },
     },
     paginate: async (kind) =>
       kind === "issues"
@@ -141,23 +98,7 @@ test("close retries deduplicate their notice and report failed label cleanup", a
               },
             ],
   };
-  const run = () =>
-    new Function(
-      "github",
-      "context",
-      "core",
-      `return (async () => {${code}})()`,
-    )(
-      github,
-      { repo: { owner: "test", repo: "repo" } },
-      {
-        info() {},
-        warning() {},
-        setFailed(message) {
-          throw Error(message);
-        },
-      },
-    );
+  const run = () => runCloseWorkflow(github);
   await assert.rejects(run(), /Failed to close/);
   await assert.rejects(run(), /Failed to close/);
   assert.equal(
@@ -184,7 +125,10 @@ test("final comment patches use the full retry budget after the label succeeds",
     ) {
       finalAttempts += 1;
       if (finalAttempts < 3)
-        throw Object.assign(Error("Temporary patch failure"), { status: 503 });
+        throw Object.assign(Error("Temporary patch failure"), {
+          status: 503,
+          retryAfter: 0,
+        });
     }
     return request(path, options);
   };
@@ -228,7 +172,10 @@ test("temporary label and final-patch failures recover without duplicate comment
             !options.data.body.includes(" pending -->");
       if (target && !failed) {
         failed = true;
-        throw Object.assign(Error("Transient failure"), { status: 503 });
+        throw Object.assign(Error("Transient failure"), {
+          status: 503,
+          retryAfter: 0,
+        });
       }
       return request(path, options);
     };
@@ -248,7 +195,7 @@ test("exhausted transient writes stay pending for manual recovery", async () => 
   api.request = (path, options = {}) => {
     if (path.endsWith("/labels")) {
       attempts += 1;
-      throw Object.assign(Error("Outage"), { status: 503 });
+      throw Object.assign(Error("Outage"), { status: 503, retryAfter: 0 });
     }
     return request(path, options);
   };
@@ -268,7 +215,10 @@ test("a maintainer pause during backoff stops the retry", async () => {
     if (path.endsWith("/labels")) {
       attempts += 1;
       api.data.comments.push(comment(2, "maintainer", "/triage pause"));
-      throw Object.assign(Error("Temporary failure"), { status: 503 });
+      throw Object.assign(Error("Temporary failure"), {
+        status: 503,
+        retryAfter: 0,
+      });
     }
     return request(path, options);
   };
@@ -278,15 +228,6 @@ test("a maintainer pause during backoff stops the retry", async () => {
 });
 
 test("failed day-seven closes retain needs-info for the next daily run", async () => {
-  const yaml = readFileSync(
-    new URL("../../.github/workflows/close-needs-info.yml", import.meta.url),
-    "utf8",
-  );
-  const code = yaml
-    .split("script: |\n")[1]
-    .split("\n")
-    .map((line) => line.replace(/^ {12}/, ""))
-    .join("\n");
   const removed = [],
     closed = [];
   const github = {
@@ -301,11 +242,6 @@ test("failed day-seven closes retain needs-info for the next daily run", async (
           if (p.issue_number === 1) throw Error("Temporary close error");
           closed.push(p.issue_number);
         },
-      },
-      repos: {
-        getCollaboratorPermissionLevel: async () => ({
-          data: { role_name: "maintain" },
-        }),
       },
     },
     paginate: async (kind) =>
@@ -327,25 +263,7 @@ test("failed day-seven closes retain needs-info for the next daily run", async (
               },
             ],
   };
-  await assert.rejects(
-    new Function(
-      "github",
-      "context",
-      "core",
-      `return (async () => {${code}})()`,
-    )(
-      github,
-      { repo: { owner: "test", repo: "repo" } },
-      {
-        info() {},
-        warning() {},
-        setFailed(message) {
-          throw Error(message);
-        },
-      },
-    ),
-    /Failed to close/,
-  );
+  await assert.rejects(runCloseWorkflow(github), /Failed to close/);
   assert.deepEqual(closed, [2]);
   assert.deepEqual(removed, [2]);
 });
@@ -711,21 +629,12 @@ test("collection rejects PRs and oversized context rather than dropping late rep
 });
 
 test("real close workflow ages needs-info regardless of who applied it", async () => {
-  const yaml = readFileSync(
-    new URL("../../.github/workflows/close-needs-info.yml", import.meta.url),
-    "utf8",
-  );
-  const code = yaml
-    .split("script: |\n")[1]
-    .split("\n")
-    .map((line) => line.replace(/^ {12}/, ""))
-    .join("\n");
-  for (const [actor, role, closes] of [
-    [{ login: bot, type: "Bot" }, "admin", true],
-    [user("writer"), "write", true],
-    [user("triager"), "triage", true],
-    [null, "none", true],
-    [user("maintainer"), "maintain", true],
+  for (const actor of [
+    { login: bot, type: "Bot" },
+    user("writer"),
+    user("triager"),
+    null,
+    user("maintainer"),
   ]) {
     const writes = [];
     const issue = { number: 1, title: "Example", user: user("reporter") };
@@ -738,14 +647,7 @@ test("real close workflow ages needs-info regardless of who applied it", async (
       update: async () => writes.push("close"),
     };
     const github = {
-      rest: {
-        issues: endpoints,
-        repos: {
-          getCollaboratorPermissionLevel: async () => ({
-            data: { role_name: role },
-          }),
-        },
-      },
+      rest: { issues: endpoints },
       paginate: async (type) =>
         type === "issues"
           ? [issue]
@@ -761,23 +663,7 @@ test("real close workflow ages needs-info regardless of who applied it", async (
               ]
             : [],
     };
-    await new Function(
-      "github",
-      "context",
-      "core",
-      `return (async () => {${code}})()`,
-    )(
-      github,
-      { repo: { owner: "test", repo: "repo" } },
-      {
-        info() {},
-        warning() {},
-        setFailed(message) {
-          throw Error(message);
-        },
-      },
-    );
-    assert.equal(writes.includes("close"), closes);
-    if (!closes) assert.equal(writes.length, 0);
+    await runCloseWorkflow(github);
+    assert.deepEqual(writes, ["comment", "close", "remove"]);
   }
 });

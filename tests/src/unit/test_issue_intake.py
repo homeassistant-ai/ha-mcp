@@ -15,8 +15,7 @@ def test_issue_intake_behavior() -> None:
         [
             node,
             "--test",
-            str(root / "tests/js/issue-intake.test.mjs"),
-            str(root / "tests/js/issue-intake-review.test.mjs"),
+            *map(str, sorted((root / "tests/js").glob("issue-intake*.test.mjs"))),
         ],
         cwd=root,
         capture_output=True,
@@ -42,9 +41,14 @@ def test_issue_intake_event_and_credential_boundaries() -> None:
     assert "concurrency" not in workflow
     assert admission["concurrency"]["cancel-in-progress"] is True
     assert "github.run_id" in admission["concurrency"]["group"]
+    assert (
+        "!contains(fromJSON('[" in admission["if"]
+        and "github.event.label.name == 'needs-info'" in admission["if"]
+    )
     assert admission["steps"][0]["if"] == "github.event_name != 'workflow_dispatch'"
     job = workflow["jobs"]["document"]
     assert job["needs"] == "admit"
+    assert job["if"] == "needs.admit.outputs.run == 'true'"
     assert job["concurrency"]["cancel-in-progress"] is False
     assert "codex-auth-" in job["concurrency"]["group"]
     steps = job["steps"]

@@ -13,6 +13,7 @@ import { setTimeout as delay } from "node:timers/promises";
 const here = dirname(fileURLToPath(import.meta.url));
 export const policy = readFileSync(resolve(here, "instructions.md"), "utf8");
 export const marker = "<!-- ha-mcp-intake:v1 ";
+export const triageCommand = /^\/triage (pause|resume|refresh)\s*$/;
 export const questions = {
   install_method:
     "How is ha-mcp installed (HACS integration, app/add-on, Docker, uvx/pip, or another method)?",
@@ -103,10 +104,12 @@ export function validateSchema(value, spec = schema, path = "result") {
 export function validateResult(result, context) {
   validateSchema(result);
   if (result.needs_translation && !result.translation.length) {
-    throw Error("Non-English reports require an English translation");
+    throw Error(
+      "translation: must contain an English translation when needs_translation is true",
+    );
   }
   const sources = new Map(context.sources.map((s) => [s.source_id, s]));
-  const normalize = (text) => text.replace(/\r\n/g, "\n");
+  const normalize = (text) => text.replace(/\r\n?/g, "\n");
   for (const key of [
     "summary",
     "translation",
@@ -144,20 +147,31 @@ export function validateResult(result, context) {
     if (!requested.evidence.some((e) => sources.get(e.source_id)?.maintainer))
       throw Error(`already_requested[${index}]: requires maintainer evidence`);
   }
-  for (const item of result.agreed_scope) {
+  for (const [index, item] of result.agreed_scope.entries()) {
     if (!item.evidence.some((e) => sources.get(e.source_id)?.maintainer))
-      throw Error("Agreed scope requires maintainer evidence");
+      throw Error(`agreed_scope[${index}]: requires maintainer evidence`);
   }
   // Several affected tools or clients are legitimate separate sourced facts.
   // Only the question/control field lists require uniqueness.
-  for (const values of [
-    result.missing_fields,
-    result.already_requested.map((r) => r.field),
+  for (const [path, values] of [
+    ["missing_fields", result.missing_fields],
+    ["already_requested", result.already_requested.map((r) => r.field)],
   ]) {
-    if (new Set(values).size !== values.length) throw Error("Duplicate field");
+    const duplicate = values.findIndex((value, index) =>
+      values.slice(0, index).includes(value),
+    );
+    if (duplicate >= 0)
+      throw Error(
+        `${path}[${duplicate}]: duplicate field ${values[duplicate]}`,
+      );
   }
-  if (result.facts.some((f) => result.missing_fields.includes(f.field)))
-    throw Error("A field cannot be both known and missing");
+  const overlap = result.facts.findIndex((fact) =>
+    result.missing_fields.includes(fact.field),
+  );
+  if (overlap >= 0)
+    throw Error(
+      `facts[${overlap}].field: cannot also appear in missing_fields[${result.missing_fields.indexOf(result.facts[overlap].field)}]`,
+    );
   return result;
 }
 
@@ -181,15 +195,27 @@ export class GitHub {
     } catch (error) {
       // Do not echo issue bodies, API payloads, or token-bearing stderr into logs.
       const status = /HTTP (\d+)/.exec(String(error.stderr ?? ""))?.[1];
+      const retryAfter =
+        /retry-after:\s*(\d+)/i.exec(String(error.stderr ?? ""))?.[1] ??
+        /retry after\s+(\d+)\s+seconds?/i.exec(String(error.stderr ?? ""))?.[1];
       throw Object.assign(
         Error(
           `GitHub ${method} ${endpoint} failed${status ? ` (HTTP ${status})` : ""}`,
         ),
-        { status: Number(status) },
+        {
+          status: Number(status),
+          retryAfter: retryAfter === undefined ? undefined : Number(retryAfter),
+        },
       );
     }
     if (!output.trim()) return null;
-    const parsed = JSON.parse(output);
+    let parsed;
+    try {
+      parsed = JSON.parse(output);
+    } catch {
+      // Never quote malformed API output: it may contain issue text or secrets.
+      throw Error(`GitHub ${method} ${endpoint} returned invalid JSON`);
+    }
     if (!paginate) return parsed;
     if (!Array.isArray(parsed) || !parsed.every(Array.isArray))
       throw Error("Incomplete GitHub pagination");
@@ -200,6 +226,22 @@ export class GitHub {
 const isHuman = (user) => user?.type === "User" && user.login !== "ghhamcp";
 const isMaintainer = (role) => ["maintain", "admin"].includes(role);
 const timestamp = (item) => item.updated_at ?? item.created_at;
+const ignoredCommand = (comment, roles) =>
+  isHuman(comment.user) &&
+  triageCommand.test(comment.body) &&
+  !isMaintainer(roles[comment.user.login]);
+
+export async function roleFor(api, repository, login) {
+  try {
+    const permission = await api.request(
+      `repos/${repository}/collaborators/${encodeURIComponent(login)}/permission`,
+    );
+    return permission.role_name;
+  } catch (error) {
+    if (error.status === 404) return "none";
+    throw error;
+  }
+}
 
 export function makeContext(snapshot) {
   const { issue, comments, roles } = snapshot;
@@ -214,7 +256,7 @@ export function makeContext(snapshot) {
         maintainer: !!issue.user && isMaintainer(roles[issue.user.login]),
       },
       ...comments
-        .filter((c) => isHuman(c.user))
+        .filter((c) => isHuman(c.user) && !ignoredCommand(c, roles))
         .map((c) => ({
           source_id: `comment-${c.id}`,
           text: c.body,
@@ -231,7 +273,7 @@ export function control(snapshot) {
     (c) =>
       isHuman(c.user) &&
       isMaintainer(snapshot.roles[c.user.login]) &&
-      /^\/triage (pause|resume|refresh)\s*$/.test(c.body),
+      triageCommand.test(c.body),
   );
   commands.sort(
     (a, b) => timestamp(a).localeCompare(timestamp(b)) || a.id - b.id,
@@ -266,7 +308,7 @@ export function fingerprint(snapshot) {
     locked: snapshot.issue.locked,
     control: control(snapshot),
     edits: snapshot.comments
-      .filter((c) => isHuman(c.user))
+      .filter((c) => isHuman(c.user) && !ignoredCommand(c, snapshot.roles))
       .map((c) => [c.id, timestamp(c)]),
     labelEvents: snapshot.events
       .filter((e) => e.label?.name === "needs-info" && isHuman(e.actor))
@@ -309,15 +351,7 @@ export async function collect(api, repository, number) {
   const roles = {};
   const users = [issue.user, ...comments.map((c) => c.user)];
   for (const login of new Set(users.filter(isHuman).map((u) => u.login))) {
-    try {
-      const permission = await api.request(
-        `repos/${repository}/collaborators/${encodeURIComponent(login)}/permission`,
-      );
-      roles[login] = permission.role_name;
-    } catch (error) {
-      if (error.status !== 404) throw error;
-      roles[login] = "none";
-    }
+    roles[login] = await roleFor(api, repository, login);
   }
   const snapshot = { repository, issue, comments, events, roles };
   if (Buffer.byteLength(JSON.stringify(makeContext(snapshot))) > 160000)
@@ -345,21 +379,24 @@ export function prompt(context) {
   return `${policy}\n\nSOURCE DATA (JSON):\n${JSON.stringify(context)}\n`;
 }
 
-// Escape model prose so it cannot inject mentions, images or Markdown links.
+// Escape model prose so it cannot inject user mentions, issue references,
+// images or Markdown links.
 export function prose(text) {
-  return text
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/([\\`*_{}\[\]()#!|])/g, "\\$1")
-    // GitHub post-processes HTML entities and escaped hashes into mentions.
-    // A zero-width separator preserves display while preventing those links.
-    .replace(/@/g, "@\u200b")
-    .replace(/#(?=\w)/g, "#\u200b")
-    .replace(/\b([a-z][a-z\d+.-]*):\/\//gi, "$1[:]//")
-    .replace(/\bwww\./gi, "www[.]");
+  return (
+    text
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/([\\`*_{}\[\]()#!|])/g, "\\$1")
+      // GitHub post-processes HTML entities and escaped hashes into mentions.
+      // A zero-width separator preserves display while preventing those links.
+      .replace(/@/g, "@\u200b")
+      .replace(/#(?=\w)/g, "#\u200b")
+      .replace(/\b([a-z][a-z\d+.-]*):\/\//gi, "$1[:]//")
+      .replace(/\bwww\./gi, "www[.]")
+  );
 }
 
 export function render(result, prepared) {
@@ -453,14 +490,13 @@ export async function publish(api, prepared, result, bot, attempt = 0) {
     prepared.snapshot.repository,
     prepared.snapshot.issue.number,
   );
-  if (
-    fingerprint(latest) !== prepared.digest ||
-    !prepare(latest, bot, { force: true }).run
-  ) {
+  const latestPrepared = prepare(latest, bot, { force: true });
+  if (fingerprint(latest) !== prepared.digest || !latestPrepared.run) {
+    const reason = latestPrepared.reason;
     console.log(
-      "::warning::Context changed; publication skipped. A matching event or explicit refresh must process the current state.",
+      `::warning::Publication skipped: ${reason ?? "source context changed"}. A matching event or explicit refresh must process the current state.`,
     );
-    return "Context changed; publication skipped";
+    return `Publication skipped: ${reason ?? "source context changed"}`;
   }
   const existing = ownComment(latest, bot);
   const base = `repos/${latest.repository}/issues`;
@@ -516,7 +552,11 @@ export async function publish(api, prepared, result, bot, attempt = 0) {
       attempt < 2 &&
       (error.status === 429 || (error.status >= 500 && error.status <= 599))
     ) {
-      await delay(1000 * (attempt + 1));
+      const seconds = Math.min(
+        30,
+        Math.max(0, error.retryAfter ?? [5, 15][attempt]),
+      );
+      await delay(seconds * 1000);
       return publish(api, prepared, result, bot, attempt + 1);
     }
     throw error;
@@ -544,28 +584,13 @@ export async function main(command, options = {}) {
       event.comment?.user?.type === "Bot"
     )
       return skip("Bot or PR event ignored");
-    if (
-      event.comment &&
-      /^\/triage (pause|resume|refresh)\s*$/.test(event.comment.body)
-    ) {
-      const actor = event.comment.user?.login;
-      if (!actor) return skip("Command author missing");
-      const permission = await api.request(
-        `repos/${env.GITHUB_REPOSITORY}/collaborators/${encodeURIComponent(actor)}/permission`,
-      );
-      if (!isMaintainer(permission.role_name))
-        return skip("Maintainer command ignored: insufficient role");
-    }
     if (env.GITHUB_EVENT_NAME === "workflow_dispatch") {
       for (const actor of new Set([
         env.GITHUB_ACTOR,
         env.GITHUB_TRIGGERING_ACTOR,
       ])) {
         if (!actor) throw Error("Missing dispatch actor");
-        const permission = await api.request(
-          `repos/${env.GITHUB_REPOSITORY}/collaborators/${encodeURIComponent(actor)}/permission`,
-        );
-        if (!isMaintainer(permission.role_name))
+        if (!isMaintainer(await roleFor(api, env.GITHUB_REPOSITORY, actor)))
           throw Error("Maintainer dispatch required");
       }
     }
@@ -606,7 +631,13 @@ if (
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
   main(process.argv[2]).catch((error) => {
-    console.error(error.message);
+    const message = String(error.message).replace(/[\r\n]/g, " ");
+    const trace = String(error.stack ?? "")
+      .split(/\r?\n/)
+      .slice(1, 4)
+      .map((line) => line.trim())
+      .join(" | ");
+    console.error(`::error::${message}${trace ? ` | ${trace}` : ""}`);
     process.exitCode = 1;
   });
 }

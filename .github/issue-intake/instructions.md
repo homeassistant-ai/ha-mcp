@@ -33,8 +33,8 @@ error messages and uncertainty. Never reproduce credentials or secret URLs.
   install_method, ha_mcp_version, ha_version, client, transport, operating_system,
   affected_tool, error, reproduction. Do not omit a known field just because its
   source passage also supports another fact. "Unknown" or "not supplied" is not
-  a known value. Up to 18 fact rows allow multiple tools/clients without dropping
-  the installation method, versions or other environment details.
+  a known value. The schema permits multiple fact rows for tools and clients;
+  never drop installation, version or other reported environment details.
 - Ask only for essential missing fields that block understanding this report.
   Use existing replies, even if they answer fields absent from the initial body.
   Do not ask for an error message when the symptom is wrong behavior without an
@@ -51,4 +51,5 @@ error messages and uncertainty. Never reproduce credentials or secret URLs.
   A missing field may be requested to clarify it, but do not choose a diagnosis.
 
 The workflow owns wording of questions, labels, authorization and publication.
-Your missing_fields list is a suggestion, not permission to close the issue.
+Your missing_fields list informs its needs-info decision. A separate deterministic
+lifecycle may close an issue after seven days without a reporter reply.

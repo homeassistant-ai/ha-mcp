@@ -1,8 +1,8 @@
-name: '🤖 Close needs-info Issues'
+name: "🤖 Close needs-info Issues"
 
 on:
   schedule:
-    - cron: '0 9 * * *'  # Daily at 09:00 UTC
+    - cron: "0 9 * * *" # Daily at 09:00 UTC
   workflow_dispatch: {}
 
 concurrency:
@@ -50,12 +50,16 @@ jobs:
             // needs-info so the next daily run can retry it.
             const failedCloses = [];
             const failedLabelCleanups = [];
+            const failedReplyCleanups = [];
+            const failedClosingNotices = [];
+            const failedReminders = [];
 
             for (const issue of issues) {
               // The issues endpoint also returns pull requests with this label.
               if (issue.pull_request) continue;
               const issueNumber = issue.number;
-              const greeting = issue.user?.login ? `Hi @${issue.user.login}` : "Hello";
+              const issueAuthor = issue.user?.login;
+              const greeting = issueAuthor ? `Hi @${issueAuthor}` : "Hello";
               core.info(`Checking issue #${issueNumber}: ${issue.title}`);
 
               const events = await github.paginate(github.rest.issues.listEvents, {
@@ -88,14 +92,14 @@ jobs:
                 per_page: 100,
               });
 
-              // Only the issue author replying resets the clock (the retired triage
+              // Only the issue author replying clears needs-info (the retired triage
               // bot used the same rule). A maintainer/bystander comment must not
               // remove needs-info, or the issue silently escapes the stale-close
-              // path with the requested info still missing. Re-labeling after an
-              // author reply restarts the whole schedule via the label event.
+              // path with the requested info still missing. If intake later finds
+              // essential details still missing, re-labeling starts a new schedule.
               const authorReplied = comments.some(c =>
-                issue.user?.login && c.user?.type !== 'Bot' &&
-                c.user?.login === issue.user.login &&
+                issueAuthor && c.user?.type !== 'Bot' &&
+                c.user?.login === issueAuthor &&
                 new Date(c.created_at) > labeledDate
               );
               if (authorReplied) {
@@ -108,7 +112,10 @@ jobs:
                     name: 'needs-info',
                   });
                 } catch (err) {
-                  if (err.status !== 404) core.warning(`  Failed to remove needs-info: ${err.message}`);
+                  if (err.status !== 404) {
+                    core.warning(`  Failed to remove needs-info: ${err.message}`);
+                    failedReplyCleanups.push(issueNumber);
+                  }
                 }
                 continue;
               }
@@ -134,6 +141,7 @@ jobs:
                     commented = true;
                   } catch (err) {
                     core.warning(`  Failed to post closing comment on #${issueNumber}: ${err.message} — skipping close`);
+                    failedClosingNotices.push(issueNumber);
                   }
                 }
 
@@ -211,13 +219,19 @@ jobs:
                 core.info(`  Posted day-${day} reminder`);
               } catch (err) {
                 core.warning(`  Failed to post day-${day} reminder on #${issueNumber}: ${err.message}`);
+                failedReminders.push(`${issueNumber}@day-${day}`);
               }
             }
 
-            if (failedCloses.length > 0) {
-              core.setFailed(`Failed to close ${failedCloses.length} issue(s): #${failedCloses.join(', #')}. Each remains open with needs-info retained for the next daily run; a closing notice was already posted.`);
-            }
-
-            if (failedLabelCleanups.length > 0) {
-              core.setFailed(`Post-close label cleanup failed for issues #${failedLabelCleanups.join(', #')}. These issues are closed; remove needs-info manually after restoring API access.`);
-            }
+            const failures = [];
+            if (failedCloses.length > 0)
+              failures.push(`Failed to close ${failedCloses.length} issue(s): #${failedCloses.join(', #')}. Each remains open with needs-info retained for the next daily run; a closing notice was already posted.`);
+            if (failedLabelCleanups.length > 0)
+              failures.push(`Post-close label cleanup failed for issues #${failedLabelCleanups.join(', #')}. These issues are closed; remove needs-info manually after restoring API access.`);
+            if (failedReplyCleanups.length > 0)
+              failures.push(`Failed to clear needs-info after reporter replies on issues #${failedReplyCleanups.join(', #')}.`);
+            if (failedClosingNotices.length > 0)
+              failures.push(`Failed to post closing notices for issues #${failedClosingNotices.join(', #')}; they remain open for retry.`);
+            if (failedReminders.length > 0)
+              failures.push(`Failed to post needs-info reminders for #${failedReminders.join(', #')}.`);
+            if (failures.length > 0) core.setFailed(failures.join(' '));

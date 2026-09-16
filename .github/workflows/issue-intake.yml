@@ -49,9 +49,11 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           sparse-checkout: .github
-      - name: Check command and dispatch admission
+      - name: Check dispatch admission
         id: admission
-        timeout-minutes: 1
+        # Longer than the controller's 60-second GitHub API timeout so a stalled
+        # request can emit its own redacted endpoint error before the step ends.
+        timeout-minutes: 2
         env:
           GH_TOKEN: ${{ github.token }}
           HA_MCP_APP_SLUG: ${{ vars.HA_MCP_APP_SLUG }}
