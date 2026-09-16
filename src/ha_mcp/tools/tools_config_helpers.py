@@ -1454,10 +1454,14 @@ async def validate_registry_ids(
     """Validate that registry references point at entries that actually exist.
 
     Bug 16 (issue #1150) / issue #2159: HA's registry-update APIs accept any
-    string for a cross-registry reference and store it verbatim, so a typo or a
-    since-deleted ID becomes a dangling reference the write tool still reports
-    as a success. Validate before sending so the caller gets a clear error with
-    the available IDs to choose from.
+    string for a cross-registry reference and answer with a success envelope
+    either way, so without this check a typo or a since-deleted ID passes as a
+    completed write. What happens to the bad value differs per reference:
+    area_id / floor_id / category are stored verbatim and become a dangling
+    reference, while an unknown label_id is dropped (the area registry filters
+    the requested set through the label registry), leaving the caller with a
+    success it cannot distinguish from an applied one. Validate before sending
+    so the caller gets a clear error with the available IDs to choose from.
 
     ``categories`` maps a category SCOPE ("helpers", "automation", "script",
     "scene") to the category_id being assigned in that scope; each distinct
