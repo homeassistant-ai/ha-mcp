@@ -6,7 +6,14 @@ from types import SimpleNamespace
 
 import pytest
 
+from ha_mcp.backup_manager import _restore_area_or_floor
 from ha_mcp.tools.tools_areas import AreaTools
+from ha_mcp.tools.tools_config_helpers import (
+    _apply_create_entity_registry,
+    _apply_update_icon_area_labels,
+    _entity_registry_update_coro,
+    _execute_fallback_registry_update,
+)
 from ha_mcp.tools.tools_entities import EntityTools
 from ha_mcp.tools.tools_labels import LabelTools
 
@@ -206,4 +213,80 @@ async def test_area_replacement_waits_for_inflight_add():
         if second is not None:
             result = await second
             assert result["success"]
+    assert registry.labels["target"] == ["blue"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "replace"),
+    [
+        (
+            "entity",
+            lambda c: _entity_registry_update_coro(c, "light.target", None, ["blue"]),
+        ),
+        (
+            "entity",
+            lambda c: _apply_create_entity_registry(
+                c, "light.target", None, None, ["blue"], {}, []
+            ),
+        ),
+        (
+            "entity",
+            lambda c: _apply_update_icon_area_labels(
+                c, "light.target", None, None, ["blue"], {}, []
+            ),
+        ),
+        (
+            "entity",
+            lambda c: _execute_fallback_registry_update(
+                c, "test", "light.target", None, None, None, ["blue"], None, []
+            ),
+        ),
+        (
+            "area",
+            lambda c: _restore_area_or_floor(c, "area:target", {"labels": ["blue"]}),
+        ),
+    ],
+    ids=[
+        "flow-helper",
+        "created-helper",
+        "updated-helper",
+        "fallback-helper",
+        "area-restore",
+    ],
+)
+async def test_other_replacements_wait_for_inflight_add(kind, replace):
+    registry = Registry()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    replacing = asyncio.Event()
+
+    async def send(message):
+        if message["type"].endswith("/update") and "red" in message.get("labels", []):
+            entered.set()
+            await release.wait()
+        return await registry.send_websocket_message(message)
+
+    client = SimpleNamespace(send_websocket_message=send)
+
+    async def replacement():
+        replacing.set()
+        await replace(client)
+
+    first = asyncio.create_task(
+        add_area(client, "red")
+        if kind == "area"
+        else update_entity(client, ["red"], "add")
+    )
+    second = None
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        second = asyncio.create_task(replacement())
+        await asyncio.wait_for(replacing.wait(), 1)
+        assert registry.labels["target"] == ["existing"]
+    finally:
+        release.set()
+        await first
+        if second is not None:
+            await second
     assert registry.labels["target"] == ["blue"]

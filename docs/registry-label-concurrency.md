@@ -16,10 +16,11 @@ removed automatically.
 | `ha_set_entity(labels=..., label_operation="add"/"remove")` | Read entity labels and merge/filter them | Hold the entity lock from the read through the registry update, including bulk calls. |
 | `ha_set_entity(label_operation="set")` | Replace labels explicitly | Use the same entity lock; replacement can intentionally remove earlier additions. |
 | `ha_set_area_or_floor(kind="area", labels=...)` | Replace labels explicitly | Use the same area lock through the existing verification. |
+| Helper create/update label setters | Replace entity labels explicitly | Share the entity lock, including config-entry and fallback helper paths. |
 | `ha_set_device(labels=...)` | One complete replacement; no additive operation | No client-side read-modify-write to protect. Home Assistant applies the single write. |
 | `ha_set_entity(categories=...)` | Send only the requested scope assignments | Home Assistant merges scopes in its synchronous registry update; no client-side merge. |
 | Label/category registry metadata and other entity/device registry fields | Send only explicitly supplied fields | No client-side label merge. |
-| Backup restore | Deliberately restore saved registry values | Snapshot replacement; do not run a restore concurrently with edits to its target. |
+| Area backup restore | Deliberately replace saved registry values | Share the area lock for the replacement write; the wider restore remains non-atomic. |
 
 The lock does not coordinate separate processes/event loops, the Home Assistant
 UI, automations, or other integrations. Home Assistant provides no conditional

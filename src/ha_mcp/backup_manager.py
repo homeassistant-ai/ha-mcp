@@ -67,6 +67,7 @@ from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from .client.rest_client import HomeAssistantConnectionError, HomeAssistantError
 from .utils.data_paths import get_data_dir
+from .utils.registry_update_lock import registry_update_lock
 
 logger = logging.getLogger(__name__)
 
@@ -2592,7 +2593,8 @@ async def _restore_area_or_floor(client: Any, entity_id: str, config: Any) -> An
         payload["floor_id"] = real_id
     else:
         raise ValueError(f"Unknown area/floor kind: {kind!r}")
-    return await _ws_send(client, payload)
+    async with registry_update_lock(kind, real_id):
+        return await _ws_send(client, payload)
 
 
 # Todo items — entity_id is "<todo.entity>::<item_uid>"
