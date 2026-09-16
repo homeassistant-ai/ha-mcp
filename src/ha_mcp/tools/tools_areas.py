@@ -873,25 +873,25 @@ class AreaTools:
                 )
             )
 
-            # Issue #2159: the area registry stores an unknown floor_id
-            # verbatim, and an unknown label_id is dropped on the way in
-            # (HA filters the set through the label registry) — both end as a
-            # success envelope that does not match what was asked for, so
-            # validate before writing. ``_validate_cross_kind_params`` already
-            # rejected floor_id/labels for kind='floor', so this only ever
-            # runs for areas; None and "" / [] (clear) skip the lookup.
-            await validate_registry_ids(
-                self._client,
-                None,
-                parsed_labels,
-                None,
-                floor_id=floor_id,
-                fail_closed=True,
-            )
-
             async with (
                 registry_update_lock(kind, id) if id is not None else nullcontext()
             ):
+                # Issue #2159: the area registry stores an unknown floor_id
+                # verbatim, and an unknown label_id is dropped on the way in
+                # (HA filters the set through the label registry) — both end as a
+                # success envelope that does not match what was asked for, so
+                # validate before writing. ``_validate_cross_kind_params`` already
+                # rejected floor_id/labels for kind='floor', so this only ever
+                # runs for areas; None and "" / [] (clear) skip the lookup.
+                await validate_registry_ids(
+                    self._client,
+                    None,
+                    parsed_labels,
+                    None,
+                    floor_id=floor_id,
+                    fail_closed=True,
+                )
+
                 result = await self._client.send_websocket_message(message)
 
                 if result.get("success"):

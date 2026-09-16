@@ -1,13 +1,16 @@
 """Concurrent registry label writes must not overwrite another additive call."""
 
 import asyncio
-from collections.abc import Awaitable, Callable
+import json
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.backup_manager import _restore_area_or_floor
 from ha_mcp.tools.tools_areas import AreaTools
 from ha_mcp.tools.tools_config_helpers import (
@@ -18,6 +21,7 @@ from ha_mcp.tools.tools_config_helpers import (
 )
 from ha_mcp.tools.tools_entities import EntityTools
 from ha_mcp.tools.tools_labels import LabelTools
+from ha_mcp.utils.registry_update_lock import registry_update_lock
 
 
 class Registry:
@@ -309,3 +313,45 @@ async def test_other_replacements_wait_for_inflight_add(
         if second is not None:
             await asyncio.wait_for(second, 1)
     assert registry.labels["target"] == ["blue"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["floor", "label"])
+async def test_area_revalidates_references_after_lock_wait(
+    kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    waiting = asyncio.Event()
+    entries = [{f"{kind}_id": "reference"}]
+    updates: list[dict[str, Any]] = []
+
+    @asynccontextmanager
+    async def observed_lock(registry: str, resource_id: str) -> AsyncIterator[None]:
+        waiting.set()
+        async with registry_update_lock(registry, resource_id):
+            yield
+
+    async def send(message: dict[str, Any]) -> dict[str, Any]:
+        if message["type"] == f"config/{kind}_registry/list":
+            return {"success": True, "result": list(entries)}
+        if message["type"] == "config/area_registry/update":
+            updates.append(message)
+            return {"success": True, "result": {"area_id": "target", **message}}
+        raise AssertionError(f"Unexpected WS message: {message}")
+
+    monkeypatch.setattr("ha_mcp.tools.tools_areas.registry_update_lock", observed_lock)
+    client = SimpleNamespace(send_websocket_message=send)
+    params = {"floor_id": "reference"} if kind == "floor" else {"labels": ["reference"]}
+    async with registry_update_lock("area", "target"):
+        pending = asyncio.create_task(
+            AreaTools(client).ha_set_area_or_floor(kind="area", id="target", **params)
+        )
+        await asyncio.wait_for(waiting.wait(), 1)
+        entries.clear()
+
+    with pytest.raises(ToolError) as excinfo:
+        await asyncio.wait_for(pending, 1)
+    assert (
+        json.loads(str(excinfo.value))["error"]["code"]
+        == "VALIDATION_INVALID_PARAMETER"
+    )
+    assert updates == []
