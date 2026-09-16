@@ -54,7 +54,7 @@ import time
 import weakref
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import cached_property
@@ -3540,43 +3540,56 @@ async def _restore_template_entity_id(
     """Restore only the newly created entity's ID/name, guarded by ownership."""
     row = await _created_template_entity(client, entry_id)
     source, target = row["entity_id"], saved["entity_id"]
-    if source.split(".")[0] != target.split(".")[0]:
-        raise BackupRestoreError(
-            "Recreated Template entity has an unexpected domain",
-            reason="entity_identity_mismatch",
-            verification_status="mismatched",
-        )
-    await _check_template_entity_collision(client, target, owned_entry_id=entry_id)
-    update: dict[str, Any] = {
-        "type": "config/entity_registry/update",
-        "entity_id": source,
-    }
-    if source != target:
-        update["new_entity_id"] = target
-    if row.get("name") != saved.get("name"):
-        update["name"] = saved.get("name")
-    if len(update) > 2:
-        try:
-            await _ws_send(client, update)
-        except _CAPTURE_TRANSIENT_ERRORS as err:
-            _log_template_failure("entity_rename", err)
+    locked_ids = {source, target}
+    async with AsyncExitStack() as locks:
+        # A rename changes the lock key; hold both IDs in a stable order.
+        for entity_id in sorted(locked_ids):
+            await locks.enter_async_context(registry_update_lock("entity", entity_id))
+        row = await _created_template_entity(client, entry_id)
+        source = row["entity_id"]
+        if source not in locked_ids:
             raise BackupRestoreError(
-                "The recreated helper's entity rename outcome is unknown",
-                reason="entity_rename_outcome_unknown",
-                entity_id_mapping={
-                    "created_entity_id": source,
-                    "target_entity_id": target,
-                },
-                verification_status="unavailable",
-            ) from err
-    actual = await _created_template_entity(client, entry_id)
-    if actual["entity_id"] != target or actual.get("name") != saved.get("name"):
-        raise BackupRestoreError(
-            "Recreated Template entity identity did not match",
-            reason="entity_identity_mismatch",
-            verification_status="mismatched",
-        )
-    return {"created_entity_id": source, "restored_entity_id": target}
+                "Recreated Template entity ID changed while waiting to restore it",
+                reason="entity_identity_mismatch",
+                verification_status="mismatched",
+            )
+        if source.split(".")[0] != target.split(".")[0]:
+            raise BackupRestoreError(
+                "Recreated Template entity has an unexpected domain",
+                reason="entity_identity_mismatch",
+                verification_status="mismatched",
+            )
+        await _check_template_entity_collision(client, target, owned_entry_id=entry_id)
+        update: dict[str, Any] = {
+            "type": "config/entity_registry/update",
+            "entity_id": source,
+        }
+        if source != target:
+            update["new_entity_id"] = target
+        if row.get("name") != saved.get("name"):
+            update["name"] = saved.get("name")
+        if len(update) > 2:
+            try:
+                await _ws_send(client, update)
+            except _CAPTURE_TRANSIENT_ERRORS as err:
+                _log_template_failure("entity_rename", err)
+                raise BackupRestoreError(
+                    "The recreated helper's entity rename outcome is unknown",
+                    reason="entity_rename_outcome_unknown",
+                    entity_id_mapping={
+                        "created_entity_id": source,
+                        "target_entity_id": target,
+                    },
+                    verification_status="unavailable",
+                ) from err
+        actual = await _created_template_entity(client, entry_id)
+        if actual["entity_id"] != target or actual.get("name") != saved.get("name"):
+            raise BackupRestoreError(
+                "Recreated Template entity identity did not match",
+                reason="entity_identity_mismatch",
+                verification_status="mismatched",
+            )
+        return {"created_entity_id": source, "restored_entity_id": target}
 
 
 async def _recreate_template_helper(

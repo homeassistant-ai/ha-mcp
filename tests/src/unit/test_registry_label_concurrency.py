@@ -496,3 +496,38 @@ async def test_template_restore_rereads_after_lock_wait(
     else:
         await asyncio.wait_for(pending, 1)
         assert row == {"entity_id": target, "name": "Saved name"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [TimeoutError, asyncio.CancelledError])
+async def test_template_restore_releases_both_ids_on_failure(
+    error: type[BaseException], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source, target = "sensor.created", "sensor.restored"
+
+    async def created(client: Any, entry_id: str) -> dict[str, Any]:
+        return {"entity_id": source, "name": None}
+
+    async def collision(client: Any, target: str, **kwargs: Any) -> None:
+        raise error()
+
+    async def send(message: dict[str, Any]) -> dict[str, Any]:
+        return {"success": True, "result": {"entity_entry": dict(message)}}
+
+    monkeypatch.setattr("ha_mcp.backup_manager._created_template_entity", created)
+    monkeypatch.setattr(
+        "ha_mcp.backup_manager._check_template_entity_collision", collision
+    )
+    client = SimpleNamespace(send_websocket_message=send)
+    with pytest.raises(error):
+        await _restore_template_entity_id(
+            client, "entry", {"entity_id": target, "name": "Saved name"}
+        )
+    results = await asyncio.wait_for(
+        asyncio.gather(
+            EntityTools(client).ha_set_entity(entity_id=source, name="Source"),
+            EntityTools(client).ha_set_entity(entity_id=target, name="Target"),
+        ),
+        1,
+    )
+    assert all(result["success"] for result in results)
