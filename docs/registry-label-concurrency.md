@@ -31,7 +31,9 @@ lists are still replacements, even if based on an earlier read.
 Failures retain their existing classification and partial-progress reporting.
 There is no automatic retry: a transport failure may follow a committed write.
 Exception and cancellation unwinding releases the lock, and a later call reads
-fresh state. Bulk updates lock one resource at a time and remain non-atomic. Template identity
-restore stops with an identity mismatch if the entity moves to a third ID while
+fresh state. Bulk updates lock one resource at a time and remain non-atomic.
+Shared label and category references are checked before any bulk write and
+rechecked under each entity lock; a reference deleted during a wait fails only
+that entity. Template identity restore stops with an identity mismatch if the entity moves to a third ID while
 waiting; it does not write using an unlocked identity. Locking adds no sleeps or
 retries, and registry requests retain their existing timeouts.

@@ -2,6 +2,7 @@
 
 import json
 import logging
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1424,12 +1425,11 @@ class TestHaSetEntityBulkOperations:
         }
         update_ack = {"success": True, "result": {"entity_entry": entity_entry}}
         mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                _registry_list("label_id", "outdoor"),
-                update_ack,
-                update_ack,
-                update_ack,
-            ]
+            side_effect=lambda message: (
+                _registry_list("label_id", "outdoor")
+                if message["type"] == "config/label_registry/list"
+                else update_ack
+            )
         )
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
@@ -1528,15 +1528,15 @@ class TestHaSetEntityBulkOperations:
             "aliases": [],
             "labels": ["outdoor"],
         }
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                _registry_list("label_id", "outdoor"),
-                # light.a succeeds
-                {"success": True, "result": {"entity_entry": entity_entry}},
-                # light.b fails
-                {"success": False, "error": {"message": "Entity not found"}},
-            ]
-        )
+
+        def send(message: dict[str, Any]) -> dict[str, Any]:
+            if message["type"] == "config/label_registry/list":
+                return _registry_list("label_id", "outdoor")
+            if message["entity_id"] == "light.a":
+                return {"success": True, "result": {"entity_entry": entity_entry}}
+            return {"success": False, "error": {"message": "Entity not found"}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=send)
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
@@ -1575,49 +1575,19 @@ class TestHaSetEntityBulkOperations:
     @pytest.mark.asyncio
     async def test_bulk_label_add_operation(self, mock_mcp, mock_client):
         """Bulk operation with label_operation='add' should work."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                _registry_list("label_id", "new_label"),
-                # Get labels for light.a
-                {"success": True, "result": {"labels": ["existing"]}},
-                # Update light.a
-                {
+
+        def send(message: dict[str, Any]) -> dict[str, Any]:
+            if message["type"] == "config/label_registry/list":
+                return _registry_list("label_id", "new_label")
+            if message["type"] == "config/entity_registry/get":
+                labels = {"light.a": ["existing"], "light.b": ["other"]}
+                return {
                     "success": True,
-                    "result": {
-                        "entity_entry": {
-                            "entity_id": "light.a",
-                            "name": None,
-                            "original_name": "A",
-                            "icon": None,
-                            "area_id": None,
-                            "disabled_by": None,
-                            "hidden_by": None,
-                            "aliases": [],
-                            "labels": ["existing", "new_label"],
-                        }
-                    },
-                },
-                # Get labels for light.b
-                {"success": True, "result": {"labels": ["other"]}},
-                # Update light.b
-                {
-                    "success": True,
-                    "result": {
-                        "entity_entry": {
-                            "entity_id": "light.b",
-                            "name": None,
-                            "original_name": "B",
-                            "icon": None,
-                            "area_id": None,
-                            "disabled_by": None,
-                            "hidden_by": None,
-                            "aliases": [],
-                            "labels": ["other", "new_label"],
-                        }
-                    },
-                },
-            ]
-        )
+                    "result": {"labels": labels[message["entity_id"]]},
+                }
+            return {"success": True, "result": {"entity_entry": dict(message)}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=send)
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
@@ -1629,6 +1599,11 @@ class TestHaSetEntityBulkOperations:
 
         assert result["success"] is True
         assert result["succeeded_count"] == 2
+        entries = {
+            entry["entity_id"]: entry["entity_entry"] for entry in result["succeeded"]
+        }
+        assert set(entries["light.a"]["labels"]) == {"existing", "new_label"}
+        assert set(entries["light.b"]["labels"]) == {"other", "new_label"}
 
     @pytest.mark.asyncio
     async def test_bulk_categories_set(self, mock_mcp, mock_client):
@@ -1647,11 +1622,11 @@ class TestHaSetEntityBulkOperations:
         }
         update_ack = {"success": True, "result": {"entity_entry": entity_entry}}
         mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                _registry_list("category_id", "cat_id"),
-                update_ack,
-                update_ack,
-            ]
+            side_effect=lambda message: (
+                _registry_list("category_id", "cat_id")
+                if message["type"] == "config/category_registry/list"
+                else update_ack
+            )
         )
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
