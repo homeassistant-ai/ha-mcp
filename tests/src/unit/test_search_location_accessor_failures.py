@@ -10,6 +10,7 @@ from .test_component_ws_search import (
     FakeDevice,
     FakeFloor,
     FakeHass,
+    FakeLabel,
     FakeRegEntry,
     FakeState,
     make_view,
@@ -34,6 +35,7 @@ def _search(
         ("entity", "async_get"),
         ("area", "async_get_area"),
         ("floor", "async_get_floor"),
+        ("label", "async_get_label"),
     ],
 )
 def test_search_reports_failed_registry_lookup(
@@ -43,9 +45,14 @@ def test_search_reports_failed_registry_lookup(
     area_filter: str | None,
 ) -> None:
     view = make_view(
-        entity={"light.kitchen": FakeRegEntry("light.kitchen", area_id="kitchen")},
+        entity={
+            "light.kitchen": FakeRegEntry(
+                "light.kitchen", area_id="kitchen", labels=["task"]
+            )
+        },
         areas=[FakeArea("kitchen", "Kitchen", "ground")],
         floors=[FakeFloor("ground", "Ground floor")],
+        labels=[FakeLabel("task", "Task lighting")],
     )
 
     def broken(_key: str) -> None:

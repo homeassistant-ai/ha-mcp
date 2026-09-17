@@ -2581,9 +2581,8 @@ def _call_lookup(view: _RegistryView, registry_name: str, method: str, key: str)
         return None
     try:
         return getter(key)
-    except Exception:  # pragma: no cover - defensive
-        if registry_name in {"area", "device", "entity", "floor"}:
-            view._access_failures.add(registry_name)
+    except Exception:
+        view._access_failures.add(registry_name)
         return None
 
 
