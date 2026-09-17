@@ -8,12 +8,15 @@ from .categorized_search import (
     categorize_capability,
 )
 from .lite_docstrings import LiteDocstringsTransform
+from .write_tool_note import DESKTOP_APPROVAL_NOTE, WriteToolNoteTransform
 
 __all__ = [
     "Capability",
     "CategorizedSearchTransform",
     "DEFAULT_PINNED_TOOLS",
+    "DESKTOP_APPROVAL_NOTE",
     "LiteDocstringsTransform",
     "SearchKeywordsTransform",
+    "WriteToolNoteTransform",
     "categorize_capability",
 ]

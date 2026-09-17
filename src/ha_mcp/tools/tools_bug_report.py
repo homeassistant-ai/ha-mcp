@@ -73,6 +73,30 @@ MISSING_TOOL_HINT = (
     "tool is still missing after a refresh."
 )
 
+# Known Claude Desktop bugs that present as ha-mcp failures. Both live in
+# the client, never reach this server, and already have upstream tickets, so
+# the agent must rule them out before filing here.
+KNOWN_CLIENT_ISSUES_HINT = (
+    "KNOWN CLAUDE DESKTOP ISSUES (not ha-mcp bugs; check before filing):\n"
+    "1. A write tool (dashboard, automation, script, helper, service call) "
+    "hangs and the client reports a 4-minute timeout with no result, while "
+    "read tools work. Cause: Claude Desktop's manual-approval dialog for a "
+    "local MCP server accepts the click before the call is fully generated "
+    "and silently drops the call. The server never receives it. Tracked in "
+    "homeassistant-ai/ha-mcp#2367 and anthropics/claude-code#92014. Tell the "
+    "user to retry and wait a few seconds before clicking Allow once, or to "
+    "set the write tools to Always allow (Settings -> Connectors -> the "
+    "server -> Tool permissions). A dropped call never reached Home "
+    "Assistant, so the retry is safe.\n"
+    "2. Every tool call fails with 'expected nonoptional, received "
+    "undefined' when an optional parameter is omitted. Cause: Claude Desktop "
+    "2.110.0 rejects omitted optional MCP parameters. Tracked in "
+    "homeassistant-ai/ha-mcp#2472 and anthropics/claude-code#94608. Tell the "
+    "user to downgrade Claude Desktop to 1.52386.6 (links in #2472) until "
+    "the upstream fix ships.\n"
+    "Only file a bug if the problem persists after the matching workaround."
+)
+
 # Max characters to include from addon container logs.
 # 3000 chars ≈ 750 LLM tokens — keeps the tool response well below context budgets
 # while still capturing enough recent output to diagnose most issues.
@@ -917,7 +941,8 @@ class BugReportTools:
                     "runtime_bug_template, agent_behavior_template, "
                     "anonymization_guide, suggested_title, "
                     "runtime_bug_submit_url, agent_behavior_submit_url, "
-                    "duplicate_check_urls, missing_tool_hint, instructions."
+                    "duplicate_check_urls, missing_tool_hint, "
+                    "known_client_issues_hint, instructions."
                 ),
             ),
         ] = None,
@@ -1139,6 +1164,7 @@ class BugReportTools:
             "agent_behavior_submit_url": agent_behavior_submit_url,
             "duplicate_check_urls": duplicate_check_urls,
             "missing_tool_hint": MISSING_TOOL_HINT,
+            "known_client_issues_hint": KNOWN_CLIENT_ISSUES_HINT,
             "instructions": (
                 "WORKFLOW FOR PRESENTING BUG REPORTS:\n\n"
                 "0. **PRE-CHECK — is the problem a missing/unavailable tool?** If "
@@ -1148,6 +1174,12 @@ class BugReportTools:
                 "client tool list (not a server bug), fixed by refreshing or "
                 "reconnecting the MCP connection. Only continue with this report "
                 "if the tool is still missing after the user refreshes.\n\n"
+                "0b. **PRE-CHECK — is it a known Claude Desktop bug?** A write "
+                "tool that hangs to a 4-minute timeout, or every call failing "
+                "with 'expected nonoptional, received undefined', is a client "
+                "bug with an upstream ticket. See the `known_client_issues_hint` "
+                "field for the workaround to give the user, and only continue "
+                "if the problem persists after it.\n\n"
                 "1. **Check for duplicates FIRST** (before presenting the template):\n"
                 "   - Use the duplicate_check_urls to search for similar issues\n"
                 '   - If gh CLI is available: use `gh issue list --search "keyword"`\n'
