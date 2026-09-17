@@ -47,7 +47,7 @@ _PROBE_ENTITY_ID = f"automation.{_SLUG}"
 async def test_reference_graph_flags_an_automation_that_uses_the_entity(
     mcp_client, ha_client
 ):
-    """ha_search reports HA's own reference-graph verdict for an entity_id query.
+    """Legacy deep search reports HA's reference-graph verdict for an entity_id.
 
     Fails if HA does not serve ``search/related``, if it names the command or
     its parameters differently, if the result envelope is not what the parser
@@ -97,7 +97,7 @@ async def test_reference_graph_flags_an_automation_that_uses_the_entity(
         # into the automations bucket.
         assert record["match_in_references"] is True, (
             "Home Assistant's reference graph did not reach the automations "
-            f"bucket for {_REFERENCED_ENTITY}; ha_search fell back to "
+            f"bucket for {_REFERENCED_ENTITY}; legacy deep search returned "
             f"config-body search alone. Record: {record}"
         )
         logger.info("✅ reference graph flagged %s", _ALIAS)

@@ -54,9 +54,7 @@ def add_location_metadata(
     return result
 
 
-def add_location_failures(
-    location: SearchLocation | None, names: set[str]
-) -> None:
+def add_location_failures(location: SearchLocation | None, names: set[str]) -> None:
     """Attach accessor failures when location filtering is active."""
     if location is not None:
         location.add_unavailable(names)
