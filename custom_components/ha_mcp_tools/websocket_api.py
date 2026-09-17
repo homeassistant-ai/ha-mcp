@@ -315,7 +315,11 @@ from .const import (
     OPT_CHANNEL,
     OPT_PIP_SPEC,
 )
-from .search_locations import add_location_metadata, resolve_search_location
+from .search_locations import (
+    add_location_failures,
+    add_location_metadata,
+    resolve_search_location,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1035,6 +1039,9 @@ class _RegistryView:
     floor: Any = None
     label: Any = None
     device: Any = None
+    _access_failures: set[str] = dataclass_field(
+        default_factory=set, init=False, repr=False, compare=False
+    )
 
     # One request-local, conflict-filtered semantic snapshot plus the identities
     # removed from it. Visibility filtering consumes the former and its warning
@@ -1214,6 +1221,7 @@ def _do_search(
         entities = [
             _project_entity(r, include_membership=membership_requested) for r in page
         ]
+        add_location_failures(location, view._access_failures)
 
     # --- Config surfaces (automations + scripts + scenes + helpers) ----------
     # One combined pagination window, mirroring the server's config branch.
@@ -2348,16 +2356,22 @@ def _iter_config_entries(hass: HomeAssistant) -> list[Any]:
 
 
 def _reg_entity(view: _RegistryView, entity_id: str) -> Any:
-    return _call_lookup(view.entity, "async_get", entity_id)
+    return _call_lookup(view, "entity", "async_get", entity_id)
 
 
 def _device(view: _RegistryView, device_id: str | None) -> Any:
     if not device_id:
         return None
-    return _call_lookup(view.device, "async_get", device_id)
+    return _call_lookup(view, "device", "async_get", device_id)
 
 
-def _device_collection_values(collection: Any, *, collection_name: str) -> list[Any]:
+def _device_collection_values(
+    view: _RegistryView,
+    collection: Any,
+    *,
+    collection_name: str,
+    mapping_like: bool = False,
+) -> list[Any]:
     """Enumerate a Core device collection across old and 2026.9 shapes.
 
     Before Core 2026.9 ``registry.devices`` was a mapping-like container. Core
@@ -2368,10 +2382,11 @@ def _device_collection_values(collection: Any, *, collection_name: str) -> list[
     """
     if collection is None:
         return []
-    if isinstance(collection, Mapping):
+    if mapping_like or isinstance(collection, Mapping):
         try:
             return list(collection.values())
         except Exception:  # pragma: no cover - defensive
+            view._access_failures.add("device")
             _LOGGER.warning(
                 "failed to enumerate device registry collection %s",
                 collection_name,
@@ -2381,6 +2396,7 @@ def _device_collection_values(collection: Any, *, collection_name: str) -> list[
     try:
         return list(collection)
     except Exception:  # pragma: no cover - defensive
+        view._access_failures.add("device")
         _LOGGER.warning(
             "failed to enumerate device registry collection %s",
             collection_name,
@@ -2408,16 +2424,20 @@ def _unambiguous_device_entries(view: _RegistryView) -> dict[str, Any]:
     main_collection = getattr(reg, "devices", None)
     if hasattr(reg, "child_devices"):
         candidates = _device_collection_values(
-            main_collection, collection_name="devices"
+            view, main_collection, collection_name="devices"
         )
         candidates.extend(
             _device_collection_values(
-                getattr(reg, "child_devices", None), collection_name="child_devices"
+                view,
+                getattr(reg, "child_devices", None),
+                collection_name="child_devices",
             )
         )
     else:
         # The pre-2026.9 container is mapping-like and iterates ids, not entries.
-        candidates = _mapping_values(main_collection)
+        candidates = _device_collection_values(
+            view, main_collection, collection_name="devices", mapping_like=True
+        )
 
     by_id: dict[str, Any] = {}
     conflicts: set[str] = set()
@@ -2524,7 +2544,7 @@ def _effective_device_area_id(view: _RegistryView, device: Any) -> str | None:
 def _area_name(view: _RegistryView, area_id: str | None) -> str | None:
     if not area_id:
         return None
-    area = _call_lookup(view.area, "async_get_area", area_id)
+    area = _call_lookup(view, "area", "async_get_area", area_id)
     name = getattr(area, "name", None) if area is not None else None
     return str(name) if name else None
 
@@ -2532,11 +2552,11 @@ def _area_name(view: _RegistryView, area_id: str | None) -> str | None:
 def _floor_name_for_area(view: _RegistryView, area_id: str | None) -> str | None:
     if not area_id:
         return None
-    area = _call_lookup(view.area, "async_get_area", area_id)
+    area = _call_lookup(view, "area", "async_get_area", area_id)
     floor_id = getattr(area, "floor_id", None) if area is not None else None
     if not floor_id:
         return None
-    floor = _call_lookup(view.floor, "async_get_floor", floor_id)
+    floor = _call_lookup(view, "floor", "async_get_floor", floor_id)
     name = getattr(floor, "name", None) if floor is not None else None
     return str(name) if name else None
 
@@ -2544,13 +2564,14 @@ def _floor_name_for_area(view: _RegistryView, area_id: str | None) -> str | None
 def _label_names(view: _RegistryView, label_ids: Any) -> list[str]:
     names: list[str] = []
     for label_id in sorted(label_ids or []):
-        label = _call_lookup(view.label, "async_get_label", label_id)
+        label = _call_lookup(view, "label", "async_get_label", label_id)
         name = getattr(label, "name", None) if label is not None else None
         names.append(str(name) if name else str(label_id))
     return names
 
 
-def _call_lookup(registry: Any, method: str, key: str) -> Any:
+def _call_lookup(view: _RegistryView, registry_name: str, method: str, key: str) -> Any:
+    registry = getattr(view, registry_name)
     if registry is None:
         return None
     getter = getattr(registry, method, None)
@@ -2559,6 +2580,8 @@ def _call_lookup(registry: Any, method: str, key: str) -> Any:
     try:
         return getter(key)
     except Exception:  # pragma: no cover - defensive
+        if registry_name in {"area", "device", "entity", "floor"}:
+            view._access_failures.add(registry_name)
         return None
 
 

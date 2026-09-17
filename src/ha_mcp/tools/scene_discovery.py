@@ -244,7 +244,9 @@ async def _scan_configs(
         async with asyncio.timeout(CONFIG_SCAN_TIMEOUT):
             await asyncio.gather(*tasks)
     except TimeoutError:
-        pass
+        logger.debug(
+            "Scene config scan reached its deadline; returning partial results"
+        )
     finally:
         for task in tasks:
             if not task.done():

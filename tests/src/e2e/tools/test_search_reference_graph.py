@@ -72,7 +72,7 @@ async def test_reference_graph_flags_an_automation_that_uses_the_entity(
         )
 
     try:
-        data = await wait_for_tool_result(
+        await wait_for_tool_result(
             mcp_client,
             tool_name="ha_search",
             arguments={

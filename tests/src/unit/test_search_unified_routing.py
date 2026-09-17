@@ -23,6 +23,7 @@ from .test_ha_search_component_routing import (
         ({"domain_filter": "light"}, "domain_listing"),
         ({"state_filter": "on"}, "state_listing"),
         ({"area_filter": "Kitchen"}, "area_only"),
+        ({"area_filter": " Kitchen "}, "area_only"),
         ({"query": "kitchen", "area_filter": "Kitchen"}, "area_filtered_query"),
     ],
 )
@@ -52,7 +53,7 @@ async def test_unified_component_serves_listings_and_locations(
     assert len(calls) == 1
     assert calls[0].kwargs["search_types"] == ["entity"]
     if "area_filter" in arguments:
-        assert response["area_filter"] == "Kitchen"
+        assert response["area_filter"] == arguments["area_filter"].strip()
         assert response["area_names"] == ["Kitchen"]
 
 

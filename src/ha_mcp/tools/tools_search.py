@@ -1441,7 +1441,7 @@ def _component_listing_metadata(
         payload["domain_filter"] = domain
     area = (req.area_filter or "").strip()
     if area:
-        payload["area_filter"] = req.area_filter
+        payload["area_filter"] = area
         payload["area_names"] = component_result.get("area_names", [])
         if not payload["total_matches"]:
             qualifier = f"{domain} " if domain else ""

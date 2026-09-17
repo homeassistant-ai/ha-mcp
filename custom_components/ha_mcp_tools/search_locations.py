@@ -19,6 +19,17 @@ class SearchLocation:
     warnings: list[str]
     unavailable: list[str]
 
+    def add_unavailable(self, names: set[str]) -> None:
+        """Record registry failures discovered while applying the filter."""
+        added = sorted(names.difference(self.unavailable))
+        if not added:
+            return
+        self.unavailable.extend(added)
+        self.warnings.append(
+            "Location filtering is incomplete: unavailable "
+            f"{', '.join(added)} registry data; matches may be missing."
+        )
+
 
 def add_location_metadata(
     result: dict[str, Any], location: SearchLocation | None
@@ -43,6 +54,14 @@ def add_location_metadata(
     return result
 
 
+def add_location_failures(
+    location: SearchLocation | None, names: set[str]
+) -> None:
+    """Attach accessor failures when location filtering is active."""
+    if location is not None:
+        location.add_unavailable(names)
+
+
 def resolve_search_location(view: Any, query: str) -> SearchLocation:
     """Resolve an area or floor once for the entire search result window."""
     areas, areas_available = _registry_rows(view.area, "area")
@@ -60,19 +79,16 @@ def resolve_search_location(view: Any, query: str) -> SearchLocation:
     area_ids, warnings = _resolve_area_query(
         areas, floors, query, floor_registry_available=floors_available
     )
-    if unavailable:
-        warnings.append(
-            "Location filtering is incomplete: unavailable "
-            f"{', '.join(unavailable)} registry data; matches may be missing."
-        )
-    return SearchLocation(
+    location = SearchLocation(
         area_ids=area_ids,
         area_names=sorted(
             str(areas[area_id].get("name") or area_id) for area_id in area_ids
         ),
         warnings=warnings,
-        unavailable=unavailable,
+        unavailable=[],
     )
+    location.add_unavailable(set(unavailable))
+    return location
 
 
 def _registry_rows(registry: Any, kind: str) -> tuple[dict[str, dict[str, Any]], bool]:
