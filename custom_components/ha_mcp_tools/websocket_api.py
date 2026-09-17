@@ -2,10 +2,10 @@
 
 This module registers versioned ``ha_mcp_tools/*`` WebSocket commands that the
 ha-mcp server calls in-process (same HA core, no REST/WS round-trips) behind a
-capability gate. It registers twenty-three commands. It advertises twenty-seven
-capabilities: twenty-two command capabilities plus five additive flags
+capability gate. It advertises command capabilities and additive flags
 (dashboards_doc_search, device_registry_child_semantics, search_visibility,
-search_entity_membership, and search_visibility_allowlist_authorization);
+search_entity_membership, search_visibility_allowlist_authorization, and
+search_unified);
 the info handshake carries no capability entry:
 
 * ``ha_mcp_tools/info`` — the handshake: ``schema_version`` + ``capabilities[]``
@@ -16,6 +16,8 @@ the info handshake carries no capability entry:
 * ``ha_mcp_tools/search`` — a unified in-process search over live registries and
   states, joined and scored, mirroring today's ``ha_search`` response envelope.
   The search_entity_membership flag gates opt-in generic group metadata.
+  The search_unified flag covers area/floor resolution, state filtering before
+  pagination, queryless listing, and search windows beyond the advisory limit.
 * ``ha_mcp_tools/overview`` — the raw in-process reads the server's
   ``get_system_overview`` + ``ha_get_overview`` wrapper consume (states,
   services, entity/device/area registries, ``hass.config``, persistent
@@ -313,6 +315,7 @@ from .const import (
     OPT_CHANNEL,
     OPT_PIP_SPEC,
 )
+from .search_locations import add_location_metadata, resolve_search_location
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -354,6 +357,8 @@ SCHEMA_VERSION = 1
 # capability key of its own.)
 CAPABILITIES: list[str] = [
     "search",
+    # Location/state filters precede pagination; search accepts any result window.
+    "search_unified",
     # A flag on search: gates its additive result_fields request and generic
     # is_group/member_entity_ids response fields.
     "search_entity_membership",
@@ -730,9 +735,7 @@ def _search_schema() -> dict[Any, Any]:
         vol.Optional("exact", default=True): bool,
         vol.Optional("include_hidden", default=True): bool,
         vol.Optional("include_config", default=False): bool,
-        vol.Optional("limit", default=DEFAULT_LIMIT): vol.All(
-            int, vol.Range(min=1, max=MAX_RESULTS)
-        ),
+        vol.Optional("limit", default=DEFAULT_LIMIT): vol.All(int, vol.Range(min=1)),
         vol.Optional("offset", default=0): vol.All(int, vol.Range(min=0)),
         # Opt-in entity visibility for component search. The component advertises
         # ``search_visibility`` and ``search_visibility_allowlist_authorization``;
@@ -1132,6 +1135,11 @@ def _do_search(
     # load_hidden_set warnings).
     visibility_warnings: list[str] = []
     hidden: set[str] = set()
+    location = (
+        resolve_search_location(view, area_filter)
+        if area_filter and SEARCH_TYPE_ENTITY in search_types
+        else None
+    )
 
     # ``secret_values`` (loaded off-loop by _search_prep) scrubs resolved-!secret
     # plaintext from the config-body match corpus: a YAML-loaded automation/script/
@@ -1152,7 +1160,7 @@ def _do_search(
             exact=exact,
             include_hidden=include_hidden,
             domain_filter=domain_filter,
-            area_filter=area_filter,
+            area_filter=location.area_ids if location else None,
             state_filter=state_filter,
             include_membership=membership_requested,
         )
@@ -1279,7 +1287,7 @@ def _do_search(
     # ha_search consumer merges these into the response's top-level warnings.
     if visibility_warnings:
         result["visibility_warnings"] = visibility_warnings
-    return result
+    return add_location_metadata(result, location)
 
 
 def _sort_key(rec: dict[str, Any]) -> str:
@@ -1401,13 +1409,12 @@ def _search_entities(
     exact: bool,
     include_hidden: bool,
     domain_filter: str | None,
-    area_filter: str | None,
+    area_filter: set[str] | None,
     state_filter: str | None,
     include_membership: bool = False,
 ) -> list[dict[str, Any]]:
     """Score every state against the query over the joined registry view."""
     results: list[dict[str, Any]] = []
-    area_filter_lower = area_filter.lower() if area_filter else None
     # Lower the state filter once; the entity state is lowered per record so the
     # compare is case-insensitive (e.g. an input_select holding "Vacation"
     # matches state_filter="vacation").
@@ -1423,9 +1430,7 @@ def _search_entities(
             and (rec["state"] or "").lower() != state_filter_lower
         ):
             continue
-        if area_filter_lower is not None and not _entity_matches_area(
-            rec, area_filter_lower
-        ):
+        if area_filter is not None and rec["_area_id"] not in area_filter:
             continue
 
         if match_all:
@@ -1626,14 +1631,6 @@ def _entity_record(
         "_area_id": join["_area_id"],
         "_match_texts": match_texts,
     }
-
-
-def _entity_matches_area(rec: dict[str, Any], area_filter_lower: str) -> bool:
-    area_id = rec.get("_area_id")
-    if area_id and str(area_id).lower() == area_filter_lower:
-        return True
-    area_name = rec.get("area")
-    return bool(area_name and str(area_name).lower() == area_filter_lower)
 
 
 def _project_entity(

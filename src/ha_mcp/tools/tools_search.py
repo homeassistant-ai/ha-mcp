@@ -275,9 +275,8 @@ def _project_response_fields(
 _INTENT_SKIP_WARNING: str = (
     "config-body search skipped: domain_filter / area_filter / "
     "state_filter signals entity-only intent. To search config bodies, "
-    'pass search_types=["automation", ...] — but note this pins the call '
-    "to config-only and drops the entity-result surface, so it does not "
-    "return both alongside each other."
+    "use the corresponding get/list tool or repeat the query without "
+    "entity filters."
 )
 
 
@@ -670,7 +669,14 @@ def _new_search_response(
         "config_total_matches": 0,
         "partial": False,
         "errors": [],
-        "warnings": [],
+        "warnings": (
+            [
+                "entity search skipped: explicit search_types selects "
+                "configuration-only search; omit search_types to search entities."
+            ]
+            if parsed_search_types is not None
+            else []
+        ),
     }
 
 
@@ -1164,14 +1170,16 @@ def _dashboard_split_serviceable(req: _ResolvedSearch, caps: Any) -> bool:
       ``search_types=["dashboard"]`` would send an empty request and leave the
       split as a dashboards leg wearing a component envelope — the legacy path
       already produces exactly that, with its own bucket.
-    - The window fetch would ask for more records than the component's
-      ``limit`` ceiling (``_component_max_results``), which its schema rejects
+    - On older components without ``search_unified``, the window fetch would
+      ask for more records than the component's ``limit`` ceiling (``_component_max_results``), which its schema rejects
       outright.
     """
     serves_body = req.body_eligible and bool(_component_body_search_types(req))
     if not (req.registry_eligible or serves_body):
         return False
-    return req.offset + req.limit <= _component_max_results(caps)
+    return component_supports(caps, "search_unified") or (
+        req.offset + req.limit <= _component_max_results(caps)
+    )
 
 
 @dataclass(frozen=True)
@@ -1323,7 +1331,7 @@ def _apply_dashboard_leg_state(response: dict[str, Any], leg: _DashboardLeg) -> 
 def _merge_component_visibility_warnings(
     response: dict[str, Any], component_result: dict[str, Any]
 ) -> None:
-    """Fold the component's ``visibility_warnings`` into the response warnings.
+    """Fold component visibility and location warnings into the response.
 
     The component emits these when a hide dimension fails open (unknown category /
     empty-registry allowlist / Assist unavailable). Merged into the same top-level
@@ -1340,6 +1348,13 @@ def _merge_component_visibility_warnings(
         logger.warning(
             "component visibility_warnings ignored: expected a list, got %s",
             type(component_visibility_warnings).__name__,
+        )
+
+    component_warnings = component_result.get("warnings")
+    if isinstance(component_warnings, list):
+        merge_visibility_warnings(
+            response,
+            [warning for warning in component_warnings if isinstance(warning, str)],
         )
 
 
@@ -1408,6 +1423,35 @@ def _component_config_payload(
     return payload
 
 
+def _component_entity_search_mode(req: _ResolvedSearch) -> str:
+    """Retain each public listing mode while using component matching."""
+    if (req.area_filter or "").strip():
+        return "area_filtered_query" if req.query_text else "area_only"
+    if req.query_text:
+        return "exact_match" if req.exact_match else "fuzzy_search"
+    return "domain_listing" if (req.domain_filter or "").strip() else "state_listing"
+
+
+def _component_listing_metadata(
+    req: _ResolvedSearch, payload: dict[str, Any], component_result: dict[str, Any]
+) -> None:
+    """Preserve public listing labels and empty-area messages without rescanning."""
+    domain = _normalized_domain_filter(req.domain_filter)
+    if domain:
+        payload["domain_filter"] = domain
+    area = (req.area_filter or "").strip()
+    if area:
+        payload["area_filter"] = req.area_filter
+        payload["area_names"] = component_result.get("area_names", [])
+        if not payload["total_matches"]:
+            qualifier = f"{domain} " if domain else ""
+            payload["message"] = f"No {qualifier}entities found in area: {area}"
+    if not req.query_text:
+        match_type = "area_match" if area else payload["search_type"]
+        for entity in payload["results"]:
+            entity["match_type"] = match_type
+
+
 def _shape_component_search_response(
     req: _ResolvedSearch,
     component_result: dict[str, Any],
@@ -1463,11 +1507,9 @@ def _shape_component_search_response(
             "offset": req.offset,
             "limit": req.limit,
             "count": len(entities),
-            "search_type": "exact_match" if req.exact_match else "fuzzy_search",
+            "search_type": _component_entity_search_mode(req),
         }
-        domain_filter = _normalized_domain_filter(req.domain_filter)
-        if domain_filter:
-            entity_payload["domain_filter"] = domain_filter
+        _component_listing_metadata(req, entity_payload, component_result)
         # Order mirrors _search_regular: group by domain first (it projects its
         # own records), then project the flat results[].
         _apply_by_domain_grouping(
@@ -2104,8 +2146,9 @@ class SearchTools:
                     "registry (entity_ids, friendly names, areas) AND "
                     "configuration bodies (automation triggers/actions, "
                     "script sequences, scene contents, helper bodies, "
-                    "dashboard cards) in one call. Use this for any "
-                    "find-something-in-HA question — entity OR config. "
+                    "dashboard cards) in one call. Use dedicated get/list "
+                    "tools first for known resource types; use this for "
+                    "broader discovery or deep searches. "
                     "Pass the exact entity_id, not a name fragment, when "
                     "checking what a rename or delete would break: that form "
                     "reports automations, scripts and scenes referencing it "
@@ -2149,6 +2192,8 @@ class SearchTools:
                 description=(
                     "Configuration types to include in body search: "
                     "'automation', 'script', 'scene', 'helper', 'dashboard'. "
+                    "Explicitly providing this selects configuration-only "
+                    "search and skips entities. Omit it for entity discovery. "
                     "Default = automation+script+scene+helper. Pass as list "
                     "or JSON-array string."
                 ),
@@ -2317,8 +2362,9 @@ class SearchTools:
             entity-sets, helper bodies, dashboard cards. Driven by `query`;
             narrow with `search_types`.
 
-        Use this whenever you need to find something in HA without deciding
-        entity-name vs config-body search up front.
+        Use dedicated get/list tools first for a known resource type, including
+        ha_config_get_scene for scene listing and content search. Use this for
+        broader discovery or deep searches across resource types.
 
         For control requests with exclusions such as "except", "excluding", or
         "but not", include `is_group` and `member_entity_ids` in `result_fields`.
@@ -2335,8 +2381,9 @@ class SearchTools:
 
         Config-body search is skipped when `domain_filter`/`area_filter`/
         `state_filter` signal entity-only intent (keeping name lookups off the
-        expensive backend); a `warnings[]` entry names the skip. Pass
-        `search_types=[...]` to force config search.
+        expensive backend); a `warnings[]` entry names the skip. Repeat without
+        entity filters to search configuration contents too. Explicit legacy
+        `search_types=[...]` calls search configs only and skip entities.
 
         Caveats:
           - `partial: True` means results are NOT exhaustive — a surface raised,
@@ -2362,7 +2409,7 @@ class SearchTools:
               result_fields=["entity_id", "friendly_name", "is_group",
               "member_entity_ids"])
             - Which automations use an entity: ha_search("light.bed_light")
-            - Scenes touching a light: ha_search("light.kitchen", search_types=["scene"])
+            - Scenes touching a light: ha_config_get_scene(query="light.kitchen", search_in_config=True)
             - Narrow the response to the entity bucket: ha_search("kitchen", fields=["entities"])
             - All unavailable entities: ha_search(state_filter="unavailable")
         """
@@ -2440,51 +2487,18 @@ class SearchTools:
             body_skipped_by_intent_gate=body_skipped_by_intent_gate,
         )
 
-        # Prefer the custom component's in-process unified search when it
-        # advertises the capability: one WS round-trip replaces the multi-fetch
-        # legacy pipeline. Route per command and fall back cleanly when the
-        # component is absent, downlevel, or errors — the taxonomy lives in
-        # ``_ha_search_via_component``.
-        #
-        # Only QUERY-DRIVEN searches route through the component. The listing
-        # modes — empty/whitespace query with domain_filter (legacy
-        # ``search_type: domain_listing``) and any area_filter search (legacy
-        # ``area_only`` / ``area_filtered_query``, with their own area-shaped
-        # response keys) — keep the legacy path: their response contracts
-        # differ per mode, and after the request-dedup work they are cheap
-        # registry-only calls, so the component round-trip buys nothing worth
-        # the shape risk. A ``search_types`` naming a surface the component's
-        # ``search`` command lacks also stays legacy — see
-        # ``_component_serves_search_types`` (issue #2008). ``dashboard`` is
-        # the exception: naming it keeps the fast path for the surfaces the
-        # command DOES serve, and its own bucket comes from the dashboards leg
-        # merged in ``_ha_search_via_component`` — dropping the whole call to
-        # legacy for it cost every mixed search the per-config REST fetches
-        # (issue #2289).
-        #
-        # Entity-visibility gate. A plain ``search`` component applies no
-        # filtering, so an install with an ACTIVE visibility filter would leak
-        # hidden entities through the fast path. The ``search_visibility``
-        # capability closes that: a component that advertises it accepts the raw
-        # hide config (``VisibilityConfig.to_wire``) as the ``visibility`` param
-        # and excludes hidden entities before its own counts/pagination. The
-        # ``search_visibility_allowlist_authorization`` capability adds the
-        # ``allowlist_authorization`` wire key, which opts the component into the
-        # revised allowlist precedence; without it an active allowlist falls back
-        # to legacy (see ``_resolve_component_search_visibility``). With no active
-        # filter, the plain ``search`` route runs without a ``visibility`` param,
-        # so old components
-        # keep working. ``ha_get_overview`` needs no analogous gate — it reapplies
-        # the filter over the component's raw slices. Checked only when it would
-        # serve, so the common (no-component / filter-off) install pays nothing.
-        if (
-            req.query_text
-            and not (req.area_filter or "").strip()
-            and _component_serves_search_types(req)
-        ):
+        # Capability-gated semantics keep old components compatible while newer
+        # components serve queryless listings, locations, and complete windows.
+        # Visibility and membership gates still apply before any entity data is
+        # returned; schema hiding never changes old-client invocation support.
+        if _component_serves_search_types(req):
             caps = await get_component_caps(self._client)
+            mode_supported = component_supports(caps, "search_unified") or (
+                bool(req.query_text) and not (req.area_filter or "").strip()
+            )
             if (
-                component_supports(caps, "search")
+                mode_supported
+                and component_supports(caps, "search")
                 and component_supports(caps, DEVICE_REGISTRY_CHILD_SEMANTICS)
                 and (
                     not _requested_membership(parsed_result_fields)

@@ -42,6 +42,7 @@ from .helpers import (
     validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
+from .scene_discovery import discover_scenes
 from .tools_config_helpers import validate_registry_ids
 from .util_helpers import (
     JSON_STRING_COERCION,
@@ -271,25 +272,46 @@ class ConfigSceneTools:
             "openWorldHint": False,
             "idempotentHint": True,
             "readOnlyHint": True,
-            "title": "Get Scene Config",
+            "title": "Get or Find Scenes",
         },
     )
     @log_tool_usage
     async def ha_config_get_scene(
         self,
         scene_id: Annotated[
-            str, Field(description="Scene identifier (e.g., 'movie_night')")
-        ],
+            str | None,
+            Field(description="Scene identifier; omit to list or search scenes"),
+        ] = None,
+        query: Annotated[
+            str | None, Field(description="Filter scene names or IDs")
+        ] = None,
+        search_in_config: Annotated[
+            bool,
+            Field(
+                description="Also search full stored scene attribute values within a bounded scan"
+            ),
+        ] = False,
+        limit: Annotated[
+            int, Field(description="Maximum scenes per page", ge=1, le=100)
+        ] = 20,
+        offset: Annotated[int, Field(description="Pagination offset", ge=0)] = 0,
     ) -> dict[str, Any]:
         """
-        Retrieve Home Assistant scene configuration.
+        Get a scene's complete configuration, or list and search scenes without scene_id.
 
-        Returns the complete configuration for a scene, including the ``entities``
-        dict and other settings (``name``, ``icon``, ``id``).
+        Use ha_search for cross-domain discovery and dependency searches. For ordinary
+        scene discovery, use this tool and pass a returned scene_id back to retrieve
+        the complete entities dict and config_hash for editing.
+
+        Listing returns compact metadata. Integration-managed scenes have no editable
+        storage config or scene_id. Optional content search reads full storage bodies;
+        partial results explicitly report unread configs and are not exhaustive.
 
         EXAMPLES:
         - Get scene: ha_config_get_scene("movie_night")
         - Get scene: ha_config_get_scene("bedroom_dim")
+        - Find scenes: ha_config_get_scene(query="movie")
+        - Find attribute values: ha_config_get_scene(query="rainbow", search_in_config=True)
 
         RELATED TOOLS:
         - ha_config_set_scene — pass the returned ``config_hash`` for
@@ -298,6 +320,21 @@ class ConfigSceneTools:
         For detailed scene configuration help, use ha_get_skill_guide.
         """
         try:
+            if scene_id is None:
+                if not 1 <= limit <= 100 or offset < 0:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "limit must be between 1 and 100 and offset must be non-negative",
+                        )
+                    )
+                return await discover_scenes(
+                    self._client,
+                    query=query,
+                    search_in_config=search_in_config,
+                    limit=limit,
+                    offset=offset,
+                )
             # Issue #1168 R6 blocker 16: empty ``scene_id`` previously
             # surfaced as ``RESOURCE_NOT_FOUND`` with a misleading
             # `entities`-related suggestion. Pre-flight here so the caller
@@ -310,11 +347,11 @@ class ConfigSceneTools:
                 message="scene_id must not be empty",
                 suggestions=[
                     "Pass a non-empty scene identifier (e.g. 'movie_night')",
-                    "Use ha_search(domain_filter='scene') to find existing scene_ids",
+                    "Call ha_config_get_scene() without scene_id to discover scenes",
                 ],
                 context={"scene_id": scene_id},
             )
-            # Scenes ALWAYS take the legacy path — deliberately no component
+            # Full scene config reads ALWAYS take the legacy path — no component
             # routing here, unlike the automation/script gets. Scenes do not
             # retain their raw storage body in memory: HomeAssistantScene's
             # ``scene_config.states`` holds runtime State OBJECTS built at
@@ -342,10 +379,14 @@ class ConfigSceneTools:
                 e,
                 context={
                     "scene_id": scene_id,
-                    "entity_id": f"scene.{scene_id.removeprefix('scene.')}",
+                    **(
+                        {"entity_id": f"scene.{scene_id.removeprefix('scene.')}"}
+                        if scene_id is not None
+                        else {}
+                    ),
                 },
                 suggestions=[
-                    "Verify scene_id exists using ha_search(domain_filter='scene')",
+                    "Call ha_config_get_scene() without scene_id to discover scenes",
                     "Check Home Assistant connection",
                     "Use ha_get_skill_guide for help",
                 ],
