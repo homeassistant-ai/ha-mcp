@@ -78,6 +78,16 @@ async def test_get_tool_path_matches_list_path() -> None:
     assert await WriteToolNoteTransform().get_tool("nope", call_next_missing) is None
 
 
+def test_tool_search_write_and_delete_proxies_carry_the_note() -> None:
+    """The proxies are synthesised after the transform runs, so they embed it."""
+    from ha_mcp.transforms.categorized_search import _build_proxy_descriptions
+
+    descs = _build_proxy_descriptions("ha_search_tools")
+    assert descs["write"].endswith(DESKTOP_APPROVAL_NOTE)
+    assert descs["delete"].endswith(DESKTOP_APPROVAL_NOTE)
+    assert DESKTOP_APPROVAL_NOTE not in descs["read"]
+
+
 def test_note_names_the_workarounds() -> None:
     lowered = DESKTOP_APPROVAL_NOTE.lower()
     assert "4-minute" in lowered
