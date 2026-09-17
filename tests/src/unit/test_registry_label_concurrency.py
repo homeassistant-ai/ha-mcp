@@ -531,3 +531,70 @@ async def test_template_restore_releases_both_ids_on_failure(
         1,
     )
     assert all(result["success"] for result in results)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["set", "add", "category"])
+async def test_bulk_revalidates_references_after_entity_lock_wait(
+    operation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kind = "category" if operation == "category" else "label"
+    entries = [{f"{kind}_id": "reference"}]
+    waiting = asyncio.Event()
+    ready_updated = asyncio.Event()
+    writes: list[str] = []
+
+    @asynccontextmanager
+    async def observed_lock(registry: str, resource_id: str) -> AsyncIterator[None]:
+        if resource_id == "light.waiting":
+            waiting.set()
+        async with registry_update_lock(registry, resource_id):
+            yield
+
+    async def send(message: dict[str, Any]) -> dict[str, Any]:
+        if message["type"] == f"config/{kind}_registry/list":
+            return {"success": True, "result": list(entries)}
+        if message["type"] == "config/entity_registry/get":
+            return {
+                "success": True,
+                "result": {"entity_id": message["entity_id"], "labels": []},
+            }
+        if message["type"] == "config/entity_registry/update":
+            writes.append(message["entity_id"])
+            if message["entity_id"] == "light.ready":
+                ready_updated.set()
+            return {"success": True, "result": {"entity_entry": dict(message)}}
+        raise AssertionError(f"Unexpected WS message: {message}")
+
+    monkeypatch.setattr(
+        "ha_mcp.tools.tools_entities.registry_update_lock", observed_lock
+    )
+    params: dict[str, Any] = (
+        {"categories": {"helpers": "reference"}}
+        if operation == "category"
+        else {"labels": ["reference"], "label_operation": operation}
+    )
+    client = SimpleNamespace(send_websocket_message=send)
+    async with registry_update_lock("entity", "light.waiting"):
+        pending = asyncio.create_task(
+            EntityTools(client).ha_set_entity(
+                entity_id=["light.ready", "light.waiting"], **params
+            )
+        )
+        try:
+            await asyncio.wait_for(waiting.wait(), 1)
+            await asyncio.wait_for(ready_updated.wait(), 1)
+            entries.clear()
+        except BaseException:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+            raise
+
+    result = await asyncio.wait_for(pending, 1)
+    assert result["success"] is False
+    assert result["partial"] is True
+    assert result["succeeded_count"] == result["failed_count"] == 1
+    assert [entry["entity_id"] for entry in result["succeeded"]] == ["light.ready"]
+    assert result["failed"][0]["entity_id"] == "light.waiting"
+    assert "reference" in result["failed"][0]["error"]
+    assert writes == ["light.ready"]
