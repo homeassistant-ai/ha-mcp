@@ -316,8 +316,8 @@ from .const import (
     OPT_PIP_SPEC,
 )
 from .search_locations import (
-    add_location_failures,
     add_location_metadata,
+    add_registry_failures,
     resolve_search_location,
 )
 
@@ -1221,7 +1221,9 @@ def _do_search(
         entities = [
             _project_entity(r, include_membership=membership_requested) for r in page
         ]
-        add_location_failures(location, view._access_failures)
+        add_registry_failures(
+            location, view._access_failures, diagnostics, partial_reasons
+        )
 
     # --- Config surfaces (automations + scripts + scenes + helpers) ----------
     # One combined pagination window, mirroring the server's config branch.

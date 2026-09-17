@@ -54,10 +54,20 @@ def add_location_metadata(
     return result
 
 
-def add_location_failures(location: SearchLocation | None, names: set[str]) -> None:
-    """Attach accessor failures when location filtering is active."""
+def add_registry_failures(
+    location: SearchLocation | None,
+    names: set[str],
+    diagnostics: dict[str, int],
+    partial_reasons: list[str],
+) -> None:
+    """Report accessor failures for filtered and unfiltered entity searches."""
     if location is not None:
         location.add_unavailable(names)
+    elif names:
+        partial_reasons.append(
+            "Entity search registry data unavailable: " + ", ".join(sorted(names))
+        )
+        diagnostics["entity_registries_unavailable"] = len(names)
 
 
 def resolve_search_location(view: Any, query: str) -> SearchLocation:
