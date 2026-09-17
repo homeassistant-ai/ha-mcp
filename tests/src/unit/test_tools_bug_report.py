@@ -927,6 +927,22 @@ class TestBugReportTool:
             "Check for duplicates FIRST"
         )
 
+    def test_recommended_runtime_projection_keeps_both_hints(self):
+        """The ``fields`` example an agent copies must not drop the pre-check
+        fields that ``instructions`` then tells it to read."""
+        import inspect
+        import re
+
+        from ha_mcp.tools import tools_bug_report
+
+        source = inspect.getsource(tools_bug_report.BugReportTools.ha_report_issue)
+        match = re.search(r"Typical for a runtime bug: \"\s*\"'([^']+)'", source)
+        assert match, "fields description lost its runtime-bug example"
+        recommended = set(re.sub(r'["\s]', "", match.group(1)).split(","))
+        assert {"missing_tool_hint", "known_client_issues_hint", "instructions"} <= (
+            recommended
+        )
+
     @pytest.mark.asyncio
     async def test_bug_report_addon_logs_included_for_addon(
         self, registered_tools, mock_client

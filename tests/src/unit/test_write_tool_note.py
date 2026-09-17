@@ -78,14 +78,34 @@ async def test_get_tool_path_matches_list_path() -> None:
     assert await WriteToolNoteTransform().get_tool("nope", call_next_missing) is None
 
 
-def test_tool_search_write_and_delete_proxies_carry_the_note() -> None:
-    """The proxies are synthesised after the transform runs, so they embed it."""
-    from ha_mcp.transforms.categorized_search import _build_proxy_descriptions
+@pytest.mark.asyncio
+async def test_tool_search_catalog_carries_the_note_on_write_paths() -> None:
+    """With tool search on, the note reaches every path a write can take.
 
-    descs = _build_proxy_descriptions("ha_search_tools")
-    assert descs["write"].endswith(DESKTOP_APPROVAL_NOTE)
-    assert descs["delete"].endswith(DESKTOP_APPROVAL_NOTE)
-    assert DESKTOP_APPROVAL_NOTE not in descs["read"]
+    ``CategorizedSearchTransform`` synthesises the call proxies after
+    ``WriteToolNoteTransform`` ran, so the proxies embed the note themselves;
+    the hidden write tool behind them carries it from the transform. Checks
+    the produced catalog, not source ordering.
+    """
+    from ha_mcp.transforms import CategorizedSearchTransform
+
+    tools = [
+        _make_tool("ha_get_state", destructive=False),
+        _make_tool("ha_config_set_dashboard", destructive=True),
+        _make_tool("ha_remove_zone", destructive=True),
+    ]
+    noted = await WriteToolNoteTransform().list_tools(tools)
+    catalog = await CategorizedSearchTransform(max_results=5).transform_tools(noted)
+
+    by_name = {t.name: t.description or "" for t in catalog}
+    assert DESKTOP_APPROVAL_NOTE in by_name["ha_call_write_tool"]
+    assert DESKTOP_APPROVAL_NOTE in by_name["ha_call_delete_tool"]
+    assert DESKTOP_APPROVAL_NOTE not in by_name["ha_call_read_tool"]
+    assert DESKTOP_APPROVAL_NOTE not in by_name["ha_search_tools"]
+
+    hidden = {t.name: t.description or "" for t in noted}
+    assert hidden["ha_config_set_dashboard"].endswith(DESKTOP_APPROVAL_NOTE)
+    assert DESKTOP_APPROVAL_NOTE not in hidden["ha_get_state"]
 
 
 def test_note_names_the_workarounds() -> None:

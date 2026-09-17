@@ -23,8 +23,9 @@ if TYPE_CHECKING:
 
 DESKTOP_APPROVAL_NOTE = (
     "If a Claude Desktop user gets a 4-minute timeout with no result on this "
-    "call, tell them to wait a few seconds before clicking the manual-approve "
-    "button, or to set this tool to Always allow."
+    "call, read the target back before repeating it, and tell them to wait a "
+    "few seconds before clicking the manual-approve button, or to set this "
+    "tool to Always allow."
 )
 
 

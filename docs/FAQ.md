@@ -293,10 +293,12 @@ See the [integration's README](https://github.com/norpol/hass-codex-tunnel-mcp#r
 
 ### Claude Desktop: a write tool hangs for 4 minutes, reads work fine
 
-This is a Claude Desktop bug, not an ha-mcp bug. It only affects servers
-configured in `claude_desktop_config.json` (any bridge: `mcp-remote`,
-`fastmcp-remote`, `mcp-proxy`); claude.ai custom connectors and Claude Code are
-not affected.
+This is a Claude Desktop bug, not an ha-mcp bug. It affects tools served by
+MCP servers Claude Desktop runs locally: anything in
+`claude_desktop_config.json` (a direct stdio server or a bridge such as
+`mcp-remote`, `fastmcp-remote` or `mcp-proxy`), Desktop Extensions, and
+Desktop's own Filesystem connector. claude.ai custom connectors and Claude Code
+are not affected.
 
 With a tool set to **Needs approval**, Desktop shows the approval dialog while
 the model is still generating the call's arguments. Clicking **Allow once**
@@ -304,7 +306,9 @@ before generation finishes silently drops the call: it never reaches the bridge
 or the server, and Desktop reports "No result received … after waiting 4
 minutes". The longer the arguments, the wider the window, which is why
 dashboard, automation, script and helper writes hit it most. A dropped call
-never reached Home Assistant, so retrying is safe. Tracked upstream as
+never reached Home Assistant, but the same 4-minute timeout can also hide a
+call that did land and lost only its result, so read the target back before
+repeating a write that is not idempotent. Tracked upstream as
 [anthropics/claude-code#92014](https://github.com/anthropics/claude-code/issues/92014)
 (a second Desktop bug,
 [#80012](https://github.com/anthropics/claude-code/issues/80012), drops
