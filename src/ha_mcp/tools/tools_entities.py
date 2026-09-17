@@ -21,6 +21,7 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
+from ..utils.registry_update_lock import registry_update_lock
 from .auto_backup import with_auto_backup
 from .component_api import (
     DEVICE_REGISTRY_CHILD_SEMANTICS,
@@ -1021,65 +1022,65 @@ class EntityTools:
         new_device_name: str | None = None,
         device_class: str | None = None,
         parsed_options: dict[str, dict[str, Any]] | None = None,
-        preflighted: bool = False,
     ) -> dict[str, Any]:
         """Update a single entity. Orchestrates the phase pipeline."""
-        # Phase 1: For add/remove label operations, fetch current labels first
-        final_labels = await self._resolve_final_labels(
-            entity_id, parsed_labels, label_operation
-        )
-
-        # Phase 2: Build update message for entity registry
-        message: dict[str, Any] = {
-            "type": "config/entity_registry/update",
-            "entity_id": entity_id,
-        }
-        updates_made: list[str] = []
-        _build_name_visibility_fields(
-            message, updates_made, area_id, name, icon, device_class
-        )
-        _build_state_tag_fields(
-            message,
-            updates_made,
-            enabled,
-            hidden,
-            parsed_aliases,
-            parsed_categories,
-            final_labels,
-            label_operation,
-            parsed_labels,
-        )
-        if new_entity_id is not None:
-            self._validate_entity_rename(
-                entity_id, new_entity_id, message, updates_made
+        async with registry_update_lock("entity", entity_id):
+            # Phase 1: For add/remove label operations, fetch current labels first
+            final_labels = await self._resolve_final_labels(
+                entity_id, parsed_labels, label_operation
             )
-        # expose_to and device_name are appended to updates_made only after their
-        # WS phases run (Phases 5-6), so the Phase-4 error context never claims
-        # they were applied before they ran.
-        has_deferred_work = parsed_expose_to is not None or new_device_name is not None
-        if not updates_made and not parsed_options and not has_deferred_work:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "No updates specified",
-                    suggestions=[
-                        "Provide at least one of: area_id, name, icon, device_class, enabled, hidden, aliases, categories, labels, options, expose_to, new_entity_id, or new_device_name"
-                    ],
+
+            # Phase 2: Build update message for entity registry
+            message: dict[str, Any] = {
+                "type": "config/entity_registry/update",
+                "entity_id": entity_id,
+            }
+            updates_made: list[str] = []
+            _build_name_visibility_fields(
+                message, updates_made, area_id, name, icon, device_class
+            )
+            _build_state_tag_fields(
+                message,
+                updates_made,
+                enabled,
+                hidden,
+                parsed_aliases,
+                parsed_categories,
+                final_labels,
+                label_operation,
+                parsed_labels,
+            )
+            if new_entity_id is not None:
+                self._validate_entity_rename(
+                    entity_id, new_entity_id, message, updates_made
                 )
+            # expose_to and device_name are appended to updates_made only after their
+            # WS phases run (Phases 5-6), so the Phase-4 error context never claims
+            # they were applied before they ran.
+            has_deferred_work = (
+                parsed_expose_to is not None or new_device_name is not None
             )
+            if not updates_made and not parsed_options and not has_deferred_work:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "No updates specified",
+                        suggestions=[
+                            "Provide at least one of: area_id, name, icon, device_class, enabled, hidden, aliases, categories, labels, options, expose_to, new_entity_id, or new_device_name"
+                        ],
+                    )
+                )
 
-        # Save original entity_id before potential rename
-        original_entity_id = entity_id
+            # Save original entity_id before potential rename
+            original_entity_id = entity_id
 
-        # Issue #2159: validate cross-registry references immediately before
-        # the write — the narrowest window against a concurrent registry
-        # deletion (#2160 placed the area check here for the same reason).
-        # The bulk path preflights its shared labels/categories once at tool
-        # entry and passes preflighted=True so N entities don't repeat the
-        # lookups. For label add, only the added IDs are checked: the merged
-        # set may legitimately carry pre-existing dangling labels, whose
-        # cleanup path (label_operation="remove") must stay open.
-        if not preflighted:
+            # Issue #2159: validate cross-registry references immediately before
+            # the write — the narrowest window against a concurrent registry
+            # deletion (#2160 placed the area check here for the same reason).
+            # Bulk calls also revalidate here after waiting for the entity lock.
+            # For label add, only the added IDs are checked: the merged
+            # set may legitimately carry pre-existing dangling labels, whose
+            # cleanup path (label_operation="remove") must stay open.
             await validate_registry_ids(
                 self._client,
                 area_id,
@@ -1088,14 +1089,14 @@ class EntityTools:
                 fail_closed=True,
             )
 
-        # Phase 3: Send entity registry update (covers all fields except expose_to)
-        (
-            entity_id,
-            entity_entry,
-            has_registry_updates,
-        ) = await self._execute_registry_update(
-            entity_id, message, updates_made, new_entity_id
-        )
+            # Phase 3: Send entity registry update (covers all fields except expose_to)
+            (
+                entity_id,
+                entity_entry,
+                has_registry_updates,
+            ) = await self._execute_registry_update(
+                entity_id, message, updates_made, new_entity_id
+            )
 
         # Phase 4: Per-domain options
         entity_entry, options_succeeded = await self._apply_options_updates(
@@ -1221,7 +1222,6 @@ class EntityTools:
                     parsed_labels,
                     label_operation,
                     None,  # expose_to batched separately below
-                    preflighted=True,  # labels/categories validated at entry
                 )
                 for eid in entity_ids
             ],
@@ -1812,12 +1812,9 @@ class EntityTools:
             parsed_options = _parse_options_param(options)
             parsed_expose_to = _parse_expose_to_param(expose_to)
 
-            # Issue #2159 bulk preflight: labels/categories are shared across
-            # the fan-out, so validate them once here instead of once per
-            # entity inside _update_single_entity (area_id was rejected for
-            # bulk above). The single-entity path instead validates
-            # immediately before its registry write, minimizing the
-            # check-to-write window.
+            # Reject invalid shared references before any bulk writes. Each
+            # entity also revalidates under its lock to catch references deleted
+            # while waiting, preserving per-entity partial-progress reporting.
             if is_bulk:
                 await validate_registry_ids(
                     self._client,

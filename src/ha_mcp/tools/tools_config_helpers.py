@@ -27,6 +27,7 @@ from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_auth_error, create_error_response
 from ..redaction import redact_flow_schema, redaction_enabled
 from ..strict_bps import BestPracticeKeyParam
+from ..utils.registry_update_lock import registry_update_lock
 from .auto_backup import with_auto_backup
 from .component_api import (
     component_supports,
@@ -1826,7 +1827,8 @@ async def _entity_registry_update_coro(
         update_message["labels"] = labels
     if icon is not None:
         update_message["icon"] = icon if icon else None
-    return await client.send_websocket_message(update_message)
+    async with registry_update_lock("entity", entity_id):
+        return await client.send_websocket_message(update_message)
 
 
 async def _category_apply_coro(
@@ -2637,7 +2639,8 @@ async def _apply_create_entity_registry(
         update_message["area_id"] = area_id if area_id else None
     if labels is not None:
         update_message["labels"] = labels
-    update_result = await client.send_websocket_message(update_message)
+    async with registry_update_lock("entity", entity_id):
+        update_result = await client.send_websocket_message(update_message)
     if update_result.get("success"):
         if icon is not None:
             helper_data["icon"] = icon if icon else None
@@ -3269,7 +3272,8 @@ async def _apply_update_icon_area_labels(
         registry_update["area_id"] = area_id if area_id else None
     if labels is not None:
         registry_update["labels"] = labels
-    reg_result = await client.send_websocket_message(registry_update)
+    async with registry_update_lock("entity", entity_id):
+        reg_result = await client.send_websocket_message(registry_update)
     if reg_result.get("success"):
         if icon is not None:
             updated_data["icon"] = icon if icon else None
@@ -3333,7 +3337,8 @@ async def _execute_fallback_registry_update(
         fallback_msg["area_id"] = area_id if area_id else None
     if labels is not None:
         fallback_msg["labels"] = labels
-    result = await client.send_websocket_message(fallback_msg)
+    async with registry_update_lock("entity", entity_id):
+        result = await client.send_websocket_message(fallback_msg)
     updated_data: dict[str, Any] = {}
     if result.get("success"):
         updated_data = result.get("result", {}).get("entity_entry", {})

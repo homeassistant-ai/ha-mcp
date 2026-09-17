@@ -269,12 +269,8 @@ class TestBulkExposeBatching:
                 },
             }
 
-        client.send_websocket_message = AsyncMock(
-            side_effect=[
-                {  # bulk label-registry preflight (issue #2159)
-                    "success": True,
-                    "result": [{"label_id": "outdoor"}],
-                },
+        responses = iter(
+            [
                 _reg_entry("light.a"),  # registry update for a
                 _reg_entry("light.b"),  # registry update for b
                 {"success": True},  # single batched expose for [a, b]
@@ -295,6 +291,13 @@ class TestBulkExposeBatching:
                 },
             ]
         )
+        client.send_websocket_message = AsyncMock(
+            side_effect=lambda message: (
+                {"success": True, "result": [{"label_id": "outdoor"}]}
+                if message["type"] == "config/label_registry/list"
+                else next(responses)
+            )
+        )
         tool = _register(client)["ha_set_entity"]
 
         result = await tool(
@@ -306,15 +309,18 @@ class TestBulkExposeBatching:
         assert result["success"] is True
         assert result["succeeded_count"] == 2
         calls = [c[0][0] for c in client.send_websocket_message.call_args_list]
-        # 1 label preflight + 2 registry updates + 1 expose + 1 refetch
-        assert [c["type"] for c in calls] == [
-            "config/label_registry/list",
+        # Shared preflight plus one revalidation per entity; exposure stays batched.
+        assert sum(c["type"] == "config/label_registry/list" for c in calls) == 3
+        writes_and_refetch = [
+            c for c in calls if c["type"] != "config/label_registry/list"
+        ]
+        assert [c["type"] for c in writes_and_refetch] == [
             "config/entity_registry/update",
             "config/entity_registry/update",
             "homeassistant/expose_entity",
             "config/entity_registry/get_entries",
         ]
-        assert calls[3]["entity_ids"] == ["light.a", "light.b"]
+        assert writes_and_refetch[2]["entity_ids"] == ["light.a", "light.b"]
         entries = {e["entity_id"]: e for e in result["succeeded"]}
         updates_a = str(entries["light.a"]["updates"])
         assert "labels=['outdoor']" in updates_a
