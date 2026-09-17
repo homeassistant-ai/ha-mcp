@@ -35,6 +35,7 @@ from ha_mcp._vendor.mcp.types import ToolAnnotations
 
 from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from ..renamed_tools import adapt_retired_arguments, current_tool_name
+from .write_tool_note import DESKTOP_APPROVAL_NOTE
 
 if TYPE_CHECKING:
     from ha_mcp._vendor.fastmcp.server.transforms import GetToolNext
@@ -171,14 +172,16 @@ def _build_proxy_descriptions(search_tool_name: str) -> dict[str, str]:
             f"Creates or updates data. Use for any tool that modifies "
             f"state but does not delete/remove resources.\n"
             f"{_PROXY_PARAMS_SUFFIX}\n"
-            f'EXAMPLE: ha_call_write_tool(name="ha_set_area_or_floor", arguments={{"kind": "area", "name": "Kitchen"}})'
+            f'EXAMPLE: ha_call_write_tool(name="ha_set_area_or_floor", arguments={{"kind": "area", "name": "Kitchen"}})\n'
+            f"{DESKTOP_APPROVAL_NOTE}"
         ),
         "delete": (
             f"Execute a delete/remove tool discovered via {search_tool_name}. "
             f"Permanently removes data. Use for tools that delete or "
             f"remove resources (areas, automations, devices, etc.).\n"
             f"{_PROXY_PARAMS_SUFFIX}\n"
-            f'EXAMPLE: ha_call_delete_tool(name="ha_remove_area_or_floor", arguments={{"kind": "area", "id": "old_area"}})'
+            f'EXAMPLE: ha_call_delete_tool(name="ha_remove_area_or_floor", arguments={{"kind": "area", "id": "old_area"}})\n'
+            f"{DESKTOP_APPROVAL_NOTE}"
         ),
     }
 

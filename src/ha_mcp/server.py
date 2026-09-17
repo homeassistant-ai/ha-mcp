@@ -217,6 +217,10 @@ class HomeAssistantSmartMCPServer:
         # of the full description we just discarded).
         self._apply_lite_docstrings()
 
+        # Append the Claude Desktop approval note to write tools. After
+        # lite docstrings so the note survives the replacement.
+        self._apply_write_tool_note()
+
         # Enrich tool descriptions with BM25 keyword boosts. Runs
         # unconditionally so Claude's native deferred-tool search
         # (claude.ai) benefits even when ENABLE_TOOL_SEARCH is off.
@@ -1126,6 +1130,20 @@ class HomeAssistantSmartMCPServer:
                 "effect. Catalog token usage will be unchanged from the "
                 "default."
             )
+
+    def _apply_write_tool_note(self) -> None:
+        """Append the Claude Desktop manual-approval note to write tools.
+
+        Applied unconditionally: the dropped calls never reach the server
+        (issue #2367), so the tool description is the only channel that
+        reaches the agent before the user clicks approve.
+        """
+        try:
+            from .transforms import WriteToolNoteTransform
+
+            self.mcp.add_transform(WriteToolNoteTransform())
+        except Exception:
+            logger.exception("Failed to apply WriteToolNoteTransform")
 
     def _apply_search_keyword_enrichment(self) -> None:
         """Append BM25 keyword boosts to tool descriptions.

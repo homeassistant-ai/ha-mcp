@@ -900,6 +900,50 @@ class TestBugReportTool:
         )
 
     @pytest.mark.asyncio
+    async def test_bug_report_known_client_issues_hint(
+        self, ha_report_issue_func, mock_client
+    ):
+        """Known Claude Desktop bugs (#2367, #2472) are surfaced as a pre-check.
+
+        Both present as ha-mcp failures but never reach the server, so the
+        agent must get the upstream ticket and the user workaround before
+        it assembles a report.
+        """
+        mock_client.get_config.return_value = {"version": "2024.12.0"}
+        mock_client.get_states.return_value = []
+
+        result = await ha_report_issue_func()
+
+        hint = result["known_client_issues_hint"]
+        assert "#2367" in hint and "claude-code#92014" in hint
+        assert "#2472" in hint and "claude-code#94608" in hint
+        assert "wait a few seconds" in hint.lower()
+        assert "always allow" in hint.lower()
+        assert "1.52386.6" in hint
+
+        instructions = result["instructions"]
+        assert "known_client_issues_hint" in instructions
+        assert instructions.index("known_client_issues_hint") < instructions.index(
+            "Check for duplicates FIRST"
+        )
+
+    def test_recommended_runtime_projection_keeps_both_hints(self):
+        """The ``fields`` example an agent copies must not drop the pre-check
+        fields that ``instructions`` then tells it to read."""
+        import inspect
+        import re
+
+        from ha_mcp.tools import tools_bug_report
+
+        source = inspect.getsource(tools_bug_report.BugReportTools.ha_report_issue)
+        match = re.search(r"Typical for a runtime bug: \"\s*\"'([^']+)'", source)
+        assert match, "fields description lost its runtime-bug example"
+        recommended = set(re.sub(r'["\s]', "", match.group(1)).split(","))
+        assert {"missing_tool_hint", "known_client_issues_hint", "instructions"} <= (
+            recommended
+        )
+
+    @pytest.mark.asyncio
     async def test_bug_report_addon_logs_included_for_addon(
         self, registered_tools, mock_client
     ):

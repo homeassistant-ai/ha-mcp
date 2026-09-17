@@ -291,11 +291,55 @@ See the [integration's README](https://github.com/norpol/hass-codex-tunnel-mcp#r
 2. **Subsequent requests** - Should be faster (packages cached)
 3. **Alternative** - Use Docker for consistent performance
 
-### Claude Desktop stays busy after an HTTP tool call
+### Claude Desktop: a write tool hangs for 4 minutes, reads work fine
 
-For HTTP connections (including a local stdio-to-HTTP bridge), **Settings →
-Advanced → Diagnostics** offers two independent experiments. Both default to
-**off** and require a server restart:
+This is a Claude Desktop bug, not an ha-mcp bug. It affects tools served by
+MCP servers Claude Desktop runs locally: anything in
+`claude_desktop_config.json` (a direct stdio server or a bridge such as
+`mcp-remote`, `fastmcp-remote` or `mcp-proxy`), Desktop Extensions, and
+Desktop's own Filesystem connector. claude.ai custom connectors and Claude Code
+are not affected.
+
+With a tool set to **Needs approval**, Desktop shows the approval dialog while
+the model is still generating the call's arguments. Clicking **Allow once**
+before generation finishes silently drops the call: it never reaches the bridge
+or the server, and Desktop reports "No result received … after waiting 4
+minutes". The longer the arguments, the wider the window, which is why
+dashboard, automation, script and helper writes hit it most. A dropped call
+never reached Home Assistant, but the same 4-minute timeout can also hide a
+call that did land and lost only its result, so read the target back before
+repeating a write that is not idempotent. Tracked upstream as
+[anthropics/claude-code#92014](https://github.com/anthropics/claude-code/issues/92014)
+(a second Desktop bug,
+[#80012](https://github.com/anthropics/claude-code/issues/80012), drops
+in-flight calls when several conversations share one local server). Our
+thread: [#2367](https://github.com/homeassistant-ai/ha-mcp/issues/2367).
+
+Workarounds, any one of them:
+
+1. **Wait a few seconds before clicking Allow once**, longer for large
+   dashboard writes. Desktop gives no "generation finished" signal, so this
+   is timing-based.
+2. **Set the ha-mcp write tools to Always allow**: Settings → Connectors →
+   your server → Tool permissions.
+3. **Keep manual approval, but in ha-mcp instead of Desktop**: set the tools to
+   Always allow in Desktop and enable **Tool Security Policies** with a
+   require-approval rule on the write tools. The call is dispatched
+   immediately, so the race never happens, and you approve it in the Tool
+   Security Policies tab of the settings UI.
+4. Use a claude.ai custom connector or Claude Code instead of a Desktop local
+   server.
+
+Related: Claude Desktop 2.110.0 rejects omitted optional parameters
+("expected nonoptional, received undefined"); see
+[#2472](https://github.com/homeassistant-ai/ha-mcp/issues/2472) for the
+downgrade workaround.
+
+#### HTTP transport diagnostics
+
+If the hang does not match the above, for HTTP connections (including a local
+stdio-to-HTTP bridge) **Settings → Advanced → Diagnostics** offers two
+independent experiments. Both default to **off** and require a server restart:
 
 - **HTTP transport diagnostics** (`HAMCP_HTTP_TRANSPORT_DIAGNOSTICS=true`):
   logs request/response byte counts, elapsed time, body completion, observed
