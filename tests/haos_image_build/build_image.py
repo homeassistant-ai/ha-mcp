@@ -38,7 +38,7 @@ LOG = logging.getLogger("haos_image_build")
 
 # Stable image inputs are Renovate-managed; changing any pin invalidates the
 # shared image cache. Beta lanes explicitly override all three at build time.
-# renovate: datasource=github-releases depName=home-assistant/operating-system
+# renovate: datasource=custom.ha-os-stable depName=home-assistant/operating-system
 STABLE_HAOS_VERSION = "18.2"
 # renovate: datasource=custom.ha-supervisor-stable depName=home-assistant/supervisor
 STABLE_SUPERVISOR_VERSION = "2026.09.2"
