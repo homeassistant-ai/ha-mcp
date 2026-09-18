@@ -66,15 +66,23 @@ class _StubClient:
 
 
 class _CalendarRestClient(_StubClient):
-    """Stub exposing the REST ``_request`` the calendar fetcher reads through."""
+    """Stub exposing the REST ``_request`` the calendar fetcher reads through.
 
-    def __init__(self, events: list[dict[str, Any]]) -> None:
+    ``events`` may be a list (every window answers the same) or a list of
+    per-call responses, which lets a test distinguish the configured window
+    from the wide sweep that follows a miss.
+    """
+
+    def __init__(self, events: Any, *, per_call: list[Any] | None = None) -> None:
         self._events = events
+        self._per_call = per_call
         self.calls: list[tuple[str, Any]] = []
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         assert method == "GET"
         self.calls.append((path, kwargs.get("params") or {}))
+        if self._per_call is not None:
+            return self._per_call[len(self.calls) - 1]
         return self._events
 
 
@@ -466,11 +474,35 @@ class TestFetcherIdResolution:
     async def test_fetch_calendar_event_missing_uid_returns_none(self) -> None:
         client = _CalendarRestClient([{"uid": "other", "summary": "Lunch"}])
         assert await bm._fetch_calendar_event(client, "calendar.fam::evt-1") is None
+        # A miss sweeps a second, wider window before giving up.
+        assert len(client.calls) == 2
+
+    async def test_fetch_calendar_event_sweeps_wider_window_on_miss(self) -> None:
+        # An event outside the configured lookahead (booked far ahead, or
+        # already past) must still be captured: no snapshot means the prior
+        # values are unrecoverable after the write.
+        target = {"uid": "evt-1", "summary": "Anniversary"}
+        client = _CalendarRestClient(None, per_call=[[], [target]])
+        got = await bm._fetch_calendar_event(client, "calendar.fam::evt-1")
+        assert got == {"calendar_entity_id": "calendar.fam", **target}
+        assert len(client.calls) == 2
+        narrow, wide = client.calls[0][1], client.calls[1][1]
+        assert wide["start"] < narrow["start"], (narrow, wide)
+        assert wide["end"] > narrow["end"], (narrow, wide)
+
+    async def test_fetch_calendar_event_hit_skips_the_wide_sweep(self) -> None:
+        target = {"uid": "evt-1", "summary": "Dinner"}
+        client = _CalendarRestClient([target])
+        assert await bm._fetch_calendar_event(client, "calendar.fam::evt-1") == {
+            "calendar_entity_id": "calendar.fam",
+            **target,
+        }
+        assert len(client.calls) == 1
 
     async def test_fetch_calendar_event_non_list_body_raises(self) -> None:
         # Parity with the registry fetchers: a degraded 200 must raise rather
         # than masquerade as ``entity_missing``.
-        client = _CalendarRestClient({"unexpected": "dict body"})  # type: ignore[arg-type]
+        client = _CalendarRestClient({"unexpected": "dict body"})
         with pytest.raises(HomeAssistantError, match="Expected a list"):
             await bm._fetch_calendar_event(client, "calendar.fam::evt-1")
 

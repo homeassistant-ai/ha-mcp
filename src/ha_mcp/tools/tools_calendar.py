@@ -36,7 +36,9 @@ logger = logging.getLogger(__name__)
 
 
 def _validate_recurrence_target(
-    entity_id: str, recurrence_id: str | None, recurrence_range: str | None
+    entity_id: str,
+    recurrence_id: str | None,
+    recurrence_range: Literal["THISANDFUTURE"] | None,
 ) -> None:
     """Reject recurrence targeting that Home Assistant would silently widen.
 
@@ -51,8 +53,10 @@ def _validate_recurrence_target(
             recurrence_id,
             "recurrence_id",
             suggestions=[
-                "Use ha_config_get_calendar_events() to list occurrences and "
-                "obtain a valid recurrence_id",
+                (
+                    "Use ha_config_get_calendar_events() to list occurrences "
+                    "and obtain a valid recurrence_id"
+                ),
                 "Omit recurrence_id to target the whole series",
             ],
             context={"entity_id": entity_id},

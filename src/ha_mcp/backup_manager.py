@@ -2468,6 +2468,49 @@ async def _restore_group(client: Any, entity_id: str, config: Any) -> Any:
 # Calendar events — calendar.get_events to fetch, calendar.create/update services.
 
 
+# A capture that finds nothing writes no snapshot, so an edit to an event
+# outside the configured lookahead would be unrecoverable. These bounds are the
+# second, wider sweep taken only when the configured window misses: generous
+# enough to cover a past event or one booked well ahead, without asking a busy
+# calendar to expand a decade of recurrences on every write.
+_CALENDAR_WIDE_LOOKBACK_DAYS = 366
+_CALENDAR_WIDE_LOOKAHEAD_DAYS = 732
+
+
+async def _find_calendar_event(
+    client: Any, cal: str, uid: str, start: datetime, end: datetime
+) -> Any:
+    """Return the event with ``uid`` on ``cal`` between ``start`` and ``end``.
+
+    Reads the REST calendar view rather than the ``calendar.get_events``
+    service: the service response is built by HA's
+    ``_list_events_dict_factory``, which keeps only ``LIST_EVENT_FIELDS``
+    (start/end/summary/description/location/status) and therefore carries no
+    ``uid`` to match on. ``/api/calendars/{entity_id}`` serialises the whole
+    CalendarEvent, so uid, recurrence_id and rrule survive — the same endpoint
+    ``ha_config_get_calendar_events`` reads.
+    """
+    try:
+        events = await client._request(
+            "GET",
+            f"/calendars/{cal}",
+            params={"start": start.isoformat(), "end": end.isoformat()},
+        )
+    except HomeAssistantError as err:
+        # Only treat 404 (calendar entity not present) as "skip silently".
+        # Auth/transport/server errors deserve a WARNING so an operator
+        # can spot a misconfigured calendar integration; matches the
+        # ``status_code == 404`` narrowing the automation/script/scene
+        # fetchers use.
+        if getattr(err, "status_code", None) == 404:
+            return None
+        raise
+    for event in _require_list(events, f"/calendars/{cal}"):
+        if isinstance(event, dict) and event.get("uid") == uid:
+            return event
+    return None
+
+
 async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
     # entity_id is "<calendar.entity>::<event_uid>"
     cal, _, uid = entity_id.partition("::")
@@ -2487,35 +2530,25 @@ async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
         days = 7
     days = max(1, min(365, days))
     now = datetime.now(UTC)
-    # Read through the REST calendar view rather than the
-    # ``calendar.get_events`` service: the service response is built by HA's
-    # ``_list_events_dict_factory``, which keeps only ``LIST_EVENT_FIELDS``
-    # (start/end/summary/description/location/status) and therefore carries no
-    # ``uid`` to match on. ``/api/calendars/{entity_id}`` serialises the whole
-    # CalendarEvent, so uid, recurrence_id and rrule survive — the same
-    # endpoint ``ha_config_get_calendar_events`` reads.
-    try:
-        events = await client._request(
-            "GET",
-            f"/calendars/{cal}",
-            params={
-                "start": now.isoformat(),
-                "end": (now + timedelta(days=days)).isoformat(),
-            },
+    found = await _find_calendar_event(
+        client, cal, uid, now, now + timedelta(days=days)
+    )
+    if found is None:
+        # The configured window is the cheap common case, not the contract: a
+        # write targets an event by uid, and an event being edited or deleted
+        # can sit in the past or well beyond the lookahead. Missing it would
+        # silently skip the snapshot and leave the prior values unrecoverable,
+        # so sweep once more over a wide window before concluding it is gone.
+        found = await _find_calendar_event(
+            client,
+            cal,
+            uid,
+            now - timedelta(days=_CALENDAR_WIDE_LOOKBACK_DAYS),
+            now + timedelta(days=_CALENDAR_WIDE_LOOKAHEAD_DAYS),
         )
-    except HomeAssistantError as err:
-        # Only treat 404 (calendar entity not present) as "skip silently".
-        # Auth/transport/server errors deserve a WARNING so an operator
-        # can spot a misconfigured calendar integration; matches the
-        # ``status_code == 404`` narrowing the automation/script/scene
-        # fetchers use.
-        if getattr(err, "status_code", None) == 404:
-            return None
-        raise
-    for event in _require_list(events, f"/calendars/{cal}"):
-        if isinstance(event, dict) and event.get("uid") == uid:
-            return {"calendar_entity_id": cal, **event}
-    return None
+    if found is None:
+        return None
+    return {"calendar_entity_id": cal, **found}
 
 
 def _calendar_bound(value: Any) -> tuple[str, bool] | None:
