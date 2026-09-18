@@ -65,7 +65,11 @@ import yaml  # type: ignore[import-untyped]
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from .client.rest_client import HomeAssistantConnectionError, HomeAssistantError
+from .client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantConnectionError,
+    HomeAssistantError,
+)
 from .utils.data_paths import get_data_dir
 from .utils.registry_update_lock import registry_update_lock
 
@@ -2532,6 +2536,22 @@ def _calendar_bound(value: Any) -> tuple[str, bool] | None:
     return None
 
 
+# HA reports a missing event as a plain ``failed`` command error whose message
+# comes from the integration (Local Calendar surfaces ical's "No existing item
+# with uid/recurrence_id: ..."), so absence has to be read off the message.
+_CALENDAR_EVENT_ABSENT_MARKERS = ("no existing item", "not found", "does not exist")
+
+
+def _calendar_update_cannot_apply(err: HomeAssistantCommandError) -> bool:
+    """Whether ``err`` proves the in-place update never touched the event."""
+    if getattr(err, "code", None) == "not_supported":
+        # The calendar advertises no UPDATE_EVENT, so it cannot ever accept
+        # the update and re-creating is the only restore available.
+        return True
+    message = str(err).lower()
+    return any(marker in message for marker in _CALENDAR_EVENT_ABSENT_MARKERS)
+
+
 async def _recreate_calendar_event(
     client: Any,
     cal: str,
@@ -2595,9 +2615,16 @@ async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> A
         message["recurrence_id"] = config["recurrence_id"]
     try:
         return await _ws_send(client, message)
-    except HomeAssistantError as err:
+    except HomeAssistantCommandError as err:
+        if not _calendar_update_cannot_apply(err):
+            # A transport drop, a timeout or an unclassified command failure
+            # leaves it unknown whether HA applied the update; re-creating
+            # then leaves a duplicate behind. Only a failure that PROVES the
+            # update never landed falls through. Connection errors and
+            # timeouts are separate types, so they never reach here at all.
+            raise
         logger.info(
-            "Restoring calendar event %s on %s in place failed (%s); "
+            "Restoring calendar event %s on %s in place is not possible (%s); "
             "re-creating it instead",
             uid,
             cal,

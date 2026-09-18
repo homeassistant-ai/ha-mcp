@@ -35,6 +35,47 @@ from .util_helpers import is_connection_error_message
 logger = logging.getLogger(__name__)
 
 
+def _validate_recurrence_target(
+    entity_id: str, recurrence_id: str | None, recurrence_range: str | None
+) -> None:
+    """Reject recurrence targeting that Home Assistant would silently widen.
+
+    A range starts AT the identified occurrence, so Home Assistant ignores
+    ``recurrence_range`` unless ``recurrence_id`` is set (ical gates the whole
+    fork on it). Without the identifier an update then edits the master event
+    and a delete removes the ENTIRE series rather than this occurrence and the
+    following ones — both silently, and both reported as success.
+    """
+    if recurrence_id is not None:
+        validate_identifier_not_empty(
+            recurrence_id,
+            "recurrence_id",
+            suggestions=[
+                "Use ha_config_get_calendar_events() to list occurrences and "
+                "obtain a valid recurrence_id",
+                "Omit recurrence_id to target the whole series",
+            ],
+            context={"entity_id": entity_id},
+        )
+    if recurrence_range is not None and recurrence_id is None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "recurrence_range requires recurrence_id: the range starts at "
+                "the identified occurrence",
+                context={
+                    "entity_id": entity_id,
+                    "recurrence_range": recurrence_range,
+                },
+                suggestions=[
+                    "Pass the recurrence_id of the occurrence the range starts at",
+                    "Omit recurrence_range to target the whole series",
+                    "Use ha_config_get_calendar_events() to list occurrences",
+                ],
+            )
+        )
+
+
 class CalendarTools:
     """Calendar event management tools for Home Assistant."""
 
@@ -637,6 +678,8 @@ class CalendarTools:
                     )
                 )
 
+            _validate_recurrence_target(entity_id, recurrence_id, recurrence_range)
+
             # Reject mixed date/datetime up front so the simple, recurring
             # (rrule) and update paths give the same clear validation error —
             # only the simple path routes through
@@ -835,6 +878,8 @@ class CalendarTools:
                 ],
                 context={"entity_id": entity_id},
             )
+
+            _validate_recurrence_target(entity_id, recurrence_id, recurrence_range)
 
             # ``calendar.delete_event`` is NOT a REST service — HA only
             # registers ``calendar.create_event`` and ``calendar.get_events``.

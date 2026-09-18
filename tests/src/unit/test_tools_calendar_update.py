@@ -234,6 +234,54 @@ async def test_empty_uid_is_rejected_before_any_round_trip(bad):
     client.call_service.assert_not_awaited()
 
 
+@pytest.mark.parametrize("bad", ["", "   "])
+@pytest.mark.asyncio
+async def test_blank_recurrence_id_is_rejected(bad):
+    """A blank recurrence_id is truthy to HA and forks against nothing."""
+    client = _make_mock_client()
+
+    tools = CalendarTools(client)
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_calendar_event(
+            entity_id="calendar.test",
+            summary="Renamed meeting",
+            start="2026-06-15T10:00:00",
+            end="2026-06-15T11:00:00",
+            uid="series-1",
+            recurrence_id=bad,
+        )
+
+    message = str(exc_info.value)
+    assert "VALIDATION_INVALID_PARAMETER" in message
+    assert '"parameter": "recurrence_id"' in message, message
+    client.send_websocket_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recurrence_range_without_recurrence_id_is_rejected():
+    """The range starts AT the occurrence, so HA ignores it without the id.
+
+    ical gates the entire fork on a truthy recurrence_id, so a range with no
+    id silently edits the master event instead of this occurrence onwards.
+    """
+    client = _make_mock_client()
+
+    tools = CalendarTools(client)
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_calendar_event(
+            entity_id="calendar.test",
+            summary="Renamed meeting",
+            start="2026-06-15T10:00:00",
+            end="2026-06-15T11:00:00",
+            uid="series-1",
+            recurrence_range="THISANDFUTURE",
+        )
+
+    assert "VALIDATION_INVALID_PARAMETER" in str(exc_info.value)
+    assert "recurrence_id" in str(exc_info.value)
+    client.send_websocket_message.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_update_rejects_mixed_date_and_datetime_values():
     """The date/datetime guard runs on the update path too."""

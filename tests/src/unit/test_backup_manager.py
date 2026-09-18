@@ -40,7 +40,12 @@ from ha_mcp.backup_manager import (
     _summarize_patch_counts,
     get_backup_manager,
 )
-from ha_mcp.client.rest_client import HomeAssistantError
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+    HomeAssistantError,
+)
 from ha_mcp.errors import ErrorCode, create_error_response
 from ha_mcp.tools.auto_backup import with_auto_backup
 
@@ -516,7 +521,10 @@ class TestFetcherIdResolution:
         posted: list[tuple[str, Any]] = []
 
         async def failing_ws(_client: Any, _msg: dict[str, Any]) -> Any:
-            raise HomeAssistantError("Calendar does not support event update")
+            raise HomeAssistantCommandError(
+                "Command failed: Error while updating event: No existing item "
+                "with uid/recurrence_id: evt-1/None"
+            )
 
         async def fake_post(_client: Any, path: str, payload: Any) -> Any:
             posted.append((path, payload))
@@ -559,7 +567,7 @@ class TestFetcherIdResolution:
         async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
             calls["n"] += 1
             if calls["n"] == 1:
-                raise HomeAssistantError("Event not found")
+                raise HomeAssistantCommandError("Command failed: Event not found")
             sent.append(msg)
             return {"ok": True}
 
@@ -582,6 +590,80 @@ class TestFetcherIdResolution:
         )
         assert [m["type"] for m in sent] == ["calendar/event/create"]
         assert sent[0]["event"]["rrule"] == "FREQ=WEEKLY;BYDAY=MO"
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            pytest.param(
+                HomeAssistantConnectionError("WebSocket closed"),
+                id="connection",
+            ),
+            pytest.param(HomeAssistantCommandTimeout("Command timeout"), id="timeout"),
+            pytest.param(
+                HomeAssistantCommandError("Command failed: Invalid rrule"),
+                id="other_command_failure",
+            ),
+        ],
+    )
+    async def test_restore_calendar_event_does_not_recreate_on_ambiguous_error(
+        self, error: BaseException, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Only a failure PROVING the update never landed may re-create; a
+        # dropped connection, a timeout or an unclassified command failure
+        # could each have applied it, and re-creating would duplicate the
+        # event instead of restoring it.
+        async def failing_ws(_client: Any, _msg: dict[str, Any]) -> Any:
+            raise error
+
+        async def fail_post(*_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError("must not re-create on an ambiguous failure")
+
+        monkeypatch.setattr(bm, "_ws_send", failing_ws)
+        monkeypatch.setattr(bm, "_rest_post", fail_post)
+        with pytest.raises(type(error)):
+            await bm._restore_calendar_event(
+                _StubClient(),
+                "calendar.fam::evt-1",
+                {
+                    "calendar_entity_id": "calendar.fam",
+                    "uid": "evt-1",
+                    "summary": "Dinner",
+                    "start": {"dateTime": "2026-06-15T18:00:00-04:00"},
+                    "end": {"dateTime": "2026-06-15T19:00:00-04:00"},
+                },
+            )
+
+    async def test_restore_calendar_event_recreates_when_update_unsupported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # HA's ``not_supported`` code proves the calendar can never accept the
+        # update, so re-creating is the only restore it can offer.
+        posted: list[tuple[str, Any]] = []
+
+        async def failing_ws(_client: Any, _msg: dict[str, Any]) -> Any:
+            raise HomeAssistantCommandError(
+                "Command failed: Calendar does not support event update",
+                "not_supported",
+            )
+
+        async def fake_post(_client: Any, path: str, payload: Any) -> Any:
+            posted.append((path, payload))
+            return {"ok": True}
+
+        monkeypatch.setattr(bm, "_ws_send", failing_ws)
+        monkeypatch.setattr(bm, "_rest_post", fake_post)
+        await bm._restore_calendar_event(
+            _StubClient(),
+            "calendar.fam::evt-1",
+            {
+                "calendar_entity_id": "calendar.fam",
+                "uid": "evt-1",
+                "summary": "Dinner",
+                "start": {"dateTime": "2026-06-15T18:00:00-04:00"},
+                "end": {"dateTime": "2026-06-15T19:00:00-04:00"},
+            },
+        )
+        assert [path for path, _ in posted] == ["services/calendar/create_event"]
 
     async def test_restore_calendar_event_without_bounds_raises(self) -> None:
         with pytest.raises(HomeAssistantError):
