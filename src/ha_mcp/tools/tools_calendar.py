@@ -54,7 +54,9 @@ def _calendar_event_backup_id(kw: dict[str, Any]) -> str:
         # uid. Restoring the captured occurrence would land on the NEW series
         # and fork that single date out of it, leaving every later date
         # edited while reporting success.
-        logger.warning(
+        # Debug, not warning: the decorator runs this key builder twice per
+        # call, and once even when auto-backup is switched off.
+        logger.debug(
             "Auto-backup: no snapshot for the ranged write on %s (event %s); "
             "a recurrence range rewrites the series, which a per-occurrence "
             "snapshot cannot undo",
@@ -67,7 +69,7 @@ def _calendar_event_backup_id(kw: dict[str, Any]) -> str:
         # command: Home Assistant validates ``rrule`` with a rule parser that
         # rejects both null and empty, so the restore has no way to say
         # "no recurrence" and the stored rule survives the merge.
-        logger.warning(
+        logger.debug(
             "Auto-backup: no snapshot for the recurrence-rule write on %s "
             "(event %s); Home Assistant offers no way to clear a rule again",
             entity_id,
