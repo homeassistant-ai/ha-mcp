@@ -2009,9 +2009,9 @@ class TestDashboardResourceCaptureRestore:
 # create their own backing entity via the integration config flow
 # (local_calendar / local_todo both ship with HA Core) — neither is a
 # ``helper_type``, so we drive the flow through ``ha_client`` like
-# test_integration_setup.py does. Capture fires on DELETE for calendar
-# (the set tool is create-only) and on EDIT for todo. Each test tears its
-# config entry down in a finally block.
+# test_integration_setup.py does. Capture fires on DELETE (and on an
+# update, which carries a uid) for calendar, and on EDIT for todo. Each
+# test tears its config entry down in a finally block.
 
 
 @pytest.mark.haos_only
@@ -2019,10 +2019,11 @@ class TestDashboardResourceCaptureRestore:
 @pytest.mark.external_only
 @pytest.mark.cleanup
 class TestCalendarCaptureRestore:
-    """Auto-backup for calendar events. ``ha_config_set_calendar_event``
-    only CREATES, so the pre-write snapshot fires on
-    ``ha_config_remove_calendar_event`` (pre-delete capture). Restore
-    re-creates the event from the snapshot."""
+    """Auto-backup for calendar events. The snapshot is keyed on
+    ``<entity>::<uid>``, so it fires on ``ha_config_remove_calendar_event``
+    and on an update through ``ha_config_set_calendar_event`` (a create
+    carries no uid). Restoring a deleted event re-creates it; restoring an
+    edited one puts the captured values back under the same uid."""
 
     async def test_calendar_capture_on_delete(
         self, mcp_client, ha_client, monkeypatch: pytest.MonkeyPatch
@@ -2100,7 +2101,7 @@ class TestCalendarCaptureRestore:
             assert uid, f"created event has no uid: {got.get('events')}"
 
             # Let HA's calendar store settle before the pre-delete fetch
-            # (the decorator runs its own calendar.get_events lookup; a
+            # (the decorator runs its own read of the REST calendar view; a
             # freshly-written iCal event can lag behind the create response).
             await asyncio.sleep(_HA_PROPAGATION_SETTLE_SECONDS)
 
