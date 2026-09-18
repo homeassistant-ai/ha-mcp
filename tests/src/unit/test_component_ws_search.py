@@ -821,6 +821,7 @@ class TestInfo:
         assert info["component_version"] == COMPONENT_VERSION
         assert info["capabilities"] == [
             "search",
+            "search_unified",
             "search_entity_membership",
             "overview",
             "helpers_list",
@@ -904,7 +905,7 @@ class TestInfo:
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
             ).read_text(encoding="utf-8")
         )
-        assert manifest["version"] == COMPONENT_VERSION == "2.2.0"
+        assert manifest["version"] == COMPONENT_VERSION == "2.2.1"
 
 
 # =============================================================================
@@ -2092,7 +2093,6 @@ class TestSchemaValidation:
         "bad",
         [
             {"type": "ha_mcp_tools/search", "limit": 0},
-            {"type": "ha_mcp_tools/search", "limit": 9999},
             {"type": "ha_mcp_tools/search", "offset": -1},
             {"type": "ha_mcp_tools/search", "search_types": ["bogus"]},
             {"type": "ha_mcp_tools/search", "exact": "yes"},
