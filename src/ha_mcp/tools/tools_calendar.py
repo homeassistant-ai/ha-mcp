@@ -34,6 +34,10 @@ from .util_helpers import is_connection_error_message
 
 logger = logging.getLogger(__name__)
 
+# The only recurrence range Home Assistant recognises; it compares the string
+# verbatim against ical's Range.THIS_AND_FUTURE.
+_THIS_AND_FUTURE = "THISANDFUTURE"
+
 
 def _calendar_event_backup_id(kw: dict[str, Any]) -> str:
     """Auto-backup key for a calendar write: ``<entity>::<uid>[::<recurrence_id>]``.
@@ -107,6 +111,26 @@ def _validate_recurrence_target(
                 "Omit recurrence_id to target the whole series",
             ],
             context={"entity_id": entity_id},
+        )
+    if recurrence_range is not None and recurrence_range != _THIS_AND_FUTURE:
+        # The ``Literal`` annotation only binds MCP calls, which the tool's
+        # TypeAdapter validates; a direct Python call reaches here unchecked
+        # and Home Assistant compares the value verbatim, so a near-miss
+        # spelling silently degrades to a single-occurrence write.
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"recurrence_range must be {_THIS_AND_FUTURE!r}: Home Assistant "
+                "compares the value verbatim",
+                context={
+                    "entity_id": entity_id,
+                    "recurrence_range": recurrence_range,
+                },
+                suggestions=[
+                    f"Pass {_THIS_AND_FUTURE!r} to target this and later occurrences",
+                    "Omit recurrence_range to target a single occurrence",
+                ],
+            )
         )
     if recurrence_range is not None and recurrence_id is None:
         raise_tool_error(

@@ -408,3 +408,48 @@ def test_backup_key_identifies_the_targeted_occurrence(kwargs, expected):
     of a single occurrence.
     """
     assert _calendar_event_backup_id(kwargs) == expected
+
+
+@pytest.mark.asyncio
+async def test_direct_call_rejects_a_misspelled_range():
+    """The Literal binds MCP calls only; a direct Python call needs the check.
+
+    Home Assistant compares the range verbatim against ical's
+    Range.THIS_AND_FUTURE ("THISANDFUTURE"), so the underscored spelling would
+    reach HA and silently degrade to a single-occurrence write. Verified: before
+    this guard, a direct call put "THIS_AND_FUTURE" on the wire.
+    """
+    client = _make_mock_client()
+
+    tools = CalendarTools(client)
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_set_calendar_event(
+            entity_id="calendar.test",
+            summary="Renamed meeting",
+            start="2026-06-15T10:00:00",
+            end="2026-06-15T11:00:00",
+            uid="series-1",
+            recurrence_id="20260615T100000",
+            recurrence_range="THIS_AND_FUTURE",
+        )
+
+    assert "VALIDATION_INVALID_PARAMETER" in str(exc_info.value)
+    assert "THISANDFUTURE" in str(exc_info.value)
+    client.send_websocket_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_direct_delete_call_rejects_a_misspelled_range():
+    client = _make_mock_client()
+
+    tools = CalendarTools(client)
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_remove_calendar_event(
+            entity_id="calendar.test",
+            uid="series-1",
+            recurrence_id="20260615T100000",
+            recurrence_range="THIS_AND_FUTURE",
+        )
+
+    assert "VALIDATION_INVALID_PARAMETER" in str(exc_info.value)
+    client.send_websocket_message.assert_not_awaited()
