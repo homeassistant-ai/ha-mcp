@@ -513,8 +513,6 @@ class CalendarTools:
     )
     @with_auto_backup(
         domain="calendar_event",
-        # Create mode carries no uid, so only an update snapshots the prior
-        # event.
         id_fn=_calendar_event_backup_id,
     )
     @log_tool_usage

@@ -2468,11 +2468,8 @@ async def _restore_group(client: Any, entity_id: str, config: Any) -> Any:
 # Calendar events — calendar.get_events to fetch, calendar.create/update services.
 
 
-# A capture that finds nothing writes no snapshot, so an edit to an event
-# outside the configured lookahead would be unrecoverable. These bounds are the
-# second, wider sweep taken only when the configured window misses: generous
-# enough to cover a past event or one booked well ahead, without asking a busy
-# calendar to expand a decade of recurrences on every write.
+# Bounds of the second sweep below: wide enough for a past event or one booked
+# well ahead, without asking a busy calendar to expand a decade of recurrences.
 _CALENDAR_WIDE_LOOKBACK_DAYS = 366
 _CALENDAR_WIDE_LOOKAHEAD_DAYS = 732
 
@@ -2667,8 +2664,7 @@ async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> A
     # carries the series' rule, and sending it back onto one occurrence —
     # which ical has already forked into a plain event — would make that
     # occurrence a second series under the same uid, duplicating every later
-    # date. A series-wide write is not snapshotted at all (see
-    # ``_fetch_calendar_event``), so no snapshot describes a whole series.
+    # date.
 
     if not uid:
         return await _recreate_calendar_event(client, cal, event, start, end)

@@ -991,6 +991,9 @@ class TestCalendarEventLifecycle:
             assert edited[0].get("uid") == series_uid, (
                 "an edited occurrence keeps the series uid"
             )
+            assert edited[0].get("recurrence_id") == recurrence_id, (
+                "the occurrence that changed must be the one the update targeted"
+            )
             assert not edited[0].get("rrule"), (
                 "an edited occurrence is forked into a standalone event and "
                 f"must not keep the series rule: {edited[0]}"
