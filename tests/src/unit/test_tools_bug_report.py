@@ -1702,6 +1702,19 @@ class TestDetectMcpTransport:
         monkeypatch.setattr("sys.stdin", fake_stdin)
         assert _detect_mcp_transport() == "http"
 
+    def test_embedded_short_circuits_to_http(self, monkeypatch):
+        # The component's in-process server runs inside HA core: no -web
+        # argv0, no transport env, no Supervisor token, and HA's stdin is not
+        # a TTY. Without this branch a live embedded install reported
+        # "stdio" and the stdio-only host-app walk ran against HA's own
+        # process tree.
+        from ha_mcp.tools import tools_bug_report
+
+        monkeypatch.setattr("sys.argv", ["/usr/bin/python", "-m", "homeassistant"])
+        monkeypatch.setattr(tools_bug_report, "is_embedded", lambda: True)
+        monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: False))
+        assert _detect_mcp_transport() == "http"
+
 
 class TestFormatConfigTogglesForTemplate:
     """Tests for _format_config_toggles_for_template."""

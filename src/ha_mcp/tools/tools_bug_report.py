@@ -540,6 +540,12 @@ def _detect_mcp_transport() -> str:
     if os.environ.get("MCP_HTTP_PORT") or os.environ.get("FASTMCP_PORT"):
         return "http"
 
+    # The in-process server inside HA core only ever serves HTTP, and HA's
+    # stdin is not a TTY, so the isatty fallback below would label every
+    # embedded install "stdio" (seen on a live component install, 8.5.0).
+    if is_embedded():
+        return "http"
+
     # Home Assistant add-on always runs HTTP via homeassistant-addon/start.py.
     # Placed after the explicit hints (argv0 / env) so an operator override
     # still wins, but before the stdin-isatty fallback because Supervisor-
