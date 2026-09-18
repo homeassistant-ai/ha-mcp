@@ -477,6 +477,25 @@ class TestFetcherIdResolution:
         # A miss sweeps a second, wider window before giving up.
         assert len(client.calls) == 2
 
+    async def test_fetch_calendar_event_queries_around_the_recurrence_id(
+        self,
+    ) -> None:
+        # An occurrence far outside every now-relative window must still be
+        # captured; its recurrence_id names the date, so one request finds it.
+        target = {
+            "uid": "evt-1",
+            "summary": "Decade out",
+            "recurrence_id": "20360615T090000",
+        }
+        client = _CalendarRestClient([target])
+        got = await bm._fetch_calendar_event(
+            client, "calendar.fam::evt-1::20360615T090000"
+        )
+        assert got == {"calendar_entity_id": "calendar.fam", **target}
+        assert len(client.calls) == 1
+        assert client.calls[0][1]["start"].startswith("2036-06-14")
+        assert client.calls[0][1]["end"].startswith("2036-06-16")
+
     async def test_fetch_calendar_event_sweeps_wider_window_on_miss(self) -> None:
         # An event outside the configured lookahead (booked far ahead, or
         # already past) must still be captured: no snapshot means the prior

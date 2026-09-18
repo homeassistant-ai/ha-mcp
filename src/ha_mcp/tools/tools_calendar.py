@@ -362,16 +362,17 @@ class CalendarTools:
         ``calendar/event/update`` is WebSocket-only, the same split that forces
         the delete tool onto the WebSocket API.
         """
+        # HA merges rather than replaces, so an omitted key keeps its old
+        # value; the empty strings are what make this a replacement.
         event: dict[str, Any] = {
             "summary": summary,
             "dtstart": start,
             "dtend": end,
+            "description": description or "",
+            "location": location or "",
         }
-        if description is not None:
-            event["description"] = description
-        if location is not None:
-            event["location"] = location
         if rrule is not None:
+            # No empty counterpart: HA's rule parser rejects null and empty.
             event["rrule"] = rrule
 
         ws_kwargs: dict[str, Any] = {"entity_id": entity_id, "uid": uid}
@@ -662,9 +663,12 @@ class CalendarTools:
         set ``end`` to ``start + 1 day``.
 
         An update replaces the whole event rather than patching it, so
-        ``summary``, ``start`` and ``end`` stay required in update mode and any
-        ``description``, ``location`` or ``rrule`` that is not re-supplied is
-        dropped from the event.
+        ``summary``, ``start`` and ``end`` stay required in update mode, and a
+        ``description`` or ``location`` that is not re-supplied is cleared.
+        An ``rrule`` is the exception: Home Assistant accepts a new rule but
+        has no way to express "no recurrence", so an existing rule survives an
+        update that omits it. Delete the event and create it again to drop the
+        recurrence.
 
         Not every calendar integration supports event creation; recurring
         events additionally require the integration to support recurrence

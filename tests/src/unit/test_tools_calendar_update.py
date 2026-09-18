@@ -62,14 +62,17 @@ async def test_update_routes_via_pooled_websocket():
     assert message["type"] == "calendar/event/update"
     assert message["entity_id"] == "calendar.test"
     assert message["uid"] == "evt-123"
+    # Text fields go out empty rather than omitted: HA merges the update into
+    # the stored event, so an omitted key would keep its old value and the
+    # update would not be the replacement it claims to be.
     assert message["event"] == {
         "summary": "Renamed meeting",
         "dtstart": "2026-06-15T10:00:00",
         "dtend": "2026-06-15T11:00:00",
+        "description": "",
+        "location": "",
     }
-    # Unset optional fields stay out of the replacement event entirely.
-    assert "description" not in message["event"]
-    assert "location" not in message["event"]
+    # A rule has no empty form HA accepts, so it stays out when unset.
     assert "rrule" not in message["event"]
     # Recurrence params omitted when unset.
     assert "recurrence_id" not in message

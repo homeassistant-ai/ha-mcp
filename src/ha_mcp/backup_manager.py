@@ -2519,6 +2519,21 @@ async def _find_calendar_event(
     return None
 
 
+def _recurrence_id_window(
+    recurrence_id: str | None,
+) -> tuple[datetime, datetime] | None:
+    """A day-wide window around an iCalendar recurrence id, if it parses."""
+    if not recurrence_id:
+        return None
+    for fmt in ("%Y%m%dT%H%M%S", "%Y%m%dT%H%M%SZ", "%Y%m%d"):
+        try:
+            at = datetime.strptime(recurrence_id, fmt).replace(tzinfo=UTC)
+        except ValueError:
+            continue
+        return at - timedelta(days=1), at + timedelta(days=1)
+    return None
+
+
 async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
     # entity_id is "<calendar.entity>::<event_uid>[::<recurrence_id>]"
     cal, _, rest = entity_id.partition("::")
@@ -2540,9 +2555,18 @@ async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
     days = max(1, min(365, days))
     now = datetime.now(UTC)
     wanted = recurrence_id or None
-    found = await _find_calendar_event(
-        client, cal, uid, wanted, now, now + timedelta(days=days)
+    # A recurrence_id names the occurrence's own date, so an occurrence far
+    # outside the windows below is still found in one request.
+    around = _recurrence_id_window(wanted)
+    found = (
+        await _find_calendar_event(client, cal, uid, wanted, *around)
+        if around
+        else None
     )
+    if found is None:
+        found = await _find_calendar_event(
+            client, cal, uid, wanted, now, now + timedelta(days=days)
+        )
     if found is None:
         # The configured window is the cheap common case, not the contract: a
         # write targets an event by uid, and an event being edited or deleted
