@@ -3,7 +3,7 @@ Calendar Management E2E Tests
 
 Tests the calendar event management tools:
 - ha_config_get_calendar_events - Get events from a calendar
-- ha_config_set_calendar_event - Create a calendar event
+- ha_config_set_calendar_event - Create a calendar event, or update one by uid
 - ha_config_remove_calendar_event - Delete a calendar event
 
 Note: These tests require calendar integrations to be configured in Home Assistant.
@@ -747,6 +747,156 @@ class TestCalendarEventLifecycle:
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
         logger.info("Invalid entity delete test completed")
+
+    @staticmethod
+    def _event_start_value(event: dict) -> str:
+        """Return an event's start as an ISO string across backend shapes."""
+        start = event.get("start")
+        if isinstance(start, dict):
+            return str(start.get("dateTime") or start.get("date"))
+        return str(start)
+
+    async def test_update_calendar_event(self, mcp_client, deletable_event_uid):
+        """
+        Test: Update an existing calendar event by uid
+
+        Renames the event and shifts it an hour later, then reads it back to
+        prove the SAME uid now carries the new summary and no longer carries
+        the old one. Local Calendar's ``async_update_event`` preserves the uid
+        (the ical store excludes ``uid`` from the applied update), so the
+        fixture's teardown still deletes the event by the uid it captured.
+
+        Negative path: updating a uid that does not exist must fail with
+        actionable suggestions.
+        """
+        calendar_entity, event_uid = deletable_event_uid
+        logger.info(
+            f"Testing ha_config_set_calendar_event update for {calendar_entity} "
+            f"with uid={event_uid}..."
+        )
+
+        now = datetime.now(UTC)
+        list_args = {
+            "entity_id": calendar_entity,
+            "start": now.isoformat(),
+            "end": (now + timedelta(days=3)).isoformat(),
+        }
+
+        def _by_uid(data: dict) -> list[dict]:
+            return [e for e in data.get("events", []) if e.get("uid") == event_uid]
+
+        before = await wait_for_tool_result(
+            mcp_client,
+            "ha_config_get_calendar_events",
+            list_args,
+            predicate=lambda d: bool(_by_uid(d)),
+            timeout=15,
+            description=f"read-back of event '{event_uid}' before update",
+        )
+        original = _by_uid(before)[0]
+        original_summary = original.get("summary")
+        old_start = datetime.fromisoformat(self._event_start_value(original))
+
+        new_summary = f"E2E Updated Test Event {uuid.uuid4().hex[:8]}"
+        new_start = old_start + timedelta(hours=1)
+        new_end = new_start + timedelta(hours=1)
+
+        # The seeded local_calendar is writable and implements event update, so
+        # this must succeed rather than skip.
+        update_result = await mcp_client.call_tool(
+            "ha_config_set_calendar_event",
+            {
+                "entity_id": calendar_entity,
+                "summary": new_summary,
+                "start": new_start.isoformat(),
+                "end": new_end.isoformat(),
+                "uid": event_uid,
+            },
+        )
+        update_data = assert_mcp_success(update_result, "update calendar event")
+        assert update_data.get("success") is True, (
+            f"Update should return success=True; got {update_data}"
+        )
+        assert update_data.get("uid") == event_uid, (
+            f"Update should echo the target uid; got {update_data}"
+        )
+
+        after = await wait_for_tool_result(
+            mcp_client,
+            "ha_config_get_calendar_events",
+            list_args,
+            predicate=lambda d: any(
+                e.get("summary") == new_summary for e in _by_uid(d)
+            ),
+            timeout=15,
+            description=f"read-back of updated event '{new_summary}'",
+        )
+        updated = _by_uid(after)
+        assert updated, f"event '{event_uid}' disappeared after update"
+        assert all(e.get("summary") == new_summary for e in updated), (
+            f"expected every occurrence of {event_uid} to carry the new "
+            f"summary, got {[e.get('summary') for e in updated]}"
+        )
+        assert all(e.get("summary") != original_summary for e in updated), (
+            f"old summary '{original_summary}' still present on {event_uid}"
+        )
+        logger.info(f"Event {event_uid} updated to '{new_summary}'")
+
+        missing_uid = f"missing-{uuid.uuid4().hex[:8]}"
+        negative = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_calendar_event",
+            {
+                "entity_id": calendar_entity,
+                "summary": "Should not be written",
+                "start": new_start.isoformat(),
+                "end": new_end.isoformat(),
+                "uid": missing_uid,
+            },
+        )
+        assert negative.get("success") is False, (
+            f"Update of a nonexistent uid should fail: got {negative}"
+        )
+        negative_error = negative.get("error", {})
+        assert negative_error.get("suggestions") or negative_error.get("suggestion"), (
+            f"Update failure should provide helpful suggestion(s); got {negative_error}"
+        )
+
+        logger.info("ha_config_set_calendar_event update test completed")
+
+    async def test_update_calendar_event_invalid_entity(self, mcp_client):
+        """
+        Test: Update event with invalid calendar entity
+
+        Verifies the entity_id format guard fires in update mode too.
+        """
+        logger.info(
+            "Testing ha_config_set_calendar_event update with invalid entity..."
+        )
+
+        now = datetime.now(UTC)
+        start = (now + timedelta(days=1)).isoformat()
+        end = (now + timedelta(days=1, hours=1)).isoformat()
+
+        data = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_calendar_event",
+            {
+                "entity_id": "not_a_valid_calendar",
+                "summary": "Test Event",
+                "start": start,
+                "end": end,
+                "uid": "some-event-uid",
+            },
+        )
+
+        assert data.get("success") is False, "Should fail for invalid entity"
+        assert "calendar." in extract_error_message(data), (
+            "Error should mention correct format"
+        )
+
+        logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
+        logger.info("Invalid entity update test completed")
 
 
 @pytest.mark.calendar
