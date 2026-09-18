@@ -513,7 +513,8 @@ def _format_client_host_for_template(diagnostic_info: dict[str, Any]) -> str:
     if bridge:
         parts.append(
             f"stdio bridge ({bridge}); the real client app is hidden behind "
-            "it, ask the user which app and version launched the bridge"
+            "it, ask the user which app and version launched the bridge, do "
+            "not guess"
         )
     if diagnostic_info.get("mcp_transport") == "stdio":
         if client_host:
@@ -1300,10 +1301,15 @@ class BugReportTools:
                 "   - `**MCP Client Host:**` — the app that launched ha-mcp and its release, read\n"
                 "     from the parent process over stdio. Claude Desktop only advertises\n"
                 "     `local-agent-mode-<server> 1.0.0` in the handshake, and Desktop releases are\n"
-                "     what client-side regressions hinge on (#2472), so if this line says\n"
-                '     "not detected" or the version is "unknown", ASK the user which app and\n'
-                "     version they are using (Claude Desktop: Settings -> About; Claude Code:\n"
-                "     `claude --version`) and write the answer on this line before presenting.\n\n"
+                "     what client-side regressions hinge on (#2472). If this line says\n"
+                '     "not detected", "stdio bridge", or the version is "unknown", ASK the\n'
+                "     user which app and version they are using (Claude Desktop: Settings ->\n"
+                "     About; Claude Code: `claude --version`) and write THEIR answer on this\n"
+                "     line. NEVER fill it in yourself: you cannot know the app or its version,\n"
+                "     and a guessed value sends triage the wrong way. If the user does not\n"
+                '     know, write "unknown (user asked)". An `MCP Client` of `mcp 0.1.0` is\n'
+                "     a bridge such as fastmcp-remote, not the real client, so the same rule\n"
+                "     applies there.\n\n"
                 "5. **Present the anonymized report to the user**:\n"
                 "   a. Show the suggested_title (user can edit if needed) and tell them GitHub's\n"
                 "      title field is now pre-filled via the submission URL — they don't need to\n"

@@ -2580,3 +2580,4 @@ class TestBugReportClientHostRow:
         assert "**MCP Client Host:**" in instructions
         assert "not detected" in instructions
         assert "ASK the user which app" in instructions
+        assert "NEVER fill it in yourself" in instructions
