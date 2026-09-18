@@ -18,7 +18,11 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.src.haos_runtime import _wait_supervisor_update_done
+from tests.src.haos_runtime import (
+    _is_transient_supervisor_job_error,
+    _wait_supervisor_running,
+    _wait_supervisor_update_done,
+)
 
 _SETTLED = {
     "success": True,
@@ -37,6 +41,8 @@ _PENDING = {
     },
 }
 _FAILURE = {"success": False, "error": {"code": "unknown_error"}}
+_STARTUP = {"success": True, "result": {"state": "startup"}}
+_RUNNING = {"success": True, "result": {"state": "running"}}
 
 
 class _FakeWS:
@@ -141,3 +147,93 @@ def test_malformed_frame_raises_descriptive_error() -> None:
         pytest.raises(RuntimeError, match=r"malformed WS frame"),
     ):
         _wait_supervisor_update_done(_BadWS(), 1000.0, _next_id())
+
+
+def test_running_wait_settles_after_startup() -> None:
+    """A startup-state /info answer is re-polled until the state is running."""
+    ws = _FakeWS([_STARTUP, _RUNNING])
+    with (
+        patch("tests.src.haos_runtime.time.monotonic", return_value=0.0),
+        patch("tests.src.haos_runtime.time.sleep") as sleep,
+    ):
+        _wait_supervisor_running(ws, 1000.0, _next_id())
+    assert ws.sent_ids == [1, 2]
+    assert sleep.call_count == 1
+
+
+def test_running_wait_polls_root_info_endpoint() -> None:
+    """The state lives on the root /info endpoint, not /supervisor/info."""
+    sent: list[dict[str, Any]] = []
+
+    class _RecordingWS(_FakeWS):
+        def send(self, raw: str) -> None:
+            sent.append(json.loads(raw))
+            super().send(raw)
+
+    ws = _RecordingWS([_RUNNING])
+    with patch("tests.src.haos_runtime.time.monotonic", return_value=0.0):
+        _wait_supervisor_running(ws, 1000.0, _next_id())
+    assert sent == [
+        {
+            "id": 1,
+            "type": "supervisor/api",
+            "endpoint": "/info",
+            "method": "get",
+            "timeout": 30,
+        }
+    ]
+
+
+def test_running_wait_tolerates_success_false_then_settles() -> None:
+    """A success=False frame mid-boot is recorded + re-polled, not raised."""
+    ws = _FakeWS([_FAILURE, _RUNNING])
+    with (
+        patch("tests.src.haos_runtime.time.monotonic", return_value=0.0),
+        patch("tests.src.haos_runtime.time.sleep") as sleep,
+    ):
+        _wait_supervisor_running(ws, 1000.0, _next_id())
+    assert ws.sent_ids == [1, 2]
+    assert sleep.call_count == 1
+
+
+def test_running_wait_timeout_surfaces_last_state() -> None:
+    """Persistent startup state -> TimeoutError naming the last state seen."""
+    ws = _FakeWS([], default=_STARTUP)
+    clock = {"t": 0.0}
+
+    def _monotonic() -> float:
+        clock["t"] += 5.0
+        return clock["t"]
+
+    with (
+        patch("tests.src.haos_runtime.time.monotonic", side_effect=_monotonic),
+        patch("tests.src.haos_runtime.time.sleep"),
+        pytest.raises(TimeoutError, match=r"last state: 'startup'"),
+    ):
+        _wait_supervisor_running(ws, 20.0, _next_id())
+
+
+@pytest.mark.parametrize(
+    ("message", "transient"),
+    [
+        (
+            "supervisor/api /addons/x/update failed: {'code': 'unknown_error', "
+            "'message': 'Another job is running for job group addon_x'}",
+            True,
+        ),
+        (
+            "supervisor/api /addons/x/update failed: {'code': 'unknown_error', "
+            "'message': 'Supervisor is not ready to perform this operation, "
+            "please try again later'}",
+            True,
+        ),
+        (
+            "supervisor/api /addons/x/update failed: {'code': 'unknown_error', "
+            "'message': 'No update available for app x'}",
+            False,
+        ),
+    ],
+)
+def test_transient_supervisor_job_error_markers(message: str, transient: bool) -> None:
+    """Only the self-clearing rejections are retried; real errors propagate."""
+    assert _is_transient_supervisor_job_error(message) is transient
