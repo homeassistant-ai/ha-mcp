@@ -2493,6 +2493,26 @@ class TestFormatClientHostForTemplate:
     def test_empty_diagnostics_say_not_detected(self):
         assert _format_client_host_for_template({}) == "not detected"
 
+    def test_python_sdk_default_identity_is_flagged_as_a_bridge(self):
+        # Observed live: Claude Desktop -> fastmcp-remote -> component shows
+        # up as the Python MCP SDK's default clientInfo, hiding Desktop.
+        line = _format_client_host_for_template(
+            {
+                "mcp_transport": "http",
+                "mcp_client_info": {"name": "mcp", "version": "0.1.0", "title": ""},
+                "http_user_agent": "python-httpx/0.28.1",
+            }
+        )
+        assert line.startswith("stdio bridge (Python MCP SDK default identity")
+        assert "ask the user which app and version launched the bridge" in line
+        assert "User-Agent `python-httpx/0.28.1`" in line
+
+    def test_named_bridges_are_flagged(self):
+        line = _format_client_host_for_template(
+            {"mcp_transport": "http", "mcp_client_info": {"name": "mcp-remote"}}
+        )
+        assert "stdio bridge (mcp-remote bridge)" in line
+
 
 class TestBugReportClientHostRow:
     @pytest.fixture

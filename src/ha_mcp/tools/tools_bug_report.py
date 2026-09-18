@@ -474,6 +474,18 @@ def _format_client_info_for_template(info: dict[str, str]) -> str:
 _CLAUDE_DESKTOP_STDIO_PREFIX = "local-agent-mode-"
 HOST_NOT_DETECTED = "not detected"
 
+# stdio-to-HTTP bridges present their own identity in the handshake, so the
+# server never sees the real client behind them. ``mcp 0.1.0`` is the Python
+# MCP SDK's default clientInfo, which is what fastmcp-remote and mcp-proxy
+# style bridges send (observed live from Claude Desktop -> fastmcp-remote ->
+# component, 2026-09).
+_STDIO_BRIDGE_NAMES = {
+    "mcp": "Python MCP SDK default identity, i.e. a fastmcp-remote / mcp-proxy style bridge",
+    "mcp-remote": "mcp-remote bridge",
+    "mcp-proxy": "mcp-proxy bridge",
+    "fastmcp-remote": "fastmcp-remote bridge",
+}
+
 
 def _http_user_agent() -> str:
     """The request's ``User-Agent``, or ``""`` outside an HTTP request."""
@@ -494,8 +506,15 @@ def _format_client_host_for_template(diagnostic_info: dict[str, Any]) -> str:
     client_host = diagnostic_info.get("mcp_client_host") or {}
     user_agent = diagnostic_info.get("http_user_agent") or ""
     parts: list[str] = []
-    if (client_info.get("name") or "").startswith(_CLAUDE_DESKTOP_STDIO_PREFIX):
+    name = client_info.get("name") or ""
+    if name.startswith(_CLAUDE_DESKTOP_STDIO_PREFIX):
         parts.append("Claude Desktop (local agent mode)")
+    bridge = _STDIO_BRIDGE_NAMES.get(name.lower())
+    if bridge:
+        parts.append(
+            f"stdio bridge ({bridge}); the real client app is hidden behind "
+            "it, ask the user which app and version launched the bridge"
+        )
     if diagnostic_info.get("mcp_transport") == "stdio":
         if client_host:
             version = client_host.get("version") or "unknown"
