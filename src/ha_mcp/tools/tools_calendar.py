@@ -35,6 +35,25 @@ from .util_helpers import is_connection_error_message
 logger = logging.getLogger(__name__)
 
 
+def _calendar_event_backup_id(kw: dict[str, Any]) -> str:
+    """Auto-backup key for a calendar write: ``<entity>::<uid>[::<recurrence_id>]``.
+
+    A recurring series expands into occurrences that all share the ``uid`` and
+    differ only by ``recurrence_id``, so the uid alone cannot identify which
+    occurrence a write targets. Creates carry no uid and are skipped with a
+    falsy key (the truthy ``"::"`` shape would hit the fetch with no record to
+    find).
+    """
+    entity_id = kw.get("entity_id")
+    uid = kw.get("uid")
+    if not entity_id or not uid:
+        return ""
+    recurrence_id = kw.get("recurrence_id")
+    if recurrence_id:
+        return f"{entity_id}::{uid}::{recurrence_id}"
+    return f"{entity_id}::{uid}"
+
+
 def _validate_recurrence_target(
     entity_id: str,
     recurrence_id: str | None,
@@ -468,14 +487,9 @@ class CalendarTools:
     )
     @with_auto_backup(
         domain="calendar_event",
-        # Skip on missing entity_id or uid; falsy "" beats the truthy
-        # "::" shape that would hit the fetch with no record to find. Create
-        # mode carries no uid, so only an update snapshots the prior event.
-        id_fn=lambda kw: (
-            f"{kw['entity_id']}::{kw['uid']}"
-            if kw.get("entity_id") and kw.get("uid")
-            else ""
-        ),
+        # Create mode carries no uid, so only an update snapshots the prior
+        # event.
+        id_fn=_calendar_event_backup_id,
     )
     @log_tool_usage
     async def ha_config_set_calendar_event(
@@ -782,13 +796,7 @@ class CalendarTools:
     )
     @with_auto_backup(
         domain="calendar_event",
-        # Skip on missing entity_id or uid; falsy "" beats the truthy
-        # "::" shape that would hit the fetch with no record to find.
-        id_fn=lambda kw: (
-            f"{kw['entity_id']}::{kw['uid']}"
-            if kw.get("entity_id") and kw.get("uid")
-            else ""
-        ),
+        id_fn=_calendar_event_backup_id,
     )
     @log_tool_usage
     async def ha_config_remove_calendar_event(

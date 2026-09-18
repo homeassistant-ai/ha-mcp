@@ -19,7 +19,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.tools.tools_calendar import CalendarTools
+from ha_mcp.tools.tools_calendar import (
+    CalendarTools,
+    _calendar_event_backup_id,
+)
 
 
 def _make_mock_client(ws_return: dict | None = None) -> MagicMock:
@@ -350,3 +353,33 @@ async def test_no_uid_with_rrule_keeps_websocket_create_path():
     assert message["type"] == "calendar/event/create"
     assert "uid" not in message
     client.call_service.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "kwargs, expected",
+    [
+        pytest.param(
+            {"entity_id": "calendar.fam", "uid": "evt-1"},
+            "calendar.fam::evt-1",
+            id="whole_event",
+        ),
+        pytest.param(
+            {
+                "entity_id": "calendar.fam",
+                "uid": "evt-1",
+                "recurrence_id": "20260615T090000",
+            },
+            "calendar.fam::evt-1::20260615T090000",
+            id="one_occurrence",
+        ),
+        pytest.param({"entity_id": "calendar.fam"}, "", id="create_has_no_uid"),
+        pytest.param({"uid": "evt-1"}, "", id="no_entity"),
+    ],
+)
+def test_backup_key_identifies_the_targeted_occurrence(kwargs, expected):
+    """The uid alone cannot name one occurrence of a series.
+
+    Every expanded occurrence shares the uid, so the recurrence_id has to be
+    part of the key for the capture to snapshot the right one.
+    """
+    assert _calendar_event_backup_id(kwargs) == expected

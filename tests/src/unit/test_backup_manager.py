@@ -499,6 +499,41 @@ class TestFetcherIdResolution:
         }
         assert len(client.calls) == 1
 
+    async def test_fetch_calendar_event_selects_the_named_occurrence(self) -> None:
+        # A series expands into occurrences that all share the uid, so the
+        # recurrence_id in the key picks the one the write targets.
+        first = {
+            "uid": "evt-1",
+            "summary": "Standup",
+            "recurrence_id": "20260615T090000",
+            "rrule": "FREQ=WEEKLY;BYDAY=MO",
+        }
+        second = {
+            "uid": "evt-1",
+            "summary": "Standup",
+            "recurrence_id": "20260622T090000",
+            "rrule": "FREQ=WEEKLY;BYDAY=MO",
+        }
+        client = _CalendarRestClient([first, second])
+        got = await bm._fetch_calendar_event(
+            client, "calendar.fam::evt-1::20260622T090000"
+        )
+        assert got == {"calendar_entity_id": "calendar.fam", **second}
+
+    async def test_fetch_calendar_event_skips_a_series_wide_write(self) -> None:
+        # Without a recurrence_id the write targets the whole series, whose
+        # own start the calendar view never exposes. A snapshot of one
+        # occurrence would restore a single date and report success, so the
+        # capture is skipped instead.
+        occurrence = {
+            "uid": "evt-1",
+            "summary": "Standup",
+            "recurrence_id": "20260615T090000",
+            "rrule": "FREQ=WEEKLY;BYDAY=MO",
+        }
+        client = _CalendarRestClient([occurrence])
+        assert await bm._fetch_calendar_event(client, "calendar.fam::evt-1") is None
+
     async def test_fetch_calendar_event_non_list_body_raises(self) -> None:
         # Parity with the registry fetchers: a degraded 200 must raise rather
         # than masquerade as ``entity_missing``.
@@ -537,11 +572,14 @@ class TestFetcherIdResolution:
         assert len(sent) == 1
         assert sent[0]["type"] == "calendar/event/update"
         assert sent[0]["uid"] == "evt-1"
+        # description is sent empty: HA merges the update into the stored
+        # event, so omitting it would keep a description the write added.
         assert sent[0]["event"] == {
             "summary": "Dinner",
             "dtstart": "2026-06-15T18:00:00-04:00",
             "dtend": "2026-06-15T19:00:00-04:00",
             "location": "Home",
+            "description": "",
         }
 
     async def test_restore_calendar_event_recreates_when_update_fails(
@@ -587,41 +625,84 @@ class TestFetcherIdResolution:
             )
         ]
 
-    async def test_restore_calendar_event_recreates_series_over_websocket(
+    async def test_restore_calendar_event_never_replays_an_rrule(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # ``calendar.create_event`` has no rrule field, so a recurring
-        # snapshot must be re-created over the WebSocket API or the series
-        # would come back as a single event.
+        # Every expanded occurrence carries the series' rule; sending it back
+        # would fork the occurrence into a second series under the same uid.
         sent: list[dict[str, Any]] = []
-        calls = {"n": 0}
 
         async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise HomeAssistantCommandError("Command failed: Event not found")
             sent.append(msg)
             return {"ok": True}
 
-        async def fail_post(*_args: Any, **_kwargs: Any) -> Any:
-            raise AssertionError("a recurring series cannot go through REST")
-
         monkeypatch.setattr(bm, "_ws_send", fake_ws)
-        monkeypatch.setattr(bm, "_rest_post", fail_post)
         await bm._restore_calendar_event(
             _StubClient(),
-            "calendar.fam::evt-1",
+            "calendar.fam::evt-1::20260615T090000",
             {
                 "calendar_entity_id": "calendar.fam",
                 "uid": "evt-1",
+                "recurrence_id": "20260615T090000",
                 "summary": "Standup",
                 "rrule": "FREQ=WEEKLY;BYDAY=MO",
                 "start": {"dateTime": "2026-06-15T09:00:00-04:00"},
                 "end": {"dateTime": "2026-06-15T09:15:00-04:00"},
             },
         )
-        assert [m["type"] for m in sent] == ["calendar/event/create"]
-        assert sent[0]["event"]["rrule"] == "FREQ=WEEKLY;BYDAY=MO"
+        assert sent[0]["recurrence_id"] == "20260615T090000"
+        assert "rrule" not in sent[0]["event"]
+
+    async def test_restore_calendar_event_reads_recurrence_id_from_the_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sent: list[dict[str, Any]] = []
+
+        async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
+            sent.append(msg)
+            return {"ok": True}
+
+        monkeypatch.setattr(bm, "_ws_send", fake_ws)
+        await bm._restore_calendar_event(
+            _StubClient(),
+            "calendar.fam::evt-1::20260615T090000",
+            {
+                "summary": "Standup",
+                "start": {"dateTime": "2026-06-15T09:00:00-04:00"},
+                "end": {"dateTime": "2026-06-15T09:15:00-04:00"},
+            },
+        )
+        assert sent[0]["uid"] == "evt-1"
+        assert sent[0]["recurrence_id"] == "20260615T090000"
+
+    async def test_restore_missing_occurrence_raises_instead_of_recreating(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An occurrence that is gone cannot be put back into its series;
+        # create_event would only add a detached event beside it.
+        async def failing_ws(_client: Any, _msg: dict[str, Any]) -> Any:
+            raise HomeAssistantCommandError(
+                "Command failed: No existing item with uid/recurrence_id"
+            )
+
+        async def fail_post(*_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError("an occurrence must not be re-created")
+
+        monkeypatch.setattr(bm, "_ws_send", failing_ws)
+        monkeypatch.setattr(bm, "_rest_post", fail_post)
+        with pytest.raises(HomeAssistantError, match="no longer exists"):
+            await bm._restore_calendar_event(
+                _StubClient(),
+                "calendar.fam::evt-1::20260615T090000",
+                {
+                    "calendar_entity_id": "calendar.fam",
+                    "uid": "evt-1",
+                    "recurrence_id": "20260615T090000",
+                    "summary": "Standup",
+                    "start": {"dateTime": "2026-06-15T09:00:00-04:00"},
+                    "end": {"dateTime": "2026-06-15T09:15:00-04:00"},
+                },
+            )
 
     @pytest.mark.parametrize(
         "error",
