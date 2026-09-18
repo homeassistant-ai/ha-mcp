@@ -37,7 +37,10 @@ from that cache and falls back to a local build on a miss.
 
 `build_image.py` has three Renovate-managed stable inputs:
 
-- `STABLE_HAOS_VERSION`: the stable operating-system release.
+- `STABLE_HAOS_VERSION`: the promoted operating-system release from
+  `https://version.home-assistant.io/stable.json` (`hassos.ova`). The GitHub
+  release object appears hours before its per-board assets finish uploading,
+  so the release list is not the promotion signal.
 - `STABLE_SUPERVISOR_VERSION`: the promoted Supervisor version from
   `https://version.home-assistant.io/stable.json`, used as a minimum.
 - `STABLE_CORE_VERSION`: the exact Core version, updated together with the
