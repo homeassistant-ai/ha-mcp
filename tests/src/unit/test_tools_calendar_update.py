@@ -374,12 +374,34 @@ async def test_no_uid_with_rrule_keeps_websocket_create_path():
         ),
         pytest.param({"entity_id": "calendar.fam"}, "", id="create_has_no_uid"),
         pytest.param({"uid": "evt-1"}, "", id="no_entity"),
+        pytest.param(
+            {
+                "entity_id": "calendar.fam",
+                "uid": "evt-1",
+                "recurrence_id": "20260615T090000",
+                "recurrence_range": "THISANDFUTURE",
+            },
+            "",
+            id="ranged_write_is_not_snapshotted",
+        ),
+        pytest.param(
+            {
+                "entity_id": "calendar.fam",
+                "uid": "evt-1",
+                "rrule": "FREQ=WEEKLY;BYDAY=MO",
+            },
+            "",
+            id="rule_write_is_not_snapshotted",
+        ),
     ],
 )
 def test_backup_key_identifies_the_targeted_occurrence(kwargs, expected):
     """The uid alone cannot name one occurrence of a series.
 
     Every expanded occurrence shares the uid, so the recurrence_id has to be
-    part of the key for the capture to snapshot the right one.
+    part of the key for the capture to snapshot the right one. A falsy key
+    means no snapshot: a create has nothing to capture, and neither a ranged
+    write nor one that adds a recurrence rule can be undone from a snapshot
+    of a single occurrence.
     """
     assert _calendar_event_backup_id(kwargs) == expected

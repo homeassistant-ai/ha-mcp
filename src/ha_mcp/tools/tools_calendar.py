@@ -42,11 +42,37 @@ def _calendar_event_backup_id(kw: dict[str, Any]) -> str:
     differ only by ``recurrence_id``, so the uid alone cannot identify which
     occurrence a write targets. Creates carry no uid and are skipped with a
     falsy key (the truthy ``"::"`` shape would hit the fetch with no record to
-    find).
+    find), as are the two write shapes no snapshot could undo.
     """
     entity_id = kw.get("entity_id")
     uid = kw.get("uid")
     if not entity_id or not uid:
+        return ""
+    if kw.get("recurrence_range"):
+        # A ranged write splits the series: Home Assistant truncates the
+        # original at this occurrence and starts a second one under the same
+        # uid. Restoring the captured occurrence would land on the NEW series
+        # and fork that single date out of it, leaving every later date
+        # edited while reporting success.
+        logger.warning(
+            "Auto-backup: no snapshot for the ranged write on %s (event %s); "
+            "a recurrence range rewrites the series, which a per-occurrence "
+            "snapshot cannot undo",
+            entity_id,
+            uid,
+        )
+        return ""
+    if kw.get("rrule"):
+        # Turning an event into a series cannot be undone through the update
+        # command: Home Assistant validates ``rrule`` with a rule parser that
+        # rejects both null and empty, so the restore has no way to say
+        # "no recurrence" and the stored rule survives the merge.
+        logger.warning(
+            "Auto-backup: no snapshot for the recurrence-rule write on %s "
+            "(event %s); Home Assistant offers no way to clear a rule again",
+            entity_id,
+            uid,
+        )
         return ""
     recurrence_id = kw.get("recurrence_id")
     if recurrence_id:
