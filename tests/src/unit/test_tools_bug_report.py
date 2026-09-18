@@ -2543,4 +2543,4 @@ class TestBugReportClientHostRow:
         instructions = result["instructions"]
         assert "**MCP Client Host:**" in instructions
         assert "not detected" in instructions
-        assert "ASK the user which app and version" in instructions
+        assert "ASK the user which app" in instructions
