@@ -150,6 +150,7 @@ explicit_package_bases = true
 [[tool.mypy.overrides]]
 module = [
     "jq",
+    "psutil",
     "pydantic_monty",
     "pydantic_monty.*",
 ]
