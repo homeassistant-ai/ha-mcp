@@ -31,6 +31,7 @@ from .._version import get_version, is_embedded, is_running_in_addon
 from ..client.supervisor_client import make_supervisor_httpx_client
 from ..config import Settings, get_global_settings
 from ..errors import create_validation_error
+from ..utils.mcp_client_host import detect_client_host
 from ..utils.usage_logger import (
     AVG_LOG_ENTRIES_PER_TOOL,
     get_recent_logs,
@@ -466,6 +467,48 @@ def _format_client_info_for_template(info: dict[str, str]) -> str:
     return base
 
 
+# Claude Desktop advertises every stdio server as ``local-agent-mode-<server
+# name> 1.0.0`` (#1701, #2472, #2484), so the name alone never says which
+# Desktop release is involved.
+_CLAUDE_DESKTOP_STDIO_PREFIX = "local-agent-mode-"
+HOST_NOT_DETECTED = "not detected"
+
+
+def _http_user_agent() -> str:
+    """The request's ``User-Agent``, or ``""`` outside an HTTP request."""
+    value = get_http_headers(include={"user-agent"}).get("user-agent", "")
+    return str(value).strip()
+
+
+def _format_client_host_for_template(diagnostic_info: dict[str, Any]) -> str:
+    """Render what the server could learn about the host app beyond ``clientInfo``.
+
+    Over stdio the host is the process that spawned ha-mcp, so the parent
+    chain names it and, for Claude Desktop, gives the release. Over HTTP the
+    ``User-Agent`` is the only extra signal (and for Anthropic's connector
+    broker it carries no app version). The wording tells the agent exactly
+    when it still has to ask the user.
+    """
+    client_info = diagnostic_info.get("mcp_client_info") or {}
+    client_host = diagnostic_info.get("mcp_client_host") or {}
+    user_agent = diagnostic_info.get("http_user_agent") or ""
+    parts: list[str] = []
+    if (client_info.get("name") or "").startswith(_CLAUDE_DESKTOP_STDIO_PREFIX):
+        parts.append("Claude Desktop (local agent mode)")
+    if diagnostic_info.get("mcp_transport") == "stdio":
+        if client_host:
+            version = client_host.get("version") or "unknown"
+            parts.append(
+                f"{client_host.get('name') or 'unknown'} {version} "
+                "_(from the parent process)_"
+            )
+        else:
+            parts.append(HOST_NOT_DETECTED)
+    elif user_agent and client_info.get("title") != "from HTTP User-Agent":
+        parts.append(f"User-Agent `{user_agent}`")
+    return "; ".join(parts) or HOST_NOT_DETECTED
+
+
 def _detect_mcp_transport() -> str:
     """Best-effort MCP transport detection.
 
@@ -755,6 +798,7 @@ def _build_formatted_report(
         f"Installation Method: {diagnostic_info['installation_method']}",
         f"MCP Transport: {mcp_transport}",
         f"MCP Client: {_format_client_info_for_template(client_info)}",
+        f"MCP Client Host: {_format_client_host_for_template(diagnostic_info)}",
         f"Operating System: {platform_info['os']} {platform_info['os_release']} ({platform_info['architecture']})",
         f"Python Version: {platform_info['python_version']}",
         f"Home Assistant Version: {diagnostic_info['home_assistant_version']}",
@@ -1016,6 +1060,12 @@ class BugReportTools:
         config_toggles = _get_config_toggles()
         mcp_transport = _detect_mcp_transport()
         client_info = _extract_client_info(ctx)
+        client_host = (
+            await asyncio.to_thread(detect_client_host)
+            if mcp_transport == "stdio"
+            else {}
+        )
+        user_agent = _http_user_agent()
         installed_version = await asyncio.to_thread(_detect_installed_version)
         component_version = await self._detect_component_version()
         tools_entry_status = await self._detect_tools_entry_status()
@@ -1036,6 +1086,8 @@ class BugReportTools:
             "websockets_dependency": _websockets_dependency_state(),
             "mcp_transport": mcp_transport,
             "mcp_client_info": client_info,
+            "mcp_client_host": client_host,
+            "http_user_agent": user_agent,
             "config_toggles": config_toggles,
             "connection_status": "Unknown",
             "home_assistant_version": "Unknown",
@@ -1218,7 +1270,14 @@ class BugReportTools:
                 "     for triage — do not skip it.\n"
                 "   `MCP Transport` and `MCP Client` are auto-detected by the server (the latter\n"
                 "   from the MCP `initialize` handshake); leave both as-is unless they're clearly\n"
-                "   wrong.\n\n"
+                "   wrong.\n"
+                "   - `**MCP Client Host:**` — the app that launched ha-mcp and its release, read\n"
+                "     from the parent process over stdio. Claude Desktop only advertises\n"
+                "     `local-agent-mode-<server> 1.0.0` in the handshake, and Desktop releases are\n"
+                "     what client-side regressions hinge on (#2472), so if this line says\n"
+                '     "not detected" or the version is "unknown", ASK the user which app and\n'
+                "     version they are using (Claude Desktop: Settings -> About; Claude Code:\n"
+                "     `claude --version`) and write the answer on this line before presenting.\n\n"
                 "5. **Present the anonymized report to the user**:\n"
                 "   a. Show the suggested_title (user can edit if needed) and tell them GitHub's\n"
                 "      title field is now pre-filled via the submission URL — they don't need to\n"
@@ -1553,6 +1612,7 @@ ha_call_service(domain="light", service="turn_on", entity_id="light.example")
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
 - **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
+- **MCP Client Host:** {_format_client_host_for_template(diagnostic_info)} _(auto-detected; if this says "not detected" or "unknown", ask the user which app and version launched ha-mcp and write it here)_
 - **AI Model:**
 - **Operating System:** {platform_info.get("os", "Unknown")} {platform_info.get("os_release", "")} ({platform_info.get("architecture", "Unknown")})
 - **Python Version:** {platform_info.get("python_version", "Unknown")}
@@ -1720,6 +1780,7 @@ def _generate_agent_behavior_template(
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
 - **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
+- **MCP Client Host:** {_format_client_host_for_template(diagnostic_info)} _(auto-detected; if this says "not detected" or "unknown", ask the user which app and version launched ha-mcp and write it here)_
 - **AI Model:**
 - **Home Assistant Version:** {diagnostic_info.get("home_assistant_version", "Unknown")}
 

@@ -971,6 +971,16 @@ class TestReportIssueE2E:
             "formatted_report should render the beta flag in its config toggles"
         )
 
+        # 4) The host-app row is always rendered so a triager can see whether
+        #    the launching app (and, for Claude Desktop, its release) was
+        #    identified or still has to be asked for. Over stdio the parent
+        #    chain is walked; over HTTP it is the User-Agent, if any.
+        diag = data.get("diagnostic_info", {})
+        assert isinstance(diag.get("mcp_client_host"), dict)
+        assert "MCP Client Host:" in report
+        for key in ("runtime_bug_template", "agent_behavior_template"):
+            assert "**MCP Client Host:**" in data.get(key, "")
+
         logger.info(
             "ha_report_issue hint + beta flag verified end-to-end "
             f"(enable_beta_features={toggles['enable_beta_features']})"

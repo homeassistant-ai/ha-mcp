@@ -13,6 +13,7 @@ from ha_mcp.tools.tools_bug_report import (
     _extract_client_info,
     _fetch_addon_logs,
     _fetch_core_error_log,
+    _format_client_host_for_template,
     _format_client_info_for_template,
     _format_config_toggles_for_template,
     _format_logs_for_report,
@@ -2413,3 +2414,126 @@ def test_extract_client_info_outside_an_http_request_returns_empty():
     """stdio has no HTTP request, so there is no User-Agent to fall back to."""
     ctx = SimpleNamespace(session=SimpleNamespace(client_params=None))
     assert _extract_client_info(ctx) == {}
+
+
+class TestFormatClientHostForTemplate:
+    """The `MCP Client Host:` row — what the server learned beyond clientInfo."""
+
+    def test_stdio_host_detected_renders_name_and_version(self):
+        line = _format_client_host_for_template(
+            {
+                "mcp_transport": "stdio",
+                "mcp_client_info": {"name": "local-agent-mode-Home Assistant"},
+                "mcp_client_host": {"name": "Claude Desktop", "version": "2.110.0"},
+            }
+        )
+        assert line == (
+            "Claude Desktop (local agent mode); "
+            "Claude Desktop 2.110.0 _(from the parent process)_"
+        )
+
+    def test_stdio_without_host_says_not_detected(self):
+        line = _format_client_host_for_template(
+            {"mcp_transport": "stdio", "mcp_client_info": {"name": "cursor-vscode"}}
+        )
+        assert line == "not detected"
+
+    def test_local_agent_mode_prefix_is_labelled_even_when_host_unknown(self):
+        line = _format_client_host_for_template(
+            {
+                "mcp_transport": "stdio",
+                "mcp_client_info": {"name": "local-agent-mode-home-assistant"},
+            }
+        )
+        assert line == "Claude Desktop (local agent mode); not detected"
+
+    def test_http_renders_user_agent_alongside_client_info(self):
+        line = _format_client_host_for_template(
+            {
+                "mcp_transport": "http",
+                "mcp_client_info": {"name": "claude-ai", "title": ""},
+                "http_user_agent": "Claude-User (+https://docs.anthropic.com/claude-code)",
+            }
+        )
+        assert (
+            line == "User-Agent `Claude-User (+https://docs.anthropic.com/claude-code)`"
+        )
+
+    def test_http_user_agent_not_repeated_when_it_already_is_the_client_info(self):
+        # The clientInfo fallback already parsed User-Agent into name/version.
+        line = _format_client_host_for_template(
+            {
+                "mcp_transport": "http",
+                "mcp_client_info": {
+                    "name": "python-httpx",
+                    "version": "0.28.1",
+                    "title": "from HTTP User-Agent",
+                },
+                "http_user_agent": "python-httpx/0.28.1",
+            }
+        )
+        assert line == "not detected"
+
+    def test_empty_diagnostics_say_not_detected(self):
+        assert _format_client_host_for_template({}) == "not detected"
+
+
+class TestBugReportClientHostRow:
+    @pytest.fixture
+    def ha_report_issue_func(self, mock_mcp, mock_client):
+        register_bug_report_tools(mock_mcp, mock_client)
+        func = mock_mcp._tools["ha_report_issue"]
+        while hasattr(func, "__wrapped__"):
+            func = func.__wrapped__
+        return func
+
+    @pytest.mark.asyncio
+    async def test_stdio_host_reaches_diagnostics_and_both_templates(
+        self, ha_report_issue_func, monkeypatch
+    ):
+        from ha_mcp.tools import tools_bug_report
+
+        monkeypatch.setattr(tools_bug_report, "_detect_mcp_transport", lambda: "stdio")
+        monkeypatch.setattr(
+            tools_bug_report,
+            "detect_client_host",
+            lambda: {"name": "Claude Desktop", "version": "2.110.0", "evidence": "x"},
+        )
+        result = await ha_report_issue_func()
+
+        assert result["diagnostic_info"]["mcp_client_host"] == {
+            "name": "Claude Desktop",
+            "version": "2.110.0",
+            "evidence": "x",
+        }
+        for key in ("runtime_bug_template", "agent_behavior_template"):
+            assert (
+                "**MCP Client Host:** Claude Desktop 2.110.0 _(from the parent process)_"
+                in result[key]
+            )
+        assert "MCP Client Host: Claude Desktop 2.110.0" in result["formatted_report"]
+
+    @pytest.mark.asyncio
+    async def test_http_transport_skips_process_tree_walk(
+        self, ha_report_issue_func, monkeypatch
+    ):
+        from ha_mcp.tools import tools_bug_report
+
+        monkeypatch.setattr(tools_bug_report, "_detect_mcp_transport", lambda: "http")
+
+        def unexpected():
+            raise AssertionError("process tree must not be walked over HTTP")
+
+        monkeypatch.setattr(tools_bug_report, "detect_client_host", unexpected)
+        result = await ha_report_issue_func()
+        assert result["diagnostic_info"]["mcp_client_host"] == {}
+
+    @pytest.mark.asyncio
+    async def test_instructions_tell_the_agent_to_ask_when_host_unknown(
+        self, ha_report_issue_func
+    ):
+        result = await ha_report_issue_func()
+        instructions = result["instructions"]
+        assert "**MCP Client Host:**" in instructions
+        assert "not detected" in instructions
+        assert "ASK the user which app and version" in instructions
