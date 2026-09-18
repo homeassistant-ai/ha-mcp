@@ -920,6 +920,9 @@ class TestBugReportTool:
         assert "#2472" in hint and "claude-code#94608" in hint
         assert "wait a few seconds" in hint.lower()
         assert "always allow" in hint.lower()
+        # Fixed upstream: the primary advice is to update, downgrade is the
+        # fallback for users who cannot.
+        assert "update claude desktop to 2.2553.0" in hint.lower()
         assert "1.52386.6" in hint
 
         instructions = result["instructions"]

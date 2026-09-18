@@ -94,9 +94,10 @@ KNOWN_CLIENT_ISSUES_HINT = (
     "2. Every tool call fails with 'expected nonoptional, received "
     "undefined' when an optional parameter is omitted. Cause: Claude Desktop "
     "2.110.0 rejects omitted optional MCP parameters. Tracked in "
-    "homeassistant-ai/ha-mcp#2472 and anthropics/claude-code#94608. Tell the "
-    "user to downgrade Claude Desktop to 1.52386.6 (links in #2472) until "
-    "the upstream fix ships.\n"
+    "homeassistant-ai/ha-mcp#2472 and anthropics/claude-code#94608 (fixed "
+    "upstream). Tell the user to update Claude Desktop to 2.2553.0 or later; "
+    "if they cannot update, downgrading to 1.52386.6 (links in #2472) also "
+    "works.\n"
     "Only file a bug if the problem persists after the matching workaround."
 )
 
