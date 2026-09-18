@@ -509,7 +509,11 @@ def _format_client_host_for_template(diagnostic_info: dict[str, Any]) -> str:
     name = client_info.get("name") or ""
     if name.startswith(_CLAUDE_DESKTOP_STDIO_PREFIX):
         parts.append("Claude Desktop (local agent mode)")
+    # "mcp" is only the SDK default when paired with its literal 0.1.0; a
+    # client that names itself "mcp" with a real version is not a bridge.
     bridge = _STDIO_BRIDGE_NAMES.get(name.lower())
+    if name.lower() == "mcp" and client_info.get("version") != "0.1.0":
+        bridge = None
     if bridge:
         parts.append(
             f"stdio bridge ({bridge}); the real client app is hidden behind "

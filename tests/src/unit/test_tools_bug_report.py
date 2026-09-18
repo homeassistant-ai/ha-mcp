@@ -2507,6 +2507,18 @@ class TestFormatClientHostForTemplate:
         assert "ask the user which app and version launched the bridge" in line
         assert "User-Agent `python-httpx/0.28.1`" in line
 
+    def test_mcp_name_with_a_real_version_is_not_a_bridge(self):
+        # Only the SDK's literal default (mcp 0.1.0) marks a bridge; a client
+        # that calls itself "mcp" with its own version is reported as-is.
+        line = _format_client_host_for_template(
+            {
+                "mcp_transport": "http",
+                "mcp_client_info": {"name": "mcp", "version": "2.3.0", "title": ""},
+            }
+        )
+        assert "stdio bridge" not in line
+        assert line == "not detected"
+
     def test_named_bridges_are_flagged(self):
         line = _format_client_host_for_template(
             {"mcp_transport": "http", "mcp_client_info": {"name": "mcp-remote"}}
@@ -2579,5 +2591,5 @@ class TestBugReportClientHostRow:
         instructions = result["instructions"]
         assert "**MCP Client Host:**" in instructions
         assert "not detected" in instructions
-        assert "ASK the user which app" in instructions
+        assert "user which app and version they are using" in instructions
         assert "NEVER fill it in yourself" in instructions
