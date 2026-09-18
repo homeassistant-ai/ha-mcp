@@ -344,8 +344,11 @@ class CalendarTools:
                 "Use ha_config_get_calendar_events() to find the correct event UID",
                 "Check datetime format (ISO 8601)",
                 "Ensure end time is after start time",
-                "Not every calendar integration supports updating events (Local "
-                "Calendar does; the core Google and CalDAV integrations do not)",
+                (
+                    "Not every calendar integration supports updating events "
+                    "(Local Calendar does; the core Google and CalDAV "
+                    "integrations do not)"
+                ),
             ]
         else:
             suggestions = [

@@ -749,12 +749,20 @@ class TestCalendarEventLifecycle:
         logger.info("Invalid entity delete test completed")
 
     @staticmethod
-    def _event_start_value(event: dict) -> str:
-        """Return an event's start as an ISO string across backend shapes."""
-        start = event.get("start")
-        if isinstance(start, dict):
-            return str(start.get("dateTime") or start.get("date"))
-        return str(start)
+    def _event_bound(event: dict, key: str) -> datetime:
+        """Return an event's ``start``/``end`` as a datetime across backend shapes."""
+        value = event.get(key)
+        if isinstance(value, dict):
+            value = value.get("dateTime") or value.get("date")
+        return datetime.fromisoformat(str(value))
+
+    async def _supports_event_update(self, mcp_client, entity_id: str) -> bool:
+        """Whether the calendar advertises CalendarEntityFeature.UPDATE_EVENT (4)."""
+        result = await mcp_client.call_tool("ha_get_state", {"entity_id": entity_id})
+        data = parse_mcp_result(result)
+        record = data.get("data", data)
+        features = (record.get("attributes") or {}).get("supported_features") or 0
+        return bool(int(features) & 4)
 
     async def test_update_calendar_event(self, mcp_client, deletable_event_uid):
         """
@@ -770,6 +778,11 @@ class TestCalendarEventLifecycle:
         actionable suggestions.
         """
         calendar_entity, event_uid = deletable_event_uid
+        # The fixture only proves create support; ``calendar/event/update`` is
+        # refused by integrations without UPDATE_EVENT (core Google, CalDAV).
+        # The seeded local_calendar advertises it, so this never skips in CI.
+        if not await self._supports_event_update(mcp_client, calendar_entity):
+            pytest.skip(f"Calendar {calendar_entity} does not support event update")
         logger.info(
             f"Testing ha_config_set_calendar_event update for {calendar_entity} "
             f"with uid={event_uid}..."
@@ -795,7 +808,7 @@ class TestCalendarEventLifecycle:
         )
         original = _by_uid(before)[0]
         original_summary = original.get("summary")
-        old_start = datetime.fromisoformat(self._event_start_value(original))
+        old_start = self._event_bound(original, "start")
 
         new_summary = f"E2E Updated Test Event {uuid.uuid4().hex[:8]}"
         new_start = old_start + timedelta(hours=1)
@@ -840,11 +853,20 @@ class TestCalendarEventLifecycle:
         assert all(e.get("summary") != original_summary for e in updated), (
             f"old summary '{original_summary}' still present on {event_uid}"
         )
+        # Aware datetimes compare across offsets, so HA's local-time read-back
+        # matches the UTC values we sent.
+        for occurrence in updated:
+            assert self._event_bound(occurrence, "start") == new_start, (
+                f"start not shifted on {event_uid}: {occurrence.get('start')}"
+            )
+            assert self._event_bound(occurrence, "end") == new_end, (
+                f"end not shifted on {event_uid}: {occurrence.get('end')}"
+            )
         logger.info(f"Event {event_uid} updated to '{new_summary}'")
 
+        mcp = MCPAssertions(mcp_client)
         missing_uid = f"missing-{uuid.uuid4().hex[:8]}"
-        negative = await safe_call_tool(
-            mcp_client,
+        negative = await mcp.call_tool_failure(
             "ha_config_set_calendar_event",
             {
                 "entity_id": calendar_entity,
@@ -853,9 +875,6 @@ class TestCalendarEventLifecycle:
                 "end": new_end.isoformat(),
                 "uid": missing_uid,
             },
-        )
-        assert negative.get("success") is False, (
-            f"Update of a nonexistent uid should fail: got {negative}"
         )
         negative_error = negative.get("error", {})
         assert negative_error.get("suggestions") or negative_error.get("suggestion"), (
@@ -878,8 +897,8 @@ class TestCalendarEventLifecycle:
         start = (now + timedelta(days=1)).isoformat()
         end = (now + timedelta(days=1, hours=1)).isoformat()
 
-        data = await safe_call_tool(
-            mcp_client,
+        mcp = MCPAssertions(mcp_client)
+        data = await mcp.call_tool_failure(
             "ha_config_set_calendar_event",
             {
                 "entity_id": "not_a_valid_calendar",
@@ -888,11 +907,7 @@ class TestCalendarEventLifecycle:
                 "end": end,
                 "uid": "some-event-uid",
             },
-        )
-
-        assert data.get("success") is False, "Should fail for invalid entity"
-        assert "calendar." in extract_error_message(data), (
-            "Error should mention correct format"
+            expected_error="calendar.",
         )
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
