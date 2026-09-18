@@ -757,11 +757,17 @@ class TestCalendarEventLifecycle:
         return datetime.fromisoformat(str(value))
 
     async def _supports_event_update(self, mcp_client, entity_id: str) -> bool:
-        """Whether the calendar advertises CalendarEntityFeature.UPDATE_EVENT (4)."""
-        result = await mcp_client.call_tool("ha_get_state", {"entity_id": entity_id})
-        data = parse_mcp_result(result)
+        """Whether the calendar advertises CalendarEntityFeature.UPDATE_EVENT (4).
+
+        The state read is asserted, so a failed lookup fails the test instead
+        of masking as a skip.
+        """
+        data = await MCPAssertions(mcp_client).call_tool_success(
+            "ha_get_state", {"entity_id": entity_id}
+        )
         record = data.get("data", data)
-        features = (record.get("attributes") or {}).get("supported_features") or 0
+        assert "attributes" in record, f"no attributes in state for {entity_id}"
+        features = record["attributes"].get("supported_features") or 0
         return bool(int(features) & 4)
 
     async def test_update_calendar_event(self, mcp_client, deletable_event_uid):
