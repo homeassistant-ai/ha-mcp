@@ -109,11 +109,11 @@ def _exe_and_name(proc: Any, psutil: Any) -> tuple[str, str]:
     try:
         exe = proc.exe() or ""
     except (psutil.Error, OSError):
-        pass
+        pass  # protected or vanished binary: fall back to the bare name
     try:
         name = proc.name() or ""
     except (psutil.Error, OSError):
-        pass
+        pass  # process gone mid-walk: skipped by the caller as nameless
     if not name and exe:
         name = Path(exe).name
     return exe, name
