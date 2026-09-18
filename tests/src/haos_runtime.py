@@ -2427,6 +2427,30 @@ def boot_haos_qemu(image_path: Path, serial_log: Path | None = None) -> Iterator
             proc.wait()
 
 
+def _is_transient_supervisor_info_error(err: Any) -> bool:
+    """Return whether a failed ``supervisor/api`` read frame is worth re-polling.
+
+    Mirrors ``build_image._is_transient_supervisor_readiness_error``: while
+    Supervisor restarts, Core's proxy answers with no code, ``unknown_command``
+    (hassio handler not yet registered) or a blank ``unknown_error``, and
+    Supervisor's own middleware answers ``System is not ready with state: ...``
+    until it accepts API calls. Anything else (``unauthorized``, a validation
+    error, ...) is a permanent failure the caller must surface at once.
+    """
+    if not isinstance(err, dict):
+        return True
+    code = err.get("code")
+    if code is None or code == "unknown_command":
+        return True
+    if code != "unknown_error":
+        return False
+    message = err.get("message")
+    return not message or (
+        isinstance(message, str)
+        and message.startswith("System is not ready with state: ")
+    )
+
+
 def _recv_supervisor_info_frame(
     ws: Any,
     info_id: int,
@@ -2437,8 +2461,9 @@ def _recv_supervisor_info_frame(
     """Read frames until the ``endpoint`` answer for ``info_id``.
 
     Returns ``(result, None)`` on success, ``(None, error)`` on a transient
-    Supervisor failure frame, or ``(None, None)`` if the deadline passes with no
-    matching frame.
+    Supervisor failure frame (see ``_is_transient_supervisor_info_error``), or
+    ``(None, None)`` if the deadline passes with no matching frame. A permanent
+    failure frame raises ``RuntimeError`` immediately.
     """
     while time.monotonic() < deadline:
         remaining = max(deadline - time.monotonic(), 1.0)
@@ -2458,6 +2483,8 @@ def _recv_supervisor_info_frame(
             continue
         if not resp.get("success", False):
             err = resp.get("error") or resp
+            if not _is_transient_supervisor_info_error(err):
+                raise RuntimeError(f"supervisor/api {endpoint} failed: {err!r}")
             return None, f"supervisor/api {endpoint} failed: {err!r}"
         return resp.get("result") or {}, None
     return None, None

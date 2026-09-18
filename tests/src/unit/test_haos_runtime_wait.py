@@ -41,6 +41,17 @@ _PENDING = {
     },
 }
 _FAILURE = {"success": False, "error": {"code": "unknown_error"}}
+_SETUP_STATE = {
+    "success": False,
+    "error": {
+        "code": "unknown_error",
+        "message": "System is not ready with state: setup",
+    },
+}
+_UNAUTHORIZED = {
+    "success": False,
+    "error": {"code": "unauthorized", "message": "Unauthorized"},
+}
 _STARTUP = {"success": True, "result": {"state": "startup"}}
 _RUNNING = {"success": True, "result": {"state": "running"}}
 
@@ -237,3 +248,33 @@ def test_running_wait_timeout_surfaces_last_state() -> None:
 def test_transient_supervisor_job_error_markers(message: str, transient: bool) -> None:
     """Only the self-clearing rejections are retried; real errors propagate."""
     assert _is_transient_supervisor_job_error(message) is transient
+
+
+def test_running_wait_tolerates_setup_state_error_frame() -> None:
+    """Supervisor's own not-ready middleware answer is re-polled."""
+    ws = _FakeWS([_SETUP_STATE, _RUNNING])
+    with (
+        patch("tests.src.haos_runtime.time.monotonic", return_value=0.0),
+        patch("tests.src.haos_runtime.time.sleep") as sleep,
+    ):
+        _wait_supervisor_running(ws, 1000.0, _next_id())
+    assert ws.sent_ids == [1, 2]
+    assert sleep.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "wait",
+    [_wait_supervisor_running, _wait_supervisor_update_done],
+    ids=["running", "update_done"],
+)
+def test_permanent_error_frame_raises_without_retry(wait: Any) -> None:
+    """A non-restart failure (e.g. unauthorized) surfaces at once, not at deadline."""
+    ws = _FakeWS([_UNAUTHORIZED, _RUNNING])
+    with (
+        patch("tests.src.haos_runtime.time.monotonic", return_value=0.0),
+        patch("tests.src.haos_runtime.time.sleep") as sleep,
+        pytest.raises(RuntimeError, match=r"failed: .*unauthorized"),
+    ):
+        wait(ws, 1000.0, _next_id())
+    assert ws.sent_ids == [1]
+    sleep.assert_not_called()
