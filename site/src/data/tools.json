@@ -3104,18 +3104,43 @@
   },
   {
     "name": "ha_config_get_scene",
-    "title": "Get Scene Config",
-    "description": "Retrieve Home Assistant scene configuration.\n\nReturns the complete configuration for a scene, including the ``entities``\ndict and other settings (``name``, ``icon``, ``id``).\n\nEXAMPLES:\n- Get scene: ha_config_get_scene(\"movie_night\")\n- Get scene: ha_config_get_scene(\"bedroom_dim\")\n\nRELATED TOOLS:\n- ha_config_set_scene — pass the returned ``config_hash`` for\n  ``python_transform`` updates.\n\nFor detailed scene configuration help, use ha_get_skill_guide.",
+    "title": "Get or Find Scenes",
+    "description": "Get a scene's complete configuration, or list and search scenes without scene_id.\n\nUse ha_search for cross-domain discovery and dependency searches. For ordinary\nscene discovery, use this tool and pass a returned scene_id back to retrieve\nthe complete entities dict and config_hash for editing.\n\nListing returns compact metadata. Integration-managed scenes have no editable\nstorage config or scene_id. Optional content search reads full storage bodies;\npartial results explicitly report unread configs and are not exhaustive.\n\nEXAMPLES:\n- Get scene: ha_config_get_scene(\"movie_night\")\n- Get scene: ha_config_get_scene(\"bedroom_dim\")\n- Find scenes: ha_config_get_scene(query=\"movie\")\n- Find attribute values: ha_config_get_scene(query=\"rainbow\", search_in_config=True)\n\nRELATED TOOLS:\n- ha_config_set_scene — pass the returned ``config_hash`` for\n  ``python_transform`` updates.\n\nFor detailed scene configuration help, use ha_get_skill_guide.",
     "inputSchema": {
       "properties": {
         "scene_id": {
-          "type": "str",
-          "description": "Scene identifier (e.g., 'movie_night')"
+          "type": "str | None",
+          "description": "Scene identifier; omit to list or search scenes",
+          "default": null
+        },
+        "query": {
+          "type": "str | None",
+          "description": "Filter scene names or IDs",
+          "default": null
+        },
+        "search_in_config": {
+          "type": "bool",
+          "description": "Also search full stored scene attribute values within a bounded scan",
+          "default": false
+        },
+        "limit": {
+          "type": "int",
+          "description": "Maximum scenes per page",
+          "constraints": {
+            "ge": 1,
+            "le": 100
+          },
+          "default": 20
+        },
+        "offset": {
+          "type": "int",
+          "description": "Pagination offset",
+          "constraints": {
+            "ge": 0
+          },
+          "default": 0
         }
-      },
-      "required": [
-        "scene_id"
-      ]
+      }
     },
     "annotations": {
       "openWorldHint": false,
@@ -3443,13 +3468,13 @@
   {
     "name": "ha_search",
     "title": "Search",
-    "description": "Search for entities (lights, sensors, switches, climate, etc.) by name, domain, or area — AND inside automation/script/scene/helper/dashboard configurations — in one call.\n\nTwo surfaces run in parallel and return tagged results:\n  - **entities**: entity-registry matches (entity_id, friendly name,\n    area). Filter with `domain_filter`/`area_filter`/`state_filter`;\n    omit `query` to enumerate a domain, area, or state.\n  - **automations / scripts / scenes / helpers / dashboards**: matches\n    *inside* config definitions — triggers, actions, sequences, scene\n    entity-sets, helper bodies, dashboard cards. Driven by `query`;\n    narrow with `search_types`.\n\nUse this whenever you need to find something in HA without deciding\nentity-name vs config-body search up front.\n\nFor control requests with exclusions such as \"except\", \"excluding\", or\n\"but not\", include `is_group` and `member_entity_ids` in `result_fields`.\nDo not control an aggregate whose members include an excluded entity;\nprefer leaf entities when the exception cannot be verified safely.\nA withheld member list still returns is_group=true; absence of\nmember_entity_ids must not be interpreted as a leaf entity.\n\nWhen NOT to use:\n  - To read a known entity_id's state: use `ha_get_state` (cheaper).\n  - To inspect one automation/script/scene config by id: use the\n    matching `ha_config_get_*`.\n  - To list installed Apps (add-ons): use `ha_get_app`.\n\nConfig-body search is skipped when `domain_filter`/`area_filter`/\n`state_filter` signal entity-only intent (keeping name lookups off the\nexpensive backend); a `warnings[]` entry names the skip. Pass\n`search_types=[...]` to force config search.\n\nCaveats:\n  - `partial: True` means results are NOT exhaustive — a surface raised,\n    or the config-body branch lost data (per-id time budget exhausted,\n    an individual fetch failed, or a helper-type list fetch failed).\n    Empty buckets with `partial: True` mean \"search failed\", not \"no\n    results\". The cause is in `partial_reason`, also mirrored into\n    `warnings[]` with an \"incomplete results: \" prefix. Do not treat a\n    partial response as complete.\n  - `count` is items in this response (post-pagination), not corpus\n    totals — use `entity_total_matches` + `config_total_matches`.\n  - `limit`/`offset` apply per-surface. Flat `has_more`/`next_offset`\n    page the next call (iterate `offset = next_offset`); per-surface\n    `entity_*`/`config_*` variants show which surface still has results.\n\nFor parameters, schema, and worked examples, see ha_get_skill_guide.\n\nExamples:\n    - List sensors in an area: ha_search(domain_filter=\"sensor\", area_filter=\"Living Room\")\n    - Find a light by name: ha_search(\"kitchen\", domain_filter=\"light\")\n    - Find lights safely before an \"all except one\" control request:\n      ha_search(\"living room\", domain_filter=\"light\",\n      result_fields=[\"entity_id\", \"friendly_name\", \"is_group\",\n      \"member_entity_ids\"])\n    - Which automations use an entity: ha_search(\"light.bed_light\")\n    - Scenes touching a light: ha_search(\"light.kitchen\", search_types=[\"scene\"])\n    - Narrow the response to the entity bucket: ha_search(\"kitchen\", fields=[\"entities\"])\n    - All unavailable entities: ha_search(state_filter=\"unavailable\")",
+    "description": "Search for entities (lights, sensors, switches, climate, etc.) by name, domain, or area — AND inside automation/script/scene/helper/dashboard configurations — in one call.\n\nTwo surfaces run in parallel and return tagged results:\n  - **entities**: entity-registry matches (entity_id, friendly name,\n    area). Filter with `domain_filter`/`area_filter`/`state_filter`;\n    omit `query` to enumerate a domain, area, or state.\n  - **automations / scripts / scenes / helpers / dashboards**: matches\n    *inside* config definitions — triggers, actions, sequences, scene\n    entity-sets, helper bodies, dashboard cards. Driven by `query`;\n    narrow with `search_types`.\n\nUse dedicated get/list tools first for a known resource type, including\nha_config_get_scene for scene listing and content search. Use this for\nbroader discovery or deep searches across resource types.\n\nFor control requests with exclusions such as \"except\", \"excluding\", or\n\"but not\", include `is_group` and `member_entity_ids` in `result_fields`.\nDo not control an aggregate whose members include an excluded entity;\nprefer leaf entities when the exception cannot be verified safely.\nA withheld member list still returns is_group=true; absence of\nmember_entity_ids must not be interpreted as a leaf entity.\n\nWhen NOT to use:\n  - To read a known entity_id's state: use `ha_get_state` (cheaper).\n  - To inspect one automation/script/scene config by id: use the\n    matching `ha_config_get_*`.\n  - To list installed Apps (add-ons): use `ha_get_app`.\n\nConfig-body search is skipped when `domain_filter`/`area_filter`/\n`state_filter` signal entity-only intent (keeping name lookups off the\nexpensive backend); a `warnings[]` entry names the skip. Repeat without\nentity filters to search configuration contents too. Explicit legacy\n`search_types=[...]` calls search configs only and skip entities.\n\nCaveats:\n  - `partial: True` means results are NOT exhaustive — a surface raised,\n    or the config-body branch lost data (per-id time budget exhausted,\n    an individual fetch failed, or a helper-type list fetch failed).\n    Empty buckets with `partial: True` mean \"search failed\", not \"no\n    results\". The cause is in `partial_reason`, also mirrored into\n    `warnings[]` with an \"incomplete results: \" prefix. Do not treat a\n    partial response as complete.\n  - `count` is items in this response (post-pagination), not corpus\n    totals — use `entity_total_matches` + `config_total_matches`.\n  - `limit`/`offset` apply per-surface. Flat `has_more`/`next_offset`\n    page the next call (iterate `offset = next_offset`); per-surface\n    `entity_*`/`config_*` variants show which surface still has results.\n\nFor parameters, schema, and worked examples, see ha_get_skill_guide.\n\nExamples:\n    - List sensors in an area: ha_search(domain_filter=\"sensor\", area_filter=\"Living Room\")\n    - Find a light by name: ha_search(\"kitchen\", domain_filter=\"light\")\n    - Find lights safely before an \"all except one\" control request:\n      ha_search(\"living room\", domain_filter=\"light\",\n      result_fields=[\"entity_id\", \"friendly_name\", \"is_group\",\n      \"member_entity_ids\"])\n    - Which automations use an entity: ha_search(\"light.bed_light\")\n    - Scenes touching a light: ha_config_get_scene(query=\"light.kitchen\", search_in_config=True)\n    - Narrow the response to the entity bucket: ha_search(\"kitchen\", fields=[\"entities\"])\n    - All unavailable entities: ha_search(state_filter=\"unavailable\")",
     "inputSchema": {
       "properties": {
         "query": {
           "type": "str | None",
           "default": null,
-          "description": "What to search for (entity name fragment, free-text config term, entity_id). Searches BOTH the entity registry (entity_ids, friendly names, areas) AND configuration bodies (automation triggers/actions, script sequences, scene contents, helper bodies, dashboard cards) in one call. Use this for any find-something-in-HA question — entity OR config. Pass the exact entity_id, not a name fragment, when checking what a rename or delete would break: that form reports automations, scripts and scenes referencing it even when their configuration could not be read. Omit `query` to enumerate by `domain_filter`, `area_filter`, and/or `state_filter` alone (registry-listing mode); configuration-body search is skipped in that mode because there is no term to match against."
+          "description": "What to search for (entity name fragment, free-text config term, entity_id). Searches BOTH the entity registry (entity_ids, friendly names, areas) AND configuration bodies (automation triggers/actions, script sequences, scene contents, helper bodies, dashboard cards) in one call. Use dedicated get/list tools first for known resource types; use this for broader discovery or deep searches. Pass the exact entity_id, not a name fragment, when checking what a rename or delete would break: that form reports automations, scripts and scenes referencing it even when their configuration could not be read. Omit `query` to enumerate by `domain_filter`, `area_filter`, and/or `state_filter` alone (registry-listing mode); configuration-body search is skipped in that mode because there is no term to match against."
         },
         "domain_filter": {
           "type": "str | None",
@@ -3464,7 +3489,7 @@
         "search_types": {
           "type": "str | list[str] | None",
           "default": null,
-          "description": "Configuration types to include in body search: 'automation', 'script', 'scene', 'helper', 'dashboard'. Default = automation+script+scene+helper. Pass as list or JSON-array string."
+          "description": "Configuration types to include in body search: 'automation', 'script', 'scene', 'helper', 'dashboard'. Explicitly providing this selects configuration-only search and skips entities. Omit it for entity discovery. Default = automation+script+scene+helper. Pass as list or JSON-array string."
         },
         "limit": {
           "type": "int",
