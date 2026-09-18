@@ -320,7 +320,8 @@ class TestDashboardSplitRoute:
         assert resp["config_total_matches"] == 2
         assert resp["count"] == 2
         assert resp["partial"] is False
-        assert resp["warnings"] == []
+        assert len(resp["warnings"]) == 1
+        assert "entity search skipped" in resp["warnings"][0]
         # Exactly one frame per leg, and the legacy inventory is untouched.
         assert len(_sent(ws, "ha_mcp_tools/search")) == 1
         assert len(_sent(ws, "ha_mcp_tools/dashboards")) == 1

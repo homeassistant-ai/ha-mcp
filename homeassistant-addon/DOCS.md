@@ -617,7 +617,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_manage_radio` — Manage Home Assistant radios — Z-Wave, Zigbee, Matter, and Thread.
 
 ### Scenes
-- `ha_config_get_scene` — Retrieve Home Assistant scene configuration.
+- `ha_config_get_scene` — Get a scene's complete configuration, or list and search scenes without scene_id.
 - `ha_config_remove_scene` — Delete a Home Assistant scene.
 - `ha_config_set_scene` — Create or update a Home Assistant scene.
 

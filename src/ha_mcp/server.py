@@ -228,6 +228,12 @@ class HomeAssistantSmartMCPServer:
         # indexes the enriched descriptions.
         self._apply_search_keyword_enrichment()
 
+        # Capability-specific metadata supersedes legacy/lite descriptions,
+        # and must reach the catalog before categorized search indexes it.
+        from .transforms import ComponentSearchSchemaTransform
+
+        self.mcp.add_transform(ComponentSearchSchemaTransform(self.client))
+
         # Apply tool search transform (must come after all tools and
         # the skill guide tool are registered so it can wrap everything)
         self._apply_tool_search()
@@ -758,10 +764,13 @@ class HomeAssistantSmartMCPServer:
             "ha_get_skill_guide or your locally installed skills."
         ),
         "ha_config_get_scene": (
-            "Get a Home Assistant scene configuration by "
-            "scene_id or entity_id. Returns the full config plus a "
+            "Get a Home Assistant scene configuration by scene_id or entity_id, "
+            "or omit scene_id to list/search scenes. Use query for names/IDs "
+            "and search_in_config=True for full stored attribute values. "
+            "Pass a returned scene_id to get the full config plus a "
             "stable config_hash for use with python_transform on "
-            "ha_config_set_scene.\n\n"
+            "ha_config_set_scene. Integration-managed scenes have no editable "
+            "storage config; partial content searches are not exhaustive.\n\n"
             "For schema details, see "
             "ha_get_skill_guide."
         ),
