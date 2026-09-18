@@ -51,6 +51,7 @@ from custom_components.ha_mcp_tools.const import (  # noqa: E402
     OPT_AUTO_UPDATE,
     OPT_BIND_HOST,
     OPT_CHANNEL,
+    OPT_ENABLE_LLM_API,
     OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_SERVER_URL,
@@ -1878,7 +1879,10 @@ class TestThreadEnvStaging:
         # blueprint files directly; it is HA's own config dir, captured on the
         # event loop at construction, never a caller-supplied path.
         set_conn.assert_called_once_with(
-            "http://ha.local:8123", "tok-xyz", config_dir=mgr._hass_config_dir
+            "http://ha.local:8123",
+            "tok-xyz",
+            config_dir=mgr._hass_config_dir,
+            llm_api_enabled=True,
         )
         # _serve raised on the ha_mcp.server import → captured, thread didn't hang.
         assert mgr._thread_exc is not None
@@ -1907,7 +1911,33 @@ class TestThreadEnvStaging:
             "https://127.0.0.1:8123",
             "tok-xyz",
             config_dir=mgr._hass_config_dir,
+            llm_api_enabled=True,
             verify_ssl=False,
+        )
+
+    def test_serve_passes_disabled_llm_api_option(self, tmp_path, monkeypatch):
+        mgr, _hass, _entry = _manager(
+            tmp_path,
+            options={
+                OPT_SERVER_URL: "http://ha.local:8123",
+                OPT_ENABLE_LLM_API: False,
+            },
+        )
+        set_conn = MagicMock(name="set_embedded_connection")
+        ha_mcp_mod = ModuleType("ha_mcp")
+        ha_mcp_config = ModuleType("ha_mcp.config")
+        ha_mcp_config.set_embedded_connection = set_conn
+        monkeypatch.setitem(sys.modules, "ha_mcp", ha_mcp_mod)
+        monkeypatch.setitem(sys.modules, "ha_mcp.config", ha_mcp_config)
+        monkeypatch.delitem(sys.modules, "ha_mcp.server", raising=False)
+
+        mgr._thread_main("tok-xyz")
+
+        set_conn.assert_called_once_with(
+            "http://ha.local:8123",
+            "tok-xyz",
+            config_dir=mgr._hass_config_dir,
+            llm_api_enabled=False,
         )
 
     def test_serve_drops_only_config_dir_on_a_server_without_it(

@@ -284,3 +284,17 @@ class TestEmbeddedConnection:
     def test_blank_config_dir_reads_as_none(self):
         config.set_embedded_connection("http://127.0.0.1:8123", "tok123", config_dir="")
         assert config.get_embedded_config_dir() is None
+
+    def test_llm_metadata_is_off_outside_embedded_mode(self):
+        assert config.should_emit_llm_api_metadata() is False
+
+    def test_old_component_keeps_embedded_llm_metadata(self):
+        config.set_embedded_connection("http://127.0.0.1:8123", "tok123")
+        assert config.should_emit_llm_api_metadata() is True
+
+    @pytest.mark.parametrize("enabled", [True, False])
+    def test_embedded_llm_metadata_follows_component_option(self, enabled):
+        config.set_embedded_connection(
+            "http://127.0.0.1:8123", "tok123", llm_api_enabled=enabled
+        )
+        assert config.should_emit_llm_api_metadata() is enabled
