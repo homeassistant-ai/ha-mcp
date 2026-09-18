@@ -94,12 +94,12 @@ async def test_update_forwards_recurrence_and_optional_event_fields():
         rrule="FREQ=WEEKLY;BYDAY=MO",
         uid="series-1",
         recurrence_id="20260615T100000",
-        recurrence_range="THIS_AND_FUTURE",
+        recurrence_range="THISANDFUTURE",
     )
 
     message = client.send_websocket_message.await_args.args[0]
     assert message["recurrence_id"] == "20260615T100000"
-    assert message["recurrence_range"] == "THIS_AND_FUTURE"
+    assert message["recurrence_range"] == "THISANDFUTURE"
     assert message["event"] == {
         "summary": "Team sync",
         "dtstart": "2026-06-15T10:00:00",
@@ -109,7 +109,7 @@ async def test_update_forwards_recurrence_and_optional_event_fields():
         "rrule": "FREQ=WEEKLY;BYDAY=MO",
     }
     assert result["recurrence_id"] == "20260615T100000"
-    assert result["recurrence_range"] == "THIS_AND_FUTURE"
+    assert result["recurrence_range"] == "THISANDFUTURE"
 
 
 @pytest.mark.asyncio
@@ -188,7 +188,7 @@ async def test_update_transport_failure_maps_to_connection_error():
     "recurrence_kwargs",
     [
         pytest.param({"recurrence_id": "20260615T100000"}, id="recurrence_id"),
-        pytest.param({"recurrence_range": "THIS_AND_FUTURE"}, id="recurrence_range"),
+        pytest.param({"recurrence_range": "THISANDFUTURE"}, id="recurrence_range"),
     ],
 )
 @pytest.mark.asyncio

@@ -56,7 +56,7 @@ from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import cached_property
 from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict
@@ -2482,21 +2482,23 @@ async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
     except (AttributeError, ImportError, ValueError, TypeError):
         days = 7
     days = max(1, min(365, days))
-    start = datetime.now(UTC).isoformat()
-    payload = {
-        "type": "execute_script",
-        "sequence": [
-            {
-                "service": "calendar.get_events",
-                "target": {"entity_id": cal},
-                "data": {"duration": {"days": days}, "start_date_time": start},
-                "response_variable": "events",
-            },
-            {"stop": "", "response_variable": "events"},
-        ],
-    }
+    now = datetime.now(UTC)
+    # Read through the REST calendar view rather than the
+    # ``calendar.get_events`` service: the service response is built by HA's
+    # ``_list_events_dict_factory``, which keeps only ``LIST_EVENT_FIELDS``
+    # (start/end/summary/description/location/status) and therefore carries no
+    # ``uid`` to match on. ``/api/calendars/{entity_id}`` serialises the whole
+    # CalendarEvent, so uid, recurrence_id and rrule survive — the same
+    # endpoint ``ha_config_get_calendar_events`` reads.
     try:
-        result = await _ws_send(client, payload)
+        events = await client._request(
+            "GET",
+            f"/calendars/{cal}",
+            params={
+                "start": now.isoformat(),
+                "end": (now + timedelta(days=days)).isoformat(),
+            },
+        )
     except HomeAssistantError as err:
         # Only treat 404 (calendar entity not present) as "skip silently".
         # Auth/transport/server errors deserve a WARNING so an operator
@@ -2506,24 +2508,102 @@ async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
         if getattr(err, "status_code", None) == 404:
             return None
         raise
-    result = _require_dict(result, "execute_script")
-    events = result.get("response", {}).get("events", {}).get(cal, {}).get("events", [])
-    for ev in events:
-        if ev.get("uid") == uid:
-            return {"calendar_entity_id": cal, **ev}
+    for event in _require_list(events, f"/calendars/{cal}"):
+        if isinstance(event, dict) and event.get("uid") == uid:
+            return {"calendar_entity_id": cal, **event}
     return None
 
 
+def _calendar_bound(value: Any) -> tuple[str, bool] | None:
+    """Return ``(iso_value, is_date_only)`` for a snapshotted event boundary.
+
+    The REST view wraps each boundary as ``{"dateTime": ...}`` (timed) or
+    ``{"date": ...}`` (all-day); snapshots taken before that switch hold a
+    flat ISO string, which a 10-character length identifies as date-only.
+    """
+    if isinstance(value, dict):
+        if value.get("dateTime"):
+            return str(value["dateTime"]), False
+        if value.get("date"):
+            return str(value["date"]), True
+        return None
+    if isinstance(value, str) and value:
+        return value, len(value) == 10
+    return None
+
+
+async def _recreate_calendar_event(
+    client: Any,
+    cal: str,
+    event: dict[str, Any],
+    start: tuple[str, bool],
+    end: tuple[str, bool],
+) -> Any:
+    """Create an event that no longer exists under its snapshotted uid."""
+    if event.get("rrule"):
+        # ``calendar.create_event`` has no rrule field, so a recurring series
+        # can only be re-created over the WebSocket API.
+        return await _ws_send(
+            client,
+            {"type": "calendar/event/create", "entity_id": cal, "event": event},
+        )
+
+    data: dict[str, Any] = {"entity_id": cal, "summary": event["summary"]}
+    if start[1]:
+        data.update({"start_date": start[0], "end_date": end[0]})
+    else:
+        data.update({"start_date_time": start[0], "end_date_time": end[0]})
+    for key in ("description", "location"):
+        if event.get(key):
+            data[key] = event[key]
+    return await _rest_post(client, "services/calendar/create_event", data)
+
+
 async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> Any:
-    cal = config.get("calendar_entity_id")
-    if not cal:
-        cal = entity_id.split("::", 1)[0]
-    data = {k: v for k, v in config.items() if k != "calendar_entity_id"}
-    return await _rest_post(
-        client,
-        "services/calendar/create_event",
-        {"entity_id": cal, **data},
-    )
+    cal = config.get("calendar_entity_id") or entity_id.split("::", 1)[0]
+    uid = config.get("uid") or entity_id.partition("::")[2]
+    start = _calendar_bound(config.get("start"))
+    end = _calendar_bound(config.get("end"))
+    if start is None or end is None:
+        raise HomeAssistantError(
+            f"Calendar snapshot for {entity_id!r} has no usable start/end"
+        )
+
+    event: dict[str, Any] = {
+        "summary": config.get("summary") or "",
+        "dtstart": start[0],
+        "dtend": end[0],
+    }
+    for key in ("description", "location", "rrule"):
+        if config.get(key):
+            event[key] = config[key]
+
+    if not uid:
+        return await _recreate_calendar_event(client, cal, event, start, end)
+
+    # An edited event still exists under its uid, so put the captured values
+    # back in place instead of creating a second copy. Only a snapshot of a
+    # DELETED event (or a calendar without UPDATE_EVENT) falls through to
+    # re-creation.
+    message: dict[str, Any] = {
+        "type": "calendar/event/update",
+        "entity_id": cal,
+        "uid": uid,
+        "event": event,
+    }
+    if config.get("recurrence_id"):
+        message["recurrence_id"] = config["recurrence_id"]
+    try:
+        return await _ws_send(client, message)
+    except HomeAssistantError as err:
+        logger.info(
+            "Restoring calendar event %s on %s in place failed (%s); "
+            "re-creating it instead",
+            uid,
+            cal,
+            err,
+        )
+    return await _recreate_calendar_event(client, cal, event, start, end)
 
 
 # Zones — zone/{list,update} (no ``config/`` prefix per HA's actual WS API;

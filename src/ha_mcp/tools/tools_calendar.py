@@ -10,7 +10,7 @@ Use ha_search(query='calendar', domain_filter='calendar') to find calendar entit
 
 import logging
 from datetime import datetime, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
@@ -491,11 +491,13 @@ class CalendarTools:
             ),
         ] = None,
         recurrence_range: Annotated[
-            str | None,
+            Literal["THISANDFUTURE"] | None,
             Field(
                 description=(
-                    "Only meaningful with 'uid': 'THIS_AND_FUTURE' to update "
-                    "this and all following occurrences."
+                    "Only meaningful with 'uid': 'THISANDFUTURE' to update "
+                    "this and all following occurrences. Home Assistant "
+                    "compares this value verbatim, so no other spelling "
+                    "(including 'THIS_AND_FUTURE') selects the range."
                 ),
                 default=None,
             ),
@@ -546,7 +548,7 @@ class CalendarTools:
             end="2024-02-05T12:00:00",
             uid="recurring-event-67890",
             recurrence_id="20240205T100000",
-            recurrence_range="THIS_AND_FUTURE"
+            recurrence_range="THISANDFUTURE"
         )
 
         # Create a recurring event (every Monday, 10 occurrences)
@@ -757,9 +759,14 @@ class CalendarTools:
             ),
         ] = None,
         recurrence_range: Annotated[
-            str | None,
+            Literal["THISANDFUTURE"] | None,
             Field(
-                description="Optional recurrence range ('THIS_AND_FUTURE' to delete this and future occurrences)",
+                description=(
+                    "Optional recurrence range ('THISANDFUTURE' to delete this "
+                    "and future occurrences). Home Assistant compares this "
+                    "value verbatim, so no other spelling (including "
+                    "'THIS_AND_FUTURE') selects the range."
+                ),
                 default=None,
             ),
         ] = None,
@@ -776,7 +783,7 @@ class CalendarTools:
         - entity_id: Calendar entity ID (e.g., 'calendar.family')
         - uid: Unique identifier of the event to delete
         - recurrence_id: Optional recurrence ID for recurring events
-        - recurrence_range: Optional recurrence range ('THIS_AND_FUTURE' to delete this and future occurrences)
+        - recurrence_range: Optional recurrence range ('THISANDFUTURE' to delete this and future occurrences)
 
         **Example Usage:**
         ```python
@@ -791,7 +798,7 @@ class CalendarTools:
             "calendar.work",
             uid="recurring-event-67890",
             recurrence_id="20240115T100000",
-            recurrence_range="THIS_AND_FUTURE"
+            recurrence_range="THISANDFUTURE"
         )
         ```
 

@@ -61,12 +61,12 @@ async def test_delete_forwards_recurrence_params():
         entity_id="calendar.test",
         uid="evt-123",
         recurrence_id="20260101T100000",
-        recurrence_range="THIS_AND_FUTURE",
+        recurrence_range="THISANDFUTURE",
     )
 
     message = client.send_websocket_message.await_args.args[0]
     assert message["recurrence_id"] == "20260101T100000"
-    assert message["recurrence_range"] == "THIS_AND_FUTURE"
+    assert message["recurrence_range"] == "THISANDFUTURE"
 
 
 @pytest.mark.asyncio
