@@ -541,7 +541,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 ### Calendar
 - `ha_config_get_calendar_events` — Retrieve calendar events from a calendar entity.
 - `ha_config_remove_calendar_event` — Delete an event from a calendar.
-- `ha_config_set_calendar_event` — Create a new event in a calendar.
+- `ha_config_set_calendar_event` — Create a new event in a calendar, or update an existing one.
 
 ### Camera
 - `ha_get_camera_image` — Retrieve a snapshot image from a Home Assistant camera entity.
