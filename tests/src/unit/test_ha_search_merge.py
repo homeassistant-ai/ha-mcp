@@ -597,7 +597,7 @@ def test_intent_skip_warning_emitted_when_gate_fires() -> None:
     assert len(response["warnings"]) == 1
     assert response["warnings"][0] == _INTENT_SKIP_WARNING
     # The user-visible opt-back-in hint must be present; agents read this.
-    assert "search_types=" in response["warnings"][0]
+    assert "without entity filters" in response["warnings"][0]
 
 
 def test_intent_skip_warning_not_emitted_when_gate_quiet() -> None:
