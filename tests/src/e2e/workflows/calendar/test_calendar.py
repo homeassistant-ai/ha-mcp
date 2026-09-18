@@ -889,6 +889,133 @@ class TestCalendarEventLifecycle:
 
         logger.info("ha_config_set_calendar_event update test completed")
 
+    async def test_update_one_occurrence_leaves_the_series_alone(self, mcp_client):
+        """
+        Test: Update a single occurrence of a recurring series by recurrence_id
+
+        Every occurrence of a series shares the event uid and differs only by
+        recurrence_id, so a uid-only update would hit whichever occurrence the
+        backend returned first. Targets the SECOND occurrence, then asserts the
+        other two kept their summary and their rrule. The edited one loses its
+        rrule because Home Assistant forks it into a standalone event, which is
+        why a restore must never replay the rule onto it.
+        """
+        calendar_entity = await self._find_writable_calendar(mcp_client)
+        if not calendar_entity:
+            pytest.skip("No calendar entities available for testing")
+        if not await self._supports_event_update(mcp_client, calendar_entity):
+            pytest.skip(f"Calendar {calendar_entity} does not support event update")
+
+        summary = f"E2E Series Test Event {uuid.uuid4().hex[:8]}"
+        rrule = "FREQ=DAILY;COUNT=3"
+        now = datetime.now(UTC)
+        start = (now + timedelta(days=1)).replace(
+            hour=9, minute=0, second=0, microsecond=0
+        )
+        end = start + timedelta(minutes=30)
+        list_args = {
+            "entity_id": calendar_entity,
+            "start": start.isoformat(),
+            "end": (start + timedelta(days=2, hours=4)).isoformat(),
+        }
+        mcp = MCPAssertions(mcp_client)
+
+        def _series(data: dict, wanted: str) -> list[dict]:
+            return [e for e in data.get("events", []) if e.get("summary") == wanted]
+
+        create_data = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_calendar_event",
+            {
+                "entity_id": calendar_entity,
+                "summary": summary,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "rrule": rrule,
+            },
+        )
+        if not create_data.get("success"):
+            pytest.skip(
+                f"Calendar {calendar_entity} does not support recurring "
+                f"event creation: {extract_error_message(create_data) or 'Unknown'}"
+            )
+
+        series_uid: str | None = None
+        try:
+            events_data = await wait_for_tool_result(
+                mcp_client,
+                "ha_config_get_calendar_events",
+                list_args,
+                predicate=lambda d: len(_series(d, summary)) >= 3,
+                timeout=15,
+                description=f"3 occurrences of '{summary}'",
+            )
+            occurrences = sorted(
+                _series(events_data, summary), key=lambda e: str(e.get("start"))
+            )
+            series_uid = occurrences[0].get("uid")
+            assert series_uid, "series occurrences should carry a uid"
+
+            target = occurrences[1]
+            recurrence_id = target.get("recurrence_id")
+            assert recurrence_id, (
+                f"every occurrence of a series carries a recurrence_id; got {target}"
+            )
+
+            new_summary = f"{summary} EDITED"
+            new_start = self._event_bound(target, "start") + timedelta(hours=2)
+            new_end = new_start + timedelta(minutes=30)
+            update_data = await mcp.call_tool_success(
+                "ha_config_set_calendar_event",
+                {
+                    "entity_id": calendar_entity,
+                    "summary": new_summary,
+                    "start": new_start.isoformat(),
+                    "end": new_end.isoformat(),
+                    "uid": series_uid,
+                    "recurrence_id": recurrence_id,
+                },
+            )
+            assert update_data.get("recurrence_id") == recurrence_id
+
+            after = await wait_for_tool_result(
+                mcp_client,
+                "ha_config_get_calendar_events",
+                list_args,
+                predicate=lambda d: bool(_series(d, new_summary)),
+                timeout=15,
+                description=f"read-back of edited occurrence '{new_summary}'",
+            )
+            edited = _series(after, new_summary)
+            assert len(edited) == 1, f"exactly one occurrence should change: {edited}"
+            assert edited[0].get("uid") == series_uid, (
+                "an edited occurrence keeps the series uid"
+            )
+            assert not edited[0].get("rrule"), (
+                "an edited occurrence is forked into a standalone event and "
+                f"must not keep the series rule: {edited[0]}"
+            )
+
+            untouched = _series(after, summary)
+            assert len(untouched) == 2, (
+                f"the other 2 occurrences must be unchanged, got {untouched}"
+            )
+            assert all(e.get("rrule") == rrule for e in untouched), (
+                f"the remaining occurrences keep the series rule: {untouched}"
+            )
+        finally:
+            if series_uid:
+                try:
+                    await mcp_client.call_tool(
+                        "ha_config_remove_calendar_event",
+                        {"entity_id": calendar_entity, "uid": series_uid},
+                    )
+                except Exception as cleanup_error:
+                    logger.warning(
+                        f"Cleanup of series {series_uid} on {calendar_entity}: "
+                        f"{cleanup_error}"
+                    )
+
     async def test_update_calendar_event_invalid_entity(self, mcp_client):
         """
         Test: Update event with invalid calendar entity
