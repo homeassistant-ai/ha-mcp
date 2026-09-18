@@ -187,9 +187,14 @@ class TestDetectClientHost:
         ancestors.extend([_FakeProc("/usr/bin/uv", "uv"), _FakeProc("/bin/sh", "sh")])
         assert detect_client_host() == {}
 
-    def test_unreadable_process_tree_returns_empty(self, monkeypatch):
+    @pytest.mark.parametrize(
+        "error", [psutil.NoSuchProcess(pid=0), OSError("proc backend failure")]
+    )
+    def test_unreadable_process_tree_returns_empty(self, monkeypatch, error):
+        # psutil surfaces some backend failures as a bare OSError rather than
+        # psutil.Error; either must degrade to "no host", never break the report.
         def boom():
-            raise psutil.NoSuchProcess(pid=0)
+            raise error
 
         monkeypatch.setattr(psutil, "Process", boom)
         assert detect_client_host() == {}

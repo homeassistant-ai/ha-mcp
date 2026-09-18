@@ -84,7 +84,7 @@ def detect_client_host() -> dict[str, str]:
         return {}
     try:
         ancestors = psutil.Process().parents()
-    except psutil.Error as exc:
+    except (psutil.Error, OSError) as exc:
         logger.debug("Cannot read process ancestry: %s", exc)
         return {}
     for proc in ancestors:
