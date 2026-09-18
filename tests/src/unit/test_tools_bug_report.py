@@ -2480,6 +2480,13 @@ class TestFormatClientHostForTemplate:
 
 class TestBugReportClientHostRow:
     @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.get_config = AsyncMock(return_value={"version": "2024.12.0"})
+        client.get_states = AsyncMock(return_value=[])
+        return client
+
+    @pytest.fixture
     def ha_report_issue_func(self, mock_mcp, mock_client):
         register_bug_report_tools(mock_mcp, mock_client)
         func = mock_mcp._tools["ha_report_issue"]
