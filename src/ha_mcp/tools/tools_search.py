@@ -1171,8 +1171,8 @@ def _dashboard_split_serviceable(req: _ResolvedSearch, caps: Any) -> bool:
       split as a dashboards leg wearing a component envelope — the legacy path
       already produces exactly that, with its own bucket.
     - On older components without ``search_unified``, the window fetch would
-      ask for more records than the component's ``limit`` ceiling (``_component_max_results``), which its schema rejects
-      outright.
+      ask for more records than the component's ``limit`` ceiling
+      (``_component_max_results``), which its schema rejects outright.
     """
     serves_body = req.body_eligible and bool(_component_body_search_types(req))
     if not (req.registry_eligible or serves_body):

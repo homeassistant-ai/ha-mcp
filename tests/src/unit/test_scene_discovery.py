@@ -5,7 +5,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from ha_mcp._vendor.fastmcp import Client, FastMCP
 from ha_mcp.client.rest_client import HomeAssistantAPIError
+from ha_mcp.tools.helpers import register_tool_methods
 from ha_mcp.tools.tools_config_scenes import ConfigSceneTools
 
 
@@ -128,18 +130,51 @@ async def test_config_failure_is_partial_not_no_match(scene_client):
     assert "not exhaustive" in result["partial_reason"]
 
 
+@pytest.mark.parametrize("query", ["Movie", "northern lights"])
+async def test_content_search_404_reports_incomplete_total(
+    scene_client: MagicMock, query: str
+) -> None:
+    scene_client.get_scene_config.side_effect = HomeAssistantAPIError(
+        "missing", status_code=404
+    )
+    result = await ConfigSceneTools(scene_client).ha_config_get_scene(
+        query=query, search_in_config=True
+    )
+
+    assert result["partial"] is True
+    assert result["total_is_exact"] is False
+    assert result["config_scan"]["not_in_storage"] == 1
+    assert result["config_scan"]["failed"] == 0
+    assert "not exhaustive" in result["partial_reason"]
+    if query == "Movie":
+        assert result["scenes"][0]["config_status"] == "not_in_storage"
+        assert result["scenes"][0]["scene_id"] is None
+    else:
+        assert result["scenes"] == []
+        assert result["total"] == 0
+
+
 async def test_single_get_does_not_discover_or_probe_component(scene_client):
     result = await ConfigSceneTools(scene_client).ha_config_get_scene("17000001")
     assert result["action"] == "get"
     scene_client.get_states.assert_not_awaited()
 
 
-@pytest.mark.parametrize("arguments", [{"scene_id": ""}, {"limit": 0}, {"offset": -1}])
-async def test_invalid_discovery_parameters_raise_tool_error(scene_client, arguments):
-    from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-    with pytest.raises(ToolError):
-        await ConfigSceneTools(scene_client).ha_config_get_scene(**arguments)
+@pytest.mark.parametrize(
+    "arguments", [{"scene_id": ""}, {"limit": 0}, {"limit": 101}, {"offset": -1}]
+)
+async def test_invalid_discovery_parameters_raise_tool_error(
+    scene_client: MagicMock, arguments: dict[str, str | int]
+) -> None:
+    mcp = FastMCP("scene-discovery-validation")
+    register_tool_methods(mcp, ConfigSceneTools(scene_client))
+    async with Client(mcp) as client:
+        result = await client.call_tool(
+            "ha_config_get_scene", arguments, raise_on_error=False
+        )
+    assert result.is_error
+    scene_client.get_states.assert_not_awaited()
+    scene_client.get_scene_config.assert_not_awaited()
 
 
 async def test_component_inventory_pages_without_rest_states(scene_client, monkeypatch):

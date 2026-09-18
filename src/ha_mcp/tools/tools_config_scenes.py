@@ -321,13 +321,6 @@ class ConfigSceneTools:
         """
         try:
             if scene_id is None:
-                if not 1 <= limit <= 100 or offset < 0:
-                    raise_tool_error(
-                        create_error_response(
-                            ErrorCode.VALIDATION_INVALID_PARAMETER,
-                            "limit must be between 1 and 100 and offset must be non-negative",
-                        )
-                    )
                 return await discover_scenes(
                     self._client,
                     query=query,

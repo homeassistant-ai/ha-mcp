@@ -39,7 +39,7 @@ def add_location_metadata(
         return result
     result["area_names"] = location.area_names
     if location.warnings:
-        result["warnings"] = location.warnings
+        result.setdefault("warnings", []).extend(location.warnings)
     if location.unavailable:
         result["partial"] = True
         reason = "Location registry data unavailable: " + ", ".join(

@@ -232,3 +232,32 @@ def test_location_resolution_observes_live_registry_changes(
     assert wsapi._do_search(hass, params)["entity_total_matches"] == 2
     view.area._areas["bedroom"].floor_id = "ground"
     assert wsapi._do_search(hass, params)["entity_total_matches"] == 3
+
+
+def test_location_metadata_preserves_existing_warnings() -> None:
+    from custom_components.ha_mcp_tools.search_locations import (
+        SearchLocation,
+        add_location_metadata,
+    )
+
+    location = SearchLocation(
+        area_ids={"kitchen"},
+        area_names=["Kitchen"],
+        warnings=["Location registry incomplete"],
+        unavailable=["floor"],
+    )
+    result = add_location_metadata(
+        {
+            "warnings": ["Automation scan incomplete"],
+            "partial": True,
+            "partial_reason": "Automation scan incomplete",
+        },
+        location,
+    )
+
+    assert result["warnings"] == [
+        "Automation scan incomplete",
+        "Location registry incomplete",
+    ]
+    assert "Automation scan incomplete" in result["partial_reason"]
+    assert "floor" in result["partial_reason"]
