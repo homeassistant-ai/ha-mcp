@@ -278,3 +278,22 @@ def test_permanent_error_frame_raises_without_retry(wait: Any) -> None:
         wait(ws, 1000.0, _next_id())
     assert ws.sent_ids == [1]
     sleep.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("wait", "frames"),
+    [
+        (_wait_supervisor_running, [_STARTUP, _RUNNING]),
+        (_wait_supervisor_update_done, [_PENDING, _SETTLED]),
+    ],
+    ids=["running", "update_done"],
+)
+def test_poll_sleep_is_capped_to_deadline(wait: Any, frames: list[dict]) -> None:
+    """Near the deadline the 10s poll sleep shrinks to the remaining budget."""
+    ws = _FakeWS(frames)
+    with (
+        patch("tests.src.haos_runtime.time.monotonic", return_value=8.0),
+        patch("tests.src.haos_runtime.time.sleep") as sleep,
+    ):
+        wait(ws, 15.0, _next_id())
+    sleep.assert_called_once_with(7.0)

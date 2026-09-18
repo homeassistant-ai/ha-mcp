@@ -2427,6 +2427,11 @@ def boot_haos_qemu(image_path: Path, serial_log: Path | None = None) -> Iterator
             proc.wait()
 
 
+def _poll_sleep(deadline: float) -> None:
+    """Sleep up to 10s, never past ``deadline`` (mirrors the bake's probe budget)."""
+    time.sleep(max(0.0, min(10.0, deadline - time.monotonic())))
+
+
 def _is_transient_supervisor_info_error(err: Any) -> bool:
     """Return whether a failed ``supervisor/api`` read frame is worth re-polling.
 
@@ -2540,7 +2545,7 @@ def _wait_supervisor_update_done(
         if error is not None:
             last_error = error
             log.debug("Transient /supervisor/info failure: %s", last_error)
-            time.sleep(10.0)
+            _poll_sleep(deadline)
             continue
         if result is None:
             break
@@ -2555,7 +2560,7 @@ def _wait_supervisor_update_done(
             result.get("version"),
             result.get("version_latest"),
         )
-        time.sleep(10.0)
+        _poll_sleep(deadline)
     suffix = f"; last error: {last_error}" if last_error else ""
     raise TimeoutError(
         f"Supervisor did not finish self-updating before the update deadline{suffix}"
@@ -2600,7 +2605,7 @@ def _wait_supervisor_running(
         if error is not None:
             last_error = error
             log.debug("Transient /info failure: %s", last_error)
-            time.sleep(10.0)
+            _poll_sleep(deadline)
             continue
         if result is None:
             break
@@ -2609,7 +2614,7 @@ def _wait_supervisor_running(
             log.info("Supervisor core state is running; proceeding")
             return
         log.info("Supervisor core state is %r; waiting before app ops", last_state)
-        time.sleep(10.0)
+        _poll_sleep(deadline)
     suffix = f"; last error: {last_error}" if last_error else ""
     raise TimeoutError(
         f"Supervisor did not reach the running state before the update deadline "
