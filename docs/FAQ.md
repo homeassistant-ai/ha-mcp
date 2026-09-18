@@ -331,7 +331,8 @@ Workarounds, any one of them:
    server.
 
 Related: Claude Desktop 2.110.0 rejects omitted optional parameters
-("expected nonoptional, received undefined"); see
+("expected nonoptional, received undefined"). Update Claude Desktop to
+2.2553.0 or later, which fixes it; if you cannot update, see
 [#2472](https://github.com/homeassistant-ai/ha-mcp/issues/2472) for the
 downgrade workaround.
 
