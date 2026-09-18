@@ -252,20 +252,24 @@ class HomeAssistantSmartMCPServer:
 
         self.mcp.add_middleware(ToolSearchHintMiddleware())
 
-        # Stamp every tools/list entry with its conversation-agent LLM API
-        # exposure + pinned state (#1745). Additive metadata only — regular
-        # clients are unaffected; the ha_mcp_tools custom component filters
-        # what it offers to Home Assistant conversation agents on it.
-        from .llm_exposure import LlmExposureMiddleware
+        # Only the custom component's conversation-agent LLM API consumes the
+        # private per-tool stamp. Avoid adding it to standalone/add-on catalogs,
+        # or to an embedded server whose LLM API is disabled (#2479).
+        from .config import should_emit_llm_api_metadata
 
-        # policy_live: whether the gating middleware/queue actually wired at
-        # startup — stamped so a client can distinguish "configured" from
-        # "enforcing" on the very connection it is using (#1990).
-        self.mcp.add_middleware(
-            LlmExposureMiddleware(
-                policy_live=lambda: getattr(self, "approval_queue", None) is not None
+        if should_emit_llm_api_metadata():
+            from .llm_exposure import LlmExposureMiddleware
+
+            # policy_live: whether the gating middleware/queue actually wired
+            # at startup — stamped so the component can distinguish configured
+            # from enforcing on the connection it is using (#1990).
+            self.mcp.add_middleware(
+                LlmExposureMiddleware(
+                    policy_live=lambda: (
+                        getattr(self, "approval_queue", None) is not None
+                    )
+                )
             )
-        )
 
         # Entity visibility enforce mode, INBOUND half (#2015) — always
         # installed, consults the live config per request (no-op unless

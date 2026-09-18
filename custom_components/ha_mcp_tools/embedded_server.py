@@ -67,6 +67,7 @@ from .const import (
     DEFAULT_AUTO_UPDATE,
     DEFAULT_BIND_HOST,
     DEFAULT_CHANNEL,
+    DEFAULT_ENABLE_LLM_API,
     DEFAULT_LOOPBACK_URL,
     DEFAULT_PIP_SPEC,
     DEFAULT_SERVER_PORT,
@@ -77,6 +78,7 @@ from .const import (
     OPT_AUTO_UPDATE,
     OPT_BIND_HOST,
     OPT_CHANNEL,
+    OPT_ENABLE_LLM_API,
     OPT_PIP_SPEC,
     OPT_SERVER_PORT,
     OPT_SERVER_URL,
@@ -326,6 +328,9 @@ class EmbeddedServerManager:
         # _resolve_pip_spec, which consults it.
         self._auto_update: bool = bool(
             options.get(OPT_AUTO_UPDATE, DEFAULT_AUTO_UPDATE)
+        )
+        self._llm_api_enabled: bool = bool(
+            options.get(OPT_ENABLE_LLM_API, DEFAULT_ENABLE_LLM_API)
         )
         # Initial spec without the installed-version read (that would block the
         # event loop). For an auto-update-off channel this is the bare dist here;
@@ -1533,10 +1538,13 @@ class EmbeddedServerManager:
         SSL-enabled instance just because the server is missing an unrelated,
         newer parameter.
         """
-        kwargs: dict[str, Any] = {"config_dir": self._hass_config_dir}
+        kwargs: dict[str, Any] = {
+            "config_dir": self._hass_config_dir,
+            "llm_api_enabled": self._llm_api_enabled,
+        }
         if self._loopback_verify_ssl is not None:
             kwargs["verify_ssl"] = self._loopback_verify_ssl
-        for optional in ("config_dir", "verify_ssl", None):
+        for optional in ("llm_api_enabled", "config_dir", "verify_ssl", None):
             try:
                 hamcp_config.set_embedded_connection(
                     self._server_url, access_token, **kwargs
@@ -1555,6 +1563,11 @@ class EmbeddedServerManager:
                         "Installed ha-mcp server does not accept config_dir for "
                         "the embedded connection; blueprint reads route through "
                         "the component until the server package updates"
+                    )
+                elif optional == "llm_api_enabled":
+                    _LOGGER.debug(
+                        "Installed ha-mcp server does not accept the LLM API "
+                        "metadata flag; retaining its legacy tools/list metadata"
                     )
                 else:
                     _LOGGER.warning(

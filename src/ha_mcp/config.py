@@ -1591,6 +1591,7 @@ def set_embedded_connection(
     token: str,
     verify_ssl: bool | None = None,
     config_dir: str | None = None,
+    llm_api_enabled: bool | None = None,
 ) -> None:
     """Register the in-process HA connection for embedded mode.
 
@@ -1633,6 +1634,10 @@ def set_embedded_connection(
         _EMBEDDED_CONNECTION.pop("config_dir", None)
     else:
         _EMBEDDED_CONNECTION["config_dir"] = config_dir
+    if llm_api_enabled is None:
+        _EMBEDDED_CONNECTION.pop("llm_api_enabled", None)
+    else:
+        _EMBEDDED_CONNECTION["llm_api_enabled"] = llm_api_enabled
     if _settings is not None:
         _apply_embedded_connection(_settings)
 
@@ -1646,6 +1651,20 @@ def get_embedded_config_dir() -> str | None:
     """
     config_dir = _EMBEDDED_CONNECTION.get("config_dir")
     return config_dir if isinstance(config_dir, str) and config_dir else None
+
+
+def should_emit_llm_api_metadata() -> bool:
+    """Return whether ``tools/list`` needs the component's private metadata.
+
+    Standalone and add-on clients have no consumer for ``_meta.ha_mcp``. An
+    embedded server needs it only when the custom component exposes its LLM
+    API. A missing flag means an older component, so preserve the historical
+    embedded behavior until that component is upgraded.
+    """
+    if not _EMBEDDED_CONNECTION:
+        return False
+    enabled = _EMBEDDED_CONNECTION.get("llm_api_enabled")
+    return enabled if isinstance(enabled, bool) else True
 
 
 def _reset_embedded_connection() -> None:
