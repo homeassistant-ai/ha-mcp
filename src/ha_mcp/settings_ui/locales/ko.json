@@ -573,8 +573,8 @@
       "description": "라벨 정보를 가져옵니다. 전체 라벨을 나열하거나 ID로 하나를 확인합니다."
     },
     "ha_config_get_scene": {
-      "title": "장면 설정 조회",
-      "description": "Home Assistant 장면 설정을 가져옵니다."
+      "title": "장면 가져오기 또는 찾기",
+      "description": "장면의 전체 구성을 가져오거나, scene_id 없이 장면을 나열하고 검색합니다."
     },
     "ha_config_get_script": {
       "title": "스크립트 설정 조회",
@@ -630,7 +630,7 @@
     },
     "ha_config_set_calendar_event": {
       "title": "캘린더 일정 생성·수정",
-      "description": "캘린더에 새 일정을 만듭니다."
+      "description": "캘린더에 새 일정을 만들거나 기존 일정을 업데이트합니다."
     },
     "ha_config_set_category": {
       "title": "카테고리 생성·수정",

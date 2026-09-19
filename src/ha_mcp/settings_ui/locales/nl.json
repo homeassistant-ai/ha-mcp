@@ -542,8 +542,8 @@
       "description": "Haal labelinformatie op - lijst alle labels of haal een specifieke op via ID."
     },
     "ha_config_get_scene": {
-      "title": "Haal Scène Config op",
-      "description": "Haal de Home Assistant-scèneconfiguratie op."
+      "title": "Scènes ophalen of zoeken",
+      "description": "Haal de volledige configuratie van een scène op, of lijst en zoek scènes zonder scene_id."
     },
     "ha_config_get_script": {
       "title": "Haal Script Config op",
@@ -599,7 +599,7 @@
     },
     "ha_config_set_calendar_event": {
       "title": "Maak of Werk Kalendergebeurtenis bij",
-      "description": "Maak een nieuwe gebeurtenis in een kalender."
+      "description": "Maak een nieuwe gebeurtenis aan in een kalender of werk een bestaande bij."
     },
     "ha_config_set_category": {
       "title": "Maak of Werk Categorie bij",

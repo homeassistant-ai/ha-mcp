@@ -542,8 +542,8 @@
       "description": "Akiru etikedan informon - listigu ĉiujn etikedojn aŭ akiru specifan per ID."
     },
     "ha_config_get_scene": {
-      "title": "Akiri Scenan Agordon",
-      "description": "Reakiru agordon de sceno de Home Assistant."
+      "title": "Ricevi aŭ trovi scenojn",
+      "description": "Ricevi la kompletan agordon de sceno, aŭ listigi kaj serĉi scenojn sen scene_id."
     },
     "ha_config_get_script": {
       "title": "Akiri Skriptan Agordon",
@@ -599,7 +599,7 @@
     },
     "ha_config_set_calendar_event": {
       "title": "Krei aŭ Ĝisdatigi Kalendaran Eventon",
-      "description": "Kreu novan eventon en kalendaro."
+      "description": "Krei novan eventon en kalendaro, aŭ ĝisdatigi ekzistantan."
     },
     "ha_config_set_category": {
       "title": "Krei aŭ Ĝisdatigi Kategorion",

@@ -573,8 +573,8 @@
       "description": "Zeigt Labels oder Details zu einem bestimmten Label."
     },
     "ha_config_get_scene": {
-      "title": "Szene abrufen",
-      "description": "Ruft die Konfiguration einer Home-Assistant-Szene ab."
+      "title": "Szenen abrufen oder finden",
+      "description": "Vollständige Konfiguration einer Szene abrufen oder Szenen ohne scene_id auflisten und durchsuchen."
     },
     "ha_config_get_script": {
       "title": "Skript abrufen",
@@ -630,7 +630,7 @@
     },
     "ha_config_set_calendar_event": {
       "title": "Kalenderereignis erstellen/aktualisieren",
-      "description": "Erstellt ein neues oder aktualisiert ein bestehendes Kalenderereignis."
+      "description": "Ein neues Ereignis in einem Kalender erstellen oder ein bestehendes aktualisieren."
     },
     "ha_config_set_category": {
       "title": "Kategorie erstellen/aktualisieren",

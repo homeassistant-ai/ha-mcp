@@ -542,8 +542,8 @@
       "description": "取得標籤資訊 - 列出所有標籤，或透過 ID 取得特定標籤。"
     },
     "ha_config_get_scene": {
-      "title": "取得場景設定",
-      "description": "擷取 Home Assistant 場景設定。"
+      "title": "取得或尋找場景",
+      "description": "取得場景的完整設定，或在沒有 scene_id 的情況下列出並搜尋場景。"
     },
     "ha_config_get_script": {
       "title": "取得腳本設定",
@@ -599,7 +599,7 @@
     },
     "ha_config_set_calendar_event": {
       "title": "建立或更新行事曆事件",
-      "description": "在行事曆中建立新事件。"
+      "description": "在行事曆中建立新事件，或更新現有事件。"
     },
     "ha_config_set_category": {
       "title": "建立或更新分類",

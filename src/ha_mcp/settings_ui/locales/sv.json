@@ -542,8 +542,8 @@
       "description": "Hämta etikettinformation - lista alla etiketter eller hämta en specifik med ID."
     },
     "ha_config_get_scene": {
-      "title": "Hämta Scenkonfiguration",
-      "description": "Hämta Home Assistant-scenkonfiguration."
+      "title": "Hämta eller hitta scener",
+      "description": "Hämta en scens kompletta konfiguration, eller lista och sök efter scener utan scene_id."
     },
     "ha_config_get_script": {
       "title": "Hämta Skriptkonfiguration",
@@ -599,7 +599,7 @@
     },
     "ha_config_set_calendar_event": {
       "title": "Skapa eller Uppdatera Kalenderhändelse",
-      "description": "Skapa en ny händelse i en kalender."
+      "description": "Skapa en ny händelse i en kalender eller uppdatera en befintlig."
     },
     "ha_config_set_category": {
       "title": "Skapa eller Uppdatera Kategori",

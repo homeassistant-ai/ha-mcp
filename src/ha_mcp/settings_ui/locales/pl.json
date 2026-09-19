@@ -542,8 +542,8 @@
       "description": "Pobierz informacje o etykiecie - wyświetl wszystkie etykiety lub pobierz konkretną po ID."
     },
     "ha_config_get_scene": {
-      "title": "Pobierz konfigurację sceny",
-      "description": "Pobierz konfigurację sceny Home Assistant."
+      "title": "Pobierz lub znajdź sceny",
+      "description": "Pobierz pełną konfigurację sceny lub wyświetl listę i wyszukaj sceny bez użycia scene_id."
     },
     "ha_config_get_script": {
       "title": "Pobierz konfigurację skryptu",
@@ -599,7 +599,7 @@
     },
     "ha_config_set_calendar_event": {
       "title": "Utwórz lub zaktualizuj wydarzenie w kalendarzu",
-      "description": "Utwórz nowe wydarzenie w kalendarzu."
+      "description": "Utwórz nowe wydarzenie w kalendarzu lub zaktualizuj istniejące."
     },
     "ha_config_set_category": {
       "title": "Utwórz lub zaktualizuj kategorię",

@@ -573,8 +573,8 @@
       "description": "获取标签信息——列出所有标签或按 ID 查看特定标签。"
     },
     "ha_config_get_scene": {
-      "title": "获取场景配置",
-      "description": "获取 Home Assistant 场景配置。"
+      "title": "获取或查找场景",
+      "description": "获取场景的完整配置，或者在不提供 scene_id 的情况下列出并搜索场景。"
     },
     "ha_config_get_script": {
       "title": "获取脚本配置",
@@ -630,7 +630,7 @@
     },
     "ha_config_set_calendar_event": {
       "title": "创建或更新日历事件",
-      "description": "在日历中创建新事件。"
+      "description": "在日历中创建新事件，或更新现有事件。"
     },
     "ha_config_set_category": {
       "title": "创建或更新类别",

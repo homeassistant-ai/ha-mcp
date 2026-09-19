@@ -573,8 +573,8 @@
       "description": "Ottiene informazioni sulle etichette: le elenca tutte o ne restituisce una specifica per ID."
     },
     "ha_config_get_scene": {
-      "title": "Ottieni la configurazione di una scena",
-      "description": "Recupera la configurazione di una scena di Home Assistant."
+      "title": "Ottieni o trova scene",
+      "description": "Ottieni la configurazione completa di una scena, oppure elenca e cerca scene senza scene_id."
     },
     "ha_config_get_script": {
       "title": "Ottieni la configurazione di uno script",
@@ -630,7 +630,7 @@
     },
     "ha_config_set_calendar_event": {
       "title": "Crea o aggiorna un evento del calendario",
-      "description": "Crea un nuovo evento in un calendario."
+      "description": "Crea un nuovo evento in un calendario o aggiorna uno esistente."
     },
     "ha_config_set_category": {
       "title": "Crea o aggiorna una categoria",

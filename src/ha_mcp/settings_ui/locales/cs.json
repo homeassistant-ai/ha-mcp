@@ -542,8 +542,8 @@
       "description": "Získat informace o štítku – vypsat všechny štítky nebo získat konkrétní podle ID."
     },
     "ha_config_get_scene": {
-      "title": "Získat konfiguraci scény",
-      "description": "Načíst konfiguraci scény Home Assistant."
+      "title": "Získat nebo najít scény",
+      "description": "Získejte kompletní konfiguraci scény nebo vyhledejte a seznamte scény bez scene_id."
     },
     "ha_config_get_script": {
       "title": "Získat konfiguraci skriptu",
@@ -599,7 +599,7 @@
     },
     "ha_config_set_calendar_event": {
       "title": "Vytvořit nebo aktualizovat událost kalendáře",
-      "description": "Vytvořit novou událost v kalendáři."
+      "description": "Vytvořte novou událost v kalendáři nebo aktualizujte stávající."
     },
     "ha_config_set_category": {
       "title": "Vytvořit nebo aktualizovat kategorii",
