@@ -1687,7 +1687,18 @@ class TestHaSetEntityRegistryDisableGuardrail:
 
         error_text = str(exc_info.value)
         assert "automation" in error_text.lower()
-        assert "turn_off" in error_text
+        assert (
+            "ha_config_set_automation(identifier='automation.test', enabled=False)"
+            in error_text
+        )
+        assert "ha_call_service('automation', 'turn_off'" not in error_text
+        error_data = json.loads(error_text)
+        suggestions = error_data["error"].get("suggestions", [])
+        assert any(
+            "ha_config_set_automation(identifier=..., enabled=...)" in item
+            for item in suggestions
+        )
+        assert not any("automation.turn_off" in item for item in suggestions)
         # Ensure no WebSocket call was made
         mock_client.send_websocket_message.assert_not_called()
 
@@ -1700,6 +1711,15 @@ class TestHaSetEntityRegistryDisableGuardrail:
         error_text = str(exc_info.value)
         assert "script" in error_text.lower()
         assert "turn_off" in error_text
+        assert "only to stop a currently running execution" in error_text
+        assert "does not disable the script" in error_text
+        assert "no script runtime enable/disable service" in error_text.lower()
+        error_data = json.loads(error_text)
+        suggestions = error_data["error"].get("suggestions", [])
+        assert not any(
+            "Registry-level hiding is not available" in item for item in suggestions
+        )
+        assert not any("retry" in item.lower() for item in suggestions)
         mock_client.send_websocket_message.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1712,7 +1732,11 @@ class TestHaSetEntityRegistryDisableGuardrail:
 
         error_text = str(exc_info.value)
         assert "automation" in error_text.lower()
-        assert "turn_off" in error_text
+        assert (
+            "ha_config_set_automation(identifier='automation.test', enabled=False)"
+            in error_text
+        )
+        assert "ha_call_service('automation', 'turn_off'" not in error_text
         mock_client.send_websocket_message.assert_not_called()
 
     @pytest.mark.asyncio
