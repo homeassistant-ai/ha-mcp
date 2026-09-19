@@ -1,8 +1,8 @@
-name: '🤖 Close needs-info Issues'
+name: "🤖 Close needs-info Issues"
 
 on:
   schedule:
-    - cron: '0 9 * * *'  # Daily at 09:00 UTC
+    - cron: "0 9 * * *" # Daily at 09:00 UTC
   workflow_dispatch: {}
 
 concurrency:
@@ -34,6 +34,7 @@ jobs:
             const WARNING_DAYS = [3, 5, 6];
             const MS_PER_DAY = 86400000;
             const warningMarker = (day) => `<!-- needs-info-warning:${day} -->`;
+            const closingMarker = '<!-- needs-info-closing -->';
 
             const issues = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner,
@@ -45,23 +46,36 @@ jobs:
 
             core.info(`Found ${issues.length} open issues with needs-info label`);
 
-            // Failed closes are collected rather than thrown so one bad write
-            // does not skip the rest of the batch — but they must still fail
-            // the run: a rejected close leaves the issue open with needs-info
-            // already removed, so the daily query never returns it again and
-            // nothing retries it. The failed step is the only signal left.
+            // Process the whole batch, then fail visibly. A failed close keeps
+            // needs-info so the next daily run can retry it.
             const failedCloses = [];
+            const failedLabelCleanups = [];
+            const failedReplyCleanups = [];
+            const failedClosingNotices = [];
+            const failedReminders = [];
+            const failedReads = [];
 
             for (const issue of issues) {
+              // The issues endpoint also returns pull requests with this label.
+              if (issue.pull_request) continue;
               const issueNumber = issue.number;
+              const issueAuthor = issue.user?.login;
+              const greeting = issueAuthor ? `Hi @${issueAuthor}` : "Hello";
               core.info(`Checking issue #${issueNumber}: ${issue.title}`);
 
-              const events = await github.paginate(github.rest.issues.listEvents, {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issueNumber,
-                per_page: 100,
-              });
+              let events;
+              try {
+                events = await github.paginate(github.rest.issues.listEvents, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  per_page: 100,
+                });
+              } catch (err) {
+                core.warning(`  Failed to read events for #${issueNumber}: ${err.message}`);
+                failedReads.push(`${issueNumber} (events)`);
+                continue;
+              }
               const labelEvents = events.filter(e =>
                 e.event === 'labeled' && e.label && e.label.name === 'needs-info'
               );
@@ -79,21 +93,28 @@ jobs:
               const daysSince = (Date.now() - labeledDate.getTime()) / MS_PER_DAY;
               core.info(`  needs-info applied ${daysSince.toFixed(1)} days ago`);
 
-              const comments = await github.paginate(github.rest.issues.listComments, {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issueNumber,
-                per_page: 100,
-              });
+              let comments;
+              try {
+                comments = await github.paginate(github.rest.issues.listComments, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  per_page: 100,
+                });
+              } catch (err) {
+                core.warning(`  Failed to read comments for #${issueNumber}: ${err.message}`);
+                failedReads.push(`${issueNumber} (comments)`);
+                continue;
+              }
 
-              // Only the issue author replying resets the clock (the retired triage
+              // Only the issue author replying clears needs-info (the retired triage
               // bot used the same rule). A maintainer/bystander comment must not
               // remove needs-info, or the issue silently escapes the stale-close
-              // path with the requested info still missing. Re-labeling after an
-              // author reply restarts the whole schedule via the label event.
+              // path with the requested info still missing. If intake later finds
+              // essential details still missing, re-labeling starts a new schedule.
               const authorReplied = comments.some(c =>
-                c.user.type !== 'Bot' &&
-                c.user.login === issue.user.login &&
+                issueAuthor && c.user?.type !== 'Bot' &&
+                c.user?.login === issueAuthor &&
                 new Date(c.created_at) > labeledDate
               );
               if (authorReplied) {
@@ -106,41 +127,40 @@ jobs:
                     name: 'needs-info',
                   });
                 } catch (err) {
-                  if (err.status !== 404) core.warning(`  Failed to remove needs-info: ${err.message}`);
+                  if (err.status !== 404) {
+                    core.warning(`  Failed to remove needs-info: ${err.message}`);
+                    failedReplyCleanups.push(issueNumber);
+                  }
                 }
                 continue;
               }
 
-              // --- Close path: comment first, then label removal, then close.
+              // --- Close path: comment first, then close, then label removal.
               // Never close silently — if the comment fails, leave the issue open.
               if (daysSince >= DAYS_BEFORE_CLOSE) {
                 core.info(`  Closing issue #${issueNumber} — ${DAYS_BEFORE_CLOSE} days without reply`);
 
-                let commented = false;
-                try {
-                  await github.rest.issues.createComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: issueNumber,
-                    body: `Hi @${issue.user.login} — closing this issue as we haven't received the requested information after ${DAYS_BEFORE_CLOSE} days.\n\nFeel free to open a new issue once you have the details ready.\n\n*🤖 Automated by Issue Bot*`,
-                  });
-                  commented = true;
-                } catch (err) {
-                  core.warning(`  Failed to post closing comment on #${issueNumber}: ${err.message} — skipping close`);
+                let commented = comments.some(c =>
+                  c.user?.login === BOT_LOGIN &&
+                  new Date(c.created_at) > labeledDate &&
+                  c.body.includes(closingMarker)
+                );
+                if (!commented) {
+                  try {
+                    await github.rest.issues.createComment({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: issueNumber,
+                      body: `${greeting} — closing this issue as we haven't received the requested information after ${DAYS_BEFORE_CLOSE} days.\n\nFeel free to open a new issue once you have the details ready.\n\n*🤖 Automated by Issue Bot*\n${closingMarker}`,
+                    });
+                    commented = true;
+                  } catch (err) {
+                    core.warning(`  Failed to post closing comment on #${issueNumber}: ${err.message} — skipping close`);
+                    failedClosingNotices.push(issueNumber);
+                  }
                 }
 
                 if (!commented) continue;
-
-                try {
-                  await github.rest.issues.removeLabel({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: issueNumber,
-                    name: 'needs-info',
-                  });
-                } catch (err) {
-                  if (err.status !== 404) core.warning(`  Failed to remove needs-info on #${issueNumber}: ${err.message}`);
-                }
 
                 try {
                   await github.rest.issues.update({
@@ -154,7 +174,22 @@ jobs:
                 } catch (err) {
                   core.warning(`  Failed to close #${issueNumber}: ${err.message}`);
                   failedCloses.push(issueNumber);
+                  continue;
                 }
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    name: 'needs-info',
+                  });
+                } catch (err) {
+                  if (err.status !== 404) {
+                    core.warning(`  Failed to remove needs-info on closed issue #${issueNumber}`);
+                    failedLabelCleanups.push(issueNumber);
+                  }
+                }
+
                 continue;
               }
 
@@ -168,7 +203,7 @@ jobs:
               }
               const day = dueDays[dueDays.length - 1];
               const alreadyPosted = comments.some(c =>
-                c.user.login === BOT_LOGIN &&
+                c.user?.login === BOT_LOGIN &&
                 new Date(c.created_at) > labeledDate &&
                 c.body.includes(warningMarker(day))
               );
@@ -187,21 +222,33 @@ jobs:
                 ? `⚠️ **Final reminder** — this issue will be closed automatically **tomorrow** unless the requested information is provided.`
                 : `⏳ **Reminder** — this issue is still awaiting the requested information and will be closed automatically in about ${daysLeft} day${daysLeft === 1 ? '' : 's'}.`;
               // Guarded like the close-path comment: one rejected write (e.g. a
-              // secondary rate limit) must not abort the rest of the batch and
-              // fail the step.
+              // secondary rate limit) must not abort the rest of the batch. It
+              // is recorded so the step fails visibly after all issues run.
               try {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: issueNumber,
-                  body: `Hi @${issue.user.login} — ${notice}\n\nReplying with the requested details keeps it open.\n\n*🤖 Automated by Issue Bot*\n${warningMarker(day)}`,
+                  body: `${greeting} — ${notice}\n\nReplying with the requested details keeps it open.\n\n*🤖 Automated by Issue Bot*\n${warningMarker(day)}`,
                 });
                 core.info(`  Posted day-${day} reminder`);
               } catch (err) {
                 core.warning(`  Failed to post day-${day} reminder on #${issueNumber}: ${err.message}`);
+                failedReminders.push(`${issueNumber}@day-${day}`);
               }
             }
 
-            if (failedCloses.length > 0) {
-              core.setFailed(`Failed to close ${failedCloses.length} issue(s): #${failedCloses.join(', #')}. Each is open with needs-info already removed and a closing comment posted — the daily query will never return it again, so close it (or re-apply needs-info) manually.`);
-            }
+            const failures = [];
+            if (failedCloses.length > 0)
+              failures.push(`Failed to close ${failedCloses.length} issue(s): #${failedCloses.join(', #')}. Each remains open with needs-info retained for the next daily run; a closing notice was already posted.`);
+            if (failedLabelCleanups.length > 0)
+              failures.push(`Post-close label cleanup failed for issues #${failedLabelCleanups.join(', #')}. These issues are closed; remove needs-info manually after restoring API access.`);
+            if (failedReplyCleanups.length > 0)
+              failures.push(`Failed to clear needs-info after reporter replies on issues #${failedReplyCleanups.join(', #')}.`);
+            if (failedClosingNotices.length > 0)
+              failures.push(`Failed to post closing notices for issues #${failedClosingNotices.join(', #')}; they remain open for retry.`);
+            if (failedReminders.length > 0)
+              failures.push(`Failed to post needs-info reminders for #${failedReminders.join(', #')}.`);
+            if (failedReads.length > 0)
+              failures.push(`Failed to read issue data for #${failedReads.join(', #')}.`);
+            if (failures.length > 0) core.setFailed(failures.join(' '));

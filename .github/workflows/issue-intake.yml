@@ -1,0 +1,139 @@
+name: Document issue reports
+
+on:
+  issues:
+    types: [opened, edited, reopened, labeled, unlabeled, locked, unlocked]
+  issue_comment:
+    types: [created, edited, deleted]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue to document again (maintainers only).
+        required: true
+        type: number
+      model:
+        description: Model for factual documentation only.
+        type: choice
+        default: gpt-5.6-terra
+        options: [gpt-5.6-terra, gpt-5.6-sol]
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  admit:
+    if: >-
+      github.repository == 'homeassistant-ai/ha-mcp' &&
+      !github.event.issue.pull_request &&
+      (!github.event.comment || github.event.comment.user.type != 'Bot') &&
+      github.event.sender.type != 'Bot' && github.actor != 'ghhamcp' &&
+      (!contains(fromJSON('["labeled","unlabeled"]'), github.event.action) || github.event.label.name == 'needs-info')
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    concurrency:
+      # Automatic bursts share a group; an explicit dispatch keeps its model
+      # choice and forced rerun even if another comment arrives meanwhile.
+      group: issue-intake-admit-${{ github.repository }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event.issue.number }}
+      cancel-in-progress: true
+    outputs:
+      run: ${{ steps.admission.outputs.run }}
+    steps:
+      - name: Coalesce issue activity before entering the auth queue
+        if: github.event_name != 'workflow_dispatch'
+        run: sleep 15
+      - name: Checkout trusted admission code
+        timeout-minutes: 2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: .github
+      - name: Check dispatch admission
+        id: admission
+        # Longer than the controller's 60-second GitHub API timeout so a stalled
+        # request can emit its own redacted endpoint error before the step ends.
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HA_MCP_APP_SLUG: ${{ vars.HA_MCP_APP_SLUG }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: node .github/issue-intake/intake.mjs admit
+
+  document:
+    needs: admit
+    if: needs.admit.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 27
+    # Never cancel an active OAuth consumer to coalesce issue events.
+    concurrency:
+      group: codex-auth-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
+    env:
+      HA_MCP_APP_SLUG: ${{ vars.HA_MCP_APP_SLUG }}
+    steps:
+      - name: Checkout trusted workflow source
+        timeout-minutes: 2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: .github
+
+      - name: Collect human context and maintainer decisions
+        id: context
+        timeout-minutes: 4
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: node .github/issue-intake/intake.mjs collect
+
+      - name: Document the report
+        id: codex
+        if: steps.context.outputs.run == 'true'
+        timeout-minutes: 14
+        uses: ./.github/actions/codex-run
+        with:
+          codex-auth: ${{ secrets.CODEX_AUTH }}
+          model: ${{ inputs.model || 'gpt-5.6-terra' }}
+          reasoning-effort: low
+          sandbox: read-only
+          allow-shell: "false"
+          network-access: "false"
+          web-search: disabled
+          instructions-file: .issue-intake/prompt.txt
+          output-schema: .issue-intake/schema.json
+          timeout-minutes: "8"
+
+      # Mint the write token only after the model has exited. It is never
+      # supplied to Codex, nor is the App private key in the model environment.
+      - name: Create scoped publication token
+        id: app-token
+        if: steps.context.outputs.run == 'true'
+        timeout-minutes: 1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ vars.HA_MCP_APP_ID }}
+          private-key: ${{ secrets.HA_MCP_APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-contents: read
+
+      - name: Validate, recheck context, and publish
+        if: steps.context.outputs.run == 'true'
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TOKEN_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          OUTPUT_PATH: ${{ steps.codex.outputs.output-path }}
+        run: node .github/issue-intake/intake.mjs publish
+
+      - name: Persist refreshed Codex auth
+        if: ${{ always() && steps.codex.outputs.auth-path != '' }}
+        timeout-minutes: 3
+        uses: ./.github/actions/codex-update-auth
+        with:
+          codex-auth-path: ${{ steps.codex.outputs.auth-path }}
+          original-codex-auth: ${{ steps.codex.outputs.original-auth-path }}
+          gh-token: ${{ secrets.CODEX_AUTH_PAT }}
+          repository: ${{ github.repository }}

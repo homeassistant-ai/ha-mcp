@@ -69,6 +69,8 @@ Do not create, edit, label, close, or comment on an issue or pull request withou
 
 The detailed label taxonomy, issue-analysis query, bot behavior, review commands, CI loop, and release automation live in the [GitHub workflow reference](docs/agents/github-workflow.md).
 
+Before changing automated issue documentation, read the [issue-intake policy and controls](docs/agents/issue-intake.md) for source handling, maintainer overrides, permissions, and bench validation.
+
 ### Automated Code Review
 
 After every push, inspect human and automated feedback. Codex and CodeRabbit findings are hypotheses: verify them against current source, tests, and contracts. Human feedback has priority. Read every CodeRabbit review body in full because collapsed outside-diff and nitpick findings may create no unresolved thread.
