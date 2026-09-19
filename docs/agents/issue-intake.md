@@ -90,8 +90,8 @@ invalidate an old result and emit a workflow warning; a subscribed event process
 the new state, or an operator can refresh explicitly. A lock or pause intentionally
 stops progress until reversed. Identical source fingerprints avoid another model
 call. A pending marker preserves incomplete writes for recovery, without another
-comment. Transient owned-comment/label writes retry twice after fixed 5-second
-and 15-second delays.
+comment. Transient patches to an existing owned comment and idempotent label
+writes retry twice after fixed 5-second and 15-second delays.
 Exhausted failures stay pending and fail visibly; failed work is never marked done.
 GitHub has no transaction spanning these writes, so narrow concurrent changes can
 still race individual API calls.
