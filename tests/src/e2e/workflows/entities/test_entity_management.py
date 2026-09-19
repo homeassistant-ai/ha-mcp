@@ -375,6 +375,14 @@ class TestEntityManagement:
         area_id = area_data.get("area_id")
         cleanup_tracker.track("area", area_id)
 
+        # Seed HA's own-name (null) alias so the read below proves it survives
+        # a string-only alias write (#2495).
+        seed_result = await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "aliases": [None]},
+        )
+        assert_mcp_success(seed_result, "Seed computed-name alias")
+
         # Set properties using ha_set_entity
         test_aliases = ["test alias", "another alias"]
         await mcp_client.call_tool(
@@ -434,6 +442,9 @@ class TestEntityManagement:
         # The entity's own name rides along as a null entry (#2495).
         assert {a for a in returned_aliases if a is not None} == set(test_aliases), (
             f"aliases mismatch: expected {test_aliases}, got {returned_aliases}"
+        )
+        assert None in returned_aliases, (
+            f"Computed-name alias dropped: {returned_aliases}"
         )
 
         logger.info("Single entity lookup verified with all fields")
