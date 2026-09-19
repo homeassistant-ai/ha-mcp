@@ -30,12 +30,19 @@ const withBase = (path: string) => {
         <li class="ml-4"><a href="#tool-settings-page" class="text-blue-400 hover:underline">The Settings Page (Tools, Backups &amp; More)</a></li>
         <li><a href="#demo" class="text-blue-400 hover:underline">Try Without Your Own Home Assistant</a></li>
         <li><a href="#troubleshooting" class="text-blue-400 hover:underline">Troubleshooting</a></li>
+        <li class="ml-4"><a href="#sse-removed" class="text-blue-400 hover:underline">ha-mcp-sse Removed (SSE configs)</a></li>
         <li class="ml-4"><a href="#macos-connection" class="text-blue-400 hover:underline">macOS Connection Issues</a></li>
+        <li class="ml-4"><a href="#windows-pywin32" class="text-blue-400 hover:underline">Windows: pywin32 Installation Fails</a></li>
         <li class="ml-4"><a href="#uv-tls-interception" class="text-blue-400 hover:underline">uvx Certificate Errors (proxy / antivirus)</a></li>
         <li class="ml-4"><a href="#webhook-proxy" class="text-blue-400 hover:underline">Webhook Proxy Alternative</a></li>
         <li class="ml-4"><a href="#webhook-proxy-security" class="text-blue-400 hover:underline">Webhook Proxy: securing the URL</a></li>
         <li class="ml-4"><a href="#openai-tunnel" class="text-blue-400 hover:underline">ChatGPT Behind a Firewall (OpenAI Tunnel)</a></li>
+        <li class="ml-4"><a href="#desktop-zero-tools" class="text-blue-400 hover:underline">Claude Desktop Shows Zero Tools</a></li>
+        <li class="ml-4"><a href="#stale-uvx-version" class="text-blue-400 hover:underline">Tools Missing or Old Version</a></li>
+        <li class="ml-4"><a href="#terminating-session-none" class="text-blue-400 hover:underline">"Terminating session: None" in Logs</a></li>
+        <li class="ml-4"><a href="#desktop-busy-after-http-call" class="text-blue-400 hover:underline">Claude Desktop Stays Busy After an HTTP Call</a></li>
         <li class="ml-4"><a href="#antigravity-troubleshooting" class="text-blue-400 hover:underline">Antigravity Client Troubleshooting</a></li>
+        <li class="ml-4"><a href="#couldnt-reach-handshake" class="text-blue-400 hover:underline">"Couldn't Reach the MCP Server"</a></li>
         <li class="ml-4"><a href="#claude-ai-connection" class="text-blue-400 hover:underline">Claude.ai Connection Issues</a></li>
         <li class="ml-4"><a href="#claude-ai-hosted-requirements" class="text-blue-400 hover:underline">Claude.ai Hosted Connector Requirements</a></li>
         <li class="ml-4"><a href="#google-spark-oauth" class="text-blue-400 hover:underline">Google Gemini Spark OAuth</a></li>
@@ -45,6 +52,7 @@ const withBase = (path: string) => {
         <li class="ml-4"><a href="#docker-port" class="text-blue-400 hover:underline">Docker: Changing the Port</a></li>
         <li><a href="#custom-component" class="text-blue-400 hover:underline">Custom Component (ha_mcp_tools)</a></li>
         <li><a href="#configuration" class="text-blue-400 hover:underline">Configuration Options</a></li>
+        <li class="ml-4"><a href="#entity-visibility" class="text-blue-400 hover:underline">Entity Visibility Filter (opt-in)</a></li>
         <li><a href="#feedback" class="text-blue-400 hover:underline">Feedback & Help</a></li>
       </ul>
     </nav>
@@ -82,7 +90,7 @@ const withBase = (path: string) => {
                 <tr class="border-b border-slate-800">
                   <td class="py-2">Tools</td>
                   <td class="py-2">~15 basic tools</td>
-                  <td class="py-2 text-brand">80+ comprehensive tools</td>
+                  <td class="py-2 text-brand">92+ comprehensive tools</td>
                 </tr>
                 <tr class="border-b border-slate-800">
                   <td class="py-2">Focus</td>
@@ -176,6 +184,11 @@ volumes:
       <h2 class="text-2xl font-semibold text-white mb-6">Troubleshooting</h2>
 
       <div class="space-y-6">
+        <div class="faq-item" id="sse-removed">
+          <h3 class="text-lg font-medium text-white mb-2"><code class="bg-slate-800 px-1 rounded">ha-mcp-sse</code> is gone / my SSE config stopped connecting</h3>
+          <p class="text-slate-300">The legacy <code class="bg-slate-800 px-1 rounded">ha-mcp-sse</code> entry point (deprecated HTTP+SSE transport on port 8087) was removed &mdash; the MCP specification deprecated the HTTP+SSE transport. Switch to <code class="bg-slate-800 px-1 rounded">ha-mcp-web</code>, which serves Streamable HTTP at <code class="bg-slate-800 px-1 rounded">/mcp</code> on port 8086, and change any SSE-style client config accordingly (Gemini CLI users: use the <code class="bg-slate-800 px-1 rounded">httpUrl</code> key, not <code class="bg-slate-800 px-1 rounded">url</code>). An SSE / <code class="bg-slate-800 px-1 rounded">--transport sse</code> client config pointed at <code class="bg-slate-800 px-1 rounded">ha-mcp-web</code> returns <code class="bg-slate-800 px-1 rounded">405</code> and won't connect.</p>
+        </div>
+
         <div class="faq-item" id="oauth-v7-migration">
           <h3 class="text-lg font-medium text-white mb-2">OAuth stopped working after upgrading to v7.0.0</h3>
           <p class="text-slate-300 mb-4">v7.0.0 removed the Home Assistant URL field from the OAuth consent form to fix security vulnerabilities (SSRF and XSS). Set <code class="bg-slate-800 px-1 rounded">HOMEASSISTANT_URL</code> as a server-side environment variable before starting ha-mcp.</p>
@@ -231,11 +244,22 @@ uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
             <li>Create a combined CA bundle:
               <pre class="code-block mt-2"><code>cat $(python3 -m certifi) /path/to/your-ca.crt &gt; combined-ca-bundle.crt</code></pre>
             </li>
-            <li>Mount it and set <code class="bg-slate-800 px-1 rounded">SSL_CERT_FILE</code>:
-              <pre class="code-block mt-2"><code>docker run --rm \
-  -e SSL_CERT_FILE=/certs/ca-bundle.crt \
-  -v ./combined-ca-bundle.crt:/certs/ca-bundle.crt:ro \
-  ...</code></pre>
+            <li>Mount it and set <code class="bg-slate-800 px-1 rounded">SSL_CERT_FILE</code> in your client config:
+              <pre class="code-block mt-2"><code>{`{
+  "mcpServers": {
+    "home-assistant": {
+      "command": "docker",
+      "args": [
+        "run", "--rm",
+        "-e", "HOMEASSISTANT_URL=https://your-ha:8123",
+        "-e", "HOMEASSISTANT_TOKEN=your_token",
+        "-e", "SSL_CERT_FILE=/certs/ca-bundle.crt",
+        "-v", "./combined-ca-bundle.crt:/certs/ca-bundle.crt:ro",
+        "ghcr.io/homeassistant-ai/ha-mcp:latest"
+      ]
+    }
+  }
+}`}</code></pre>
             </li>
           </ol>
         </div>
@@ -286,6 +310,31 @@ ImportError: cannot import name 'request_ctx' from 'mcp.server.lowlevel.server'<
   }
 }`}</code></pre>
           <p class="text-slate-400 text-sm mt-3">Connecting to the HA app through <code class="bg-slate-800 px-1 rounded">uvx fastmcp-remote</code> instead? Add the same <code class="bg-slate-800 px-1 rounded">UV_NATIVE_TLS=1</code> entry to that config's <code class="bg-slate-800 px-1 rounded">env</code> block. The equivalent <code class="bg-slate-800 px-1 rounded">--native-tls</code> flag also works, but it is a global <code class="bg-slate-800 px-1 rounded">uv</code> option, so it must come before the package name. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/1506" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#1506</a>.</p>
+        </div>
+
+        <div class="faq-item" id="windows-pywin32">
+          <h3 class="text-lg font-medium text-white mb-2">Windows: pywin32 installation fails</h3>
+          <p class="text-slate-300 mb-3">If you see <code class="bg-slate-800 px-1 rounded">Failed to install: pywin32</code> or <code class="bg-slate-800 px-1 rounded">os error 32</code> ("file is used by another process") when starting ha-mcp on Windows, this is caused by two upstream bugs:</p>
+          <ol class="text-slate-300 space-y-1 list-decimal list-inside mb-3">
+            <li>The MCP Python SDK requires <code class="bg-slate-800 px-1 rounded">pywin32</code> on Windows even though server-only users don't need it (<a href="https://github.com/modelcontextprotocol/python-sdk/issues/2233" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">python-sdk#2233</a>)</li>
+            <li><code class="bg-slate-800 px-1 rounded">uv</code> has a known issue installing <code class="bg-slate-800 px-1 rounded">pywin32</code> on Windows (<a href="https://github.com/astral-sh/uv/issues/17679" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">uv#17679</a>)</li>
+          </ol>
+          <p class="text-slate-300 mb-2"><strong class="text-white">Workaround &mdash; use Docker:</strong></p>
+          <pre class="code-block"><code>{`{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-v", "ha-mcp-data:/home/mcpuser/.ha-mcp",
+        "-e", "HOMEASSISTANT_URL=http://host.docker.internal:8123",
+        "-e", "HOMEASSISTANT_TOKEN=your_token",
+        "ghcr.io/homeassistant-ai/ha-mcp:latest"
+      ]
+    }
+  }
+}`}</code></pre>
+          <p class="text-slate-400 text-sm mt-3">See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/672" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#672</a> for details.</p>
         </div>
 
         <div class="faq-item">
@@ -351,6 +400,14 @@ source ~/.zshrc
             <li>If "Home Assistant" is not listed, check your config file syntax</li>
             <li>Try asking Claude: "Can you list your available tools?"</li>
           </ol>
+        </div>
+
+        <div class="faq-item" id="desktop-zero-tools">
+          <h3 class="text-lg font-medium text-white mb-2">Claude Desktop shows the server connected but exposes zero tools</h3>
+          <p class="text-slate-300 mb-3"><strong class="text-white">Fingerprint:</strong> The server shows as connected and both <code class="bg-slate-800 px-1 rounded">initialize</code> and <code class="bg-slate-800 px-1 rounded">tools/list</code> complete successfully in <code class="bg-slate-800 px-1 rounded">mcp.log</code> and the per-server log, yet the model sees no tools &mdash; and nothing surfaces an error in the UI or the logs.</p>
+          <p class="text-slate-300 mb-3"><strong class="text-white">Fix:</strong> Check the server's key in <code class="bg-slate-800 px-1 rounded">claude_desktop_config.json</code> for parentheses and remove them. For example, renaming the key from <code class="bg-slate-800 px-1 rounded">"Home Assistant (ha-mcp)"</code> to <code class="bg-slate-800 px-1 rounded">"HASS ha-mcp"</code> (same URL, everything else unchanged) makes the full tool catalog reappear after a restart. Spaces in the key are fine; parentheses are the characters observed to trigger the drop. If in doubt, keep the key to letters, digits, spaces, <code class="bg-slate-800 px-1 rounded">_</code>, and <code class="bg-slate-800 px-1 rounded">-</code>.</p>
+          <p class="text-slate-300 mb-3"><strong class="text-white">Why:</strong> The Anthropic API requires every tool name to match <code class="bg-slate-800 px-1 rounded">^[a-zA-Z0-9_-]&#123;1,64&#125;$</code> (<a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">tool-definition docs</a>), and Claude Desktop appears to derive each exposed tool's namespaced name from the <code class="bg-slate-800 px-1 rounded">mcpServers</code> key. Spaces in a key are fine (the reporter confirmed spaces work), but a key with <code class="bg-slate-800 px-1 rounded">(</code> or <code class="bg-slate-800 px-1 rounded">)</code> leaves the derived names outside that grammar, so the client discards the affected tools before it ever calls the API &mdash; which is why the drop leaves no trace in the logs. (Claude Desktop's exact key-to-name handling is not publicly documented; this explanation is inferred from the reporter's bidirectional repro &mdash; same URL, only the key changes &mdash; together with the published name constraint.)</p>
+          <p class="text-slate-400 text-sm">None of the shipped example configs use parentheses in the key, so a default setup never hits this &mdash; it is specifically a hand-authored key like <code class="bg-slate-800 px-1 rounded">Home Assistant (ha-mcp)</code> that trips it. This is a Claude Desktop client behavior, not a ha-mcp problem: ha-mcp's own tool names are all valid <code class="bg-slate-800 px-1 rounded">snake_case</code>. See <a href="https://github.com/homeassistant-ai/ha-mcp/issues/1743" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">#1743</a>.</p>
         </div>
 
         <div class="faq-item" id="webhook-proxy">
@@ -435,6 +492,35 @@ source ~/.zshrc
           </ol>
         </div>
 
+        <div class="faq-item" id="stale-uvx-version">
+          <h3 class="text-lg font-medium text-white mb-2">Tools are missing or using old version</h3>
+          <p class="text-slate-300 mb-3">If you're seeing fewer tools than expected or outdated behavior, <code class="bg-slate-800 px-1 rounded">uvx</code> may be using a cached old version.</p>
+          <p class="text-slate-400 mb-2">Solution:</p>
+          <pre class="code-block"><code># Clear the uv cache
+uv cache clean
+
+# Force refresh to latest version
+uvx --refresh ha-mcp@latest</code></pre>
+          <p class="text-slate-400 mt-3 mb-2">Verify the version:</p>
+          <pre class="code-block"><code>uvx ha-mcp@latest --version</code></pre>
+          <p class="text-slate-400 text-sm mt-3">The version should match the <a href="https://github.com/homeassistant-ai/ha-mcp/releases/latest" class="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">latest release</a>. If you see a much older version, the cache needs clearing.</p>
+        </div>
+
+        <div class="faq-item" id="terminating-session-none">
+          <h3 class="text-lg font-medium text-white mb-2">"Terminating session: None" in server logs</h3>
+          <p class="text-slate-300"><strong class="text-green-400">This is normal.</strong> ha-mcp runs in stateless HTTP mode, which means each request creates and discards a temporary session. The <code class="bg-slate-800 px-1 rounded">Terminating session: None</code> log message is the MCP SDK reporting this routine cleanup &mdash; the connection stays active.</p>
+        </div>
+
+        <div class="faq-item" id="desktop-busy-after-http-call">
+          <h3 class="text-lg font-medium text-white mb-2">Claude Desktop stays busy after an HTTP tool call</h3>
+          <p class="text-slate-300 mb-3">For HTTP connections (including a local stdio-to-HTTP bridge), <strong>Settings &rarr; Advanced &rarr; Diagnostics</strong> offers two independent experiments. Both default to <strong>off</strong> and require a server restart:</p>
+          <ul class="text-slate-300 space-y-3 list-disc list-inside mb-3">
+            <li><strong>HTTP transport diagnostics</strong> (<code class="bg-slate-800 px-1 rounded">HAMCP_HTTP_TRANSPORT_DIAGNOSTICS=true</code>): logs request/response byte counts, elapsed time, body completion, observed disconnects and exception types at INFO level. Each request gets a server-generated trace identifier. No bodies, credentials, secret paths or client request IDs are logged. The toggle automatically enables INFO for this diagnostic logger, including when Home Assistant defaults to WARNING, and restores the previous level when the HTTP app stops. Other loggers are unchanged. Explicit Home Assistant overrides for <code class="bg-slate-800 px-1 rounded">ha_mcp.http_transport</code> and logging filters still apply.</li>
+            <li><strong>JSON responses instead of streaming</strong> (<code class="bg-slate-800 px-1 rounded">HAMCP_HTTP_JSON_RESPONSE=true</code>): asks FastMCP to return a single JSON response instead of an SSE stream. This affects all HTTP clients connected to that server and removes streamed progress notifications from those responses. Tool results are unchanged.</li>
+          </ul>
+          <p class="text-slate-400 text-sm">Diagnostics can help distinguish an incomplete upload from an incomplete response. <code class="bg-slate-800 px-1 rounded">response_complete=True</code> means the ASGI server accepted the final body event; it does <strong>not</strong> prove the client received or processed the result. These options are experiments, not a confirmed fix for Claude Desktop hangs. They do not affect a direct stdio server or require a custom component update. Turn them off and restart to restore the previous HTTP behavior, including any existing FastMCP JSON-response configuration.</p>
+        </div>
+
         <div class="faq-item" id="antigravity-troubleshooting">
           <h3 class="text-lg font-medium text-white mb-2">Antigravity client troubleshooting</h3>
           <ul class="text-slate-300 space-y-3 list-disc list-inside">
@@ -454,6 +540,17 @@ source ~/.zshrc
               <strong>Connection issues after config changes:</strong> Restart the Agent session in Antigravity after saving any config changes.
             </li>
           </ul>
+        </div>
+
+        <div class="faq-item" id="couldnt-reach-handshake">
+          <h3 class="text-lg font-medium text-white mb-2">Claude.ai says "Couldn't reach the MCP server"</h3>
+          <p class="text-slate-300 mb-3"><strong class="text-green-400">This is usually normal.</strong> Claude.ai shows this error during its initial connection handshake, but the server often connects successfully afterward. To verify you're actually connected:</p>
+          <ol class="text-slate-300 space-y-1 list-decimal list-inside mb-3">
+            <li>Look for a <strong>"Configure"</strong> button on the connector &mdash; click it</li>
+            <li>If you see tools listed, you're connected and ready to go</li>
+          </ol>
+          <p class="text-slate-300 mb-3">You can also start a new conversation and ask Claude if it can see your Home Assistant via the MCP connection &mdash; this is the easiest way to confirm it's truly connected. Checking your server logs for successful requests (HTTP 200) after the initial error also confirms the connection is working. This is a known Claude.ai behavior that affects all MCP servers, not just ha-mcp.</p>
+          <p class="text-slate-300"><strong class="text-white">If it genuinely won't connect</strong> (not just the transient handshake error above): Claude.ai connects from Anthropic's servers, so the MCP URL must be reachable from the public internet &mdash; not just your LAN. Work through <a href="#claude-ai-hosted-requirements" class="text-blue-400 hover:underline">the three hosted-connector rules</a> below (port 443, egress range, response timeouts), then <a href="#claude-ai-connection" class="text-blue-400 hover:underline">Claude.ai connection issues</a>.</p>
         </div>
 
         <div class="faq-item" id="claude-ai-connection">
@@ -686,6 +783,53 @@ source ~/.zshrc
               </tbody>
             </table>
           </div>
+        </div>
+
+        <div id="entity-visibility">
+          <h3 class="text-lg font-medium text-white mb-3">Entity visibility filter (opt-in)</h3>
+          <p class="text-slate-300 mb-3">By default the agent sees every entity. If auto-generated diagnostic or helper entities clutter search and overview results, you can hide a chosen set of them from the <em>collection</em> read tools (<code class="bg-slate-800 px-1 rounded">ha_search</code>, <code class="bg-slate-800 px-1 rounded">ha_get_overview</code>). In its default form this is <strong>noise reduction, not access control</strong> &mdash; a hidden entity is still returned by a direct <code class="bg-slate-800 px-1 rounded">ha_get_state</code> / <code class="bg-slate-800 px-1 rounded">ha_get_entity</code> on its <code class="bg-slate-800 px-1 rounded">entity_id</code>, and still appears in automation, dashboard, and template content, so do not rely on the default filter as a security boundary. The opt-in <a href="#enforce-mode" class="text-blue-400 hover:underline">Enforce mode</a> below turns it into a genuine read barrier: with <code class="bg-slate-800 px-1 rounded">"enforce": true</code>, direct reads of a hidden entity are concealed and content reads that would surface one are refused across tool reads, except for the deliberately unrestricted-by-default <code class="bg-slate-800 px-1 rounded">ha_report_issue</code> diagnostic path described below.</p>
+          <p class="text-slate-300 mb-3"><strong class="text-white">Default form: reads only &mdash; it does not gate control tools.</strong> Without enforce mode the filter only scopes what the <em>collection read</em> tools return. It does <strong>not</strong> stop an agent from calling a service on a hidden <code class="bg-slate-800 px-1 rounded">entity_id</code>: gating writes is a separate concern handled by the Tool Security Policies engine (which matches on a call's arguments), not by visibility. In the default form, visibility is deliberately read-scoping only, precisely because it is noise reduction and cannot be a security boundary (content-bearing reads such as automation and template bodies would leak hidden entities anyway). Enforce mode changes this by also concealing hidden entities named in a write call's arguments (see below).</p>
+          <p class="text-slate-300 mb-3">The easiest way to configure it is the <strong>Entity Visibility</strong> tab in the ha-mcp settings UI (enable toggle, category checkboxes, area/label fields, per-entity denylist). It reads and writes the same file described below, so either surface works.</p>
+          <p class="text-slate-300 mb-2">The filter is off until <code class="bg-slate-800 px-1 rounded">entity_visibility.json</code> exists in the ha-mcp data directory (the same directory as <code class="bg-slate-800 px-1 rounded">tool_policy.json</code>; <code class="bg-slate-800 px-1 rounded">/data</code> in the app) with <code class="bg-slate-800 px-1 rounded">"enabled": true</code>:</p>
+          <pre class="code-block"><code>{`{
+  "version": 1,
+  "enabled": true,
+  "exclude_categories": ["diagnostic", "config"],
+  "exclude_hidden": false,
+  "deny_entity_ids": [],
+  "exclude_areas": [],
+  "exclude_labels": [],
+  "allow_entity_ids": [],
+  "allow_areas": [],
+  "allow_labels": [],
+  "respect_assist_exposure": false,
+  "enforce": false,
+  "restrict_report_issue": false
+}`}</code></pre>
+          <p class="text-slate-300 mt-3 mb-2">The filter uses a precedence ladder:</p>
+          <ul class="text-slate-300 space-y-2 list-disc list-inside mb-3">
+            <li><strong>Hard excludes.</strong> <code class="bg-slate-800 px-1 rounded">deny_entity_ids</code> and concrete <code class="bg-slate-800 px-1 rounded">exclude_areas</code> / <code class="bg-slate-800 px-1 rounded">exclude_labels</code> entries always hide a matching entity, even if an allowlist also matches it. These settings represent an explicit conflict resolution: deny/exclude wins.</li>
+            <li><strong>Broad filters.</strong> <code class="bg-slate-800 px-1 rounded">exclude_categories</code> hides Home Assistant's <code class="bg-slate-800 px-1 rounded">diagnostic</code> and <code class="bg-slate-800 px-1 rounded">config</code> categories; unknown values are ignored and surfaced as a <code class="bg-slate-800 px-1 rounded">warnings</code> entry on the next read. Set <code class="bg-slate-800 px-1 rounded">exclude_hidden: true</code> to also hide entities marked hidden in Home Assistant. These broad filters apply normally when no allowlist is active.</li>
+            <li><strong>Allowlist.</strong> The moment any of <code class="bg-slate-800 px-1 rounded">allow_entity_ids</code> / <code class="bg-slate-800 px-1 rounded">allow_areas</code> / <code class="bg-slate-800 px-1 rounded">allow_labels</code> is non-empty, the filter enters <em>restrict</em> mode: nonmatching entities are hidden, including entities added later. A matching entity is authorized past the broad category, Home Assistant hidden-state, and Assist exposure filters. Hard <code class="bg-slate-800 px-1 rounded">deny_entity_ids</code>, <code class="bg-slate-800 px-1 rounded">exclude_areas</code>, and <code class="bg-slate-800 px-1 rounded">exclude_labels</code> conflicts still win. Leave all three allowlist fields empty to disable restrict mode.</li>
+            <li><strong>Respect Assist exposure.</strong> With <code class="bg-slate-800 px-1 rounded">respect_assist_exposure: true</code> the filter hides entities not effectively exposed to Home Assistant's Assist (<code class="bg-slate-800 px-1 rounded">conversation</code>) assistant, mirroring <code class="bg-slate-800 px-1 rounded">async_should_expose</code> (an explicit per-entity exposure override wins; otherwise, if the instance exposes new entities, the entity's domain and device-class defaults decide). This broad filter is not fetched or applied while an effective allowlist remains active. If an area/label allowlist degrades open because the entity registry is empty and no <code class="bg-slate-800 px-1 rounded">allow_entity_ids</code> are configured, no allow match remains to authorize past Assist, so this filter applies again. Because HA offers no single "effective exposure" API, the decision is reconstructed client-side from two extra websocket reads per search &mdash; the set of entities explicitly exposed to the assistant (<code class="bg-slate-800 px-1 rounded">expose_entity/list</code>, which reports only the <em>exposed</em> ones) and the "expose new entities" flag that drives the default branch; if either read fails the dimension is skipped with a <code class="bg-slate-800 px-1 rounded">warnings</code> note rather than hiding everything. A registry entity's explicit override &mdash; exposed <em>or</em> un-exposed &mdash; is read directly from the entity-registry <code class="bg-slate-800 px-1 rounded">options</code> the registry list already carries, so an explicit un-expose is honored. One residual limit: for an entity that lives only in the state machine (a YAML/template entity with no entity-registry entry), HA surfaces it through <code class="bg-slate-800 px-1 rounded">expose_entity/list</code> only when it is <em>exposed</em>; an explicit un-expose cannot be observed there, so such an entity falls to its domain/device-class default and stays visible (fail-open).</li>
+          </ul>
+          <p class="text-slate-400 text-sm"><code class="bg-slate-800 px-1 rounded">version</code> drives optimistic-concurrency for the settings UI (it bumps on each save so two tabs can't clobber each other); when hand-editing the file, leave it as-is. The config is read live per request, so edits apply on the next call. A missing file leaves the filter off; an <em>invalid</em> one leaves the filter off for search/overview (with a <code class="bg-slate-800 px-1 rounded">warnings</code> note) while enforce-mode safety falls back to the session's last good config &mdash; with none, tool calls are refused until the file is fixed (see <a href="#enforce-mode" class="text-blue-400 hover:underline">Enforce mode</a> below). When the filter is enabled but the registry read degrades, registry-derived dimensions (categories, hidden-state, areas, labels, Assist) are skipped with a <code class="bg-slate-800 px-1 rounded">warnings</code> note; <code class="bg-slate-800 px-1 rounded">deny_entity_ids</code> and <code class="bg-slate-800 px-1 rounded">allow_entity_ids</code>, which need no registry data, still apply.</p>
+
+          <h4 class="font-medium text-white mt-6 mb-2" id="enforce-mode">Enforce mode</h4>
+          <p class="text-slate-300 mb-3">Set <code class="bg-slate-800 px-1 rounded">"enforce": true</code> (or the <strong>Enforce mode</strong> toggle in the Entity Visibility tab) to turn the same hidden set into a genuine read barrier applied across tool reads, not just <code class="bg-slate-800 px-1 rounded">ha_search</code> / <code class="bg-slate-800 px-1 rounded">ha_get_overview</code>. The default exception is <code class="bg-slate-800 px-1 rounded">ha_report_issue</code>, described below. <code class="bg-slate-800 px-1 rounded">enforce</code> is not a hide dimension &mdash; it does not change <em>which</em> entities are hidden, only how strongly the hiding is applied &mdash; so it is inert unless the filter is also <code class="bg-slate-800 px-1 rounded">enabled</code> with at least one active hide dimension. What it covers:</p>
+          <ul class="text-slate-300 space-y-2 list-disc list-inside mb-3">
+            <li><strong>Direct reads are concealed.</strong> A call whose arguments name a hidden entity_id exactly (<code class="bg-slate-800 px-1 rounded">ha_get_state</code>, <code class="bg-slate-800 px-1 rounded">ha_get_history</code>, &hellip;) is refused <em>before the tool runs</em> with a canonical <code class="bg-slate-800 px-1 rounded">ENTITY_NOT_FOUND</code>, so the entity's state and attributes never flow. Concealment of <em>existence</em> is best-effort: per-tool not-found shapes vary (a bulk <code class="bg-slate-800 px-1 rounded">ha_get_state</code> normally partial-succeeds, and details/suggestions differ per tool), so a caller deliberately comparing error shapes may infer that an id is hidden rather than absent. Note this also means a bulk read that co-lists one hidden entity is refused as a whole &mdash; retry without the hidden id to read the rest.</li>
+            <li><strong>Collection reads omit</strong> hidden entities, exactly as they do without enforce. In enforce mode this extends to <code class="bg-slate-800 px-1 rounded">ha_search</code>'s configuration-body matches: an automation, script, scene, helper, or dashboard record that references a hidden entity is omitted from the config results (in the default soft mode such records still appear &mdash; that is the documented soft-filter behavior).</li>
+            <li><strong>Allowed state reads filter hidden content.</strong> A JSON <code class="bg-slate-800 px-1 rounded">ha_get_state</code> result for a visible entity may contain fields, mapping keys, list items, or related records that name hidden entities (for example, a person's diagnostic device trackers). That content is omitted while the visible entity's own state is returned. Because attribute values derive from related entities (the person's coordinates come from its trackers), the whole <code class="bg-slate-800 px-1 rounded">attributes</code> mapping is omitted when any of its content names a hidden entity. The response receives a warning listing the omitted JSON paths and pointing to the Entity Visibility settings, so an agent can tell a filtered field from a missing one. Non-JSON output, a shape that cannot carry the warning, or any hidden reference left after filtering is refused by the normal outbound scan.</li>
+            <li><strong>Other content reads are refused on contact.</strong> An ordinary dashboard config, template result, automation/script body, trace, log, or file read whose output would surface a hidden entity_id is refused with a generic <code class="bg-slate-800 px-1 rounded">ENTITY_VISIBILITY_ENFORCED</code> error that never names the matched id.</li>
+            <li><strong>Writes naming a hidden entity are concealed too.</strong> The inbound argument scan applies to <em>every</em> tool, including service calls: a <code class="bg-slate-800 px-1 rounded">ha_call_service</code> targeting a hidden entity_id is concealed as not-found, so an agent cannot confirm the entity by trying to control it.</li>
+          </ul>
+          <p class="text-slate-300 mb-3">What it deliberately <strong>refuses</strong> (their output cannot be text-scanned): sandbox code execution via <code class="bg-slate-800 px-1 rounded">ha_manage_custom_tool</code> (<code class="bg-slate-800 px-1 rounded">code</code> / <code class="bg-slate-800 px-1 rounded">run_saved</code> &mdash; pure <code class="bg-slate-800 px-1 rounded">list_saved</code> stays allowed) and screenshot/pixel output (<code class="bg-slate-800 px-1 rounded">ha_get_dashboard_screenshot</code>, <code class="bg-slate-800 px-1 rounded">ha_config_get_dashboard</code> with <code class="bg-slate-800 px-1 rounded">include_screenshot</code>, or <code class="bg-slate-800 px-1 rounded">ha_config_set_dashboard</code> with <code class="bg-slate-800 px-1 rounded">return_screenshot</code>).</p>
+          <p class="text-slate-300 mb-3">One image surface is deliberately <strong>exempt</strong>: <code class="bg-slate-800 px-1 rounded">ha_get_camera_image</code>. A camera the filter does not hide returns physical-world imagery &mdash; a photograph, not a rendering of Home Assistant entity data &mdash; so its frames are not gated (a hidden camera is concealed like any other entity). The residual case is a visible camera whose view happens to include a display showing a hidden entity's state; if a camera can see something sensitive, hide the camera too (denylist or its area).</p>
+          <p class="text-slate-300 mb-3">A second surface is deliberately <strong>exempt by default</strong>: <code class="bg-slate-800 px-1 rounded">ha_report_issue</code>. While <code class="bg-slate-800 px-1 rounded">"restrict_report_issue": false</code>, it bypasses both visibility scans on every call &mdash; not only during a registry failure &mdash; and can return diagnostic fields such as core, app/add-on, recent, and startup logs that contain hidden entity_ids. This keeps the troubleshooting path available when visibility configuration or Home Assistant registry inputs are the problem. Set <code class="bg-slate-800 px-1 rounded">"restrict_report_issue": true</code> to scan and refuse it like other tool reads.</p>
+          <p class="text-slate-300 mb-3">Except for that default diagnostic escape hatch, enforce mode <strong>fails closed</strong>: if the entity registry (or the config file itself) cannot be loaded, the server falls back to the last good read from this session &mdash; and with none available, tool calls are refused rather than risk leaking a restricted entity. If no config can be read, <code class="bg-slate-800 px-1 rounded">ha_report_issue</code> follows its safe unrestricted default; if a last-good config opted it in, it fails closed too. The hidden set is cached for ~30s, so an area/label membership change in Home Assistant can take up to that long to take effect for the area/label dimensions (a config edit in the settings UI applies on the next call).</p>
+          <p class="text-slate-300 mb-3">Because refuse-on-contact applies to the <em>whole</em> hidden set, broad hide dimensions make refusals frequent: with the default <code class="bg-slate-800 px-1 rounded">diagnostic</code>/<code class="bg-slate-800 px-1 rounded">config</code> category excludes still active, any log, automation, or dashboard read that mentions a diagnostic entity is refused wholesale. Enforce mode works best with a <em>targeted</em> deny &mdash; the private areas, labels, or entity_ids you actually need concealed &mdash; rather than broad decluttering dimensions.</p>
+          <p class="text-slate-400 text-sm"><strong class="text-slate-300">Honest residual limits.</strong> This is a strong barrier against <em>incidental</em> exposure, not a cryptographic guarantee. A Jinja template (or code) that <em>derives</em> a hidden entity's state without ever naming its entity_id &mdash; e.g. <code class="bg-slate-800 px-1 rounded">{`{{ states | selectattr('state','eq','on') | list | count }}`}</code> &mdash; cannot be caught by a text scan. Treat enforce mode as robust protection against an agent stumbling onto hidden entities, not as a boundary against an adversarial prompt author who is deliberately trying to exfiltrate a hidden entity's state.</p>
         </div>
       </div>
     </section>

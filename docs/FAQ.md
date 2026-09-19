@@ -10,9 +10,13 @@ Common questions and solutions for ha-mcp setup.
 
 You can also use ha-mcp with other AI clients. See the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) for 15+ supported clients.
 
-### Do I need the Home Assistant app (add-on)?
+### Do I need the Home Assistant app (add-on)? {#app-vs-stdio}
 
-**No.** The HA app is just one installation method. Most users run ha-mcp directly on their computer using `uvx` (recommended for Claude Desktop). The app is only needed if you want to run ha-mcp inside your Home Assistant OS environment.
+**No.** The HA app is just one installation method. Most users run ha-mcp directly on their computer using `uvx` (recommended for Claude Desktop). To run ha-mcp inside Home Assistant itself, you can install it as the app (Home Assistant OS / Supervised) or via the [HA-MCP custom component](#custom-component)'s in-process server, which works on every installation type.
+
+If you *do* run the app, you don't also need `uvx` — that would be a second, separate instance. HTTP-native clients (Codex, Cursor, Windsurf, Claude Code) connect straight to the app's URL, no proxy needed. One caveat: as of early 2026, Codex's HTTP MCP support has a [known initialization bug](https://github.com/openai/codex/issues/11284) where it loads no tools; if you hit that, run ha-mcp locally over stdio with `uvx` instead.
+
+**Don't run both for the same client.** If you switch to the app, remove any local/stdio entry from your client config — a Claude Desktop server running `uvx ha-mcp@latest` with `HOMEASSISTANT_URL` / `HOMEASSISTANT_TOKEN` is the local version and bypasses the app entirely. Pointing both at the same Home Assistant can leave the connection wedged until you restart. The app's Claude Desktop config uses `uvx fastmcp-remote` with the app's URL and **no** token.
 
 ### What's the difference between ha-mcp and Home Assistant's built-in MCP?
 
@@ -25,6 +29,49 @@ You can also use ha-mcp with other AI clients. See the [Setup Wizard](https://ho
 | Cameras | No | Screenshot and analysis |
 
 Built-in = operate devices. ha-mcp = administer your system.
+
+### How do I open the ha-mcp settings page? {#tool-settings-page}
+
+ha-mcp ships a web settings page where you can enable, disable, and pin individual MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests. How you reach it depends on how ha-mcp is running:
+
+- **Claude Desktop / Claude Code / any stdio install (`uvx ha-mcp`):** a localhost settings server spawns automatically alongside the MCP process. The easiest way to find the URL is to **ask the AI** something like *"how do I open the ha-mcp settings page?"* — the URL is included in `ha_get_overview`'s response. You can also read it directly from `~/.ha-mcp/ui.url` (Windows: `%USERPROFILE%\.ha-mcp\ui.url`). The URL is bound to `127.0.0.1` only and gated by a random secret path generated when the settings server starts.
+- **HA Custom Component (in-process server):** open the admin-only **HA-MCP** panel in the Home Assistant sidebar — it serves the settings page through Home Assistant itself, no URL or secret needed.
+- **HA App:** easiest is the **"Open Web UI"** button on the app page (served over Home Assistant ingress — no secret needed). For direct or remote access outside the HA UI, the page lives behind the app's secret path: `http://<home-assistant-ip>:9583/<secret-path>/settings`. Find `<secret-path>` in the app's **Configuration** tab ("Secret path override") or in `/data/secret_path.txt`. The bare `:9583/settings` without the secret path is rejected for non-ingress callers.
+- **`ha-mcp-web` / Docker (HTTP):** append `/settings` to your MCP secret-path URL. The default `MCP_SECRET_PATH` is `/mcp`, so the page is at `http://<host>:8086/mcp/settings`; if you set a custom secret path, use that instead (e.g. `http://<host>:8086/private_xxx/settings`).
+- **Remote (Cloudflare Tunnel / reverse proxy):** same as Docker/HTTP — the page sits under your secret path wherever the MCP endpoint is reachable, e.g. `https://<your-host>/<secret-path>/settings`.
+
+Changes apply on the next MCP-server restart. To stop the stdio sidecar entirely, click the "Permanently disable settings server" button on the page, set `HA_MCP_DISABLE_SETTINGS_UI=1` in your MCP client config, or create an empty `~/.ha-mcp/settings_ui_disabled` file.
+
+### My settings reset every time I re-create the Docker container {#docker-settings-not-persisted}
+
+ha-mcp stores its tool configuration, feature flags, backup settings and OAuth client registrations under `~/.ha-mcp` — which is `/home/mcpuser/.ha-mcp` inside the container. That lives in the container's writable layer, so it disappears whenever the container is replaced (`docker rm`, `docker compose down`, pulling a new image, or any `--rm` run). Mount a volume there to keep it:
+
+```bash
+docker run -d --name ha-mcp -p 8086:8086 \
+  -v ha-mcp-data:/home/mcpuser/.ha-mcp \
+  -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
+  -e HOMEASSISTANT_TOKEN=your_token \
+  ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-web
+```
+
+Or in compose:
+
+```yaml
+services:
+  ha-mcp:
+    volumes:
+      - ha-mcp-data:/home/mcpuser/.ha-mcp
+
+volumes:
+  ha-mcp-data:
+    name: ha-mcp-data
+```
+
+Keep the `name:` line — without it Compose creates `<project>_ha-mcp-data` instead, which is not the volume the `docker run` command above or the `docker volume rm` below refer to.
+
+A volume mount stays writable even with `read_only: true`, so keep it when you harden the container — without it ha-mcp can't write to `~/.ha-mcp` under a read-only root filesystem and falls back to a temporary directory that's wiped on every restart. To store the data elsewhere, mount your own path and set `HA_MCP_CONFIG_DIR` to it. This doesn't apply to the HA app (add-on) or the custom component, which persist to Home Assistant's own storage automatically.
+
+Whatever you mount must be writable by the UID the container actually runs as. A named volume is initialised as UID 999 (the image's `mcpuser`) and needs nothing further; a host bind mount needs `chown 999:999` first; and if you run with `--user` to override the UID, chown the mounted directory to that UID instead — a named volume stays owned by 999 and the overridden user can't write to it. If ha-mcp still can't persist, it says so at startup — look for *"Cannot write ha-mcp data to ... data will NOT persist across restarts"* in `docker logs ha-mcp`. A volume created by an older image can be left owned by root; `docker volume rm ha-mcp-data` and let the current image recreate it.
 
 ---
 
@@ -57,7 +104,23 @@ SSE-style client config accordingly (Gemini CLI users: use the `httpUrl` key, no
 
 ### OAuth stopped working after upgrading to v7.0.0
 
-v7.0.0 removed the Home Assistant URL field from the OAuth consent form to fix security vulnerabilities (SSRF and XSS). Set `HOMEASSISTANT_URL` as a server-side environment variable before starting ha-mcp. See the [OAuth migration guide](OAUTH.md#migrating-from-v6x) for instructions.
+v7.0.0 removed the Home Assistant URL field from the OAuth consent form to fix security vulnerabilities (SSRF and XSS). Set `HOMEASSISTANT_URL` as a server-side environment variable before starting ha-mcp.
+
+```bash
+# Docker
+docker run -d -p 8086:8086 \
+  -v ha-mcp-data:/home/mcpuser/.ha-mcp \
+  -e HOMEASSISTANT_URL=https://your-ha-instance.example.com \
+  -e MCP_BASE_URL=https://your-mcp-server.example.com \
+  ghcr.io/homeassistant-ai/ha-mcp:latest ha-mcp-oauth
+
+# uvx
+HOMEASSISTANT_URL=https://your-ha-instance.example.com \
+MCP_BASE_URL=https://your-mcp-server.example.com \
+uvx --from=ha-mcp@latest ha-mcp-oauth
+```
+
+The consent form now accepts only the token. See the [OAuth migration guide](OAUTH.md#migrating-from-v6x) for instructions.
 
 ### Claude.ai says "Couldn't reach the MCP server"
 
@@ -72,7 +135,9 @@ This is a known Claude.ai behavior that affects all MCP servers, not just ha-mcp
 
 **If it genuinely won't connect** (not just the transient handshake error above): Claude.ai connects from Anthropic's servers, so the MCP URL must be reachable from the public internet — not just your LAN. A URL that works in Claude Code or a local browser can still be unreachable for Claude.ai web. Open the URL on your **phone with Wi-Fi off** (cellular): if it doesn't load there, it isn't publicly reachable (DNS / port-forward / TLS / reverse-proxy) and Claude.ai can't reach it either. Also make sure you clicked **Connect** on the connector (and, with OAuth enabled, **Allow** on the consent page) — adding the connector alone does not complete the connection.
 
-**Hosted Claude connectors: three environment rules.** claude.ai and Claude Desktop connectors reach your server from *Anthropic's backend*, not from your browser, so no server-side setting can work around these:
+### Claude.ai connects from my browser but the connector fails — ports, firewalls, timeouts {#claude-ai-hosted-requirements}
+
+Hosted Claude surfaces (claude.ai, Claude Desktop connectors) reach your server from *Anthropic's backend*, not from your browser. Three environment rules apply that no server-side setting can work around:
 
 - **Port `443` only.** The connector URL must use standard HTTPS with no explicit port. Anthropic's backend only connects on 443, so `https://ha.example.com:8123/...` is unreachable from a hosted connector even though it loads fine in your own browser and passes an external HTTP check. Put a reverse proxy, tunnel, or 443 port-forward in front and keep Home Assistant on 8123 internally, then paste the port-less URL. To check, open just the base address (e.g. `https://ha.example.com`, without the `/api/webhook/...` secret path) in a browser — it should bring up your HA login page.
 - **Allowlist Anthropic's egress range.** Backend traffic originates from `160.79.104.0/21`. A WAF, geo-block, or bot filter covering that range (Cloudflare's AI-crawler rules included) breaks registration, token exchange, and the post-OAuth handshake even though your browser works fine. See [Anthropic's IP ranges](https://platform.claude.com/docs/en/api/ip-addresses) and the Cloudflare entry below.
@@ -182,6 +247,74 @@ If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, y
    }
    ```
 
+### mcp-proxy fails with `ImportError: cannot import name 'request_ctx'` {#mcp-proxy-request-ctx}
+
+A previously working `uvx mcp-proxy` config stops connecting and the client shows "Server disconnected". Running the command by hand shows:
+
+```text
+from mcp.server.lowlevel.server import request_ctx
+ImportError: cannot import name 'request_ctx' from 'mcp.server.lowlevel.server'
+```
+
+**Cause:** the `mcp` SDK released version 2.0.0, which removed `request_ctx`. mcp-proxy depends on `mcp` without an upper version bound, so `uvx` installs the incompatible 2.x release. Clearing the uv cache does not help — a fresh install picks the same version.
+
+This only affected clients that reached an HTTP ha-mcp deployment through the mcp-proxy bridge (Claude Desktop and JetBrains, when this FAQ entry was written). The local stdio setup — `uvx ha-mcp@latest` — is unaffected, and so are the app (add-on), Docker, and the custom component themselves: ha-mcp already pins the SDK below 2.0.
+
+**If your client is JetBrains:** drop the bridge entirely rather than switching bridges. JetBrains IDEs support Streamable HTTP natively via the MCP Servers panel. The [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) now generates a plain `{"mcpServers": {"home-assistant": {"url": "..."}}}` entry with no `command`/`args` at all. The fastmcp-remote fix below still applies to Claude Desktop and other stdio-only clients.
+
+**Fix (Claude Desktop and other stdio-only clients):** switch the bridge to `fastmcp-remote`, the stdio bridge published by the FastMCP project. It pins its dependency on the MCP SDK to a bounded range, so an SDK release cannot break it the way it broke mcp-proxy. Replace the whole server entry with:
+
+```json
+{
+  "mcpServers": {
+    "home-assistant": {
+      "command": "uvx",
+      "args": [
+        "fastmcp-remote",
+        "http://192.168.1.100:9583/private_your_secret_path"
+      ]
+    }
+  }
+}
+```
+
+Keep your own connect URL. No `--transport` flag is needed: fastmcp-remote defaults to Streamable HTTP, which is what ha-mcp serves. Restart the client after saving (Claude Desktop: **File → Exit**, then reopen; closing the window is not enough). The [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) generates this config for stdio-only clients.
+
+**Prefer to stay on mcp-proxy?** Adding `"--with", "mcp<2.0.0"` to its `args` also works. `--with` is a global `uv` option, so it must come *before* the package name. That pin has to be revisited on the next SDK major; switching bridges does not. See [#2073](https://github.com/homeassistant-ai/ha-mcp/issues/2073).
+
+### uvx fails with `invalid peer certificate: UnknownIssuer` {#uv-tls-interception}
+
+If `uvx` can't download ha-mcp (or `fastmcp-remote`, if you connect to the app through it) and the log shows a certificate error fetching from PyPI, the failure is in `uv`'s package download — it never reaches Home Assistant:
+
+```text
+Failed to fetch: https://pypi.org/simple/ha-mcp/
+  invalid peer certificate: UnknownIssuer
+```
+
+In Claude Desktop this often shows up as the server briefly connecting, then "transport closed unexpectedly" — `uvx` exits when it can't fetch the package.
+
+**Cause:** `uv` (which backs `uvx`) ships its own bundled root-certificate store and ignores the operating-system certificate store by default. If anything on your machine intercepts HTTPS — a corporate proxy, Zscaler, or antivirus with HTTPS/SSL scanning (Kaspersky, ESET, Bitdefender, etc.) — it presents a certificate chained to a root your OS trusts but `uv`'s bundled store does not, producing `UnknownIssuer`. This is most common on Windows.
+
+**Fix:** point `uv` at the OS native certificate store by adding `UV_NATIVE_TLS=1` to the server's `env` block:
+
+```json
+{
+  "mcpServers": {
+    "Home Assistant": {
+      "command": "uvx",
+      "args": ["ha-mcp@latest"],
+      "env": {
+        "HOMEASSISTANT_URL": "http://homeassistant.local:8123",
+        "HOMEASSISTANT_TOKEN": "your_long_lived_token",
+        "UV_NATIVE_TLS": "1"
+      }
+    }
+  }
+}
+```
+
+Connecting to the HA app through `uvx fastmcp-remote` instead? Add the same `UV_NATIVE_TLS=1` entry to that config's `env` block. The equivalent `--native-tls` flag also works, but it is a global `uv` option, so it must come before the package name. See [#1506](https://github.com/homeassistant-ai/ha-mcp/issues/1506).
+
 ### Windows: pywin32 installation fails
 
 If you see `Failed to install: pywin32` or `os error 32` ("file is used by another process") when starting ha-mcp on Windows, this is caused by two upstream bugs:
@@ -229,6 +362,8 @@ source ~/.zshrc
 %USERPROFILE%\.local\bin\uvx.exe --version
 ```
 
+**Claude Desktop note:** Claude Desktop does **not** inherit your shell's PATH. If `uvx` is not found even after restarting, use the absolute path in your config instead of `uvx`. Find it with `which uvx` in your terminal, then set `"command": "/Users/<you>/.local/bin/uvx"` (macOS/Linux) or the equivalent Windows path.
+
 ### MCP server not showing in Claude Desktop
 
 1. **Restart Claude completely** - Use Cmd+Q (Mac) or Alt+F4 (Windows), not just close the window
@@ -268,6 +403,8 @@ None of the shipped example configs use parentheses in the key, so a default set
 
 ### Can't connect remotely? Try the Webhook Proxy app {#webhook-proxy}
 
+Using the [HA-MCP custom component](#custom-component)'s in-process server? Remote access is built in — its webhook connect URL already works through Nabu Casa or any reverse proxy pointed at Home Assistant, so you don't need the Webhook Proxy app. The rest of this answer applies to the app (add-on), Docker, and pip installs.
+
 If you're having trouble setting up remote access — TLS errors, Cloudflare configuration issues, or port forwarding problems — the **Webhook Proxy app** may be a simpler alternative.
 
 Instead of requiring a dedicated tunnel to port 9583, the Webhook Proxy routes MCP traffic through Home Assistant's main port (8123) via a webhook. If you already have **Nabu Casa** or any reverse proxy pointing at your HA instance, this can be the easiest remote setup.
@@ -278,6 +415,57 @@ Instead of requiring a dedicated tunnel to port 9583, the Webhook Proxy routes M
 4. Use that URL in your MCP client configuration
 
 See [#784](https://github.com/homeassistant-ai/ha-mcp/issues/784) for an example where this resolved a TLS connection issue.
+
+### Webhook Proxy: securing the URL {#webhook-proxy-security}
+
+By default the Webhook Proxy app registers an **unauthenticated** webhook endpoint. The webhook URL itself is the shared secret — anyone with the full URL can reach your MCP server, which exposes powerful Home Assistant control. Treat the URL like a password.
+
+**Don't share the URL**
+
+- Avoid pasting it into screenshots, log paste-bins, public configs, or chat transcripts.
+- Mask the part after `/api/webhook/` if you have to share anything.
+- Anyone with the full URL can call your MCP tools.
+
+**Rotating the URL if it leaks**
+
+1. Stop the Webhook Proxy app.
+2. Delete `/data/webhook_id.txt` from the app's filesystem (e.g. via SSH/Terminal app).
+3. Start the app. A new webhook ID and URL are generated on first launch.
+4. Copy the new URL from the app logs into your MCP client(s). The old URL stops working immediately.
+
+**Reinstalling the app also changes the URL.** Uninstalling wipes the app's `/data` (where `webhook_id.txt` lives), so the next start generates a fresh webhook ID and overwrites `/config/.mcp_proxy_config.json` with it. Update your MCP client — and re-add the Claude.ai connector — with the new URL afterwards.
+
+**Optional: Enable OAuth (Beta)**
+
+For a real auth layer on top of the URL secret, the Webhook Proxy app (v1.1.0 and later) ships an optional OAuth 2.1 mode. Toggle **Show unused optional configuration options**, turn **Enable OAuth (Beta)** on, set **OAuth Mode** to `legacy` if you want the Client ID + Secret flow described here (a first-time enable with the mode left unset defaults to `ha_auth`, which generates no credentials), leave Client ID and Client Secret blank, and restart the app. Legacy mode also needs a **full Home Assistant restart** (a Repair prompts you) — restarting only the app is not enough; `ha_auth` needs no Home Assistant restart. In legacy mode the app generates a strong Client ID and Client Secret on first start, persists them at `/data/oauth_creds.json`, and prints them in the app log.
+
+That is the app's `legacy` OAuth mode. Webhook Proxy 3.x defaults a first-time enable to `ha_auth` instead: you sign in with your Home Assistant account and no Client ID or Secret exists. In Claude.ai's connector wizard, `ha_auth` is **Always required** + **Use Anthropic's hosted client metadata** (both auto-detected); for `legacy`, choose **Use your own OAuth client** and paste the Client ID and Client Secret from the app log. Click **Add**, then the connector's **Connect** button — Claude.ai handles the rest of the OAuth handshake. When the toggle is off, the webhook URL behaves exactly as before with no auth check.
+
+**OAuth flow end-to-end**
+
+1. Claude.ai redirects your browser to `https://<host>/authorize?...` with PKCE parameters.
+2. The app serves a consent page showing the redirect destination — verify it's Claude.ai's callback URL.
+3. Click **Allow**. The app issues a one-time auth code and redirects back to Claude.ai.
+4. Claude.ai exchanges the code at `https://<host>/token` using your Client ID + Client Secret + the PKCE verifier. The app returns a 1-hour access token and a 30-day refresh token, both HMAC-signed.
+5. From then on Claude.ai sends every MCP request with `Authorization: Bearer <token>`; expired access tokens are refreshed automatically.
+
+**The Client Secret is the real security boundary**
+
+The `/authorize` consent page is reachable without being logged into Home Assistant or Nabu Casa — that's how OAuth works (the consent page must be reachable from the OAuth client's browser session). What stops an attacker who clicks "Allow" on a phishing authorize URL: the resulting auth code is bound to PKCE and useless without your **OAuth Client Secret** at the token endpoint. So the Client Secret is the actual gate, not the consent page.
+
+**Treat the Client Secret like a password.** Don't paste it into screenshots, support threads, or public configs. If you suspect it has leaked — or want a clean slate after sharing logs for debugging — rotate it immediately. After rotation, any tokens issued under the old credentials stop refreshing, forcing the client to redo OAuth.
+
+**Rotating OAuth credentials**
+
+- **From the app UI (recommended):** turn on **Regenerate OAuth Credentials on Next Start**, save, restart the app. The app wipes the stored credentials, generates fresh ones, prints them in the log, and auto-clears the regenerate toggle. Update your MCP client to match. Takes ~30 seconds.
+- **Custom values:** type new strings into the Client ID and Client Secret fields and restart — your values override the stored file.
+- **Filesystem:** stop the app, delete `/data/oauth_creds.json`, start the app. Equivalent to the UI option but requires SSH/Terminal access.
+
+**Getting "Invalid client id" — or OAuth/credential changes not taking effect**
+
+This applies to `legacy` mode (`ha_auth` needs only an app restart). Legacy mode's OAuth provider views are bound into Home Assistant's HTTP layer when the integration first loads, and HA can't re-register or drop them on a config reload (the webhook endpoint itself re-registers on reload — it's specifically the OAuth views). So switching legacy mode on/off, regenerating its credentials, or reinstalling the app in legacy mode only takes effect after a **full Home Assistant restart** (Settings → System → Restart) — reloading the integration or restarting the app is not enough. After restarting, delete and re-add the Claude.ai connector with the current URL (and current Client ID/Secret, if OAuth is on).
+
+Beta status: the OAuth flow is built against the MCP 2025-06-18 spec and tested with Claude.ai. Other clients' OAuth coverage may vary. Report issues on GitHub.
 
 ### ChatGPT behind a firewall? Try the community OpenAI Tunnel integration {#openai-tunnel}
 
@@ -349,7 +537,132 @@ ChatGPT (web, including Codex Work Mode) caches a connector's tool list and some
 
 **Solution:** delete the connector and create a new one with a **different name** — ChatGPT then fetches a fresh tool list. Re-adding it under the original name is not enough; the cached list survives the re-add.
 
+### Antigravity client troubleshooting {#antigravity-troubleshooting}
+
+- **"Unexpected server output" error:** Add `FASTMCP_SHOW_SERVER_BANNER=false` to your stdio env config. This disables the startup banner that Antigravity misinterprets as unexpected output.
+- **"EOF" errors:** Use absolute paths for the command, not relative paths.
+- **First run timeout:** Run `uvx ha-mcp@latest --version` in your terminal first to download and cache the package before Antigravity tries to start it.
+- **Tools load but fail when called:** Try switching to stdio mode instead of HTTP. HTTP mode can experience "connection closed" or reconnection errors with this client.
+- **Connection issues after config changes:** Restart the Agent session in Antigravity after saving any config changes.
+
+### Claude.ai connection issues {#claude-ai-connection}
+
+Claude.ai connector setup is known to be flaky, but usually works after repeated attempts. Enter the URL, click **Continue**, and keep the settings marked **Detected**. If authentication is not auto-detected, the connection may not be working: **delete any existing connector and create a new one, then try again**. You can try selecting settings manually, but connections typically only work when the settings are auto-detected, so manually forcing them — including **None / No login** — may not help.
+
+If you installed the embedded HA-MCP server, make sure you have **restarted Home Assistant** after installation so everything registers properly.
+
+If tools stop responding or the connector appears disconnected in Claude.ai:
+
+1. **Restart both Claude.ai and the MCP server.** Refresh the Claude.ai page in your browser and restart the ha-mcp process (or Docker container). Either side can hold stale connection state. An intermittent connect failure is usually a transient tunnel/relay hiccup, so a restart and retry often clears it.
+2. A `405 Method Not Allowed` on a `GET` in your ha-mcp logs is **normal** and not the cause of a failed connect. Claude.ai pre-flights with a `GET` and the Streamable HTTP MCP endpoint only accepts `POST` (and `DELETE`), not `GET`, so a `405` shows up even on a successful connection (the log annotates it *NORMAL for most non-SSE connections*).
+3. Check that your tunnel (Cloudflare, ngrok, etc.) is still running and the URL has not changed.
+4. Verify the server is reachable by visiting the MCP URL directly in your browser — you should see a response from the server (with OAuth enabled on the webhook proxy, an `Unauthorized` response is expected and correct).
+5. **Reachability from Anthropic's servers:** Claude.ai connects from the cloud, not your network — a URL that works in Claude Code or your browser (both on your LAN) can still be unreachable for Claude.ai web. Open the URL on your **phone with Wi-Fi off**; if it doesn't load, it isn't publicly reachable and Claude.ai can't reach it either.
+6. **Don't forget to click *Connect* on the connector** — and, with OAuth enabled, click **Allow** on the consent page. Adding the connector alone does not complete the connection.
+7. **URL works in your browser but the LLM can't connect?** Your reverse proxy is filtering the AI client — see [Cloudflare: LLM can't connect](#cloudflare-llm-cant-connect-block-ai-training-bots) above (Cloudflare's "Block AI training bots" and geo/country blocking are the usual causes).
+
+### Google Gemini Spark: legacy mode is verified; ha_auth expected as of component 2.0.0 {#google-spark-oauth}
+
+Gemini Spark's custom connected apps are OAuth-only, and they authenticate using a cross-origin redirect URI (a Client ID Metadata Document). Home Assistant core's native OAuth provider only fetches these from 2026.9 onward ([home-assistant/core#176286](https://github.com/home-assistant/core/pull/176286), fixing [#176282](https://github.com/home-assistant/core/issues/176282)); older cores reject Spark's authorization request with **"Invalid redirect URI"**.
+
+As of component 2.0.0, the HA-MCP component validates Client ID Metadata Documents itself and hands Home Assistant core an identity it accepts on any core version, so **ha_auth** mode is expected to work with Spark (live verification in progress). **Legacy** mode remains the verified fallback: a self-hosted authorization server with a static Client ID and Client Secret you paste into Spark's Advanced settings. One limitation of the automatic path: registrations without exactly one stable web redirect origin — multiple origins (as Spark's), loopback-only callbacks (CLI clients), or a mix — sign in normally but cannot refresh; the client must re-authorize when the token expires, which most handle automatically but some surface to the user. See the [Setup Wizard](https://homeassistant-ai.github.io/ha-mcp/setup/) and pick **Gemini Spark** for the full walkthrough.
+
+This page will be updated once ha_auth mode is verified end-to-end with Spark.
+
+### Copilot CLI: remote OAuth works with ha_auth as of component 2.0.0; legacy for older setups {#copilot-cli-oauth-legacy}
+
+Copilot CLI's remote MCP setup requires an OAuth **Client ID** — its `/mcp add` form won't accept a blank field — and it tries to get one via dynamic client registration. Before component 2.0.0, `ha_auth` mode advertised no registration endpoint, so that registration failed (`MCPOAuthError: Failed to register OAuth client`). As of 2.0.0 the component serves a registration endpoint in `ha_auth` mode, so registration succeeds; legacy mode remains the verified alternative if your setup predates it.
+
+On component 2.0.0 or newer: keep **Authentication mode** on `ha_auth` — Copilot CLI registers automatically and signs in with your Home Assistant account. On older versions (or as a fallback): set **Authentication mode** to `legacy`, restart Home Assistant when the repair prompts you, and copy the generated **Client ID** and **Client Secret** from the Options page (also printed in the Home Assistant log) into Copilot CLI's required fields.
+
+This is the same self-hosted authorization path used for [Google Gemini Spark](#google-spark-oauth), which can also use it as a fallback.
+
+### Test ha-mcp without configuring a client {#quick-test}
+
+Before setting up a client, you can run a quick smoke test against the public demo server to confirm `uvx` is installed and ha-mcp launches correctly:
+
+```bash
+HOMEASSISTANT_URL=https://ha-mcp-demo-server.qc-h.net HOMEASSISTANT_TOKEN=demo uvx ha-mcp@latest
+```
+
+This starts ha-mcp in stdio mode connected to the public demo Home Assistant instance. Press **Ctrl+C** to stop. If it launches without errors, your environment is ready — replace the URL and token with your own values to connect to your Home Assistant.
+
+### Keep ha-mcp-web running in the background {#uvx-background}
+
+To run the ha-mcp HTTP server detached from the terminal so it survives logout:
+
+```bash
+nohup uvx --from ha-mcp@latest ha-mcp-web > /dev/null 2>&1 &
+```
+
+`nohup` detaches the process from the terminal and redirects output to `/dev/null`. The trailing `&` sends it to the background. For more robust setups (auto-restart on crash, start on boot), use **systemd** or the **Home Assistant app** instead.
+
+### Docker: changing the port requires updating both places {#docker-port}
+
+When running ha-mcp-web in Docker, the port is set in *two* independent places and they must match:
+
+- The **second** number in `-p HOST:CONTAINER` — this is the container-side port Docker listens on
+- The `MCP_PORT` environment variable — this is the port ha-mcp binds inside the container
+
+If these differ, the container starts but requests never reach the server. Example using port 9000:
+
+```bash
+docker run -d --name ha-mcp \
+  -p 9000:9000 \
+  -v ha-mcp-data:/home/mcpuser/.ha-mcp \
+  -e HOMEASSISTANT_URL=http://homeassistant.local:8123 \
+  -e HOMEASSISTANT_TOKEN=your_token \
+  -e MCP_PORT=9000 \
+  ghcr.io/homeassistant-ai/ha-mcp:latest \
+  ha-mcp-web
+```
+
+The first number in `-p` (the host port) can be anything — only the second number must match `MCP_PORT`.
+
 ---
+
+## Custom Component (ha_mcp_tools) {#custom-component}
+
+The **HA-MCP Custom Component** (`ha_mcp_tools`) has two config-entry types under one integration: the **File & YAML services entry** (**HA-MCP File & YAML Tools**) adds the privileged file and YAML-configuration services described below, and the **HA-MCP Server** entry runs the full ha-mcp server in-process inside Home Assistant — now the recommended way to install ha-mcp, working on every Home Assistant installation type (HAOS, Supervised, Container, Core). The **HA-MCP Server** entry is a complete, standalone install that replaces the app, Docker, and uvx/stdio methods — run only one ha-mcp server, never two side by side. See the [in-process server guide](in-process-server.md) for the full walkthrough.
+
+### What is the custom component and why do I need it?
+
+Some tools require a companion custom component installed in Home Assistant. Standard HA APIs do not expose file system access or YAML config editing. This component provides both.
+
+**Tools that require the component:**
+
+- `ha_config_set_yaml` — Safely add, replace, or remove top-level YAML keys in configuration.yaml and package files (automatic backup, validation, and config check)
+- `ha_list_files` — List files in allowed directories (www/, themes/, custom_templates/)
+- `ha_read_file` — Read files from allowed paths (config YAML, logs, www/, themes/, custom_templates/, custom_components/)
+- `ha_write_file` — Write files to allowed directories
+- `ha_delete_file` — Delete files from allowed directories
+
+Template helper edit backups and restores also require the component, using either its Server entry or File & YAML Tools entry. The five tools listed above return an error with installation instructions if the component is missing.
+
+### How do I install it?
+
+**Using HACS (recommended):** open [this HACS repository link](https://my.home-assistant.io/redirect/hacs_repository/?owner=homeassistant-ai&repository=ha-mcp-integration&category=integration), or add it manually: open **HACS** > **Integrations** > three-dot menu > **Custom repositories** > add `https://github.com/homeassistant-ai/ha-mcp-integration` (category: Integration) > **Download**.
+
+After installing, restart Home Assistant. Then open **Settings** > **Devices & Services** > **Add Integration** and search for **HA-MCP Custom Component**, then pick the entry type: **HA-MCP Server** (the in-process server — the recommended install) or **HA-MCP File & YAML Tools** (the file/YAML services described above).
+
+**Manual install:** Copy `custom_components/ha_mcp_tools/` from the [repository](https://github.com/homeassistant-ai/ha-mcp) into your HA config's `custom_components/` directory. Restart Home Assistant, then add the integration as described above.
+
+### Do I also need to enable feature flags?
+
+Yes. The component is required, but the tools are also gated by feature flags for safety:
+
+| Variable | Enables |
+|----------|---------|
+| `HAMCP_ENABLE_FILESYSTEM_TOOLS=true` | `ha_list_files`, `ha_read_file`, `ha_write_file`, `ha_delete_file` |
+| `ENABLE_YAML_CONFIG_EDITING=true` | `ha_config_set_yaml` |
+
+The component itself is installed through HACS — add `homeassistant-ai/ha-mcp-integration` as a custom repository (no feature flag required). An AI agent can drive that install with the generic HACS tools; then add the **HA-MCP File & YAML Tools** entry from **Settings > Devices & Services > Add Integration**.
+
+### Do I still need the app or the webhook proxy if I use the custom component?
+
+**No.** The custom component's **HA-MCP Server** entry runs the whole ha-mcp server inside Home Assistant and is completely independent of the Home Assistant app. For remote access it registers its own built-in Home Assistant webhook, so you do not need the separate Webhook Proxy app either.
+
+The app remains a fully supported alternative on Home Assistant OS and Supervised — pick whichever install you prefer; you never need to run both.
 
 ---
 
@@ -362,6 +675,7 @@ ChatGPT (web, including Codex Work Mode) caches a connector's tool list and some
 | `HOMEASSISTANT_URL` | Your Home Assistant URL | - | Yes |
 | `HOMEASSISTANT_TOKEN` | Long-lived access token (or `demo` for demo env) | - | Yes |
 | `BACKUP_HINT` | Backup recommendation level | `normal` | No |
+| `HA_MCP_DISABLE_SETTINGS_UI` | Set to `1` to skip the localhost settings-page sidecar that stdio installs spawn by default ([details](#tool-settings-page)) | - | No |
 
 ### Backup Hint Modes
 
