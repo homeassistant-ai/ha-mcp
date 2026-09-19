@@ -1,0 +1,314 @@
+---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/az.json (keys addon.*, features.*,
+# addon_dev.*); regenerate with: python scripts/generate_locales.py
+configuration:
+  backup_hint:
+    name: HA-nın tam anlıq nüsxəsi üçün tövsiyə səviyyəsi (LLM üçün)
+    description: 'Riskli əməliyyatlardan (məs. cihazların kütləvi silinməsindən) əvvəl
+
+      Home Assistant-ın tar arxivində tam ehtiyat nüsxəsinin yaradılmasını nə vaxt
+
+      tövsiyə etmək barədə LLM-in `ha_manage_backup(scope=''snapshot'')` alətinin
+      təsvirində
+
+      gördüyü tövsiyənin ifadə tərzini tənzimləyir. YALNIZ LLM-ə ünvanlanan
+
+      bu bir cümləyə təsir edir.
+
+
+      Avtomatlaşdırmaların / skriptlərin / köməkçilərin / və s. hər redaktəsindən
+      əvvəl avtomatik anlıq nüsxə yaratmaq üçün
+
+      aşağıdakı ayrıca **Redaktələrin avtomatik ehtiyat nüsxəsini aktivləşdir** seçimindən
+      istifadə edin.'
+  secret_path:
+    name: Gizli yolun əvəzlənməsi
+    description: 'MCP serveri üçün istəyə bağlı fərdi HTTP yolu. Avtomatik yaradılmış
+      təhlükəsiz yoldan istifadə etmək üçün boş saxlayın.
+
+      '
+  enable_tool_search:
+    name: Alət axtarışını aktivləşdir
+    description: 'Tam alət kataloqunu axtarış əsasında alət tapma ilə əvəz edir. Başlanğıc
+      kontekst həcmini təxminən 90% azaldaraq təqribən 5K tokenə endirir. ⚠️ Öz daxili
+      alət axtarışı / sonradan yüklənən alətləri olan müştərilərdə (claude.ai, Claude
+      Desktop, Claude Code) bunu AKTİVLƏŞDİRMƏYİN — iki axtarış qatı ziddiyyət yaradır
+      və həmin müştərinin daxili alət axtarışı daha yaxşı seçimdir; bunu deaktiv saxlayın.
+      Alətlərin sonradan yüklənməsi müştəri və model birləşməsindən asılıdır: quruluşunuz
+      tam kataloqu əvvəlcədən yükləyirsə, bundan istifadə edin — sonradan yüklənən
+      alətlər üçün daxili dəstəyi olmayan modellərdə (məsələn, Gemini, OpenAI ilə
+      uyğun lokal modellər, Claude Haiku), modeldən asılı olmayaraq bütün alət sxemlərini
+      birbaşa kontekstə daxil edən müştərilərdə (məsələn, GitHub Copilot CLI) və ya
+      daha kiçik kontekst pəncərələrində. Bəzi Codex modellərində və ChatGPT-də də
+      sonradan yüklənən alətlər var — bu seçimi ehtiyac olmadan aktiv saxlamamaq üçün
+      müştərinizin/modelinizin imkanlarını birbaşa yoxlayın. Alətlər ha_search_tools
+      vasitəsilə tapılır və kateqoriyalara ayrılmış proksilər vasitəsilə icra olunur
+      (oxuma/yazma/silmə). Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.'
+  enable_tool_security_policies:
+    name: Alətlərin təhlükəsizlik siyasətlərini aktivləşdir (qabaqcıl)
+    description: Ciddi nəticələr doğura bilən alət çağırışları (kilid/siqnalizasiya
+      idarəetməsi, avtomatlaşdırmaların yazılması və s.) üçün istifadəçi təsdiqi tələb
+      edir. Qorunan alət çağırıldıqda agent istifadəçidən veb interfeysdə Alətlərin
+      təhlükəsizlik siyasətləri bölməsini açmağı və çağırışın davam etməsi üçün Təsdiqlə
+      düyməsinə basmağı istəyir. Hər alət üçün qaydalar və istəyə bağlı arqument şərtləri
+      Alətlərin təhlükəsizlik siyasətləri bölməsində konfiqurasiya olunur. Standart
+      olaraq deaktivdir. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.
+  enable_security_policy_tool:
+    name: AI agentlərinə alətlərin təhlükəsizlik siyasətlərini redaktə etməyə icazə
+      ver
+    description: 'Qoşulmuş AI agentlərinə alətlərin təhlükəsizlik siyasətlərini oxumağa
+      və yenidən yazmağa imkan verən ha_manage_security_policy alətini qeydiyyata
+      alır — bu, təsdiq tələblərinin çıxarılmasını da əhatə edir. Standart olaraq
+      deaktivdir. Yuxarıdakı Alətlərin təhlükəsizlik siyasətləri seçimindən asılı
+      deyil: bu seçim qaydaların tətbiq olunmasını deyil, onları kimin redaktə edə
+      biləcəyini idarə edir. Alət gözləyən təsdiq sorğularını görə və ya onlar barədə
+      qərar verə bilməz. İnsan nəzarətini saxlamaq üçün aləti aktivləşdirməzdən əvvəl
+      ona təsdiq tələbi qoyun: veb interfeysin Alətlər vərəqində Təhlükəsizlik siyasətini
+      idarə et aləti üçün "security gated" seçimini aktivləşdirin. Qüvvəyə minməsi
+      üçün yenidən başlatmaq tələb olunur.'
+  read_only_mode:
+    name: Yalnız oxuma rejimi
+    description: Bütün yazma alətlərini söndürür və alətlərin hər hansı yazma və ya
+      dağıdıcı əməliyyat çağırışı etmə imkanını aradan qaldırır. Həm oxuma, həm də
+      yazma funksiyası olan alətlər — ehtiyat nüsxələr, tətbiqlər (əlavələr), enerji
+      tərcihləri, səs emalı ardıcıllıqları və aktiv olduqda kod rejimi — yazma əməliyyatları
+      bloklanmaqla istifadəyə açıq qalır. Veb interfeysin Alətlər bölməsindəki seçimlə
+      eynidir. Standart olaraq deaktivdir. Qüvvəyə minməsi üçün yenidən başlatma tələb
+      olunur.
+  redact_secrets:
+    name: Məxfi məlumatları gizlət
+    description: Alət cavabları AI köməkçisinə çatmazdan əvvəl onlardan məxfi məlumatları
+      gizlədir. Parol kimi işarələnmiş tətbiq (əlavə) seçimləri və inteqrasiya sahələri
+      təyin edilib/boş göstəricisi ilə əvəz olunur (beləliklə, "bu giriş məlumatı
+      konfiqurasiya edilibmi?" sualını cavablandırmaq mümkün qalır), digər alət cavabları
+      isə serverin artıq gördüyü məxfi dəyərlərdən təmizlənir (6 simvoldan qısa dəyərlər
+      nəzərə alınmır, çünki kiçik fraqmentlərin əvəzlənməsi əlaqəsiz çıxışı korlayardı).
+      Sxemdə parol kimi işarələnməyən sahələr aşkarlana bilmir. Standart olaraq deaktivdir.
+  enable_beta_features:
+    name: Beta funksiyaları aktivləşdir (əsas seçim)
+    description: ⚠ TƏHLÜKƏ — bu alətlər Home Assistant qurulumunuza BƏRPAOLUNMAZ ZƏRƏR
+      VURA BİLƏR. Onlar YAML konfiqurasiyanıza və fayl sisteminizə yazır, fərdi komponentlər
+      quraşdırır, təcrid olunmuş mühitdə ixtiyari Python kodunu işə salır və AI-nin
+      gördüyü alət sənədləşmə mətnlərini redaktə edir. Heç bir zəmanət və dəstək təminatı
+      yoxdur — onları aktivləşdirməyin RİSKİNİ ÖZÜNÜZ DAŞIYIRSINIZ. Bunu aktivləşdirməzdən
+      əvvəl Home Assistant-ın ehtiyat nüsxəsini yaradın və ehtiyat nüsxə olmadan işlək
+      sistemdə heç vaxt aktivləşdirməyin. Aşağıdakı sınaq alt seçimləri üçün əsas
+      idarəetmə seçimidir; bu əsas seçim deaktiv olduqda, alt seçimlər açıq şəkildə
+      true dəyərinə təyin edilsə belə, icra zamanı nəzərə alınmır. Eyni seçim veb
+      parametrlər interfeysində də "Beta features (dangerous)" altında göstərilir
+      — yenidən başlatmada hər iki interfeys digərinin vəziyyətini əks etdirir.
+  enable_yaml_config_editing:
+    name: YAML konfiqurasiyasının redaktəsini aktivləşdir (beta)
+    description: Beta funksiya. AI köməkçilərinə configuration.yaml və packages/*.yaml
+      fayllarında üst səviyyəli açarları əlavə etməyə, əvəzləməyə və ya çıxarmağa
+      imkan verir. Yalnız icazə siyahısındakı açarlara icazə verilir (məsələn, template,
+      sensor, command_line, mqtt, knx); homeassistant, http və recorder kimi əsas
+      açarlar bloklanır. Hər redaktə YAML sintaksisini yoxlayır, konfiqurasiya yoxlamasını
+      işə salır və avtomatik ehtiyat nüsxə yaradır. Əksər açarlara edilən dəyişikliklərin
+      qüvvəyə minməsi üçün HA tam yenidən başladılmalıdır. Məlum məhdudiyyətlər üçün
+      docs/beta.md faylına baxın. Mövcud olduqda xüsusi təyinatlı alətlərə (avtomatlaşdırmalar,
+      skriptlər, səhnələr, köməkçilər, şablon sensorları) üstünlük verilməlidir. Yuxarıdakı
+      (və veb interfeysdəki) əsas "Enable beta features" seçiminin aktiv olması TƏLƏB
+      OLUNUR — əks halda bu alt seçim buradakı dəyərindən asılı olmayaraq icra zamanı
+      nəzərə alınmır.
+  enable_yaml_packages_automation:
+    name: packages/*.yaml fayllarında avtomatlaşdırmaya icazə ver
+    description: YAML konfiqurasiyasının redaktəsinə aid alt seçimdir. Aktiv olduqda
+      ha_config_set_yaml packages/*.yaml daxilində yaml_path='automation' qəbul edir.
+      Deaktiv olduqda çağırış həm müştəri, həm də server tərəfində rədd edilir. Saxlama
+      rejimi alətinə (ha_config_set_automation) təsir etmir. Standart olaraq deaktivdir;
+      yalnız yuxarıdakı "Enable YAML config editing" seçimi də aktiv olduqda qüvvəyə
+      minir.
+  enable_yaml_packages_script:
+    name: packages/*.yaml fayllarında skriptə icazə ver
+    description: YAML konfiqurasiyasının redaktəsinə aid alt seçimdir. Aktiv olduqda
+      ha_config_set_yaml packages/*.yaml daxilində yaml_path='script' qəbul edir.
+      Deaktiv olduqda çağırış həm müştəri, həm də server tərəfində rədd edilir. Saxlama
+      rejimi alətinə (ha_config_set_script) təsir etmir. Standart olaraq deaktivdir;
+      yalnız yuxarıdakı "Enable YAML config editing" seçimi də aktiv olduqda qüvvəyə
+      minir.
+  enable_yaml_packages_scene:
+    name: packages/*.yaml fayllarında səhnəyə icazə ver
+    description: YAML konfiqurasiyasının redaktəsinə aid alt seçimdir. Aktiv olduqda
+      ha_config_set_yaml packages/*.yaml daxilində yaml_path='scene' qəbul edir. Deaktiv
+      olduqda çağırış həm müştəri, həm də server tərəfində rədd edilir. Saxlama rejimi
+      alətinə (ha_config_set_scene) təsir etmir. Standart olaraq deaktivdir; yalnız
+      yuxarıdakı "Enable YAML config editing" seçimi də aktiv olduqda qüvvəyə minir.
+  enable_yaml_edit_confirm:
+    name: YAML redaktələri üçün təsdiq tələb et (fərqlərin önbaxışı)
+    description: 'YAML konfiqurasiyasının redaktəsinə aid alt seçimdir, standart olaraq
+      aktivdir (tövsiyə olunur). İlk ha_config_set_yaml çağırışı diskdə dəyişəcək
+      məzmunun birləşdirilmiş fərqini və təsdiq tokenini qaytarır, heç nə yazmır;
+      redaktə yalnız həmin tokenlə çağırış təkrarlandıqda tətbiq olunur. Tələb olunan
+      redaktədən kənar istənməyən dəyişikliklərin diskə yazılmazdan əvvəl aşkarlanması
+      üçün nəzərdə tutulub (problem #1720). Yalnız hər redaktədə bir sorğu-cavab dövrünə
+      qənaət etmək üçün söndürün.'
+  enable_code_mode:
+    name: Fərdi alətlər üçün təcrid olunmuş mühiti aktivləşdir (beta)
+    description: Beta funksiya. Heç bir daxili alət sorğunu yerinə yetirə bilmədikdə
+      AI köməkçilərinə təhlükəsiz, təcrid olunmuş mühitdə fərdi Python kodu yaratmağa,
+      işə salmağa, yadda saxlamağa və silməyə imkan verən ha_manage_custom_tool alətini
+      aktivləşdirir. Kod fayl sisteminə və ya sərbəst şəbəkə girişinə malik olmayan
+      təcrid olunmuş interpretatorda işləyir. Təcrid olunmuş mühitdəki kod HA REST
+      API-yə müraciət edə (api_get/api_post), WebSocket əmrləri göndərə (ws_send),
+      mövcud MCP alətlərini çağıra (call_tool) və ya yadda saxlanılmış aləti çıxara
+      (delete_saved_tool) bilər. Yadda saxlanılmış alətlər standart olaraq /data/saved_tools.json
+      faylında saxlanılır, buna görə tətbiq (əlavə) yenidən başladıldıqda qorunur
+      və qoşula bilən hər müştəriyə görünür. Məlum məhdudiyyətlər üçün docs/beta.md
+      faylına baxın. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur. Yuxarıdakı
+      (və veb interfeysdəki) əsas "Enable beta features" seçiminin aktiv olması TƏLƏB
+      OLUNUR — əks halda bu alt seçim buradakı dəyərindən asılı olmayaraq icra zamanı
+      nəzərə alınmır.
+  enable_lite_docstrings:
+    name: Alətlərin qısa sənədləşmə mətnlərini aktivləşdir (beta)
+    description: 'Beta funksiya. 15 geniş həcmli ha-mcp alətinin (ha_config_get_automation,
+      ha_config_set_automation, ha_config_get_script, ha_config_set_script, ha_config_get_scene,
+      ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard,
+      ha_config_set_dashboard, ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup,
+      ha_report_issue) sənədləşmə mətnlərini sxem və nümunə təfərrüatları üçün ha_get_skill_guide
+      alətinə (və ya onun skill:// resursuna) yönləndirən daha qısa variantlarla əvəz
+      edir. Bir istisna var: ha_report_issue bunun əvəzinə öz cavabının instructions
+      sahəsinə yönləndirir. Ehtiyat nüsxə ipucu parametrinin tənzimlənməsi qısa mətn
+      rejimində də qüvvədə qalır. XƏBƏRDARLIQ: bu, başlanğıc token istifadəsini azaldır,
+      lakin LLM performansını pisləşdirə bilər — qısaldılmış təsvirlər LLM-in təfərrüatlar
+      üçün həqiqətən bacarıq alətini çağırmasına və ya bacarıq resursunu oxumasına
+      əsaslanır, buna isə zəmanət yoxdur (bəzi modellər əlavə alət çağırışını ötürəcək
+      və nəticədə əvvəlkindən daha az təlimata malik olacaq). MCP resurslarını dəstəkləyən
+      müştəri ilə və ya enable_tool_search ilə birlikdə istifadəsi daha uyğundur.
+      Qüvvəyə minməsi üçün yenidən başlatma tələb olunur. Yuxarıdakı (və veb interfeysdəki)
+      əsas "Enable beta features" seçiminin aktiv olması TƏLƏB OLUNUR — əks halda
+      bu alt seçim buradakı dəyərindən asılı olmayaraq icra zamanı nəzərə alınmır.'
+  enable_mandatory_bps:
+    name: Yazma zamanı ən yaxşı təcrübələr üzrə bacarıq təlimatlarını əlavə et
+    description: 'Yazma alətlərinin bacarıq məzmunu təqdim etməsi funksiyası üçün
+      əsas seçim (problem #1182). Aktiv olduqda (standart vəziyyət) altı konfiqurasiya
+      yazma aləti (avtomatlaşdırmalar, skriptlər, səhnələr, köməkçilər, idarə panelləri,
+      xam YAML) hər uğurlu yazmada Home Assistant üzrə ən yaxşı təcrübələrin əsas
+      istinad fayllarını `skill_content` daxilində əlavə edir, həmçinin ən yaxşı təcrübə
+      xəbərdarlıqlarında istinad edilən bölmələri avtomatik daxil edir. Hər alət həmçinin
+      hər çağırış üçün `MandatoryBPS` parametri təqdim edir; agent məzmunu əldə etdikdən
+      sonra sonrakı çağırışlarda bunu false edə bilər. Bu əsas seçim deaktiv olduqda
+      çağırış parametrindən və ya BP xəbərdarlıqlarından asılı olmayaraq HEÇ BİR skill_content
+      göndərilmir. İlk seçim kimi aktiv saxlanması tövsiyə olunur; yalnız çox kiçik
+      kontekst pəncərələri olan modellər üçün söndürün. Bunun söndürülməsi yazma dəqiqliyini
+      azalda bilər. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.'
+  enable_strict_mandatory_bps:
+    name: Ən yaxşı təcrübələrə ciddi riayət rejimi
+    description: 'Ciddi rejim: müştəri ən yaxşı təcrübələri oxuduğunu sübut edənədək
+      onun alətdən istifadəsinə mane olur. Aktiv olduqda ən yaxşı təcrübələrə əsaslanan
+      altı yazma aləti (avtomatlaşdırmalar, skriptlər, səhnələr, köməkçilər, idarə
+      panelləri, xam YAML) bloklanır və müştərini ha_get_skill_guide vasitəsilə ən
+      yaxşı təcrübələr üzrə bacarıq təlimatını oxumağa və oradan aldığı təsdiq açarını
+      geri ötürməyə yönəldən xəta qaytarır. Aktiv olduqda ha_get_skill_guide aləti
+      aktiv vəziyyətdə kilidlənir — təsdiq açarını yalnız o təqdim edir. Yuxarıdakı
+      "Attach best-practice skills on writes" seçiminə tabedir və həmin seçim deaktiv
+      olduqda təsirsizdir. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.'
+  ha_tool_concurrency:
+    name: Home Assistant alətlərinin paralel icrası
+    description: Bütün sessiyalar üzrə Home Assistant alətlərinin üst səviyyəli çağırışlarının
+      eyni vaxtda icrası üçün istəyə bağlı limit. Daxili REST, WebSocket və hər alətin
+      daxilində şaxələnən çağırışların paralel icrası dəyişmir. 0 məhdudiyyətsiz davranışı
+      saxlayır. İcra üçün boş yer gözləyən çağırış 60 saniyədən sonra uğursuz olur.
+  enable_filesystem_tools:
+    name: Fayl sistemi alətlərini aktivləşdir (beta)
+    description: 'HAMCP_ENABLE_FILESYSTEM_TOOLS=true təyin edir. Home Assistant fayl
+      sisteminizdə faylların birbaşa oxunmasına/yazılmasına giriş imkanı verir. XƏBƏRDARLIQ:
+      bu, MCP serverinə sisteminizdəki fayllara həssas birbaşa giriş verir. Yalnız
+      fayl əməliyyatlarında AI köməkçisinə güvənirsinizsə, aktivləşdirin. Qüvvəyə
+      minməsi üçün yenidən başlatma tələb olunur. Yuxarıdakı (və veb interfeysdəki)
+      əsas "Enable beta features" seçiminin aktiv olması TƏLƏB OLUNUR — əks halda
+      bu alt seçim buradakı dəyərindən asılı olmayaraq icra zamanı nəzərə alınmır.'
+  enable_dashboard_screenshot:
+    name: İdarə panelinin ekran görüntüsü rejimini aktivləşdir (beta)
+    description: Beta funksiya — standart olaraq deaktivdir. AI köməkçilərinin müxtəlif
+      ekran ölçülərinə uyğunlaşan bir və ya daha çox Lovelace şəklini yoxlaya bilməsi
+      üçün (məsələn, indicə yaratdıqları idarə panelini yoxlamaq məqsədilə) ha_get_dashboard_screenshot
+      alətini, həmçinin idarə panelini oxuma/yazma alətlərinə include_screenshot /
+      return_screenshot seçimlərini əlavə edir. Adları sabit olan görünüşləri, mobil/planşet/masaüstü
+      görüntü dəstlərini və PNG/JPEG/WebP/BMP çıxışını dəstəkləyir. Görüntü yaratma
+      ayrıca, istəyə bağlı mühərrikdə — balloob tərəfindən hazırlanmış "Puppet" tətbiqində
+      (əlavəsində), qrafik interfeyssiz Chromium-da — işləyir; onu bir dəfə quraşdırırsınız
+      (balloob repozitoriyasını tətbiq mağazasına əlavə edib "Puppet" tətbiqini quraşdırın)
+      və uzunmüddətli giriş tokeni verirsiniz; Docker/Container qurulumlarında həmin
+      mühərriki köməkçi proses kimi işə salıb HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL
+      təyin edirsiniz. Ağır komponentlər yalnız bu seçimi aktivləşdirib mühərriki
+      də quraşdırdıqda quraşdırılır. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.
+      Yuxarıdakı (və veb interfeysdəki) əsas "Enable beta features" seçiminin aktiv
+      olması TƏLƏB OLUNUR — əks halda bu alt seçim buradakı dəyərindən asılı olmayaraq
+      icra zamanı nəzərə alınmır.
+  enable_auto_backup:
+    name: Redaktələrin avtomatik ehtiyat nüsxəsini aktivləşdir
+    description: 'Ehtiyat nüsxə mexanizmi ilə əhatə olunan hər yazma/dağıdıcı MCP
+      alət çağırışından (avtomatlaşdırma, skript, səhnə, köməkçi, idarə paneli, idarə
+      paneli resursu, etiket, kateqoriya, qrup, zona, sahə, təqvim, todo, obyekt,
+      cihaz, inteqrasiya və müvafiq çıxarma/silmə alətləri) əvvəl obyekt üzrə anlıq
+      nüsxə yaradır. Avtomatik ehtiyat nüsxə tezliyi limiti bunun nə qədər tez-tez
+      baş verdiyini məhdudlaşdırır: 0 (standart) hər belə çağırışda, N>0 isə hər obyekt
+      üçün N dəqiqə ərzində ən çox bir anlıq nüsxə yaradır. Anlıq nüsxələr /data/ha_mcp_backups/
+      altında YAML faylları kimi saxlanılır (HAMCP_BACKUP_DIR vasitəsilə dəyişdirilə
+      bilər) və veb parametrlər interfeysindəki Ehtiyat nüsxələr vərəqi və ya ha_manage_backup(scope=''edits'',
+      ...) vasitəsilə siyahılanır, bərpa edilir və ya silinir. Bu domenlər üçün nüsxənin
+      yaradılması imkan daxilində yerinə yetirilir — uğursuzluq zamanı jurnala WARNING
+      yazılır və yazma əməliyyatı davam edir. Fayl və birbaşa YAML alətləri istisnadır:
+      ha_write_file, ha_delete_file və ha_config_set_yaml anlıq nüsxəni ilkin şərt
+      sayır, buna görə bu seçim deaktiv olduqda həmin alətlərlə yazma rədd edilir,
+      nüsxə yaratmaq alınmadıqda isə yazma bloklanır. Standart olaraq aktivdir; seçimi
+      söndürmək imkan daxilində yaradılan nüsxələrdən imtina edir və bununla birlikdə
+      fayl və birbaşa YAML alətlərini də istifadədən çıxarır. Qüvvəyə minməsi üçün
+      yenidən başlatmaq tələb olunur.'
+  auto_backup_throttle_minutes:
+    name: Avtomatik ehtiyat nüsxə tezliyi limiti (dəqiqə)
+    description: Hər obyekt üçün tezlik məhdudiyyətinin müddəti. 0 (standart) ehtiyat
+      nüsxə mexanizmi ilə əhatə olunan hər yazma əməliyyatında anlıq nüsxə yaradır.
+      N>0 hər obyekt üçün N dəqiqə ərzində ən çox bir anlıq nüsxə yaradır. Aralıq
+      0–1440.
+  auto_backup_retain_per_entity:
+    name: Avtomatik ehtiyat nüsxələrin saxlanma sayı (hər obyekt üzrə)
+    description: Hər obyekt üçün saxlanılan anlıq nüsxələrin maksimum sayı. Bu limiti
+      aşan köhnə anlıq nüsxələr hər uğurlu nüsxə yaratma zamanı silinir. Standart
+      dəyər 100, aralıq 1–10000.
+  enable_snapshot_delete:
+    name: Anlıq nüsxələrin silinməsinə icazə ver
+    description: ha_manage_backup alətinə HA-nın tam anlıq nüsxələrinin tar arxivlərini
+      silməyə imkan verir (scope='snapshot', action='delete'). Standart olaraq deaktivdir
+      — səhv dəyişiklikdən sonra anlıq nüsxə son bərpa nöqtəsi ola bilər, buna görə
+      insan burada bu seçimi aktivləşdirməlidir. Aktiv olduqda belə planlaşdırılmış
+      ehtiyat nüsxələr, qalan ən yeni anlıq nüsxə və aşağıdakı minimum yaş həddinə
+      çatmamış bütün nüsxələr qorunur.
+  snapshot_delete_min_age_days:
+    name: Silmək üçün anlıq nüsxənin minimum yaşı (gün)
+    description: Anlıq nüsxənin silinə bilməsi üçün yaradılmasından ən azı bu qədər
+      vaxt keçməlidir. Aralıq 0–365; 0 minimum həddi söndürür (ən yeni anlıq nüsxənin
+      və planlaşdırılmış ehtiyat nüsxələrin qorunması qüvvədə qalır). Standart dəyər
+      7.
+  tool_search_max_results:
+    name: Alət axtarışında maksimum nəticə sayı
+    description: 'Alət axtarışı aktiv olduqda ha_search_tools tərəfindən qaytarılan
+      alətlərin maksimum sayı. Daha aşağı dəyərlər (2-3) kontekst tokenlərinə qənaət
+      edir, lakin uyğun alətləri nəzərdən qaçıra bilər. Aralıq: 2-10. Yenidən başlatma
+      tələb olunur.'
+  disabled_tools:
+    name: Deaktiv alətlər (vergüllə ayrılmış)
+    description: Burada sadalanan alətlər məcburi söndürülür və veb Parametrlər interfeysində
+      (Alətlər vərəqində) kilidlənir — əvvəlcə bu seçimdəki təyinatı ləğv etmədən
+      onları orada yenidən aktivləşdirmək mümkün deyil. Məcburi alətlərin kiçik bir
+      qrupu (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      söndürülə bilməz və burada sadalansa belə işləməyə davam edir. ha_get_skill_guide
+      yalnız ən yaxşı təcrübələrə ciddi riayət rejimi (enable_strict_mandatory_bps)
+      deaktiv olduqda söndürülə bilər. Vergüllə ayrılmış alət adları (məs. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Sancaqlanmış alətlər (vergüllə ayrılmış)
+    description: Burada sadalanan alətlər sancaqlanmış vəziyyətdə kilidlənir — Alətlər
+      vərəqinin yuxarısında görünür və əvvəlcə bu seçimdəki təyinatı ləğv etmədən
+      veb Parametrlər interfeysindən sancaqlarını çıxarmaq mümkün deyil. Alət axtarışı
+      ilə birlikdə faydalıdır. Vergüllə ayrılmış alət adları.
+  verify_ssl:
+    name: TLS sertifikatını yoxla
+    description: Home Assistant serverinin TLS sertifikatını yoxlayın. Tətbiq (əlavə)
+      Supervisor proksisi vasitəsilə qoşulur, buna görə adətən bu seçimin təsiri olmur
+      və aktiv saxlanmalıdır. Yalnız tətbiqi (əlavəni) HA ilə özünün imzaladığı sertifikatı
+      olan və ya host adı uyğun gəlməyən ictimai HTTPS host adı üzərindən əlaqə yaratmaq
+      üçün yenidən konfiqurasiya etmisinizsə söndürün. Söndürmək ötürülmənin təhlükəsizliyini
+      zəiflədir — buna ehtiyacınız olduğunu dəqiq bilmirsinizsə, aktiv saxlayın. Qüvvəyə
+      minməsi üçün yenidən başlatmaq tələb olunur.
