@@ -256,6 +256,30 @@ class TestEntityManagement:
             f"Computed-name alias dropped while clearing strings: {cleared_entry}"
         )
 
+        # The switch is the only way to turn the own-name entry off, and back on.
+        off_result = await mcp_client.call_tool(
+            "ha_set_entity",
+            {
+                "entity_id": entity_id,
+                "aliases": ["only this"],
+                "use_entity_name_alias": False,
+            },
+        )
+        off_data = assert_mcp_success(off_result, "Switch own-name alias off")
+        assert off_data.get("entity_entry", {}).get("aliases") == ["only this"], (
+            f"Own-name alias not removed: {off_data}"
+        )
+
+        on_result = await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "use_entity_name_alias": True},
+        )
+        on_data = assert_mcp_success(on_result, "Switch own-name alias on")
+        on_aliases = on_data.get("entity_entry", {}).get("aliases", [])
+        assert None in on_aliases and "only this" in on_aliases, (
+            f"Own-name alias not restored alongside strings: {on_data}"
+        )
+
         logger.info("Aliases cleared successfully")
 
         # Cleanup

@@ -2473,6 +2473,96 @@ class TestHaSetEntityAliases:
         assert mock_client.send_websocket_message.call_count == 1
 
     @pytest.mark.asyncio
+    async def test_switch_off_strips_null_without_lookup(
+        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
+    ) -> None:
+        """use_entity_name_alias=False removes the own-name entry, even if passed."""
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"entity_entry": {"entity_id": "light.t"}},
+        }
+
+        result = await set_entity_tool(
+            entity_id="light.t",
+            aliases=[None, "Maanlamp"],
+            use_entity_name_alias=False,
+        )
+
+        assert mock_client.send_websocket_message.call_count == 1
+        assert self._update_call(mock_client)["aliases"] == ["Maanlamp"]
+        assert "entity-name alias off" in result["updates"]
+
+    @pytest.mark.asyncio
+    async def test_switch_on_adds_null_without_lookup(
+        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
+    ) -> None:
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"entity_entry": {"entity_id": "light.t"}},
+        }
+
+        result = await set_entity_tool(
+            entity_id="light.t", aliases=["Maanlamp"], use_entity_name_alias=True
+        )
+
+        assert mock_client.send_websocket_message.call_count == 1
+        assert self._update_call(mock_client)["aliases"] == [None, "Maanlamp"]
+        assert "entity-name alias on" in result["updates"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("switch", "expected"),
+        [(False, ["old"]), (True, [None, "old"])],
+        ids=["off", "on"],
+    )
+    async def test_switch_alone_rewrites_current_aliases(
+        self,
+        set_entity_tool: Callable[..., Any],
+        mock_client: MagicMock,
+        switch: bool,
+        expected: list[str | None],
+    ) -> None:
+        """Without aliases, the switch reads the registry and keeps the strings."""
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"aliases": [None, "old"]}},
+            {"success": True, "result": {"entity_entry": {"entity_id": "light.t"}}},
+        ]
+
+        result = await set_entity_tool(
+            entity_id="light.t", use_entity_name_alias=switch
+        )
+
+        assert result["success"] is True
+        assert self._update_call(mock_client)["aliases"] == expected
+
+    @pytest.mark.asyncio
+    async def test_kept_null_is_reported_in_updates(
+        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
+    ) -> None:
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"aliases": [None]}},
+            {"success": True, "result": {"entity_entry": {"entity_id": "light.t"}}},
+        ]
+
+        result = await set_entity_tool(entity_id="light.t", aliases=["x"])
+
+        assert "entity-name alias kept" in result["updates"]
+
+    @pytest.mark.asyncio
+    async def test_switch_rejected_in_bulk(
+        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(
+                entity_id=["light.a", "light.b"], use_entity_name_alias=False
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "use_entity_name_alias" in body["error"]["message"]
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("aliases", [[1, "x"], '["x", 2]', "not json"])
     async def test_non_string_entries_rejected(
         self,

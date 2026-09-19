@@ -595,18 +595,8 @@ class EntityTools:
             return None, _extract_ws_error(result)
         return (result.get("result") or {}).get("labels") or [], None
 
-    async def _resolve_final_aliases(
-        self,
-        entity_id: str,
-        parsed_aliases: list[str | None] | None,
-    ) -> list[str | None] | None:
-        """Keep the entity's own-name (``null``) alias unless the caller passed one.
-
-        HA's Voice settings dialog leaves that entry alone when aliases are
-        edited; a plain string list must not silently turn it off (#2495).
-        """
-        if parsed_aliases is None or None in parsed_aliases:
-            return parsed_aliases
+    async def _get_entity_aliases(self, entity_id: str) -> list[str | None]:
+        """Fetch the entity's current registry aliases (``null`` = own name)."""
         get_msg: dict[str, Any] = {
             "type": "config/entity_registry/get",
             "entity_id": entity_id,
@@ -621,10 +611,35 @@ class EntityTools:
                     context={"entity_id": entity_id},
                 )
             )
-        current = (result.get("result") or {}).get("aliases") or []
-        if None in current:
-            return [None, *parsed_aliases]
-        return parsed_aliases
+        aliases: list[str | None] = (result.get("result") or {}).get("aliases") or []
+        return aliases
+
+    async def _resolve_final_aliases(
+        self,
+        entity_id: str,
+        parsed_aliases: list[str | None] | None,
+        use_entity_name_alias: bool | None,
+    ) -> tuple[list[str | None] | None, str | None]:
+        """Apply the own-name (``null``) alias switch; returns (aliases, note).
+
+        With no explicit switch, the registry's existing ``null`` survives a
+        string-only write — HA's Voice settings dialog does the same (#2495).
+        """
+        if use_entity_name_alias is None:
+            if parsed_aliases is None or None in parsed_aliases:
+                return parsed_aliases, None
+            if None in await self._get_entity_aliases(entity_id):
+                return [None, *parsed_aliases], "entity-name alias kept"
+            return parsed_aliases, None
+        source = (
+            parsed_aliases
+            if parsed_aliases is not None
+            else await self._get_entity_aliases(entity_id)
+        )
+        strings: list[str | None] = [a for a in source if a is not None]
+        if use_entity_name_alias:
+            return [None, *strings], "entity-name alias on"
+        return strings, "entity-name alias off"
 
     async def _resolve_final_labels(
         self,
@@ -1088,6 +1103,7 @@ class EntityTools:
         new_device_name: str | None = None,
         device_class: str | None = None,
         parsed_options: dict[str, dict[str, Any]] | None = None,
+        use_entity_name_alias: bool | None = None,
     ) -> dict[str, Any]:
         """Update a single entity. Orchestrates the phase pipeline."""
         async with registry_update_lock("entity", entity_id):
@@ -1095,8 +1111,8 @@ class EntityTools:
             final_labels = await self._resolve_final_labels(
                 entity_id, parsed_labels, label_operation
             )
-            parsed_aliases = await self._resolve_final_aliases(
-                entity_id, parsed_aliases
+            parsed_aliases, alias_note = await self._resolve_final_aliases(
+                entity_id, parsed_aliases, use_entity_name_alias
             )
 
             # Phase 2: Build update message for entity registry
@@ -1119,6 +1135,8 @@ class EntityTools:
                 label_operation,
                 parsed_labels,
             )
+            if alias_note:
+                updates_made.append(alias_note)
             if new_entity_id is not None:
                 self._validate_entity_rename(
                     entity_id, new_entity_id, message, updates_made
@@ -1135,7 +1153,7 @@ class EntityTools:
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         "No updates specified",
                         suggestions=[
-                            "Provide at least one of: area_id, name, icon, device_class, enabled, hidden, aliases, categories, labels, options, expose_to, new_entity_id, or new_device_name"
+                            "Provide at least one of: area_id, name, icon, device_class, enabled, hidden, aliases, use_entity_name_alias, categories, labels, options, expose_to, new_entity_id, or new_device_name"
                         ],
                     )
                 )
@@ -1695,7 +1713,20 @@ class EntityTools:
                     "List of voice assistant aliases for the entity (replaces existing "
                     "aliases). A null entry is the entity's own name (HA's 'use entity "
                     "name' switch); it is kept automatically unless your list already "
-                    "contains null. Single entity only."
+                    "contains null. To turn that switch off or on, use "
+                    "use_entity_name_alias. Single entity only."
+                ),
+                default=None,
+            ),
+        ] = None,
+        use_entity_name_alias: Annotated[
+            bool | None,
+            Field(
+                description=(
+                    "HA's 'use entity name' voice-alias switch. True keeps the entity's "
+                    "own name answering in Assist, False turns it off so only the "
+                    "aliases match. Omit to leave it as is. Works with or without "
+                    "aliases. Single entity only."
                 ),
                 default=None,
             ),
@@ -1770,7 +1801,7 @@ class EntityTools:
 
         BULK OPERATIONS:
         When entity_id is a list, only labels, expose_to, and categories parameters are supported.
-        Other parameters (area_id, name, icon, device_class, options, enabled, hidden, aliases, new_entity_id, new_device_name) require single entity.
+        Other parameters (area_id, name, icon, device_class, options, enabled, hidden, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.
 
         LABEL OPERATIONS:
         - label_operation="set" (default): Replace all labels with the provided list. Use [] to clear.
@@ -1859,6 +1890,7 @@ class EntityTools:
                 "enabled": enabled,
                 "hidden": hidden,
                 "aliases": aliases,
+                "use_entity_name_alias": use_entity_name_alias,
                 "new_entity_id": new_entity_id,
                 "new_device_name": new_device_name,
             }
@@ -1872,7 +1904,7 @@ class EntityTools:
                         f"Bulk operations (multiple entity_ids) only support categories, labels, and expose_to. "
                         f"Single-entity parameters provided: {non_null_single_params}",
                         suggestions=[
-                            "Use a single entity_id for area_id, name, icon, device_class, options, enabled, hidden, or aliases",
+                            "Use a single entity_id for area_id, name, icon, device_class, options, enabled, hidden, aliases, or use_entity_name_alias",
                             "Or remove single-entity parameters to use bulk categories/labels/expose_to",
                         ],
                     )
@@ -1916,6 +1948,7 @@ class EntityTools:
                     new_device_name=new_device_name,
                     device_class=device_class,
                     parsed_options=parsed_options,
+                    use_entity_name_alias=use_entity_name_alias,
                 )
 
             # Bulk case
