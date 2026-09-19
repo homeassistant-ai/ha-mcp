@@ -248,8 +248,12 @@ class TestEntityManagement:
         clear_data = assert_mcp_success(clear_result, "Clear aliases")
 
         cleared_entry = clear_data.get("entity_entry", {})
-        assert [a for a in cleared_entry.get("aliases", []) if a is not None] == [], (
+        cleared_aliases = cleared_entry.get("aliases", [])
+        assert [a for a in cleared_aliases if a is not None] == [], (
             f"Aliases not cleared: {cleared_entry}"
+        )
+        assert None in cleared_aliases, (
+            f"Computed-name alias dropped while clearing strings: {cleared_entry}"
         )
 
         logger.info("Aliases cleared successfully")
