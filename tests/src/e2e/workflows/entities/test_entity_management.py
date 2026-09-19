@@ -416,7 +416,8 @@ class TestEntityManagement:
 
         # Verify aliases
         returned_aliases = entity_entry.get("aliases", [])
-        assert set(test_aliases) == set(returned_aliases), (
+        # The entity's own name rides along as a null entry (#2495).
+        assert [a for a in returned_aliases if a is not None] == test_aliases, (
             f"aliases mismatch: expected {test_aliases}, got {returned_aliases}"
         )
 
