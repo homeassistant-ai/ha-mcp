@@ -6,6 +6,7 @@ via the Home Assistant entity registry API.
 """
 
 import asyncio
+import json
 import logging
 import re
 from typing import Annotated, Any, Literal
@@ -279,7 +280,7 @@ def _build_state_tag_fields(
     updates_made: list[str],
     enabled: bool | None,
     hidden: bool | None,
-    parsed_aliases: list[str] | None,
+    parsed_aliases: list[str | None] | None,
     parsed_categories: dict[str, str | None] | None,
     final_labels: list[str] | None,
     label_operation: str,
@@ -429,6 +430,40 @@ def _parse_string_list_field(
     return None
 
 
+def _parse_aliases_param(
+    aliases: str | list[str | None] | None,
+) -> list[str | None] | None:
+    """Parse aliases, keeping ``null`` entries.
+
+    HA stores the entity's own (computed) name as a ``null`` entry in
+    ``aliases`` (issue #2495); it must survive the round trip.
+    """
+    if aliases is None:
+        return None
+    parsed: Any = aliases
+    if isinstance(aliases, str):
+        try:
+            parsed = json.loads(aliases)
+        except (json.JSONDecodeError, RecursionError) as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid aliases parameter: Invalid JSON in aliases: {e}",
+                )
+            )
+    if not isinstance(parsed, list) or not all(
+        item is None or isinstance(item, str) for item in parsed
+    ):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Invalid aliases parameter: aliases must be a JSON array of "
+                "strings (null entries stand for the entity's own name)",
+            )
+        )
+    return parsed
+
+
 def _parse_categories_param(
     categories: dict[str, str | None] | None,
 ) -> dict[str, str | None] | None:
@@ -559,6 +594,37 @@ class EntityTools:
         if not result.get("success"):
             return None, _extract_ws_error(result)
         return (result.get("result") or {}).get("labels") or [], None
+
+    async def _resolve_final_aliases(
+        self,
+        entity_id: str,
+        parsed_aliases: list[str | None] | None,
+    ) -> list[str | None] | None:
+        """Keep the entity's own-name (``null``) alias unless the caller passed one.
+
+        HA's Voice settings dialog leaves that entry alone when aliases are
+        edited; a plain string list must not silently turn it off (#2495).
+        """
+        if parsed_aliases is None or None in parsed_aliases:
+            return parsed_aliases
+        get_msg: dict[str, Any] = {
+            "type": "config/entity_registry/get",
+            "entity_id": entity_id,
+        }
+        result = await self._client.send_websocket_message(get_msg)
+        if not result.get("success"):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to get current aliases for {entity_id}: "
+                    f"{_extract_ws_error(result)}",
+                    context={"entity_id": entity_id},
+                )
+            )
+        current = (result.get("result") or {}).get("aliases") or []
+        if None in current:
+            return [None, *parsed_aliases]
+        return parsed_aliases
 
     async def _resolve_final_labels(
         self,
@@ -1013,7 +1079,7 @@ class EntityTools:
         icon: str | None,
         enabled: bool | None,
         hidden: bool | None,
-        parsed_aliases: list[str] | None,
+        parsed_aliases: list[str | None] | None,
         parsed_categories: dict[str, str | None] | None,
         parsed_labels: list[str] | None,
         label_operation: str,
@@ -1028,6 +1094,9 @@ class EntityTools:
             # Phase 1: For add/remove label operations, fetch current labels first
             final_labels = await self._resolve_final_labels(
                 entity_id, parsed_labels, label_operation
+            )
+            parsed_aliases = await self._resolve_final_aliases(
+                entity_id, parsed_aliases
             )
 
             # Phase 2: Build update message for entity registry
@@ -1619,10 +1688,15 @@ class EntityTools:
             ),
         ] = None,
         aliases: Annotated[
-            str | list[str] | None,
+            str | list[str | None] | None,
             JSON_STRING_COERCION,
             Field(
-                description="List of voice assistant aliases for the entity (replaces existing aliases). Single entity only.",
+                description=(
+                    "List of voice assistant aliases for the entity (replaces existing "
+                    "aliases). A null entry is the entity's own name (HA's 'use entity "
+                    "name' switch); it is kept automatically unless your list already "
+                    "contains null. Single entity only."
+                ),
                 default=None,
             ),
         ] = None,
@@ -1806,7 +1880,7 @@ class EntityTools:
 
             _validate_enabled_constraint(enabled, entity_ids)
 
-            parsed_aliases = _parse_string_list_field(aliases, "aliases")
+            parsed_aliases = _parse_aliases_param(aliases)
             parsed_categories = _parse_categories_param(categories)
             parsed_labels = _parse_string_list_field(labels, "labels")
             parsed_options = _parse_options_param(options)
@@ -1939,7 +2013,7 @@ class EntityTools:
         - hidden_by: Why hidden (null=visible, "user"/"integration"/etc)
         - enabled: Boolean shorthand (True if disabled_by is null)
         - hidden: Boolean shorthand (True if hidden_by is not null)
-        - aliases: Voice assistant aliases
+        - aliases: Voice assistant aliases (a null entry = the entity's own name)
         - labels: Assigned label IDs
         - categories: Category assignments (dict mapping scope to category_id)
         - device_class: User "Show As" override (null = use original_device_class)

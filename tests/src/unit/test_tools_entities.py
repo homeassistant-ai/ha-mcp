@@ -2346,3 +2346,131 @@ class TestHaGetEntityRegistryOptions:
         result = await tool(entity_id="sensor.legacy")
 
         assert result["entity_entry"]["config_entry_id"] is None
+
+
+class TestHaSetEntityAliases:
+    """ha_set_entity aliases keep HA's computed-name (``null``) entry (#2495)."""
+
+    @pytest.fixture
+    def set_entity_tool(self, mock_client):
+        mcp = MagicMock()
+        tools: dict[str, Any] = {}
+
+        def capture_add_tool(method):
+            fmcp = getattr(method, "__fastmcp__", None)
+            tools[(fmcp.name if fmcp else None) or method.__name__] = method
+
+        mcp.add_tool = capture_add_tool
+        register_entity_tools(mcp, mock_client)
+        return tools["ha_set_entity"]
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @staticmethod
+    def _update_call(mock_client):
+        calls = [
+            c[0][0]
+            for c in mock_client.send_websocket_message.call_args_list
+            if c[0][0]["type"] == "config/entity_registry/update"
+        ]
+        assert len(calls) == 1
+        return calls[0]
+
+    @pytest.mark.asyncio
+    async def test_plain_list_keeps_existing_computed_name(
+        self, set_entity_tool, mock_client
+    ):
+        """Registry has [null]; a string-only list must not drop it."""
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"aliases": [None]}},
+            {"success": True, "result": {"entity_entry": {"entity_id": "light.t"}}},
+        ]
+
+        result = await set_entity_tool(entity_id="light.t", aliases=["Maanlamp"])
+
+        assert result["success"] is True
+        get_call = mock_client.send_websocket_message.call_args_list[0][0][0]
+        assert get_call == {
+            "type": "config/entity_registry/get",
+            "entity_id": "light.t",
+        }
+        assert self._update_call(mock_client)["aliases"] == [None, "Maanlamp"]
+
+    @pytest.mark.asyncio
+    async def test_plain_list_respects_disabled_computed_name(
+        self, set_entity_tool, mock_client
+    ):
+        """Registry has no null (switch off); the list is sent as given."""
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"aliases": ["old"]}},
+            {"success": True, "result": {"entity_entry": {"entity_id": "light.t"}}},
+        ]
+
+        await set_entity_tool(entity_id="light.t", aliases=["new"])
+
+        assert self._update_call(mock_client)["aliases"] == ["new"]
+
+    @pytest.mark.asyncio
+    async def test_empty_list_keeps_computed_name(self, set_entity_tool, mock_client):
+        """Clearing aliases must not make the entity unaddressable by name."""
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"aliases": [None, "old"]}},
+            {"success": True, "result": {"entity_entry": {"entity_id": "light.t"}}},
+        ]
+
+        await set_entity_tool(entity_id="light.t", aliases=[])
+
+        assert self._update_call(mock_client)["aliases"] == [None]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "aliases",
+        [[None, "Maanlamp"], '[null, "Maanlamp"]'],
+        ids=["list", "json-string"],
+    )
+    async def test_explicit_null_passes_through_without_lookup(
+        self, set_entity_tool, mock_client, aliases
+    ):
+        """Caller-provided null is authoritative: no registry read, sent verbatim."""
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"entity_entry": {"entity_id": "light.t"}},
+        }
+
+        result = await set_entity_tool(entity_id="light.t", aliases=aliases)
+
+        assert result["success"] is True
+        assert mock_client.send_websocket_message.call_count == 1
+        assert self._update_call(mock_client)["aliases"] == [None, "Maanlamp"]
+
+    @pytest.mark.asyncio
+    async def test_lookup_failure_is_reported(self, set_entity_tool, mock_client):
+        """A failed registry read must not fall through to a name-dropping write."""
+        mock_client.send_websocket_message.return_value = {
+            "success": False,
+            "error": {"message": "boom"},
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id="light.t", aliases=["x"])
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "boom" in error_data["error"]["message"]
+        assert mock_client.send_websocket_message.call_count == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("aliases", [[1, "x"], '["x", 2]', "not json"])
+    async def test_non_string_entries_rejected(
+        self, set_entity_tool, mock_client, aliases
+    ):
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id="light.t", aliases=aliases)
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        mock_client.send_websocket_message.assert_not_called()

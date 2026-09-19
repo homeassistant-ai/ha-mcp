@@ -215,8 +215,13 @@ class TestEntityManagement:
         entity_entry = update_data.get("entity_entry", {})
         returned_aliases = entity_entry.get("aliases", [])
 
-        assert set(aliases) == set(returned_aliases), (
+        # HA keeps the entity's own name as a null entry; it must survive
+        # a string-only alias write (#2495).
+        assert [a for a in returned_aliases if a is not None] == aliases, (
             f"Aliases mismatch: expected {aliases}, got {returned_aliases}"
+        )
+        assert None in returned_aliases, (
+            f"Computed-name alias dropped: {returned_aliases}"
         )
 
         logger.info(f"Aliases set: {returned_aliases}")
@@ -232,7 +237,7 @@ class TestEntityManagement:
         clear_data = assert_mcp_success(clear_result, "Clear aliases")
 
         cleared_entry = clear_data.get("entity_entry", {})
-        assert len(cleared_entry.get("aliases", [])) == 0, (
+        assert [a for a in cleared_entry.get("aliases", []) if a is not None] == [], (
             f"Aliases not cleared: {cleared_entry}"
         )
 
