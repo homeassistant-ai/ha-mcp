@@ -200,6 +200,17 @@ class TestEntityManagement:
         entity_id = data.get("entity_id") or f"input_boolean.{data['data']['id']}"
         cleaner.track_entity("input_boolean", entity_id)
 
+        # Establish HA's own-name (null) alias explicitly so the preservation
+        # check below does not depend on the registry's create-time default.
+        seed_result = await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "aliases": [None]},
+        )
+        seed_data = assert_mcp_success(seed_result, "Seed computed-name alias")
+        assert seed_data.get("entity_entry", {}).get("aliases") == [None], (
+            f"Computed-name alias not written: {seed_data}"
+        )
+
         # Set aliases
         aliases = ["test alias one", "test alias two"]
 
@@ -215,9 +226,9 @@ class TestEntityManagement:
         entity_entry = update_data.get("entity_entry", {})
         returned_aliases = entity_entry.get("aliases", [])
 
-        # HA keeps the entity's own name as a null entry; it must survive
-        # a string-only alias write (#2495).
-        assert [a for a in returned_aliases if a is not None] == aliases, (
+        # The null entry must survive a string-only alias write (#2495).
+        # Order-insensitive: the component join may sort aliases.
+        assert {a for a in returned_aliases if a is not None} == set(aliases), (
             f"Aliases mismatch: expected {aliases}, got {returned_aliases}"
         )
         assert None in returned_aliases, (
@@ -417,7 +428,7 @@ class TestEntityManagement:
         # Verify aliases
         returned_aliases = entity_entry.get("aliases", [])
         # The entity's own name rides along as a null entry (#2495).
-        assert [a for a in returned_aliases if a is not None] == test_aliases, (
+        assert {a for a in returned_aliases if a is not None} == set(test_aliases), (
             f"aliases mismatch: expected {test_aliases}, got {returned_aliases}"
         )
 
