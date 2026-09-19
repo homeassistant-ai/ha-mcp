@@ -1,0 +1,884 @@
+{
+  "meta": {
+    "native_name": "Azərbaycanca",
+    "dir": "ltr"
+  },
+  "messages": {
+    "app.document_title": "HA-MCP alətlərinin parametrləri",
+    "app.title": "HA-MCP parametrləri",
+    "language.label": "Dil",
+    "language.auto": "Avtomatik",
+    "theme.label": "Tema",
+    "theme.auto_os": "Avtomatik (OS)",
+    "theme.light": "Açıq",
+    "theme.dark": "Tünd",
+    "status.loading": "Yüklənir…",
+    "footer.installation": "quraşdırma: {method}",
+    "footer.deployment.addon": "tətbiq/əlavə",
+    "footer.deployment.docker": "konteyner/docker",
+    "footer.deployment.pyinstaller": "müstəqil ikili fayl",
+    "footer.deployment.git": "mənbə kodunun lokal nüsxəsi",
+    "footer.deployment.pypi": "python paketi",
+    "footer.deployment.unknown": "naməlum",
+    "nav.skip": "Məzmuna keç",
+    "tabs.aria": "Parametr bölmələri",
+    "tabs.tools": "Alətlər",
+    "tabs.server": "Server parametrləri",
+    "tabs.backups": "Ehtiyat nüsxələr",
+    "tabs.policies": "Alətlərin təhlükəsizlik siyasətləri",
+    "tabs.visibility": "Obyektlərin görünürlüyü",
+    "tabs.accessibility": "Əlçatanlıq",
+    "notice.restart_required": "⚠ Dəyişikliklər yadda saxlanıldı. Qüvvəyə minməsi üçün HA-MCP-ni yenidən başladın. Növbəti işəsalmada HA-MCP deaktiv alətləri MCP alət siyahısından tamamilə çıxarır. Sonra alət siyahısının yenidən yüklənməsi üçün AI müştərinizdə MCP serverinə yenidən qoşulun və ya onu yeniləyin (məsələn, claude.ai-da alət siyahısını yeniləyin, ChatGPT-də konnektoru yenidən əlavə edin/yeniləyin və ya Claude Desktop-u bağlayıb yenidən açın). Tətbiqin (əlavənin) və ya Home Assistant-ın yenidən başladılması müştərinizin keşdəki alət siyahısını YENİLƏMİR. ChatGPT bəzən konnektor çıxarılıb yenidən əlavə edildikdən sonra belə keşdəki alət siyahısını təqdim etməyə davam edir — alətlər hələ də görünmürsə, konnektoru silin və başqa adla yenisini yaradın.",
+    "notice.shared_settings": "Server üzrə ümumi funksiyalar (alət axtarışı, YAML konfiqurasiyasının redaktəsi, fayl sistemi alətləri və s.) həm <strong>Server parametrləri</strong> bölməsində, həm də tətbiqin (əlavənin) Konfiqurasiya səhifəsində görünür; hər iki yerdə eyni parametrlərdir. Tətbiq (əlavə) yenidən başladıldıqdan sonra hər iki interfeysdəki parametrlər bir-biri ilə sinxronlaşır. Dəyişikliklər üçün HA-MCP yenidən başladılmalıdır.",
+    "notice.env_pins": "<code>DISABLED_TOOLS</code> və ya <code>PINNED_TOOLS</code> mühit dəyişənlərində sadalanan alətlər yalnız oxuma rejimində kilidlənib; onları burada redaktə etmək üçün mühit dəyişənini ləğv edin. Sancaqlama seçimləri yalnız alət axtarışı aktiv olduqda qüvvəyə minir (Server parametrləri bölməsində və ya tətbiqin (əlavənin) Konfiqurasiya səhifəsində).",
+    "actions.restart_addon": "Tətbiqi (əlavəni) yenidən başlat",
+    "actions.save": "Yadda saxla",
+    "actions.save_settings": "Parametrləri yadda saxla",
+    "actions.refresh": "Yenilə",
+    "actions.close": "Bağla",
+    "tools.read_only.label": "Yalnız oxuma rejimi",
+    "tools.read_only.help": "Bütün yazma alətlərini söndürür və bütün alətlərin yazma və ya dağıdıcı əməliyyat çağırışlarını bloklayır. Həm oxuma, həm də yazma funksiyası olan alətlər (ehtiyat nüsxələr, tətbiqlər (əlavələr), enerji tərcihləri, səs emalı ardıcıllıqları və aktiv olduqda kod rejimi) yazma əməliyyatları bloklanmaqla istifadəyə açıq qalır.",
+    "tools.read_only.unknown": "Server parametrlərini oxumaq mümkün olmadı. Yalnız oxuma rejiminin vəziyyəti naməlumdur; bu görünüş serverin tətbiq etdiyi qaydaları əks etdirməyə bilər.",
+    "tools.search": "Alət axtarışı...",
+    "server.auto_save_notice": "Bu bölmədəki parametrlər avtomatik yadda saxlanılır. Dəyişikliklər yalnız HA-MCP-ni yenidən başlatdıqdan (server tərəfində tətbiq olunur) və AI müştərinizdə MCP serverinə yenidən qoşulduqdan və ya onu yenilədikdən (alət siyahısı yenidən yüklənir) sonra qüvvəyə minir; məsələn, claude.ai-da alət siyahısını yeniləyin, ChatGPT-də konnektoru yenidən əlavə edin və ya yeniləyin, yaxud Claude Desktop-u bağlayıb yenidən açın. ChatGPT bəzən konnektor çıxarılıb yenidən əlavə edildikdən sonra belə keşdəki alət siyahısını təqdim etməyə davam edir — alətlər hələ də görünmürsə, konnektoru silin və başqa adla yenisini yaradın.",
+    "server.sections.search": "Axtarış və uyğunlaşdırma",
+    "server.sections.operations": "Əməliyyatlar",
+    "server.sections.tool_surface": "Təqdim olunan alətlər",
+    "server.sections.diagnostics": "Diaqnostika",
+    "server.sections.sidecar": "Parametrlər interfeysinin köməkçi prosesi",
+    "server.sections.beta": "Beta funksiyalar (təhlükəli)",
+    "server.sections.developer": "Tərtibatçı",
+    "server.sidecar.disable": "Parametrlər serverini həmişəlik söndür",
+    "server.sidecar.disable_title": "Parametrlər interfeysini həmişəlik söndürür: bu serveri dayandırır VƏ ~/.ha-mcp/settings_ui_disabled faylını yaradır ki, gələcəkdə ha-mcp işə salınanda yenidən başlamasın. Yenidən aktivləşdirmək üçün həmin faylı silin.",
+    "backups.loading": "Ehtiyat nüsxələrin vəziyyəti yüklənir…",
+    "backups.filter.domain": "Domen (məsələn, automation)",
+    "backups.filter.domain_aria": "Ehtiyat nüsxələri domenə görə süz",
+    "backups.filter.entity": "Obyekt ID-si",
+    "backups.filter.entity_aria": "Ehtiyat nüsxələri obyekt ID-sinə görə süz",
+    "backups.bulk_delete": "Uyğun gələnləri toplu sil…",
+    "policies.title": "Alətlərin təhlükəsizlik siyasətləri",
+    "policies.intro": "Ciddi nəticələr doğura bilən çağırışlar üçün hər alət üzrə təsdiq tələbi. Alət üçün təsdiq tələbini aktivləşdirmək məqsədilə <strong>Alətlər</strong> bölməsindən istifadə edin, sonra uyğunluq şərtlərini və təsdiqin qüvvədə qalma müddətini burada dəqiqləşdirin. Şərt operatorları: bərabərdir, bunlardan biridir, müntəzəm ifadə, ehtiva edir, mövcuddur, böyükdür, kiçikdir.",
+    "policies.global.title": "Qlobal parametrlər",
+    "policies.global.unknown": "Server parametrlərini oxumaq mümkün olmadı. Aşağıdakı iki seçimin vəziyyəti naməlum kimi göstərilir və səhifə uğurla yenidən yüklənənədək dəyişdirilə bilməz; bu görünüş serverin tətbiq etdiyi qaydaları əks etdirməyə bilər.",
+    "policies.global.enabled.label": "Alətlərin təhlükəsizlik siyasətlərini aktivləşdir",
+    "policies.global.enabled.help": "Əsas seçim. Server parametrlərindəki seçimlə eynidir. Standart olaraq deaktivdir. Təsdiq tələb edən vasitəçi proqram qatını aktivləşdirmək üçün seçimi aktivləşdirin və HA-MCP-ni yenidən başladın. Deaktiv olduqda aşağıdakı qaydalar saxlanılır, lakin tətbiq edilmir.",
+    "policies.global.manage_tool.label": "AI agentlərinə bu siyasətləri redaktə etməyə icazə ver (ha_manage_security_policy)",
+    "policies.global.manage_tool.help": "Bu bölmədə redaktə olunan siyasət sənədini oxuyan və əvəz edən ha_manage_security_policy alətini qeydiyyata alır. Standart olaraq deaktivdir. Yuxarıdakı əsas seçimdən asılı deyil: qaydaların tətbiq edilib-edilməməsini deyil, onları kimin redaktə edə biləcəyini idarə edir. Alət təsdiq gözləyən sorğuların növbəsi ilə bağlı əməliyyatları təqdim etmir, lakin siyasətlə qorunan set əməliyyatı yenə də təsdiq tələb edə bilər.",
+    "policies.global.manage_tool.warning": "Bu seçimi aktivləşdirmək qoşulmuş AI agentlərinə bu bölmədəki təhlükəsizlik siyasətlərini yenidən yazmağa, o cümlədən təsdiq tələblərini çıxarmağa imkan verir. İnsan nəzarətini saxlamaq üçün aləti aktivləşdirməzdən ƏVVƏL ona təsdiq tələbi qoyun: Alətlər bölməsində Təhlükəsizlik siyasətini idarə et aləti üçün \"security gated\" seçimini aktivləşdirin. Bu qaydanı alət hələ deaktiv ikən yaratmaq olar; yuxarıdakı əsas seçim aktivləşdirilib server yenidən başladıldıqdan sonra qayda tətbiq olunur. Bu iki seçimdən hər hansı birini dəyişdirdikdən sonra tətbiqi (əlavəni) yenidən başladın.",
+    "policies.global.wait.label": "Gözləmə müddəti, saniyə (5-600)",
+    "policies.global.wait.help": "Vasitəçi proqram qatının vaxt həddi bitənədək təsdiqi nə qədər gözləməsi.",
+    "policies.global.ttl.label": "Təsdiqin TTL müddəti, dəqiqə (1-60)",
+    "policies.global.ttl.help": "Gözləyən təsdiqin vaxtı bitənədək növbədə nə qədər qalması.",
+    "policies.global.save": "Qlobal parametrləri yadda saxla",
+    "policies.pending.title": "Gözləyən təsdiqlər",
+    "policies.pending.empty": "Gözləyən təsdiq yoxdur.",
+    "policies.rules.title": "Təsdiq tələb olunan alətlər",
+    "policies.rules.empty": "Hazırda təhlükəsizlik təsdiqi tələb olunan alət yoxdur. Hər alət üçün təsdiq tələbini <a href=\"#\" data-panel-link=\"tools\">Alətlər</a> bölməsində aktivləşdirin.",
+    "accessibility.intro": "Bu parametrlər dərhal tətbiq olunur və həm bu brauzerdə, həm də serverdə yadda saxlanılır, buna görə bütün rejimlərdə yenidən başlatmalardan sonra da qorunur (parametrlər səhifəsinin bəzən yeni porta keçə bildiyi stdio rejimi də daxil olmaqla). Sənədləşmə saytı eyni idarəetmə seçimlərini naviqasiya zolağında təqdim edir; onun serveri yoxdur və parametrlər hər brauzerdə ayrıca saxlanılır.",
+    "accessibility.storage_blocked": "Brauzeriniz saytın məlumat saxlamasını bloklayır; seçimlər yalnız bu sessiya üçün tətbiq olunur.",
+    "accessibility.theme.title": "Tema",
+    "accessibility.theme.help": "Bir kliklə seçilən rəng sxemləri. Standart Avtomatik seçimi OS tərcihinizə uyğunlaşır və həmin tərcih dəyişəndə dərhal dəyişir.",
+    "accessibility.theme.preset": "Hazır tema",
+    "accessibility.theme.paper": "Kağız",
+    "accessibility.theme.gray": "Boz",
+    "accessibility.theme.contrast": "Yüksək kontrast",
+    "accessibility.text_size.title": "Mətn ölçüsü",
+    "accessibility.text_size.help": "Əsas şrift ölçüsünü dəyişir. Brauzerin miqyaslama funksiyası (Ctrl/Cmd +) bununla yanaşı işləməyə davam edir.",
+    "accessibility.colors.title": "Fərdi rənglər",
+    "accessibility.colors.help": "Seçilmiş tema üçün öz rənglərinizi seçin. Hər rəng nümunəsi sisteminizin vizual rəng seçicisini açır.",
+    "accessibility.colors.background": "Fon",
+    "accessibility.colors.text": "Mətn",
+    "accessibility.colors.accent": "Vurğu",
+    "accessibility.colors.low_contrast": "Seçilmiş fon və mətn rənglərinin kontrast nisbəti 4.5:1 həddindən aşağıdır və birlikdə oxunması çətin ola bilər.",
+    "accessibility.colors.clear": "Fərdi rəngləri təmizlə",
+    "accessibility.reset": "Standart parametrlərə qaytar",
+    "visibility.intro": "Axtarış və icmal nəticələrinin daha səliqəli olması üçün az əhəmiyyətli obyektləri (avtomatik yaradılmış diaqnostik və ya köməkçi obyektləri, yaxud ayrıca verilmiş siyahıdakı obyektləri) toplu oxuma alətlərindən, <code>ha_search</code> və <code>ha_get_overview</code> alətlərindən gizlədin. Standart olaraq deaktivdir; dəyişikliklər növbəti alət çağırışında tətbiq olunur.",
+    "visibility.boundary": "Məcburi tətbiq rejimi (aşağıda) olmadan bu, girişə nəzarət deyil, artıq nəticələrin azaldılmasıdır: gizli obyekt entity_id vasitəsilə birbaşa oxunduqda yenə qaytarılır və avtomatlaşdırma, idarə paneli və şablon məzmununda görünür. Təhlükəsizlik sərhədi kimi təkcə süzgəcə güvənməyin.",
+    "visibility.enabled": "Obyektlərin görünürlük süzgəcini aktivləşdir",
+    "visibility.enforce.title": "Məcburi tətbiq rejimi",
+    "visibility.enforce.help": "Süzgəcin təsirini axtarış və icmal nəticələrini səliqəyə salmaqdan bütün alət oxumalarına genişləndirir; standart olaraq ha_report_issue istisnadır. Gizli obyektin birbaşa oxunması “not found” qaytarır, onu üzə çıxaracaq məzmunun oxunması isə rədd edilir. Hesabat aləti üçün istisna aşağıda idarə olunur. Bu, təsadüfi üzə çıxmanın qarşısını mümkün qədər alan gizlətmədir, gücləndirilmiş təhlükəsizlik sərhədi deyil.",
+    "visibility.enforce.only_enforced": "Gizli obyektləri bütün alət oxumalarında oxunmaz et (standart olaraq problem hesabatları istisna olmaqla)",
+    "visibility.enforce.report_issue_help": "Bu seçim deaktiv olduqda ha_report_issue və onun bütün diaqnostik çıxışı—jurnallar da daxil olmaqla—hər çağırışda məcburi tətbiq rejimindən kənarda qalır, hətta görünürlük məlumatları sağlam olduqda və ya əlçatan olmadıqda belə. Bu aləti də digər oxumalar kimi yoxlamaq və rədd etmək üçün seçimi aktivləşdirin.",
+    "visibility.enforce.restrict_report_issue": "Məcburi tətbiq rejimini ha_report_issue alətinə tətbiq et",
+    "visibility.categories.title": "Kateqoriyaya görə gizlət",
+    "visibility.categories.help": "Home Assistant avtomatik yaradılmış obyektləri diagnostic və ya config kimi etiketləyir.",
+    "visibility.categories.legend": "Gizlədiləcək obyekt kateqoriyaları",
+    "visibility.categories.diagnostic": "Diaqnostik",
+    "visibility.categories.config": "Konfiqurasiya",
+    "visibility.categories.hidden": "Home Assistant-da artıq gizlədilmiş obyektlər də",
+    "visibility.area_label.title": "Sahəyə və ya etiketə görə gizlət",
+    "visibility.area_label.help": "Vergüllə ayrılmış sahə ID-ləri və ya etiket ID-ləri; sadalanan sahələrdən hər hansı birində olan və ya etiketlərdən hər hansı birini daşıyan obyektlər gizlədilir.",
+    "visibility.areas": "Sahələr",
+    "visibility.labels": "Etiketlər",
+    "visibility.entities.title": "Konkret obyektləri gizlət",
+    "visibility.entities.help": "Hər sətirdə bir entity_id. Obyekt reyestrində qeydləri olmasa belə, bunlar gizli qalır.",
+    "visibility.entities.denied": "Qadağan olunmuş obyekt ID-ləri",
+    "visibility.allowlist.title": "İcazə siyahısı ilə məhdudlaşdır",
+    "visibility.allowlist.help": "Qabaqcıl: icazə siyahısının hər hansı sahəsi doldurulduqda uyğun gəlməyən obyektlər gizlədilir (sonradan əlavə olunan obyektlər də daxil olmaqla). Uyğunluq kateqoriya, Home Assistant-da gizlilik vəziyyəti və Assist süzgəclərini üstələyir; qadağan olunmuş obyekt ID-ləri və istisna edilmiş sahə və ya etiketlər isə yenə üstün sayılır. Söndürmək üçün hər üç sahəni boş saxlayın.",
+    "visibility.allowlist.areas": "İcazəli sahələr",
+    "visibility.allowlist.labels": "İcazəli etiketlər",
+    "visibility.allowlist.entities_help": "İcazəli obyekt ID-ləri, hər sətirdə biri.",
+    "visibility.allowlist.entities": "İcazəli obyekt ID-ləri",
+    "visibility.assist.title": "Assist-ə təqdim edilməni nəzərə al",
+    "visibility.assist.help": "Home Assistant-ın Assist (“conversation”) səsli köməkçisinə təqdim olunmayan obyektləri gizlədir və Parametrlər > Səsli köməkçilər > Təqdim et siyahısına uyğun işləyir. İcazə siyahısı aktiv olduqda tətbiq olunmur; digər hallarda hər axtarışa iki websocket oxuması əlavə edir.",
+    "visibility.assist.only_exposed": "Yalnız Assist-ə təqdim olunan obyektləri göstər",
+    "features.enable_tool_search.label": "Alət axtarışını aktivləşdir",
+    "features.enable_tool_search.help": "Tam alət kataloqunu axtarış əsasında alət tapma ilə əvəz edir. Başlanğıc kontekst həcmini təxminən 90% azaldaraq təqribən 5K tokenə endirir. ⚠️ Öz daxili alət axtarışı / sonradan yüklənən alətləri olan müştərilərdə (claude.ai, Claude Desktop, Claude Code) bunu AKTİVLƏŞDİRMƏYİN — iki axtarış qatı ziddiyyət yaradır və həmin müştərinin daxili alət axtarışı daha yaxşı seçimdir; bunu deaktiv saxlayın. Alətlərin sonradan yüklənməsi müştəri və model birləşməsindən asılıdır: quruluşunuz tam kataloqu əvvəlcədən yükləyirsə, bundan istifadə edin — sonradan yüklənən alətlər üçün daxili dəstəyi olmayan modellərdə (məsələn, Gemini, OpenAI ilə uyğun lokal modellər, Claude Haiku), modeldən asılı olmayaraq bütün alət sxemlərini birbaşa kontekstə daxil edən müştərilərdə (məsələn, GitHub Copilot CLI) və ya daha kiçik kontekst pəncərələrində. Bəzi Codex modellərində və ChatGPT-də də sonradan yüklənən alətlər var — bu seçimi ehtiyac olmadan aktiv saxlamamaq üçün müştərinizin/modelinizin imkanlarını birbaşa yoxlayın. Alətlər ha_search_tools vasitəsilə tapılır və kateqoriyalara ayrılmış proksilər vasitəsilə icra olunur (oxuma/yazma/silmə). Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.",
+    "features.tool_search_max_results.label": "Alət axtarışında maksimum nəticə sayı",
+    "features.tool_search_max_results.help": "Alət axtarışı aktiv olduqda ha_search_tools tərəfindən qaytarılan alətlərin maksimum sayı. Daha aşağı dəyərlər (2-3) kontekst tokenlərinə qənaət edir, lakin uyğun alətləri nəzərdən qaçıra bilər. Aralıq: 2-10. Yenidən başlatma tələb olunur.",
+    "features.enable_tool_security_policies.label": "Alətlərin təhlükəsizlik siyasətlərini aktivləşdir (qabaqcıl)",
+    "features.enable_tool_security_policies.help": "Ciddi nəticələr doğura bilən alət çağırışları (kilid/siqnalizasiya idarəetməsi, avtomatlaşdırmaların yazılması və s.) üçün istifadəçi təsdiqi tələb edir. Qorunan alət çağırıldıqda agent istifadəçidən veb interfeysdə Alətlərin təhlükəsizlik siyasətləri bölməsini açmağı və çağırışın davam etməsi üçün Təsdiqlə düyməsinə basmağı istəyir. Hər alət üçün qaydalar və istəyə bağlı arqument şərtləri Alətlərin təhlükəsizlik siyasətləri bölməsində konfiqurasiya olunur. Standart olaraq deaktivdir. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.",
+    "features.read_only_mode.label": "Yalnız oxuma rejimi",
+    "features.read_only_mode.help": "Bütün yazma alətlərini söndürür və alətlərin hər hansı yazma və ya dağıdıcı əməliyyat çağırışı etmə imkanını aradan qaldırır. Həm oxuma, həm də yazma funksiyası olan alətlər — ehtiyat nüsxələr, tətbiqlər (əlavələr), enerji tərcihləri, səs emalı ardıcıllıqları və aktiv olduqda kod rejimi — yazma əməliyyatları bloklanmaqla istifadəyə açıq qalır. Veb interfeysin Alətlər bölməsindəki seçimlə eynidir. Standart olaraq deaktivdir. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.",
+    "features.redact_secrets.label": "Məxfi məlumatları gizlət",
+    "features.redact_secrets.help": "Alət cavabları AI köməkçisinə çatmazdan əvvəl onlardan məxfi məlumatları gizlədir. Parol kimi işarələnmiş tətbiq (əlavə) seçimləri və inteqrasiya sahələri təyin edilib/boş göstəricisi ilə əvəz olunur (beləliklə, \"bu giriş məlumatı konfiqurasiya edilibmi?\" sualını cavablandırmaq mümkün qalır), digər alət cavabları isə serverin artıq gördüyü məxfi dəyərlərdən təmizlənir (6 simvoldan qısa dəyərlər nəzərə alınmır, çünki kiçik fraqmentlərin əvəzlənməsi əlaqəsiz çıxışı korlayardı). Sxemdə parol kimi işarələnməyən sahələr aşkarlana bilmir. Standart olaraq deaktivdir.",
+    "features.enable_mandatory_bps.label": "Yazma zamanı ən yaxşı təcrübələr üzrə bacarıq təlimatlarını əlavə et",
+    "features.enable_mandatory_bps.help": "Yazma alətlərinin bacarıq məzmunu təqdim etməsi funksiyası üçün əsas seçim (problem #1182). Aktiv olduqda (standart vəziyyət) altı konfiqurasiya yazma aləti (avtomatlaşdırmalar, skriptlər, səhnələr, köməkçilər, idarə panelləri, xam YAML) hər uğurlu yazmada Home Assistant üzrə ən yaxşı təcrübələrin əsas istinad fayllarını `skill_content` daxilində əlavə edir, həmçinin ən yaxşı təcrübə xəbərdarlıqlarında istinad edilən bölmələri avtomatik daxil edir. Hər alət həmçinin hər çağırış üçün `MandatoryBPS` parametri təqdim edir; agent məzmunu əldə etdikdən sonra sonrakı çağırışlarda bunu false edə bilər. Bu əsas seçim deaktiv olduqda çağırış parametrindən və ya BP xəbərdarlıqlarından asılı olmayaraq HEÇ BİR skill_content göndərilmir. İlk seçim kimi aktiv saxlanması tövsiyə olunur; yalnız çox kiçik kontekst pəncərələri olan modellər üçün söndürün. Bunun söndürülməsi yazma dəqiqliyini azalda bilər. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.",
+    "features.enable_strict_mandatory_bps.label": "Ən yaxşı təcrübələrə ciddi riayət rejimi",
+    "features.enable_strict_mandatory_bps.help": "Ciddi rejim: müştəri ən yaxşı təcrübələri oxuduğunu sübut edənədək onun alətdən istifadəsinə mane olur. Aktiv olduqda ən yaxşı təcrübələrə əsaslanan altı yazma aləti (avtomatlaşdırmalar, skriptlər, səhnələr, köməkçilər, idarə panelləri, xam YAML) bloklanır və müştərini ha_get_skill_guide vasitəsilə ən yaxşı təcrübələr üzrə bacarıq təlimatını oxumağa və oradan aldığı təsdiq açarını geri ötürməyə yönəldən xəta qaytarır. Aktiv olduqda ha_get_skill_guide aləti aktiv vəziyyətdə kilidlənir — təsdiq açarını yalnız o təqdim edir. Yuxarıdakı \"Attach best-practice skills on writes\" seçiminə tabedir və həmin seçim deaktiv olduqda təsirsizdir. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.",
+    "features.enable_beta_features.label": "Beta funksiyaları aktivləşdir (əsas seçim)",
+    "features.enable_beta_features.help": "⚠ TƏHLÜKƏ — bu alətlər Home Assistant qurulumunuza BƏRPAOLUNMAZ ZƏRƏR VURA BİLƏR. Onlar YAML konfiqurasiyanıza və fayl sisteminizə yazır, fərdi komponentlər quraşdırır, təcrid olunmuş mühitdə ixtiyari Python kodunu işə salır və AI-nin gördüyü alət sənədləşmə mətnlərini redaktə edir. Heç bir zəmanət və dəstək təminatı yoxdur — onları aktivləşdirməyin RİSKİNİ ÖZÜNÜZ DAŞIYIRSINIZ. Bunu aktivləşdirməzdən əvvəl Home Assistant-ın ehtiyat nüsxəsini yaradın və ehtiyat nüsxə olmadan işlək sistemdə heç vaxt aktivləşdirməyin. Aşağıdakı sınaq alt seçimləri üçün əsas idarəetmə seçimidir; bu əsas seçim deaktiv olduqda, alt seçimlər açıq şəkildə true dəyərinə təyin edilsə belə, icra zamanı nəzərə alınmır. Eyni seçim veb parametrlər interfeysində də \"Beta features (dangerous)\" altında göstərilir — yenidən başlatmada hər iki interfeys digərinin vəziyyətini əks etdirir.",
+    "features.enable_yaml_config_editing.label": "YAML konfiqurasiyasının redaktəsini aktivləşdir (beta)",
+    "features.enable_yaml_config_editing.help": "Beta funksiya. AI köməkçilərinə configuration.yaml və packages/*.yaml fayllarında üst səviyyəli açarları əlavə etməyə, əvəzləməyə və ya çıxarmağa imkan verir. Yalnız icazə siyahısındakı açarlara icazə verilir (məsələn, template, sensor, command_line, mqtt, knx); homeassistant, http və recorder kimi əsas açarlar bloklanır. Hər redaktə YAML sintaksisini yoxlayır, konfiqurasiya yoxlamasını işə salır və avtomatik ehtiyat nüsxə yaradır. Əksər açarlara edilən dəyişikliklərin qüvvəyə minməsi üçün HA tam yenidən başladılmalıdır. Məlum məhdudiyyətlər üçün docs/beta.md faylına baxın. Mövcud olduqda xüsusi təyinatlı alətlərə (avtomatlaşdırmalar, skriptlər, səhnələr, köməkçilər, şablon sensorları) üstünlük verilməlidir. Yuxarıdakı (və veb interfeysdəki) əsas \"Enable beta features\" seçiminin aktiv olması TƏLƏB OLUNUR — əks halda bu alt seçim buradakı dəyərindən asılı olmayaraq icra zamanı nəzərə alınmır.",
+    "features.enable_yaml_edit_confirm.label": "YAML redaktələri üçün təsdiq tələb et (fərqlərin önbaxışı)",
+    "features.enable_yaml_edit_confirm.help": "YAML konfiqurasiyasının redaktəsinə aid alt seçimdir, standart olaraq aktivdir (tövsiyə olunur). İlk ha_config_set_yaml çağırışı diskdə dəyişəcək məzmunun birləşdirilmiş fərqini və təsdiq tokenini qaytarır, heç nə yazmır; redaktə yalnız həmin tokenlə çağırış təkrarlandıqda tətbiq olunur. Tələb olunan redaktədən kənar istənməyən dəyişikliklərin diskə yazılmazdan əvvəl aşkarlanması üçün nəzərdə tutulub (problem #1720). Yalnız hər redaktədə bir sorğu-cavab dövrünə qənaət etmək üçün söndürün.",
+    "features.enable_yaml_packages_automation.label": "packages/*.yaml fayllarında avtomatlaşdırmaya icazə ver",
+    "features.enable_yaml_packages_automation.help": "YAML konfiqurasiyasının redaktəsinə aid alt seçimdir. Aktiv olduqda ha_config_set_yaml packages/*.yaml daxilində yaml_path='automation' qəbul edir. Deaktiv olduqda çağırış həm müştəri, həm də server tərəfində rədd edilir. Saxlama rejimi alətinə (ha_config_set_automation) təsir etmir. Standart olaraq deaktivdir; yalnız yuxarıdakı \"Enable YAML config editing\" seçimi də aktiv olduqda qüvvəyə minir.",
+    "features.enable_yaml_packages_script.label": "packages/*.yaml fayllarında skriptə icazə ver",
+    "features.enable_yaml_packages_script.help": "YAML konfiqurasiyasının redaktəsinə aid alt seçimdir. Aktiv olduqda ha_config_set_yaml packages/*.yaml daxilində yaml_path='script' qəbul edir. Deaktiv olduqda çağırış həm müştəri, həm də server tərəfində rədd edilir. Saxlama rejimi alətinə (ha_config_set_script) təsir etmir. Standart olaraq deaktivdir; yalnız yuxarıdakı \"Enable YAML config editing\" seçimi də aktiv olduqda qüvvəyə minir.",
+    "features.enable_yaml_packages_scene.label": "packages/*.yaml fayllarında səhnəyə icazə ver",
+    "features.enable_yaml_packages_scene.help": "YAML konfiqurasiyasının redaktəsinə aid alt seçimdir. Aktiv olduqda ha_config_set_yaml packages/*.yaml daxilində yaml_path='scene' qəbul edir. Deaktiv olduqda çağırış həm müştəri, həm də server tərəfində rədd edilir. Saxlama rejimi alətinə (ha_config_set_scene) təsir etmir. Standart olaraq deaktivdir; yalnız yuxarıdakı \"Enable YAML config editing\" seçimi də aktiv olduqda qüvvəyə minir.",
+    "features.enable_filesystem_tools.label": "Fayl sistemi alətlərini aktivləşdir (beta)",
+    "features.enable_filesystem_tools.help": "HAMCP_ENABLE_FILESYSTEM_TOOLS=true təyin edir. Home Assistant fayl sisteminizdə faylların birbaşa oxunmasına/yazılmasına giriş imkanı verir. XƏBƏRDARLIQ: bu, MCP serverinə sisteminizdəki fayllara həssas birbaşa giriş verir. Yalnız fayl əməliyyatlarında AI köməkçisinə güvənirsinizsə, aktivləşdirin. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur. Yuxarıdakı (və veb interfeysdəki) əsas \"Enable beta features\" seçiminin aktiv olması TƏLƏB OLUNUR — əks halda bu alt seçim buradakı dəyərindən asılı olmayaraq icra zamanı nəzərə alınmır.",
+    "features.enable_code_mode.label": "Fərdi alətlər üçün təcrid olunmuş mühiti aktivləşdir (beta)",
+    "features.enable_code_mode.help": "Beta funksiya. Heç bir daxili alət sorğunu yerinə yetirə bilmədikdə AI köməkçilərinə təhlükəsiz, təcrid olunmuş mühitdə fərdi Python kodu yaratmağa, işə salmağa, yadda saxlamağa və silməyə imkan verən ha_manage_custom_tool alətini aktivləşdirir. Kod fayl sisteminə və ya sərbəst şəbəkə girişinə malik olmayan təcrid olunmuş interpretatorda işləyir. Təcrid olunmuş mühitdəki kod HA REST API-yə müraciət edə (api_get/api_post), WebSocket əmrləri göndərə (ws_send), mövcud MCP alətlərini çağıra (call_tool) və ya yadda saxlanılmış aləti çıxara (delete_saved_tool) bilər. Yadda saxlanılmış alətlər standart olaraq /data/saved_tools.json faylında saxlanılır, buna görə tətbiq (əlavə) yenidən başladıldıqda qorunur və qoşula bilən hər müştəriyə görünür. Məlum məhdudiyyətlər üçün docs/beta.md faylına baxın. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur. Yuxarıdakı (və veb interfeysdəki) əsas \"Enable beta features\" seçiminin aktiv olması TƏLƏB OLUNUR — əks halda bu alt seçim buradakı dəyərindən asılı olmayaraq icra zamanı nəzərə alınmır.",
+    "features.enable_lite_docstrings.label": "Alətlərin qısa sənədləşmə mətnlərini aktivləşdir (beta)",
+    "features.enable_lite_docstrings.help": "Beta funksiya. 15 geniş həcmli ha-mcp alətinin (ha_config_get_automation, ha_config_set_automation, ha_config_get_script, ha_config_set_script, ha_config_get_scene, ha_config_set_scene, ha_config_list_helpers, ha_config_set_helper, ha_config_get_dashboard, ha_config_set_dashboard, ha_call_service, ha_config_set_yaml, ha_search, ha_manage_backup, ha_report_issue) sənədləşmə mətnlərini sxem və nümunə təfərrüatları üçün ha_get_skill_guide alətinə (və ya onun skill:// resursuna) yönləndirən daha qısa variantlarla əvəz edir. Bir istisna var: ha_report_issue bunun əvəzinə öz cavabının instructions sahəsinə yönləndirir. Ehtiyat nüsxə ipucu parametrinin tənzimlənməsi qısa mətn rejimində də qüvvədə qalır. XƏBƏRDARLIQ: bu, başlanğıc token istifadəsini azaldır, lakin LLM performansını pisləşdirə bilər — qısaldılmış təsvirlər LLM-in təfərrüatlar üçün həqiqətən bacarıq alətini çağırmasına və ya bacarıq resursunu oxumasına əsaslanır, buna isə zəmanət yoxdur (bəzi modellər əlavə alət çağırışını ötürəcək və nəticədə əvvəlkindən daha az təlimata malik olacaq). MCP resurslarını dəstəkləyən müştəri ilə və ya enable_tool_search ilə birlikdə istifadəsi daha uyğundur. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur. Yuxarıdakı (və veb interfeysdəki) əsas \"Enable beta features\" seçiminin aktiv olması TƏLƏB OLUNUR — əks halda bu alt seçim buradakı dəyərindən asılı olmayaraq icra zamanı nəzərə alınmır.",
+    "features.enable_dashboard_screenshot.label": "İdarə panelinin ekran görüntüsü rejimini aktivləşdir (beta)",
+    "features.enable_dashboard_screenshot.help": "Beta funksiya — standart olaraq deaktivdir. AI köməkçilərinin müxtəlif ekran ölçülərinə uyğunlaşan bir və ya daha çox Lovelace şəklini yoxlaya bilməsi üçün (məsələn, indicə yaratdıqları idarə panelini yoxlamaq məqsədilə) ha_get_dashboard_screenshot alətini, həmçinin idarə panelini oxuma/yazma alətlərinə include_screenshot / return_screenshot seçimlərini əlavə edir. Adları sabit olan görünüşləri, mobil/planşet/masaüstü görüntü dəstlərini və PNG/JPEG/WebP/BMP çıxışını dəstəkləyir. Görüntü yaratma ayrıca, istəyə bağlı mühərrikdə — balloob tərəfindən hazırlanmış \"Puppet\" tətbiqində (əlavəsində), qrafik interfeyssiz Chromium-da — işləyir; onu bir dəfə quraşdırırsınız (balloob repozitoriyasını tətbiq mağazasına əlavə edib \"Puppet\" tətbiqini quraşdırın) və uzunmüddətli giriş tokeni verirsiniz; Docker/Container qurulumlarında həmin mühərriki köməkçi proses kimi işə salıb HAMCP_DASHBOARD_SCREENSHOT_ENGINE_URL təyin edirsiniz. Ağır komponentlər yalnız bu seçimi aktivləşdirib mühərriki də quraşdırdıqda quraşdırılır. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur. Yuxarıdakı (və veb interfeysdəki) əsas \"Enable beta features\" seçiminin aktiv olması TƏLƏB OLUNUR — əks halda bu alt seçim buradakı dəyərindən asılı olmayaraq icra zamanı nəzərə alınmır.",
+    "actions.restart_server": "HA-MCP serverini yenidən başlat",
+    "actions.restart_confirm": "HA-MCP indi yenidən başladılsın? Yenidən əlçatan olduqda səhifə avtomatik yenidən yüklənəcək.",
+    "actions.view": "Bax",
+    "actions.diff": "Fərqlər",
+    "actions.restore": "Bərpa et",
+    "actions.delete": "Sil",
+    "actions.edit": "Redaktə et",
+    "actions.remove": "Çıxar",
+    "actions.cancel": "Ləğv et",
+    "actions.approve": "Təsdiqlə",
+    "actions.deny": "Rədd et",
+    "actions.dismiss": "Bağla",
+    "status.loaded": "Yükləndi",
+    "status.loading_ellipsis": "Yüklənir…",
+    "status.loading_parentheses": "(yüklənir…)",
+    "status.unsaved": "Yadda saxlanılmamış dəyişikliklər...",
+    "status.saving": "Yadda saxlanılır…",
+    "status.saving_server_setting": "Server parametri yadda saxlanılır...",
+    "status.saved": "Yadda saxlanıldı.",
+    "status.saved_restart": "Yadda saxlanıldı. Yenidən başlatma tələb olunur.",
+    "status.saved_llm_api": "Yadda saxlanıldı. LLM API vasitəsilə təqdim edilmə agentin növbəti mesajında qüvvəyə minir.",
+    "status.saved_reload_failed": "Yadda saxlanıldı (yenidən yükləmə alınmadı; yoxlamaq üçün yeniləyin).",
+    "status.nothing_editable": "Redaktə edilə bilən heç nə yoxdur.",
+    "status.stopping": "Dayandırılır...",
+    "status.stopped_offline": "Dayandırıldı. Bu səhifə əlçatmaz olacaq",
+    "status.stopped_connection": "Dayandırıldı (əlaqə kəsildi)",
+    "status.restarting": "Yenidən başladılır…",
+    "status.waiting_addon": "Tətbiqin (əlavənin) yenidən əlçatan olması gözlənilir…",
+    "status.waiting_server": "HA-MCP serverinin yenidən əlçatan olması gözlənilir…",
+    "errors.javascript": "JS xətası: {message} @ {where}",
+    "errors.async": "Asinxron xəta: {message}",
+    "errors.network": "Şəbəkə xətası: {message}",
+    "errors.network_endpoint": "{endpoint} ünvanına müraciət zamanı şəbəkə xətası: {message}",
+    "errors.http_endpoint": "{endpoint} ünvanından HTTP {status} {detail} cavabı qaytarıldı",
+    "errors.json_endpoint": "{endpoint} ünvanından gələn cavabı JSON kimi təhlil etmək mümkün olmadı: {message}",
+    "errors.render": "Görüntünün yaradılması alınmadı: {message} (çağırış steki üçün brauzerin tərtibatçı alətlərini açın)",
+    "errors.save_failed": "Yadda saxlamaq alınmadı",
+    "errors.save_failed_detail": "Yadda saxlamaq alınmadı: {message}",
+    "errors.save_outcome_unknown": "Dəyişikliyi təsdiqləmək mümkün olmadı. Tətbiq olunub-olunmadığı məlum deyil — serverdəki vəziyyəti görmək üçün yenidən yükləyin.",
+    "errors.save_failed_http": "Yadda saxlamaq alınmadı (HTTP {status})",
+    "errors.save_failed_non_json": "Yadda saxlamaq alınmadı (HTTP {status}, cavab gövdəsi JSON formatında deyil)",
+    "errors.load_failed": "Yükləmək alınmadı: {status}",
+    "errors.stop_failed": "Dayandırmaq alınmadı",
+    "errors.restart_failed": "Yenidən başlatmaq alınmadı",
+    "errors.failed_detail": "Alınmadı: {detail}",
+    "errors.addon_not_back": "Tətbiq (əlavə) yenidən əlçatan olmadı. Səhifəni əl ilə yenidən yükləyin.",
+    "errors.server_not_back": "HA-MCP serveri yenidən əlçatan olmadı. Səhifəni əl ilə yenidən yükləyin.",
+    "errors.unparseable_suffix": " (cavab gövdəsi təhlil edilə bilmir)",
+    "common.operation_failed": "{operation} əməliyyatı alınmadı: {detail}",
+    "common.enabled": "aktivdir",
+    "common.disabled": "deaktiv",
+    "common.env_locked": "mühit dəyişəni ilə kilidlənib",
+    "common.minutes_short": "{count} dəq",
+    "common.bytes": "{count} bayt",
+    "common.none": "(yoxdur)",
+    "notice.restart.addon": "⚠ Dəyişikliklər yadda saxlanıldı. Qüvvəyə minməsi üçün \"Restart app (add-on)\" düyməsinə basın. Deaktiv alətlər növbəti işəsalmada MCP alət siyahısından çıxarılacaq. Sonra AI müştərinizdə alət siyahısını yeniləyin; yalnız tətbiqi yenidən başlatmaq müştərinin keşdəki siyahısını yeniləmir.",
+    "notice.restart.embedded": "⚠ Dəyişikliklər yadda saxlanıldı. Proses daxilindəki inteqrasiyanı yenidən yükləmək üçün \"Restart HA-MCP Server\" düyməsinə basın. Sonra AI müştərinizdə MCP alət siyahısını yeniləyin.",
+    "notice.restart.sidecar": "⚠ Dəyişikliklər yadda saxlanıldı. Qüvvəyə minməsi üçün MCP müştərinizdən tam çıxıb onu yenidən açın. Deaktiv alətlər növbəti işəsalmada MCP alət siyahısından çıxarılacaq.",
+    "notice.restart.standalone": "⚠ Dəyişikliklər yadda saxlanıldı. ha-mcp prosesini yenidən başladın, sonra AI müştərinizdə MCP alət siyahısını yeniləyin.",
+    "server.sidecar.confirm_disable": "⚠ Parametrlər serveri HƏMİŞƏLİK söndürülsün?\n\nBu, serveri dayandırır və onun yenidən başlamasına mane olan işarə faylı yaradır. Girişi bərpa etmək üçün ~/.ha-mcp/settings_ui_disabled faylını silin və HA_MCP_DISABLE_SETTINGS_UI dəyişənini ləğv edin. Davam edilsin?",
+    "tools.empty": "Alət tapılmadı. Köməkçi proses ~/.ha-mcp/tool_metadata.json faylını oxuyur. Fayl yoxdursa və ya boşdursa, MCP müştərinizi yenidən başladın. Təfərrüatlar üçün ~/.ha-mcp/sidecar.log faylına baxın.",
+    "tools.group_count": "{enabled}/{total} aktivdir",
+    "tools.group_toggle_title": "Bu qrupdakı bütün alətləri aktivləşdir/söndür",
+    "tools.badges.mandatory": "məcburi",
+    "tools.badges.read_only": "yalnız oxuma",
+    "tools.badges.writes": "yazır",
+    "tools.badges.deletes": "silir",
+    "tools.notes.gated_disabled": "Deaktivdir. {setting} parametrini aktivləşdirin — siyasəti redaktə edən alətin seçimi Alətlərin təhlükəsizlik siyasətləri bölməsindədir — sonra tətbiqi (əlavəni) yenidən başladın.",
+    "tools.notes.beta_disabled": "Beta. {setting} parametrini tərtibat tətbiqinin (əlavəsinin) konfiqurasiyasında və ya uyğun mühit dəyişənində təyin edin (docs/beta.md faylına baxın).",
+    "tools.notes.env_pinned": "{variable} dəyişəni ilə sancaqlanıb. Burada redaktə etmək üçün mühit dəyişənini ləğv edin.",
+    "tools.notes.bps_locked": "Ən yaxşı təcrübələrə ciddi riayət rejimi aktiv olduğu müddətdə kilidlənib. Bu aləti söndürmək üçün əvvəlcə həmin parametri söndürün.",
+    "tools.notes.read_only_off": "Deaktivdir. Yalnız oxuma rejimi aktivdir; yazma alətləri deaktivdir.",
+    "tools.notes.read_only_partial": "Yalnız oxuma rejimi: bu alətin yazma əməliyyatları bloklanıb; oxuma əməliyyatları istifadəyə açıq qalır.",
+    "tools.llm_api.label": "LLM API",
+    "tools.llm_api.help": "Bu aləti LLM API vasitəsilə Home Assistant söhbət agentlərinə təqdim edin. Agentin növbəti mesajında qüvvəyə minir; yenidən başlatma tələb olunmur.",
+    "tools.aria.llm_api": "{title} aləti söhbət agentinin LLM API interfeysinə təqdim olunur",
+    "tools.aria.enabled": "{title} aktivdir",
+    "tools.aria.pinned": "{title} sancaqlanıb",
+    "tools.aria.security_gated": "{title} üçün təhlükəsizlik təsdiqi tələb olunur",
+    "tools.states.enabled": "aktivdir",
+    "tools.states.pinned": "sancaqlanıb",
+    "tools.states.security_gated": "təhlükəsizlik təsdiqi tələb olunur",
+    "tools.security.enable_first": "Əvvəlcə server parametrlərində Alətlərin təhlükəsizlik siyasətlərini aktivləşdirin.",
+    "tools.summary.total": "Cəmi {count}",
+    "tools.summary.enabled": "{count} aktivdir",
+    "tools.summary.pinned": "{count} sancaqlanıb",
+    "tools.summary.disabled": "{count} deaktivdir",
+    "tools.read_only.save_failed": "Yalnız oxuma rejiminin dəyişikliyi yadda saxlanılmadı. Serverdə hələ də əvvəlki dəyər saxlanılır.",
+    "backup.fields.enable_auto_backup.label": "Redaktələr üçün avtomatik ehtiyat nüsxə yarat",
+    "backup.fields.enable_auto_backup.help": "Avtomatik ehtiyat nüsxələmə ilə əhatə olunan hər yazma və ya dağıdıcı alət çağırışından əvvəl anlıq nüsxə yaradın.",
+    "backup.fields.auto_backup_throttle_minutes.label": "Tezlik məhdudiyyəti (dəqiqə)",
+    "backup.fields.auto_backup_throttle_minutes.help": "Hər obyekt üzrə tezlik məhdudiyyəti. 0 = hər yazmada; N > 0 = hər N dəqiqədə ən çox bir ehtiyat nüsxə. Aralıq 0–1440.",
+    "backup.fields.auto_backup_retain_per_entity.label": "Hər obyekt üçün saxlanılan nüsxə sayı",
+    "backup.fields.auto_backup_retain_per_entity.help": "Hər obyekt üçün saxlanılan anlıq nüsxələrin maksimum sayı (1–10000). Köhnələri növbə ilə silinir.",
+    "backup.fields.auto_backup_dir.label": "Ehtiyat nüsxə qovluğunu dəyiş",
+    "backup.fields.auto_backup_dir.help": "Standart yer üçün boş saxlayın: tətbiqdə (əlavədə) /data/ha_mcp_backups, digər hallarda ha-mcp məlumat qovluğunun backups/ alt qovluğu; anlıq nüsxələri əvvəlki standart yerdə saxlayan qurulum həmin yerdən istifadə etməyə davam edir. İstifadə olunan qovluq ehtiyat nüsxələrin vəziyyətində göstərilir. Və ya mütləq yol daxil edin.",
+    "backup.fields.auto_backup_calendar_lookahead_days.label": "Təqvimdə irəli baxış (gün)",
+    "backup.fields.auto_backup_calendar_lookahead_days.help": "Redaktədən əvvəlki anlıq nüsxələr üçün qarşıdakı neçə günün təqvim hadisələrinin sorğulanması. Aralıq 1–365.",
+    "backup.fields.enable_snapshot_delete.label": "Anlıq nüsxələrin silinməsinə icazə ver",
+    "backup.fields.enable_snapshot_delete.help": "Planlaşdırılmış, ən yeni və kifayət qədər köhnəlməmiş anlıq nüsxələrin qorunmasını saxlamaqla ha_manage_backup alətinə tam HA anlıq nüsxələrini silməyə icazə verin.",
+    "backup.fields.snapshot_delete_min_age_days.label": "Silmək üçün anlıq nüsxənin minimum yaşı (gün)",
+    "backup.fields.snapshot_delete_min_age_days.help": "Anlıq nüsxənin silinməsi üçün yaradılmasından ən azı bu qədər vaxt keçməlidir. Aralıq 0–365.",
+    "backup.origins.addon": "Supervisor ilə sinxronlaşdırılıb. Yadda saxladıqdan sonra yenidən başlatma tələb olunur.",
+    "backup.origins.file": "Lokal olaraq saxlanılır; dərhal qüvvəyə minir.",
+    "backup.origins.default": "Standart dəyər istifadə olunur; ilk yadda saxlamada onu əvəz edən lokal parametr faylı yaradılır.",
+    "backup.errors.load_settings": "Ehtiyat nüsxə parametrlərini yükləmək mümkün olmadı.",
+    "backup.errors.unavailable": "Ehtiyat nüsxə parametrləri əlçatan deyil.",
+    "backup.errors.load_list": "Ehtiyat nüsxələri yükləyərkən xəta baş verdi",
+    "backup.errors.load_one": "\"{name}\" adlı ehtiyat nüsxəni yükləmək mümkün olmadı: {message}",
+    "backup.errors.diff": "\"{name}\" adlı ehtiyat nüsxənin fərqlərini müəyyənləşdirmək mümkün olmadı: {message}",
+    "backup.errors.restore": "\"{name}\" adlı nüsxəni bərpa etmək alınmadı: {message}",
+    "backup.errors.restore_detail": "Bərpa alınmadı: {detail}",
+    "backup.errors.delete": "\"{name}\" adlı nüsxəni silmək alınmadı: {message}",
+    "backup.errors.delete_detail": "Silmək alınmadı: {detail}",
+    "backup.errors.bulk_delete": "Toplu silmək alınmadı: {detail}",
+    "backup.delete.in_use": "Bu ehtiyat nüsxə istifadə olunur. Aktiv nüsxə yaratma və ya bərpa əməliyyatı bitdikdən sonra yenidən cəhd edin.",
+    "backup.state.status": "Vəziyyət",
+    "backup.state.throttle": "Tezlik məhdudiyyəti",
+    "backup.state.retain": "Hər obyekt üçün saxlanılan nüsxə sayı",
+    "backup.state.directory": "Qovluq",
+    "backup.state.total": "Cəmi",
+    "backup.empty": "Hələ ehtiyat nüsxə yoxdur. Yaratmaq üçün avtomatik ehtiyat nüsxələməni aktivləşdirin və bir obyekti redaktə edin.",
+    "backup.modal.view": "Bax: {name}",
+    "backup.modal.diff": "Fərqlər: {name}",
+    "backup.identical": "(eynidir)",
+    "backup.confirm.restore": "{name} adlı nüsxə bərpa edilsin?\n\nBu, mövcud konfiqurasiyanın üzərinə yazır və ya silinmiş şablon köməkçisini yenidən yaradır. Mövcud şablon köməkçiləri üçün yeni qoruyucu ehtiyat nüsxə tələb olunur. Digər bərpa əməliyyatları cari avtomatik ehtiyat nüsxə parametrlərindən istifadə edir və yeni qoruyucu ehtiyat nüsxə olmadan davam edə bilər.",
+    "backup.confirm.delete": "{name} adlı nüsxə silinsin? Bu əməliyyatı geri qaytarmaq mümkün deyil.",
+    "backup.restored": "Bərpa edildi. Qoruyucu ehtiyat nüsxə: {name}",
+    "backup.restore.not_applied": "Bərpa tətbiq edilmədi. Heç nə dəyişdirilmədi.",
+    "backup.restore.mismatched": "Bərpa tətbiq edildi, lakin cari konfiqurasiya ehtiyat nüsxə ilə uyğun gəlmir.",
+    "backup.restore.verified": "Bərpa tətbiq edildi və yoxlanıldı.",
+    "backup.restore.unverified": "Bərpa tətbiq edildi, lakin yoxlama mümkün deyil.",
+    "backup.restore.unknown": "Bu bərpanın Home Assistant-da dəyişiklik edib-etmədiyini təsdiqləmək mümkün olmadı. Yenidən cəhd etməzdən əvvəl cari konfiqurasiyanı və ehtiyat nüsxə siyahısını yoxlayın.",
+    "backup.restore.safety": "Qoruyucu ehtiyat nüsxə: {name}. Əvvəlki vəziyyətə qayıtmaq üçün bu qoruyucu ehtiyat nüsxəni bərpa etməzdən əvvəl cari konfiqurasiyanı yoxlayın.",
+    "backup.restore.reason.unsupported_form": "Home Assistant bu bərpa üçün uyğun forma təqdim etmədi.",
+    "backup.restore.reason.unsupported_fields": "Anlıq nüsxənin bəzi sahələri cari forma tərəfindən qəbul edilmir.",
+    "backup.restore.reason.validation_failed": "Home Assistant bərpa edilmiş konfiqurasiyanı etibarsız hesab edərək rədd etdi.",
+    "backup.restore.reason.flow_aborted": "Home Assistant bərpa prosesini dayandırdı.",
+    "backup.restore.fields": "Sahələr: {fields}",
+    "backup.restore.recreated_entry": "Yenidən yaradılmış konfiqurasiya qeydi: {entry_id}",
+    "backup.restore.entity_mapping": "Obyekt ID-si: {created} → {restored}",
+    "backup.restore.entity_mapping_unknown": "Obyektin adının dəyişdirilməsini təsdiqləmək mümkün olmadı: {created} → {target}. Yenidən cəhd etməzdən əvvəl yeni qeydi yoxlayın.",
+    "backup.restore.mapping_unavailable": "Bu anlıq nüsxədə obyekt uyğunluğu yoxdur; yenidən yaradılmış köməkçinin obyekt ID-si yeni ola bilər.",
+    "backup.restore.entity_collision": "Yadda saxlanılmış {entity_id} obyekt ID-si artıq istifadə olunur və üzərinə yazılmadı.",
+    "backup.bulk.prompt_days": "N gündən köhnə ehtiyat nüsxələri silin (yalnız cari süzgəclərdən istifadə etmək üçün boş saxlayın):",
+    "backup.bulk.filter_required": "Ən azı bir süzgəc təyin edin (domen, obyekt və ya günlə ifadə olunan yaş).",
+    "backup.bulk.confirm": "Bu şərtlərə uyğun bütün ehtiyat nüsxələr silinsin: {filters}?",
+    "backup.bulk.deleted": "{count} ehtiyat nüsxə silindi",
+    "backup.bulk.partial": "{deleted} ehtiyat nüsxə silindi; {failed} ehtiyat nüsxəni silmək alınmadı.",
+    "backup.bulk.in_use": "{count} ehtiyat nüsxə istifadə olunur. Aktiv nüsxə yaratma və ya bərpa əməliyyatı bitdikdən sonra yenidən cəhd edin.",
+    "backup.bulk.unknown": "Silmə nəticəsini təsdiqləmək mümkün olmadı. Yenidən cəhd etməzdən əvvəl ehtiyat nüsxə siyahısını yoxlayın.",
+    "filesystem.custom.title": "Fərdi fayl sistemi yolları (qabaqcıl)",
+    "filesystem.custom.help": "Fayl alətlərinin <strong>oxuya və yaza</strong> biləcəyi əlavə yollar (hər sətirdə bir yol). <code>sensor.yaml</code> kimi dəqiq fayl adları da daxil olmaqla konfiqurasiya qovluğuna nəzərən yollar və <code>/share</code>, <code>/media</code>, <code>/ssl</code> və <code>/backup</code> daxilindəki yollar dəstəklənir. Hər qeyd həmin yola və onun daxilindəki hər şeyə icazə verir. Qeydlər yazıldığı kimi uyğunlaşdırılır; <code>*</code> kimi əvəzedici simvollar dəstəklənmir. Bu yolları Home Assistant-da Parametrlər → Cihazlar və xidmətlər → HA-MCP fərdi komponenti → HA-MCP File & YAML Tools → Konfiqurasiya et bölməsində də idarə edə bilərsiniz; hər iki yerdə eyni parametr redaktə olunur və dəyişikliklər dərhal tətbiq edilir.",
+    "filesystem.custom.blocked": "Həmişə bloklanır: {paths}, yol vasitəsilə üst qovluqlara keçid (<code>..</code>) və icazə verilən HAOS bölmələrindən kənardakı mütləq yollar.",
+    "filesystem.custom.enable_first": "Redaktə etmək üçün yuxarıda beta funksiyalarını və fayl sistemi alətlərini aktivləşdirin.",
+    "filesystem.custom.unavailable": "Fərdi yollar hazırda əlçatan deyil.",
+    "filesystem.custom.save": "Yolları yadda saxla",
+    "filesystem.custom.saved_rejected": "Yadda saxlanıldı. Rədd edilənlər (bloklanmış və ya etibarsız): {paths}",
+    "origins.env_locked": "Mühit dəyişəni vasitəsilə təyin edilib; burada redaktə etmək üçün həmin təyinatı ləğv edin.",
+    "origins.addon_synced": "Tətbiqin (əlavənin) Konfiqurasiya vərəqi ilə sinxronlaşdırılıb. Yadda saxladıqdan sonra yenidən başlatmaq tələb olunur.",
+    "origins.env_var_unset": "{variable} mühit dəyişəni vasitəsilə təyin edilib; burada redaktə etmək üçün həmin təyinatı ləğv edin.",
+    "origins.beta_legacy_bridge": "Tətbiqin (əlavənin) köhnə rejimində avtomatik aktivləşdirilib. İdarəni özünüzə götürmək üçün Konfiqurasiya bölməsində <code>enable_beta_features</code> parametrini açıq şəkildə təyin edin. (mühit dəyişəni: {variable})",
+    "origins.addon_runtime": "Supervisor tərəfindən idarə olunan tətbiqin (əlavənin) icra mühiti vasitəsilə təyin edilib; burada dəyişdirilə bilməz. (mühit dəyişəni: {variable})",
+    "origins.display_only": "Yalnız göstərilir. Mühit dəyişəni və ya tətbiqin (əlavənin) parametrləri vasitəsilə dəyişdirin.",
+    "features.errors.network": "Funksiya seçimləri əlçatan deyil (/api/settings/features ünvanına müraciət zamanı şəbəkə xətası).",
+    "features.errors.http": "Funksiya seçimləri əlçatan deyil (HTTP {status}).",
+    "features.errors.json": "Funksiya seçimlərinin cavabı etibarlı JSON formatında deyildi.",
+    "advanced.errors.network": "Qabaqcıl parametrlər əlçatan deyil (/api/settings/advanced ünvanına müraciət zamanı şəbəkə xətası).",
+    "advanced.errors.http": "Qabaqcıl parametrlər əlçatan deyil (HTTP {status}).",
+    "advanced.errors.json": "Qabaqcıl parametrlərin cavabı etibarlı JSON formatında deyildi.",
+    "advanced.sidecar.stdio_only": "Yalnız stdio rejimində əlçatandır. Bu HTTP serverində portu sabitlənə bilən ayrıca parametr interfeysi prosesi yoxdur.",
+    "advanced.enable_dev_mode.confirm": "⚠ Proqramçı rejimi aktivləşdirilsin?\n\nYenidən başladıqdan sonra gizli proqramçı alətləri qoşulmuş AI agentlərinə təqdim olunacaq. Yalnız proqramlaşdırma və sınaq üçün aktivləşdirin.",
+    "advanced.dev_tools_security_policy_access.confirm": "⚠ Proqramçı alətlərinə təhlükəsizlik siyasətlərini dəyişdirməyə icazə verilsin?\n\nProqramçı rejimi aktiv olduqda qoşulmuş AI agentləri alətlərin təhlükəsizlik siyasətlərini yenidən yaza, ayrı-ayrı alətlər üçün təsdiq tələbləri əlavə edə və ya onları çıxara, gözləyən təsdiq sorğularını təsdiqləyə və ya rədd edə biləcəklər — öz təsdiq tələb edən çağırışları da daxil olmaqla. Yalnız siyasətləri sınaqdan keçirərkən aktivləşdirin.",
+    "advanced.code_mode_saved_tools_path.addon_locked": "Yadda saxlanmış alətlərin yeniləmələrdən sonra qorunması üçün tətbiq (əlavə) rejimində <code>/data/saved_tools.json</code> yolu kodda sabit təyin edilib.",
+    "advanced.code_mode_saved_tools_path.blank_warning": "Boş olarsa, fərdi alətlər yalnız yaddaşda saxlanılır və yenidən başladıqda itir.",
+    "policies.errors.conflict": "{operation} əməliyyatı alınmadı: siyasət başqa vərəqdə və ya sessiyada dəyişdirilib. Səhifəni yenidən yükləyin və dəyişikliklərinizi təkrar tətbiq edin.",
+    "policies.errors.load": "Siyasəti yükləmək mümkün olmadı: {status}",
+    "policies.errors.reach_server": "Serverlə əlaqə yaratmaq mümkün olmadı: {message}",
+    "policies.errors.corrupt_suffix": " (tool_policy.json faylı zədələnmiş görünür; serverin məlumat qovluğunda onu redaktə edin və ya silin)",
+    "policies.errors.load_detail": "Siyasəti yükləmək alınmadı: {detail}",
+    "policies.errors.update_tool": "Alətin təhlükəsizlik siyasətini yeniləmək alınmadı: {message}",
+    "policies.errors.remove_rule": "Qaydanı çıxarmaq alınmadı: {message}",
+    "policies.errors.master_save": "Alətlərin təhlükəsizlik siyasətləri ilə bağlı dəyişiklik yadda saxlanılmadı. Serverdə hələ də əvvəlki dəyər qalır.",
+    "policies.errors.manage_tool_save": "Siyasəti redaktə edən alətlə bağlı dəyişiklik yadda saxlanılmadı. Serverdə hələ də əvvəlki dəyər qalır.",
+    "policies.operations.sync_gated": "Təsdiq tələbi seçimini sinxronlaşdır",
+    "policies.operations.save_rule": "Qaydanı yadda saxla",
+    "policies.operations.save_global": "Ümumi parametrləri yadda saxla",
+    "policies.predicate.invalid": "(etibarsız)",
+    "policies.operators.exists": "mövcuddur",
+    "policies.operators.exists_long": "mövcuddur (istənilən dəyər)",
+    "policies.operators.eq": "bərabərdir",
+    "policies.operators.neq": "bərabər DEYİL",
+    "policies.operators.in": "bunlardan biridir",
+    "policies.operators.not_in": "bunlardan biri DEYİL",
+    "policies.operators.contains": "ehtiva edir",
+    "policies.operators.regex": "müntəzəm ifadəyə uyğundur",
+    "policies.operators.gt": "böyükdür",
+    "policies.operators.lt": "kiçikdir",
+    "policies.card.no_conditions": "(şərt yoxdur, qayda bu alətin hər çağırışına uyğundur)",
+    "policies.card.always_row": "(həmişə — bu alətin hər çağırışı üçün təsdiq tələb edir)",
+    "policies.card.and_join": " VƏ ",
+    "policies.card.remove_title": "Siyasətdən çıxar",
+    "policies.card.conditions_intro": "Şərtlərdən HƏR HANSI BİRİ ödənildikdə təsdiq tələb et (şərt yoxdur = həmişə təsdiq tələb et):",
+    "policies.card.add_condition": "+ Şərt əlavə et",
+    "policies.card.argument": "Arqument:",
+    "policies.card.argument_placeholder": "məs. args.color_temp",
+    "policies.card.match_when": "Uyğunluq şərti:",
+    "policies.card.value": "Dəyər:",
+    "policies.card.save_condition": "Şərti yadda saxla",
+    "policies.card.remember_for": "Təsdiqin yadda saxlanma müddəti:",
+    "policies.card.minutes_single": "dəqiqə (0 = birdəfəlik)",
+    "policies.card.confirm_remove": "\"{tool}\" aləti təhlükəsizlik siyasətindən çıxarılsın?",
+    "policies.editor.any_argument_title": "Çağırışın hər arqumentini bu şərtə uyğunluq baxımından yoxlayın.",
+    "policies.editor.any_argument": "(istənilən arqument)",
+    "policies.editor.other_path": "(digər, yol daxil edin)",
+    "policies.editor.value_source_http": "dəyər mənbəyini əldə etmək alınmadı (HTTP {status}); sərbəst mətn daxil etməyə keçilir",
+    "policies.editor.value_source_error": "dəyər mənbəyini əldə etmək alınmadı ({message}); sərbəst mətn daxil etməyə keçilir",
+    "policies.editor.schema_http": "alətin sxemini əldə etmək alınmadı (HTTP {status}); sərbəst mətn daxil etməyə keçilir",
+    "policies.editor.schema_error": "alətin sxemini əldə etmək alınmadı ({message}); sərbəst mətn daxil etməyə keçilir",
+    "policies.editor.hint.exists": "Dəyərindən asılı olmayaraq arqument mövcud olduqda təsdiq tələb etmək üçün boş saxlayın.",
+    "policies.editor.hint.list": "Bir və ya bir neçə dəyər seçin, yaxud JSON siyahısı daxil edin. İstənilən dəyər üçün təsdiq tələb etmək məqsədilə boş saxlayın.",
+    "policies.editor.hint.regex": "Arqumentin uyğunluğunu yoxlamaq üçün müntəzəm ifadə.",
+    "policies.editor.hint.contains": "Mətn parçası və ya siyahı elementi. İstənilən dəyər üçün təsdiq tələb etmək məqsədilə boş saxlayın.",
+    "policies.editor.hint.number": "Müqayisə üçün ədəd.",
+    "policies.editor.hint.equals": "Arqumentin bərabər olmalı olduğu dəyər. İstənilən dəyər üçün təsdiq tələb etmək məqsədilə boş saxlayın.",
+    "policies.editor.loading_choices": "Seçimlər yüklənir…",
+    "policies.editor.pick_value": "(dəyər seçin)",
+    "policies.editor.placeholder.blank": "adətən boş saxlanılır",
+    "policies.editor.validation.pick_one_or_more": "ən azı bir dəyər seçin",
+    "policies.editor.validation.pick_value": "dəyər seçin",
+    "policies.editor.validation.value_required": "op={operator} üçün dəyər tələb olunur",
+    "policies.editor.validation.empty_list": "op={operator} üçün boş siyahı",
+    "policies.editor.validation.argument_required": "arqument tələb olunur",
+    "policies.pending.offline": "Serverlə əlaqə kəsildi ({message}). Yenidən cəhd edilir.",
+    "policies.pending.disabled": "Alətlərin təhlükəsizlik siyasətləri deaktivdir. Təsdiq tələbini aktivləşdirmək üçün bu seçimi aktivləşdirin və HA-MCP-ni yenidən başladın.",
+    "policies.pending.unavailable": "Anlıq təsdiqlər əlçatan deyil. HA-MCP jurnalını yoxlayın.",
+    "policies.pending.expires": "Bitmə vaxtı: {time}",
+    "policies.pending.already_decided": "Bu təsdiq sorğusu artıq {decision}, ola bilsin ki, başqa vərəqdən və ya sessiyadan.",
+    "policies.pending.decision.approved": "təsdiqlənib",
+    "policies.pending.decision.denied": "rədd edilib",
+    "policies.pending.invalid_token": "Bu təsdiq tokeni artıq etibarlı deyil (artıq istifadə edilib və ya vaxtı bitib).",
+    "policies.pending.action_failed": "Təsdiq əməliyyatı alınmadı: {detail}",
+    "visibility.errors.reach_server": "Serverlə əlaqə yaratmaq mümkün olmadı: {message}",
+    "visibility.errors.corrupt_suffix": " (entity_visibility.json faylı zədələnmiş görünür; serverin məlumat qovluğunda onu redaktə edin və ya silin)",
+    "visibility.errors.load_detail": "Görünürlük konfiqurasiyasını yükləmək alınmadı: {detail}",
+    "visibility.errors.conflict": "Konfiqurasiya başqa vərəqdə və ya sessiyada dəyişdirilib. Səhifəni yenidən yükləyin, sonra dəyişikliklərinizi təkrar tətbiq edin.",
+    "advanced.homeassistant_url.label": "Home Assistant URL-i",
+    "advanced.homeassistant_url.help": "Yalnız göstərilir. HOMEASSISTANT_URL vasitəsilə təyin edilir və ya tətbiq (əlavə) tərəfindən idarə olunur.",
+    "advanced.homeassistant_token.label": "Home Assistant tokeni",
+    "advanced.homeassistant_token.help": "Yalnız göstərilir. HOMEASSISTANT_TOKEN vasitəsilə təyin edilir. Təhlükəsizlik üçün burada gizlədilir.",
+    "advanced.timeout.label": "HA sorğusunun gözləmə müddəti (s)",
+    "advanced.timeout.help": "Hər HTTP sorğusu üçün gözləmə müddəti. Aralıq 1–600. Yenidən başlatmaq tələb olunur.",
+    "advanced.max_retries.label": "HA sorğusu üçün maksimum təkrar cəhd sayı",
+    "advanced.max_retries.help": "Hər uğursuz REST çağırışı üçün təkrar cəhd limiti. Aralıq 0–20. Yenidən başlatmaq tələb olunur.",
+    "advanced.verify_ssl.label": "SSL sertifikatlarını yoxla",
+    "advanced.verify_ssl.help": "TLS yoxlamasını yalnız etibarlı şəbəkələrdə söndürün. Yenidən başlatmaq tələb olunur.",
+    "advanced.fuzzy_threshold.label": "Qeyri-səlis axtarış həddi",
+    "advanced.fuzzy_threshold.help": "Daha aşağı dəyərlər obyektlərin uyğunlaşdırılmasında daha az dəqiqlik tələb edir. Aralıq 0–100.",
+    "advanced.automation_config_time_budget.label": "Avtomatlaşdırma konfiqurasiyaları üçün vaxt limiti (s)",
+    "advanced.automation_config_time_budget.help": "Dərin axtarışın avtomatlaşdırma konfiqurasiyalarını əldə etməyə sərf etdiyi maksimum vaxt. Aralıq 1–600. Yenidən başlatmaq tələb olunur.",
+    "advanced.script_config_time_budget.label": "Skript konfiqurasiyaları üçün vaxt limiti (s)",
+    "advanced.script_config_time_budget.help": "Dərin axtarışın skript konfiqurasiyalarını əldə etməyə sərf etdiyi maksimum vaxt. Aralıq 1–600. Yenidən başlatmaq tələb olunur.",
+    "advanced.scene_config_time_budget.label": "Səhnə konfiqurasiyaları üçün vaxt limiti (s)",
+    "advanced.scene_config_time_budget.help": "Dərin axtarışın səhnə konfiqurasiyalarını əldə etməyə sərf etdiyi maksimum vaxt. Aralıq 1–600. Yenidən başlatmaq tələb olunur.",
+    "advanced.individual_config_timeout.label": "Hər konfiqurasiya sorğusu üçün gözləmə müddəti (s)",
+    "advanced.individual_config_timeout.help": "Hər avtomatlaşdırma/skript/səhnə konfiqurasiyasını əldə etmək üçün gözləmə müddəti. Aralıq 1–600. Yenidən başlatmaq tələb olunur.",
+    "advanced.individual_fetch_batch_size.label": "Konfiqurasiya sorğuları paketinin ölçüsü",
+    "advanced.individual_fetch_batch_size.help": "ID üzrə eyni vaxtda konfiqurasiya sorğularının sayı. Sorğuları ardıcıl icra edən HA serverlərində 1 dəyərinə doğru azaldın. Aralıq 1–100. Yenidən başlatmaq tələb olunur.",
+    "advanced.enable_history_query_guardrails.label": "Tarixçə sorğuları üçün qoruyucu məhdudiyyətlər",
+    "advanced.enable_history_query_guardrails.help": "Obyekt sayı və vaxt aralığı üzrə ehtiyatlı limitləri aşan qeydiyyatçı sorğularını rədd edir. Standart olaraq deaktivdir.",
+    "advanced.ha_tool_concurrency.label": "Home Assistant alətlərinin paralel icrası",
+    "advanced.ha_tool_concurrency.help": "Bütün sessiyalar üzrə Home Assistant alətlərinin üst səviyyəli çağırışlarının eyni vaxtda icrası üçün istəyə bağlı limit. Daxili REST, WebSocket və hər alətin daxilində şaxələnən çağırışların paralel icrası dəyişmir. 0 məhdudiyyətsiz davranışı saxlayır. İcra üçün boş yer gözləyən çağırış 60 saniyədən sonra uğursuz olur. Aralıq 0–32. Yenidən başlatmaq tələb olunur.",
+    "advanced.backup_hint.label": "Ehtiyat nüsxə tövsiyəsinin səviyyəsi",
+    "advanced.backup_hint.help": "Riskli yazma əməliyyatlarından əvvəl HA-nın tam anlıq nüsxəsini yaratmaq üçün LLM-ə verilən tövsiyənin nə dərəcədə təkidli olmasını idarə edir.",
+    "advanced.backup_hint.choices.strong": "Güclü",
+    "advanced.backup_hint.choices.normal": "Normal",
+    "advanced.backup_hint.choices.weak": "Zəif",
+    "advanced.backup_hint.choices.auto": "Avtomatik",
+    "advanced.dashboard_screenshot_engine_url.label": "İdarə panelinin ekran görüntüsü mühərrikinin URL-i",
+    "advanced.dashboard_screenshot_engine_url.help": "Ekran görüntüsü mühərrikinin əsas URL-i. Supervisor vasitəsilə avtomatik aşkarlama üçün boş saxlayın. Dərhal tətbiq edilir.",
+    "advanced.enable_websocket.label": "WebSocket-i aktivləşdir",
+    "advanced.enable_websocket.help": "WebSocket vasitəsilə vəziyyətin izlənməsi. Söndürüldükdə dövri sorğulara keçilir və bir çox alətin işi zəifləyir. Yenidən başlatmaq tələb olunur.",
+    "advanced.enabled_tool_modules.label": "Aktiv alət modulları",
+    "advanced.enabled_tool_modules.help": "Vergüllə ayrılmış modul adları və ya 'all'. Yenidən başlatmaq tələb olunur.",
+    "advanced.enable_dashboard_partial_tools.label": "İdarə panelinin qismən yenilənməsi alətləri",
+    "advanced.enable_dashboard_partial_tools.help": "Tokenlərə qənaət edən qismən idarə paneli alətləri. Alətlərdən proqram vasitəsilə istifadə edən müştərilər üçün söndürün.",
+    "advanced.mcp_server_name.label": "MCP serverinin adı",
+    "advanced.mcp_server_name.help": "MCP əl sıxması zamanı bildirilir. Yenidən başlatmaq tələb olunur.",
+    "advanced.mcp_server_version.label": "MCP serverinin versiyası",
+    "advanced.mcp_server_version.help": "Standart olaraq paketin versiyası istifadə edilir. Başqa dəyər təyin etmək müştərilərdə çaşqınlıq yarada bilər. Yenidən başlatmaq tələb olunur.",
+    "advanced.environment.label": "Mühit",
+    "advanced.environment.help": "development və ya production. Jurnala yazılan məlumatların təfərrüat səviyyəsinə təsir edir. Yenidən başlatmaq tələb olunur.",
+    "advanced.http_transport_diagnostics.label": "HTTP ötürülməsinin diaqnostikası",
+    "advanced.http_transport_diagnostics.help": "Eksperimentaldır. Server işləyərkən HTTP diaqnostikası üçün INFO səviyyəsində jurnal qeydini avtomatik aktivləşdirir; ötürülən məzmun və giriş məlumatları daxil edilmir. Digər jurnal qeydiyyatçıları dəyişmir; Home Assistant jurnal qeydiyyatçısı üçün açıq şəkildə təyin edilmiş fərdi parametrlər və süzgəclər qüvvədə qalır. Müştərinin məlumatı qəbul etdiyini təsdiqləmir. Yalnız HTTP üçün; yenidən başlatmaq tələb olunur.",
+    "advanced.http_json_response.label": "Axın əvəzinə JSON cavabları",
+    "advanced.http_json_response.help": "Eksperimentaldır. SSE axını əvəzinə tək JSON cavabı qaytarır. Bu serverdəki bütün HTTP müştərilərinə təsir edir və bu cavablar üçün gedişatın axınla ötürülməsini söndürür. Yalnız HTTP üçün; yenidən başlatmaq tələb olunur.",
+    "advanced.log_level.label": "Jurnal səviyyəsi",
+    "advanced.log_level.help": "DEBUG/INFO/WARNING/ERROR/CRITICAL. Yenidən başlatmaq tələb olunur.",
+    "advanced.debug.label": "Sazlama rejimi",
+    "advanced.debug.help": "Sorğuların ətraflı jurnallaşdırılması. Həssas məlumatları üzə çıxara bilər. Yenidən başlatmaq tələb olunur.",
+    "advanced.code_mode_max_duration.label": "Kod rejimində maksimum müddət (s)",
+    "advanced.code_mode_max_duration.help": "Təcrid olunmuş mühitdə hər icra üçün faktiki keçən vaxt limiti. Aralıq 1–300. Yenidən başlatmaq tələb olunur.",
+    "advanced.code_mode_max_memory.label": "Kod rejimində maksimum yaddaş (bayt)",
+    "advanced.code_mode_max_memory.help": "Təcrid olunmuş mühitdə hər icra üçün yaddaş limiti. Aralıq 1–256 MB. Yenidən başlatmaq tələb olunur.",
+    "advanced.code_mode_max_recursion.label": "Kod rejimində maksimum rekursiya",
+    "advanced.code_mode_max_recursion.help": "Təcrid olunmuş mühitdə hər icra üçün rekursiya dərinliyi limiti. Yenidən başlatmaq tələb olunur.",
+    "advanced.code_mode_max_invocations.label": "Kod rejimində maksimum çağırış sayı",
+    "advanced.code_mode_max_invocations.help": "Təcrid olunmuş mühitdə hər icra üçün API/alət çağırışı limiti. Yenidən başlatmaq tələb olunur.",
+    "advanced.code_mode_saved_tools_path.label": "Yadda saxlanmış alətlərin yolu",
+    "advanced.code_mode_saved_tools_path.help": "Fərdi alətləri yenidən başlatmalar arasında qorumaq üçün istifadə edilən JSON faylı. Yenidən başlatmaq tələb olunur.",
+    "advanced.extra_yaml_write_keys.label": "Yazmağa icazə verilən əlavə YAML açarları",
+    "advanced.extra_yaml_write_keys.help": "Bu quraşdırmada əsasən YAML ilə işləyən inteqrasiyalar (məs. alert2) üçün ha_config_set_yaml alətinin daxili açarlara əlavə olaraq yaza biləcəyi yuxarı səviyyəli açarlar. Hər sətirdə bir açar daxil edin və ya açarları vergüllə ayırın. Home Assistant-ın öz etibar sərhədini yenidən müəyyən edən açarlar heç vaxt əlavə edilə bilməz və nəzərə alınmır. Fərdi komponentin 1.2.4 və ya daha yeni versiyası tələb olunur.",
+    "advanced.sidecar_pin_port.label": "Parametrlər interfeysinin köməkçi proses portu",
+    "advanced.sidecar_pin_port.help": "0 ilk işə salınmada boş port seçir və onu sonrakı yenidən başlatmalar üçün saxlayır; 1024–65535 üstün tutulan portu sabitləyir (məşğuldursa, boş porta keçir). Yenidən başlatmaq tələb olunur.",
+    "advanced.enable_dev_mode.label": "Proqramçı rejimi",
+    "advanced.enable_dev_mode.help": "⚠ Parametrləri dəyişdirə və işləyən serveri əvəz edə bilən gizli alətləri qeydiyyata alır. Yalnız proqramlaşdırma və sınaq üçün. Yenidən başlatmaq tələb olunur.",
+    "advanced.dev_tools_security_policy_access.label": "Proqramçı alətlərinin təhlükəsizlik siyasətlərinə girişi",
+    "advanced.dev_tools_security_policy_access.help": "⚠ Proqramçı rejimi aktiv olduqda proqramçı alətlərinə alətlərin təhlükəsizlik siyasətlərini yenidən yazmağa, ayrı-ayrı alətlər üçün təsdiq tələbləri əlavə etməyə və ya onları çıxarmağa, gözləyən təsdiq sorğularını sizin adınızdan təsdiqləməyə və ya rədd etməyə imkan verir — AI agenti öz təsdiq tələb edən çağırışlarını qəbul edə bilər. Yalnız siyasətlərin sınağı üçün. Yenidən başlatmadan qüvvəyə minir.",
+    "addon.backup_hint.name": "HA-nın tam anlıq nüsxəsi üçün tövsiyə səviyyəsi (LLM üçün)",
+    "addon.backup_hint.description": "Riskli əməliyyatlardan (məs. cihazların kütləvi silinməsindən) əvvəl\nHome Assistant-ın tar arxivində tam ehtiyat nüsxəsinin yaradılmasını nə vaxt\ntövsiyə etmək barədə LLM-in `ha_manage_backup(scope='snapshot')` alətinin təsvirində\ngördüyü tövsiyənin ifadə tərzini tənzimləyir. YALNIZ LLM-ə ünvanlanan\nbu bir cümləyə təsir edir.\n\nAvtomatlaşdırmaların / skriptlərin / köməkçilərin / və s. hər redaktəsindən əvvəl avtomatik anlıq nüsxə yaratmaq üçün\naşağıdakı ayrıca **Redaktələrin avtomatik ehtiyat nüsxəsini aktivləşdir** seçimindən istifadə edin.",
+    "addon.secret_path.name": "Gizli yolun əvəzlənməsi",
+    "addon.secret_path.description": "MCP serveri üçün istəyə bağlı fərdi HTTP yolu. Avtomatik yaradılmış təhlükəsiz yoldan istifadə etmək üçün boş saxlayın.\n",
+    "addon.enable_security_policy_tool.name": "AI agentlərinə alətlərin təhlükəsizlik siyasətlərini redaktə etməyə icazə ver",
+    "addon.enable_security_policy_tool.description": "Qoşulmuş AI agentlərinə alətlərin təhlükəsizlik siyasətlərini oxumağa və yenidən yazmağa imkan verən ha_manage_security_policy alətini qeydiyyata alır — bu, təsdiq tələblərinin çıxarılmasını da əhatə edir. Standart olaraq deaktivdir. Yuxarıdakı Alətlərin təhlükəsizlik siyasətləri seçimindən asılı deyil: bu seçim qaydaların tətbiq olunmasını deyil, onları kimin redaktə edə biləcəyini idarə edir. Alət gözləyən təsdiq sorğularını görə və ya onlar barədə qərar verə bilməz. İnsan nəzarətini saxlamaq üçün aləti aktivləşdirməzdən əvvəl ona təsdiq tələbi qoyun: veb interfeysin Alətlər vərəqində Təhlükəsizlik siyasətini idarə et aləti üçün \"security gated\" seçimini aktivləşdirin. Qüvvəyə minməsi üçün yenidən başlatmaq tələb olunur.",
+    "addon.enable_auto_backup.name": "Redaktələrin avtomatik ehtiyat nüsxəsini aktivləşdir",
+    "addon.enable_auto_backup.description": "Ehtiyat nüsxə mexanizmi ilə əhatə olunan hər yazma/dağıdıcı MCP alət çağırışından (avtomatlaşdırma, skript, səhnə, köməkçi, idarə paneli, idarə paneli resursu, etiket, kateqoriya, qrup, zona, sahə, təqvim, todo, obyekt, cihaz, inteqrasiya və müvafiq çıxarma/silmə alətləri) əvvəl obyekt üzrə anlıq nüsxə yaradır. Avtomatik ehtiyat nüsxə tezliyi limiti bunun nə qədər tez-tez baş verdiyini məhdudlaşdırır: 0 (standart) hər belə çağırışda, N>0 isə hər obyekt üçün N dəqiqə ərzində ən çox bir anlıq nüsxə yaradır. Anlıq nüsxələr /data/ha_mcp_backups/ altında YAML faylları kimi saxlanılır (HAMCP_BACKUP_DIR vasitəsilə dəyişdirilə bilər) və veb parametrlər interfeysindəki Ehtiyat nüsxələr vərəqi və ya ha_manage_backup(scope='edits', ...) vasitəsilə siyahılanır, bərpa edilir və ya silinir. Bu domenlər üçün nüsxənin yaradılması imkan daxilində yerinə yetirilir — uğursuzluq zamanı jurnala WARNING yazılır və yazma əməliyyatı davam edir. Fayl və birbaşa YAML alətləri istisnadır: ha_write_file, ha_delete_file və ha_config_set_yaml anlıq nüsxəni ilkin şərt sayır, buna görə bu seçim deaktiv olduqda həmin alətlərlə yazma rədd edilir, nüsxə yaratmaq alınmadıqda isə yazma bloklanır. Standart olaraq aktivdir; seçimi söndürmək imkan daxilində yaradılan nüsxələrdən imtina edir və bununla birlikdə fayl və birbaşa YAML alətlərini də istifadədən çıxarır. Qüvvəyə minməsi üçün yenidən başlatmaq tələb olunur.",
+    "addon.auto_backup_throttle_minutes.name": "Avtomatik ehtiyat nüsxə tezliyi limiti (dəqiqə)",
+    "addon.auto_backup_throttle_minutes.description": "Hər obyekt üçün tezlik məhdudiyyətinin müddəti. 0 (standart) ehtiyat nüsxə mexanizmi ilə əhatə olunan hər yazma əməliyyatında anlıq nüsxə yaradır. N>0 hər obyekt üçün N dəqiqə ərzində ən çox bir anlıq nüsxə yaradır. Aralıq 0–1440.",
+    "addon.auto_backup_retain_per_entity.name": "Avtomatik ehtiyat nüsxələrin saxlanma sayı (hər obyekt üzrə)",
+    "addon.auto_backup_retain_per_entity.description": "Hər obyekt üçün saxlanılan anlıq nüsxələrin maksimum sayı. Bu limiti aşan köhnə anlıq nüsxələr hər uğurlu nüsxə yaratma zamanı silinir. Standart dəyər 100, aralıq 1–10000.",
+    "addon.enable_snapshot_delete.name": "Anlıq nüsxələrin silinməsinə icazə ver",
+    "addon.enable_snapshot_delete.description": "ha_manage_backup alətinə HA-nın tam anlıq nüsxələrinin tar arxivlərini silməyə imkan verir (scope='snapshot', action='delete'). Standart olaraq deaktivdir — səhv dəyişiklikdən sonra anlıq nüsxə son bərpa nöqtəsi ola bilər, buna görə insan burada bu seçimi aktivləşdirməlidir. Aktiv olduqda belə planlaşdırılmış ehtiyat nüsxələr, qalan ən yeni anlıq nüsxə və aşağıdakı minimum yaş həddinə çatmamış bütün nüsxələr qorunur.",
+    "addon.snapshot_delete_min_age_days.name": "Silmək üçün anlıq nüsxənin minimum yaşı (gün)",
+    "addon.snapshot_delete_min_age_days.description": "Anlıq nüsxənin silinə bilməsi üçün yaradılmasından ən azı bu qədər vaxt keçməlidir. Aralıq 0–365; 0 minimum həddi söndürür (ən yeni anlıq nüsxənin və planlaşdırılmış ehtiyat nüsxələrin qorunması qüvvədə qalır). Standart dəyər 7.",
+    "addon.disabled_tools.name": "Deaktiv alətlər (vergüllə ayrılmış)",
+    "addon.disabled_tools.description": "Burada sadalanan alətlər məcburi söndürülür və veb Parametrlər interfeysində (Alətlər vərəqində) kilidlənir — əvvəlcə bu seçimdəki təyinatı ləğv etmədən onları orada yenidən aktivləşdirmək mümkün deyil. Məcburi alətlərin kiçik bir qrupu (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup) söndürülə bilməz və burada sadalansa belə işləməyə davam edir. ha_get_skill_guide yalnız ən yaxşı təcrübələrə ciddi riayət rejimi (enable_strict_mandatory_bps) deaktiv olduqda söndürülə bilər. Vergüllə ayrılmış alət adları (məs. ha_call_event,ha_eval_template).",
+    "addon.pinned_tools.name": "Sancaqlanmış alətlər (vergüllə ayrılmış)",
+    "addon.pinned_tools.description": "Burada sadalanan alətlər sancaqlanmış vəziyyətdə kilidlənir — Alətlər vərəqinin yuxarısında görünür və əvvəlcə bu seçimdəki təyinatı ləğv etmədən veb Parametrlər interfeysindən sancaqlarını çıxarmaq mümkün deyil. Alət axtarışı ilə birlikdə faydalıdır. Vergüllə ayrılmış alət adları.",
+    "addon.verify_ssl.name": "TLS sertifikatını yoxla",
+    "addon.verify_ssl.description": "Home Assistant serverinin TLS sertifikatını yoxlayın. Tətbiq (əlavə) Supervisor proksisi vasitəsilə qoşulur, buna görə adətən bu seçimin təsiri olmur və aktiv saxlanmalıdır. Yalnız tətbiqi (əlavəni) HA ilə özünün imzaladığı sertifikatı olan və ya host adı uyğun gəlməyən ictimai HTTPS host adı üzərindən əlaqə yaratmaq üçün yenidən konfiqurasiya etmisinizsə söndürün. Söndürmək ötürülmənin təhlükəsizliyini zəiflədir — buna ehtiyacınız olduğunu dəqiq bilmirsinizsə, aktiv saxlayın. Qüvvəyə minməsi üçün yenidən başlatmaq tələb olunur.",
+    "addon.ha_tool_concurrency.name": "Home Assistant alətlərinin paralel icrası",
+    "addon.ha_tool_concurrency.description": "Bütün sessiyalar üzrə Home Assistant alətlərinin üst səviyyəli çağırışlarının eyni vaxtda icrası üçün istəyə bağlı limit. Daxili REST, WebSocket və hər alətin daxilində şaxələnən çağırışların paralel icrası dəyişmir. 0 məhdudiyyətsiz davranışı saxlayır. İcra üçün boş yer gözləyən çağırış 60 saniyədən sonra uğursuz olur.",
+    "addon_stable.enable_tool_search.description": "Tam alət kataloqunu axtarış əsasında aşkarlama ilə əvəz edin. Boşdayanma zamanı kontekst həcmini təxminən 90% azaldaraq təqribən 5K tokenə endirir. ⚠️ Öz daxili alət axtarışı / təxirə salınmış alətləri olan müştərilərdə (claude.ai, Claude Desktop, Claude Code) bunu aktivləşdirməyin — iki axtarış qatı toqquşur və həmin müştərilərdə daxili alət axtarışı daha yaxşı seçimdir; bunu deaktiv saxlayın. Alətlərin təxirə salınıb-salınmaması müştəri və model birləşməsindən asılıdır: quruluşunuz tam kataloqu əvvəlcədən yükləyirsə, bundan istifadə edin — təxirə salınmış alətləri özündə dəstəkləməyən modellər (məs. Gemini, OpenAI ilə uyğun lokal modellər, Claude Haiku), modeldən asılı olmayaraq bütün alət sxemlərini birbaşa kontekstə daxil edən müştərilər (məs. GitHub Copilot CLI) və ya daha kiçik kontekst pəncərələri üçün. Bəzi Codex modelləri və ChatGPT də təxirə salınmış alətləri dəstəkləyir — bu seçimi lazımsız yerə aktiv saxlamamaq üçün müştərinizin/modelinizin funksiyalarını birbaşa yoxlayın. Alətlər ha_search_tools vasitəsilə tapılır və kateqoriyalara ayrılmış proksilər (oxuma/yazma/silmə) vasitəsilə icra olunur. Qüvvəyə minməsi üçün tətbiqi (əlavəni) yenidən başlatmaq tələb olunur — sonra alət siyahısının yenidən yüklənməsi üçün AI müştərinizdə MCP serverinə yenidən qoşulun və ya onu yeniləyin. Təkcə tətbiqi (əlavəni) yenidən başlatmaq müştərinin keşindəki alət siyahısını yeniləmir; bu, buradakı istənilən parametr dəyişdirildikdən sonra keçərlidir."
+  },
+  "tool_groups": {
+    "Apps (add-ons)": "Tətbiqlər (əlavələr)",
+    "Areas & Floors": "Sahələr və mərtəbələr",
+    "Assist": "Assist",
+    "Automations": "Avtomatlaşdırmalar",
+    "Blueprints": "Layihə şablonları",
+    "Calendar": "Təqvim",
+    "Camera": "Kamera",
+    "Dashboard": "İdarə paneli",
+    "Dashboards": "İdarə panelləri",
+    "Developer": "Proqramçı",
+    "Device Registry": "Cihaz reyestri",
+    "Energy": "Enerji",
+    "Entity Registry": "Obyekt reyestri",
+    "Files": "Fayllar",
+    "Groups": "Qruplar",
+    "HACS": "HACS",
+    "Helper Entities": "Köməkçi obyektlər",
+    "History & Statistics": "Tarixçə və statistika",
+    "Integrations": "İnteqrasiyalar",
+    "Labels & Categories": "Etiketlər və kateqoriyalar",
+    "Matter": "Matter",
+    "Scenes": "Səhnələr",
+    "Scripts": "Skriptlər",
+    "Search & Discovery": "Axtarış və aşkarlama",
+    "Service & Device Control": "Xidmət və cihazların idarə edilməsi",
+    "System": "Sistem",
+    "Todo Lists": "Tapşırıq siyahıları",
+    "Utilities": "Yardımçı alətlər",
+    "Zones": "Zonalar"
+  },
+  "tools": {
+    "ha_bulk_control": {
+      "title": "Toplu idarə et",
+      "description": "Açıq şəkildə göstərilmiş əməliyyatları və ya nəticəsi əvvəlcədən müəyyən olan, struktura əsaslanan bir toplu əməliyyatı idarə edin."
+    },
+    "ha_call_event": {
+      "title": "Hadisəni çağır",
+      "description": "Home Assistant hadisə şinində fərdi hadisə icra edin."
+    },
+    "ha_call_service": {
+      "title": "Xidməti çağır",
+      "description": "Obyektləri idarə etmək və avtomatlaşdırmaları işə salmaq üçün Home Assistant xidmətlərini icra edin."
+    },
+    "ha_config_delete_dashboard": {
+      "title": "İdarə panelini sil",
+      "description": "Saxlama rejimində olan idarə panelini tamamilə silin."
+    },
+    "ha_config_delete_dashboard_resource": {
+      "title": "İdarə panelinin resursunu sil",
+      "description": "İdarə panelinin resursunu silin."
+    },
+    "ha_config_get_automation": {
+      "title": "Avtomatlaşdırmanın konfiqurasiyasını al",
+      "description": "Home Assistant avtomatlaşdırmasının konfiqurasiyasını alın."
+    },
+    "ha_config_get_calendar_events": {
+      "title": "Təqvim hadisələrini al",
+      "description": "Təqvim obyektindən təqvim hadisələrini alın."
+    },
+    "ha_config_get_category": {
+      "title": "Kateqoriyanı al",
+      "description": "Kateqoriya haqqında məlumat alın: müəyyən əhatə dairəsindəki bütün kateqoriyaları siyahı şəklində göstərin və ya ID üzrə konkret kateqoriyanı alın."
+    },
+    "ha_config_get_dashboard": {
+      "title": "İdarə panelini al",
+      "description": "İdarə paneli haqqında məlumat alın: bütün idarə panellərini siyahı şəklində göstərin, konfiqurasiyanı alın və ya kartları axtarın."
+    },
+    "ha_config_get_label": {
+      "title": "Etiketi al",
+      "description": "Etiket haqqında məlumat alın: bütün etiketləri siyahı şəklində göstərin və ya ID üzrə konkret etiketi alın."
+    },
+    "ha_config_get_scene": {
+      "title": "Səhnələri al və ya tap",
+      "description": "Səhnənin tam konfiqurasiyasını alın və ya scene_id göstərmədən səhnələri siyahı şəklində göstərin və axtarın."
+    },
+    "ha_config_get_script": {
+      "title": "Skriptin konfiqurasiyasını al",
+      "description": "Home Assistant skriptinin konfiqurasiyasını alın."
+    },
+    "ha_config_get_yaml": {
+      "title": "YAML konfiqurasiyasının hissəsini oxu",
+      "description": "Konfiqurasiya faylında açara uyğun YAML hissəsini oxuyun və ya onun hansı faylda müəyyən edildiyini tapın."
+    },
+    "ha_config_list_dashboard_resources": {
+      "title": "İdarə panelinin resurslarını siyahı şəklində göstər",
+      "description": "Lovelace idarə panelinin resurslarını (fərdi kartlar, temalar, CSS/JS) siyahı şəklində göstərin."
+    },
+    "ha_config_list_groups": {
+      "title": "Qrupları siyahı şəklində göstər",
+      "description": "Home Assistant obyekt qruplarını onlara daxil olan obyektlərlə birlikdə siyahı şəklində göstərin."
+    },
+    "ha_config_list_helpers": {
+      "title": "Köməkçiləri siyahı şəklində göstər",
+      "description": "Müəyyən növdə olan Home Assistant köməkçilərini konfiqurasiyaları ilə birlikdə siyahı şəklində göstərin."
+    },
+    "ha_config_remove_automation": {
+      "title": "Avtomatlaşdırmanı çıxar",
+      "description": "Home Assistant avtomatlaşdırmasını silin."
+    },
+    "ha_config_remove_calendar_event": {
+      "title": "Təqvim hadisəsini çıxar",
+      "description": "Təqvimdən hadisə silin."
+    },
+    "ha_config_remove_category": {
+      "title": "Kateqoriyanı çıxar",
+      "description": "Home Assistant kateqoriyasını silin."
+    },
+    "ha_config_remove_group": {
+      "title": "Qrupu çıxar",
+      "description": "group.remove xidməti vasitəsilə xidmətə əsaslanan Home Assistant obyekt qrupunu çıxarın."
+    },
+    "ha_config_remove_label": {
+      "title": "Etiketi çıxar",
+      "description": "Home Assistant etiketini silin."
+    },
+    "ha_config_remove_scene": {
+      "title": "Səhnəni çıxar",
+      "description": "Home Assistant səhnəsini silin."
+    },
+    "ha_config_remove_script": {
+      "title": "Skripti çıxar",
+      "description": "Home Assistant skriptini silin."
+    },
+    "ha_config_set_automation": {
+      "title": "Avtomatlaşdırma yarat və ya yenilə",
+      "description": "Home Assistant avtomatlaşdırması yaradın və ya yeniləyin."
+    },
+    "ha_config_set_calendar_event": {
+      "title": "Təqvim hadisəsi yarat və ya yenilə",
+      "description": "Təqvimdə yeni hadisə yaradın və ya mövcud hadisəni yeniləyin."
+    },
+    "ha_config_set_category": {
+      "title": "Kateqoriya yarat və ya yenilə",
+      "description": "Home Assistant kateqoriyası yaradın və ya yeniləyin."
+    },
+    "ha_config_set_dashboard": {
+      "title": "İdarə paneli yarat və ya yenilə",
+      "description": "Home Assistant idarə paneli yaradın və ya yeniləyin."
+    },
+    "ha_config_set_dashboard_resource": {
+      "title": "İdarə panelinin resursunu təyin et",
+      "description": "İdarə panelinin resursunu (daxilə yazılmış kod və ya xarici URL) yaradın və ya yeniləyin."
+    },
+    "ha_config_set_group": {
+      "title": "Qrup yarat və ya yenilə",
+      "description": "group.set xidməti vasitəsilə xidmətə əsaslanan Home Assistant obyekt qrupu yaradın və ya yeniləyin."
+    },
+    "ha_config_set_helper": {
+      "title": "Köməkçi yarat və ya yenilə",
+      "description": "Home Assistant köməkçi obyektlərini və konfiqurasiyanın alt qeydlərini yaradın və ya yeniləyin."
+    },
+    "ha_config_set_label": {
+      "title": "Etiket yarat və ya yenilə",
+      "description": "Home Assistant etiketi yaradın və ya yeniləyin."
+    },
+    "ha_config_set_scene": {
+      "title": "Səhnə yarat və ya yenilə",
+      "description": "Home Assistant səhnəsi yaradın və ya yeniləyin."
+    },
+    "ha_config_set_script": {
+      "title": "Skript yarat və ya yenilə",
+      "description": "Home Assistant skripti yaradın və ya yeniləyin."
+    },
+    "ha_config_set_yaml": {
+      "title": "YAML konfiqurasiyasını təyin et",
+      "description": "configuration.yaml və ya paket fayllarında ən üst səviyyədəki açarları əlavə edin, əvəz edin və ya çıxarın."
+    },
+    "ha_delete_file": {
+      "title": "Faylı sil",
+      "description": "İcazə verilən qovluqlardan fayl silin."
+    },
+    "ha_dev_manage_server": {
+      "title": "MCP serverini idarə et (proqramçı)",
+      "description": "İşləyən ha-mcp serverinin özünü idarə edin (proqramçı rejimi)."
+    },
+    "ha_dev_manage_settings": {
+      "title": "Server parametrlərini idarə et (proqramçı)",
+      "description": "ha-mcp serverinin parametrlərini və alətlər, siyasətlər, ehtiyat nüsxələr bölmələrini idarə edin (proqramçı rejimi)."
+    },
+    "ha_eval_template": {
+      "title": "Şablonu emal et",
+      "description": "Home Assistant-ın şablon mühərrikindən istifadə edərək Jinja2 şablonlarını emal edin."
+    },
+    "ha_get_app": {
+      "title": "Tətbiqləri (əlavələri) al",
+      "description": "Quraşdırılmış və ya mövcud Home Assistant tətbiqlərini (əlavələrini), yaxud konkret tətbiq haqqında ətraflı məlumat alın."
+    },
+    "ha_get_automation_traces": {
+      "title": "Avtomatlaşdırmanın icra izlərini al",
+      "description": "Problemləri araşdırmaq üçün avtomatlaşdırma və skriptlərin icra izlərini alın."
+    },
+    "ha_get_camera_image": {
+      "title": "Kamera görüntüsünü al",
+      "description": "Home Assistant kamera obyektindən görüntünün anlıq nüsxəsini alın."
+    },
+    "ha_get_dashboard_screenshot": {
+      "title": "İdarə panelinin ekran şəklini al",
+      "description": "Home Assistant Lovelace idarə panelinin görünüşünə aid yaradılmış şəkilləri alın."
+    },
+    "ha_get_device": {
+      "title": "Cihazı al (Zigbee/ZHA/Z2M, Z-Wave və Matter daxil olmaqla)",
+      "description": "Zigbee (ZHA/Z2M) və Z-Wave JS cihazları da daxil olmaqla, cihaz məlumatlarını səhifələrə bölünmüş şəkildə alın."
+    },
+    "ha_get_entity": {
+      "title": "Obyekti al",
+      "description": "Bir və ya bir neçə obyekt üçün obyekt reyestrindəki məlumatları alın."
+    },
+    "ha_get_entity_exposure": {
+      "title": "Obyektin əlçatanlıq parametrlərini al",
+      "description": "Obyektlərin əlçatanlıq parametrlərini alın: hamısını siyahı şəklində göstərin və ya konkret obyektin parametrlərini alın."
+    },
+    "ha_get_hacs_info": {
+      "title": "HACS məlumatlarını al",
+      "description": "HACS (Home Assistant Community Store) məlumatlarını alın — mağazada axtarış edin və ya repozitoriya haqqında ətraflı məlumat alın."
+    },
+    "ha_get_history": {
+      "title": "Obyektin tarixçəsini və ya statistikasını al",
+      "description": "Home Assistant-ın məlumatları qeydə alan komponentindən keçmiş məlumatları alın."
+    },
+    "ha_get_integration": {
+      "title": "İnteqrasiyanı al",
+      "description": "İnteqrasiya (konfiqurasiya qeydi) haqqında məlumatları səhifələrə bölünmüş şəkildə alın."
+    },
+    "ha_get_logs": {
+      "title": "Jurnalları al",
+      "description": "Müxtəlif mənbələrdən Home Assistant jurnallarını alın."
+    },
+    "ha_get_operation_status": {
+      "title": "Əməliyyatın vəziyyətini al",
+      "description": "WebSocket vasitəsilə real vaxtda yoxlama apararaq bir və ya bir neçə cihaz əməliyyatının vəziyyətini alın."
+    },
+    "ha_get_overview": {
+      "title": "Sistem icmalını al",
+      "description": "Ağıllı kateqoriyalaşdırma ilə AI üçün uyğun sistem icmalını alın."
+    },
+    "ha_get_state": {
+      "title": "Obyektin vəziyyətini al",
+      "description": "Bir və ya bir neçə obyektin (işıqlar, açarlar, sensorlar, iqlim cihazları, örtüklər, kilidlər, ventilyatorlar) cari vəziyyəti, halı və atributları haqqında məlumat alın."
+    },
+    "ha_get_system_health": {
+      "title": "Sistemin işləkliyini al (ZHA/Z-Wave/inteqrasiya diaqnostikası daxil olmaqla)",
+      "description": "Zigbee (ZHA), Z-Wave JS və hər inteqrasiyaya aid diaqnostika məlumatları daxil olmaqla, Home Assistant sisteminin işləkliyi haqqında məlumat alın."
+    },
+    "ha_get_todo": {
+      "title": "Tapşırıqları al",
+      "description": "Tapşırıq siyahılarını və ya tapşırıqları alın: bütün tapşırıq siyahılarını göstərin və ya konkret siyahıdakı tapşırıqları alın."
+    },
+    "ha_get_zone": {
+      "title": "Zonanı al",
+      "description": "Zona haqqında məlumat alın: bütün zonaları siyahı şəklində göstərin və ya konkret zona haqqında ətraflı məlumat alın."
+    },
+    "ha_list_files": {
+      "title": "Faylları siyahı şəklində göstər",
+      "description": "Home Assistant konfiqurasiyası daxilindəki qovluğun fayllarını siyahı şəklində göstərin."
+    },
+    "ha_list_floors_areas": {
+      "title": "Mərtəbə və sahələri siyahı şəklində göstər",
+      "description": "Mərtəbələri səviyyəyə görə artan sıra ilə, hər mərtəbəyə təyin edilmiş sahələri onun daxilində, mərtəbəsi olmayan sahələri isə ayrıca siyahı şəklində göstərin."
+    },
+    "ha_list_services": {
+      "title": "Mövcud xidmətləri siyahı şəklində göstər",
+      "description": "Mövcud Home Assistant xidmətlərini siyahı şəklində göstərin, istəyə bağlı olaraq səhifələrə bölün və məlumatın ətraflılıq səviyyəsini tənzimləyin."
+    },
+    "ha_manage_app": {
+      "title": "Tətbiqi (əlavəni) idarə et",
+      "description": "Home Assistant tətbiqlərini (əlavələri) idarə edin və ya tətbiqin API-si üçün proksi kimi işləyin."
+    },
+    "ha_manage_backup": {
+      "title": "Ehtiyat nüsxələri idarə et",
+      "description": "Müxtəlif növ ehtiyat nüsxə əməliyyatlarını dəstəkləyən bu alətin yönləndirmə cədvəli üçün alətin təsvirinə baxın."
+    },
+    "ha_manage_blueprints": {
+      "title": "Layihə şablonlarını idarə et",
+      "description": "Home Assistant layihə şablonlarını idarə edin — siyahı şəklində göstərin, oxuyun, idxal edin, yadda saxlayın, silin və ya müstəqil konfiqurasiya yaradın."
+    },
+    "ha_manage_custom_tool": {
+      "title": "Fərdi alət",
+      "description": "Təcrid olunmuş mühitdə fərdi alət yaradın və işə salın və ya yadda saxlanılmış fərdi alətləri idarə edin (kod rejimi)."
+    },
+    "ha_manage_energy_prefs": {
+      "title": "Enerji idarə panelinin tərcihlərini idarə et",
+      "description": "Home Assistant enerji idarə panelinin tərcihlərini idarə edin."
+    },
+    "ha_manage_hacs": {
+      "title": "HACS-ı idarə et",
+      "description": "HACS (Home Assistant Community Store) xidmətini idarə edin — quraşdırın/yeniləyin, çıxarın, fərdi repozitoriyalar əlavə edin və ya repozitoriya məlumatlarını yeniləyin."
+    },
+    "ha_manage_pipeline": {
+      "title": "Assist emal ardıcıllığını idarə et",
+      "description": "Home Assistant Assist emal ardıcıllıqlarını idarə edin."
+    },
+    "ha_manage_radio": {
+      "title": "Radio qurğularını idarə et (Z-Wave / Zigbee / Matter / Thread)",
+      "description": "Home Assistant radio qurğularını idarə edin — Z-Wave, Zigbee, Matter və Thread."
+    },
+    "ha_manage_security_policy": {
+      "title": "Təhlükəsizlik siyasətini idarə et",
+      "description": "Ciddi nəticələrə səbəb ola biləcək alət çağırışlarını istifadəçi təsdiqindən asılı edən alət təhlükəsizlik siyasətini oxuyun və yenidən yazın."
+    },
+    "ha_manage_theme": {
+      "title": "İnterfeys temalarını idarə et",
+      "description": "Home Assistant interfeys temalarını idarə edin."
+    },
+    "ha_manage_updates": {
+      "title": "Yeniləmələri idarə et",
+      "description": "Home Assistant yeniləmələrini idarə edin -- siyahı şəklində göstərin, ətraflı məlumatları oxuyun, toplu quraşdırın, ötürün və ya ötürməni ləğv edin."
+    },
+    "ha_read_file": {
+      "title": "Faylı oxu",
+      "description": "Home Assistant konfiqurasiya qovluğundan fayl oxuyun."
+    },
+    "ha_reload_core": {
+      "title": "Əsas komponentləri yenidən yüklə",
+      "description": "Home Assistant-ı tam yenidən başlatmadan konfiqurasiyasını yenidən yükləyin."
+    },
+    "ha_remove_area_or_floor": {
+      "title": "Sahəni və ya mərtəbəni çıxar",
+      "description": "Home Assistant sahəsini və ya mərtəbəsini çıxarın."
+    },
+    "ha_remove_device": {
+      "title": "Cihazı çıxar",
+      "description": "Heç bir inteqrasiyaya bağlı olmayan cihazı Home Assistant cihaz reyestrindən çıxarın."
+    },
+    "ha_remove_entity": {
+      "title": "Obyekti çıxar",
+      "description": "Home Assistant obyekt reyestrindən bir və ya bir neçə obyekti çıxarın."
+    },
+    "ha_remove_helpers_integrations": {
+      "title": "Köməkçini və ya inteqrasiyanı çıxar",
+      "description": "Home Assistant köməkçisini və ya inteqrasiyanın konfiqurasiya qeydini çıxarın."
+    },
+    "ha_remove_todo_item": {
+      "title": "Tapşırığı çıxar",
+      "description": "Home Assistant tapşırıq siyahısından tapşırığı çıxarın."
+    },
+    "ha_remove_zone": {
+      "title": "Zonanı çıxar",
+      "description": "Home Assistant zonasını çıxarın."
+    },
+    "ha_report_issue": {
+      "title": "Problem və ya rəy bildir",
+      "description": "Problem hesabatları və ya rəy göndərmək üçün diaqnostika məlumatlarını və şablonları alın."
+    },
+    "ha_restart": {
+      "title": "Home Assistant-ı yenidən başlat",
+      "description": "Home Assistant-ı yenidən başladın."
+    },
+    "ha_search": {
+      "title": "Axtarış",
+      "description": "Obyektləri (işıqlar, sensorlar, açarlar, iqlim cihazları və s.) ada, domenə və ya sahəyə görə axtarın — HƏMÇİNİN avtomatlaşdırmaların, skriptlərin və səhnələrin daxilində axtarış edin."
+    },
+    "ha_set_area_or_floor": {
+      "title": "Sahə və ya mərtəbə yarat və ya yenilə",
+      "description": "Home Assistant sahəsi və ya mərtəbəsi yaradın və ya yeniləyin."
+    },
+    "ha_set_device": {
+      "title": "Cihazı təyin et",
+      "description": "Cihazın ad, sahə, deaktiv vəziyyət və ya etiketlər kimi xüsusiyyətlərini yeniləyin."
+    },
+    "ha_set_entity": {
+      "title": "Obyekti təyin et",
+      "description": "Obyekt reyestrində obyektin xüsusiyyətlərini yeniləyin."
+    },
+    "ha_set_integration": {
+      "title": "İnteqrasiyanı təyin et",
+      "description": "İnteqrasiyanı (konfiqurasiya qeydini) idarə edin: aktivləşdirin/söndürün, əlavə edin, seçimlərini yeniləyin və ya yenidən konfiqurasiya edin."
+    },
+    "ha_set_todo_item": {
+      "title": "Tapşırığı təyin et",
+      "description": "Home Assistant-da tapşırıq yaradın və ya yeniləyin."
+    },
+    "ha_set_zone": {
+      "title": "Zonanı təyin et",
+      "description": "Home Assistant zonası yaradın və ya yeniləyin."
+    },
+    "ha_write_file": {
+      "title": "Faylı yaz",
+      "description": "Home Assistant konfiqurasiyasında icazə verilən qovluqlara fayl yazın."
+    }
+  }
+}
