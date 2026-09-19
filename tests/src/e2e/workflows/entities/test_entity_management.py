@@ -200,6 +200,17 @@ class TestEntityManagement:
         entity_id = data.get("entity_id") or f"input_boolean.{data['data']['id']}"
         cleaner.track_entity("input_boolean", entity_id)
 
+        # Establish HA's own-name (null) alias explicitly so the preservation
+        # check below does not depend on the registry's create-time default.
+        seed_result = await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "aliases": [None]},
+        )
+        seed_data = assert_mcp_success(seed_result, "Seed computed-name alias")
+        assert seed_data.get("entity_entry", {}).get("aliases") == [None], (
+            f"Computed-name alias not written: {seed_data}"
+        )
+
         # Set aliases
         aliases = ["test alias one", "test alias two"]
 
@@ -215,8 +226,13 @@ class TestEntityManagement:
         entity_entry = update_data.get("entity_entry", {})
         returned_aliases = entity_entry.get("aliases", [])
 
-        assert set(aliases) == set(returned_aliases), (
+        # The null entry must survive a string-only alias write (#2495).
+        # Order-insensitive: the component join may sort aliases.
+        assert {a for a in returned_aliases if a is not None} == set(aliases), (
             f"Aliases mismatch: expected {aliases}, got {returned_aliases}"
+        )
+        assert None in returned_aliases, (
+            f"Computed-name alias dropped: {returned_aliases}"
         )
 
         logger.info(f"Aliases set: {returned_aliases}")
@@ -232,8 +248,36 @@ class TestEntityManagement:
         clear_data = assert_mcp_success(clear_result, "Clear aliases")
 
         cleared_entry = clear_data.get("entity_entry", {})
-        assert len(cleared_entry.get("aliases", [])) == 0, (
+        cleared_aliases = cleared_entry.get("aliases", [])
+        assert [a for a in cleared_aliases if a is not None] == [], (
             f"Aliases not cleared: {cleared_entry}"
+        )
+        assert None in cleared_aliases, (
+            f"Computed-name alias dropped while clearing strings: {cleared_entry}"
+        )
+
+        # The switch is the only way to turn the own-name entry off, and back on.
+        off_result = await mcp_client.call_tool(
+            "ha_set_entity",
+            {
+                "entity_id": entity_id,
+                "aliases": ["only this"],
+                "use_entity_name_alias": False,
+            },
+        )
+        off_data = assert_mcp_success(off_result, "Switch own-name alias off")
+        assert off_data.get("entity_entry", {}).get("aliases") == ["only this"], (
+            f"Own-name alias not removed: {off_data}"
+        )
+
+        on_result = await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "use_entity_name_alias": True},
+        )
+        on_data = assert_mcp_success(on_result, "Switch own-name alias on")
+        on_aliases = on_data.get("entity_entry", {}).get("aliases", [])
+        assert None in on_aliases and "only this" in on_aliases, (
+            f"Own-name alias not restored alongside strings: {on_data}"
         )
 
         logger.info("Aliases cleared successfully")
@@ -355,6 +399,14 @@ class TestEntityManagement:
         area_id = area_data.get("area_id")
         cleanup_tracker.track("area", area_id)
 
+        # Seed HA's own-name (null) alias so the read below proves it survives
+        # a string-only alias write (#2495).
+        seed_result = await mcp_client.call_tool(
+            "ha_set_entity",
+            {"entity_id": entity_id, "aliases": [None]},
+        )
+        assert_mcp_success(seed_result, "Seed computed-name alias")
+
         # Set properties using ha_set_entity
         test_aliases = ["test alias", "another alias"]
         await mcp_client.call_tool(
@@ -411,8 +463,12 @@ class TestEntityManagement:
 
         # Verify aliases
         returned_aliases = entity_entry.get("aliases", [])
-        assert set(test_aliases) == set(returned_aliases), (
+        # The entity's own name rides along as a null entry (#2495).
+        assert {a for a in returned_aliases if a is not None} == set(test_aliases), (
             f"aliases mismatch: expected {test_aliases}, got {returned_aliases}"
+        )
+        assert None in returned_aliases, (
+            f"Computed-name alias dropped: {returned_aliases}"
         )
 
         logger.info("Single entity lookup verified with all fields")
