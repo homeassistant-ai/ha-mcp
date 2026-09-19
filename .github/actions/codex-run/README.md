@@ -15,6 +15,7 @@ resolve inside `GITHUB_WORKSPACE`.
 | Input | Default | Meaning |
 |---|---|---|
 | `sandbox` | `read-only` | `read-only` or `workspace-write`; credential paths stay denied in both modes. |
+| `read-only-paths` | empty | Existing workspace paths, one per line, kept readable but not writable. Coding callers can protect their trusted controller checkout and source `.git` directory. |
 | `allow-shell` | `true` | Whether the model can execute commands. Use `false` for pre-collected untrusted reports. |
 | `network-access` | `false` | Outbound network for model commands; `true` allows direct network access without a domain allowlist. It does not govern the Codex client's connection to OpenAI. |
 | `web-search` | empty (CLI default) | Optional hosted web search override: `disabled`, `cached`, or `live`. Omission passes no override, preserving existing callers' CLI behavior. Set `disabled` for reports restricted to supplied context. |
