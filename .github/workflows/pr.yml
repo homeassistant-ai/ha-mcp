@@ -136,15 +136,21 @@ jobs:
             while IFS= read -r f; do
               [ -z "$f" ] && continue
               case "$f" in
-                # The app store descriptions are read by Home Assistant's app
-                # store, never by the suite, so they skip like any other docs.
-                # Must precede the addon-dirs arm below, which would otherwise
-                # claim them: case arms are evaluated in order.
-                homeassistant-addon/DOCS.md|homeassistant-addon-dev/DOCS.md)
+                # Markdown docs inside the app / component dirs are
+                # user-facing docs (DOCS.md, README, CHANGELOG), not bake
+                # inputs — they don't change what the E2E suite tests. Their
+                # content IS asserted, by unit tests such as
+                # test_tool_docs_sync and test_build_mirror_readme, and those
+                # jobs are ungated: this classifier gates only the five
+                # e2e-validation* lanes, so skipping here loses no coverage.
+                # Must precede the app-dirs arm below, which would otherwise
+                # claim them — case arms are evaluated in order. Mirrors the
+                # same arm in haos-e2e-tests.yml.
+                homeassistant-addon/*.md|homeassistant-addon-dev/*.md|homeassistant-addon-webhook-proxy/*.md|custom_components/ha_mcp_tools/*.md)
                   continue ;;
-                # Bake inputs / addon dirs are baked into the qcow2 / shipped —
-                # their other docs change what the suite tests, so they count
-                # as code.
+                # Bake inputs / app dirs are baked into the qcow2 / shipped —
+                # their non-doc files change what the suite tests, so they
+                # count as code.
                 homeassistant-addon/*|homeassistant-addon-dev/*|homeassistant-addon-webhook-proxy/*|custom_components/ha_mcp_tools/*|tests/haos_image_build/*|tests/initial_test_state/*)
                   run=true; break ;;
                 # Pure docs / website do not, on their own, warrant the suite.

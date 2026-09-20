@@ -64,11 +64,15 @@ _MUST_SKIP = (
     ".github/ISSUE_TEMPLATE/config.yml",
     ".github/ISSUE_TEMPLATE/runtime_bug.yml",
     ".github/ISSUE_TEMPLATE/startup_bug.yml",
-    # The app store descriptions. Their arm has to sit ahead of the
-    # addon-dirs arm, which would otherwise claim them, so this pins the
-    # ordering as much as the patterns.
+    # User-facing markdown inside the app / component dirs. Its arm has to
+    # sit ahead of the app-dirs arm, which would otherwise claim it, so this
+    # pins the ordering as much as the patterns.
     "homeassistant-addon/DOCS.md",
     "homeassistant-addon-dev/DOCS.md",
+    "homeassistant-addon/README.md",
+    "homeassistant-addon/CHANGELOG.md",
+    "homeassistant-addon-webhook-proxy/DOCS.md",
+    "custom_components/ha_mcp_tools/README.md",
 )
 
 # Paths inside the app directories that are NOT store descriptions: baked or
@@ -76,6 +80,8 @@ _MUST_SKIP = (
 _ADDON_CODE = (
     "homeassistant-addon/config.yaml",
     "homeassistant-addon-dev/Dockerfile",
+    "tests/haos_image_build/build.sh",
+    "custom_components/ha_mcp_tools/const.py",
 )
 
 
@@ -143,6 +149,22 @@ def test_app_directories_still_count_as_code(workflow: str, path: str) -> None:
     assert _classify(workflow, path) == "true", (
         f"{workflow} classifies {path} as docs, but the app trees are baked "
         "into the qcow2 / shipped, so their non-description files are code."
+    )
+
+
+@pytest.mark.parametrize("path", _MUST_RUN + _MUST_SKIP + _ADDON_CODE)
+def test_both_classifiers_agree(path: str) -> None:
+    """The two hand-duplicated copies must reach the same verdict.
+
+    They drifted once already: an arm treating app-directory markdown as docs
+    was added to haos-e2e-tests.yml alone (#1712), so the same file ran the
+    pr.yml matrix and skipped the haos one for months. Nothing compared them.
+    """
+    verdicts = {w: _classify(w, path) for w in _CLASSIFIER_WORKFLOWS}
+    assert len(set(verdicts.values())) == 1, (
+        f"{path} classifies differently per workflow: {verdicts}. The two "
+        "classifiers are duplicated by hand — an arm added to one needs the "
+        "same arm in the other."
     )
 
 
