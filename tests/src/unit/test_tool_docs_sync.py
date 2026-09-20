@@ -149,6 +149,8 @@ class TestToolDocsSync:
             ],
             ".env.example": [f"catalog (~{count} tools)"],
             # Outside extract_tools' ADDON_TOOLS marker span, so hand-typed.
+            # Also pinned by test_about_section_tool_count_synced above; kept
+            # here so this stays one list of every place a count is stated.
             "homeassistant-addon/DOCS.md": [f"catalog (~{count} tools)"],
             "docs/FAQ.md": [f"| {count} comprehensive tools |"],
             "site/src/pages/faq.astro": [f">{count} comprehensive tools<"],

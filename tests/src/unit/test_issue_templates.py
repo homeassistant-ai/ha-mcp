@@ -13,6 +13,7 @@ shape the repo relies on.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -25,15 +26,19 @@ _TEMPLATE_DIR = _REPO_ROOT / ".github" / "ISSUE_TEMPLATE"
 # Every `body` entry type GitHub's issue-form schema accepts.
 _BODY_TYPES = frozenset({"markdown", "input", "textarea", "dropdown", "checkboxes"})
 
-# Where a ``?template=`` URL can legitimately live: the server builds them, the
-# workflows post them, and the docs cite them. (root, glob patterns); a root
-# that is a file is scanned directly.
-_URL_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("src", ("*.py",)),
-    ("docs", ("*.md",)),
-    (".github/workflows", ("*.yml",)),
-    ("README.md", ()),
-)
+# Text file types that can carry a ``?template=`` URL.
+_URL_BEARING_SUFFIXES = frozenset({".py", ".md", ".yml", ".yaml", ".astro"})
+
+
+def _tracked_files() -> list[str]:
+    """Every file git tracks, so the walk cannot go stale as the tree grows."""
+    result = subprocess.run(
+        ["git", "-C", str(_REPO_ROOT), "ls-files"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.splitlines()
 
 
 def _template_paths() -> list[Path]:
@@ -107,20 +112,25 @@ def test_every_template_url_in_source_names_a_real_form() -> None:
     reporter the picker.
 
     Scanning only ``src/`` missed exactly that: three references to a
-    ``bug_report.md`` that has not existed for some time.
+    ``bug_report.md`` that has not existed for some time. An allowlist of roots
+    would have kept being one directory short, so this walks every tracked file
+    instead — a link added under ``site/src/``, in an app directory, or in a
+    root document is covered without editing this test.
     """
     pattern = re.compile(r"issues/new\?template=([\w.-]+)")
     referenced: dict[str, Path] = {}
-    for root, globs in _URL_SOURCES:
-        base = _REPO_ROOT / root
-        candidates = (
-            [base] if base.is_file() else [m for g in globs for m in base.rglob(g)]
-        )
-        for source in candidates:
-            if "_vendor" in source.parts or source.is_relative_to(_REPO_ROOT / "tests"):
-                continue
-            for name in pattern.findall(source.read_text(encoding="utf-8")):
-                referenced.setdefault(name, source)
+    for line in _tracked_files():
+        source = _REPO_ROOT / line
+        if source.suffix not in _URL_BEARING_SUFFIXES:
+            continue
+        # Vendored upstream code and the tests that pin these very URLs are the
+        # two places a form name legitimately appears without being a live link.
+        if "_vendor" in source.parts or source.is_relative_to(_REPO_ROOT / "tests"):
+            continue
+        for name in pattern.findall(
+            source.read_text(encoding="utf-8", errors="ignore")
+        ):
+            referenced.setdefault(name, source)
     assert referenced, "no ?template= URLs found at all — has the pattern moved?"
     for name, source in sorted(referenced.items()):
         assert (_TEMPLATE_DIR / name).is_file(), (
