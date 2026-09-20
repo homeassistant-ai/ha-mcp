@@ -119,7 +119,10 @@ class TestToolDocsSync:
             )
 
     def test_hand_maintained_tool_counts_are_synced(self) -> None:
-        """Every prose tool count outside DOCS.md must match the registry.
+        """Each tool count listed below must match the registry.
+
+        This is a whitelist, not a sweep: it pins the places the repo is known
+        to state a count, and will not notice a new one added somewhere else.
 
         ``scripts/extract_tools.py`` regenerates only DOCS.md and two spans
         of README.md — the ``tools-N-blue`` badge and the ``Complete Tool
