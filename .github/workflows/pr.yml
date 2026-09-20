@@ -158,8 +158,10 @@ jobs:
                 # them when someone opens an issue, and nothing under src/,
                 # custom_components/ or tests/ ever opens one. The only code
                 # coupling is the filename, in the issues/new?template= URL in
-                # src/ha_mcp/tools/tools_bug_report.py — and no test reads the
-                # forms either, so running the suite would not catch a rename.
+                # src/ha_mcp/tools/tools_bug_report.py, and that is pinned by
+                # test_issue_templates.py — a unit test, which this classifier
+                # does not gate — so a rename fails there rather than needing
+                # the suite.
                 # Pinned to *.yml because `*` crosses `/` in a case pattern: a
                 # bare ISSUE_TEMPLATE/* would also skip any future non-form
                 # file dropped in that directory. Legacy markdown templates are

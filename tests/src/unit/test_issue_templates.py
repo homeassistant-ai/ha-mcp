@@ -12,6 +12,7 @@ shape the repo relies on.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +87,30 @@ def test_connection_preflight_never_becomes_a_required_field(path: Path) -> None
             assert not option.get("required", False), (
                 f"{path.name}: pre-flight options must not be required"
             )
+
+
+def test_every_template_url_in_source_names_a_real_form() -> None:
+    """Tie the ``?template=`` filenames in source to the files on disk.
+
+    ``tools_bug_report.py`` builds its submission URLs from hard-coded form
+    filenames. Renaming a form leaves every other test green — the ones above
+    parametrize over a glob, and the code-side test pins the URL string — so
+    the two halves never meet. The e2e classifier now skips the suite for this
+    directory too, so nothing else would catch it either.
+    """
+    pattern = re.compile(r"issues/new\?template=([\w.-]+)")
+    referenced: dict[str, Path] = {}
+    for source in (_REPO_ROOT / "src").rglob("*.py"):
+        if "_vendor" in source.parts:
+            continue
+        for name in pattern.findall(source.read_text(encoding="utf-8")):
+            referenced.setdefault(name, source)
+    assert referenced, "no ?template= URLs found in src/ — has the pattern moved?"
+    for name, source in sorted(referenced.items()):
+        assert (_TEMPLATE_DIR / name).is_file(), (
+            f"{source.relative_to(_REPO_ROOT)} builds an issue URL for "
+            f"{name!r}, which does not exist in .github/ISSUE_TEMPLATE/"
+        )
 
 
 def test_config_contact_links_are_well_formed() -> None:
