@@ -71,7 +71,13 @@ Keep the `name:` line — without it Compose creates `<project>_ha-mcp-data` ins
 
 A volume mount stays writable even with `read_only: true`, so keep it when you harden the container — without it ha-mcp can't write to `~/.ha-mcp` under a read-only root filesystem and falls back to a temporary directory that's wiped on every restart. To store the data elsewhere, mount your own path and set `HA_MCP_CONFIG_DIR` to it. This doesn't apply to the HA app (add-on) or the custom component, which persist to Home Assistant's own storage automatically.
 
-Whatever you mount must be writable by the UID the container actually runs as. A named volume is initialised as UID 999 (the image's `mcpuser`) and needs nothing further; a host bind mount needs `chown 999:999` first; and if you run with `--user` to override the UID, chown the mounted directory to that UID instead — a named volume stays owned by 999 and the overridden user can't write to it. If ha-mcp still can't persist, it says so at startup — look for *"Cannot write ha-mcp data to ... data will NOT persist across restarts"* in `docker logs ha-mcp`. A volume created by an older image can be left owned by root; `docker volume rm ha-mcp-data` and let the current image recreate it.
+Whatever you mount must be writable by the UID the container actually runs as. A named volume is initialised as UID 999 (the image's `mcpuser`) and needs nothing further; a host bind mount needs `chown 999:999` first; and if you run with `--user` to override the UID, chown the mounted directory to that UID instead — a named volume stays owned by 999 and the overridden user can't write to it. If ha-mcp still can't persist, it says so at startup — look for *"Cannot write ha-mcp data to ... data will NOT persist across restarts"* in `docker logs ha-mcp`. A volume created by an older image can be left owned by root. Repair the ownership in place rather than deleting the volume, which would destroy your settings, backups, and OAuth client registrations:
+
+```bash
+docker run --rm -v ha-mcp-data:/data alpine chown -R 999:999 /data
+```
+
+Only if that fails and you accept losing the stored data, `docker volume rm ha-mcp-data` lets the current image recreate it from scratch — back the volume up first.
 
 ---
 
@@ -235,7 +241,7 @@ If your Home Assistant uses HTTPS with a self-signed certificate or custom CA, y
        "home-assistant": {
          "command": "docker",
          "args": [
-           "run", "--rm",
+           "run", "--rm", "-i",
            "-e", "HOMEASSISTANT_URL=https://your-ha:8123",
            "-e", "HOMEASSISTANT_TOKEN=your_token",
            "-e", "SSL_CERT_FILE=/certs/ca-bundle.crt",
@@ -362,7 +368,7 @@ source ~/.zshrc
 %USERPROFILE%\.local\bin\uvx.exe --version
 ```
 
-**Claude Desktop note:** Claude Desktop does **not** inherit your shell's PATH. If `uvx` is not found even after restarting, use the absolute path in your config instead of `uvx`. Find it with `which uvx` in your terminal, then set `"command": "/Users/<you>/.local/bin/uvx"` (macOS/Linux) or the equivalent Windows path.
+**Claude Desktop note:** Claude Desktop does **not** inherit your shell's PATH. If `uvx` is not found even after restarting, use the absolute path in your config instead of `uvx`. Find it with `which uvx` (macOS/Linux) or `where uvx` / `Get-Command uvx` (Windows PowerShell), then set `"command": "/Users/<you>/.local/bin/uvx"` or the equivalent Windows path.
 
 ### MCP server not showing in Claude Desktop
 
@@ -592,10 +598,12 @@ This starts ha-mcp in stdio mode connected to the public demo Home Assistant ins
 To run the ha-mcp HTTP server detached from the terminal so it survives logout:
 
 ```bash
+HOMEASSISTANT_URL=http://homeassistant.local:8123 \
+HOMEASSISTANT_TOKEN=your_long_lived_token \
 nohup uvx --from ha-mcp@latest ha-mcp-web > /dev/null 2>&1 &
 ```
 
-`nohup` detaches the process from the terminal and redirects output to `/dev/null`. The trailing `&` sends it to the background. For more robust setups (auto-restart on crash, start on boot), use **systemd** or the **Home Assistant app** instead.
+Both variables are required: without them ha-mcp-web exits immediately, and because this command sends output to `/dev/null` the error explaining why is discarded with it. Drop them only if they are already exported in that shell. `nohup` detaches the process from the terminal and redirects output to `/dev/null`. The trailing `&` sends it to the background. For more robust setups (auto-restart on crash, start on boot), use **systemd** or the **Home Assistant app** instead.
 
 ### Docker: changing the port requires updating both places {#docker-port}
 

@@ -150,7 +150,9 @@ volumes:
     name: ha-mcp-data</code></pre>
           <p class="text-slate-400 text-sm mt-3">Keep the <code class="bg-slate-800 px-1 rounded">name:</code> line — without it Compose creates <code class="bg-slate-800 px-1 rounded">&lt;project&gt;_ha-mcp-data</code> instead, which is not the volume the <code class="bg-slate-800 px-1 rounded">docker run</code> command above or the <code class="bg-slate-800 px-1 rounded">docker volume rm</code> below refer to.</p>
           <p class="text-slate-400 text-sm mt-3">A volume mount stays writable even with <code class="bg-slate-800 px-1 rounded">read_only: true</code>, so keep it when you harden the container — without it ha-mcp can't write to <code class="bg-slate-800 px-1 rounded">~/.ha-mcp</code> under a read-only root filesystem and falls back to a temporary directory that's wiped on every restart. To store the data elsewhere, mount your own path and set <code class="bg-slate-800 px-1 rounded">HA_MCP_CONFIG_DIR</code> to it. This doesn't apply to the HA app (add-on) or the custom component, which persist to Home Assistant's own storage automatically.</p>
-          <p class="text-slate-400 text-sm mt-3">Whatever you mount must be writable by the UID the container actually runs as. A named volume is initialised as UID 999 (the image's <code class="bg-slate-800 px-1 rounded">mcpuser</code>) and needs nothing further; a host bind mount needs <code class="bg-slate-800 px-1 rounded">chown 999:999</code> first; and if you run with <code class="bg-slate-800 px-1 rounded">--user</code> to override the UID, chown the mounted directory to that UID instead — a named volume stays owned by 999 and the overridden user can't write to it. If ha-mcp still can't persist, it says so at startup — look for <em>"Cannot write ha-mcp data to ... data will NOT persist across restarts"</em> in <code class="bg-slate-800 px-1 rounded">docker logs ha-mcp</code>. A volume created by an older image can be left owned by root; <code class="bg-slate-800 px-1 rounded">docker volume rm ha-mcp-data</code> and let the current image recreate it.</p>
+          <p class="text-slate-400 text-sm mt-3">Whatever you mount must be writable by the UID the container actually runs as. A named volume is initialised as UID 999 (the image's <code class="bg-slate-800 px-1 rounded">mcpuser</code>) and needs nothing further; a host bind mount needs <code class="bg-slate-800 px-1 rounded">chown 999:999</code> first; and if you run with <code class="bg-slate-800 px-1 rounded">--user</code> to override the UID, chown the mounted directory to that UID instead — a named volume stays owned by 999 and the overridden user can't write to it. If ha-mcp still can't persist, it says so at startup — look for <em>"Cannot write ha-mcp data to ... data will NOT persist across restarts"</em> in <code class="bg-slate-800 px-1 rounded">docker logs ha-mcp</code>. A volume created by an older image can be left owned by root. Repair the ownership in place rather than deleting the volume, which would destroy your settings, backups, and OAuth client registrations:</p>
+          <pre class="code-block mt-3"><code>docker run --rm -v ha-mcp-data:/data alpine chown -R 999:999 /data</code></pre>
+          <p class="text-slate-400 text-sm mt-3">Only if that fails and you accept losing the stored data, <code class="bg-slate-800 px-1 rounded">docker volume rm ha-mcp-data</code> lets the current image recreate it from scratch &mdash; back the volume up first.</p>
         </div>
       </div>
     </section>
@@ -250,7 +252,7 @@ uvx --from=ha-mcp@latest ha-mcp-oauth</code></pre>
     "home-assistant": {
       "command": "docker",
       "args": [
-        "run", "--rm",
+        "run", "--rm", "-i",
         "-e", "HOMEASSISTANT_URL=https://your-ha:8123",
         "-e", "HOMEASSISTANT_TOKEN=your_token",
         "-e", "SSL_CERT_FILE=/certs/ca-bundle.crt",
@@ -356,7 +358,7 @@ source ~/.zshrc
             </div>
           </div>
           <div class="mt-4 p-4 bg-slate-900/50 rounded-lg border border-slate-700/50">
-            <p class="text-slate-300 text-sm"><strong class="text-white">Claude Desktop note:</strong> Claude Desktop does <strong>not</strong> inherit your shell's PATH. If <code class="bg-slate-800 px-1 rounded">uvx</code> is not found even after restarting, use the absolute path in your config instead of <code class="bg-slate-800 px-1 rounded">uvx</code>. Find it with <code class="bg-slate-800 px-1 rounded">which uvx</code> in your terminal, then set <code class="bg-slate-800 px-1 rounded">"command": "/Users/&lt;you&gt;/.local/bin/uvx"</code> (macOS/Linux) or the equivalent Windows path.</p>
+            <p class="text-slate-300 text-sm"><strong class="text-white">Claude Desktop note:</strong> Claude Desktop does <strong>not</strong> inherit your shell's PATH. If <code class="bg-slate-800 px-1 rounded">uvx</code> is not found even after restarting, use the absolute path in your config instead of <code class="bg-slate-800 px-1 rounded">uvx</code>. Find it with <code class="bg-slate-800 px-1 rounded">which uvx</code> (macOS/Linux) or <code class="bg-slate-800 px-1 rounded">where uvx</code> / <code class="bg-slate-800 px-1 rounded">Get-Command uvx</code> (Windows PowerShell), then set <code class="bg-slate-800 px-1 rounded">"command": "/Users/&lt;you&gt;/.local/bin/uvx"</code> (macOS/Linux) or the equivalent Windows path.</p>
           </div>
         </div>
 
@@ -619,7 +621,10 @@ uvx --refresh ha-mcp@latest</code></pre>
         <div class="faq-item" id="uvx-background">
           <h3 class="text-lg font-medium text-white mb-2">Keep ha-mcp-web running in the background</h3>
           <p class="text-slate-300 mb-3">To run the ha-mcp HTTP server detached from the terminal so it survives logout:</p>
-          <pre class="code-block"><code>nohup uvx --from ha-mcp@latest ha-mcp-web &gt; /dev/null 2&gt;&amp;1 &amp;</code></pre>
+          <pre class="code-block"><code>HOMEASSISTANT_URL=http://homeassistant.local:8123 \
+HOMEASSISTANT_TOKEN=your_long_lived_token \
+nohup uvx --from ha-mcp@latest ha-mcp-web &gt; /dev/null 2&gt;&amp;1 &amp;</code></pre>
+          <p class="text-slate-300 text-sm mt-3">Both variables are required: without them ha-mcp-web exits immediately, and because this command sends output to <code class="bg-slate-800 px-1 rounded">/dev/null</code> the error explaining why is discarded with it. Drop them only if they are already exported in that shell.</p>
           <p class="text-slate-400 text-sm mt-3"><code class="bg-slate-800 px-1 rounded">nohup</code> detaches the process from the terminal and redirects output to <code class="bg-slate-800 px-1 rounded">/dev/null</code>. The trailing <code class="bg-slate-800 px-1 rounded">&amp;</code> sends it to the background. For more robust setups (auto-restart on crash, start on boot), use <strong>systemd</strong> or the <strong>Home Assistant app</strong> instead.</p>
         </div>
 
