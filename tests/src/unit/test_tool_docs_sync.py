@@ -123,10 +123,10 @@ class TestToolDocsSync:
         them independently stale at once (92+, 95+, 84, 80+, 70+) — this pins
         them so the next tool addition fails here instead of drifting again.
 
-        Deliberate floor claims ("80+ tools" in the app store description) are
-        out of scope here: they stay true as the catalog grows, which is the
-        point of writing them that way, so pinning them to an exact figure
-        would defeat it.
+        A floor claim like "80+ tools" in the app store description is not a
+        count and is not asserted here: it is written to stay true as the
+        catalog grows, so pinning it to an exact figure would defeat the reason
+        it is phrased that way. Every place that does state a number is below.
         """
         tools = json.loads(
             (REPO_ROOT / "site" / "src" / "data" / "tools.json").read_text(
