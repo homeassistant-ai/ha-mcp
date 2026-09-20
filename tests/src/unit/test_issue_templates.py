@@ -25,22 +25,28 @@ _TEMPLATE_DIR = _REPO_ROOT / ".github" / "ISSUE_TEMPLATE"
 # Every `body` entry type GitHub's issue-form schema accepts.
 _BODY_TYPES = frozenset({"markdown", "input", "textarea", "dropdown", "checkboxes"})
 
+# Where a ``?template=`` URL can legitimately live: the server builds them, the
+# workflows post them, and the docs cite them. (root, glob patterns); a root
+# that is a file is scanned directly.
+_URL_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("src", ("*.py",)),
+    ("docs", ("*.md",)),
+    (".github/workflows", ("*.yml",)),
+    ("README.md", ()),
+)
+
 
 def _template_paths() -> list[Path]:
     return sorted(p for p in _TEMPLATE_DIR.glob("*.yml") if p.name != "config.yml")
 
 
-def _template_ids() -> list[str]:
-    return [p.name for p in _template_paths()]
-
-
 def test_every_template_file_parses() -> None:
-    """A YAML error anywhere in the directory costs the whole picker entry."""
+    """A YAML error drops that form from the picker, silently."""
     for path in sorted(_TEMPLATE_DIR.glob("*.yml")):
         yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize("path", _template_paths(), ids=_template_ids())
+@pytest.mark.parametrize("path", _template_paths(), ids=lambda p: p.name)
 def test_form_carries_the_required_top_level_keys(path: Path) -> None:
     """GitHub requires name, description and body on an issue form."""
     data: Any = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -52,7 +58,7 @@ def test_form_carries_the_required_top_level_keys(path: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("path", _template_paths(), ids=_template_ids())
+@pytest.mark.parametrize("path", _template_paths(), ids=lambda p: p.name)
 def test_every_body_entry_declares_a_valid_type(path: Path) -> None:
     """An unrecognised `type` invalidates the form silently."""
     data: Any = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -65,7 +71,7 @@ def test_every_body_entry_declares_a_valid_type(path: Path) -> None:
         )
 
 
-@pytest.mark.parametrize("path", _template_paths(), ids=_template_ids())
+@pytest.mark.parametrize("path", _template_paths(), ids=lambda p: p.name)
 def test_connection_preflight_never_becomes_a_required_field(path: Path) -> None:
     """The pre-flight checklist is guidance, not a gate.
 
@@ -90,26 +96,63 @@ def test_connection_preflight_never_becomes_a_required_field(path: Path) -> None
 
 
 def test_every_template_url_in_source_names_a_real_form() -> None:
-    """Tie the ``?template=`` filenames in source to the files on disk.
+    """Tie every ``?template=`` filename in the repo to a file on disk.
 
-    ``tools_bug_report.py`` builds its submission URLs from hard-coded form
-    filenames. Renaming a form leaves every other test green — the ones above
-    parametrize over a glob, and the code-side test pins the URL string — so
-    the two halves never meet. The e2e classifier now skips the suite for this
-    directory too, so nothing else would catch it either.
+    Form filenames are hard-coded in several places — ``tools_bug_report.py``
+    builds its submission URLs from them, and ``notify-dev-channel.yml`` posts
+    one into dev-channel issues automatically. Renaming or retiring a form
+    leaves every other test green: the ones above parametrize over a glob, and
+    the code-side test pins the URL string, so the two halves never meet.
+    GitHub's failure is silent — an unknown ``?template=`` just hands the
+    reporter the picker.
+
+    Scanning only ``src/`` missed exactly that: three references to a
+    ``bug_report.md`` that has not existed for some time.
     """
     pattern = re.compile(r"issues/new\?template=([\w.-]+)")
     referenced: dict[str, Path] = {}
-    for source in (_REPO_ROOT / "src").rglob("*.py"):
-        if "_vendor" in source.parts:
-            continue
-        for name in pattern.findall(source.read_text(encoding="utf-8")):
-            referenced.setdefault(name, source)
-    assert referenced, "no ?template= URLs found in src/ — has the pattern moved?"
+    for root, globs in _URL_SOURCES:
+        base = _REPO_ROOT / root
+        candidates = (
+            [base] if base.is_file() else [m for g in globs for m in base.rglob(g)]
+        )
+        for source in candidates:
+            if "_vendor" in source.parts or source.is_relative_to(_REPO_ROOT / "tests"):
+                continue
+            for name in pattern.findall(source.read_text(encoding="utf-8")):
+                referenced.setdefault(name, source)
+    assert referenced, "no ?template= URLs found at all — has the pattern moved?"
     for name, source in sorted(referenced.items()):
         assert (_TEMPLATE_DIR / name).is_file(), (
             f"{source.relative_to(_REPO_ROOT)} builds an issue URL for "
             f"{name!r}, which does not exist in .github/ISSUE_TEMPLATE/"
+        )
+
+
+def test_every_faq_link_targets_a_real_anchor() -> None:
+    """Tie the intake forms' deep links to an id on the site FAQ page.
+
+    The forms point reporters at one FAQ section, and that link is the reason
+    this intake change exists. Nothing asserted it: rename the section and all
+    three links land on the top of the FAQ with no error anywhere. Both ends of
+    the coupling now skip the e2e lanes — ``.github/ISSUE_TEMPLATE/*.yml`` and
+    ``site/*`` — so a site-only rename would break them with every check green.
+    """
+    faq = (_REPO_ROOT / "site" / "src" / "pages" / "faq.astro").read_text(
+        encoding="utf-8"
+    )
+    ids = set(re.findall(r'id="([\w-]+)"', faq))
+    fragments: dict[str, Path] = {}
+    for path in sorted(_TEMPLATE_DIR.glob("*.yml")):
+        for fragment in re.findall(
+            r"/faq/?#([\w-]+)", path.read_text(encoding="utf-8")
+        ):
+            fragments.setdefault(fragment, path)
+    assert fragments, "no /faq#... links found in the issue forms — regex stale?"
+    for fragment, path in sorted(fragments.items()):
+        assert fragment in ids, (
+            f"{path.name} links to /faq/#{fragment}, which is not an id on "
+            "site/src/pages/faq.astro"
         )
 
 

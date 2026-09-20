@@ -21,6 +21,13 @@ REPO_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import extract_tools  # noqa: E402
 
+TOOLS_JSON = REPO_ROOT / "site" / "src" / "data" / "tools.json"
+
+
+def _tools() -> list[dict]:
+    """The generated tool catalog every count in the repo is measured against."""
+    return json.loads(TOOLS_JSON.read_text(encoding="utf-8"))
+
 
 class TestToolDocsSync:
     """Tool source code must follow documentation conventions."""
@@ -63,7 +70,7 @@ class TestToolDocsSync:
     def test_docs_section_contains_all_tools(self) -> None:
         """Auto-generated DOCS.md section must list all tools from tools.json."""
 
-        tools_json = REPO_ROOT / "site" / "src" / "data" / "tools.json"
+        tools_json = TOOLS_JSON
         docs_path = REPO_ROOT / "homeassistant-addon" / "DOCS.md"
 
         tools = json.loads(tools_json.read_text(encoding="utf-8"))
@@ -98,11 +105,7 @@ class TestToolDocsSync:
 
     def test_about_section_tool_count_synced(self) -> None:
         """Tool count in About section must match the actual tool registry."""
-        tools = json.loads(
-            (REPO_ROOT / "site" / "src" / "data" / "tools.json").read_text(
-                encoding="utf-8"
-            )
-        )
+        tools = _tools()
         docs = (REPO_ROOT / "homeassistant-addon" / "DOCS.md").read_text(
             encoding="utf-8"
         )
@@ -118,21 +121,20 @@ class TestToolDocsSync:
     def test_hand_maintained_tool_counts_are_synced(self) -> None:
         """Every prose tool count outside DOCS.md must match the registry.
 
-        ``scripts/extract_tools.py`` only rewrites DOCS.md and README.md's
-        generated spans, so these counts are hand-typed. PR #2500 found five of
-        them independently stale at once (92+, 95+, 84, 80+, 70+) — this pins
-        them so the next tool addition fails here instead of drifting again.
+        ``scripts/extract_tools.py`` regenerates only DOCS.md and two spans
+        of README.md — the ``tools-N-blue`` badge and the ``Complete Tool
+        List`` summary. Everything else below is typed by hand, and it had
+        drifted in five places at once when this test was written. Asserting
+        the two regenerated needles alongside the rest is deliberate: it keeps
+        one list of every place the repo states a tool count, so a reader does
+        not have to know which are script-maintained.
 
         A floor claim like "80+ tools" in the app store description is not a
         count and is not asserted here: it is written to stay true as the
         catalog grows, so pinning it to an exact figure would defeat the reason
         it is phrased that way. Every place that does state a number is below.
         """
-        tools = json.loads(
-            (REPO_ROOT / "site" / "src" / "data" / "tools.json").read_text(
-                encoding="utf-8"
-            )
-        )
+        tools = _tools()
         count = len(tools)
         expected = {
             "README.md": [
@@ -143,6 +145,8 @@ class TestToolDocsSync:
                 f"instead of {count}.",
             ],
             ".env.example": [f"catalog (~{count} tools)"],
+            # Outside extract_tools' ADDON_TOOLS marker span, so hand-typed.
+            "homeassistant-addon/DOCS.md": [f"catalog (~{count} tools)"],
             "docs/FAQ.md": [f"| {count} comprehensive tools |"],
             "site/src/pages/faq.astro": [f">{count} comprehensive tools<"],
             "site/src/pages/index.astro": [f"{count} tools across 6 categories"],

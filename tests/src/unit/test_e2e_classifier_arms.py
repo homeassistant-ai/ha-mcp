@@ -26,6 +26,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+from functools import cache
 from pathlib import Path
 
 import pytest
@@ -34,8 +35,10 @@ import yaml
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
 
-# Workflows carrying a copy of the classifier. Both are checked independently:
-# they are hand-duplicated, so a fix applied to one can miss the other.
+# Workflows carrying a copy of the classifier. Every corpus below is asserted
+# against BOTH: they are hand-duplicated, so a fix applied to one can miss the
+# other — #1712 added the app-markdown arm to haos-e2e-tests.yml alone, and the
+# same file ran the pr.yml matrix while skipping the haos one for months.
 _CLASSIFIER_WORKFLOWS = ("pr.yml", "haos-e2e-tests.yml")
 
 # Paths that must NEVER skip the suite. The classifier is fail-closed by
@@ -48,7 +51,6 @@ _MUST_RUN = (
     ".github/workflows/pr.yml",
     ".github/dependabot.yml",
     ".coderabbit.yaml",
-    "custom_components/ha_mcp_tools/const.py",
     # `*` crosses `/`, so the ISSUE_TEMPLATE arm must be pinned to the form
     # extension or a non-form file in that directory would skip the suite.
     ".github/ISSUE_TEMPLATE/nested/deep.py",
@@ -75,8 +77,8 @@ _MUST_SKIP = (
     "custom_components/ha_mcp_tools/README.md",
 )
 
-# Paths inside the app directories that are NOT store descriptions: baked or
-# shipped, so they still count as code on both copies of the classifier.
+# Non-markdown files in the app / bake-input trees. They are baked into the
+# qcow2 or shipped, so they still count as code on both copies.
 _ADDON_CODE = (
     "homeassistant-addon/config.yaml",
     "homeassistant-addon-dev/Dockerfile",
@@ -85,34 +87,42 @@ _ADDON_CODE = (
 )
 
 
-def _classifier_script(workflow: str) -> str:
-    """Return the `Classify changed files` step's shell script."""
+@cache
+def _case_arms(workflow: str) -> str:
+    """The classifier step's `case ... esac` block, with its `$f` loop variable.
+
+    Cached: this is a pure file read, and the corpora below would otherwise
+    reparse two workflows of a thousand-plus lines once per path.
+    """
     data = yaml.safe_load((_WORKFLOW_DIR / workflow).read_text(encoding="utf-8"))
     for job in data["jobs"].values():
         for step in job.get("steps") or ():
             if step.get("id") == "filter" and "run" in step:
-                return str(step["run"])
+                match = re.search(
+                    r"^\s*case \"\$f\" in$.*?^\s*esac$", str(step["run"]), re.M | re.S
+                )
+                assert match, f'{workflow}: no `case "$f" in` block in the classifier'
+                return match.group(0)
     raise AssertionError(f"{workflow}: no classifier step with id 'filter'")
-
-
-def _case_block(script: str) -> str:
-    """Extract just the `case ... esac` block, with its `$f` loop variable."""
-    match = re.search(r"^\s*case \"\$f\" in$.*?^\s*esac$", script, re.M | re.S)
-    assert match, 'classifier no longer contains a `case "$f" in` block'
-    return match.group(0)
 
 
 def _classify(workflow: str, path: str) -> str:
     """Run the workflow's own `case` arms over one path; return run= verdict.
 
-    The arms are replayed verbatim under the real shell rather than
+    The arms themselves are replayed under the real shell rather than
     reimplemented, so glob semantics (notably `*` crossing `/`) come from the
-    shell that runs them in CI, not from this test's idea of them.
+    shell that runs them in CI, not from this test's idea of them. The
+    arms run inside a one-iteration loop so their `break` and `continue` are
+    legal exactly as in production; each path is classified alone, so
+    short-circuiting across a multi-path changeset is not covered.
     """
     bash = shutil.which("bash")
     if bash is None:  # pragma: no cover - CI images all ship bash
         pytest.skip("bash unavailable")
-    program = f'run=false\nf="$1"\n{_case_block(_classifier_script(workflow))}\nprintf %s "$run"\n'
+    program = (
+        f'run=false\nfor f in "$1"; do\n{_case_arms(workflow)}\ndone\n'
+        'printf %s "$run"\n'
+    )
     result = subprocess.run(
         [bash, "-c", program, "bash", path],
         capture_output=True,
@@ -145,26 +155,10 @@ def test_documentation_paths_skip_the_suite(workflow: str, path: str) -> None:
 @pytest.mark.parametrize("workflow", _CLASSIFIER_WORKFLOWS)
 @pytest.mark.parametrize("path", _ADDON_CODE)
 def test_app_directories_still_count_as_code(workflow: str, path: str) -> None:
-    """Only DOCS.md skips; the rest of the app trees are baked or shipped."""
+    """Markdown in those trees skips; everything else there is baked or shipped."""
     assert _classify(workflow, path) == "true", (
         f"{workflow} classifies {path} as docs, but the app trees are baked "
-        "into the qcow2 / shipped, so their non-description files are code."
-    )
-
-
-@pytest.mark.parametrize("path", _MUST_RUN + _MUST_SKIP + _ADDON_CODE)
-def test_both_classifiers_agree(path: str) -> None:
-    """The two hand-duplicated copies must reach the same verdict.
-
-    They drifted once already: an arm treating app-directory markdown as docs
-    was added to haos-e2e-tests.yml alone (#1712), so the same file ran the
-    pr.yml matrix and skipped the haos one for months. Nothing compared them.
-    """
-    verdicts = {w: _classify(w, path) for w in _CLASSIFIER_WORKFLOWS}
-    assert len(set(verdicts.values())) == 1, (
-        f"{path} classifies differently per workflow: {verdicts}. The two "
-        "classifiers are duplicated by hand — an arm added to one needs the "
-        "same arm in the other."
+        "into the qcow2 / shipped, so their non-markdown files are code."
     )
 
 
@@ -176,7 +170,7 @@ def test_issue_template_arm_is_pinned_to_the_form_extension(workflow: str) -> No
     catches a bare `ISSUE_TEMPLATE/*` via the nested-path corpus entries, but
     this states the requirement where the next editor of the arm will read it.
     """
-    block = _case_block(_classifier_script(workflow))
+    block = _case_arms(workflow)
     assert ".github/ISSUE_TEMPLATE/*.yml" in block, (
         f"{workflow}: the issue-form arm must be pinned to *.yml — `*` crosses "
         "`/` in a case pattern, so ISSUE_TEMPLATE/* would also skip a future "
