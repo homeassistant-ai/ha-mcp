@@ -12,8 +12,8 @@ shape the repo relies on.
 
 from __future__ import annotations
 
+import os
 import re
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -29,16 +29,45 @@ _BODY_TYPES = frozenset({"markdown", "input", "textarea", "dropdown", "checkboxe
 # Text file types that can carry a ``?template=`` URL.
 _URL_BEARING_SUFFIXES = frozenset({".py", ".md", ".yml", ".yaml", ".astro"})
 
+# Directories the walk skips: build output and dependency trees, plus the two
+# places a form name legitimately appears without being a live link — vendored
+# upstream code, and the tests that pin these very URLs.
+_PRUNED_DIRS = frozenset(
+    {
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "_vendor",
+        "build",
+        "dist",
+        "htmlcov",
+        "local",
+        "node_modules",
+        "site-packages",
+        "tests",
+        "venv",
+        "worktree",
+    }
+)
 
-def _tracked_files() -> list[str]:
-    """Every file git tracks, so the walk cannot go stale as the tree grows."""
-    result = subprocess.run(
-        ["git", "-C", str(_REPO_ROOT), "ls-files"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return result.stdout.splitlines()
+
+def _url_bearing_files() -> list[Path]:
+    """Every file in the tree that could carry a ``?template=`` URL.
+
+    Walks the filesystem rather than asking git: the CI runner's checkout is
+    owned by a different user than the test process, so ``git ls-files`` exits
+    128 there on a dubious-ownership refusal.
+    """
+    found: list[Path] = []
+    for directory, subdirs, names in os.walk(_REPO_ROOT):
+        subdirs[:] = [d for d in subdirs if d not in _PRUNED_DIRS]
+        for name in names:
+            path = Path(directory) / name
+            if path.suffix in _URL_BEARING_SUFFIXES:
+                found.append(path)
+    return found
 
 
 def _template_paths() -> list[Path]:
@@ -113,20 +142,13 @@ def test_every_template_url_in_source_names_a_real_form() -> None:
 
     Scanning only ``src/`` missed exactly that: three references to a
     ``bug_report.md`` that has not existed for some time. An allowlist of roots
-    would have kept being one directory short, so this walks every tracked file
+    would have kept being one directory short, so this walks the tree
     instead — a link added under ``site/src/``, in an app directory, or in a
     root document is covered without editing this test.
     """
     pattern = re.compile(r"issues/new\?template=([\w.-]+)")
     referenced: dict[str, Path] = {}
-    for line in _tracked_files():
-        source = _REPO_ROOT / line
-        if source.suffix not in _URL_BEARING_SUFFIXES:
-            continue
-        # Vendored upstream code and the tests that pin these very URLs are the
-        # two places a form name legitimately appears without being a live link.
-        if "_vendor" in source.parts or source.is_relative_to(_REPO_ROOT / "tests"):
-            continue
+    for source in _url_bearing_files():
         for name in pattern.findall(
             source.read_text(encoding="utf-8", errors="ignore")
         ):
