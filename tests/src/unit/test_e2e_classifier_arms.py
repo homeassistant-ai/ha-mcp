@@ -64,6 +64,18 @@ _MUST_SKIP = (
     ".github/ISSUE_TEMPLATE/config.yml",
     ".github/ISSUE_TEMPLATE/runtime_bug.yml",
     ".github/ISSUE_TEMPLATE/startup_bug.yml",
+    # The app store descriptions. Their arm has to sit ahead of the
+    # addon-dirs arm, which would otherwise claim them, so this pins the
+    # ordering as much as the patterns.
+    "homeassistant-addon/DOCS.md",
+    "homeassistant-addon-dev/DOCS.md",
+)
+
+# Paths inside the app directories that are NOT store descriptions: baked or
+# shipped, so they still count as code on both copies of the classifier.
+_ADDON_CODE = (
+    "homeassistant-addon/config.yaml",
+    "homeassistant-addon-dev/Dockerfile",
 )
 
 
@@ -121,6 +133,16 @@ def test_documentation_paths_skip_the_suite(workflow: str, path: str) -> None:
     assert _classify(workflow, path) == "false", (
         f"{workflow} classifies {path} as code, so a documentation-only change "
         "runs the full e2e suite for nothing."
+    )
+
+
+@pytest.mark.parametrize("workflow", _CLASSIFIER_WORKFLOWS)
+@pytest.mark.parametrize("path", _ADDON_CODE)
+def test_app_directories_still_count_as_code(workflow: str, path: str) -> None:
+    """Only DOCS.md skips; the rest of the app trees are baked or shipped."""
+    assert _classify(workflow, path) == "true", (
+        f"{workflow} classifies {path} as docs, but the app trees are baked "
+        "into the qcow2 / shipped, so their non-description files are code."
     )
 
 

@@ -136,8 +136,15 @@ jobs:
             while IFS= read -r f; do
               [ -z "$f" ] && continue
               case "$f" in
+                # The app store descriptions are read by Home Assistant's app
+                # store, never by the suite, so they skip like any other docs.
+                # Must precede the addon-dirs arm below, which would otherwise
+                # claim them: case arms are evaluated in order.
+                homeassistant-addon/DOCS.md|homeassistant-addon-dev/DOCS.md)
+                  continue ;;
                 # Bake inputs / addon dirs are baked into the qcow2 / shipped —
-                # their docs change what the suite tests, so they count as code.
+                # their other docs change what the suite tests, so they count
+                # as code.
                 homeassistant-addon/*|homeassistant-addon-dev/*|homeassistant-addon-webhook-proxy/*|custom_components/ha_mcp_tools/*|tests/haos_image_build/*|tests/initial_test_state/*)
                   run=true; break ;;
                 # Pure docs / website do not, on their own, warrant the suite.
