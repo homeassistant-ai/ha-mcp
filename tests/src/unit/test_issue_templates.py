@@ -31,7 +31,10 @@ _URL_BEARING_SUFFIXES = frozenset({".py", ".md", ".yml", ".yaml", ".astro"})
 
 # Directories the walk skips: build output and dependency trees, plus the two
 # places a form name legitimately appears without being a live link — vendored
-# upstream code, and the tests that pin these very URLs.
+# upstream code, and the tests that pin these very URLs. The vendored names
+# track pyproject.toml's ruff ``extend-exclude``; ``skills-vendor`` is a git
+# submodule, so it is empty in a checkout that did not init submodules and a
+# walk only meets its upstream's own issue templates on a full checkout.
 _PRUNED_DIRS = frozenset(
     {
         ".git",
@@ -46,6 +49,7 @@ _PRUNED_DIRS = frozenset(
         "local",
         "node_modules",
         "site-packages",
+        "skills-vendor",
         "tests",
         "venv",
         "worktree",
