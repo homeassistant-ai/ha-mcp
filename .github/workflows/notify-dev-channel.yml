@@ -96,7 +96,7 @@ jobs:
 
           ---
 
-          **Found an issue?** Please [open a new bug report](https://github.com/homeassistant-ai/ha-mcp/issues/new?template=bug_report.md) and mention this PR for context.
+          **Found an issue?** Please [open a new bug report](https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.yml) and mention this PR for context.
           EOF
           )"
 
@@ -142,7 +142,7 @@ jobs:
 
           **After testing:**
           - ✅ **If it's fixed:** Great! Feel free to comment here to confirm
-          - ❌ **If still broken:** [Open a new issue](https://github.com/homeassistant-ai/ha-mcp/issues/new?template=bug_report.md) and reference #${ISSUE_NUM}
+          - ❌ **If still broken:** [Open a new issue](https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.yml) and reference #${ISSUE_NUM}
             - Closed issues can't be reopened by reporters
             - A new issue helps us track the problem properly
           EOF

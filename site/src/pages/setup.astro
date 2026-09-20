@@ -2267,7 +2267,7 @@ ingress:
             <div class="mt-2 text-slate-400"><strong>Custom headers &amp; secret interpolation:</strong> Use <code class="bg-slate-800 px-1 rounded">{env:VAR}</code> in header values — OpenCode reads the env var at runtime without storing it in the file. Example: <code class="bg-slate-800 px-1 rounded">"Authorization": "Bearer {env:HA_TOKEN}"</code>.</div>
             <div class="mt-2 text-slate-400"><strong>Suppressing auto-OAuth:</strong> OpenCode handles OAuth via Dynamic Client Registration automatically on remote endpoints. Add <code class="bg-slate-800 px-1 rounded">"oauth": false</code> to the server entry to opt out.</div>
             <div class="mt-2 text-slate-400"><strong>Tool namespacing:</strong> ha-mcp tools appear as <code class="bg-slate-800 px-1 rounded">home-assistant_*</code> in OpenCode. You can enable or disable the namespace per-agent via OpenCode's per-agent namespace toggles.</div>
-            <div class="mt-2 text-slate-400"><strong>Context size:</strong> ha-mcp adds 92+ tools to the prompt context, which is non-trivial. Consider using a dedicated OpenCode agent for HA-heavy workflows to keep other agents lean.</div>
+            <div class="mt-2 text-slate-400"><strong>Context size:</strong> ha-mcp adds 87 tools to the prompt context, which is non-trivial. Consider using a dedicated OpenCode agent for HA-heavy workflows to keep other agents lean.</div>
           </div>
         </div>`);
       }
@@ -2647,7 +2647,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
           </div>
           <div class="bg-amber-900/20 border border-amber-700/50 rounded-lg p-3 mt-4">
             <p class="text-amber-300 text-sm font-medium">Using a smaller or local LLM (Ollama, etc.)?</p>
-            <p class="text-amber-200/80 text-xs mt-1">If the model can't see the tools or your Home Assistant, it may be getting handed all 80+ tools at once. It's recommended to try the following to see if it helps:</p>
+            <p class="text-amber-200/80 text-xs mt-1">If the model can't see the tools or your Home Assistant, it may be getting handed all 87 tools at once. It's recommended to try the following to see if it helps:</p>
             <ul class="text-amber-200/80 text-xs mt-1 space-y-1 list-disc list-inside">
               <li>Enable tool search (app option <code class="bg-amber-900/30 px-1 rounded">enable_tool_search</code>, or <code class="bg-amber-900/30 px-1 rounded">ENABLE_TOOL_SEARCH=true</code>): the full catalog is deferred behind a search interface so tools load on demand instead of all at once.</li>
               <li>Raise your model's context window above the default (in Ollama, <code class="bg-amber-900/30 px-1 rounded">num_ctx</code>) so the tool definitions and your conversation fit.</li>
@@ -2745,7 +2745,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
         settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">
         <h3 class="instruction-title">After it's running: the settings page</h3>
         <p class="text-slate-300 mb-2">The MCP Server app ships a web settings page where you can enable, disable, and pin MCP tools, toggle feature flags and advanced (beta) settings, manage automatic backups, and review tool-approval requests.</p>
-        <p class="text-slate-400 text-sm">Open it with the <strong>"Open Web UI"</strong> button on the app page (Home Assistant ingress &mdash; no secret needed). For direct or remote access it's at <code class="bg-slate-800 px-1 rounded">http://&lt;home-assistant-ip&gt;:9583/&lt;secret-path&gt;/settings</code> (find the secret path in the app's Configuration tab or <code class="bg-slate-800 px-1 rounded">/data/secret_path.txt</code>). See the <a href="${base}/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
+        <p class="text-slate-400 text-sm">Open it with the <strong>"Open Web UI"</strong> button on the app page (Home Assistant ingress &mdash; no secret needed). For direct access <strong>on your trusted LAN</strong> it's at <code class="bg-slate-800 px-1 rounded">http://&lt;home-assistant-ip&gt;:9583/&lt;secret-path&gt;/settings</code> (find the secret path in the app's Configuration tab or <code class="bg-slate-800 px-1 rounded">/data/secret_path.txt</code>). That URL is plain HTTP and the secret path is the credential, so don't use it across an untrusted network &mdash; reach it remotely through ingress or an HTTPS reverse proxy. See the <a href="${base}/faq#tool-settings-page" class="text-blue-400 hover:underline">FAQ</a>.</p>
       </div>`;
       } else if (isRemote) {
         settingsHint = `<div class="instruction-block border-slate-700/50 bg-slate-800/30">

@@ -34,9 +34,11 @@ env:
 
 jobs:
   # Decide whether the heavy E2E Validation lanes need to run. Default is RUN;
-  # we skip ONLY when every changed file is pure docs/website (top-level *.md,
-  # docs/**, site/**). Add-on + bake-input dirs are baked/shipped, so their docs
-  # DO matter and always count as code. On non-PR events (manual dispatch)
+  # we skip ONLY when every changed file is pure docs/website (*.md, *.mdx,
+  # docs/**, site/**, .github/ISSUE_TEMPLATE/*.yml). `*` crosses `/` in a case
+  # pattern, so *.md matches at any depth, not just the top level.
+  # Add-on + bake-input dirs are baked/shipped, so everything in them except
+  # user-facing markdown counts as code. On non-PR events (manual dispatch)
   # always run. Consumed by e2e-validation's `if:` below — a job-level skip
   # reports Success to a required check (a workflow path-skip would not).
   # PR-time guard for the release-cycle version invariant
@@ -134,12 +136,28 @@ jobs:
             while IFS= read -r f; do
               [ -z "$f" ] && continue
               case "$f" in
-                # Bake inputs / addon dirs are baked into the qcow2 / shipped —
-                # their docs change what the suite tests, so they count as code.
+                # User-facing markdown in the app / component dirs (DOCS.md,
+                # README, CHANGELOG) is not a bake input: the E2E suite never
+                # reads it, so running the suite proves nothing about it. What
+                # coverage exists is ungated anyway — test_tool_docs_sync pins
+                # DOCS.md's generated tool table in the unit-tests job, and the
+                # remaining files have no content assertion at all.
+                # Must precede the app-dirs arm — arms match in order.
+                homeassistant-addon/*.md|homeassistant-addon-dev/*.md|homeassistant-addon-webhook-proxy/*.md|custom_components/ha_mcp_tools/*.md)
+                  continue ;;
+                # Bake inputs / app dirs are baked into the qcow2 / shipped —
+                # their non-doc files change what the suite tests, so they
+                # count as code.
                 homeassistant-addon/*|homeassistant-addon-dev/*|homeassistant-addon-webhook-proxy/*|custom_components/ha_mcp_tools/*|tests/haos_image_build/*|tests/initial_test_state/*)
                   run=true; break ;;
                 # Pure docs / website do not, on their own, warrant the suite.
-                *.md|*.mdx|docs/*|site/*)
+                # GitHub issue forms are docs: only github.com reads them.
+                # The one code coupling is the filename, in the ?template= URL
+                # in tools_bug_report.py, pinned by test_issue_templates.py —
+                # an ungated unit test, so a rename fails there, not here.
+                # Pinned to *.yml so a non-form file in that directory still
+                # runs; legacy markdown templates ride the *.md arm.
+                *.md|*.mdx|docs/*|site/*|.github/ISSUE_TEMPLATE/*.yml)
                   continue ;;
                 # Anything else (code, tests, config, workflows, lockfile, ...) runs.
                 *)

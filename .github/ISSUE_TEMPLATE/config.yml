@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: "🔌 AI client can't connect? Check these three rules first"
+    url: "https://homeassistant-ai.github.io/ha-mcp/faq/#claude-ai-hosted-requirements"
+    about: "Hosted Claude connectors reach you from Anthropic's backend: port 443 only (no :8123), egress range 160.79.104.0/21 must not be blocked, and OAuth discovery, registration and token responses must answer within 10 seconds. Most \"couldn't reach the MCP server\" reports are one of these."
+  - name: "📖 FAQ & Troubleshooting"
+    url: "https://homeassistant-ai.github.io/ha-mcp/faq/"
+    about: "Known setup, connection, and runtime problems with their fixes."
+  - name: "💬 Questions & Discussion"
+    url: "https://github.com/homeassistant-ai/ha-mcp/discussions"
+    about: "Ask a question or float an idea that isn't a bug report."
