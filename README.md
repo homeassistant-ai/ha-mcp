@@ -365,7 +365,7 @@ A `ha_manage_*` tool combines several operations, so it is reachable from more t
 ### When to enable
 
 - **Claude Haiku, OpenAI-compatible local models, Gemini, or any model without native deferred tool support** — large idle-context savings. The same applies to clients that inline all tool schemas regardless of model (e.g. GitHub Copilot CLI, even when running Claude Sonnet/Opus).
-- MCP clients that cap total tool count (some cap at 100) — surfaces a minimal set (~10 tools) instead of 84.
+- MCP clients that cap total tool count (some cap at 100) — surfaces a minimal set (~10 tools) instead of 87.
 - **Cost-sensitive deployments** — fewer idle tokens per turn.
 
 Leave it off in clients with deferred tool loading (claude.ai, Claude Desktop, Claude Code); the full catalog has no idle cost there, direct calls skip the search step, and the client's built-in tool search is the better choice — there is no benefit to running ha-mcp's on top of it. Whether tools are deferred depends on the client and model combination: the same model can behave differently per client — GitHub Copilot CLI running Claude Sonnet/Opus inlines the full catalog and still benefits from tool search here. Some Codex models and ChatGPT include deferred tools too — check your client/model directly to confirm its features so you don't leave this enabled unnecessarily.

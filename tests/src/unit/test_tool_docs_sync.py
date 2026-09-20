@@ -115,6 +115,51 @@ class TestToolDocsSync:
                 "Run 'python scripts/extract_tools.py' to regenerate."
             )
 
+    def test_hand_maintained_tool_counts_are_synced(self) -> None:
+        """Every prose tool count outside DOCS.md must match the registry.
+
+        ``scripts/extract_tools.py`` only rewrites DOCS.md and README.md's
+        generated spans, so these counts are hand-typed. PR #2500 found five of
+        them independently stale at once (92+, 95+, 84, 80+, 70+) — this pins
+        them so the next tool addition fails here instead of drifting again.
+
+        Deliberate floor claims ("80+ tools" in the app store description) are
+        out of scope here: they stay true as the catalog grows, which is the
+        point of writing them that way, so pinning them to an exact figure
+        would defeat it.
+        """
+        tools = json.loads(
+            (REPO_ROOT / "site" / "src" / "data" / "tools.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        count = len(tools)
+        expected = {
+            "README.md": [
+                f"tools-{count}-blue",
+                f'alt="{count} Tools"',
+                f"Complete Tool List ({count} tools)",
+                f"catalog (~{count} tools)",
+                f"instead of {count}.",
+            ],
+            ".env.example": [f"catalog (~{count} tools)"],
+            "docs/FAQ.md": [f"| {count} comprehensive tools |"],
+            "site/src/pages/faq.astro": [f">{count} comprehensive tools<"],
+            "site/src/pages/index.astro": [f"{count} tools across 6 categories"],
+            "site/src/pages/setup.astro": [
+                f"adds {count} tools",
+                f"all {count} tools at once",
+            ],
+            "tests/uat/stories/TODO.md": [f"{count}-tool codebase"],
+        }
+        for relative, needles in expected.items():
+            text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+            for needle in needles:
+                assert needle in text, (
+                    f"{relative}: tool count is stale — expected {needle!r}. "
+                    f"tools.json currently carries {count} tools."
+                )
+
 
 class TestExtractToolsScriptRobustness:
     """Structural guards on scripts/extract_tools.py itself.

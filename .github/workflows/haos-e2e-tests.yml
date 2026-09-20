@@ -125,10 +125,17 @@ jobs:
                 homeassistant-addon/*|homeassistant-addon-dev/*|homeassistant-addon-webhook-proxy/*|custom_components/ha_mcp_tools/*|tests/haos_image_build/*|tests/initial_test_state/*)
                   run=true; break ;;
                 # Pure docs / website do not, on their own, warrant the suite.
-                # GitHub issue forms are documentation too: they are read only
-                # by github.com when someone opens an issue and are never
-                # loaded by the server, the component, or the tests.
-                *.md|*.mdx|docs/*|site/*|.github/ISSUE_TEMPLATE/*)
+                # GitHub issue forms are documentation too: github.com reads
+                # them when someone opens an issue, and nothing under src/,
+                # custom_components/ or tests/ ever opens one. The only code
+                # coupling is the filename, in the issues/new?template= URL in
+                # src/ha_mcp/tools/tools_bug_report.py — and no test reads the
+                # forms either, so running the suite would not catch a rename.
+                # Pinned to *.yml because `*` crosses `/` in a case pattern: a
+                # bare ISSUE_TEMPLATE/* would also skip any future non-form
+                # file dropped in that directory. Legacy markdown templates are
+                # already covered by the *.md arm.
+                *.md|*.mdx|docs/*|site/*|.github/ISSUE_TEMPLATE/*.yml)
                   continue ;;
                 # Anything else (code, tests, config, workflows, lockfile, ...) runs.
                 *)
