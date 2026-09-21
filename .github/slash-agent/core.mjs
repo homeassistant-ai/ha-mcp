@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { prose } from "../issue-intake/intake.mjs";
 
-export const MODELS = { astra: "gpt-6-astra", sol: "gpt-5.6-sol" };
+export const MODELS = {
+  astra: "gpt-6-astra",
+  sol: "gpt-5.6-sol",
+  terra: "gpt-5.6-terra",
+};
 export const REVIEW_BOTS = [
   "coderabbitai[bot]",
   "chatgpt-codex-connector[bot]",
@@ -27,7 +31,9 @@ export const trustedComment = (comment, roles) =>
   trustedReview(principal(comment), roles);
 
 export function command(body) {
-  const match = /^\/(astra|sol)[ \t]+(\S[\s\S]*)$/.exec((body ?? "").trim());
+  const match = /^\/(astra|sol|terra)[ \t]+(\S[\s\S]*)$/.exec(
+    (body ?? "").trim(),
+  );
   if (!match || match[2].length > 12000) return null;
   const text = match[2].trim();
   return {
@@ -89,7 +95,7 @@ export function renderState(state, repository) {
     : "";
   const body =
     `Slash agent: **${state.status}**${link}\n\n${prose(state.summary || "Preparing the requested work.")}\n\n` +
-    `Round ${state.rounds}/${MAX_ROUNDS}. Maintainers can use \`/astra pause\`, \`/astra resume\`, or a new \`/sol <request>\`.\n\n` +
+    `Round ${state.rounds}/${MAX_ROUNDS}. Maintainers can pause, resume, or send a new \`/astra\`, \`/sol\`, or \`/terra\` request.\n\n` +
     `${STATE_MARKER}${encoded} -->`;
   if (body.length > 65000)
     throw Error("Slash checkpoint exceeds GitHub's comment size limit");

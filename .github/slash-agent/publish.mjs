@@ -64,7 +64,7 @@ function assertCurrent(api, plan, app, expectedHead, checkThreads = true) {
     (c) =>
       principal(c)?.type === "User" &&
       trustedComment(c, current.roles) &&
-      /^\/(astra|sol)\s+/.test(c.body ?? "") &&
+      /^\/(astra|sol|terra)\s+/.test(c.body ?? "") &&
       c.updated_at > command.updated_at,
   );
   if (laterControl)
@@ -375,8 +375,15 @@ export function publish(
     ),
   });
   state.checkedHead = fresh.head;
-  state.status = state.pr ? "waiting" : "blocked";
-  if (!state.pr)
+  state.status = state.pr
+    ? "waiting"
+    : result.outcome === "unchanged"
+      ? "complete"
+      : "blocked";
+  if (!state.pr && result.outcome === "unchanged")
+    state.summary +=
+      "\n\nCompleted on the issue without repository changes; no PR was created.";
+  else if (!state.pr)
     state.summary +=
       "\n\nNo code changes were produced, so no PR was created. A maintainer can clarify with a new slash command.";
   save(api, state, app);

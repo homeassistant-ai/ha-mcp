@@ -38,7 +38,7 @@ def test_slash_workflow_keeps_publication_and_auth_outside_generated_code():
     assert agent["with"]["read-only-paths"].split() == ["control", "source/.git"]
     assert agent["with"]["passthrough-env"] == "GH_TOKEN"
     assert agent["with"]["working-directory"] == "source"
-    assert "HA_MCP_APP_PRIVATE_KEY" not in str(code)
+    assert "HA_MCP_AGENT_APP_PRIVATE_KEY" not in str(code)
     cleanup = code["steps"][-1]
     assert "always()" in cleanup["if"]
     assert "codex-update-auth" in cleanup["uses"]
@@ -46,6 +46,10 @@ def test_slash_workflow_keeps_publication_and_auth_outside_generated_code():
         sum(step["timeout-minutes"] for step in code["steps"]) < code["timeout-minutes"]
     )
     publisher = jobs["publish"]
+    publisher_text = str(publisher)
+    assert "HA_MCP_AGENT_APP_ID" in publisher_text
+    assert "HA_MCP_AGENT_APP_PRIVATE_KEY" in publisher_text
+    assert "HA_MCP_APP_PRIVATE_KEY" not in publisher_text
     assert publisher["needs"] == ["admit", "code"]
     assert "cancelled()" in publisher["if"]
     checkout = publisher["steps"][0]

@@ -32,7 +32,10 @@ Return JSON matching the provided schema. Include an accurate title, summary,
 test evidence and a compact memory checkpoint for a later fresh worker. The
 checkpoint should capture decisions, remaining work and relevant commands,
 without credentials or a raw transcript. Set outcome to changed, unchanged, or
-blocked. If blocked, explain exactly what requires maintainer input.
+blocked. On an issue where no repository change is needed, use `unchanged` and
+write the requested public answer in the summary; the controller will publish
+it in the App-owned issue checkpoint without creating a PR. If blocked, explain
+exactly what requires maintainer input.
 
 For each review thread you addressed, return its supplied thread_id, a concise
 evidence-backed response, and whether it can be resolved. Do not resolve a valid

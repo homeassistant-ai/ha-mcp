@@ -1,7 +1,7 @@
 # Maintainer slash coding workflow
 
-An exact `/astra <task>` or `/sol <task>` comment from a repository maintainer
-starts coding work on an issue or a same-repository PR. Actual `maintain` and
+An exact `/astra <task>`, `/sol <task>` or `/terra <task>` comment from a
+repository maintainer starts agent work on an issue or a same-repository PR. Actual `maintain` and
 `admin` roles are checked through GitHub; `write`, `triage`, author association,
 quoted commands and bot comments do not authorize a task. Manual dispatch names
 an existing command comment and verifies both the dispatcher and rerunning actor.
@@ -14,8 +14,12 @@ The command explicitly authorizes this lifecycle through readiness, including
 publication and review replies. A separate ready command is not needed; pause
 remains available before the readiness transition.
 
-The model mapping is fixed: Astra uses `gpt-6-astra`, Sol uses `gpt-5.6-sol`.
-An issue starts `agents/issue-N` from the default branch and creates a draft PR.
+The model mapping is fixed: Astra uses `gpt-6-astra`, Sol uses `gpt-5.6-sol`,
+and Terra uses `gpt-5.6-terra`. An issue starts `agents/issue-N` from the default
+branch and creates a draft PR when the result changes the repository. An
+unchanged result instead completes in the App-owned issue checkpoint, whose
+summary is the public answer, without creating a branch or PR. A blocked result
+uses the same comment to explain the maintainer input it needs.
 A command on an existing same-repository PR works on its current branch. Forks,
 the default/base branch, protected branches and unowned pre-existing agent
 branches are rejected. The controller always appends a commit with one parent
@@ -40,13 +44,14 @@ The default-branch workflow has three jobs:
    creates Git objects through the API, and reconciles the PR and checkpoint.
    It never executes generated source with the App credential.
 
-The App needs Contents write, Pull requests write, Issues write, and Actions,
-Checks and Commit statuses read (Metadata read is implicit). It needs no
-Workflows, Administration or ruleset bypass permission. The intake workflow
-continues requesting its narrower issue-documentation token from the same App.
-Use the existing HA_MCP_APP_ID/HA_MCP_APP_SLUG variables and
-HA_MCP_APP_PRIVATE_KEY/CODEX_AUTH/CODEX_AUTH_PAT secrets. Product and bench retain
-separate Codex OAuth credentials.
+The dedicated `ha-mcp-agent` App needs Contents write, Pull requests write,
+Issues write, and Actions, Checks and Commit statuses read (Metadata read is
+implicit). It needs no Workflows, Administration or ruleset bypass permission.
+Configure the `HA_MCP_AGENT_APP_ID` and `HA_MCP_AGENT_APP_SLUG` variables and
+the `HA_MCP_AGENT_APP_PRIVATE_KEY` secret for this workflow. The intake workflow
+continues using the narrower `ha-mcp` App and its existing `HA_MCP_APP_*`
+configuration. Product and bench retain separate App private keys, Codex OAuth
+credentials and `CODEX_AUTH_PAT` secrets.
 
 The worker may change at most 80 regular files totalling 2 MiB. Publication
 rejects traversal, symlinks/submodules, credential paths, root/scoped `AGENTS.md`
@@ -84,8 +89,9 @@ Pending checks do not consume a coding turn. A new failing head or new authorize
 feedback can trigger another turn. Reporter edits and ordinary contributor text
 remain context but cannot spend a turn through a later CI/status event. A session
 gets at most four automatic coding turns per
-command. A new task or `/astra resume` (or `/sol resume`) resets that budget;
-`/astra pause` or `/sol pause` stops continuation. Revoking maintainer authority
+command. A new task or a matching `/astra resume`, `/sol resume` or `/terra
+resume` resets that budget; the corresponding `pause` command stops
+continuation. Revoking maintainer authority
 also stops admission. Failed workers and exhausted budgets leave an explicit
 blocked checkpoint, requiring a new maintainer command.
 

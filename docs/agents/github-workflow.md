@@ -100,7 +100,7 @@ issue enrichment, labeling, and planning are disabled to avoid competing respons
 The model does not diagnose, propose fixes, classify cause, or create PRs.
 See [issue intake](issue-intake.md) for controls, permissions, tests, and recovery.
 
-Maintainer `/astra` and `/sol` commands start the separate [slash coding workflow](slash-agent.md).
+Maintainer `/astra`, `/sol` and `/terra` commands start the separate [slash agent workflow](slash-agent.md).
 Its durable checkpoint carries work from an issue into a draft PR and through
 review/CI corrections to readiness. It never merges or requests reviewers.
 

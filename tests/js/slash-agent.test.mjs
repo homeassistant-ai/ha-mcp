@@ -292,6 +292,7 @@ const green = (api) => {
 test("only anchored, nonempty slash commands select supported models", () => {
   assert.equal(command("/astra implement this").model, "gpt-6-astra");
   assert.equal(command("/sol fix it\r\nkeep scope").model, "gpt-5.6-sol");
+  assert.equal(command("/terra explain this").model, "gpt-5.6-terra");
   for (const text of [
     "/astra",
     "@astra fix",
@@ -299,6 +300,7 @@ test("only anchored, nonempty slash commands select supported models", () => {
     "```\n/astra fix\n```",
     "/astral fix",
     "/solitude fix",
+    "/terraform fix",
   ])
     assert.equal(command(text), null);
 });
@@ -326,6 +328,21 @@ test("issue command creates one draft PR with append-only commits and durable me
   assert.equal(prepare(api, { number: 10, automatic: true }, APP), null);
   const session = stateFrom(api.comments, APP);
   assert.match(session.summary, /automation enable/);
+});
+
+test("unchanged issue work answers in the checkpoint without creating a PR", () => {
+  const api = new FakeAPI(),
+    work = artifact();
+  work.changes = [];
+  work.result.outcome = "unchanged";
+  work.result.summary = "The existing behavior already covers the request.";
+  const state = publish(api, initial(api), work, APP, { runId: "42" });
+  assert.equal(state.status, "complete");
+  assert.equal(state.pr, null);
+  assert.ok(!api.calls.some((call) => call.path === "pulls"));
+  const checkpoint = api.comments.find((comment) => comment.user === bot);
+  assert.match(checkpoint.body, /Slash agent: \*\*complete\*\*/);
+  assert.match(checkpoint.body, /existing behavior already covers/);
 });
 
 test("readiness waits for all required checks with the expected App, without requesting review", () => {
