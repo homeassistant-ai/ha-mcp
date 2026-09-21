@@ -47,7 +47,7 @@ The default-branch workflow has three jobs:
 The dedicated `ha-mcp-agent` App needs Contents write, Pull requests write,
 Issues write, and Actions, Checks and Commit statuses read (Metadata read is
 implicit). It needs no Workflows, Administration or ruleset bypass permission.
-Configure the `HA_MCP_AGENT_APP_ID` and `HA_MCP_AGENT_APP_SLUG` variables and
+Configure the `HA_MCP_AGENT_CLIENT_ID` and `HA_MCP_AGENT_APP_SLUG` variables and
 the `HA_MCP_AGENT_APP_PRIVATE_KEY` secret for this workflow. The intake workflow
 continues using the narrower `ha-mcp` App and its existing `HA_MCP_APP_*`
 configuration. Product and bench retain separate App private keys, Codex OAuth

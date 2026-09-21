@@ -47,7 +47,8 @@ def test_slash_workflow_keeps_publication_and_auth_outside_generated_code():
     )
     publisher = jobs["publish"]
     publisher_text = str(publisher)
-    assert "HA_MCP_AGENT_APP_ID" in publisher_text
+    assert "HA_MCP_AGENT_CLIENT_ID" in publisher_text
+    assert "HA_MCP_AGENT_APP_ID" not in publisher_text
     assert "HA_MCP_AGENT_APP_PRIVATE_KEY" in publisher_text
     assert "HA_MCP_APP_PRIVATE_KEY" not in publisher_text
     assert publisher["needs"] == ["admit", "code"]
