@@ -328,10 +328,12 @@ def test_read_only_paths_protect_controller_and_git_metadata(tmp_path):
     permissions = config["permissions"]["ci-action"]
     assert permissions["extends"] == ":workspace"
     entries = permissions["filesystem"]
+
     # Native Windows jq receives MSYS-converted --arg paths; the Ubuntu runner
     # keeps POSIX paths. Both designate the same explicitly protected locations.
     def expected(path):
         return path.as_posix() if os.name == "nt" else posix(path)
+
     assert entries[expected(workspace / "control")] == "read"
     assert entries[expected(workspace / "source" / ".git")] == "read"
     assert "deny" in entries.values()
