@@ -467,7 +467,7 @@
     "advanced.code_mode_saved_tools_path.label": "Vojo de konservitaj iloj",
     "advanced.code_mode_saved_tools_path.help": "JSON-dosiero uzata por konservi kutimajn ilojn trans restartigoj. Restartigo necesa.",
     "advanced.extra_yaml_write_keys.label": "Ekstraj YAML-skribaj ŝlosiloj",
-    "advanced.extra_yaml_write_keys.help": "Supraj ŝlosiloj disigitaj per komoj, kiujn ha_config_set_yaml povas skribi krom la enkonstruitaj, por YAML-unuaj integriĝoj en ĉi tiu instalaĵo (ekz. alert2). Ŝlosiloj, kiuj redifinas la propran fidlimon de Home Assistant, neniam povas esti aldonitaj kaj estas ignoritaj. Postulas kutiman komponanton 1.2.4 aŭ pli novan.",
+    "advanced.extra_yaml_write_keys.help": "Kromaj ĉefnivelaj ŝlosiloj, kiujn ha_config_set_yaml povas skribi krom la enkonstruitaj, por YAML-unuaj integriĝoj en ĉi tiu instalo (ekz. alert2). Enigu unu ŝlosilon por ĉiu linio aŭ disigu ŝlosilojn per komoj. Ŝlosiloj, kiuj redefinas la propran fidlimon de Home Assistant, neniam povas esti aldoniĝaj kaj estas ignoritaj. Postulas la propran komponaĵon 1.2.4 aŭ pli novan.",
     "advanced.sidecar_pin_port.label": "Flankveturila pordo de Agorda UI",
     "advanced.sidecar_pin_port.help": "0 elektas liberan pordon ĉe la unua ekfunkciigo kaj konservas ĝin por postaj restartigoj; 1024–65535 fiksas preferatan pordon (revenas al libera se okupita). Restartigo necesa.",
     "advanced.enable_dev_mode.label": "Disvolva reĝimo",
@@ -542,8 +542,8 @@
       "description": "Akiru etikedan informon - listigu ĉiujn etikedojn aŭ akiru specifan per ID."
     },
     "ha_config_get_scene": {
-      "title": "Akiri Scenan Agordon",
-      "description": "Reakiru agordon de sceno de Home Assistant."
+      "title": "Ricevi aŭ trovi scenojn",
+      "description": "Ricevi la kompletan agordon de sceno, aŭ listigi kaj serĉi scenojn sen scene_id."
     },
     "ha_config_get_script": {
       "title": "Akiri Skriptan Agordon",
@@ -599,7 +599,7 @@
     },
     "ha_config_set_calendar_event": {
       "title": "Krei aŭ Ĝisdatigi Kalendaran Eventon",
-      "description": "Kreu novan eventon en kalendaro."
+      "description": "Krei novan eventon en kalendaro, aŭ ĝisdatigi ekzistantan."
     },
     "ha_config_set_category": {
       "title": "Krei aŭ Ĝisdatigi Kategorion",

@@ -6,7 +6,8 @@ import logging
 import uuid
 
 import pytest
-from fastmcp.exceptions import ToolError
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..utilities.assertions import assert_mcp_success, wait_for_automation
 from ..utilities.wait_helpers import wait_for_entity_state

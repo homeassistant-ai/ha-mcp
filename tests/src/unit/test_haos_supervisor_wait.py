@@ -30,6 +30,7 @@ from tests.haos_image_build.build_image import (
     _wait_core_version,
     _wait_supervisor_channel_metadata,
     _wait_supervisor_ready,
+    _wait_supervisor_running,
     onboard,
 )
 
@@ -888,6 +889,82 @@ def test_wait_requires_requested_minimum_version() -> None:
     sleep.assert_called_once_with(10.0)
 
 
+def test_running_returns_immediately_when_running() -> None:
+    """Supervisor already running: a single root /info read, no polling."""
+    ws = Mock()
+    ws.supervisor_api.return_value = {"state": "running"}
+    with patch("tests.haos_image_build.build_image.time.sleep") as sleep:
+        result = _wait_supervisor_running(ws)
+    assert result["state"] == "running"
+    ws.supervisor_api.assert_called_once_with("/info", method="get", timeout=30.0)
+    sleep.assert_not_called()
+
+
+def test_running_polls_through_startup() -> None:
+    """Polls /info until Supervisor finishes its boot sequence."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        {"state": "setup"},
+        {"state": "startup"},
+        {"state": "running"},
+    ]
+    with patch("tests.haos_image_build.build_image.time.sleep") as sleep:
+        _wait_supervisor_running(ws)
+    assert ws.supervisor_api.call_count == 3
+    assert sleep.call_args_list == [call(10.0), call(10.0)]
+    ws.reconnect.assert_not_called()
+
+
+def test_running_tolerates_setup_state_error() -> None:
+    """The setup-state middleware error before /info answers is retried."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = [
+        WSCommandError(
+            "not ready",
+            code="unknown_error",
+            supervisor_message="System is not ready with state: setup",
+        ),
+        {"state": "running"},
+    ]
+    with patch("tests.haos_image_build.build_image.time.sleep") as sleep:
+        _wait_supervisor_running(ws)
+    assert ws.supervisor_api.call_count == 2
+    sleep.assert_called_once_with(10.0)
+    ws.reconnect.assert_called_once()
+
+
+def test_running_rejects_terminal_error_without_retry() -> None:
+    """A terminal Supervisor command error propagates immediately."""
+    ws = Mock()
+    ws.supervisor_api.side_effect = WSCommandError(
+        "invalid request", code="invalid_format"
+    )
+    with (
+        patch("tests.haos_image_build.build_image.time.sleep") as sleep,
+        pytest.raises(WSCommandError, match="invalid request"),
+    ):
+        _wait_supervisor_running(ws)
+    sleep.assert_not_called()
+
+
+def test_running_times_out_naming_last_state() -> None:
+    """A never-running Supervisor raises the readiness timeout with the state."""
+    ws = Mock()
+    ws.supervisor_api.return_value = {"state": "startup"}
+    # Monotonic sequence: deadline, pre-request budget, post-request check,
+    # next pre-request budget (expired).
+    with (
+        patch(
+            "tests.haos_image_build.build_image.time.monotonic",
+            side_effect=[0.0, 0.0, 5.0, 10.0],
+        ),
+        patch("tests.haos_image_build.build_image.time.sleep"),
+        pytest.raises(_SupervisorReadinessTimeout, match=r"last state='startup'"),
+    ):
+        _wait_supervisor_running(ws, timeout=10.0)
+    ws.supervisor_api.assert_called_once_with("/info", method="get", timeout=10.0)
+
+
 def test_configure_variant_is_noop_when_settings_are_unset() -> None:
     """The stable image path performs no Supervisor/Core mutations."""
     ws = Mock()
@@ -1288,6 +1365,7 @@ def test_configure_beta_variant_installs_exact_core_version() -> None:
             version_latest="2026.08.0",
             channel="beta",
         ),
+        {"state": "running"},
         _core_info(
             "2026.8.2",
             version_latest="2026.8.3",
@@ -1522,6 +1600,7 @@ def test_configure_beta_variant_polls_after_blank_unknown_core_update_error() ->
             version_latest="2026.08.0",
             channel="beta",
         ),
+        {"state": "running"},
         _core_info(
             "2026.8.2",
             version_latest="2026.8.3",
@@ -1569,6 +1648,7 @@ def test_configure_beta_variant_rejects_terminal_core_update_error() -> None:
             version_latest="2026.08.0",
             channel="beta",
         ),
+        {"state": "running"},
         _core_info(
             "2026.8.2",
             version_latest="2026.8.3",

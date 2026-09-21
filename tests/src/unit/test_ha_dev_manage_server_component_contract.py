@@ -203,7 +203,7 @@ async def test_real_component_no_entry_falls_back_to_component_not_installed() -
     none, the consumer surfaces COMPONENT_NOT_INSTALLED. Component-first: the
     component write is attempted first and returns None (no entry), so
     find_server_config_entry runs SECOND and, also finding none, is what raises."""
-    from fastmcp.exceptions import ToolError
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
     component_hass = _ComponentHass([])  # no server entry anywhere
     ws = _real_update_ws(component_hass)

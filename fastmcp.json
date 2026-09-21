@@ -1,7 +1,0 @@
-{
-  "$schema": "https://gofastmcp.com/public/schemas/fastmcp.json/v1.json",
-  "source": {
-    "path": "src/ha_mcp/__main__.py",
-    "entrypoint": "mcp"
-  }
-}

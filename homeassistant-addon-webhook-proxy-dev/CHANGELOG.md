@@ -9,6 +9,11 @@ history from before the fork.
 -->
 
 
+## v3.0.4.dev2 (2026-09-13)
+
+- Add `/api/webhook/<id>/readonly` connections using the existing authentication.
+  Requires an MCP server with read-only endpoint support.
+
 ## v3.0.4.dev1 (2026-09-13)
 
 Version line rebased onto stable 3.0.3 by the promotion workflow. The discovery

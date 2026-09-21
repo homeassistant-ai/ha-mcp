@@ -195,17 +195,11 @@ export class GitHub {
     } catch (error) {
       // Do not echo issue bodies, API payloads, or token-bearing stderr into logs.
       const status = /HTTP (\d+)/.exec(String(error.stderr ?? ""))?.[1];
-      const retryAfter =
-        /retry-after:\s*(\d+)/i.exec(String(error.stderr ?? ""))?.[1] ??
-        /retry after\s+(\d+)\s+seconds?/i.exec(String(error.stderr ?? ""))?.[1];
       throw Object.assign(
         Error(
           `GitHub ${method} ${endpoint} failed${status ? ` (HTTP ${status})` : ""}`,
         ),
-        {
-          status: Number(status),
-          retryAfter: retryAfter === undefined ? undefined : Number(retryAfter),
-        },
+        { status: Number(status) },
       );
     }
     if (!output.trim()) return null;
@@ -230,6 +224,8 @@ const ignoredCommand = (comment, roles) =>
   isHuman(comment.user) &&
   triageCommand.test(comment.body) &&
   !isMaintainer(roles[comment.user.login]);
+const visibleComment = (comment, roles) =>
+  isHuman(comment.user) && !ignoredCommand(comment, roles);
 
 export async function roleFor(api, repository, login) {
   try {
@@ -256,7 +252,7 @@ export function makeContext(snapshot) {
         maintainer: !!issue.user && isMaintainer(roles[issue.user.login]),
       },
       ...comments
-        .filter((c) => isHuman(c.user) && !ignoredCommand(c, roles))
+        .filter((c) => visibleComment(c, roles))
         .map((c) => ({
           source_id: `comment-${c.id}`,
           text: c.body,
@@ -308,7 +304,7 @@ export function fingerprint(snapshot) {
     locked: snapshot.issue.locked,
     control: control(snapshot),
     edits: snapshot.comments
-      .filter((c) => isHuman(c.user) && !ignoredCommand(c, snapshot.roles))
+      .filter((c) => visibleComment(c, snapshot.roles))
       .map((c) => [c.id, timestamp(c)]),
     labelEvents: snapshot.events
       .filter((e) => e.label?.name === "needs-info" && isHuman(e.actor))
@@ -552,11 +548,8 @@ export async function publish(api, prepared, result, bot, attempt = 0) {
       attempt < 2 &&
       (error.status === 429 || (error.status >= 500 && error.status <= 599))
     ) {
-      const seconds = Math.min(
-        30,
-        Math.max(0, error.retryAfter ?? [5, 15][attempt]),
-      );
-      await delay(seconds * 1000);
+      const wait = api.delay ?? delay;
+      await wait([5, 15][attempt] * 1000);
       return publish(api, prepared, result, bot, attempt + 1);
     }
     throw error;

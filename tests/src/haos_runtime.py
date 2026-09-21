@@ -1365,6 +1365,55 @@ def stage_embedded_server_feature_flags_in_qcow2(
         _shutil.rmtree(workdir, ignore_errors=True)
 
 
+def _ws_connect_error_is_transient(error: Exception) -> bool:
+    """A restarting Core refuses, times out, or answers 502-504 through a proxy."""
+    import websockets.exceptions
+
+    if isinstance(
+        error, ssl.SSLCertVerificationError | websockets.exceptions.InvalidURI
+    ):
+        return False
+    if isinstance(error, websockets.exceptions.InvalidStatus):
+        return error.response.status_code in (502, 503, 504)
+    return True
+
+
+def _connect_home_assistant_ws(
+    ws_url: str, ssl_context: ssl.SSLContext | None, deadline: float
+) -> Any:
+    """Open the Core WebSocket, retrying transient failures until ``deadline``.
+
+    Right after a Core restart the HTTP endpoints answer before the WebSocket
+    handshake does.
+    """
+    import websockets.exceptions
+    import websockets.sync.client
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"Timed out opening {ws_url}")
+        try:
+            return websockets.sync.client.connect(
+                ws_url,
+                max_size=None,
+                open_timeout=min(remaining, 30.0),
+                ssl=ssl_context,
+            )
+        except (
+            OSError,
+            TimeoutError,
+            websockets.exceptions.WebSocketException,
+        ) as error:
+            if (
+                not _ws_connect_error_is_transient(error)
+                or time.monotonic() + 2.0 >= deadline
+            ):
+                raise
+            LOG.debug("Core WebSocket %s not ready yet: %r", ws_url, error)
+            time.sleep(2.0)
+
+
 def _home_assistant_ws_command(
     base_url: str,
     token: str,
@@ -1373,9 +1422,8 @@ def _home_assistant_ws_command(
     timeout: float = 60.0,
     verify_ssl: bool = True,
 ) -> Any:
-    """Run one authenticated Home Assistant WebSocket command."""
-    import websockets.sync.client
-
+    """Run one authenticated Home Assistant WebSocket command within ``timeout``."""
+    deadline = time.monotonic() + timeout
     ws_url = (
         base_url.replace("http://", "ws://").replace("https://", "wss://")
         + "/api/websocket"
@@ -1387,26 +1435,20 @@ def _home_assistant_ws_command(
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
 
-    with websockets.sync.client.connect(
-        ws_url,
-        max_size=None,
-        open_timeout=min(timeout, 30.0),
-        ssl=ssl_context,
-    ) as ws:
-        first = json.loads(ws.recv())
+    with _connect_home_assistant_ws(ws_url, ssl_context, deadline) as ws:
+        first = json.loads(ws.recv(timeout=max(deadline - time.monotonic(), 0.0)))
         if first.get("type") != "auth_required":
             raise RuntimeError(f"WS handshake: expected auth_required, got {first!r}")
         ws.send(json.dumps({"type": "auth", "access_token": token}))
-        auth_resp = json.loads(ws.recv())
+        auth_resp = json.loads(ws.recv(timeout=max(deadline - time.monotonic(), 0.0)))
         if auth_resp.get("type") != "auth_ok":
             raise RuntimeError(f"WS auth rejected: {auth_resp}")
 
         msg_id = 1
         ws.send(json.dumps({"id": msg_id, **command}))
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        while (remaining := deadline - time.monotonic()) > 0:
             try:
-                raw = ws.recv(timeout=max(deadline - time.monotonic(), 1.0))
+                raw = ws.recv(timeout=remaining)
             except TimeoutError:
                 continue
             if not isinstance(raw, str):
@@ -1906,8 +1948,9 @@ def _addon_link_transient_leaves() -> tuple[type[BaseException], ...]:
     """
     import anyio
     import httpx
-    from fastmcp.exceptions import ClientError, FastMCPError
-    from mcp import McpError
+    import httpx2
+
+    from ha_mcp._vendor.fastmcp.exceptions import ClientError, FastMCPError, McpError
 
     return (
         McpError,
@@ -1917,6 +1960,8 @@ def _addon_link_transient_leaves() -> tuple[type[BaseException], ...]:
         OSError,
         TimeoutError,
         httpx.HTTPError,
+        # FastMCP's client transport raises httpx2 errors.
+        httpx2.HTTPError,
         # Cancelling a stalled attempt tears the streamable-HTTP memory
         # streams down mid-read. These are plain Exceptions, not OSError.
         anyio.ClosedResourceError,
@@ -1979,8 +2024,8 @@ def _probe_addon_ha_link(addon_mcp_url: str, budget: float) -> None:
     """
     import asyncio
 
-    from fastmcp import Client
-    from fastmcp.client.transports import StreamableHttpTransport
+    from ha_mcp._vendor.fastmcp import Client
+    from ha_mcp._vendor.fastmcp.client.transports import StreamableHttpTransport
 
     inner = max(budget * 0.8, budget - 2.0)
 
@@ -2382,14 +2427,48 @@ def boot_haos_qemu(image_path: Path, serial_log: Path | None = None) -> Iterator
             proc.wait()
 
 
+def _poll_sleep(deadline: float) -> None:
+    """Sleep up to 10s, never past ``deadline`` (mirrors the bake's probe budget)."""
+    time.sleep(max(0.0, min(10.0, deadline - time.monotonic())))
+
+
+def _is_transient_supervisor_info_error(err: Any) -> bool:
+    """Return whether a failed ``supervisor/api`` read frame is worth re-polling.
+
+    Mirrors ``build_image._is_transient_supervisor_readiness_error``: while
+    Supervisor restarts, Core's proxy answers with no code, ``unknown_command``
+    (hassio handler not yet registered) or a blank ``unknown_error``, and
+    Supervisor's own middleware answers ``System is not ready with state: ...``
+    until it accepts API calls. Anything else (``unauthorized``, a validation
+    error, ...) is a permanent failure the caller must surface at once.
+    """
+    if not isinstance(err, dict):
+        return True
+    code = err.get("code")
+    if code is None or code == "unknown_command":
+        return True
+    if code != "unknown_error":
+        return False
+    message = err.get("message")
+    return not message or (
+        isinstance(message, str)
+        and message.startswith("System is not ready with state: ")
+    )
+
+
 def _recv_supervisor_info_frame(
-    ws: Any, info_id: int, deadline: float
+    ws: Any,
+    info_id: int,
+    deadline: float,
+    *,
+    endpoint: str = "/supervisor/info",
 ) -> tuple[dict | None, str | None]:
-    """Read frames until the ``/supervisor/info`` answer for ``info_id``.
+    """Read frames until the ``endpoint`` answer for ``info_id``.
 
     Returns ``(result, None)`` on success, ``(None, error)`` on a transient
-    Supervisor failure frame, or ``(None, None)`` if the deadline passes with no
-    matching frame.
+    Supervisor failure frame (see ``_is_transient_supervisor_info_error``), or
+    ``(None, None)`` if the deadline passes with no matching frame. A permanent
+    failure frame raises ``RuntimeError`` immediately.
     """
     while time.monotonic() < deadline:
         remaining = max(deadline - time.monotonic(), 1.0)
@@ -2403,14 +2482,15 @@ def _recv_supervisor_info_frame(
             resp = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise RuntimeError(
-                f"supervisor/api /supervisor/info: malformed WS frame: "
-                f"{exc} (raw={raw!r})"
+                f"supervisor/api {endpoint}: malformed WS frame: {exc} (raw={raw!r})"
             ) from exc
         if resp.get("id") != info_id:
             continue
         if not resp.get("success", False):
             err = resp.get("error") or resp
-            return None, f"supervisor/api /supervisor/info failed: {err!r}"
+            if not _is_transient_supervisor_info_error(err):
+                raise RuntimeError(f"supervisor/api {endpoint} failed: {err!r}")
+            return None, f"supervisor/api {endpoint} failed: {err!r}"
         return resp.get("result") or {}, None
     return None, None
 
@@ -2465,7 +2545,7 @@ def _wait_supervisor_update_done(
         if error is not None:
             last_error = error
             log.debug("Transient /supervisor/info failure: %s", last_error)
-            time.sleep(10.0)
+            _poll_sleep(deadline)
             continue
         if result is None:
             break
@@ -2480,11 +2560,81 @@ def _wait_supervisor_update_done(
             result.get("version"),
             result.get("version_latest"),
         )
-        time.sleep(10.0)
+        _poll_sleep(deadline)
     suffix = f"; last error: {last_error}" if last_error else ""
     raise TimeoutError(
         f"Supervisor did not finish self-updating before the update deadline{suffix}"
     )
+
+
+def _wait_supervisor_running(
+    ws: Any,
+    deadline: float,
+    next_id: Callable[[], int],
+    *,
+    log: logging.Logger = LOG,
+) -> None:
+    """Poll the Supervisor root ``/info`` until its core state is ``running``.
+
+    Supervisor 2026.09.3+ (home-assistant/supervisor#7194) rejects app
+    start/restart/rebuild/update with a 503 ("Supervisor is not ready to
+    perform this operation") until it has finished its own boot sequence.
+    Core answers its API well before that point, so the harness reaches
+    ``/addons/{slug}/update`` while Supervisor is still starting apps.
+    ``/supervisor/info`` does not carry the state; the root ``/info`` does.
+    Same frame tolerance as ``_wait_supervisor_update_done``.
+    """
+    last_error: str | None = None
+    last_state: object = None
+    while time.monotonic() < deadline:
+        info_id = next_id()
+        ws.send(
+            json.dumps(
+                {
+                    "id": info_id,
+                    "type": "supervisor/api",
+                    "endpoint": "/info",
+                    "method": "get",
+                    "timeout": 30,
+                }
+            )
+        )
+        result, error = _recv_supervisor_info_frame(
+            ws, info_id, deadline, endpoint="/info"
+        )
+        if error is not None:
+            last_error = error
+            log.debug("Transient /info failure: %s", last_error)
+            _poll_sleep(deadline)
+            continue
+        if result is None:
+            break
+        last_state = result.get("state")
+        if last_state == "running":
+            log.info("Supervisor core state is running; proceeding")
+            return
+        log.info("Supervisor core state is %r; waiting before app ops", last_state)
+        _poll_sleep(deadline)
+    suffix = f"; last error: {last_error}" if last_error else ""
+    raise TimeoutError(
+        f"Supervisor did not reach the running state before the update deadline "
+        f"(last state: {last_state!r}){suffix}"
+    )
+
+
+# Error texts Supervisor returns for conditions that clear on their own within
+# seconds: a per-addon job-group collision, and (2026.09.3+, supervisor#7194)
+# the 503 for app lifecycle calls made before its core state is RUNNING.
+_TRANSIENT_SUPERVISOR_JOB_ERRORS = (
+    "another job is running",
+    "not ready to perform this operation",
+)
+
+
+def _is_transient_supervisor_job_error(message: str) -> bool:
+    """Return whether a Supervisor job rejection is worth retrying shortly."""
+    lowered = message.lower()
+    return any(marker in lowered for marker in _TRANSIENT_SUPERVISOR_JOB_ERRORS)
 
 
 def _authenticate_ws_supervisor(ws: Any, token: str) -> None:
@@ -2598,10 +2748,12 @@ def trigger_dev_addon_update(
         to N*op_timeout). Each attempt uses a fresh ``_next_id()`` so HA Core's
         ERR_ID_REUSE guard never trips.
 
-        The collision is matched as a case-insensitive substring on the error
-        text Supervisor returns (surfaced by ``_await_supervisor_result`` as the
-        ``RuntimeError`` message); any other failure is re-raised immediately,
-        so this never masks a real error.
+        The collision, and Supervisor's not-ready 503 (see
+        ``_wait_supervisor_running``), are matched as case-insensitive
+        substrings on the error text Supervisor returns (surfaced by
+        ``_await_supervisor_result`` as the ``RuntimeError`` message); any
+        other failure is re-raised immediately, so this never masks a real
+        error.
         """
         retry_deadline = time.monotonic() + 60
         attempt = 0
@@ -2623,11 +2775,11 @@ def trigger_dev_addon_update(
                 return
             except RuntimeError as err:
                 if (
-                    "another job is running" in str(err).lower()
+                    _is_transient_supervisor_job_error(str(err))
                     and time.monotonic() < retry_deadline
                 ):
                     LOG.warning(
-                        "Supervisor %s collided with an in-flight job-group job "
+                        "Supervisor %s rejected a transient condition "
                         "(attempt %d): %s; waiting 5s and retrying",
                         endpoint,
                         attempt,
@@ -2641,6 +2793,7 @@ def trigger_dev_addon_update(
         _authenticate_ws_supervisor(ws, token)
 
         _wait_supervisor_update_done(ws, time.monotonic() + timeout, _next_id)
+        _wait_supervisor_running(ws, time.monotonic() + timeout, _next_id)
 
         # Reload the Supervisor store BEFORE asking for the update: the
         # refresh bumped the local addon's version, but Supervisor's persisted

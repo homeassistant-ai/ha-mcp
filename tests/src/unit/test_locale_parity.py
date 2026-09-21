@@ -836,8 +836,8 @@ def test_connect_local_lan_quotes_the_bind_host_option() -> None:
     # if every translated catalog lost the key, that is drift, not a stub.
     assert checked > 1, (
         "no translated catalog carries common.connect_local_lan at all — the "
-        "check above covered only English, which is the 'guard that silently "
-        "stopped running' shape tests/pytest.ini exists to prevent"
+        "check above covered only English, so translated catalog coverage has "
+        "silently stopped running"
     )
 
 

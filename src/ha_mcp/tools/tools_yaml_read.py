@@ -20,9 +20,10 @@ import logging
 import re
 from typing import Annotated, Any
 
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import tool
 from pydantic import Field
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..errors import ErrorCode, create_error_response
 from .helpers import (

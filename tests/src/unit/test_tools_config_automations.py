@@ -18,8 +18,8 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_config_automations import (
     AutomationConfigTools,
     _strip_redundant_identifier_echo,

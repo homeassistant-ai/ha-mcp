@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 from typing import override
 
-from fastmcp.server.auth.oauth_proxy.models import ProxyDCRClient
-from fastmcp.server.auth.oidc_proxy import OIDCProxy
-from mcp.server.auth.provider import AuthorizationParams, RefreshToken
-from mcp.shared.auth import OAuthClientInformationFull
+from ha_mcp._vendor.fastmcp.server.auth.oauth_proxy.models import ProxyDCRClient
+from ha_mcp._vendor.fastmcp.server.auth.oidc_proxy import OIDCProxy
+from ha_mcp._vendor.mcp.server.auth.provider import AuthorizationParams, RefreshToken
+from ha_mcp._vendor.mcp.shared.auth import OAuthClientInformationFull
 
 logger = logging.getLogger(__name__)
 

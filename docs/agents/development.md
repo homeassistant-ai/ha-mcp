@@ -61,7 +61,7 @@ Locally, `-n2` limits the number of simultaneous Home Assistant containers;
 more workers usually add memory pressure without proportional speed. CI uses
 `-n3`, a value tuned for CI's 2-vCPU, 15 GB runners. The roughly 11,000 unit
 tests take more than 25 minutes serial, so run them in parallel as shown.
-`tests/pytest.ini` sets `--maxfail=3`, so
+The root `pyproject.toml` sets `--maxfail=3`, so
 a report with three failures may be an early stop; use `--maxfail=0` only when
 the complete failure set is actually needed.
 
@@ -154,6 +154,8 @@ Concrete owners worth preserving in the map are
 `resources/card_types.json` and `resources/dashboard_guide.md`.
 `utils/config_hash.py` is the shared optimistic-locking implementation for
 automation, script, scene, dashboard, and energy configuration.
+
+Registry label updates follow the shared [concurrency strategy](../registry-label-concurrency.md).
 
 Key patterns:
 

@@ -97,15 +97,15 @@ jobs:
           permission-workflows: write
 
       - name: Self-hosted Renovate
-        uses: renovatebot/github-action@39b914146caeff8cd512e61c8992f1d5913af85c # v46.2.5
+        uses: renovatebot/github-action@37beffda261423addd537c33f2d126df7f6ffbab # v46.2.6
         with:
           # Repository config is discovered normally. Loading renovate.json as
           # global config too duplicates its managers and dashboard entries.
-          renovate-version: 44.56.2
+          renovate-version: 44.69.11
           token: ${{ steps.app-token.outputs.token }}
         env:
           LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
           RENOVATE_REPOSITORIES: ${{ github.repository }}
-          # Only this isolated generator may run; it cannot invoke a shell.
-          RENOVATE_ALLOWED_COMMANDS: '["^python3 -I scripts/vendor_websockets\\.py$"]'
+          # Only these isolated generators may run; they cannot invoke a shell.
+          RENOVATE_ALLOWED_COMMANDS: '["^python3 -I scripts/vendor_websockets\\.py$", "^python3 -I scripts/vendor_fastmcp\\.py$"]'
           RENOVATE_ALLOW_SHELL_EXECUTOR_FOR_POST_UPGRADE_COMMANDS: "false"

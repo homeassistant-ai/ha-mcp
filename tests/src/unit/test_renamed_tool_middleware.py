@@ -8,9 +8,9 @@ tool, and the old name has to stay out of the catalog.
 import logging
 
 import pytest
-from fastmcp import FastMCP
-from fastmcp.exceptions import NotFoundError
 
+from ha_mcp._vendor.fastmcp import FastMCP
+from ha_mcp._vendor.fastmcp.exceptions import NotFoundError
 from ha_mcp.tools.renamed_tool_middleware import (
     RENAMED_TOOLS,
     RenamedToolAliasMiddleware,

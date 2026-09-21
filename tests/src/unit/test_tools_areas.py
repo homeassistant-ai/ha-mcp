@@ -10,8 +10,8 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.tools_areas import AreaTools
 
 
@@ -477,3 +477,233 @@ class TestListFloorsAreasAreaFieldsProjection:
         assert "floors" in result
         assert "unassigned_areas" in result
         assert "orphaned_areas" in result
+
+
+class TestSetAreaLabels:
+    """Area labels replace the existing set (issue #2455); floors reject labels."""
+
+    @staticmethod
+    def _ws_handler(*, label_ids=(), floor_ids=(), areas=None, echo_labels=True):
+        """Answer the registry calls ``ha_set_area_or_floor`` makes.
+
+        ``config/area_registry/list`` must answer with a LIST: it is the
+        post-write verification re-read, and a dict there silently sent every
+        test down the "could not verify" branch instead of the path it meant
+        to cover. ``echo_labels=False`` models HA acknowledging the write
+        without echoing the stored labels, which is what forces that re-read.
+        """
+        area_rows = (
+            areas
+            if areas is not None
+            else [{"area_id": "kitchen", "name": "Kitchen", "labels": []}]
+        )
+
+        async def handler(msg):
+            msg_type = msg.get("type")
+            if msg_type == "config/label_registry/list":
+                return {
+                    "success": True,
+                    "result": [{"label_id": lid} for lid in label_ids],
+                }
+            if msg_type == "config/floor_registry/list":
+                return {
+                    "success": True,
+                    "result": [{"floor_id": fid} for fid in floor_ids],
+                }
+            if msg_type == "config/area_registry/list":
+                return {"success": True, "result": area_rows}
+            entry = {"area_id": "kitchen", "name": "Kitchen"}
+            if echo_labels:
+                entry["labels"] = msg.get("labels", [])
+            return {"success": True, "result": entry}
+
+        return handler
+
+    @pytest.fixture
+    def tools(self):
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return AreaTools(client)
+
+    @staticmethod
+    def _sent_types(tools):
+        return [
+            call.args[0]["type"]
+            for call in tools._client.send_websocket_message.call_args_list
+        ]
+
+    @staticmethod
+    def _write_message(tools):
+        return next(
+            call.args[0]
+            for call in tools._client.send_websocket_message.call_args_list
+            if call.args[0]["type"].startswith("config/area_registry/")
+        )
+
+    async def test_labels_rejected_for_floor(self, tools):
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_area_or_floor(
+                kind="floor", name="Ground", labels=["site_home"]
+            )
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "labels" in error_data["error"]["message"]
+        tools._client.send_websocket_message.assert_not_called()
+
+    async def test_unknown_label_rejected_on_create(self, tools):
+        tools._client.send_websocket_message.side_effect = self._ws_handler(
+            label_ids=("site_home",)
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_area_or_floor(
+                kind="area", name="Kitchen", labels=["ghost_label"]
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert error_data["unknown_labels"] == ["ghost_label"]
+        assert self._sent_types(tools) == ["config/label_registry/list"]
+
+    async def test_empty_labels_clears_without_lookup(self, tools):
+        tools._client.send_websocket_message.side_effect = self._ws_handler()
+
+        result = await tools.ha_set_area_or_floor(kind="area", id="kitchen", labels=[])
+
+        assert result["success"] is True
+        assert self._sent_types(tools) == ["config/area_registry/update"]
+        assert self._write_message(tools)["labels"] == []
+
+    async def test_create_includes_labels(self, tools):
+        tools._client.send_websocket_message.side_effect = self._ws_handler(
+            label_ids=("site_home",)
+        )
+
+        result = await tools.ha_set_area_or_floor(
+            kind="area", name="Kitchen", labels=["site_home"]
+        )
+
+        assert result["success"] is True
+        assert self._sent_types(tools) == [
+            "config/label_registry/list",
+            "config/area_registry/create",
+        ]
+        assert self._write_message(tools)["labels"] == ["site_home"]
+
+    async def test_update_replaces_labels(self, tools):
+        tools._client.send_websocket_message.side_effect = self._ws_handler(
+            label_ids=("site_home", "hvac")
+        )
+
+        result = await tools.ha_set_area_or_floor(
+            kind="area", id="kitchen", labels=["hvac"]
+        )
+
+        assert result["success"] is True
+        sent = self._write_message(tools)
+        assert sent["type"] == "config/area_registry/update"
+        assert sent["labels"] == ["hvac"]
+
+    async def test_omitted_labels_not_in_update_payload(self, tools):
+        tools._client.send_websocket_message.side_effect = self._ws_handler()
+
+        await tools.ha_set_area_or_floor(kind="area", id="kitchen", name="K2")
+
+        sent = self._write_message(tools)
+        assert "labels" not in sent
+
+    async def test_labels_verified_from_write_result(self, tools):
+        tools._client.send_websocket_message.side_effect = self._ws_handler(
+            label_ids=("site_home",)
+        )
+
+        result = await tools.ha_set_area_or_floor(
+            kind="area", name="Kitchen", labels=["site_home"]
+        )
+
+        assert result["success"] is True
+        assert result["area"]["labels"] == ["site_home"]
+        assert "config/area_registry/list" not in self._sent_types(tools)
+
+    async def test_labels_missing_from_result_fail_after_reread(self, tools):
+        async def handler(msg):
+            msg_type = msg.get("type")
+            if msg_type == "config/label_registry/list":
+                return {"success": True, "result": [{"label_id": "site_home"}]}
+            if msg_type == "config/area_registry/create":
+                return {
+                    "success": True,
+                    "result": {"area_id": "kitchen", "name": "Kitchen"},
+                }
+            if msg_type == "config/area_registry/list":
+                return {
+                    "success": True,
+                    "result": [{"area_id": "kitchen", "name": "Kitchen", "labels": []}],
+                }
+            return {"success": True, "result": {}}
+
+        tools._client.send_websocket_message.side_effect = handler
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_area_or_floor(
+                kind="area", name="Kitchen", labels=["site_home"]
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "requested labels" in error_data["error"]["message"]
+        assert error_data["expected_labels"] == ["site_home"]
+        # The area itself exists at this point — only the labels are missing,
+        # so a caller must fix the labels, not retry the create.
+        assert error_data["write_committed"] is True
+        assert error_data["area_id"] == "kitchen"
+        assert any(
+            "ha_set_area_or_floor" in s
+            for s in error_data["error"].get("suggestions", [])
+        ), error_data["error"].get("suggestions")
+
+    async def test_labels_confirmed_by_reread_when_result_omits_them(self, tools):
+        tools._client.send_websocket_message.side_effect = self._ws_handler(
+            label_ids=("site_home",),
+            echo_labels=False,
+            areas=[{"area_id": "kitchen", "name": "Kitchen", "labels": ["site_home"]}],
+        )
+
+        result = await tools.ha_set_area_or_floor(
+            kind="area", name="Kitchen", labels=["site_home"]
+        )
+
+        assert result["success"] is True
+        assert self._sent_types(tools) == [
+            "config/label_registry/list",
+            "config/area_registry/create",
+            "config/area_registry/list",
+        ]
+
+    async def test_verify_list_transport_failure_marks_write_committed(self, tools):
+        async def handler(msg):
+            msg_type = msg.get("type")
+            if msg_type == "config/label_registry/list":
+                return {"success": True, "result": [{"label_id": "site_home"}]}
+            if msg_type == "config/area_registry/create":
+                return {
+                    "success": True,
+                    "result": {"area_id": "kitchen", "name": "Kitchen"},
+                }
+            if msg_type == "config/area_registry/list":
+                raise ConnectionError("ws dropped")
+            return {"success": True, "result": {}}
+
+        tools._client.send_websocket_message.side_effect = handler
+
+        with pytest.raises(ToolError) as exc_info:
+            await tools.ha_set_area_or_floor(
+                kind="area", name="Kitchen", labels=["site_home"]
+            )
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert error_data["write_committed"] is True
+        assert error_data["area_id"] == "kitchen"
+        assert error_data["expected_labels"] == ["site_home"]
+        assert "ws dropped" in error_data["error"]["details"]

@@ -35,9 +35,9 @@ import sys
 from typing import Any
 
 import pytest
-from mcp.server import streamable_http
 from sse_starlette.sse import EventSourceResponse
 
+from ha_mcp._vendor.mcp.server import streamable_http
 from tests.addon.test_webhook_proxy import _FakeClientTimeout as AddonClientTimeout
 
 from ._embedded_stubs import ClientTimeout as EmbeddedClientTimeout

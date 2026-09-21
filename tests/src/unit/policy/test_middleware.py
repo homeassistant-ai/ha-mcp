@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import anyio
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.policy.approval_queue import ApprovalQueue, compute_args_hash
 from ha_mcp.policy.middleware import PROXY_META_TOOLS, PolicyMiddleware
 from ha_mcp.policy.model import Policy, Predicate, Rule

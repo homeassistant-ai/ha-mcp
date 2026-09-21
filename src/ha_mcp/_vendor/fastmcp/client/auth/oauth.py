@@ -1,0 +1,496 @@
+from __future__ import annotations
+
+import time
+import webbrowser
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
+from typing import Any
+
+import anyio
+import httpx2
+from key_value.aio.adapters.pydantic import PydanticAdapter
+from key_value.aio.protocols import AsyncKeyValue
+from key_value.aio.stores.memory import MemoryStore
+from ha_mcp._vendor.mcp.client.auth import OAuthClientProvider, TokenStorage
+from ha_mcp._vendor.mcp.shared._httpx_utils import McpHttpClientFactory
+from ha_mcp._vendor.mcp.shared.auth import (
+    AuthorizationCodeResult,
+    OAuthClientInformationFull,
+    OAuthClientMetadata,
+    OAuthToken,
+)
+from pydantic import AnyHttpUrl
+from typing_extensions import override
+from uvicorn.server import Server
+
+from ha_mcp._vendor.fastmcp.client.oauth_callback import (
+    OAuthCallbackResult,
+    create_oauth_callback_server,
+)
+from ha_mcp._vendor.fastmcp.utilities.http import find_available_port
+from ha_mcp._vendor.fastmcp.utilities.logging import get_logger
+
+__all__ = ["OAuth"]
+
+logger = get_logger(__name__.removeprefix("ha_mcp._vendor."))
+
+
+def _normalize_callback_host_for_bind(host: str) -> str:
+    if host.startswith("[") and host.endswith("]"):
+        return host[1:-1]
+    return host
+
+
+def _format_callback_host_for_url(host: str) -> str:
+    if ":" in host:
+        return f"[{host}]"
+    return host
+
+
+class ClientNotFoundError(Exception):
+    """Raised when OAuth client credentials are not found on the server."""
+
+
+class ExpiredClientRegistrationError(Exception):
+    """Raised when dynamic registration returns an expired client secret."""
+
+
+async def check_if_auth_required(
+    mcp_url: str, httpx_kwargs: dict[str, Any] | None = None
+) -> bool:
+    """
+    Check if the MCP endpoint requires authentication by making a test request.
+
+    Returns:
+        True if auth appears to be required, False otherwise
+    """
+    async with httpx2.AsyncClient(**(httpx_kwargs or {})) as client:
+        try:
+            # Try a simple request to the endpoint
+            response = await client.get(mcp_url, timeout=5.0)
+
+            # If we get 401/403, auth is likely required
+            if response.status_code in (401, 403):
+                return True
+
+            # Check for WWW-Authenticate header
+            if "WWW-Authenticate" in response.headers:  # noqa: SIM103
+                return True
+
+            # If we get a successful response, auth may not be required
+            return False
+
+        except httpx2.RequestError:
+            # If we can't connect, assume auth might be required
+            return True
+
+
+class TokenStorageAdapter(TokenStorage):
+    _server_url: str
+    _cache_namespace: str | None
+    _key_value_store: AsyncKeyValue
+    _storage_oauth_token: PydanticAdapter[OAuthToken]
+    _storage_client_info: PydanticAdapter[OAuthClientInformationFull]
+
+    def __init__(
+        self,
+        async_key_value: AsyncKeyValue,
+        server_url: str,
+        cache_namespace: str | None = None,
+    ):
+        self._server_url = server_url
+        self._cache_namespace = cache_namespace
+        self._key_value_store = async_key_value
+        self._storage_oauth_token = PydanticAdapter[OAuthToken](
+            default_collection="mcp-oauth-token",
+            key_value=async_key_value,
+            pydantic_model=OAuthToken,
+            raise_on_validation_error=True,
+        )
+        self._storage_client_info = PydanticAdapter[OAuthClientInformationFull](
+            default_collection="mcp-oauth-client-info",
+            key_value=async_key_value,
+            pydantic_model=OAuthClientInformationFull,
+            raise_on_validation_error=True,
+        )
+
+    def _cache_key_prefix(self) -> str:
+        # When set, the namespace distinguishes clients that share one store
+        # against the same server URL (e.g. M2M providers with different
+        # client_ids). Without it, the prefix is the bare server URL, preserving
+        # the existing keys used by the interactive OAuth flow.
+        if self._cache_namespace is not None:
+            return f"{self._server_url}/{self._cache_namespace}"
+        return self._server_url
+
+    def _get_token_cache_key(self) -> str:
+        return f"{self._cache_key_prefix()}/tokens"
+
+    def _get_client_info_cache_key(self) -> str:
+        return f"{self._cache_key_prefix()}/client_info"
+
+    def _get_token_expiry_cache_key(self) -> str:
+        return f"{self._cache_key_prefix()}/token_expiry"
+
+    async def clear(self) -> None:
+        await self._storage_oauth_token.delete(key=self._get_token_cache_key())
+        await self._storage_client_info.delete(key=self._get_client_info_cache_key())
+        await self._key_value_store.delete(
+            key=self._get_token_expiry_cache_key(),
+            collection="mcp-oauth-token-expiry",
+        )
+
+    @override
+    async def get_tokens(self) -> OAuthToken | None:
+        return await self._storage_oauth_token.get(key=self._get_token_cache_key())
+
+    @override
+    async def set_tokens(self, tokens: OAuthToken) -> None:
+        # Don't set TTL based on access token expiry - the refresh token may be
+        # valid much longer. Use 1 year as a reasonable upper bound; the OAuth
+        # provider handles actual token expiry/refresh logic.
+        await self._storage_oauth_token.put(
+            key=self._get_token_cache_key(),
+            value=tokens,
+            ttl=60 * 60 * 24 * 365,  # 1 year
+        )
+        # Store absolute expiry so reloads don't misinterpret the stale
+        # relative expires_in value (#2862).
+        if tokens.expires_in is not None:
+            expires_at = time.time() + int(tokens.expires_in)
+            await self._key_value_store.put(
+                key=self._get_token_expiry_cache_key(),
+                value={"expires_at": expires_at},
+                collection="mcp-oauth-token-expiry",
+                ttl=60 * 60 * 24 * 365,
+            )
+
+    async def get_token_expiry(self) -> float | None:
+        raw = await self._key_value_store.get(
+            key=self._get_token_expiry_cache_key(),
+            collection="mcp-oauth-token-expiry",
+        )
+        if raw is not None:
+            return float(raw["expires_at"])
+        return None
+
+    @override
+    async def get_client_info(self) -> OAuthClientInformationFull | None:
+        return await self._storage_client_info.get(
+            key=self._get_client_info_cache_key()
+        )
+
+    @override
+    async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
+        ttl: int | None = None
+
+        if client_info.client_secret_expires_at:
+            ttl = client_info.client_secret_expires_at - int(time.time())
+            if ttl <= 0:
+                await self._storage_client_info.delete(
+                    key=self._get_client_info_cache_key()
+                )
+                return
+
+        await self._storage_client_info.put(
+            key=self._get_client_info_cache_key(),
+            value=client_info,
+            ttl=ttl,
+        )
+
+
+class OAuth(OAuthClientProvider):
+    """
+    OAuth client provider for MCP servers with browser-based authentication.
+
+    This class provides OAuth authentication for FastMCP clients by opening
+    a browser for user authorization and running a local callback server.
+    """
+
+    _bound: bool
+
+    def __init__(
+        self,
+        mcp_url: str | None = None,
+        scopes: str | list[str] | None = None,
+        client_name: str = "FastMCP Client",
+        token_storage: AsyncKeyValue | None = None,
+        additional_client_metadata: dict[str, Any] | None = None,
+        callback_port: int | None = None,
+        callback_host: str = "localhost",
+        callback_timeout: float = 300.0,
+        httpx_client_factory: McpHttpClientFactory | None = None,
+        # Alternative to dynamic client registration:
+        # --- Clients host a static JSON document at an HTTPS URL ---
+        client_metadata_url: str | None = None,
+        # --- OR clients provide full client information ---
+        client_id: str | None = None,
+        client_secret: str | None = None,
+    ):
+        """
+        Initialize OAuth client provider for an MCP server.
+
+        Args:
+            mcp_url: Full URL to the MCP endpoint (e.g. "http://host/mcp/sse/").
+                Optional when OAuth is passed to Client(auth=...), which provides
+                the URL automatically from the transport.
+            scopes: OAuth scopes to request. Can be a
+            space-separated string or a list of strings.
+            client_name: Name for this client during registration
+            token_storage: An AsyncKeyValue-compatible token store, tokens are stored in memory if not provided
+            additional_client_metadata: Extra fields for OAuthClientMetadata
+            callback_port: Fixed port for OAuth callback (default: random available port)
+            callback_host: Hostname used for OAuth redirect URI and callback server.
+            callback_timeout: Seconds to wait for OAuth callback before timing out.
+            client_metadata_url: A CIMD (Client ID Metadata Document) URL. When
+                provided, this URL is used as the client_id instead of performing
+                Dynamic Client Registration. Must be an HTTPS URL with a non-root
+                path (e.g. "https://myapp.example.com/oauth/client.json").
+            client_id: Pre-registered OAuth client ID. When provided, skips dynamic
+                client registration and uses these static credentials instead.
+            client_secret: OAuth client secret (optional, used with client_id)
+        """
+        # Store config for deferred binding if mcp_url not yet known
+        self._scopes = scopes
+        self._client_name = client_name
+        self._token_storage = token_storage
+        self._additional_client_metadata = additional_client_metadata
+        self._callback_port = callback_port
+        self._callback_host = _normalize_callback_host_for_bind(callback_host)
+        self._callback_timeout = callback_timeout
+        self._client_metadata_url = client_metadata_url
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._static_client_info = None
+        self.httpx_client_factory = httpx_client_factory or httpx2.AsyncClient
+        self._bound = False
+
+        if mcp_url is not None:
+            self._bind(mcp_url)
+
+    def _bind(self, mcp_url: str) -> None:
+        """Bind this OAuth provider to a specific MCP server URL.
+
+        Called automatically when mcp_url is provided to __init__, or by the
+        transport when OAuth is used without an explicit URL.
+        """
+        if self._bound:
+            return
+
+        mcp_url = mcp_url.rstrip("/")
+
+        self.redirect_port = self._callback_port or find_available_port(
+            host=self._callback_host
+        )
+        redirect_host = _format_callback_host_for_url(self._callback_host)
+        redirect_uri = f"http://{redirect_host}:{self.redirect_port}/callback"
+
+        scopes_str: str
+        if isinstance(self._scopes, list):
+            scopes_str = " ".join(self._scopes)
+        elif self._scopes is not None:
+            scopes_str = str(self._scopes)
+        else:
+            scopes_str = ""
+
+        client_metadata = OAuthClientMetadata(
+            client_name=self._client_name,
+            redirect_uris=[AnyHttpUrl(redirect_uri)],
+            grant_types=["authorization_code", "refresh_token"],
+            response_types=["code"],
+            scope=scopes_str,
+            **(self._additional_client_metadata or {}),
+        )
+
+        if self._client_id:
+            # Create the full static client info directly which will avoid DCR.
+            # Spread client_metadata so redirect_uris, grant_types, response_types,
+            # scope, etc. are included — servers may validate these fields.
+            metadata = client_metadata.model_dump(exclude_none=True)
+            # Default token_endpoint_auth_method based on whether a secret is
+            # provided, unless the caller already set it via additional_client_metadata.
+            if "token_endpoint_auth_method" not in metadata:
+                metadata["token_endpoint_auth_method"] = (
+                    "client_secret_post" if self._client_secret else "none"
+                )
+            self._static_client_info = OAuthClientInformationFull(
+                client_id=self._client_id,
+                client_secret=self._client_secret,
+                **metadata,
+            )
+
+        token_storage = self._token_storage or MemoryStore()
+
+        if isinstance(token_storage, MemoryStore):
+            from warnings import warn
+
+            warn(
+                message="Using in-memory token storage -- tokens will be lost when the client restarts. "
+                "For persistent storage across multiple MCP servers, provide an encrypted AsyncKeyValue backend. "
+                "See https://gofastmcp.com/clients/auth/oauth#token-storage for details.",
+                stacklevel=2,
+            )
+
+        # Use full URL for token storage to properly separate tokens per MCP endpoint
+        self.token_storage_adapter: TokenStorageAdapter = TokenStorageAdapter(
+            async_key_value=token_storage, server_url=mcp_url
+        )
+
+        self.mcp_url = mcp_url
+
+        super().__init__(
+            server_url=mcp_url,
+            client_metadata=client_metadata,
+            storage=self.token_storage_adapter,
+            redirect_handler=self.redirect_handler,
+            callback_handler=self.callback_handler,
+            client_metadata_url=self._client_metadata_url,
+        )
+
+        self._bound = True
+
+    async def _initialize(self) -> None:
+        """Load stored tokens and client info, properly setting token expiry."""
+        await super()._initialize()
+
+        if self._static_client_info is not None:
+            self.context.client_info = self._static_client_info
+            await self.token_storage_adapter.set_client_info(self._static_client_info)
+
+        if self.context.current_tokens and self.context.current_tokens.expires_in:
+            stored_expiry = await self.token_storage_adapter.get_token_expiry()
+            if stored_expiry is not None:
+                self.context.token_expiry_time = stored_expiry
+            else:
+                self.context.update_token_expiry(self.context.current_tokens)
+
+    async def _perform_authorization(self) -> httpx2.Request:
+        """Reject expired registrations before attempting authorization."""
+        client_info = self.context.client_info
+        if (
+            client_info is not None
+            and client_info.client_secret is not None
+            and client_info.client_secret_expires_at
+            and client_info.client_secret_expires_at <= int(time.time())
+        ):
+            raise ExpiredClientRegistrationError(
+                "OAuth dynamic registration returned an expired client secret"
+            )
+        return await super()._perform_authorization()
+
+    async def redirect_handler(self, authorization_url: str) -> None:
+        """Open browser for authorization, with pre-flight check for invalid client."""
+        # Pre-flight check to detect invalid client_id before opening browser
+        async with self.httpx_client_factory() as client:
+            response = await client.get(authorization_url, follow_redirects=False)
+
+            # Check for client not found error (400 typically means bad client_id)
+            if response.status_code == 400:
+                raise ClientNotFoundError(
+                    "OAuth client not found - cached credentials may be stale"
+                )
+
+            # OAuth typically returns redirects, but some providers return 200 with HTML login pages
+            if response.status_code not in (200, 302, 303, 307, 308):
+                raise RuntimeError(
+                    f"Unexpected authorization response: {response.status_code}"
+                )
+
+        logger.info(f"OAuth authorization URL: {authorization_url}")
+        webbrowser.open(authorization_url)
+
+    async def callback_handler(self) -> AuthorizationCodeResult:
+        """Handle OAuth callback and return the authorization code result."""
+        # Create result container and event to capture the OAuth response
+        result = OAuthCallbackResult()
+        result_ready = anyio.Event()
+
+        # Create server with result tracking
+        server: Server = create_oauth_callback_server(
+            port=self.redirect_port,
+            host=self._callback_host,
+            server_url=self.mcp_url,
+            result_container=result,
+            result_ready=result_ready,
+        )
+
+        # Run server until response is received with timeout logic
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(server.serve)
+            logger.info(
+                f"🎧 OAuth callback server started on http://{self._callback_host}:{self.redirect_port}"
+            )
+
+            try:
+                with anyio.fail_after(self._callback_timeout):
+                    await result_ready.wait()
+                    if result.error:
+                        raise result.error
+                    # `result.code` is set once `result_ready` fires without error.
+                    return AuthorizationCodeResult(
+                        code=result.code,  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+                        state=result.state,
+                        iss=result.iss,
+                    )
+            except TimeoutError as e:
+                raise TimeoutError(
+                    f"OAuth callback timed out after {self._callback_timeout} seconds"
+                ) from e
+            finally:
+                server.should_exit = True
+                await anyio.sleep(0.1)  # Allow server to shut down gracefully
+                tg.cancel_scope.cancel()
+
+        raise RuntimeError("OAuth callback handler could not be started")
+
+    async def async_auth_flow(
+        self, request: httpx2.Request
+    ) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
+        """HTTPX auth flow with automatic retry on stale cached credentials.
+
+        If the OAuth flow fails due to invalid/stale client credentials,
+        clears the cache and retries once with fresh registration.
+        """
+        if not self._bound:
+            raise RuntimeError(
+                "OAuth provider has no server URL. Either pass mcp_url to OAuth() "
+                "or use it with Client(auth=...) which provides the URL automatically."
+            )
+        try:
+            # First attempt with potentially cached credentials
+            async with aclosing(super().async_auth_flow(request)) as gen:
+                response = None
+                while True:
+                    try:
+                        # First iteration sends None, subsequent iterations send response
+                        yielded_request = await gen.asend(response)  # ty: ignore[invalid-argument-type]
+                        response = yield yielded_request
+                    except StopAsyncIteration:
+                        break
+
+        except (ClientNotFoundError, ExpiredClientRegistrationError) as exc:
+            # Static credentials are fixed — retrying won't help. Surface the
+            # error so the user can correct their client_id / client_secret.
+            if self._static_client_info is not None:
+                raise ClientNotFoundError(
+                    "OAuth server rejected the static client credentials. "
+                    "Verify that the client_id (and client_secret, if provided) "
+                    "are correct and that the client is registered with the server."
+                ) from exc
+
+            logger.debug(
+                "OAuth client registration is invalid, clearing cache and retrying..."
+            )
+            # Clear cached state and retry once
+            self._initialized = False
+            await self.token_storage_adapter.clear()
+
+            # Retry with fresh registration
+            async with aclosing(super().async_auth_flow(request)) as gen:
+                response = None
+                while True:
+                    try:
+                        yielded_request = await gen.asend(response)  # ty: ignore[invalid-argument-type]
+                        response = yield yielded_request
+                    except StopAsyncIteration:
+                        break

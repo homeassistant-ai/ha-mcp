@@ -14,8 +14,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
 import yaml  # type: ignore[import-untyped]
-from mcp.types import Icon
 from pydantic import Field
+
+from ha_mcp._vendor.mcp.types import Icon
 
 from .config import _PACKAGE_VERSION, get_global_settings
 from .errors import ErrorCode, create_error_response
@@ -66,11 +67,11 @@ _SKILL_GUIDE_MANDATORYBPS_HINT = (
 SERVER_ICONS = [
     Icon(
         src="https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/packaging/mcpb/icon.svg",
-        mimeType="image/svg+xml",
+        mime_type="image/svg+xml",
     ),
     Icon(
         src="https://raw.githubusercontent.com/homeassistant-ai/ha-mcp/master/packaging/mcpb/icon-128.png",
-        mimeType="image/png",
+        mime_type="image/png",
         sizes=["128x128"],
     ),
 ]
@@ -216,12 +217,22 @@ class HomeAssistantSmartMCPServer:
         # of the full description we just discarded).
         self._apply_lite_docstrings()
 
+        # Append the Claude Desktop approval note to write tools. After
+        # lite docstrings so the note survives the replacement.
+        self._apply_write_tool_note()
+
         # Enrich tool descriptions with BM25 keyword boosts. Runs
         # unconditionally so Claude's native deferred-tool search
         # (claude.ai) benefits even when ENABLE_TOOL_SEARCH is off.
         # Must come before _apply_tool_search so CategorizedSearchTransform
         # indexes the enriched descriptions.
         self._apply_search_keyword_enrichment()
+
+        # Capability-specific metadata supersedes legacy/lite descriptions,
+        # and must reach the catalog before categorized search indexes it.
+        from .transforms import ComponentSearchSchemaTransform
+
+        self.mcp.add_transform(ComponentSearchSchemaTransform(self.client))
 
         # Apply tool search transform (must come after all tools and
         # the skill guide tool are registered so it can wrap everything)
@@ -247,20 +258,24 @@ class HomeAssistantSmartMCPServer:
 
         self.mcp.add_middleware(ToolSearchHintMiddleware())
 
-        # Stamp every tools/list entry with its conversation-agent LLM API
-        # exposure + pinned state (#1745). Additive metadata only — regular
-        # clients are unaffected; the ha_mcp_tools custom component filters
-        # what it offers to Home Assistant conversation agents on it.
-        from .llm_exposure import LlmExposureMiddleware
+        # Only the custom component's conversation-agent LLM API consumes the
+        # private per-tool stamp. Avoid adding it to standalone/add-on catalogs,
+        # or to an embedded server whose LLM API is disabled (#2479).
+        from .config import should_emit_llm_api_metadata
 
-        # policy_live: whether the gating middleware/queue actually wired at
-        # startup — stamped so a client can distinguish "configured" from
-        # "enforcing" on the very connection it is using (#1990).
-        self.mcp.add_middleware(
-            LlmExposureMiddleware(
-                policy_live=lambda: getattr(self, "approval_queue", None) is not None
+        if should_emit_llm_api_metadata():
+            from .llm_exposure import LlmExposureMiddleware
+
+            # policy_live: whether the gating middleware/queue actually wired
+            # at startup — stamped so the component can distinguish configured
+            # from enforcing on the connection it is using (#1990).
+            self.mcp.add_middleware(
+                LlmExposureMiddleware(
+                    policy_live=lambda: (
+                        getattr(self, "approval_queue", None) is not None
+                    )
+                )
             )
-        )
 
         # Entity visibility enforce mode, INBOUND half (#2015) — always
         # installed, consults the live config per request (no-op unless
@@ -753,10 +768,13 @@ class HomeAssistantSmartMCPServer:
             "ha_get_skill_guide or your locally installed skills."
         ),
         "ha_config_get_scene": (
-            "Get a Home Assistant scene configuration by "
-            "scene_id or entity_id. Returns the full config plus a "
+            "Get a Home Assistant scene configuration by scene_id or entity_id, "
+            "or omit scene_id to list/search scenes. Use query for names/IDs "
+            "and search_in_config=True for full stored attribute values. "
+            "Pass a returned scene_id to get the full config plus a "
             "stable config_hash for use with python_transform on "
-            "ha_config_set_scene.\n\n"
+            "ha_config_set_scene. Integration-managed scenes have no editable "
+            "storage config; partial content searches are not exhaustive.\n\n"
             "For schema details, see "
             "ha_get_skill_guide."
         ),
@@ -1125,6 +1143,20 @@ class HomeAssistantSmartMCPServer:
                 "effect. Catalog token usage will be unchanged from the "
                 "default."
             )
+
+    def _apply_write_tool_note(self) -> None:
+        """Append the Claude Desktop manual-approval note to write tools.
+
+        Applied unconditionally: the dropped calls never reach the server
+        (issue #2367), so the tool description is the only channel that
+        reaches the agent before the user clicks approve.
+        """
+        try:
+            from .transforms import WriteToolNoteTransform
+
+            self.mcp.add_transform(WriteToolNoteTransform())
+        except Exception:
+            logger.exception("Failed to apply WriteToolNoteTransform")
 
     def _apply_search_keyword_enrichment(self) -> None:
         """Append BM25 keyword boosts to tool descriptions.
@@ -1503,7 +1535,9 @@ class HomeAssistantSmartMCPServer:
             )
         else:
             try:
-                from fastmcp.server.providers.skills import SkillsDirectoryProvider
+                from ha_mcp._vendor.fastmcp.server.providers.skills import (
+                    SkillsDirectoryProvider,
+                )
             except ImportError:
                 logger.warning(
                     "SkillsDirectoryProvider not available in fastmcp; "

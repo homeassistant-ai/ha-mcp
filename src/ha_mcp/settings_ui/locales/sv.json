@@ -467,7 +467,7 @@
     "advanced.code_mode_saved_tools_path.label": "Sökväg för sparade verktyg",
     "advanced.code_mode_saved_tools_path.help": "JSON-fil som används för att bevara anpassade verktyg över omstarter. Omstart krävs.",
     "advanced.extra_yaml_write_keys.label": "Extra YAML-skrivnycklar",
-    "advanced.extra_yaml_write_keys.help": "Kommaseparerade nycklar på toppnivå som ha_config_set_yaml kan skriva utöver de inbyggda, för YAML-först-integrationer på denna installation (t.ex. alert2). Nycklar som omdefinierar Home Assistants egen förtroendegräns kan aldrig läggas till och ignoreras. Kräver anpassad komponent 1.2.4 eller nyare.",
+    "advanced.extra_yaml_write_keys.help": "Extra toppnivånycklar som ha_config_set_yaml kan skriva utöver de inbyggda, för YAML-första integrationer på den här installationen (t.ex. alert2). Ange en nyckel per rad eller separera nycklar med kommatecken. Nycklar som omdefinierar Home Assistants egna förtroendegräns kan aldrig läggas till och ignoreras. Kräver anpassad komponent 1.2.4 eller nyare.",
     "advanced.sidecar_pin_port.label": "Inställnings-UI sidovagnsport",
     "advanced.sidecar_pin_port.help": "0 väljer en ledig port vid första start och behåller den för senare omstarter; 1024–65535 fäster en föredragen port (återgår till en ledig om den är upptagen). Omstart krävs.",
     "advanced.enable_dev_mode.label": "Utvecklarläge",
@@ -542,8 +542,8 @@
       "description": "Hämta etikettinformation - lista alla etiketter eller hämta en specifik med ID."
     },
     "ha_config_get_scene": {
-      "title": "Hämta Scenkonfiguration",
-      "description": "Hämta Home Assistant-scenkonfiguration."
+      "title": "Hämta eller hitta scener",
+      "description": "Hämta en scens kompletta konfiguration, eller lista och sök efter scener utan scene_id."
     },
     "ha_config_get_script": {
       "title": "Hämta Skriptkonfiguration",
@@ -599,7 +599,7 @@
     },
     "ha_config_set_calendar_event": {
       "title": "Skapa eller Uppdatera Kalenderhändelse",
-      "description": "Skapa en ny händelse i en kalender."
+      "description": "Skapa en ny händelse i en kalender eller uppdatera en befintlig."
     },
     "ha_config_set_category": {
       "title": "Skapa eller Uppdatera Kategori",

@@ -45,7 +45,7 @@ _URL_YAML = "blueprint:\n  name: From Source URL\n  domain: automation\n"
 
 _CAPS_TEXT = {
     "schema_version": 1,
-    "component_version": "2.1.4",
+    "component_version": "2.2.0",
     "capabilities": ["blueprint_get", "blueprint_text"],
     "limits": {},
 }
@@ -57,7 +57,7 @@ _CAPS_BODY_ONLY = {
 }
 _CAPS_NONE = {
     "schema_version": 1,
-    "component_version": "2.1.4",
+    "component_version": "2.2.0",
     "capabilities": ["search"],
     "limits": {},
 }
@@ -747,7 +747,7 @@ class TestTierOrder:
     ) -> None:
         """The File & YAML Tools gates raise rather than return; that is a
         missing entry, not a failure of the blueprint being asked for."""
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         async def refuse(_c: Any, _s: str, _d: dict[str, Any]) -> Any:
             raise ToolError("entry not set up")

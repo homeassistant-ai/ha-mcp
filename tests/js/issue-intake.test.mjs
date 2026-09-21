@@ -127,13 +127,13 @@ test("final comment patches use the full retry budget after the label succeeds",
       if (finalAttempts < 3)
         throw Object.assign(Error("Temporary patch failure"), {
           status: 503,
-          retryAfter: 0,
         });
     }
     return request(path, options);
   };
   await publish(api, prepare(s, bot), result(), bot);
   assert.equal(finalAttempts, 3);
+  assert.deepEqual(api.delays, [5000, 15000]);
   assert.equal(api.data.comments.length, 1);
   assert.equal(prepare(await collect(api, "test/repo", 1), bot).run, false);
 });
@@ -174,7 +174,6 @@ test("temporary label and final-patch failures recover without duplicate comment
         failed = true;
         throw Object.assign(Error("Transient failure"), {
           status: 503,
-          retryAfter: 0,
         });
       }
       return request(path, options);
@@ -195,7 +194,7 @@ test("exhausted transient writes stay pending for manual recovery", async () => 
   api.request = (path, options = {}) => {
     if (path.endsWith("/labels")) {
       attempts += 1;
-      throw Object.assign(Error("Outage"), { status: 503, retryAfter: 0 });
+      throw Object.assign(Error("Outage"), { status: 503 });
     }
     return request(path, options);
   };
@@ -217,7 +216,6 @@ test("a maintainer pause during backoff stops the retry", async () => {
       api.data.comments.push(comment(2, "maintainer", "/triage pause"));
       throw Object.assign(Error("Temporary failure"), {
         status: 503,
-        retryAfter: 0,
       });
     }
     return request(path, options);
@@ -351,6 +349,8 @@ class FakeGitHub {
     this.data = structuredClone(data);
     this.writes = [];
     this.failLabel = false;
+    this.delays = [];
+    this.delay = async (milliseconds) => this.delays.push(milliseconds);
   }
   request(path, options = {}) {
     if (options.method && options.method !== "GET") {

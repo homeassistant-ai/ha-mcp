@@ -100,9 +100,11 @@ issue enrichment, labeling, and planning are disabled to avoid competing respons
 The model does not diagnose, propose fixes, classify cause, or create PRs.
 See [issue intake](issue-intake.md) for controls, permissions, tests, and recovery.
 
-Maintainer `/astra`, `/sol` and `/terra` commands start the separate [slash agent workflow](slash-agent.md).
-Its durable checkpoint carries work from an issue into a draft PR and through
-review/CI corrections to readiness. It never merges or requests reviewers.
+Maintainer `/astra`, `/sol` and `/terra` commands start the separate
+[slash agent workflow](slash-agent.md). Its durable checkpoint can answer on an
+issue without repository changes or carry implementation into a draft PR and
+through review and CI corrections to readiness. It never merges or requests
+reviewers.
 
 To find open issues without deep analysis:
 
@@ -190,6 +192,7 @@ summary only when the pull request actually reaches that state.
 | `locale-sync.yml` | Daily or manual | Post-merge translations pushed directly to `master`. |
 | `test.yml` | Manual | Smoke-test the generic Codex action and secret refresh. |
 | `issue-intake.yml` | Human issue activity or manual | Factual issue documentation with maintainer overrides. |
+| `slash-agent.yml` | Maintainer slash command or trusted continuation event | Issue response and issue-to-PR implementation through readiness. |
 | `codex-review-issues.yml` | Manual | Write a read-only open-issue report to Actions logs. |
 | `codex-review-prs.yml` | Manual | Write a read-only open-PR report to Actions logs. |
 
@@ -239,14 +242,16 @@ The action must discover `renovate.json` as repository configuration only.
 Passing the same file as action-global `configurationFile` as well duplicates
 custom managers and dependency-dashboard entries.
 
-The private websockets pin has a narrowly scoped post-upgrade task. Renovate
-installs Python 3.13, runs `python3 -I scripts/vendor_websockets.py`, and includes
-only `src/ha_mcp/_vendor/websockets/**` as generated artifacts alongside the pin.
-The scanner allows only that exact command, with shell execution disabled.
-This dependency retains the ordinary schedule and release-age policy. Source,
-license, manifest, drift, and API checks still gate the update; a failed
-generator is an artifact error, not an accepted pin-only update.
-The credential-free vendoring fixture exercises the pinned Renovate executor.
+The private websockets and FastMCP pins each have a narrowly scoped
+post-upgrade task. Renovate installs Python 3.13, runs
+`python3 -I scripts/vendor_websockets.py` or `python3 -I scripts/vendor_fastmcp.py`,
+and includes only that generator's `src/ha_mcp/_vendor/<package>/**` trees as
+generated artifacts alongside the pin. The scanner allows only those exact
+commands, with shell execution disabled. These dependencies retain the ordinary
+schedule and release-age policy. Source, license, manifest, drift, and API
+checks still gate the update; a failed generator is an artifact error, not an
+accepted pin-only update. The credential-free vendoring fixture exercises the
+pinned Renovate executor for both generators.
 
 Renovate enables GitHub-native squash auto-merge for minor, patch, and digest
 updates, and for its ungrouped vulnerability-alert fixes. Ordinary major

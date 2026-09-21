@@ -15,8 +15,9 @@ from datetime import tzinfo as _TZInfo
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastmcp.exceptions import ToolError
 from pydantic import BeforeValidator, ValidationError
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
@@ -2410,7 +2411,9 @@ def augment_tool_error_with_skill_content(
     if not isinstance(error_dict, dict):
         return te
     augment_error_dict_with_skill_content(error_dict, bp_warnings)
-    return ToolError(json.dumps(error_dict, indent=2, default=str))
+    return ToolError(
+        json.dumps(error_dict, indent=2, default=str), log_level=te.log_level
+    )
 
 
 def merge_visibility_warnings(

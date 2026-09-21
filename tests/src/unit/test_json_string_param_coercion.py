@@ -42,7 +42,7 @@ from .test_config_param_no_string_schema import (
 def _get_param_annotation(
     register_fn: Callable[..., Any], tool_name: str, param_name: str
 ) -> Any:
-    from fastmcp import FastMCP
+    from ha_mcp._vendor.fastmcp import FastMCP
 
     async def _inner() -> Any:
         mcp = FastMCP("test")

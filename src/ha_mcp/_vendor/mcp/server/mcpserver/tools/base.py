@@ -1,0 +1,210 @@
+from __future__ import annotations
+
+from collections.abc import Callable, Hashable
+from functools import cached_property
+from typing import TYPE_CHECKING, Any
+
+from ha_mcp._vendor.mcp_types import Icon, InputRequiredResult, ToolAnnotations
+from pydantic import BaseModel, Field, ValidationError
+
+from ha_mcp._vendor.mcp.server.mcpserver.exceptions import (
+    InvalidSignature,
+    ResourceError,
+    ToolError,
+    UnexpectedResourceError,
+    UnexpectedToolError,
+)
+from ha_mcp._vendor.mcp.server.mcpserver.resolve import (
+    build_resolver_plans,
+    find_resolved_parameters,
+    resolve_arguments,
+    returns_input_required,
+)
+from ha_mcp._vendor.mcp.server.mcpserver.utilities.context_injection import find_context_parameter
+from ha_mcp._vendor.mcp.server.mcpserver.utilities.func_metadata import FuncMetadata, func_metadata
+from ha_mcp._vendor.mcp.shared._callable_inspection import is_async_callable
+from ha_mcp._vendor.mcp.shared.exceptions import MCPError
+from ha_mcp._vendor.mcp.shared.tool_name_validation import validate_and_warn_tool_name
+
+if TYPE_CHECKING:
+    from ha_mcp._vendor.mcp.server.context import LifespanContextT, RequestT
+    from ha_mcp._vendor.mcp.server.mcpserver.context import Context
+
+
+class Tool(BaseModel):
+    """Internal tool registration info."""
+
+    fn: Callable[..., Any] = Field(exclude=True)
+    name: str = Field(description="Name of the tool")
+    title: str | None = Field(None, description="Human-readable title of the tool")
+    description: str = Field(description="Description of what the tool does")
+    parameters: dict[str, Any] = Field(description="JSON schema for tool parameters")
+    fn_metadata: FuncMetadata = Field(
+        description="Metadata about the function including a pydantic model for tool arguments"
+    )
+    is_async: bool = Field(description="Whether the tool is async")
+    context_kwarg: str | None = Field(None, description="Name of the kwarg that should receive context")
+    resolved_params: dict[str, Any] = Field(
+        default_factory=lambda: {},
+        exclude=True,
+        description="Parameters filled by resolvers, mapped to (Resolve, wants_union)",
+    )
+    resolver_plans: dict[Hashable, Any] = Field(
+        default_factory=lambda: {}, exclude=True, description="Static per-resolver parameter plans"
+    )
+    annotations: ToolAnnotations | None = Field(None, description="Optional annotations for the tool")
+    icons: list[Icon] | None = Field(default=None, description="Optional list of icons for this tool")
+    meta: dict[str, Any] | None = Field(default=None, description="Optional metadata for this tool")
+
+    @cached_property
+    def output_schema(self) -> dict[str, Any] | None:
+        return self.fn_metadata.output_schema
+
+    @classmethod
+    def from_function(
+        cls,
+        fn: Callable[..., Any],
+        name: str | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        context_kwarg: str | None = None,
+        annotations: ToolAnnotations | None = None,
+        icons: list[Icon] | None = None,
+        meta: dict[str, Any] | None = None,
+        structured_output: bool | None = None,
+    ) -> Tool:
+        """Create a Tool from a function."""
+        func_name = name or fn.__name__
+
+        validate_and_warn_tool_name(func_name)
+
+        if func_name == "<lambda>":
+            raise ValueError("You must provide a name for lambda functions")
+
+        func_doc = description or fn.__doc__ or ""
+        is_async = is_async_callable(fn)
+
+        if context_kwarg is None:  # pragma: no branch
+            context_kwarg = find_context_parameter(fn)
+
+        resolved_params = find_resolved_parameters(fn)
+        if resolved_params and returns_input_required(fn):
+            raise InvalidSignature(
+                f"Tool {func_name!r} combines Resolve(...) parameters with an InputRequiredResult "
+                "return; a call has one input_required channel, so the multi-round flow is driven "
+                "either by resolvers or by the tool body, not both"
+            )
+
+        skip_names = [context_kwarg] if context_kwarg is not None else []
+        skip_names.extend(resolved_params)
+
+        func_arg_metadata = func_metadata(
+            fn,
+            skip_names=skip_names,
+            structured_output=structured_output,
+        )
+        parameters = func_arg_metadata.arg_model.model_json_schema(by_alias=True)
+
+        # Match `model_dump_one_level`'s kwarg keys (alias when present, else field name)
+        # so a by-name resolver param resolves to a key that exists at call time.
+        tool_arg_names = {field.alias or name for name, field in func_arg_metadata.arg_model.model_fields.items()}
+        resolver_plans = build_resolver_plans(resolved_params, tool_arg_names)
+
+        return cls(
+            fn=fn,
+            name=func_name,
+            title=title,
+            description=func_doc,
+            parameters=parameters,
+            fn_metadata=func_arg_metadata,
+            is_async=is_async,
+            context_kwarg=context_kwarg,
+            resolved_params=dict(resolved_params),
+            resolver_plans=resolver_plans,
+            annotations=annotations,
+            icons=icons,
+            meta=meta,
+        )
+
+    async def run(
+        self,
+        arguments: dict[str, Any],
+        context: Context[LifespanContextT, RequestT],
+        convert_result: bool = False,
+    ) -> Any:
+        """Run the tool with arguments.
+
+        Every failure other than `MCPError` is raised as a `ToolError` whose message
+        starts `Error executing tool <name>` and whose `__cause__` is what was raised.
+        An anticipated failure keeps its own text after the prefix. A crash does not,
+        so nothing from an unexpected exception reaches the client.
+
+        Raises:
+            ToolError: If the arguments fail validation against the input schema, or
+                the tool function (or a resolver) raises `ToolError` or `ResourceError`.
+            UnexpectedToolError: If argument validation, the tool function, or a
+                resolver raises anything else, or the return value fails output conversion.
+        """
+        try:
+            validated = self.fn_metadata.validate_arguments(arguments)
+        except ValidationError as exc:
+            # The caller's arguments don't match the input schema: the model's mistake
+            # to read and correct, so it is reported like a deliberate ToolError.
+            raise ToolError(f"Error executing tool {self.name}: {exc}") from exc
+        except MCPError:
+            raise
+        except Exception as exc:
+            # A custom validator or default_factory that raises is a crash.
+            raise UnexpectedToolError(f"Error executing tool {self.name}") from exc
+
+        try:
+            pass_directly: dict[str, Any] = {}
+            if self.context_kwarg is not None:
+                pass_directly[self.context_kwarg] = context
+
+            # Resolvers see the same validated arguments the tool body receives, so a
+            # `default_factory`/stateful validator can't hand a by-name resolver a
+            # different value than the body.
+            if self.resolved_params:
+                resolved = await resolve_arguments(self.resolved_params, self.resolver_plans, validated, context)
+                if isinstance(resolved, InputRequiredResult):
+                    # A resolver still needs client input (>= 2026-07-28): surface the
+                    # batched questions instead of running the tool body this round.
+                    return self.fn_metadata.convert_result(resolved) if convert_result else resolved
+                pass_directly |= resolved
+
+            result = await self.fn_metadata.call_fn(self.fn, self.is_async, validated, pass_directly)
+
+            # Registration rejects the annotated form of this combination; this covers
+            # a body that returns an InputRequiredResult without declaring it. It is
+            # an authoring bug, so it is raised as a crash rather than a ToolError.
+            if self.resolved_params and isinstance(result, InputRequiredResult):
+                raise RuntimeError(
+                    "the tool returned an InputRequiredResult but its parameters use Resolve(...); "
+                    "a call has one input_required channel, so the multi-round flow is driven "
+                    "either by resolvers or by the tool body, not both"
+                )
+
+            if convert_result:
+                result = self.fn_metadata.convert_result(result)
+
+            return result
+        except MCPError:
+            # `MCPError` (and subclasses such as `UrlElicitationRequiredError`)
+            # carries a JSON-RPC `ErrorData(code, message, data)` and means
+            # "respond with a protocol error" - re-raise so the kernel surfaces
+            # it as a top-level JSON-RPC error rather than wrapping it as a
+            # `CallToolResult(isError=True)` execution failure.
+            raise
+        # Everything else reaches the model as an is_error result under this tool's
+        # name, and the wrapper's type tells the server whether to log a crash.
+        except (UnexpectedToolError, UnexpectedResourceError) as exc:
+            # A nested tool call or resource read crashed: still a crash here. Its
+            # message is already the generic one, so it is safe to carry along.
+            raise UnexpectedToolError(f"Error executing tool {self.name}: {exc}") from exc
+        except (ToolError, ResourceError) as exc:
+            # Raised deliberately by the tool, a resolver, or a resource it read.
+            raise ToolError(f"Error executing tool {self.name}: {exc}") from exc
+        except Exception as exc:
+            # A crash: the exception's own text stays on the server.
+            raise UnexpectedToolError(f"Error executing tool {self.name}") from exc

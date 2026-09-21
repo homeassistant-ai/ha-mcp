@@ -1,0 +1,601 @@
+from __future__ import annotations
+
+import inspect
+from collections.abc import Callable
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    ClassVar,
+)
+
+from ha_mcp._vendor import mcp_types
+import pydantic_core
+from ha_mcp._vendor.mcp.shared.tool_name_validation import validate_and_warn_tool_name
+from ha_mcp._vendor.mcp_types import (
+    CallToolResult,
+    ContentBlock,
+    Icon,
+    TextContent,
+    ToolAnnotations,
+    ToolExecution,
+)
+from ha_mcp._vendor.mcp_types import Tool as MCPTool
+from pydantic import (
+    BaseModel,
+    Field,
+    PrivateAttr,
+    PydanticSchemaGenerationError,
+    model_validator,
+)
+from pydantic.json_schema import SkipJsonSchema
+
+from ha_mcp._vendor.fastmcp.utilities.authorization import AuthCheck
+from ha_mcp._vendor.fastmcp.utilities.components import FastMCPComponent
+from ha_mcp._vendor.fastmcp.utilities.logging import get_logger
+from ha_mcp._vendor.fastmcp.utilities.prefab import (
+    is_prefab_app,
+    is_prefab_component,
+    prefab_app_from_component,
+)
+from ha_mcp._vendor.fastmcp.utilities.tasks import TaskConfig
+from ha_mcp._vendor.fastmcp.utilities.types import (
+    Audio,
+    File,
+    Image,
+    NotSet,
+    NotSetT,
+    get_cached_typeadapter,
+)
+
+if TYPE_CHECKING:
+    from ha_mcp._vendor.fastmcp.tools.function_tool import FunctionTool
+    from ha_mcp._vendor.fastmcp.tools.tool_transform import ArgTransform, TransformedTool
+
+# Re-export from function_tool module
+
+logger = get_logger(__name__.removeprefix("ha_mcp._vendor."))
+
+_JSONABLE_ADAPTER = get_cached_typeadapter(Any)
+
+
+def _default_title(name: str) -> str:
+    """Derive a display title from a tool name.
+
+    The MCP spec says clients should fall back to `name` for display when
+    `title` is absent, but some clients (e.g. ChatGPT) instead drop the tool
+    entirely. Always emitting a title avoids depending on that fallback.
+    """
+    return name.replace("_", " ").replace("-", " ").title()
+
+
+def default_serializer(data: Any) -> str:
+    return _JSONABLE_ADAPTER.dump_json(data, fallback=str).decode()
+
+
+def _serialize_to_jsonable(data: Any, annotation: Any = Any) -> Any:
+    """Serialize through Pydantic, falling back for unsupported annotations."""
+    if (
+        annotation is inspect.Signature.empty
+        or annotation is None
+        or annotation is Any
+        or annotation is ...
+        or isinstance(annotation, str)
+    ):
+        adapter = _JSONABLE_ADAPTER
+    else:
+        try:
+            return get_cached_typeadapter(annotation).dump_python(data, mode="json")
+        except PydanticSchemaGenerationError:
+            adapter = _JSONABLE_ADAPTER
+
+    return adapter.dump_python(data, mode="json")
+
+
+class ToolResult(BaseModel):
+    _raw_mcp_result: CallToolResult | None = PrivateAttr(default=None)
+
+    content: list[ContentBlock] = Field(
+        description="List of content blocks for the tool result"
+    )
+    structured_content: dict[str, Any] | None = Field(
+        default=None, description="Structured content matching the tool's output schema"
+    )
+    meta: dict[str, Any] | None = Field(
+        default=None, description="Runtime metadata about the tool execution"
+    )
+    is_error: bool = Field(
+        default=False,
+        description="Whether this result represents a tool execution error. "
+        "When True, it maps to CallToolResult.is_error so the error is returned "
+        "to the client rather than raised.",
+    )
+
+    def __init__(
+        self,
+        content: list[ContentBlock] | Any | None = None,
+        structured_content: dict[str, Any] | Any | None = None,
+        meta: dict[str, Any] | None = None,
+        is_error: bool = False,
+    ):
+        if content is None and structured_content is None:
+            raise ValueError("Either content or structured_content must be provided")
+        elif content is None:
+            content = structured_content
+
+        converted_content: list[ContentBlock] = _convert_to_content(result=content)
+
+        if structured_content is not None:
+            # Convert Prefab types to their wire-format envelope before
+            # generic serialization, so the renderer gets the right shape.
+            if is_prefab_app(structured_content):
+                structured_content = _prefab_to_json(structured_content)
+            elif is_prefab_component(structured_content):
+                structured_content = _prefab_to_json(
+                    prefab_app_from_component(structured_content)
+                )
+
+            try:
+                structured_content = _serialize_to_jsonable(structured_content)
+            except pydantic_core.PydanticSerializationError as e:
+                logger.error(
+                    f"Could not serialize structured content. If this is unexpected, set your tool's output_schema to None to disable automatic serialization: {e}"
+                )
+                raise
+            if not isinstance(structured_content, dict):
+                raise ValueError(
+                    "structured_content must be a dict or None. "
+                    f"Got {type(structured_content).__name__}: {structured_content!r}. "
+                    "Tools should wrap non-dict values based on their output_schema."
+                )
+
+        super().__init__(
+            content=converted_content,
+            structured_content=structured_content,
+            meta=meta,
+            is_error=is_error,
+        )
+
+    @classmethod
+    def from_mcp_result(cls, result: CallToolResult) -> ToolResult:
+        """Wrap a protocol result while preserving its exact wire representation."""
+        tool_result = cls(
+            content=result.content,
+            structured_content=result.structured_content,
+            meta=result.meta,
+            is_error=result.is_error,
+        )
+        tool_result._raw_mcp_result = result
+        return tool_result
+
+    def to_mcp_result(
+        self,
+    ) -> (
+        list[ContentBlock] | tuple[list[ContentBlock], dict[str, Any]] | CallToolResult
+    ):
+        if self._raw_mcp_result is not None:
+            return self._raw_mcp_result
+
+        # An error result must round-trip through CallToolResult so isError
+        # reaches the client; the plain content/tuple returns can't carry it.
+        if self.meta is not None or self.is_error:
+            return CallToolResult(
+                structured_content=self.structured_content,
+                content=self.content,
+                is_error=self.is_error,
+                _meta=self.meta,  # type: ignore[call-arg]  # _meta is Pydantic alias for meta field
+            )
+        if self.structured_content is None:
+            return self.content
+        return self.content, self.structured_content
+
+
+class InputRequiredToolResult(ToolResult):
+    """The full result of a single multi-round-trip leg (SEP-2322).
+
+    The protocol is stateless: each MRTR leg is a complete request→response
+    cycle. When a guard tool returns an `InputRequiredResult` from its body to
+    ask the client for input, that ask is the *legitimate result* of this tool
+    call — not a pause, not an error, not a third control-flow outcome. FastMCP
+    wraps it in this `ToolResult` subclass so it flows through the middleware
+    chain as an ordinary return value: `call_next(...)` returns it, default
+    middleware completes normally on the leg, and middleware authors can
+    identify an ask with a simple `isinstance(result, InputRequiredToolResult)`
+    check.
+
+    Invariant: the wrapped `InputRequiredResult` is never serialized as tool
+    content. `content` is always empty; the wire handler (`_on_call_tool`)
+    reads `.input_required` and returns it to the runner as the
+    `input_required` result. Do not read `.content` / `.structured_content` on
+    this subclass — they carry nothing.
+    """
+
+    input_required: mcp_types.InputRequiredResult = Field(
+        description="The client-input request this leg resolved to (SEP-2322)"
+    )
+
+    def __init__(self, input_required: mcp_types.InputRequiredResult) -> None:
+        # Bypass ToolResult's content-conversion __init__: an input-required
+        # leg carries no tool content (see the invariant above), and
+        # `input_required` is a required field ToolResult.__init__ can't set.
+        BaseModel.__init__(
+            self,
+            content=[],
+            structured_content=None,
+            meta=None,
+            is_error=False,
+            input_required=input_required,
+        )
+
+
+class Tool(FastMCPComponent):
+    """Internal tool registration info."""
+
+    KEY_PREFIX: ClassVar[str] = "tool"
+
+    return_type: Annotated[SkipJsonSchema[Any], Field(exclude=True)] = None
+    parameters: Annotated[
+        dict[str, Any], Field(description="JSON schema for tool parameters")
+    ]
+    output_schema: Annotated[
+        dict[str, Any] | None, Field(description="JSON schema for tool output")
+    ] = None
+    annotations: Annotated[
+        ToolAnnotations | None,
+        Field(description="Additional annotations about the tool"),
+    ] = None
+    execution: Annotated[
+        ToolExecution | None,
+        Field(description="Task execution configuration (SEP-1686)"),
+    ] = None
+    auth: Annotated[
+        SkipJsonSchema[AuthCheck | list[AuthCheck] | None],
+        Field(description="Authorization checks for this tool", exclude=True),
+    ] = None
+    timeout: Annotated[
+        float | None,
+        Field(
+            description="Execution timeout in seconds. If None, no timeout is applied."
+        ),
+    ] = None
+
+    @model_validator(mode="after")
+    def _validate_tool_name(self) -> Tool:
+        """Validate tool name according to MCP specification (SEP-986)."""
+        validate_and_warn_tool_name(self.name)
+        return self
+
+    def to_mcp_tool(
+        self,
+        **overrides: Any,
+    ) -> MCPTool:
+        """Convert the FastMCP tool to an MCP tool."""
+        # Title precedence follows the effective (post-override) values, so a
+        # caller renaming or re-annotating a tool doesn't get a stale title.
+        name = overrides.get("name", self.name)
+        annotations = overrides.get("annotations", self.annotations)
+        if isinstance(annotations, dict):
+            annotations = ToolAnnotations(**annotations)
+
+        if self.title:
+            title = self.title
+        elif annotations and annotations.title:
+            title = annotations.title
+        else:
+            title = _default_title(name)
+
+        mcp_tool = MCPTool(
+            name=name,
+            title=overrides.get("title", title),
+            description=overrides.get("description", self.description),
+            input_schema=overrides.get("inputSchema", self.parameters),
+            output_schema=overrides.get("outputSchema", self.output_schema),
+            icons=overrides.get("icons", self.icons),
+            annotations=annotations,
+            execution=overrides.get("execution", self.execution),
+            _meta=overrides.get(  # type: ignore[call-arg]  # _meta is Pydantic alias for meta field
+                "_meta", self.get_meta()
+            ),
+        )
+
+        if (
+            self.task_config.supports_tasks()
+            and "execution" not in overrides
+            and not self.execution
+        ):
+            mcp_tool.execution = ToolExecution(task_support=self.task_config.mode)
+
+        return mcp_tool
+
+    @classmethod
+    def from_function(
+        cls,
+        fn: Callable[..., Any],
+        *,
+        name: str | None = None,
+        version: str | int | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        icons: list[Icon] | None = None,
+        tags: set[str] | None = None,
+        annotations: ToolAnnotations | None = None,
+        output_schema: dict[str, Any] | NotSetT | None = NotSet,
+        meta: dict[str, Any] | None = None,
+        task: bool | TaskConfig | None = None,
+        timeout: float | None = None,
+        auth: AuthCheck | list[AuthCheck] | None = None,
+        run_in_thread: bool | None = None,
+    ) -> FunctionTool:
+        """Create a Tool from a function."""
+        from ha_mcp._vendor.fastmcp.tools.function_tool import FunctionTool
+
+        return FunctionTool.from_function(
+            fn=fn,
+            name=name,
+            version=version,
+            title=title,
+            description=description,
+            icons=icons,
+            tags=tags,
+            annotations=annotations,
+            output_schema=output_schema,
+            meta=meta,
+            task=task,
+            timeout=timeout,
+            auth=auth,
+            run_in_thread=run_in_thread,
+        )
+
+    async def run(self, arguments: dict[str, Any]) -> ToolResult:
+        """
+        Run the tool with arguments.
+
+        This method is not implemented in the base Tool class and must be
+        implemented by subclasses.
+
+        `run()` can EITHER return a list of ContentBlocks, or a tuple of
+        (list of ContentBlocks, dict of structured output).
+
+        A tool that requests client input (SEP-2322 multi-round-trip) does so by
+        returning an `InputRequiredResult` from its body; the run machinery wraps
+        that in an `InputRequiredToolResult` — a `ToolResult` subclass — so it
+        stays inside the declared `ToolResult` result type and flows through the
+        middleware chain as an ordinary result (see `FunctionTool.run`).
+        """
+        raise NotImplementedError("Subclasses must implement run()")
+
+    def convert_result(self, raw_value: Any) -> ToolResult:
+        """Convert a raw result to ToolResult.
+
+        Handles ToolResult passthrough and converts raw values using the tool's
+        attributes (output_schema) for proper conversion.
+        """
+        if isinstance(raw_value, ToolResult):
+            return raw_value
+
+        if isinstance(raw_value, CallToolResult):
+            return ToolResult.from_mcp_result(raw_value)
+
+        if is_prefab_app(raw_value):
+            return _prefab_to_tool_result(
+                raw_value,
+                fastmcp_app_name=_get_fastmcp_app_name(self),
+            )
+        if is_prefab_component(raw_value):
+            return _prefab_to_tool_result(
+                prefab_app_from_component(raw_value),
+                fastmcp_app_name=_get_fastmcp_app_name(self),
+            )
+
+        content = _convert_to_content(raw_value)
+
+        # Bytes can't be represented as structured JSON content
+        if isinstance(raw_value, bytes):
+            return ToolResult(content=content)
+
+        is_content_result = isinstance(
+            raw_value, ContentBlock | Audio | Image | File
+        ) or (
+            isinstance(raw_value, list | tuple)
+            and any(
+                isinstance(item, ContentBlock | Audio | Image | File)
+                for item in raw_value
+            )
+        )
+
+        # Skip structured content for ContentBlock types only if no output_schema
+        # (if output_schema exists, MCP SDK requires structured_content)
+        if self.output_schema is None and is_content_result:
+            return ToolResult(content=content)
+
+        try:
+            structured = _serialize_to_jsonable(raw_value, self.return_type)
+        except (pydantic_core.PydanticSerializationError, UnicodeDecodeError):
+            return ToolResult(content=content)
+
+        if not is_content_result:
+            content = _convert_to_content(structured)
+
+        if self.output_schema is None:
+            # No schema - only use structured_content for dicts
+            if isinstance(structured, dict):
+                return ToolResult(content=content, structured_content=structured)
+            return ToolResult(content=content)
+
+        # Has output_schema - wrap if x-fastmcp-wrap-result is set
+        wrap_result = self.output_schema.get("x-fastmcp-wrap-result")
+        return ToolResult(
+            content=content,
+            structured_content={"result": structured} if wrap_result else structured,
+            meta={"fastmcp": {"wrap_result": True}} if wrap_result else None,
+        )
+
+    async def _run(self, arguments: dict[str, Any]) -> ToolResult:
+        """Server entry point for tool execution.
+
+        The server calls this method instead of ``run()`` directly so that
+        subclasses can customize dispatch. For example, ``FastMCPProviderTool``
+        overrides this to delegate to child-server middleware.
+        """
+        return await self.run(arguments)
+
+    @classmethod
+    def from_tool(
+        cls,
+        tool: Tool | Callable[..., Any],
+        *,
+        name: str | None = None,
+        title: str | NotSetT | None = NotSet,
+        description: str | NotSetT | None = NotSet,
+        tags: set[str] | None = None,
+        annotations: ToolAnnotations | NotSetT | None = NotSet,
+        output_schema: dict[str, Any] | NotSetT | None = NotSet,
+        meta: dict[str, Any] | NotSetT | None = NotSet,
+        transform_args: dict[str, ArgTransform] | None = None,
+        transform_fn: Callable[..., Any] | None = None,
+    ) -> TransformedTool:
+        from ha_mcp._vendor.fastmcp.tools.tool_transform import TransformedTool
+
+        tool = cls._ensure_tool(tool)
+
+        return TransformedTool.from_tool(
+            tool=tool,
+            transform_fn=transform_fn,
+            name=name,
+            title=title,
+            transform_args=transform_args,
+            description=description,
+            tags=tags,
+            annotations=annotations,
+            output_schema=output_schema,
+            meta=meta,
+        )
+
+    @classmethod
+    def _ensure_tool(cls, tool: Tool | Callable[..., Any]) -> Tool:
+        """Coerce a callable into a Tool, respecting @tool decorator metadata."""
+        if isinstance(tool, Tool):
+            return tool
+
+        from ha_mcp._vendor.fastmcp.decorators import get_fastmcp_meta
+        from ha_mcp._vendor.fastmcp.tools.function_tool import FunctionTool, ToolMeta
+
+        fmeta = get_fastmcp_meta(tool)
+        if isinstance(fmeta, ToolMeta):
+            return FunctionTool.from_function(tool, metadata=fmeta)
+
+        return cls.from_function(tool)
+
+    def get_span_attributes(self) -> dict[str, Any]:
+        return super().get_span_attributes() | {
+            "fastmcp.component.type": "tool",
+            "fastmcp.provider.type": "LocalProvider",
+        }
+
+
+def _convert_to_single_content_block(
+    item: Any,
+) -> ContentBlock:
+    if isinstance(item, ContentBlock):
+        return item
+
+    if isinstance(item, Image):
+        return item.to_image_content()
+
+    if isinstance(item, Audio):
+        return item.to_audio_content()
+
+    if isinstance(item, File):
+        return item.to_resource_content()
+
+    if isinstance(item, str):
+        return TextContent(type="text", text=item)
+
+    if isinstance(item, bytes):
+        try:
+            return TextContent(type="text", text=item.decode("utf-8"))
+        except UnicodeDecodeError:
+            import base64
+
+            return TextContent(type="text", text=base64.b64encode(item).decode("ascii"))
+
+    return TextContent(type="text", text=default_serializer(item))
+
+
+_PREFAB_TEXT_FALLBACK = "[Rendered Prefab UI]"
+
+
+def _get_tool_resolver(app_name: str | None = None) -> Callable[..., str] | None:
+    """Get the Prefab peer-reference resolver bound to an app name."""
+    try:
+        from ha_mcp._vendor.fastmcp.apps.app import _make_resolver
+
+        return _make_resolver(app_name)
+    except ImportError:
+        return None
+
+
+def _prefab_to_json(app: Any, fastmcp_app_name: str | None = None) -> dict[str, Any]:
+    """Serialize a PrefabApp, addressing its peer-tool references by identity.
+
+    The resolver writes each reference as ``<hash>_<local_name>``, and the
+    identity behind it is recorded in the payload's meta so that servers
+    can re-address the reference on the way out without losing track of
+    what it points at.
+    """
+    from ha_mcp._vendor.fastmcp.server.providers.prefab_payload import annotate_payload_identities
+
+    data = app.to_json(tool_resolver=_get_tool_resolver(fastmcp_app_name))
+    return annotate_payload_identities(data)
+
+
+def _get_fastmcp_app_name(tool: Tool) -> str | None:
+    """Read the FastMCPApp name from a tool's metadata, if present."""
+    meta = tool.meta
+    if not meta:
+        return None
+    fastmcp_meta = meta.get("fastmcp")
+    if isinstance(fastmcp_meta, dict):
+        app = fastmcp_meta.get("app")
+        if isinstance(app, str):
+            return app
+    return None
+
+
+def _prefab_to_tool_result(app: Any, fastmcp_app_name: str | None = None) -> ToolResult:
+    """Convert a PrefabApp to a FastMCP ToolResult."""
+    return ToolResult(
+        content=[TextContent(type="text", text=_PREFAB_TEXT_FALLBACK)],
+        structured_content=_prefab_to_json(app, fastmcp_app_name=fastmcp_app_name),
+    )
+
+
+def _convert_to_content(
+    result: Any,
+) -> list[ContentBlock]:
+    """Convert a result to a sequence of content objects."""
+
+    if result is None:
+        return []
+
+    if not isinstance(result, (list | tuple)):
+        return [_convert_to_single_content_block(result)]
+
+    # If all items are ContentBlocks, return them as is
+    if all(isinstance(item, ContentBlock) for item in result):
+        return result
+
+    # If any item is a ContentBlock, convert non-ContentBlock items to TextContent
+    # without aggregating them
+    if any(isinstance(item, ContentBlock | Image | Audio | File) for item in result):
+        return [
+            _convert_to_single_content_block(item)
+            if not isinstance(item, ContentBlock)
+            else item
+            for item in result
+        ]
+    # If none of the items are ContentBlocks, aggregate all items into a single TextContent
+    return [TextContent(type="text", text=default_serializer(result))]
+
+
+__all__ = ["InputRequiredToolResult", "Tool", "ToolResult"]

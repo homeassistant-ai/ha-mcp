@@ -10,6 +10,7 @@ on:
       - tests/src/unit/test_renovate_vendoring.py
       - tests/src/unit/test_renovate_auto_merge.py
       - scripts/vendor_websockets.py
+      - scripts/vendor_fastmcp.py
       - tests/renovate/**
   workflow_dispatch:
 
@@ -79,7 +80,7 @@ jobs:
             -e RENOVATE_TEST_ROOT=/usr/local/renovate \
             "ghcr.io/renovatebot/renovate:$ENGINE" node \
             /source/tests/renovate/vendoring.mjs
-      - name: Verify promoted Supervisor lookup produces an update
+      - name: Verify promoted Supervisor and OS lookups produce updates
         if: ${{ !cancelled() && steps.validate.outcome == 'success' }}
         # Local-platform lookup has no GitHub writer. Work on a disposable copy
         # with an old fixture pin, never on the checkout or live dashboard.
@@ -92,13 +93,14 @@ jobs:
             -e RENOVATE_DRY_RUN=lookup \
             -e RENOVATE_ONBOARDING=false \
             -e 'RENOVATE_INCLUDE_PATHS=["tests/haos_image_build/build_image.py"]' \
-            -e 'RENOVATE_IGNORE_DEPS=["ghcr.io/home-assistant/home-assistant","home-assistant/operating-system"]' \
+            -e 'RENOVATE_IGNORE_DEPS=["ghcr.io/home-assistant/home-assistant"]' \
             -e LOG_LEVEL=debug -e LOG_FORMAT=json \
             --entrypoint bash "ghcr.io/renovatebot/renovate:$ENGINE" -c '
               set -euo pipefail
               cp -R /source /tmp/ha-renovate
               cd /tmp/ha-renovate
-              sed -i "s/^STABLE_SUPERVISOR_VERSION = .*/STABLE_SUPERVISOR_VERSION = \"2020.1.0\"/" \
+              sed -i -e "s/^STABLE_SUPERVISOR_VERSION = .*/STABLE_SUPERVISOR_VERSION = \"2020.1.0\"/" \
+                -e "s/^STABLE_HAOS_VERSION = .*/STABLE_HAOS_VERSION = \"1.0\"/" \
                 tests/haos_image_build/build_image.py
               if ! renovate > /tmp/lookup.jsonl; then
                 tail -n 100 /tmp/lookup.jsonl
@@ -112,22 +114,27 @@ jobs:
           const records = readFileSync("/tmp/lookup.jsonl", "utf8").split("\n")
             .filter(line => line.startsWith("{")).map(line => JSON.parse(line));
 
-          function* dependencies(value) {
+          function* dependencies(value, depName) {
             if (value && typeof value === "object") {
-              if (value.depName === "home-assistant/supervisor" && "updates" in value) {
+              if (value.depName === depName && "updates" in value) {
                 yield value;
               }
               for (const item of Object.values(value)) {
-                yield* dependencies(item);
+                yield* dependencies(item, depName);
               }
             }
           }
 
-          const candidates = records.flatMap(record => [...dependencies(record)])
-            .filter(dep => dep.currentValue === "2020.1.0" && dep.updates?.length);
-          assert.ok(candidates.length,
-            "Supervisor stable datasource produced no update candidate: "
-            + JSON.stringify(records.slice(-10), null, 2));
-          console.log("Promoted Supervisor update is discoverable from the stable datasource.");
+          for (const [depName, fixture] of [
+            ["home-assistant/supervisor", "2020.1.0"],
+            ["home-assistant/operating-system", "1.0"],
+          ]) {
+            const candidates = records.flatMap(record => [...dependencies(record, depName)])
+              .filter(dep => dep.currentValue === fixture && dep.updates?.length);
+            assert.ok(candidates.length,
+              `${depName} stable datasource produced no update candidate: `
+              + JSON.stringify(records.slice(-10), null, 2));
+          }
+          console.log("Promoted Supervisor and OS updates are discoverable from the stable datasource.");
           JS
             '

@@ -8,7 +8,7 @@
   <!-- mcp-name: io.github.homeassistant-ai/ha-mcp -->
 
   <p align="center">
-    <img src="https://img.shields.io/badge/tools-87-blue" alt="95+ Tools">
+    <img src="https://img.shields.io/badge/tools-87-blue" alt="87 Tools">
     <a href="https://github.com/homeassistant-ai/ha-mcp/releases"><img src="https://img.shields.io/github/v/release/homeassistant-ai/ha-mcp" alt="Release"></a>
     <a href="https://github.com/homeassistant-ai/ha-mcp/actions/workflows/e2e-tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/homeassistant-ai/ha-mcp/e2e-tests.yml?branch=master&label=E2E%20Tests" alt="E2E Tests"></a>
     <a href="LICENSE.md"><img src="https://img.shields.io/github/license/homeassistant-ai/ha-mcp.svg" alt="License"></a>
@@ -330,7 +330,7 @@ Skills can still be installed manually for clients that prefer local skill files
 
 ## 🔍 Tool Discovery for AI Agents
 
-By default, the full tool catalog (~84 tools) is listed to the client through the standard MCP `tools/list` response. Clients with deferred / on-demand tool loading (claude.ai, Claude Desktop, Claude Code) handle that fine — tools are pulled into context only when needed, so idle context cost is near-zero.
+By default, the full tool catalog (~87 tools) is listed to the client through the standard MCP `tools/list` response. Clients with deferred / on-demand tool loading (claude.ai, Claude Desktop, Claude Code) handle that fine — tools are pulled into context only when needed, so idle context cost is near-zero.
 
 For setups *without* deferred tool support — models like Claude Haiku, Gemini, OpenAI-compatible local models and smaller open-weights models, or clients that inline all tool schemas regardless of model (e.g. GitHub Copilot CLI) — listing the full tool catalog up front adds a lot of idle context and can overwhelm smaller models. To address that, the server ships with a **search-based discovery mode** built on top of FastMCP's BM25 search transform.
 
@@ -365,7 +365,7 @@ A `ha_manage_*` tool combines several operations, so it is reachable from more t
 ### When to enable
 
 - **Claude Haiku, OpenAI-compatible local models, Gemini, or any model without native deferred tool support** — large idle-context savings. The same applies to clients that inline all tool schemas regardless of model (e.g. GitHub Copilot CLI, even when running Claude Sonnet/Opus).
-- MCP clients that cap total tool count (some cap at 100) — surfaces a minimal set (~10 tools) instead of 84.
+- MCP clients that cap total tool count (some cap at 100) — surfaces a minimal set (~10 tools) instead of 87.
 - **Cost-sensitive deployments** — fewer idle tokens per turn.
 
 Leave it off in clients with deferred tool loading (claude.ai, Claude Desktop, Claude Code); the full catalog has no idle cost there, direct calls skip the search step, and the client's built-in tool search is the better choice — there is no benefit to running ha-mcp's on top of it. Whether tools are deferred depends on the client and model combination: the same model can behave differently per client — GitHub Copilot CLI running Claude Sonnet/Opus inlines the full catalog and still benefits from tool search here. Some Codex models and ChatGPT include deferred tools too — check your client/model directly to confirm its features so you don't leave this enabled unnecessarily.
@@ -375,6 +375,30 @@ Leave it off in clients with deferred tool loading (claude.ai, Claude Desktop, C
 For the HA app, the same option is documented in [`homeassistant-addon/DOCS.md`](homeassistant-addon/DOCS.md#enable_tool_search) along with the in-app settings UI for fine-grained tool enable/disable/pin.
 
 ---
+
+### Read-only HTTP connections
+
+Append `/readonly` to the server's HTTP MCP endpoint to restrict that connection
+to the existing Read Only Mode while other clients keep normal access:
+
+```text
+Normal:     https://example.com/private_your_secret
+Read-only:  https://example.com/private_your_secret/readonly
+```
+
+OAuth and OIDC connections use the same login/provider: for example,
+`https://example.com/mcp/readonly`. No additional secret or server is required.
+Read-only connections hide write tools and block write calls, including calls
+through cached tools or search proxies. The global Read Only Mode setting still
+restricts both endpoints when enabled. Reconnect the client after changing its URL
+so it refreshes its tool list.
+
+This is a connection mode for automated agents, not a separate permission on the
+credential: the same credentials still work at the normal endpoint. Home Assistant
+webhook URLs also accept the suffix:
+`https://your-ha.example/api/webhook/<webhook-id>/readonly`. This requires the
+updated embedded integration or Webhook Proxy dev app (add-on), together with
+the updated MCP server.
 
 ## 🧪 Dev Channel
 

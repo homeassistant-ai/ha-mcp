@@ -363,3 +363,11 @@ See [#783](https://github.com/homeassistant-ai/ha-mcp/issues/783) for more detai
 
 **Issues:** https://github.com/homeassistant-ai/ha-mcp/issues
 **Documentation:** https://github.com/homeassistant-ai/ha-mcp
+
+### Read-only agent connections
+
+Append `/readonly` to your webhook URL to hide write tools and block write calls
+for that connection. It uses the same webhook secret and OAuth login. The normal
+URL keeps its usual access; this is a client mode, not a separate credential
+permission. Both this app (add-on) and the target MCP server need a version that
+supports the suffix. Reconnect your client after changing its URL.

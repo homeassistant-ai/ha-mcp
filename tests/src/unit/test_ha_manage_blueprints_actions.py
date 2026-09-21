@@ -23,8 +23,8 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools import tools_blueprints
 from ha_mcp.tools.blueprint_sources import BlueprintSource

@@ -21,6 +21,20 @@ body:
         > field is already filled in — keep it or refine it, just don't leave it as
         > a bare `[BUG]`.
 
+  - type: checkboxes
+    id: connect_preflight
+    attributes:
+      label: "🔌 Connection Pre-flight"
+      description: |
+        If the symptom is that your AI client can't reach ha-mcp (rather than a tool
+        misbehaving once connected), rule these out first.
+        Details: [Claude.ai connects from my browser but the connector fails](https://homeassistant-ai.github.io/ha-mcp/faq/#claude-ai-hosted-requirements).
+      options:
+        - label: "My connector URL uses standard HTTPS with **no port** (`https://ha.example.com/...`, not `:8123`) — Anthropic's backend only connects on 443"
+        - label: "The URL loads on my **phone with Wi-Fi off**, so it is reachable from the public internet and not just my LAN"
+        - label: "Anthropic's egress range `160.79.104.0/21` is not blocked by a WAF, geo-block, or AI-bot filter (Cloudflare's \"Block AI training bots\" included)"
+        - label: "Not applicable — this isn't an AI-client connection problem"
+
   - type: textarea
     id: user_commentary
     attributes:

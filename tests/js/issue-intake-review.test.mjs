@@ -14,6 +14,7 @@ import {
   labelAction,
   prose,
   publish,
+  roleFor,
 } from "../../.github/issue-intake/intake.mjs";
 
 const bot = "ha-mcp[bot]";
@@ -291,6 +292,100 @@ test("failed notices, reminders, and reply cleanup fail after the whole batch", 
   });
   assert.deepEqual(attempted, ["comment-1", "comment-2", "remove-3"]);
 });
+test("read failures are reported after later issues and prior write failures are preserved", async () => {
+  const attempted = [],
+    warnings = [],
+    now = Date.now();
+  const github = {
+    rest: {
+      issues: {
+        listForRepo: "issues",
+        listEvents: "events",
+        listComments: "comments",
+        createComment: async ({ issue_number }) => {
+          attempted.push(issue_number);
+          if (issue_number === 1) throw Error("Reminder unavailable");
+        },
+        update: async () => assert.fail("No issue is old enough to close"),
+        removeLabel: async () => assert.fail("No reporter replied"),
+      },
+    },
+    paginate: async (kind, args) => {
+      if (kind === "issues")
+        return [1, 2, 3, 4].map((number) => ({
+          ...fixture().issue,
+          number,
+        }));
+      if (kind === "events") {
+        if (args.issue_number === 2)
+          throw Object.assign(Error("Events unavailable"), { status: 502 });
+        return [
+          {
+            event: "labeled",
+            label: { name: "needs-info" },
+            created_at: new Date(now - 3.5 * 86400000).toISOString(),
+          },
+        ];
+      }
+      if (args.issue_number === 3)
+        throw Object.assign(Error("Comments unavailable"), { status: 502 });
+      return [];
+    },
+  };
+  await assert.rejects(
+    runCloseWorkflow(github, { warning: (message) => warnings.push(message) }),
+    (error) => {
+      assert.match(error.message, /read issue data.*#2 \(events\).*#3 \(comments\)/i);
+      assert.match(error.message, /reminders.*#1@day-3/i);
+      return true;
+    },
+  );
+  assert.deepEqual(attempted, [1, 4]);
+  assert.ok(warnings.some((message) => /events.*#2/i.test(message)));
+  assert.ok(warnings.some((message) => /comments.*#3/i.test(message)));
+});
+
+test("already-removed needs-info labels do not fail reply or close cleanup", async () => {
+  const closed = [],
+    now = Date.now();
+  const github = {
+    rest: {
+      issues: {
+        listForRepo: "issues",
+        listEvents: "events",
+        listComments: "comments",
+        createComment: async () => {},
+        update: async ({ issue_number }) => closed.push(issue_number),
+        removeLabel: async () => {
+          throw Object.assign(Error("Label already absent"), { status: 404 });
+        },
+      },
+    },
+    paginate: async (kind, args) => {
+      if (kind === "issues")
+        return [1, 2].map((number) => ({ ...fixture().issue, number }));
+      if (kind === "events")
+        return [
+          {
+            event: "labeled",
+            label: { name: "needs-info" },
+            created_at: new Date(now - 8 * 86400000).toISOString(),
+          },
+        ];
+      return args.issue_number === 1
+        ? [
+            {
+              user: { login: "reporter", type: "User" },
+              created_at: new Date(now).toISOString(),
+              body: "More details",
+            },
+          ]
+        : [];
+    },
+  };
+  await runCloseWorkflow(github);
+  assert.deepEqual(closed, [2]);
+});
 test("translation requirement is a schema-enforced boolean", () => {
   const r = answer();
   r.needs_translation = "English (US)";
@@ -361,20 +456,19 @@ test("API errors identify their endpoint without echoing secret-bearing stderr",
       return true;
     },
   );
-  const limited = new GitHub(() => {
-    throw Object.assign(Error("limited"), {
-      stderr: "HTTP 429\nRetry-After: 17\nprivate response",
-    });
-  });
-  assert.throws(
-    () => limited.request("repos/test/repo/issues/1"),
-    (error) => {
-      assert.equal(error.status, 429);
-      assert.equal(error.retryAfter, 17);
-      assert.doesNotMatch(error.message, /private/);
-      return true;
+});
+
+test("role lookups ignore removed collaborators but propagate service failures", async () => {
+  const api = {
+    request: async () => {
+      throw Object.assign(Error("unavailable"), { status: 503 });
     },
-  );
+  };
+  await assert.rejects(roleFor(api, "test/repo", "maintainer"), /unavailable/);
+  api.request = async () => {
+    throw Object.assign(Error("not found"), { status: 404 });
+  };
+  assert.equal(await roleFor(api, "test/repo", "removed"), "none");
 });
 
 test("malformed GitHub JSON identifies the endpoint without echoing its body", () => {

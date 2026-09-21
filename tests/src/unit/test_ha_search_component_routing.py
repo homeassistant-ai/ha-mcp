@@ -18,8 +18,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import (
     HomeAssistantCommandError,
     HomeAssistantCommandTimeout,
@@ -695,19 +695,8 @@ class TestResultFieldsEnrichment:
         assert not ws.send_command.await_count
 
 
-class TestListingModesBypassComponent:
-    """The legacy listing modes must NEVER route through the component.
-
-    Regression for the first live e2e run of the component path
-    (test_search_entities.py::test_search_entities_{empty,whitespace}_query_
-    with_domain_filter and ::test_search_entities_area_filter_only): the
-    component path stamped ``search_type: exact_match`` onto responses the
-    legacy path labels ``domain_listing`` / ``area_only`` — and those modes
-    carry mode-specific response shapes the component does not replicate.
-    Only query-driven, non-area searches may route through the component — the
-    state_filter-only listing (issue #2002) has an empty query, so it stays on
-    the legacy path too.
-    """
+class TestOlderComponentListingModes:
+    """Components without unified listing semantics retain the legacy path."""
 
     @pytest.mark.asyncio
     async def test_empty_query_domain_listing_bypasses_component(
@@ -720,8 +709,9 @@ class TestListingModesBypassComponent:
         with patch_ws(ws, tools_search):
             data = await ha_search(domain_filter="light")
         assert data.get("search_type") == "domain_listing", data
-        assert not ws.send_command.await_count, (
-            "component must not be consulted for domain listings"
+        assert not any(
+            call.args[0] == "ha_mcp_tools/search"
+            for call in ws.send_command.call_args_list
         )
 
     @pytest.mark.asyncio
@@ -735,7 +725,10 @@ class TestListingModesBypassComponent:
         with patch_ws(ws, tools_search):
             data = await ha_search(query="   ", domain_filter="light")
         assert data.get("search_type") == "domain_listing", data
-        assert not ws.send_command.await_count
+        assert not any(
+            call.args[0] == "ha_mcp_tools/search"
+            for call in ws.send_command.call_args_list
+        )
 
     @pytest.mark.asyncio
     async def test_area_filter_only_bypasses_component(
@@ -748,8 +741,9 @@ class TestListingModesBypassComponent:
         with patch_ws(ws, tools_search):
             data = await ha_search(area_filter="Kitchen")
         assert data.get("search_type") == "area_only", data
-        assert not ws.send_command.await_count, (
-            "component must not be consulted for area listings"
+        assert not any(
+            call.args[0] == "ha_mcp_tools/search"
+            for call in ws.send_command.call_args_list
         )
 
     @pytest.mark.asyncio
@@ -763,8 +757,9 @@ class TestListingModesBypassComponent:
         with patch_ws(ws, tools_search):
             data = await ha_search(query="kitchen", area_filter="Kitchen")
         assert data.get("search_type") == "area_filtered_query", data
-        assert not ws.send_command.await_count, (
-            "component must not be consulted for area-scoped queries"
+        assert not any(
+            call.args[0] == "ha_mcp_tools/search"
+            for call in ws.send_command.call_args_list
         )
 
     @pytest.mark.asyncio
@@ -791,7 +786,10 @@ class TestListingModesBypassComponent:
         assert data["area_names"] == ["Cave"]
         assert [entity["entity_id"] for entity in data["entities"]] == ["light.kitchen"]
         assert any("expanded to 1 area(s)" in warning for warning in data["warnings"])
-        assert not ws.send_command.await_count
+        assert not any(
+            call.args[0] == "ha_mcp_tools/search"
+            for call in ws.send_command.call_args_list
+        )
 
     @pytest.mark.asyncio
     async def test_state_filter_only_bypasses_component(
@@ -804,8 +802,9 @@ class TestListingModesBypassComponent:
         with patch_ws(ws, tools_search):
             data = await ha_search(state_filter="on")
         assert data.get("search_type") == "state_listing", data
-        assert not ws.send_command.await_count, (
-            "component must not be consulted for state listings"
+        assert not any(
+            call.args[0] == "ha_mcp_tools/search"
+            for call in ws.send_command.call_args_list
         )
 
 
@@ -1119,9 +1118,10 @@ class TestDashboardSearchTypesGate:
             resp = await ha_search(query="energy", search_types=["dashboard"])
 
         assert resp["success"] is True
-        assert resp["dashboards"][0]["dashboard_url"] == "energy"
+        assert resp["dashboards"][0]["url_path"] == "energy"
         assert not resp.get("partial")
-        assert resp.get("warnings", []) == []
+        assert len(resp["warnings"]) == 1
+        assert "entity search skipped" in resp["warnings"][0]
         # Zero legacy lovelace round-trips.
         assert client.ws_types.get("lovelace/dashboards/list", 0) == 0
         assert client.ws_types.get("lovelace/config", 0) == 0
@@ -1155,7 +1155,8 @@ class TestDashboardSearchTypesGate:
             f"a config-less auto-generated dashboard must not flag the "
             f"ha_search envelope partial; got {resp.get('partial_reason')!r}"
         )
-        assert resp.get("warnings", []) == []
+        assert len(resp["warnings"]) == 1
+        assert "entity search skipped" in resp["warnings"][0]
         # Both dashboards were visited: the registry one answered
         # config_not_found, the default one served a clean config.
         assert client.ws_types["lovelace/config"] == 2

@@ -1,4 +1,4 @@
-"""Default-off HTTP diagnostics and JSON responses for HA-MCP launchers."""
+"""Shared HTTP endpoint modes and transport options for HA-MCP launchers."""
 
 from __future__ import annotations
 
@@ -11,15 +11,38 @@ from time import monotonic
 from typing import Any
 from uuid import uuid4
 
-import fastmcp
-from fastmcp import FastMCP
-from fastmcp.server.http import StarletteWithLifespan
 from starlette.middleware import Middleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from ha_mcp._vendor import fastmcp
+from ha_mcp._vendor.fastmcp import FastMCP
+from ha_mcp._vendor.fastmcp.server.http import StarletteWithLifespan
 
 from .config import get_global_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _get_route_path(scope: Scope) -> str:
+    """Local copy of ``starlette._utils.get_route_path`` (private API).
+
+    Strips a mount's ``root_path`` prefix from ``scope["path"]``, the same
+    prefix Starlette's own routers use to resolve a sub-app's route. Vendored
+    because the source module is private and a minor Starlette bump could
+    move or change it without notice; keep this in sync with upstream if
+    scope's routing fields ever change.
+    """
+    path: str = scope["path"]
+    root_path = scope.get("root_path", "")
+    if not root_path:
+        return path
+    if not path.startswith(root_path):
+        return path
+    if path == root_path:
+        return ""
+    if path[len(root_path)] == "/":
+        return path[len(root_path) :]
+    return path
 
 
 @dataclass
@@ -67,7 +90,7 @@ class HttpTransportFastMCP(FastMCP):
     """
 
     def http_app(self, *args: Any, **kwargs: Any) -> StarletteWithLifespan:
-        """Build the normal app, adding only explicitly enabled experiments."""
+        """Build the app with a readonly alias and optional transport experiments."""
         settings = get_global_settings()
         if settings.http_json_response:
             # FastMCP accepts json_response as its third positional argument.
@@ -89,7 +112,41 @@ class HttpTransportFastMCP(FastMCP):
                 args = (args[0], middleware, *args[2:])
             else:
                 kwargs["middleware"] = middleware
-        return super().http_app(*args, **kwargs)
+        app = super().http_app(*args, **kwargs)
+        if app.state.transport_type == "streamable-http":
+            app.add_middleware(ReadOnlyEndpoint, path=app.state.path)
+        return app
+
+
+class ReadOnlyEndpoint:
+    """Route the exact /readonly alias through the same authenticated MCP app.
+
+    This selects read-only behavior for a configured client connection; the
+    credential still works at the normal endpoint. Settings and other HTTP
+    routes are not aliased.
+    """
+
+    def __init__(self, app: ASGIApp, path: str) -> None:
+        self.app = app
+        self.path = path
+        self.readonly_path = f"{path.rstrip('/')}/readonly"
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] != "http"
+            or _get_route_path(scope).rstrip("/") != self.readonly_path
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        from .read_only import read_only_request
+
+        route_path = _get_route_path(scope)
+        prefix = scope["path"][: -len(route_path)]
+        path = prefix + self.path
+        scope = {**scope, "path": path, "raw_path": path.encode("utf-8")}
+        with read_only_request():
+            await self.app(scope, receive, send)
 
 
 @dataclass

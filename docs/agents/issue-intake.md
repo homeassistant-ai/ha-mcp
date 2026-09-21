@@ -90,15 +90,16 @@ invalidate an old result and emit a workflow warning; a subscribed event process
 the new state, or an operator can refresh explicitly. A lock or pause intentionally
 stops progress until reversed. Identical source fingerprints avoid another model
 call. A pending marker preserves incomplete writes for recovery, without another
-comment. Transient owned-comment/label writes retry twice with bounded backoff.
+comment. Transient patches to an existing owned comment and idempotent label
+writes retry twice after fixed 5-second and 15-second delays.
 Exhausted failures stay pending and fail visibly; failed work is never marked done.
 GitHub has no transaction spanning these writes, so narrow concurrent changes can
 still race individual API calls.
 
 Failed closures retain needs-info for a subsequent daily retry. Their closing
-notice is deduplicated within the label cycle. Failed reminders, closing notices,
-reply cleanup and post-close cleanup fail the batch after other issues are
-processed; cleanup failures identify the affected issues.
+notice is deduplicated within the label cycle. Failed issue reads, reminders,
+closing notices, reply cleanup and post-close cleanup fail the batch after other
+issues are processed; failures identify the affected issues.
 
 ## Testing and operation
 

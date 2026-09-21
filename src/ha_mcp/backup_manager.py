@@ -54,18 +54,24 @@ import time
 import weakref
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import cached_property
 from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict
 
 import yaml  # type: ignore[import-untyped]
-from fastmcp.exceptions import ToolError
 
-from .client.rest_client import HomeAssistantConnectionError, HomeAssistantError
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+
+from .client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantConnectionError,
+    HomeAssistantError,
+)
 from .utils.data_paths import get_data_dir
+from .utils.registry_update_lock import registry_update_lock
 
 logger = logging.getLogger(__name__)
 
@@ -2215,7 +2221,7 @@ async def _fetch_dashboard(client: Any, entity_id: str) -> Any:
     The component refuses YAML bodies, so those capture through legacy unchanged.
     Imported lazily to avoid an import cycle.
     """
-    from fastmcp.exceptions import ToolError
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
     from .tools.tools_config_dashboards import (
         _component_dashboard_config,
@@ -2462,9 +2468,76 @@ async def _restore_group(client: Any, entity_id: str, config: Any) -> Any:
 # Calendar events — calendar.get_events to fetch, calendar.create/update services.
 
 
+# Bounds of the second sweep below: wide enough for a past event or one booked
+# well ahead, without asking a busy calendar to expand a decade of recurrences.
+_CALENDAR_WIDE_LOOKBACK_DAYS = 366
+_CALENDAR_WIDE_LOOKAHEAD_DAYS = 732
+
+
+async def _find_calendar_event(
+    client: Any,
+    cal: str,
+    uid: str,
+    recurrence_id: str | None,
+    start: datetime,
+    end: datetime,
+) -> Any:
+    """Return the event with ``uid`` on ``cal`` between ``start`` and ``end``.
+
+    Reads the REST calendar view rather than the ``calendar.get_events``
+    service: the service response is built by HA's
+    ``_list_events_dict_factory``, which keeps only ``LIST_EVENT_FIELDS``
+    (start/end/summary/description/location/status) and therefore carries no
+    ``uid`` to match on. ``/api/calendars/{entity_id}`` serialises the whole
+    CalendarEvent, so uid, recurrence_id and rrule survive — the same endpoint
+    ``ha_config_get_calendar_events`` reads.
+
+    A recurring series is expanded into occurrences that all share the ``uid``,
+    so ``recurrence_id`` selects which one; without it the first match wins.
+    """
+    try:
+        events = await client._request(
+            "GET",
+            f"/calendars/{cal}",
+            params={"start": start.isoformat(), "end": end.isoformat()},
+        )
+    except HomeAssistantError as err:
+        # Only treat 404 (calendar entity not present) as "skip silently".
+        # Auth/transport/server errors deserve a WARNING so an operator
+        # can spot a misconfigured calendar integration; matches the
+        # ``status_code == 404`` narrowing the automation/script/scene
+        # fetchers use.
+        if getattr(err, "status_code", None) == 404:
+            return None
+        raise
+    for event in _require_list(events, f"/calendars/{cal}"):
+        if not isinstance(event, dict) or event.get("uid") != uid:
+            continue
+        if recurrence_id is not None and event.get("recurrence_id") != recurrence_id:
+            continue
+        return event
+    return None
+
+
+def _recurrence_id_window(
+    recurrence_id: str | None,
+) -> tuple[datetime, datetime] | None:
+    """A day-wide window around an iCalendar recurrence id, if it parses."""
+    if not recurrence_id:
+        return None
+    for fmt in ("%Y%m%dT%H%M%S", "%Y%m%dT%H%M%SZ", "%Y%m%d"):
+        try:
+            at = datetime.strptime(recurrence_id, fmt).replace(tzinfo=UTC)
+        except ValueError:
+            continue
+        return at - timedelta(days=1), at + timedelta(days=1)
+    return None
+
+
 async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
-    # entity_id is "<calendar.entity>::<event_uid>"
-    cal, _, uid = entity_id.partition("::")
+    # entity_id is "<calendar.entity>::<event_uid>[::<recurrence_id>]"
+    cal, _, rest = entity_id.partition("::")
+    uid, _, recurrence_id = rest.partition("::")
     if not cal or not uid:
         return None
     # Configurable lookahead window. Default 7 days catches typical edits;
@@ -2480,48 +2553,186 @@ async def _fetch_calendar_event(client: Any, entity_id: str) -> Any:
     except (AttributeError, ImportError, ValueError, TypeError):
         days = 7
     days = max(1, min(365, days))
-    start = datetime.now(UTC).isoformat()
-    payload = {
-        "type": "execute_script",
-        "sequence": [
-            {
-                "service": "calendar.get_events",
-                "target": {"entity_id": cal},
-                "data": {"duration": {"days": days}, "start_date_time": start},
-                "response_variable": "events",
-            },
-            {"stop": "", "response_variable": "events"},
-        ],
-    }
-    try:
-        result = await _ws_send(client, payload)
-    except HomeAssistantError as err:
-        # Only treat 404 (calendar entity not present) as "skip silently".
-        # Auth/transport/server errors deserve a WARNING so an operator
-        # can spot a misconfigured calendar integration; matches the
-        # ``status_code == 404`` narrowing the automation/script/scene
-        # fetchers use.
-        if getattr(err, "status_code", None) == 404:
-            return None
-        raise
-    result = _require_dict(result, "execute_script")
-    events = result.get("response", {}).get("events", {}).get(cal, {}).get("events", [])
-    for ev in events:
-        if ev.get("uid") == uid:
-            return {"calendar_entity_id": cal, **ev}
+    now = datetime.now(UTC)
+    wanted = recurrence_id or None
+    # A recurrence_id names the occurrence's own date, so an occurrence far
+    # outside the windows below is still found in one request.
+    around = _recurrence_id_window(wanted)
+    found = (
+        await _find_calendar_event(client, cal, uid, wanted, *around)
+        if around
+        else None
+    )
+    if found is None:
+        found = await _find_calendar_event(
+            client, cal, uid, wanted, now, now + timedelta(days=days)
+        )
+    if found is None:
+        # The configured window is the cheap common case, not the contract: a
+        # write targets an event by uid, and an event being edited or deleted
+        # can sit in the past or well beyond the lookahead. Missing it would
+        # silently skip the snapshot and leave the prior values unrecoverable,
+        # so sweep once more over a wide window before concluding it is gone.
+        found = await _find_calendar_event(
+            client,
+            cal,
+            uid,
+            wanted,
+            now - timedelta(days=_CALENDAR_WIDE_LOOKBACK_DAYS),
+            now + timedelta(days=_CALENDAR_WIDE_LOOKAHEAD_DAYS),
+        )
+    if found is None:
+        return None
+    if wanted is None and found.get("rrule"):
+        # The write targets a whole series, but the calendar view only exposes
+        # expanded OCCURRENCES — never the master event's own start. Restoring
+        # one occurrence's values would revert a single date and leave the rest
+        # of the series edited, or re-create a series starting at the wrong
+        # date, both reported as a successful restore. No snapshot is the
+        # honest answer; a single-occurrence write (which carries a
+        # recurrence_id) is captured normally.
+        logger.warning(
+            "Auto-backup: no snapshot for series-wide write on %s (event %s); "
+            "Home Assistant exposes only expanded occurrences, so the series "
+            "could not be restored faithfully",
+            cal,
+            uid,
+        )
+        return None
+    return {"calendar_entity_id": cal, **found}
+
+
+def _calendar_bound(value: Any) -> tuple[str, bool] | None:
+    """Return ``(iso_value, is_date_only)`` for a snapshotted event boundary.
+
+    The REST view wraps each boundary as ``{"dateTime": ...}`` (timed) or
+    ``{"date": ...}`` (all-day); snapshots taken before that switch hold a
+    flat ISO string, which a 10-character length identifies as date-only.
+    """
+    if isinstance(value, dict):
+        if value.get("dateTime"):
+            return str(value["dateTime"]), False
+        if value.get("date"):
+            return str(value["date"]), True
+        return None
+    if isinstance(value, str) and value:
+        return value, len(value) == 10
     return None
 
 
+# HA reports a missing event as a plain ``failed`` command error whose message
+# comes from the integration (Local Calendar surfaces ical's "No existing item
+# with uid/recurrence_id: ..."), so absence has to be read off the message.
+_CALENDAR_EVENT_ABSENT_MARKERS = ("no existing item", "not found", "does not exist")
+
+
+def _calendar_update_cannot_apply(err: HomeAssistantCommandError) -> bool:
+    """Whether ``err`` proves the in-place update never touched the event."""
+    if getattr(err, "code", None) == "not_supported":
+        # The calendar advertises no UPDATE_EVENT, so it cannot ever accept
+        # the update and re-creating is the only restore available.
+        return True
+    message = str(err).lower()
+    return any(marker in message for marker in _CALENDAR_EVENT_ABSENT_MARKERS)
+
+
+async def _recreate_calendar_event(
+    client: Any,
+    cal: str,
+    event: dict[str, Any],
+    start: tuple[str, bool],
+    end: tuple[str, bool],
+) -> Any:
+    """Create an event that no longer exists under its snapshotted uid.
+
+    Always a single event: a series-wide write is never snapshotted (the
+    calendar view cannot describe the series), and a snapshot of one
+    occurrence must not be re-created as a series of its own.
+    """
+    data: dict[str, Any] = {"entity_id": cal, "summary": event["summary"]}
+    if start[1]:
+        data.update({"start_date": start[0], "end_date": end[0]})
+    else:
+        data.update({"start_date_time": start[0], "end_date_time": end[0]})
+    for key in ("description", "location"):
+        if event.get(key):
+            data[key] = event[key]
+    return await _rest_post(client, "services/calendar/create_event", data)
+
+
 async def _restore_calendar_event(client: Any, entity_id: str, config: Any) -> Any:
-    cal = config.get("calendar_entity_id")
-    if not cal:
-        cal = entity_id.split("::", 1)[0]
-    data = {k: v for k, v in config.items() if k != "calendar_entity_id"}
-    return await _rest_post(
-        client,
-        "services/calendar/create_event",
-        {"entity_id": cal, **data},
-    )
+    cal, _, rest = entity_id.partition("::")
+    key_uid, _, key_recurrence_id = rest.partition("::")
+    cal = config.get("calendar_entity_id") or cal
+    uid = config.get("uid") or key_uid
+    recurrence_id = config.get("recurrence_id") or key_recurrence_id or None
+    start = _calendar_bound(config.get("start"))
+    end = _calendar_bound(config.get("end"))
+    if start is None or end is None:
+        raise HomeAssistantError(
+            f"Calendar snapshot for {entity_id!r} has no usable start/end"
+        )
+
+    # Home Assistant merges the update into the stored event (ical dumps it
+    # with ``exclude_unset``), so a field left out keeps whatever the write
+    # put there. Send the text fields unconditionally — empty clears a
+    # description or location the write added.
+    event: dict[str, Any] = {
+        "summary": config.get("summary") or "",
+        "dtstart": start[0],
+        "dtend": end[0],
+        "description": config.get("description") or "",
+        "location": config.get("location") or "",
+    }
+    # ``rrule`` is deliberately never replayed. Every expanded occurrence
+    # carries the series' rule, and sending it back onto one occurrence —
+    # which ical has already forked into a plain event — would make that
+    # occurrence a second series under the same uid, duplicating every later
+    # date.
+
+    if not uid:
+        return await _recreate_calendar_event(client, cal, event, start, end)
+
+    # An edited event still exists under its uid, so put the captured values
+    # back in place instead of creating a second copy. Only a snapshot of a
+    # DELETED event (or a calendar without UPDATE_EVENT) falls through to
+    # re-creation.
+    message: dict[str, Any] = {
+        "type": "calendar/event/update",
+        "entity_id": cal,
+        "uid": uid,
+        "event": event,
+    }
+    if recurrence_id:
+        message["recurrence_id"] = recurrence_id
+    try:
+        return await _ws_send(client, message)
+    except HomeAssistantCommandError as err:
+        if not _calendar_update_cannot_apply(err):
+            # A transport drop, a timeout or an unclassified command failure
+            # leaves it unknown whether HA applied the update; re-creating
+            # then leaves a duplicate behind. Only a failure that PROVES the
+            # update never landed falls through. Connection errors and
+            # timeouts are separate types, so they never reach here at all.
+            raise
+        if recurrence_id:
+            # The occurrence is gone — deleted from the series, or the series
+            # moved and this recurrence_id no longer names one of its dates.
+            # ``create_event`` could only add a detached event next to the
+            # series, which is not the occurrence being restored, so say so
+            # instead of inventing one.
+            raise HomeAssistantError(
+                f"Occurrence {recurrence_id} of event {uid} no longer exists on "
+                f"{cal}, and an occurrence cannot be re-created into its series"
+            ) from err
+        logger.info(
+            "Restoring calendar event %s on %s in place is not possible (%s); "
+            "re-creating it instead",
+            uid,
+            cal,
+            err,
+        )
+    return await _recreate_calendar_event(client, cal, event, start, end)
 
 
 # Zones — zone/{list,update} (no ``config/`` prefix per HA's actual WS API;
@@ -2591,7 +2802,8 @@ async def _restore_area_or_floor(client: Any, entity_id: str, config: Any) -> An
         payload["floor_id"] = real_id
     else:
         raise ValueError(f"Unknown area/floor kind: {kind!r}")
-    return await _ws_send(client, payload)
+    async with registry_update_lock(kind, real_id):
+        return await _ws_send(client, payload)
 
 
 # Todo items — entity_id is "<todo.entity>::<item_uid>"
@@ -3537,43 +3749,56 @@ async def _restore_template_entity_id(
     """Restore only the newly created entity's ID/name, guarded by ownership."""
     row = await _created_template_entity(client, entry_id)
     source, target = row["entity_id"], saved["entity_id"]
-    if source.split(".")[0] != target.split(".")[0]:
-        raise BackupRestoreError(
-            "Recreated Template entity has an unexpected domain",
-            reason="entity_identity_mismatch",
-            verification_status="mismatched",
-        )
-    await _check_template_entity_collision(client, target, owned_entry_id=entry_id)
-    update: dict[str, Any] = {
-        "type": "config/entity_registry/update",
-        "entity_id": source,
-    }
-    if source != target:
-        update["new_entity_id"] = target
-    if row.get("name") != saved.get("name"):
-        update["name"] = saved.get("name")
-    if len(update) > 2:
-        try:
-            await _ws_send(client, update)
-        except _CAPTURE_TRANSIENT_ERRORS as err:
-            _log_template_failure("entity_rename", err)
+    locked_ids = {source, target}
+    async with AsyncExitStack() as locks:
+        # A rename changes the lock key; hold both IDs in a stable order.
+        for entity_id in sorted(locked_ids):
+            await locks.enter_async_context(registry_update_lock("entity", entity_id))
+        row = await _created_template_entity(client, entry_id)
+        source = row["entity_id"]
+        if source not in locked_ids:
             raise BackupRestoreError(
-                "The recreated helper's entity rename outcome is unknown",
-                reason="entity_rename_outcome_unknown",
-                entity_id_mapping={
-                    "created_entity_id": source,
-                    "target_entity_id": target,
-                },
-                verification_status="unavailable",
-            ) from err
-    actual = await _created_template_entity(client, entry_id)
-    if actual["entity_id"] != target or actual.get("name") != saved.get("name"):
-        raise BackupRestoreError(
-            "Recreated Template entity identity did not match",
-            reason="entity_identity_mismatch",
-            verification_status="mismatched",
-        )
-    return {"created_entity_id": source, "restored_entity_id": target}
+                "Recreated Template entity ID changed while waiting to restore it",
+                reason="entity_identity_mismatch",
+                verification_status="mismatched",
+            )
+        if source.split(".")[0] != target.split(".")[0]:
+            raise BackupRestoreError(
+                "Recreated Template entity has an unexpected domain",
+                reason="entity_identity_mismatch",
+                verification_status="mismatched",
+            )
+        await _check_template_entity_collision(client, target, owned_entry_id=entry_id)
+        update: dict[str, Any] = {
+            "type": "config/entity_registry/update",
+            "entity_id": source,
+        }
+        if source != target:
+            update["new_entity_id"] = target
+        if row.get("name") != saved.get("name"):
+            update["name"] = saved.get("name")
+        if len(update) > 2:
+            try:
+                await _ws_send(client, update)
+            except _CAPTURE_TRANSIENT_ERRORS as err:
+                _log_template_failure("entity_rename", err)
+                raise BackupRestoreError(
+                    "The recreated helper's entity rename outcome is unknown",
+                    reason="entity_rename_outcome_unknown",
+                    entity_id_mapping={
+                        "created_entity_id": source,
+                        "target_entity_id": target,
+                    },
+                    verification_status="unavailable",
+                ) from err
+        actual = await _created_template_entity(client, entry_id)
+        if actual["entity_id"] != target or actual.get("name") != saved.get("name"):
+            raise BackupRestoreError(
+                "Recreated Template entity identity did not match",
+                reason="entity_identity_mismatch",
+                verification_status="mismatched",
+            )
+        return {"created_entity_id": source, "restored_entity_id": target}
 
 
 async def _recreate_template_helper(

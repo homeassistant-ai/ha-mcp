@@ -16,9 +16,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
 from ha_mcp import backup_manager
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantCommandError
 from ha_mcp.tools import component_api, component_devices
 from ha_mcp.tools.tools_registry import register_registry_tools

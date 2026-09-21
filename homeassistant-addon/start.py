@@ -998,7 +998,8 @@ def main() -> int:
         bind_host,
         port,
         secret_path,
-        {"log_config": _get_timestamped_uvicorn_log_config()},
+        # ws="none": uvicorn's default imports the shared websockets package.
+        {"log_config": _get_timestamped_uvicorn_log_config(), "ws": "none"},
     )
 
 

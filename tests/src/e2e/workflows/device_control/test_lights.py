@@ -12,7 +12,8 @@ import logging
 from typing import Any
 
 import pytest
-from fastmcp import Client
+
+from ha_mcp._vendor.fastmcp import Client
 
 from ...utilities.assertions import (
     assert_mcp_success,

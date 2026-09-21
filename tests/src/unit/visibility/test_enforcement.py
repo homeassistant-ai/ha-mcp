@@ -12,10 +12,10 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from fastmcp.exceptions import ToolError
-from fastmcp.tools.tool import ToolResult
-from mcp.types import TextContent
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import ToolResult
+from ha_mcp._vendor.mcp.types import TextContent
 from ha_mcp.errors import create_entity_not_found_error
 from ha_mcp.visibility import enforcement, resolver
 from ha_mcp.visibility.enforcement import (

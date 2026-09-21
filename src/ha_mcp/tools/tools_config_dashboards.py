@@ -11,10 +11,10 @@ import re
 from dataclasses import dataclass, replace
 from typing import Annotated, Any, Literal, NoReturn, cast, overload
 
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import tool
-from fastmcp.tools.tool import ToolResult
 from pydantic import Field
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import ToolResult, tool
 
 from ..client.rest_client import (
     HomeAssistantCommandError,
@@ -1811,7 +1811,7 @@ class DashboardConfigTools:
         force_reload: Annotated[
             bool,
             Field(
-                description="Force reload from storage (bypass cache). Not applicable in search mode (search always uses force=True for fresh results)."
+                description="Force reload from storage (bypass cache). Not applicable in search mode, which always reads fresh config."
             ),
         ] = False,
         entity_id: Annotated[
@@ -1914,7 +1914,7 @@ class DashboardConfigTools:
           python_transform=f'config{m["python_path"]}["icon"] = "mdi:x"' (it is
           NOT valid on its own without the `config` prefix). jq_path is the same
           location in jq dot-notation.
-          Multiple criteria are AND-ed. Always fetches fresh config (force=True).
+          Multiple criteria are AND-ed. Always fetches fresh config, bypassing the cache.
           Search covers cards/card/custom_fields/states containers up to a depth
           bound; if the dashboard carries a non-traversed child-bearing shape
           (e.g. picture-elements `elements`), the result carries a `warnings`

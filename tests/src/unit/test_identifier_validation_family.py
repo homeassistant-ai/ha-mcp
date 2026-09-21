@@ -28,8 +28,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.helpers import validate_identifier_not_empty
 
 # ---------------------------------------------------------------------------
@@ -1010,6 +1010,25 @@ class TestCalendarIdentifierValidation:
             )
         _assert_invalid_param(excinfo)
         assert '"parameter": "uid"' in str(excinfo.value), str(excinfo.value)
+        tools._client.call_service.assert_not_called()
+
+    @pytest.mark.parametrize("bad", ["", "   "])
+    async def test_set_event_rejects_empty_uid(self, tools, bad):
+        # ``uid`` is the create/update discriminator on the set tool: ``None``
+        # routes to create, non-None to update. Without the guard, ``uid=""``
+        # would route to update (``"" is None`` is False) and reach
+        # ``calendar/event/update`` as a misleading HA "event not found".
+        with pytest.raises(ToolError) as excinfo:
+            await tools.ha_config_set_calendar_event(
+                entity_id="calendar.family",
+                summary="Renamed",
+                start="2026-06-15T10:00:00",
+                end="2026-06-15T11:00:00",
+                uid=bad,
+            )
+        _assert_invalid_param(excinfo)
+        assert '"parameter": "uid"' in str(excinfo.value), str(excinfo.value)
+        tools._client.send_websocket_message.assert_not_called()
         tools._client.call_service.assert_not_called()
 
 

@@ -53,6 +53,7 @@ jobs:
             const failedReplyCleanups = [];
             const failedClosingNotices = [];
             const failedReminders = [];
+            const failedReads = [];
 
             for (const issue of issues) {
               // The issues endpoint also returns pull requests with this label.
@@ -62,12 +63,19 @@ jobs:
               const greeting = issueAuthor ? `Hi @${issueAuthor}` : "Hello";
               core.info(`Checking issue #${issueNumber}: ${issue.title}`);
 
-              const events = await github.paginate(github.rest.issues.listEvents, {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issueNumber,
-                per_page: 100,
-              });
+              let events;
+              try {
+                events = await github.paginate(github.rest.issues.listEvents, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  per_page: 100,
+                });
+              } catch (err) {
+                core.warning(`  Failed to read events for #${issueNumber}: ${err.message}`);
+                failedReads.push(`${issueNumber} (events)`);
+                continue;
+              }
               const labelEvents = events.filter(e =>
                 e.event === 'labeled' && e.label && e.label.name === 'needs-info'
               );
@@ -85,12 +93,19 @@ jobs:
               const daysSince = (Date.now() - labeledDate.getTime()) / MS_PER_DAY;
               core.info(`  needs-info applied ${daysSince.toFixed(1)} days ago`);
 
-              const comments = await github.paginate(github.rest.issues.listComments, {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issueNumber,
-                per_page: 100,
-              });
+              let comments;
+              try {
+                comments = await github.paginate(github.rest.issues.listComments, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  per_page: 100,
+                });
+              } catch (err) {
+                core.warning(`  Failed to read comments for #${issueNumber}: ${err.message}`);
+                failedReads.push(`${issueNumber} (comments)`);
+                continue;
+              }
 
               // Only the issue author replying clears needs-info (the retired triage
               // bot used the same rule). A maintainer/bystander comment must not
@@ -207,8 +222,8 @@ jobs:
                 ? `⚠️ **Final reminder** — this issue will be closed automatically **tomorrow** unless the requested information is provided.`
                 : `⏳ **Reminder** — this issue is still awaiting the requested information and will be closed automatically in about ${daysLeft} day${daysLeft === 1 ? '' : 's'}.`;
               // Guarded like the close-path comment: one rejected write (e.g. a
-              // secondary rate limit) must not abort the rest of the batch and
-              // fail the step.
+              // secondary rate limit) must not abort the rest of the batch. It
+              // is recorded so the step fails visibly after all issues run.
               try {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
@@ -234,4 +249,6 @@ jobs:
               failures.push(`Failed to post closing notices for issues #${failedClosingNotices.join(', #')}; they remain open for retry.`);
             if (failedReminders.length > 0)
               failures.push(`Failed to post needs-info reminders for #${failedReminders.join(', #')}.`);
+            if (failedReads.length > 0)
+              failures.push(`Failed to read issue data for #${failedReads.join(', #')}.`);
             if (failures.length > 0) core.setFailed(failures.join(' '));

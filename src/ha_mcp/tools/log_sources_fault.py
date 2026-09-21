@@ -16,13 +16,13 @@ with ``offset`` instead of reversing lines.
 
 The read goes through the File & YAML Tools entry's privileged ``read_file``
 service (the same route as ``ha_read_file``), which allows the path from
-component 2.1.4. Split out of ``log_sources`` under `.gemini/styleguide.md`
+component 2.2.0. Split out of ``log_sources`` under `.gemini/styleguide.md`
 § Tool Consolidation and Module Size.
 """
 
 from typing import Any, Literal, NoReturn
 
-from fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
@@ -46,7 +46,7 @@ FAULT_LOG_PATH = "home-assistant.log.fault"
 # First component release whose read allowlist includes ``FAULT_LOG_PATH``. An
 # older component answers the read with "Path not allowed"; that reply is the
 # version signal, no separate probe needed.
-MIN_COMPONENT_VERSION_FAULT_LOG = "2.1.4"
+MIN_COMPONENT_VERSION_FAULT_LOG = "2.2.0"
 
 # Lines tailed from the file per call, independent of ``limit``. A single dump
 # lists every thread, so it routinely runs past a 100-line ``limit``; tailing

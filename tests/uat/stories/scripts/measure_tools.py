@@ -34,9 +34,8 @@ sys.path.insert(0, str(REPO_ROOT / "tests"))
 
 async def measure_local() -> dict:
     """Measure tools from local code via FastMCP in-memory."""
-    from fastmcp import Client
-
     import ha_mcp.config
+    from ha_mcp._vendor.fastmcp import Client
     from ha_mcp.client import HomeAssistantClient
     from ha_mcp.server import HomeAssistantSmartMCPServer
 
@@ -52,7 +51,7 @@ async def measure_local() -> dict:
     total_schema = 0
     for t in tools:
         desc_len = len(t.description or "")
-        schema = json.dumps(t.inputSchema) if t.inputSchema else ""
+        schema = json.dumps(t.input_schema) if t.input_schema else ""
         schema_len = len(schema)
         total_desc += desc_len
         total_schema += schema_len
@@ -85,7 +84,10 @@ async def run():
     # Import after uvx installs
     from ha_mcp.client import HomeAssistantClient
     from ha_mcp.server import HomeAssistantSmartMCPServer
-    from fastmcp import Client
+    try:
+        from ha_mcp._vendor.fastmcp import Client
+    except ImportError:  # a branch from before FastMCP was vendored
+        from fastmcp import Client
 
     client = HomeAssistantClient(base_url="http://localhost:1", token="dummy")
     server = HomeAssistantSmartMCPServer(client=client)
@@ -97,7 +99,8 @@ async def run():
     total_schema = 0
     for t in tools:
         desc_len = len(t.description or "")
-        schema = json.dumps(t.inputSchema) if t.inputSchema else ""
+        raw_schema = getattr(t, "input_schema", None) or getattr(t, "inputSchema", None)
+        schema = json.dumps(raw_schema) if raw_schema else ""
         schema_len = len(schema)
         total_desc += desc_len
         total_schema += schema_len
@@ -130,8 +133,6 @@ asyncio.run(run())
                 "uvx",
                 "--from",
                 f"git+https://github.com/homeassistant-ai/ha-mcp.git@{branch}",
-                "--with",
-                "fastmcp",
                 "python",
                 script_path,
             ],

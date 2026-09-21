@@ -6,9 +6,9 @@ Each proxy carries its own MCP annotations so clients can apply
 appropriate permission policies (e.g., auto-approve reads, gate writes).
 
 Tools are categorized by their existing MCP annotations:
-- readOnlyHint=True → "read" category
-- destructiveHint=True with remove/delete in name → "delete" category
-- destructiveHint=True (other) → "write" category
+- read_only_hint=True → "read" category
+- destructive_hint=True with remove/delete in name → "delete" category
+- destructive_hint=True (other) → "write" category
 
 A ``manage`` tool combines several operations behind one name, so it is
 reachable from every proxy — read-approved calls only on the read proxy,
@@ -26,19 +26,20 @@ import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, NoReturn
 
-from fastmcp.exceptions import ToolError
-from fastmcp.server.context import Context
-from fastmcp.server.transforms import Transform
-from fastmcp.server.transforms.search.bm25 import BM25SearchTransform
-from fastmcp.tools import Tool
-from mcp.types import ToolAnnotations
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.server.context import Context
+from ha_mcp._vendor.fastmcp.server.transforms import Transform
+from ha_mcp._vendor.fastmcp.server.transforms.search.bm25 import BM25SearchTransform
+from ha_mcp._vendor.fastmcp.tools import Tool
+from ha_mcp._vendor.mcp.types import ToolAnnotations
 
-from ..errors import ErrorCode, create_error_response
+from ..errors import TOOL_ERROR_LOG_LEVEL, ErrorCode, create_error_response
 from ..renamed_tools import adapt_retired_arguments, current_tool_name
+from .write_tool_note import DESKTOP_APPROVAL_NOTE
 
 if TYPE_CHECKING:
-    from fastmcp.server.transforms import GetToolNext
-    from fastmcp.utilities.versions import VersionSpec
+    from ha_mcp._vendor.fastmcp.server.transforms import GetToolNext
+    from ha_mcp._vendor.fastmcp.utilities.versions import VersionSpec
 
 logger = logging.getLogger(__name__)
 
@@ -171,14 +172,16 @@ def _build_proxy_descriptions(search_tool_name: str) -> dict[str, str]:
             f"Creates or updates data. Use for any tool that modifies "
             f"state but does not delete/remove resources.\n"
             f"{_PROXY_PARAMS_SUFFIX}\n"
-            f'EXAMPLE: ha_call_write_tool(name="ha_set_area_or_floor", arguments={{"kind": "area", "name": "Kitchen"}})'
+            f'EXAMPLE: ha_call_write_tool(name="ha_set_area_or_floor", arguments={{"kind": "area", "name": "Kitchen"}})\n'
+            f"{DESKTOP_APPROVAL_NOTE}"
         ),
         "delete": (
             f"Execute a delete/remove tool discovered via {search_tool_name}. "
             f"Permanently removes data. Use for tools that delete or "
             f"remove resources (areas, automations, devices, etc.).\n"
             f"{_PROXY_PARAMS_SUFFIX}\n"
-            f'EXAMPLE: ha_call_delete_tool(name="ha_remove_area_or_floor", arguments={{"kind": "area", "id": "old_area"}})'
+            f'EXAMPLE: ha_call_delete_tool(name="ha_remove_area_or_floor", arguments={{"kind": "area", "id": "old_area"}})\n'
+            f"{DESKTOP_APPROVAL_NOTE}"
         ),
     }
 
@@ -276,9 +279,9 @@ def _execute_via(proxy: str, tool_name: str) -> str:
 
 def _read_only_mode() -> bool:
     """Whether Read Only Mode is on — consulted per request, like its filter."""
-    from ..config import get_global_settings
+    from ..read_only import is_read_only
 
-    return bool(get_global_settings().read_only_mode)
+    return is_read_only()
 
 
 def _advertised_routes(name: str, category: Capability) -> list[Capability]:
@@ -304,8 +307,8 @@ def _categorize_tool(tool: Tool) -> Capability:
     annotations = tool.annotations
     return categorize_capability(
         tool.name,
-        read_only=bool(annotations and annotations.readOnlyHint),
-        destructive=bool(annotations and annotations.destructiveHint),
+        read_only=bool(annotations and annotations.read_only_hint),
+        destructive=bool(annotations and annotations.destructive_hint),
     )
 
 
@@ -323,7 +326,8 @@ def _raise_non_object_arguments(value: Any, proxy_name: str, name: str) -> NoRet
                 ],
                 context={"proxy_used": proxy_name, "tool_name": name},
             )
-        )
+        ),
+        log_level=TOOL_ERROR_LOG_LEVEL,
     )
 
 
@@ -354,7 +358,8 @@ def _coerce_proxy_arguments(
                     ],
                     context={"proxy_used": proxy_name, "tool_name": name},
                 )
-            )
+            ),
+            log_level=TOOL_ERROR_LOG_LEVEL,
         ) from e
     if not isinstance(parsed, dict):
         _raise_non_object_arguments(parsed, proxy_name, name)
@@ -394,7 +399,8 @@ def _raise_wrong_category_error(
                     message=f"Tool '{name}' not found. Use ha_search_tools to discover available tools.",
                     context={"tool_name": name},
                 )
-            )
+            ),
+            log_level=TOOL_ERROR_LOG_LEVEL,
         )
     raise ToolError(
         json.dumps(
@@ -410,7 +416,8 @@ def _raise_wrong_category_error(
                     "correct_proxy": correct_proxy,
                 },
             )
-        )
+        ),
+        log_level=TOOL_ERROR_LOG_LEVEL,
     )
 
 
@@ -526,7 +533,9 @@ class CategorizedSearchTransform(BM25SearchTransform):
         }
         results = []
         for tool in tools:
-            data = tool.to_mcp_tool().model_dump(mode="json", exclude_none=True)
+            data = tool.to_mcp_tool().model_dump(
+                mode="json", exclude_none=True, by_alias=True
+            )
             routes = _advertised_routes(tool.name, _categorize_tool(tool))
             if len(routes) == 1:
                 data["execute_via"] = _execute_via(proxy_map[routes[0]], tool.name)
@@ -641,28 +650,30 @@ class CategorizedSearchTransform(BM25SearchTransform):
         search_tool = search_tool.model_copy(
             update={
                 "description": self._search_tool_description or search_tool.description,
-                "annotations": ToolAnnotations(openWorldHint=False, readOnlyHint=True),
+                "annotations": ToolAnnotations(
+                    open_world_hint=False, read_only_hint=True
+                ),
             }
         )
 
         call_read = self._make_categorized_proxy(
             proxy_name=self._call_read_name,
             category="read",
-            annotations=ToolAnnotations(openWorldHint=True, readOnlyHint=True),
+            annotations=ToolAnnotations(open_world_hint=True, read_only_hint=True),
             description=self._proxy_descs["read"],
         )
 
         call_write = self._make_categorized_proxy(
             proxy_name=self._call_write_name,
             category="write",
-            annotations=ToolAnnotations(openWorldHint=True, destructiveHint=True),
+            annotations=ToolAnnotations(open_world_hint=True, destructive_hint=True),
             description=self._proxy_descs["write"],
         )
 
         call_delete = self._make_categorized_proxy(
             proxy_name=self._call_delete_name,
             category="delete",
-            annotations=ToolAnnotations(openWorldHint=False, destructiveHint=True),
+            annotations=ToolAnnotations(open_world_hint=False, destructive_hint=True),
             description=self._proxy_descs["delete"],
         )
 
@@ -691,21 +702,21 @@ class CategorizedSearchTransform(BM25SearchTransform):
             return self._make_categorized_proxy(
                 self._call_read_name,
                 "read",
-                ToolAnnotations(openWorldHint=True, readOnlyHint=True),
+                ToolAnnotations(open_world_hint=True, read_only_hint=True),
                 self._proxy_descs["read"],
             )
         if name == self._call_write_name:
             return self._make_categorized_proxy(
                 self._call_write_name,
                 "write",
-                ToolAnnotations(openWorldHint=True, destructiveHint=True),
+                ToolAnnotations(open_world_hint=True, destructive_hint=True),
                 self._proxy_descs["write"],
             )
         if name == self._call_delete_name:
             return self._make_categorized_proxy(
                 self._call_delete_name,
                 "delete",
-                ToolAnnotations(openWorldHint=False, destructiveHint=True),
+                ToolAnnotations(open_world_hint=False, destructive_hint=True),
                 self._proxy_descs["delete"],
             )
         return await super().get_tool(name, call_next, version=version)

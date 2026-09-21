@@ -1,0 +1,454 @@
+"""Authorization middleware for FastMCP.
+
+This module provides middleware-based authorization using callable auth checks.
+AuthMiddleware applies auth checks globally to all components on the server.
+
+Example:
+    ```python
+    from fastmcp import FastMCP
+    from fastmcp.server.auth import require_scopes, restrict_tag
+    from fastmcp.server.middleware import AuthMiddleware
+
+    # Require specific scope for all components
+    mcp = FastMCP(middleware=[
+        AuthMiddleware(auth=require_scopes("api"))
+    ])
+
+    # Tag-based: components tagged "admin" require "admin" scope
+    mcp = FastMCP(middleware=[
+        AuthMiddleware(auth=restrict_tag("admin", scopes=["admin"]))
+    ])
+    ```
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+import ha_mcp._vendor.mcp_types as mt
+
+from ha_mcp._vendor.fastmcp.exceptions import AuthorizationError, InsufficientScopeError
+from ha_mcp._vendor.fastmcp.prompts.base import Prompt, PromptResult
+from ha_mcp._vendor.fastmcp.resources.base import Resource, ResourceResult
+from ha_mcp._vendor.fastmcp.resources.template import ResourceTemplate
+from ha_mcp._vendor.fastmcp.server.dependencies import get_access_token
+from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
+    CallNext,
+    Middleware,
+    MiddlewareContext,
+)
+from ha_mcp._vendor.fastmcp.tools.base import Tool, ToolResult
+from ha_mcp._vendor.fastmcp.utilities.authorization import (
+    AuthCheck,
+    AuthContext,
+    run_auth_checks,
+    run_auth_checks_with_shortfall,
+    scope_requirements,
+)
+from ha_mcp._vendor.fastmcp.utilities.versions import VersionSpec
+
+logger = logging.getLogger(__name__.removeprefix("ha_mcp._vendor."))
+
+
+def _requested_version(meta: Mapping[str, Any] | None) -> VersionSpec | None:
+    # SDK v2: request `_meta` is a plain dict (the `Meta` type alias), not the
+    # old `RequestParams.Meta` nested model.
+    if not meta:
+        return None
+
+    fastmcp_meta = meta.get("fastmcp")
+    if not isinstance(fastmcp_meta, dict):
+        return None
+
+    version = fastmcp_meta.get("version")
+    if isinstance(version, str):
+        return VersionSpec(eq=version)
+
+    if isinstance(version, dict):
+        gte = version.get("gte")
+        lt = version.get("lt")
+        eq = version.get("eq")
+
+        if not all(value is None or isinstance(value, str) for value in (gte, lt, eq)):
+            return None
+
+        return VersionSpec(gte=gte, lt=lt, eq=eq)
+
+    return None
+
+
+class AuthMiddleware(Middleware):
+    """Global authorization middleware using callable checks.
+
+    This middleware applies auth checks to all components (tools, resources,
+    prompts) on the server. It uses the same callable API as component-level
+    auth checks.
+
+    The middleware:
+    - Filters tools/resources/prompts from list responses based on auth checks
+    - Checks auth before tool execution, resource read, and prompt render
+    - Skips all auth checks for STDIO transport (no OAuth concept)
+
+    Args:
+        auth: A single auth check function or list of check functions.
+            All checks must pass for authorization to succeed (AND logic).
+
+    Example:
+        ```python
+        from fastmcp import FastMCP
+        from fastmcp.server.auth import require_scopes
+
+        # Require specific scope for all components
+        mcp = FastMCP(middleware=[AuthMiddleware(auth=require_scopes("api"))])
+
+        # Multiple scopes (AND logic)
+        mcp = FastMCP(middleware=[
+            AuthMiddleware(auth=require_scopes("read", "api"))
+        ])
+        ```
+    """
+
+    def __init__(self, auth: AuthCheck | list[AuthCheck]) -> None:
+        self.auth = auth
+
+    def _chain_shortfall(
+        self,
+        own_missing: list[str],
+        ctx: AuthContext,
+        server: Any,
+    ) -> list[str]:
+        """Widen this middleware's shortfall to cover the rest of the chain.
+
+        Scope requirements are commonly split across several `AuthMiddleware`
+        instances (the tag-based configuration does exactly this). Raising as
+        soon as the first one finds a shortfall means the middleware further in
+        never runs, so a caller told only the outer scope would obtain it, retry,
+        and be denied for the next — the same non-convergent loop that reporting
+        a union within one middleware avoids.
+
+        Sibling requirements are read without evaluating them: `scope_requirements`
+        is a pure comparison against the token and component. Only the layers the
+        request would actually reach next may contribute, so the walk starts after
+        this middleware and stops at the first one whose requirements cannot be
+        read — a layer holding an opaque check is an unverified gate, and anything
+        at or beyond it might be unreachable for reasons that have nothing to do
+        with scopes. Disclosing those requirements would leak what sits behind a
+        policy the request never passed.
+
+        Layers *before* this one are already known to have passed, so they neither
+        block the walk nor contribute anything. This middleware's own shortfall
+        always counts: the request demonstrably reached it.
+
+        The result is therefore complete when the reachable chain is scope-only,
+        and deliberately partial otherwise — never a disclosure past an
+        unevaluated gate.
+        """
+        middleware = getattr(server, "middleware", None)
+        if not isinstance(middleware, list):
+            return own_missing
+
+        position = next(
+            (i for i, mw in enumerate(middleware) if mw is self),
+            None,
+        )
+        if position is None:
+            return own_missing
+
+        missing = set(own_missing)
+        for mw in middleware[position + 1 :]:
+            if not isinstance(mw, AuthMiddleware):
+                continue
+            sibling = scope_requirements(mw.auth, ctx)
+            if sibling is None:
+                # An unverified gate. Nothing at or beyond it may contribute.
+                break
+            missing |= set(sibling)
+        return sorted(missing)
+
+    async def on_list_tools(
+        self,
+        context: MiddlewareContext[mt.ListToolsRequest],
+        call_next: CallNext[mt.ListToolsRequest, Sequence[Tool]],
+    ) -> Sequence[Tool]:
+        """Filter tools/list response based on auth checks."""
+        tools = await call_next(context)
+
+        # STDIO has no auth concept, skip filtering
+        # Late import to avoid circular import with context.py
+        from ha_mcp._vendor.fastmcp.server.context import _current_transport
+
+        if _current_transport.get() == "stdio":
+            return tools
+
+        token = get_access_token()
+
+        authorized_tools: list[Tool] = []
+        for tool in tools:
+            ctx = AuthContext(token=token, component=tool)
+            try:
+                if await run_auth_checks(self.auth, ctx):
+                    authorized_tools.append(tool)
+            except AuthorizationError:
+                continue
+
+        return authorized_tools
+
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext[mt.CallToolRequestParams],
+        call_next: CallNext[mt.CallToolRequestParams, ToolResult],
+    ) -> ToolResult:
+        """Check auth before tool execution."""
+        # STDIO has no auth concept, skip enforcement
+        # Late import to avoid circular import with context.py
+        from ha_mcp._vendor.fastmcp.server.context import _current_transport
+
+        if _current_transport.get() == "stdio":
+            return await call_next(context)
+
+        # Get the tool being called
+        tool_name = context.message.name
+        fastmcp = context.fastmcp_context
+        if fastmcp is None:
+            # Fail closed: deny access when context is missing
+            logger.warning(
+                f"AuthMiddleware: fastmcp_context is None for tool '{tool_name}'. "
+                "Denying access for security."
+            )
+            raise AuthorizationError(
+                f"Authorization failed for tool '{tool_name}': missing context"
+            )
+
+        # get_tool returns None both when the tool does not exist and when
+        # component-level auth denied access, so the two cases are
+        # indistinguishable here. Keep the message ambiguous to avoid
+        # disclosing existence of tools the caller is not authorized to see.
+        version = _requested_version(context.message.meta)
+        tool = await fastmcp.fastmcp.get_tool(tool_name, version=version)
+        if tool is None:
+            raise AuthorizationError(
+                f"Authorization failed for tool '{tool_name}': "
+                "not found or not authorized"
+            )
+
+        # Global auth check
+        token = get_access_token()
+        ctx = AuthContext(token=token, component=tool)
+        authorized, missing = await run_auth_checks_with_shortfall(self.auth, ctx)
+        if not authorized:
+            if missing:
+                missing = self._chain_shortfall(missing, ctx, fastmcp.fastmcp)
+                raise InsufficientScopeError(
+                    missing,
+                    message=(
+                        f"Authorization failed for tool '{tool_name}': "
+                        f"insufficient scope (required: {', '.join(missing)})"
+                    ),
+                )
+            raise AuthorizationError(
+                f"Authorization failed for tool '{tool_name}': insufficient permissions"
+            )
+
+        return await call_next(context)
+
+    async def on_list_resources(
+        self,
+        context: MiddlewareContext[mt.ListResourcesRequest],
+        call_next: CallNext[mt.ListResourcesRequest, Sequence[Resource]],
+    ) -> Sequence[Resource]:
+        """Filter resources/list response based on auth checks."""
+        resources = await call_next(context)
+
+        # STDIO has no auth concept, skip filtering
+        from ha_mcp._vendor.fastmcp.server.context import _current_transport
+
+        if _current_transport.get() == "stdio":
+            return resources
+
+        token = get_access_token()
+
+        authorized_resources: list[Resource] = []
+        for resource in resources:
+            ctx = AuthContext(token=token, component=resource)
+            try:
+                if await run_auth_checks(self.auth, ctx):
+                    authorized_resources.append(resource)
+            except AuthorizationError:
+                continue
+
+        return authorized_resources
+
+    async def on_read_resource(
+        self,
+        context: MiddlewareContext[mt.ReadResourceRequestParams],
+        call_next: CallNext[mt.ReadResourceRequestParams, ResourceResult],
+    ) -> ResourceResult:
+        """Check auth before resource read."""
+        # STDIO has no auth concept, skip enforcement
+        from ha_mcp._vendor.fastmcp.server.context import _current_transport
+
+        if _current_transport.get() == "stdio":
+            return await call_next(context)
+
+        # Get the resource being read
+        uri = context.message.uri
+        fastmcp = context.fastmcp_context
+        if fastmcp is None:
+            logger.warning(
+                f"AuthMiddleware: fastmcp_context is None for resource '{uri}'. "
+                "Denying access for security."
+            )
+            raise AuthorizationError(
+                f"Authorization failed for resource '{uri}': missing context"
+            )
+
+        # get_resource/get_resource_template return None both when the resource
+        # does not exist and when component-level auth denied access, so the two
+        # cases are indistinguishable here. Keep the message ambiguous to avoid
+        # disclosing existence of resources the caller is not authorized to see.
+        version = _requested_version(context.message.meta)
+        component = await fastmcp.fastmcp.get_resource(str(uri), version=version)
+        if component is None:
+            component = await fastmcp.fastmcp.get_resource_template(
+                str(uri),
+                version=version,
+            )
+        if component is None:
+            raise AuthorizationError(
+                f"Authorization failed for resource '{uri}': "
+                "not found or not authorized"
+            )
+
+        # Global auth check
+        token = get_access_token()
+        ctx = AuthContext(token=token, component=component)
+        authorized, missing = await run_auth_checks_with_shortfall(self.auth, ctx)
+        if not authorized:
+            if missing:
+                missing = self._chain_shortfall(missing, ctx, fastmcp.fastmcp)
+                raise InsufficientScopeError(
+                    missing,
+                    message=(
+                        f"Authorization failed for resource '{uri}': "
+                        f"insufficient scope (required: {', '.join(missing)})"
+                    ),
+                )
+            raise AuthorizationError(
+                f"Authorization failed for resource '{uri}': insufficient permissions"
+            )
+
+        return await call_next(context)
+
+    async def on_list_resource_templates(
+        self,
+        context: MiddlewareContext[mt.ListResourceTemplatesRequest],
+        call_next: CallNext[
+            mt.ListResourceTemplatesRequest, Sequence[ResourceTemplate]
+        ],
+    ) -> Sequence[ResourceTemplate]:
+        """Filter resource templates/list response based on auth checks."""
+        templates = await call_next(context)
+
+        # STDIO has no auth concept, skip filtering
+        from ha_mcp._vendor.fastmcp.server.context import _current_transport
+
+        if _current_transport.get() == "stdio":
+            return templates
+
+        token = get_access_token()
+
+        authorized_templates: list[ResourceTemplate] = []
+        for template in templates:
+            ctx = AuthContext(token=token, component=template)
+            try:
+                if await run_auth_checks(self.auth, ctx):
+                    authorized_templates.append(template)
+            except AuthorizationError:
+                continue
+
+        return authorized_templates
+
+    async def on_list_prompts(
+        self,
+        context: MiddlewareContext[mt.ListPromptsRequest],
+        call_next: CallNext[mt.ListPromptsRequest, Sequence[Prompt]],
+    ) -> Sequence[Prompt]:
+        """Filter prompts/list response based on auth checks."""
+        prompts = await call_next(context)
+
+        # STDIO has no auth concept, skip filtering
+        from ha_mcp._vendor.fastmcp.server.context import _current_transport
+
+        if _current_transport.get() == "stdio":
+            return prompts
+
+        token = get_access_token()
+
+        authorized_prompts: list[Prompt] = []
+        for prompt in prompts:
+            ctx = AuthContext(token=token, component=prompt)
+            try:
+                if await run_auth_checks(self.auth, ctx):
+                    authorized_prompts.append(prompt)
+            except AuthorizationError:
+                continue
+
+        return authorized_prompts
+
+    async def on_get_prompt(
+        self,
+        context: MiddlewareContext[mt.GetPromptRequestParams],
+        call_next: CallNext[mt.GetPromptRequestParams, PromptResult],
+    ) -> PromptResult:
+        """Check auth before prompt render."""
+        # STDIO has no auth concept, skip enforcement
+        from ha_mcp._vendor.fastmcp.server.context import _current_transport
+
+        if _current_transport.get() == "stdio":
+            return await call_next(context)
+
+        # Get the prompt being rendered
+        prompt_name = context.message.name
+        fastmcp = context.fastmcp_context
+        if fastmcp is None:
+            logger.warning(
+                f"AuthMiddleware: fastmcp_context is None for prompt '{prompt_name}'. "
+                "Denying access for security."
+            )
+            raise AuthorizationError(
+                f"Authorization failed for prompt '{prompt_name}': missing context"
+            )
+
+        # get_prompt returns None both when the prompt does not exist and when
+        # component-level auth denied access, so the two cases are
+        # indistinguishable here. Keep the message ambiguous to avoid
+        # disclosing existence of prompts the caller is not authorized to see.
+        version = _requested_version(context.message.meta)
+        prompt = await fastmcp.fastmcp.get_prompt(prompt_name, version=version)
+        if prompt is None:
+            raise AuthorizationError(
+                f"Authorization failed for prompt '{prompt_name}': "
+                "not found or not authorized"
+            )
+
+        # Global auth check
+        token = get_access_token()
+        ctx = AuthContext(token=token, component=prompt)
+        authorized, missing = await run_auth_checks_with_shortfall(self.auth, ctx)
+        if not authorized:
+            if missing:
+                missing = self._chain_shortfall(missing, ctx, fastmcp.fastmcp)
+                raise InsufficientScopeError(
+                    missing,
+                    message=(
+                        f"Authorization failed for prompt '{prompt_name}': "
+                        f"insufficient scope (required: {', '.join(missing)})"
+                    ),
+                )
+            raise AuthorizationError(
+                f"Authorization failed for prompt '{prompt_name}': insufficient permissions"
+            )
+
+        return await call_next(context)

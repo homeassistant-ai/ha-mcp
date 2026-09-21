@@ -382,7 +382,7 @@ class TestHaGetOverviewFieldsProjection:
         """
         import json
 
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         with pytest.raises(ToolError) as exc_info:
             await overview_tool(fields=123)
@@ -393,7 +393,7 @@ class TestHaGetOverviewFieldsProjection:
     @pytest.mark.asyncio
     async def test_bad_json_fields_raises_tool_error(self, overview_tool):
         """fields='[\"' (malformed JSON) raises ToolError."""
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         with pytest.raises(ToolError):
             await overview_tool(fields='["')
@@ -737,6 +737,10 @@ class TestHaGetOverviewReadOnlyMode:
             # ha_get_overview reads enable_tool_search from the same
             # singleton before the read-only re-read — stub both.
             lambda: SimpleNamespace(read_only_mode=on, enable_tool_search=False),
+        )
+        monkeypatch.setattr(
+            "ha_mcp.read_only.get_global_settings",
+            lambda: SimpleNamespace(read_only_mode=on),
         )
 
     @pytest.mark.asyncio

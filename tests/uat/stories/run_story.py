@@ -50,7 +50,8 @@ import yaml
 
 if TYPE_CHECKING:
     import openai
-    from fastmcp import Client as MCPClient
+
+    from ha_mcp._vendor.fastmcp import Client as MCPClient
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CATALOG_DIR = SCRIPT_DIR / "catalog"
@@ -1034,12 +1035,13 @@ async def _setup_inline_agent(
     openai_tools)`` on success, or ``None`` if setup failed (a per-story failure
     row is recorded before returning).
     """
-    from fastmcp import Client as _MCPClient
     from uat.openai_agent import (
         create_and_warm_openai_client,
         fetch_openai_tools,
     )
     from uat.run_uat import build_stdio_mcp_config
+
+    from ha_mcp._vendor.fastmcp import Client as _MCPClient
 
     config = build_stdio_mcp_config(ha_url, ha_token, args.branch, mcp_env_dict or None)
     try:

@@ -278,9 +278,8 @@ class TestMainOidcLogging:
 
     def test_setup_logging_configures_fastmcp_logger(self, monkeypatch):
         """LOG_LEVEL should apply to FastMCP's non-propagating logger."""
-        import fastmcp
-
         import ha_mcp.__main__ as main_module
+        from ha_mcp._vendor import fastmcp
 
         fastmcp_logger = logging.getLogger("fastmcp")
         streamable_http_logger = logging.getLogger("mcp.server.streamable_http")
@@ -317,9 +316,8 @@ class TestMainOidcLogging:
 
     def test_setup_logging_preserves_fastmcp_logging_opt_out(self, monkeypatch, caplog):
         """FASTMCP_LOG_ENABLED=false should suppress FastMCP records."""
-        import fastmcp
-
         import ha_mcp.__main__ as main_module
+        from ha_mcp._vendor import fastmcp
 
         fastmcp_logger = logging.getLogger("fastmcp")
         fastmcp_server_logger = logging.getLogger("fastmcp.server.server")
@@ -1262,7 +1260,7 @@ class TestOIDCProxySignatureSubset:
     def test_run_oidc_server_kwargs_are_subset_of_oidc_proxy_params(self):
         import inspect
 
-        from fastmcp.server.auth.oidc_proxy import OIDCProxy
+        from ha_mcp._vendor.fastmcp.server.auth.oidc_proxy import OIDCProxy
 
         oidc_proxy_params = set(inspect.signature(OIDCProxy.__init__).parameters)
 

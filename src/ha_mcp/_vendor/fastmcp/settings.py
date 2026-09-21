@@ -1,0 +1,339 @@
+from __future__ import annotations as _annotations
+
+import inspect
+import os
+from pathlib import Path
+from typing import Annotated, Any, Literal
+
+from platformdirs import user_data_dir
+from pydantic import Field, field_validator
+from pydantic_settings import (
+    BaseSettings,
+    SettingsConfigDict,
+)
+
+from ha_mcp._vendor.fastmcp.utilities.logging import get_logger
+
+logger = get_logger(__name__.removeprefix("ha_mcp._vendor."))
+
+ENV_FILE = os.getenv("FASTMCP_ENV_FILE", ".env")
+
+LOG_LEVEL = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+TELEMETRY_MODE = Literal["native", "propagation_only", "off"]
+
+MCP_LOG_LEVEL = Literal[
+    "debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"
+]
+
+DuplicateBehavior = Literal["warn", "error", "replace", "ignore"]
+
+TEN_MB_IN_BYTES = 1024 * 1024 * 10
+
+
+class Settings(BaseSettings):
+    """FastMCP settings."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="FASTMCP_",
+        env_file=ENV_FILE,
+        extra="ignore",
+        env_nested_delimiter="__",
+        nested_model_default_partial_update=True,
+        validate_assignment=True,
+    )
+
+    def get_setting(self, attr: str) -> Any:
+        """
+        Get a setting. If the setting contains one or more `__`, it will be
+        treated as a nested setting.
+        """
+        settings = self
+        while "__" in attr:
+            parent_attr, attr = attr.split("__", 1)
+            if not hasattr(settings, parent_attr):
+                raise AttributeError(f"Setting {parent_attr} does not exist.")
+            settings = getattr(settings, parent_attr)
+        return getattr(settings, attr)
+
+    def set_setting(self, attr: str, value: Any) -> None:
+        """
+        Set a setting. If the setting contains one or more `__`, it will be
+        treated as a nested setting.
+        """
+        settings = self
+        while "__" in attr:
+            parent_attr, attr = attr.split("__", 1)
+            if not hasattr(settings, parent_attr):
+                raise AttributeError(f"Setting {parent_attr} does not exist.")
+            settings = getattr(settings, parent_attr)
+        setattr(settings, attr, value)
+
+    home: Path = Path(user_data_dir("fastmcp", appauthor=False))
+
+    test_mode: bool = False
+
+    log_enabled: bool = True
+    log_level: LOG_LEVEL = "INFO"
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def normalize_log_level(cls, v):
+        if isinstance(v, str):
+            return v.upper()
+        return v
+
+    enable_rich_logging: Annotated[
+        bool,
+        Field(
+            description=inspect.cleandoc(
+                """
+                If True, will use rich formatting for log output. If False,
+                will use standard Python logging without rich formatting.
+                """
+            )
+        ),
+    ] = True
+
+    enable_rich_tracebacks: Annotated[
+        bool,
+        Field(
+            description=inspect.cleandoc(
+                """
+                If True, will use rich tracebacks for logging.
+                """
+            )
+        ),
+    ] = True
+
+    deprecation_warnings: Annotated[
+        bool,
+        Field(
+            description=inspect.cleandoc(
+                """
+                Whether to show deprecation warnings. You can completely reset
+                Python's warning behavior by running `warnings.resetwarnings()`.
+                Note this will NOT apply to deprecation warnings from the
+                settings class itself.
+                """,
+            )
+        ),
+    ] = True
+
+    mcp_camelcase_compat: Annotated[
+        bool,
+        Field(
+            description=inspect.cleandoc(
+                """
+                Whether to install compatibility shims that let legacy
+                camelCase reads on MCP SDK objects (e.g. `tool.inputSchema`,
+                `result.isError`) keep working after the SDK v2 rename to
+                snake_case. Each bridged read emits a
+                `FastMCPDeprecationWarning`. Set to False to disable the shims
+                entirely, in which case only the snake_case names resolve.
+                """
+            ),
+        ),
+    ] = True
+
+    client_raise_first_exceptiongroup_error: Annotated[
+        bool,
+        Field(
+            description=inspect.cleandoc(
+                """
+                Many MCP components operate in anyio taskgroups, and raise
+                ExceptionGroups instead of exceptions. If this setting is True, FastMCP Clients
+                will `raise` the first error in any ExceptionGroup instead of raising
+                the ExceptionGroup as a whole. This is useful for debugging, but may
+                mask other errors.
+                """
+            ),
+        ),
+    ] = True
+
+    telemetry_mode: Annotated[
+        TELEMETRY_MODE,
+        Field(
+            description=inspect.cleandoc(
+                """
+                Controls FastMCP's native OpenTelemetry instrumentation.
+
+                - `native` (default): FastMCP creates MCP spans and propagates
+                  trace context through request `_meta`. FastMCP uses only the
+                  OpenTelemetry API, so span creation is a no-op with negligible
+                  overhead unless an SDK and exporter are configured.
+                - `propagation_only`: FastMCP still injects and extracts trace
+                  context, and still parents downstream spans from the incoming
+                  `_meta` context, but creates none of its own MCP spans. Use
+                  this when another instrumentation layer owns the MCP span
+                  hierarchy and FastMCP's spans would duplicate it.
+                - `off`: FastMCP's span helpers become a transparent
+                  pass-through. No spans are created even when an SDK is
+                  configured, and the surrounding OTel context is left
+                  untouched — no trace context is extracted or attached.
+                """
+            ),
+        ),
+    ] = "native"
+
+    client_init_timeout: Annotated[
+        float | None,
+        Field(
+            description="The timeout for the client's initialization handshake, in seconds. Set to None or 0 to disable.",
+        ),
+    ] = None
+
+    client_disconnect_timeout: Annotated[
+        float,
+        Field(
+            description="Maximum time to wait for a clean disconnect before giving up, in seconds.",
+        ),
+    ] = 5
+
+    # Transport settings
+    transport: Literal["stdio", "http", "sse", "streamable-http"] = "stdio"
+
+    # HTTP settings
+    host: str = "127.0.0.1"
+    port: int = 8000
+    sse_path: str = "/sse"
+    message_path: str = "/messages/"
+    streamable_http_path: str = "/mcp"
+    debug: bool = False
+
+    # error handling
+    mask_error_details: Annotated[
+        bool,
+        Field(
+            description=inspect.cleandoc(
+                """
+                If True, error details from user-supplied functions (tool, resource, prompt)
+                will be masked before being sent to clients. Only error messages from explicitly
+                raised ToolError, ResourceError, or PromptError will be included in responses.
+                If False (default), all error details will be included in responses, but prefixed
+                with appropriate context.
+                """
+            ),
+        ),
+    ] = False
+
+    client_log_level: Annotated[
+        MCP_LOG_LEVEL | None,
+        Field(
+            description=inspect.cleandoc(
+                """
+                Default minimum log level for messages sent to MCP clients.
+                When set, log messages below this level are suppressed.
+                Individual clients can override this per-session using the
+                MCP logging/setLevel request.
+                """
+            ),
+        ),
+    ] = None
+
+    strict_input_validation: Annotated[
+        bool,
+        Field(
+            description=inspect.cleandoc(
+                """
+                If True, tool inputs are strictly validated against the input
+                JSON schema. For example, providing the string \"10\" to an
+                integer field will raise an error. If False, compatible inputs
+                will be coerced to match the schema, which can increase
+                compatibility. For example, providing the string \"10\" to an
+                integer field will be coerced to 10. Defaults to False.
+                """
+            ),
+        ),
+    ] = False
+
+    ssrf_trust_proxy: Annotated[
+        bool,
+        Field(
+            description=inspect.cleandoc(
+                """
+                Trust an outbound HTTP proxy for SSRF-protected fetches (OAuth client
+                metadata and JWKS). When False (default), FastMCP resolves the target
+                hostname itself and refuses to connect if it maps to a private,
+                loopback, link-local, or otherwise reserved IP. When True, FastMCP
+                routes auth metadata and JWKS fetches through the configured
+                HTTPS_PROXY/ALL_PROXY and does not honor NO_PROXY; if no proxy is
+                configured the fetch is refused (raising SSRFError) rather than sent
+                direct with the blocklist disabled. Only enable this when a trusted
+                corporate proxy is the mandated egress path: it shifts SSRF trust to
+                that proxy. Scheme (HTTPS-only) and hostname checks still apply.
+                """
+            ),
+        ),
+    ] = False
+
+    server_dependencies: list[str] = Field(
+        default_factory=list,
+        description="List of dependencies to install in the server environment",
+    )
+
+    # StreamableHTTP settings
+    json_response: bool = False
+    stateless_http: bool = (
+        False  # If True, uses true stateless mode (new transport per request)
+    )
+    http_host_origin_protection: bool | Literal["auto"] = False
+    http_allowed_hosts: list[str] | None = None
+    http_allowed_origins: list[str] | None = None
+    http_session_idle_timeout: Annotated[
+        float | None,
+        Field(
+            description=inspect.cleandoc(
+                """
+                Maximum time in seconds a streamable-HTTP session may remain
+                idle before it is terminated. A session's deadline is pushed
+                forward on every request. When None (default), sessions never
+                expire from inactivity. Not supported in stateless HTTP mode.
+                Must be a positive number of seconds when set.
+                """
+            ),
+            gt=0,
+        ),
+    ] = None
+
+    mounted_components_raise_on_load_error: Annotated[
+        bool,
+        Field(
+            description=inspect.cleandoc(
+                """
+                If True, errors encountered when loading mounted components (tools, resources, prompts)
+                will be raised instead of logged as warnings. This is useful for debugging
+                but will interrupt normal operation.
+                """
+            ),
+        ),
+    ] = False
+
+    show_server_banner: Annotated[
+        bool,
+        Field(
+            description=inspect.cleandoc(
+                """
+                If True, the server banner will be displayed when running the server.
+                This setting can be overridden by the --no-banner CLI flag or by
+                passing show_banner=False to server.run().
+                Set to False via FASTMCP_SHOW_SERVER_BANNER=false to suppress the banner.
+                """
+            ),
+        ),
+    ] = True
+
+    check_for_updates: Annotated[
+        Literal["stable", "prerelease", "off"],
+        Field(
+            description=inspect.cleandoc(
+                """
+                Controls update checking when displaying the CLI banner.
+                - "stable": Check for stable releases only (default)
+                - "prerelease": Also check for pre-release versions (alpha, beta, rc)
+                - "off": Disable update checking entirely
+                Set via FASTMCP_CHECK_FOR_UPDATES environment variable.
+                """
+            ),
+        ),
+    ] = "stable"

@@ -72,11 +72,23 @@ from .oauth_legacy import (
     build_unbound_legacy_provider,
     clear_scoped_legacy_credentials,
 )
+from .readonly_webhook import (
+    readonly_url,
+    register_readonly_webhook,
+    unregister_readonly_webhook,
+)
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _unregister_webhook(hass: HomeAssistant, webhook_id: str) -> None:
+    """Remove both endpoint variants, including on partial setup failure."""
+    unregister_readonly_webhook(hass, webhook_id)
+    async_unregister(hass, webhook_id)
+
 
 # Human-readable webhook name shown in the HA webhook registry.
 _WEBHOOK_NAME = "HA-MCP in-process server"
@@ -585,7 +597,11 @@ async def _check_webhook_auth(
 
 
 async def _async_handle_webhook(
-    hass: HomeAssistant, webhook_id: str, request: web.Request
+    hass: HomeAssistant,
+    webhook_id: str,
+    request: web.Request,
+    *,
+    read_only: bool = False,
 ) -> web.StreamResponse:
     """Forward an MCP request to the loopback server and stream the reply back."""
     domain_data = hass.data.get(DOMAIN)
@@ -597,7 +613,9 @@ async def _async_handle_webhook(
     if auth_response is not None:
         return auth_response
 
-    target_url: str = cfg["target_url"]
+    target_url: str = (
+        readonly_url(cfg["target_url"]) if read_only else cfg["target_url"]
+    )
     session: aiohttp.ClientSession = cfg["session"]
 
     body = await request.read()
@@ -824,7 +842,7 @@ async def async_register_webhook(
     # crashed unload before (re)registering — or before storing a local-only
     # config (async_unregister is a no-op pop when nothing is registered).
     # Runs before the session opens so a raise here cannot leak it.
-    async_unregister(hass, webhook_id)
+    _unregister_webhook(hass, webhook_id)
     target_url = f"http://127.0.0.1:{port}{secret_path}"
     session = aiohttp.ClientSession(timeout=_CLIENT_TIMEOUT)
     cimd_session: aiohttp.ClientSession | None = None
@@ -862,6 +880,7 @@ async def async_register_webhook(
                 _async_handle_webhook,
                 allowed_methods=["POST", "GET"],
             )
+            register_readonly_webhook(hass, webhook_id, _async_handle_webhook)
             if auth_mode == WEBHOOK_AUTH_HA:
                 _bind_ha_auth_surface(hass, cfg, webhook_id, dcr_signing_key)
             elif auth_mode == WEBHOOK_AUTH_LEGACY:
@@ -877,7 +896,7 @@ async def async_register_webhook(
             # auth-setup path. suppress: the ORIGINAL error must be what
             # propagates (review finding) - a raising cleanup would mask it.
             with suppress(Exception):
-                async_unregister(hass, webhook_id)
+                _unregister_webhook(hass, webhook_id)
             with suppress(Exception):
                 await session.close()
             if cimd_session is not None:
@@ -917,7 +936,7 @@ async def async_unregister_webhook(hass: HomeAssistant) -> None:
         return
     webhook_id = cfg.get("webhook_id")
     if webhook_id:
-        async_unregister(hass, webhook_id)
+        _unregister_webhook(hass, webhook_id)
     session = cfg.get("session")
     if session is not None:
         await session.close()

@@ -15,10 +15,10 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any, Literal
 
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import tool
-from fastmcp.tools.tool import ToolResult
 from pydantic import Field
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import ToolResult, tool
 
 from ..dashboard_screenshot.capture import (
     DEFAULT_HEIGHT,
@@ -38,6 +38,7 @@ from ..dashboard_screenshot.content import (
     dashboard_screenshot_warnings,
 )
 from ..dashboard_screenshot.paths import (
+    DashboardRenderTarget,
     resolve_dashboard_render_target,
 )
 from ..errors import ErrorCode, create_error_response
@@ -50,7 +51,7 @@ logger = logging.getLogger(__name__)
 def _package_screenshot_result(
     *,
     captures: list[Any],
-    target: Any,
+    target: DashboardRenderTarget,
     capture_failures: list[dict[str, Any]],
     capture_warnings: list[str],
 ) -> ToolResult:
@@ -58,7 +59,7 @@ def _package_screenshot_result(
     try:
         structured_content: dict[str, Any] = {
             "success": True,
-            "dashboard_url_path": target.dashboard_url_path,
+            "url_path": target.url_path,
             "view_path": target.view_path,
             "view_index": target.view_index,
             "render_path": target.render_path,
@@ -123,11 +124,11 @@ class DashboardScreenshotTools:
                 description="Legacy Lovelace frontend path to render, e.g. "
                 "'lovelace/0' (default dashboard, first view), "
                 "'lovelace-home/kitchen', or 'my-dashboard'. Leading slash "
-                "optional. Prefer dashboard_url_path + view_path for a stable "
-                "named view. Mutually exclusive with dashboard_url_path."
+                "optional. Prefer url_path + view_path for a stable "
+                "named view. Mutually exclusive with url_path."
             ),
         ] = None,
-        dashboard_url_path: Annotated[
+        url_path: Annotated[
             str | None,
             Field(
                 description="Stable dashboard URL path, e.g. 'lovelace-home' "
@@ -138,7 +139,7 @@ class DashboardScreenshotTools:
             str | None,
             Field(
                 description="Stable Lovelace views[].path value to render. "
-                "Requires dashboard_url_path."
+                "Requires url_path."
             ),
         ] = None,
         width: Annotated[
@@ -246,7 +247,7 @@ class DashboardScreenshotTools:
         target = await resolve_dashboard_render_target(
             self._client,
             dashboard_path=dashboard_path,
-            dashboard_url_path=dashboard_url_path,
+            url_path=url_path,
             view_path=view_path,
         )
         validate_capture_parameters(

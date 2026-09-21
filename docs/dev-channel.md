@@ -232,7 +232,7 @@ If you encounter issues with a dev release:
 2. **Check if the issue exists in stable** - Try the [latest stable release](https://github.com/homeassistant-ai/ha-mcp/releases/latest) to confirm it's dev-specific
 3. **Report the issue:**
    - If it's a regression (worked in stable, broken in dev), comment on the related PR or issue
-   - If it's a new bug, [open a bug report](https://github.com/homeassistant-ai/ha-mcp/issues/new?template=bug_report.md) and include:
+   - If it's a new bug, [open a bug report](https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.yml) and include:
      - The dev version number
      - Whether it reproduces in stable
      - Steps to reproduce

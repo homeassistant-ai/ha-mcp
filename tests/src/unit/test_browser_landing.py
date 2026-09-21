@@ -4,9 +4,9 @@ import logging
 
 import httpx
 import pytest
-from fastmcp import FastMCP
 
 from ha_mcp.__main__ import ProbeAccessLogFilter, register_browser_landing
+from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp.browser_landing import _registered_landing_paths
 
 

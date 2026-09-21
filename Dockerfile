@@ -5,7 +5,7 @@
 # Base images pinned by digest - Renovate will create PRs for updates
 
 # --- Build stage: install dependencies with uv ---
-FROM ghcr.io/astral-sh/uv:0.12.11-python3.13-trixie-slim@sha256:490b044e31d22959fd332a60be5a4496a69cc6f8835a8b9e1a4f376899ca7f08 AS builder
+FROM ghcr.io/astral-sh/uv:0.12.15-python3.13-trixie-slim@sha256:3ba6b26a3424b592f2dd630450caa526d107597e1cc38f8964a154d4123952b0 AS builder
 
 WORKDIR /app
 
@@ -63,10 +63,9 @@ RUN groupadd -r -g 999 mcpuser \
 
 WORKDIR /app
 
-# Copy the virtual environment, source, and config from builder
+# Copy the virtual environment and source from builder
 COPY --chown=mcpuser:mcpuser --from=builder /app/.venv /app/.venv
 COPY --chown=mcpuser:mcpuser --from=builder /app/src /app/src
-COPY --chown=mcpuser:mcpuser fastmcp.json fastmcp-http.json ./
 
 USER mcpuser
 
@@ -91,6 +90,6 @@ ENV HOMEASSISTANT_URL="" \
     HOMEASSISTANT_TOKEN="" \
     BACKUP_HINT="normal"
 
-# Default: Run in stdio mode using fastmcp.json
+# Default: Run in stdio mode
 # For HTTP mode: docker run ... IMAGE ha-mcp-web
-CMD ["fastmcp", "run", "fastmcp.json"]
+CMD ["ha-mcp"]

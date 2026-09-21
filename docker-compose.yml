@@ -14,6 +14,11 @@ services:
       dockerfile: Dockerfile
     image: homeassistant-ai/ha-mcp:latest
     container_name: ha-mcp-server
+    # A detached service has no stdin for the image's default stdio mode, so
+    # serve Streamable HTTP instead (the site's compose snippet does the same).
+    command: ha-mcp-web
+    ports:
+      - "8086:8086"
     volumes:
       # Persist tool config, feature flags, backup settings and OAuth client
       # registrations. Without this, every settings change is lost as soon as

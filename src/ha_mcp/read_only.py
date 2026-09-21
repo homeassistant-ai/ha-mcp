@@ -1,7 +1,8 @@
 """Read-only mode — catalog filtering and call-time write blocking (#1569).
 
 When ``Settings.read_only_mode`` is on (Tools-tab toggle in the web UI,
-``read_only_mode`` addon option, or ``READ_ONLY_MODE`` env var):
+``read_only_mode`` addon option, or ``READ_ONLY_MODE`` env var), or the
+HTTP connection uses the ``/readonly`` endpoint:
 
 - ``ReadOnlyToolsTransform`` hides write-capable tools from the MCP
   catalog at list time, except the exempt mixed read/write tools in
@@ -14,6 +15,8 @@ When ``Settings.read_only_mode`` is on (Tools-tab toggle in the web UI,
 Both consult the live settings singleton per request, so flipping the
 toggle in standalone HTTP mode takes effect without a restart (addon
 and stdio modes pick it up on restart, like every other feature flag).
+The HTTP endpoint additionally restricts its own request context without
+changing the shared settings.
 
 A tool counts as write-capable when its ``readOnlyHint`` annotation is
 not ``True`` — the same fail-closed default the policy handlers and the
@@ -30,12 +33,18 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn
 
-from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
-from fastmcp.server.transforms import Transform
-from fastmcp.tools import Tool
+from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
+    CallNext,
+    Middleware,
+    MiddlewareContext,
+)
+from ha_mcp._vendor.fastmcp.server.transforms import Transform
+from ha_mcp._vendor.fastmcp.tools import Tool
 
 from .config import get_global_settings
 from .errors import ErrorCode, create_error_response
@@ -44,10 +53,45 @@ from .tool_dispatch import CALL_PROXY_META_TOOLS
 from .tools.helpers import raise_tool_error
 
 if TYPE_CHECKING:
-    from fastmcp.server.transforms import GetToolNext
-    from fastmcp.utilities.versions import VersionSpec
+    from ha_mcp._vendor.fastmcp.server.transforms import GetToolNext
+    from ha_mcp._vendor.fastmcp.utilities.versions import VersionSpec
 
 logger = logging.getLogger(__name__)
+
+_request_read_only: ContextVar[bool] = ContextVar(
+    "ha_mcp_request_read_only", default=False
+)
+
+
+def is_read_only() -> bool:
+    """Apply the global setting or the current HTTP endpoint's restriction."""
+    return get_global_settings().read_only_mode or _request_read_only.get()
+
+
+@contextmanager
+def read_only_request() -> Iterator[None]:
+    """Restrict this request and its nested tool calls without affecting others."""
+    token = _request_read_only.set(True)
+    try:
+        yield
+    finally:
+        _request_read_only.reset(token)
+
+
+def read_only_remedy_hint() -> str:
+    """User-facing guidance for lifting Read Only Mode.
+
+    Deliberately never names the ``/readonly`` endpoint suffix: #2433 wants
+    this restriction to hold even for an untrusted model that could talk a
+    user into dropping it. The global setting has no such escape-hatch risk,
+    so it stays nameable when it is the (or an) active source.
+    """
+    if get_global_settings().read_only_mode:
+        return (
+            "To allow changes, the user must turn off Read Only Mode in the "
+            "ha-mcp settings UI (Tools tab) or the add-on configuration."
+        )
+    return "This connection is read-only. If changes are needed, ask the user."
 
 
 class ReadOnlyExemption(NamedTuple):
@@ -288,7 +332,7 @@ READ_ONLY_EXEMPT_TOOLS: dict[str, ReadOnlyExemption] = {
 def is_read_safe(tool: Tool) -> bool:
     """Return True when the tool's annotations declare it read-only."""
     annotations = getattr(tool, "annotations", None)
-    return bool(annotations and getattr(annotations, "readOnlyHint", None) is True)
+    return bool(annotations and annotations.read_only_hint is True)
 
 
 def read_only_visible(tool: Tool) -> bool:
@@ -322,9 +366,7 @@ def _raise_read_only_error(
             suggestions=[
                 "Continue with read-only tools — searching, getting, and "
                 + "listing data all remain available.",
-                "If the user wants to allow changes, they must turn off "
-                + "Read Only Mode in the ha-mcp settings UI (Tools tab) or "
-                + "the add-on configuration.",
+                read_only_remedy_hint(),
             ],
             context=context,
         )
@@ -333,7 +375,7 @@ def _raise_read_only_error(
 
 def require_write_access(tool_name: str) -> None:
     """Reject direct tool execution while Read Only Mode is enabled."""
-    if get_global_settings().read_only_mode:
+    if is_read_only():
         _raise_read_only_error(tool_name)
 
 
@@ -346,7 +388,7 @@ class ReadOnlyToolsTransform(Transform):
     """
 
     async def list_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
-        if not get_global_settings().read_only_mode:
+        if not is_read_only():
             return tools
         return [t for t in tools if read_only_visible(t)]
 
@@ -354,7 +396,7 @@ class ReadOnlyToolsTransform(Transform):
         self, name: str, call_next: GetToolNext, *, version: VersionSpec | None = None
     ) -> Tool | None:
         tool = await call_next(name, version=version)
-        if tool is None or not get_global_settings().read_only_mode:
+        if tool is None or not is_read_only():
             return tool
         return tool if read_only_visible(tool) else None
 
@@ -495,7 +537,7 @@ class ReadOnlyMiddleware(Middleware):
     async def on_call_tool(
         self, context: MiddlewareContext, call_next: CallNext
     ) -> Any:
-        if not get_global_settings().read_only_mode:
+        if not is_read_only():
             return await call_next(context)
 
         # RenamedToolAliasMiddleware runs ahead of this one and normally

@@ -14,11 +14,11 @@ Global-state cleanup (env var + settings singleton) is handled by the autouse
 
 import os
 
-import fastmcp
 import httpx
 import pytest
-from fastmcp import FastMCP
 
+from ha_mcp._vendor import fastmcp
+from ha_mcp._vendor.fastmcp import FastMCP
 from ha_mcp.transport_security import (
     HOST_ORIGIN_PROTECTION_ENV,
     ensure_host_origin_guard_default_off,
@@ -136,9 +136,8 @@ async def test_helper_allows_cross_origin_and_non_loopback(monkeypatch):
 
 
 def test_create_server_disables_guard(monkeypatch):
-    """_create_server -- the chokepoint for ha-mcp-web, the add-on, and the
-    ``fastmcp run fastmcp-http.json`` container path -- calls the guard-disable
-    before building the server."""
+    """_create_server -- the chokepoint for ha-mcp-web and the add-on -- calls
+    the guard-disable before building the server."""
     import ha_mcp.__main__ as main_module
 
     calls: list[int] = []

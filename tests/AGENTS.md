@@ -59,11 +59,14 @@ the baseline only from a CI observation, deleting the fragments it absorbs.
   behaviour passes *vacuously*. Naming `"dashboard"` in `search_types` no
   longer changes that — the component serves the surfaces its search command
   has while the dashboards leg serves that bucket, merged server-side
-  (#2289). Two conditions still route such a whole call to legacy:
-  `offset + limit` past the component's advertised `limit` ceiling (500
-  default — `tests/src/e2e/tools/test_search_reference_graph.py` uses exactly
-  that), and a `search_types` that leaves the component search command no
-  surface once `dashboard` is stripped (e.g. `search_types=["dashboard"]`).
+  (#2289). Components advertising `search_unified` also serve queryless
+  listings, location filters, and result windows above 500. Do not force a
+  legacy route with an oversized limit: it no longer selects that route.
+  Test legacy internals directly with the live `ha_client` when the contract
+  under test is specific to that implementation (the reference-graph E2E
+  does this). A dashboard-only old-schema request still uses its own
+  orchestration because no component search surfaces remain after splitting.
+
 - **The in-process "server" config entry** of that same component (#1527) is
   the embedded backend only, seeded separately. That one IS lane-specific.
 

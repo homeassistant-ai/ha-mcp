@@ -3,8 +3,7 @@
 import logging
 from unittest.mock import MagicMock
 
-from fastmcp.tools import tool
-
+from ha_mcp._vendor.fastmcp.tools import tool
 from ha_mcp.tools.helpers import register_tool_methods
 
 

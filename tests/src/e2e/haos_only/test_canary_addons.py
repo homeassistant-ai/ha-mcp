@@ -97,6 +97,13 @@ async def test_addon_store_search_via_mcp(mcp_client: Any) -> None:
     assert payload.get("summary", {}).get("total_available") == len(matches)
     assert all("available" in addon for addon in matches)
     assert matches, f"Supervisor store returned no MQTT matches: {payload}"
+    # A store listing's `version` must be the version you would install.
+    # Supervisor puts that in `version_latest` and uses `version` for the
+    # INSTALLED one, which is null for anything not installed — so reading the
+    # wrong field showed null for exactly the apps this listing is for.
+    assert all(addon.get("version") for addon in matches), (
+        f"Store matches missing an installable version: {matches}"
+    )
     assert any(
         "mqtt" in f"{addon.get('name', '')} {addon.get('description', '')}".lower()
         for addon in matches

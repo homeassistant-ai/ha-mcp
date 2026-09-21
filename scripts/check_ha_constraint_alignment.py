@@ -29,10 +29,9 @@ keeps them current, and the embedded-lane no-stomp guard
 collision with an image-shipped transitive package empirically.
 
 Scope limit worth knowing: this reads ``[project.dependencies]`` only, so a
-package that reaches Home Assistant's environment TRANSITIVELY (websockets
-itself now arrives that way, via fastmcp) is invisible here. The no-stomp
-guard is what covers those, by diffing the real install against the real
-image.
+package that reaches Home Assistant's environment TRANSITIVELY is invisible
+here. The no-stomp guard is what covers those, by diffing the real install
+against the real image.
 
 Usage:
     python scripts/check_ha_constraint_alignment.py --ha-version 2026.7.4

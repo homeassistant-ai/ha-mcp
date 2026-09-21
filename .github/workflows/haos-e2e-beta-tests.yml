@@ -216,7 +216,7 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.9"
+          version: "0.12.11"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -458,7 +458,7 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.9"
+          version: "0.12.11"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -479,7 +479,8 @@ jobs:
         # the self-referential haos_only embedded smoke module skips automatically.
         #
         # -n2 --dist loadscope: same per-worker QEMU/overlay parallelism as the
-        # other HAOS lanes (#1350); --maxfail=0 overrides pytest.ini's --maxfail=3
+        # other HAOS lanes (#1350); --maxfail=0 overrides
+        # pyproject.toml's --maxfail=3
         # so triage sees the full failure surface.
         run: |
           cd tests

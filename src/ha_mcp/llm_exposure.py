@@ -12,8 +12,9 @@ axis from the global enable/disable in the settings UI:
   conversation agents — in both the full-catalog and tool-search exposure
   modes of the component.
 
-The single source of truth travels **in-band**: :class:`LlmExposureMiddleware`
-stamps every ``tools/list`` entry with
+For embedded servers with the Home Assistant LLM API enabled, the single
+source of truth travels **in-band**: :class:`LlmExposureMiddleware` stamps
+every ``tools/list`` entry with
 ``_meta.ha_mcp = {"llm_api_exposed": bool, "pinned": bool, "policy": {...}}``
 so the component (one more loopback MCP client) filters on data that can never
 drift from the server's settings, with zero extra round-trips. The ``policy``
@@ -35,12 +36,12 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from fastmcp.server.middleware import Middleware
+from ha_mcp._vendor.fastmcp.server.middleware import Middleware
 
 if TYPE_CHECKING:
-    from fastmcp.server.middleware import CallNext, MiddlewareContext
-    from fastmcp.tools import Tool
-    from mcp import types as mt
+    from ha_mcp._vendor.fastmcp.server.middleware import CallNext, MiddlewareContext
+    from ha_mcp._vendor.fastmcp.tools import Tool
+    from ha_mcp._vendor.mcp import types as mt
 
 logger = logging.getLogger(__name__)
 
@@ -158,11 +159,14 @@ def _pinned_tool_names() -> set[str]:
 
 
 class LlmExposureMiddleware(Middleware):
-    """Stamp every listed tool with its LLM-API exposure + pinned state.
+    """Stamp listed tools when an embedded LLM-API connection is enabled.
 
     Runs after the visibility layer, so globally-disabled tools are already
-    absent and never carry a stamp. The stamp is additive metadata — no tool
-    is hidden or altered for regular MCP clients.
+    absent and never carry a stamp. ``server.py`` installs this middleware for
+    an embedded connection whose LLM API is enabled; older components that do
+    not send that flag retain the historical stamping behavior. Where it is
+    installed, the stamp is additive metadata — no tool is hidden or altered
+    for regular MCP clients.
     """
 
     def __init__(self, policy_live: Callable[[], bool] | None = None) -> None:
@@ -227,6 +231,10 @@ class LlmExposureMiddleware(Middleware):
             return self._policy_cache[1]
         from ._version import is_embedded, is_running_in_addon
 
+        # Today this middleware is registered only for embedded connections.
+        # Keep the deployment branches because the middleware is also useful
+        # in direct-server tests and may be registered by another integration;
+        # the metadata must describe the server that actually answered.
         block: dict[str, Any] = {
             "enabled": False,
             "live": bool(self._policy_live()) if self._policy_live else False,

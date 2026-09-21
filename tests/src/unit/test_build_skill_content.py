@@ -300,8 +300,7 @@ class TestDegradedPaths:
     )
     def test_augment_preserves_factory_recovery_guidance(self, guidance):
         """Single-suggestion errors must retain their fix after write-tool wrapping."""
-        from fastmcp.exceptions import ToolError
-
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
         from ha_mcp.errors import ErrorCode, create_error_response
 
         original = create_error_response(
@@ -370,7 +369,7 @@ class TestDegradedPaths:
         augmentation (generic hint + section embed), re-encodes into a
         new ToolError. Without this test the wrapper itself was
         unverified — only the dict variant was covered."""
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         class _BP:
             def __init__(self, refs):
@@ -407,7 +406,7 @@ class TestDegradedPaths:
         """When the ToolError body isn't a JSON-decodable error dict,
         return the original ToolError unchanged. Preserves the contract
         for any future raise that doesn't use ``raise_tool_error``."""
-        from fastmcp.exceptions import ToolError
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         te = ToolError("plain string body, not JSON")
         result = augment_tool_error_with_skill_content(te, bp_warnings=None)

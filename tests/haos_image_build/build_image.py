@@ -38,12 +38,12 @@ LOG = logging.getLogger("haos_image_build")
 
 # Stable image inputs are Renovate-managed; changing any pin invalidates the
 # shared image cache. Beta lanes explicitly override all three at build time.
-# renovate: datasource=github-releases depName=home-assistant/operating-system
-STABLE_HAOS_VERSION = "18.2"
+# renovate: datasource=custom.ha-os-stable depName=home-assistant/operating-system
+STABLE_HAOS_VERSION = "18.3"
 # renovate: datasource=custom.ha-supervisor-stable depName=home-assistant/supervisor
-STABLE_SUPERVISOR_VERSION = "2026.09.0"
+STABLE_SUPERVISOR_VERSION = "2026.09.2"
 # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
-STABLE_CORE_VERSION = "2026.9.2"
+STABLE_CORE_VERSION = "2026.9.3"
 
 HAOS_VERSION = os.environ.get("HAOS_BUILD_OS_VERSION", STABLE_HAOS_VERSION)
 if re.fullmatch(r"[0-9]+\.[0-9]+(?:\.rc[0-9]+)?", HAOS_VERSION) is None:
@@ -2055,6 +2055,55 @@ def _wait_supervisor_ready(
     )
 
 
+def _wait_supervisor_running(
+    ws: HAWebSocket, *, timeout: float = 300.0
+) -> dict[str, Any]:
+    """Wait until Supervisor's core state is ``running``.
+
+    Supervisor 2026.09.3+ (home-assistant/supervisor#7194) rejects app
+    install/start/restart/rebuild/update and Core update with a 503 until it
+    has finished its own boot sequence, which continues after Core answers its
+    API and restarts after every Supervisor self-update. ``/supervisor/info``
+    does not carry the state; the root ``/info`` does. Same transient handling
+    as ``_wait_supervisor_ready``.
+    """
+    deadline = time.monotonic() + timeout
+    last_state: object = None
+    last_error: BaseException | None = None
+    first_probe = True
+    while (
+        request_timeout := _supervisor_readiness_probe_budget(
+            deadline, delay=not first_probe
+        )
+    ) is not None:
+        first_probe = False
+        try:
+            info = ws.supervisor_api("/info", method="get", timeout=request_timeout)
+        except _SUPERVISOR_WAIT_TRANSIENT_ERRORS as e:
+            if not _is_transient_supervisor_readiness_error(e):
+                raise
+            last_error = e
+            LOG.debug("Transient error polling /info: %r", e)
+            reconnect_err = _reconnect_supervisor_during_wait(ws, deadline=deadline)
+            if reconnect_err is not None:
+                last_error = reconnect_err
+            continue
+        if time.monotonic() >= deadline:
+            break
+        state = info.get("state")
+        if state == "running":
+            LOG.info("Supervisor core state is running")
+            return info
+        if state != last_state:
+            LOG.info("Supervisor core state is %r; waiting before app ops...", state)
+        last_state = state
+    last_err_suffix = f"; last error: {last_error!r}" if last_error else ""
+    raise _SupervisorReadinessTimeout(
+        f"Supervisor did not reach the running state within {timeout:.0f}s "
+        f"(last state={last_state!r}{last_err_suffix})"
+    )
+
+
 def _wait_core_version(
     ws: HAWebSocket,
     expected_version: str,
@@ -2338,6 +2387,7 @@ def _configure_supervisor_image_variant(
     if core_version is None:
         return
 
+    _wait_supervisor_running(ws)
     _configure_core_image_variant(
         ws,
         base_url=base_url,
@@ -2650,6 +2700,7 @@ def install_addons(ws: HAWebSocket) -> dict[str, str]:
     steps (e.g. canary tests that need to address a specific addon).
     """
     _wait_supervisor_ready(ws)
+    _wait_supervisor_running(ws)
     _add_repository(ws, HA_MCP_ADDON_REPO)
     _reload_store(ws)
     installed: dict[str, str] = {}

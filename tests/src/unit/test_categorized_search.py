@@ -12,10 +12,10 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import Tool
-from mcp.types import ToolAnnotations
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import Tool
+from ha_mcp._vendor.mcp.types import ToolAnnotations
 from ha_mcp.read_only import READ_ONLY_EXEMPT_TOOLS
 from ha_mcp.transforms.categorized_search import (
     DEFAULT_PINNED_TOOLS,
@@ -29,7 +29,7 @@ from ha_mcp.transforms.categorized_search import (
 @pytest.fixture
 def read_only_on(monkeypatch):
     monkeypatch.setattr(
-        "ha_mcp.config.get_global_settings",
+        "ha_mcp.read_only.get_global_settings",
         lambda: SimpleNamespace(read_only_mode=True),
     )
 
@@ -48,9 +48,9 @@ def _make_tool(
         return "ok"
 
     annotations = ToolAnnotations(
-        readOnlyHint=read_only,
-        destructiveHint=destructive,
-        idempotentHint=idempotent,
+        read_only_hint=read_only,
+        destructive_hint=destructive,
+        idempotent_hint=idempotent,
     )
     return Tool.from_function(
         fn=noop, name=name, description=description, annotations=annotations
@@ -315,28 +315,28 @@ class TestTransformTools:
         result = await transform.transform_tools(sample_tools)
         search = next(t for t in result if t.name == "ha_search_tools")
         assert search.annotations is not None
-        assert search.annotations.readOnlyHint is True
+        assert search.annotations.read_only_hint is True
 
     @pytest.mark.anyio
     async def test_read_proxy_is_read_only(self, transform, sample_tools):
         result = await transform.transform_tools(sample_tools)
         proxy = next(t for t in result if t.name == "ha_call_read_tool")
         assert proxy.annotations is not None
-        assert proxy.annotations.readOnlyHint is True
+        assert proxy.annotations.read_only_hint is True
 
     @pytest.mark.anyio
     async def test_write_proxy_is_destructive(self, transform, sample_tools):
         result = await transform.transform_tools(sample_tools)
         proxy = next(t for t in result if t.name == "ha_call_write_tool")
         assert proxy.annotations is not None
-        assert proxy.annotations.destructiveHint is True
+        assert proxy.annotations.destructive_hint is True
 
     @pytest.mark.anyio
     async def test_delete_proxy_is_destructive(self, transform, sample_tools):
         result = await transform.transform_tools(sample_tools)
         proxy = next(t for t in result if t.name == "ha_call_delete_tool")
         assert proxy.annotations is not None
-        assert proxy.annotations.destructiveHint is True
+        assert proxy.annotations.destructive_hint is True
 
 
 # ---------------------------------------------------------------------------
@@ -504,9 +504,9 @@ class TestCategorizedCallDispatch:
     def _get_proxy_fn(self, transform, category):
         """Get the callable fn from a proxy Tool."""
         annotations_map = {
-            "read": ToolAnnotations(readOnlyHint=True),
-            "write": ToolAnnotations(destructiveHint=True),
-            "delete": ToolAnnotations(destructiveHint=True),
+            "read": ToolAnnotations(read_only_hint=True),
+            "write": ToolAnnotations(destructive_hint=True),
+            "delete": ToolAnnotations(destructive_hint=True),
         }
         proxy = transform._make_categorized_proxy(
             proxy_name=f"ha_call_{category}_tool",
@@ -849,9 +849,9 @@ class TestDoubleUnwrap:
 
     def _get_proxy_fn(self, transform, category):
         annotations_map = {
-            "read": ToolAnnotations(readOnlyHint=True),
-            "write": ToolAnnotations(destructiveHint=True),
-            "delete": ToolAnnotations(destructiveHint=True),
+            "read": ToolAnnotations(read_only_hint=True),
+            "write": ToolAnnotations(destructive_hint=True),
+            "delete": ToolAnnotations(destructive_hint=True),
         }
         proxy = transform._make_categorized_proxy(
             proxy_name=f"ha_call_{category}_tool",
@@ -1055,9 +1055,9 @@ class TestArgumentsAsString:
 
     def _get_proxy_fn(self, transform, category):
         annotations_map = {
-            "read": ToolAnnotations(readOnlyHint=True),
-            "write": ToolAnnotations(destructiveHint=True),
-            "delete": ToolAnnotations(destructiveHint=True),
+            "read": ToolAnnotations(read_only_hint=True),
+            "write": ToolAnnotations(destructive_hint=True),
+            "delete": ToolAnnotations(destructive_hint=True),
         }
         proxy = transform._make_categorized_proxy(
             proxy_name=f"ha_call_{category}_tool",

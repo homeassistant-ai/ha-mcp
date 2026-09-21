@@ -467,7 +467,7 @@
     "advanced.code_mode_saved_tools_path.label": "Percorso degli strumenti salvati",
     "advanced.code_mode_saved_tools_path.help": "File JSON usato per conservare gli strumenti personalizzati tra un riavvio e l'altro. È necessario il riavvio.",
     "advanced.extra_yaml_write_keys.label": "Chiavi YAML scrivibili aggiuntive",
-    "advanced.extra_yaml_write_keys.help": "Chiavi di primo livello separate da virgole che ha_config_set_yaml può scrivere oltre a quelle integrate, per le integrazioni di questa installazione che si configurano soprattutto in YAML (per esempio alert2). Le chiavi che ridefiniscono il confine di fiducia di Home Assistant non possono mai essere aggiunte e vengono ignorate. Richiede il componente personalizzato 1.2.4 o successivo.",
+    "advanced.extra_yaml_write_keys.help": "Ulteriori chiavi di primo livello che ha_config_set_yaml può scrivere oltre a quelle integrate, per le integrazioni YAML-first su questa installazione (ad es. alert2). Inserisci una chiave per riga o separa le chiavi con virgole. Le chiavi che ridefiniscono il limite di sicurezza di Home Assistant non possono mai essere aggiunte e vengono ignorate. Richiede il componente personalizzato 1.2.4 o successivo.",
     "advanced.sidecar_pin_port.label": "Porta del sidecar dell'interfaccia delle impostazioni",
     "advanced.sidecar_pin_port.help": "0 seleziona una porta libera al primo avvio e la mantiene per i riavvii successivi; 1024–65535 blocca una porta preferita (ricade su una libera se occupata). Riavvio richiesto.",
     "advanced.enable_dev_mode.label": "Modalità sviluppatore",
@@ -573,8 +573,8 @@
       "description": "Ottiene informazioni sulle etichette: le elenca tutte o ne restituisce una specifica per ID."
     },
     "ha_config_get_scene": {
-      "title": "Ottieni la configurazione di una scena",
-      "description": "Recupera la configurazione di una scena di Home Assistant."
+      "title": "Ottieni o trova scene",
+      "description": "Ottieni la configurazione completa di una scena, oppure elenca e cerca scene senza scene_id."
     },
     "ha_config_get_script": {
       "title": "Ottieni la configurazione di uno script",
@@ -630,7 +630,7 @@
     },
     "ha_config_set_calendar_event": {
       "title": "Crea o aggiorna un evento del calendario",
-      "description": "Crea un nuovo evento in un calendario."
+      "description": "Crea un nuovo evento in un calendario o aggiorna uno esistente."
     },
     "ha_config_set_category": {
       "title": "Crea o aggiorna una categoria",

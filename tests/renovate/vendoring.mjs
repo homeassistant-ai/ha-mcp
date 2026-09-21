@@ -30,99 +30,140 @@ const workflow = parse(readFileSync('/source/.github/workflows/renovate.yml', 'u
 const scannerEnv = workflow.jobs.renovate.steps.find(
   (step) => step.name === 'Self-hosted Renovate'
 ).env;
+const allowedCommands = JSON.parse(scannerEnv.RENOVATE_ALLOWED_COMMANDS);
 const pinFile = 'src/ha_mcp/_vendor/requirements.txt';
-const vendorDir = 'src/ha_mcp/_vendor/websockets';
-const dependency = {
-  depName: 'websockets', packageName: 'websockets', datasource: 'pypi',
-  manager: 'custom.regex', packageFile: pinFile,
-};
-const matched = await applyPackageRules({ ...getConfig(), ...repository, ...dependency });
-assert.ok(matched.postUpgradeTasks.commands.length, 'Vendored updates must regenerate source');
-for (const other of [
-  { ...dependency, packageFile: 'other/requirements.txt' },
-  { ...dependency, depName: 'other', packageName: 'other' },
-  { ...dependency, datasource: 'docker' },
-  { ...dependency, manager: 'pip_requirements' },
-]) {
-  const config = await applyPackageRules({ ...getConfig(), ...repository, ...other });
-  assert.equal(config.postUpgradeTasks.commands.length, 0, 'Unrelated pins must not run vendoring');
-}
-assert.equal(matched.minimumReleaseAge, '7 days');
-assert.deepEqual(matched.schedule, ['after 3pm on tuesday']);
+const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
 
 // Resolving a Python range uses GitHub GraphQL, which requires authentication.
 // Keep this fixture credential-free: install a published, compatible exact
 // version through the real executor. The live scanner retains its range and
 // authenticated lookup; this fixture does not test that external lookup.
 const fixturePython = '3.13.7';
-assert.ok(pythonVersioning.matches(fixturePython, matched.constraints.python));
-const fixtureUpgrade = {
-  ...matched, constraints: { ...matched.constraints, python: fixturePython },
-};
 
-const scratch = mkdtempSync(join(tmpdir(), 'renovate-vendoring-'));
-const seed = join(scratch, 'seed');
-const localDir = join(scratch, 'checkout');
-mkdirSync(join(seed, vendorDir), { recursive: true });
-mkdirSync(join(seed, 'scripts'));
-mkdirSync(localDir);
-copyFileSync('/source/scripts/vendor_websockets.py', join(seed, 'scripts/vendor_websockets.py'));
-writeFileSync(join(seed, pinFile), 'websockets==17.0.1\n');
-writeFileSync(join(seed, vendorDir, 'obsolete.py'), '# Must disappear when the tree is replaced.\n');
-writeFileSync(join(seed, vendorDir, 'VENDORED'), 'websockets==17.0.1\n');
-const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
-git(seed, 'init', '-b', 'master');
-git(seed, 'add', '.');
-git(seed, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture');
+async function exercise({ script, depName, pins, bumped, vendorDirs, extraFiles, check }) {
+  const dependency = {
+    depName, packageName: depName, datasource: 'pypi', manager: 'custom.regex', packageFile: pinFile,
+  };
+  const matched = await applyPackageRules({ ...getConfig(), ...repository, ...dependency });
+  assert.deepEqual(matched.postUpgradeTasks.commands, [`python3 -I scripts/${script}`],
+    `${depName} updates must regenerate source with ${script}`);
+  for (const other of [
+    { ...dependency, packageFile: 'other/requirements.txt' },
+    { ...dependency, depName: 'other', packageName: 'other' },
+    { ...dependency, datasource: 'docker' },
+    { ...dependency, manager: 'pip_requirements' },
+  ]) {
+    const config = await applyPackageRules({ ...getConfig(), ...repository, ...other });
+    assert.equal(config.postUpgradeTasks.commands.length, 0, 'Unrelated pins must not run vendoring');
+  }
+  assert.equal(matched.minimumReleaseAge, '7 days');
+  assert.deepEqual(matched.schedule, ['after 3pm on tuesday']);
+  assert.ok(pythonVersioning.matches(fixturePython, matched.constraints.python));
+  const fixtureUpgrade = {
+    ...matched, constraints: { ...matched.constraints, python: fixturePython },
+  };
 
-const allowedCommands = JSON.parse(scannerEnv.RENOVATE_ALLOWED_COMMANDS);
-GlobalConfig.set({
-  ...getConfig(), localDir, baseDir: scratch, cacheDir: join(scratch, 'cache'),
-  containerbaseDir: join(scratch, 'containerbase'), binarySource: 'install',
-  allowedCommands,
-  allowShellExecutorForPostUpgradeCommands:
-    scannerEnv.RENOVATE_ALLOW_SHELL_EXECUTOR_FOR_POST_UPGRADE_COMMANDS === 'true',
-});
-assert.ok(isDynamicInstall([{ toolName: 'python', constraint: matched.constraints.python }]),
-  'This fixture must exercise containerbase tool installation, not a preinstalled Python');
-await initRepo({ url: seed, defaultBranch: 'master', currentBranch: 'master', fullClone: true });
-await syncGit(); // Clone only the local seed before writing the changed pin.
-writeFileSync(join(localDir, 'unrelated.txt'), 'Never include this in the bot commit.\n');
+  const scratch = mkdtempSync(join(tmpdir(), 'renovate-vendoring-'));
+  const seed = join(scratch, 'seed');
+  const localDir = join(scratch, 'checkout');
+  mkdirSync(join(seed, 'scripts'), { recursive: true });
+  mkdirSync(join(seed, 'src/ha_mcp/_vendor'), { recursive: true });
+  mkdirSync(localDir);
+  copyFileSync(`/source/scripts/${script}`, join(seed, `scripts/${script}`));
+  writeFileSync(join(seed, pinFile), pins);
+  for (const dir of vendorDirs) {
+    mkdirSync(join(seed, dir), { recursive: true });
+    writeFileSync(join(seed, dir, 'obsolete.py'), '# Must disappear when the tree is replaced.\n');
+    writeFileSync(join(seed, dir, 'VENDORED'), 'stale\n');
+  }
+  git(seed, 'init', '-b', 'master');
+  git(seed, 'add', '.');
+  git(seed, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture');
 
-const branch = (contents) => ({
-  ...matched, branchName: 'renovate/websockets-17.x', baseBranch: 'master',
-  upgrades: [{ ...fixtureUpgrade, currentValue: '17.0.1', newValue: '17.1' }],
-  updatedPackageFiles: [{ type: 'addition', path: pinFile, contents }],
-  updatedArtifacts: [], artifactErrors: [],
-});
+  GlobalConfig.set({
+    ...getConfig(), localDir, baseDir: scratch, cacheDir: join(scratch, 'cache'),
+    containerbaseDir: join(scratch, 'containerbase'), binarySource: 'install',
+    allowedCommands,
+    allowShellExecutorForPostUpgradeCommands:
+      scannerEnv.RENOVATE_ALLOW_SHELL_EXECUTOR_FOR_POST_UPGRADE_COMMANDS === 'true',
+  });
+  assert.ok(isDynamicInstall([{ toolName: 'python', constraint: matched.constraints.python }]),
+    'This fixture must exercise containerbase tool installation, not a preinstalled Python');
+  await initRepo({ url: seed, defaultBranch: 'master', currentBranch: 'master', fullClone: true });
+  await syncGit(); // Clone only the local seed before writing the changed pin.
+  writeFileSync(join(localDir, 'unrelated.txt'), 'Never include this in the bot commit.\n');
 
-// A missing allowlist must report an artifact error and leave the tree stale.
-GlobalConfig.set({ ...GlobalConfig.get(), allowedCommands: [] });
-const denied = await executePostUpgradeCommands(branch('websockets==17.1\n'));
-assert.ok(denied.artifactErrors.length);
-assert.equal(readFileSync(join(localDir, vendorDir, 'VENDORED'), 'utf8'), 'websockets==17.0.1\n');
-GlobalConfig.set({ ...GlobalConfig.get(), allowedCommands });
+  const branch = (contents) => ({
+    ...matched, branchName: `renovate/${depName}`, baseBranch: 'master',
+    upgrades: [{ ...fixtureUpgrade, ...bumped }],
+    updatedPackageFiles: [{ type: 'addition', path: pinFile, contents }],
+    updatedArtifacts: [], artifactErrors: [],
+  });
 
-const result = await executePostUpgradeCommands(branch('websockets==17.1\n'));
-assert.deepEqual(result.artifactErrors, [], 'Tool installation and regeneration must succeed');
-const artifacts = new Map(result.updatedArtifacts.map((file) => [file.path, file]));
-for (const name of ['VENDORED', 'LICENSE', 'MANIFEST.sha256', '__init__.py', 'version.py', 'asyncio/client.py']) {
-  const artifact = artifacts.get(`${vendorDir}/${name}`);
-  assert.equal(artifact?.type, 'addition', `${name} must be committed`);
-  assert.equal(String(artifact.contents), readFileSync(join(localDir, vendorDir, name), 'utf8'));
+  // A missing allowlist must report an artifact error and leave the tree stale.
+  GlobalConfig.set({ ...GlobalConfig.get(), allowedCommands: [] });
+  const denied = await executePostUpgradeCommands(branch(bumped.pins));
+  assert.ok(denied.artifactErrors.length);
+  for (const dir of vendorDirs) {
+    assert.equal(readFileSync(join(localDir, dir, 'VENDORED'), 'utf8'), 'stale\n');
+  }
+  GlobalConfig.set({ ...GlobalConfig.get(), allowedCommands });
+
+  const result = await executePostUpgradeCommands(branch(bumped.pins));
+  assert.deepEqual(result.artifactErrors, [], 'Tool installation and regeneration must succeed');
+  const artifacts = new Map(result.updatedArtifacts.map((file) => [file.path, file]));
+  for (const dir of vendorDirs) {
+    for (const name of ['VENDORED', 'LICENSE', 'MANIFEST.sha256', '__init__.py', ...(extraFiles[dir] || [])]) {
+      const artifact = artifacts.get(`${dir}/${name}`);
+      assert.equal(artifact?.type, 'addition', `${dir}/${name} must be committed`);
+      assert.equal(String(artifact.contents), readFileSync(join(localDir, dir, name), 'utf8'));
+    }
+    assert.equal(artifacts.get(`${dir}/obsolete.py`)?.type, 'deletion');
+    const manifest = readFileSync(join(localDir, dir, 'MANIFEST.sha256'), 'utf8').trim().split('\n');
+    for (const line of manifest) {
+      const [digest, path] = line.split('  ');
+      assert.equal(createHash('sha256').update(readFileSync(join(localDir, dir, path))).digest('hex'), digest);
+    }
+  }
+  assert.ok([...artifacts.keys()].every((path) => vendorDirs.some((dir) => path.startsWith(`${dir}/`))),
+    'Only vendored outputs belong in the generated artifacts');
+  check(localDir);
+
+  // A failed regeneration must stay visible, not silently accept a pin-only bump.
+  const failed = await executePostUpgradeCommands(branch('not-a-valid-pin\n'));
+  assert.ok(failed.artifactErrors.length, 'A failed generator must report an artifact error');
+  check(localDir);
 }
-assert.equal(artifacts.get(`${vendorDir}/obsolete.py`)?.type, 'deletion');
-assert.ok([...artifacts.keys()].every((path) => path.startsWith(`${vendorDir}/`)),
-  'Only vendored outputs belong in the generated artifacts');
-assert.match(readFileSync(join(localDir, vendorDir, 'version.py'), 'utf8'), /tag = version = commit = ["']17\.1["']/);
-assert.match(readFileSync(join(localDir, vendorDir, 'VENDORED'), 'utf8'), /^websockets==17\.1\n/);
-const manifest = readFileSync(join(localDir, vendorDir, 'MANIFEST.sha256'), 'utf8').trim().split('\n');
-for (const line of manifest) {
-  const [digest, path] = line.split('  ');
-  assert.equal(createHash('sha256').update(readFileSync(join(localDir, vendorDir, path))).digest('hex'), digest);
-}
-// A failed regeneration must stay visible, not silently accept a pin-only bump.
-const failed = await executePostUpgradeCommands(branch('not-a-valid-pin\n'));
-assert.ok(failed.artifactErrors.length, 'A failed generator must report an artifact error');
-assert.match(readFileSync(join(localDir, vendorDir, 'VENDORED'), 'utf8'), /^websockets==17\.1\n/);
-console.log('Pinned Renovate executor regenerated websockets source, license and manifest; collected additions/deletions; rejected unauthorized commands and surfaced generator failures.');
+
+await exercise({
+  script: 'vendor_websockets.py',
+  depName: 'websockets',
+  pins: 'websockets==17.0.1\n',
+  bumped: { currentValue: '17.0.1', newValue: '17.1', pins: 'websockets==17.1\n' },
+  vendorDirs: ['src/ha_mcp/_vendor/websockets'],
+  extraFiles: { 'src/ha_mcp/_vendor/websockets': ['version.py', 'asyncio/client.py'] },
+  check: (localDir) => {
+    const dir = join(localDir, 'src/ha_mcp/_vendor/websockets');
+    assert.match(readFileSync(join(dir, 'version.py'), 'utf8'), /tag = version = commit = ["']17\.1["']/);
+    assert.match(readFileSync(join(dir, 'VENDORED'), 'utf8'), /^websockets==17\.1\n/);
+  },
+});
+
+await exercise({
+  script: 'vendor_fastmcp.py',
+  depName: 'fastmcp-slim',
+  pins: 'fastmcp-slim==4.0.2\nmcp==2.2.0\nmcp-types==2.2.0\n',
+  bumped: {
+    currentValue: '4.0.2', newValue: '4.0.3', pins: 'fastmcp-slim==4.0.3\nmcp==2.2.0\nmcp-types==2.2.0\n',
+  },
+  vendorDirs: ['src/ha_mcp/_vendor/fastmcp', 'src/ha_mcp/_vendor/mcp', 'src/ha_mcp/_vendor/mcp_types'],
+  extraFiles: {},
+  check: (localDir) => {
+    const vendor = join(localDir, 'src/ha_mcp/_vendor');
+    assert.match(readFileSync(join(vendor, 'fastmcp/VENDORED'), 'utf8'), /^fastmcp-slim==4\.0\.3\n/);
+    assert.match(readFileSync(join(vendor, 'fastmcp/__init__.py'), 'utf8'), /__version__ = "4\.0\.3"/);
+    assert.doesNotMatch(readFileSync(join(vendor, 'mcp/__init__.py'), 'utf8'), /^\s*from mcp_types\b/m);
+  },
+});
+
+console.log('Pinned Renovate executor regenerated the websockets and FastMCP/MCP SDK trees, licenses and manifests; collected additions/deletions; rejected unauthorized commands and surfaced generator failures.');

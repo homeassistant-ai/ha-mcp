@@ -338,7 +338,7 @@ async def test_get_not_found_falls_back_to_legacy() -> None:
     client = RoutingClient()  # legacy lovelace/config → config_not_found
     get_dashboard = _build_get_dashboard(client)
 
-    from fastmcp.exceptions import ToolError
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
     with patch_ws(ws, tools_config_dashboards), pytest.raises(ToolError):
         await get_dashboard(url_path="ghost")
@@ -519,7 +519,7 @@ async def test_legacy_search_walk_skips_untagged_row() -> None:
 @pytest.mark.asyncio
 async def test_search_requires_query() -> None:
     """mode='search' with no query is a structured validation error (no WS)."""
-    from fastmcp.exceptions import ToolError
+    from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
     ws = make_ws("ha_mcp_tools/dashboards", info_result=_CAPS_DASHBOARDS)
     client = RoutingClient()

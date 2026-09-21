@@ -13,8 +13,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.read_only import (
     _ADDON_CONFIG_WRITE_PARAMS,
     READ_ONLY_EXEMPT_TOOLS,
@@ -26,7 +26,9 @@ from ha_mcp.read_only import (
 
 
 def make_tool(name: str, read_only: bool | None):
-    annotations = None if read_only is None else SimpleNamespace(readOnlyHint=read_only)
+    annotations = (
+        None if read_only is None else SimpleNamespace(read_only_hint=read_only)
+    )
     return SimpleNamespace(name=name, annotations=annotations)
 
 
@@ -138,6 +140,9 @@ class TestExemptionRules:
             ({"slug": "x", "action": "install"}, False),
             ({"slug": "x", "action": "stop"}, False),
             ({"action": "add_repository", "repository": "url"}, False),
+            # check_updates installs nothing, but it still drives a Supervisor
+            # job that rewrites cached store state — blocked like every action.
+            ({"action": "check_updates"}, False),
             ({"slug": "x", "options": {"a": 1}}, False),
             ({"slug": "x", "boot": "auto"}, False),
             ({"slug": "x", "auto_update": True}, False),

@@ -125,7 +125,13 @@ jobs:
                 homeassistant-addon/*|homeassistant-addon-dev/*|homeassistant-addon-webhook-proxy/*|custom_components/ha_mcp_tools/*|tests/haos_image_build/*|tests/initial_test_state/*)
                   run=true; break ;;
                 # Pure docs / website do not, on their own, warrant the suite.
-                *.md|*.mdx|docs/*|site/*)
+                # GitHub issue forms are docs: only github.com reads them.
+                # The one code coupling is the filename, in the ?template= URL
+                # in tools_bug_report.py, pinned by test_issue_templates.py —
+                # an ungated unit test, so a rename fails there, not here.
+                # Pinned to *.yml so a non-form file in that directory still
+                # runs; legacy markdown templates ride the *.md arm.
+                *.md|*.mdx|docs/*|site/*|.github/ISSUE_TEMPLATE/*.yml)
                   continue ;;
                 # Anything else (code, tests, config, workflows, lockfile, ...) runs.
                 *)
@@ -267,7 +273,7 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.9"
+          version: "0.12.11"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -292,8 +298,8 @@ jobs:
         # worker amortizes its boot cost. 4-vCPU/16-GB runner fits 2x
         # QEMU at -smp 2 -m 4096 each (#1350).
         #
-        # --maxfail=0 overrides pytest.ini's --maxfail=3 so we see the full
-        # failure surface for triage — early-terminating loses signal.
+        # --maxfail=0 overrides pyproject.toml's --maxfail=3 so we see the
+        # full failure surface for triage — early-terminating loses signal.
         run: |
           cd tests
           # Dispatch inputs reach the shell through env (below), never by
@@ -491,7 +497,7 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.9"
+          version: "0.12.11"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -512,7 +518,8 @@ jobs:
         # the 3 self-referential haos_only embedded smoke tests skip automatically.
         #
         # -n2 --dist loadscope: same per-worker QEMU/overlay parallelism as the
-        # other HAOS lanes (#1350); --maxfail=0 overrides pytest.ini's --maxfail=3
+        # other HAOS lanes (#1350); --maxfail=0 overrides
+        # pyproject.toml's --maxfail=3
         # so triage sees the full failure surface.
         run: |
           cd tests
@@ -729,7 +736,7 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.9"
+          version: "0.12.11"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -967,7 +974,7 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.9"
+          version: "0.12.11"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -1182,7 +1189,7 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.9"
+          version: "0.12.11"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
@@ -1207,7 +1214,8 @@ jobs:
         # entry alone — the #2292 topology.
         #
         # -n2 --dist loadscope: same per-worker QEMU/overlay parallelism as the
-        # other HAOS lanes (#1350); --maxfail=0 overrides pytest.ini's --maxfail=3
+        # other HAOS lanes (#1350); --maxfail=0 overrides
+        # pyproject.toml's --maxfail=3
         # so triage sees the full failure surface.
         run: |
           cd tests
@@ -1427,7 +1435,7 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           # renovate: datasource=github-releases depName=astral-sh/uv
-          version: "0.12.9"
+          version: "0.12.11"
 
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}

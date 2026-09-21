@@ -1,0 +1,376 @@
+"""Base classes for FastMCP prompts."""
+
+from __future__ import annotations as _annotations
+
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
+
+import pydantic
+import pydantic_core
+
+if TYPE_CHECKING:
+    from ha_mcp._vendor.fastmcp.prompts.function_prompt import FunctionPrompt
+from ha_mcp._vendor import mcp_types
+from ha_mcp._vendor.mcp import GetPromptResult
+from ha_mcp._vendor.mcp_types import (
+    AudioContent,
+    EmbeddedResource,
+    Icon,
+    ImageContent,
+    PromptMessage,
+    TextContent,
+)
+from ha_mcp._vendor.mcp_types import Prompt as SDKPrompt
+from ha_mcp._vendor.mcp_types import PromptArgument as SDKPromptArgument
+from pydantic import Field
+from pydantic.json_schema import SkipJsonSchema
+
+from ha_mcp._vendor.fastmcp.utilities.authorization import AuthCheck
+from ha_mcp._vendor.fastmcp.utilities.components import FastMCPComponent
+from ha_mcp._vendor.fastmcp.utilities.logging import get_logger
+from ha_mcp._vendor.fastmcp.utilities.types import (
+    FastMCPBaseModel,
+)
+
+logger = get_logger(__name__.removeprefix("ha_mcp._vendor."))
+
+
+class Message(pydantic.BaseModel):
+    """Wrapper for prompt message with auto-serialization.
+
+    Accepts any content - strings pass through, other types
+    (dict, list, BaseModel) are JSON-serialized to text.
+
+    Example:
+        ```python
+        from fastmcp.prompts import Message
+
+        # String content (user role by default)
+        Message("Hello, world!")
+
+        # Explicit role
+        Message("I can help with that.", role="assistant")
+
+        # Auto-serialized to JSON
+        Message({"key": "value"})
+        Message(["item1", "item2"])
+        ```
+    """
+
+    role: Literal["user", "assistant"]
+    content: TextContent | ImageContent | AudioContent | EmbeddedResource
+
+    def __init__(
+        self,
+        content: Any,
+        role: Literal["user", "assistant"] = "user",
+    ):
+        """Create Message with automatic serialization.
+
+        Args:
+            content: The message content. str passes through directly.
+                     TextContent, ImageContent, AudioContent, and
+                     EmbeddedResource pass through.
+                     Other types (dict, list, BaseModel) are JSON-serialized.
+            role: The message role, either "user" or "assistant".
+        """
+        # Handle already-wrapped content types
+        if isinstance(
+            content, (TextContent, ImageContent, AudioContent, EmbeddedResource)
+        ):
+            normalized_content: (
+                TextContent | ImageContent | AudioContent | EmbeddedResource
+            ) = content
+        elif isinstance(content, str):
+            normalized_content = TextContent(type="text", text=content)
+        else:
+            # dict, list, BaseModel → JSON string
+            serialized = pydantic_core.to_json(content, fallback=str).decode()
+            normalized_content = TextContent(type="text", text=serialized)
+
+        super().__init__(role=role, content=normalized_content)
+
+    def to_mcp_prompt_message(self) -> PromptMessage:
+        """Convert to MCP PromptMessage."""
+        return PromptMessage(role=self.role, content=self.content)
+
+
+class PromptArgument(FastMCPBaseModel):
+    """An argument that can be passed to a prompt."""
+
+    name: str = Field(description="Name of the argument")
+    description: str | None = Field(
+        default=None, description="Description of what the argument does"
+    )
+    required: bool = Field(
+        default=False, description="Whether the argument is required"
+    )
+
+
+class PromptResult(pydantic.BaseModel):
+    """Canonical result type for prompt rendering.
+
+    Provides explicit control over prompt responses: multiple messages,
+    roles, and metadata at both the message and result level.
+
+    Accepts:
+        - str: Wrapped as single Message (user role)
+        - list[Message]: Used directly for multiple messages or custom roles
+
+    Example:
+        ```python
+        from fastmcp import FastMCP
+        from fastmcp.prompts import PromptResult, Message
+
+        mcp = FastMCP()
+
+        # Simple string content
+        @mcp.prompt
+        def greet() -> PromptResult:
+            return PromptResult("Hello!")
+
+        # Multiple messages with roles
+        @mcp.prompt
+        def conversation() -> PromptResult:
+            return PromptResult([
+                Message("What's the weather?"),
+                Message("It's sunny today.", role="assistant"),
+            ])
+        ```
+    """
+
+    messages: list[Message]
+    description: str | None = None
+    meta: dict[str, Any] | None = None
+
+    def __init__(
+        self,
+        messages: str | list[Message],
+        description: str | None = None,
+        meta: dict[str, Any] | None = None,
+    ):
+        """Create PromptResult.
+
+        Args:
+            messages: String or list of Message objects.
+            description: Optional description of the prompt result.
+            meta: Optional metadata about the prompt result.
+        """
+        normalized = self._normalize_messages(messages)
+        super().__init__(messages=normalized, description=description, meta=meta)
+
+    @staticmethod
+    def _normalize_messages(
+        messages: str | list[Message],
+    ) -> list[Message]:
+        """Normalize input to list[Message]."""
+        if isinstance(messages, str):
+            return [Message(messages)]
+        if isinstance(messages, list):
+            # Validate all items are Message
+            for i, item in enumerate(messages):
+                if not isinstance(item, Message):
+                    raise TypeError(
+                        f"messages[{i}] must be Message, got {type(item).__name__}. "
+                        f"Use Message({item!r}) to wrap the value."
+                    )
+            return messages
+        raise TypeError(
+            f"messages must be str or list[Message], got {type(messages).__name__}"
+        )
+
+    def to_mcp_prompt_result(self) -> GetPromptResult:
+        """Convert to MCP GetPromptResult."""
+        mcp_messages = [m.to_mcp_prompt_message() for m in self.messages]
+        return GetPromptResult(
+            description=self.description,
+            messages=mcp_messages,
+            _meta=self.meta,  # type: ignore[call-arg]  # _meta is Pydantic alias for meta field
+        )
+
+
+class InputRequiredPromptResult(PromptResult):
+    """The full result of a single multi-round-trip prompt leg (SEP-2322).
+
+    `InputRequiredResult` is a result type, not a `tools/call` feature: any
+    request may resolve to one. When a prompt returns an `InputRequiredResult`
+    from its body to ask the client for input, that ask is the legitimate
+    result of this `prompts/get` — so FastMCP wraps it in this `PromptResult`
+    subclass, mirroring `InputRequiredToolResult`, and it flows through the
+    middleware chain as an ordinary return value.
+
+    Invariant: the wrapped `InputRequiredResult` is never rendered as prompt
+    messages. `messages` is always empty; the wire handler (`_on_get_prompt`)
+    reads `.input_required` and returns it to the runner.
+    """
+
+    input_required: mcp_types.InputRequiredResult = Field(
+        description="The client-input request this leg resolved to (SEP-2322)"
+    )
+
+    def __init__(self, input_required: mcp_types.InputRequiredResult) -> None:
+        # Bypass PromptResult's message-normalizing __init__: an input-required
+        # leg carries no messages (see the invariant above), and
+        # `input_required` is a required field PromptResult.__init__ can't set.
+        pydantic.BaseModel.__init__(
+            self,
+            messages=[],
+            description=None,
+            meta=None,
+            input_required=input_required,
+        )
+
+
+class Prompt(FastMCPComponent):
+    """A prompt template that can be rendered with parameters."""
+
+    KEY_PREFIX: ClassVar[str] = "prompt"
+
+    arguments: list[PromptArgument] | None = Field(
+        default=None, description="Arguments that can be passed to the prompt"
+    )
+    auth: SkipJsonSchema[AuthCheck | list[AuthCheck] | None] = Field(
+        default=None, description="Authorization checks for this prompt", exclude=True
+    )
+
+    def to_mcp_prompt(
+        self,
+        **overrides: Any,
+    ) -> SDKPrompt:
+        """Convert the prompt to an MCP prompt."""
+        arguments = [
+            SDKPromptArgument(
+                name=arg.name,
+                description=arg.description,
+                required=arg.required,
+            )
+            for arg in self.arguments or []
+        ]
+
+        return SDKPrompt(
+            name=overrides.get("name", self.name),
+            description=overrides.get("description", self.description),
+            arguments=arguments,
+            title=overrides.get("title", self.title),
+            icons=overrides.get("icons", self.icons),
+            _meta=overrides.get(  # type: ignore[call-arg]  # _meta is Pydantic alias for meta field
+                "_meta", self.get_meta()
+            ),
+        )
+
+    @classmethod
+    def from_function(
+        cls,
+        fn: Callable[..., Any],
+        *,
+        name: str | None = None,
+        version: str | int | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        icons: list[Icon] | None = None,
+        tags: set[str] | None = None,
+        meta: dict[str, Any] | None = None,
+        auth: AuthCheck | list[AuthCheck] | None = None,
+    ) -> FunctionPrompt:
+        """Create a Prompt from a function.
+
+        The function can return:
+        - str: wrapped as single user Message
+        - list[Message | str]: converted to list[Message]
+        - PromptResult: used directly
+        """
+        from ha_mcp._vendor.fastmcp.prompts.function_prompt import FunctionPrompt
+
+        return FunctionPrompt.from_function(
+            fn=fn,
+            name=name,
+            version=version,
+            title=title,
+            description=description,
+            icons=icons,
+            tags=tags,
+            meta=meta,
+            auth=auth,
+        )
+
+    async def render(
+        self,
+        arguments: dict[str, Any] | None = None,
+    ) -> str | list[Message | str] | PromptResult:
+        """Render the prompt with arguments.
+
+        Subclasses must implement this method. Return one of:
+        - str: Wrapped as single user Message
+        - list[Message | str]: Converted to list[Message]
+        - PromptResult: Used directly
+        """
+        raise NotImplementedError("Subclasses must implement render()")
+
+    def convert_result(self, raw_value: Any) -> PromptResult:
+        """Convert a raw return value to PromptResult.
+
+        Accepts:
+            - PromptResult: passed through
+            - str: wrapped as single Message
+            - list[Message | str]: converted to list[Message]
+
+        Raises:
+            TypeError: for unsupported types
+        """
+        if isinstance(raw_value, PromptResult):
+            return raw_value
+
+        if isinstance(raw_value, mcp_types.InputRequiredResult):
+            # The prompt asked the client for input (SEP-2322). Wrap it so the
+            # ask travels the middleware chain as an ordinary result; the wire
+            # handler unwraps it.
+            return InputRequiredPromptResult(raw_value)
+
+        if isinstance(raw_value, str):
+            return PromptResult(raw_value, description=self.description, meta=self.meta)
+
+        if isinstance(raw_value, list | tuple):
+            messages: list[Message] = []
+            for i, item in enumerate(raw_value):
+                if isinstance(item, Message):
+                    messages.append(item)
+                elif isinstance(item, str):
+                    messages.append(Message(item))
+                else:
+                    raise TypeError(
+                        f"messages[{i}] must be Message or str, got {type(item).__name__}. "
+                        f"Use Message({item!r}) to wrap the value."
+                    )
+            return PromptResult(messages, description=self.description, meta=self.meta)
+
+        raise TypeError(
+            f"Prompt must return str, list[Message], or PromptResult, "
+            f"got {type(raw_value).__name__}"
+        )
+
+    async def _render(
+        self,
+        arguments: dict[str, Any] | None = None,
+    ) -> PromptResult:
+        """Server entry point for prompt renders.
+
+        The server calls this method instead of render() directly so that
+        subclasses can customize dispatch. For example, FastMCPProviderPrompt
+        overrides this to delegate to child-server middleware.
+        """
+        result = await self.render(arguments)
+        return self.convert_result(result)
+
+    def get_span_attributes(self) -> dict[str, Any]:
+        return super().get_span_attributes() | {
+            "fastmcp.component.type": "prompt",
+            "fastmcp.provider.type": "LocalProvider",
+        }
+
+
+__all__ = [
+    "Message",
+    "Prompt",
+    "PromptArgument",
+    "PromptResult",
+]

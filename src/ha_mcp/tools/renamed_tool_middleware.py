@@ -23,7 +23,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
+from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
+    CallNext,
+    Middleware,
+    MiddlewareContext,
+)
 
 from ..renamed_tools import RENAMED_TOOLS, adapt_retired_arguments
 

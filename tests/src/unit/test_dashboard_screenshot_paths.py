@@ -7,8 +7,8 @@ from copy import deepcopy
 from typing import Any
 
 import pytest
-from fastmcp.exceptions import ToolError
 
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.dashboard_screenshot.paths import (
     DashboardRenderTarget,
     dashboard_render_paths,
@@ -54,7 +54,7 @@ def _tool_error(exc_info: pytest.ExceptionInfo[ToolError]) -> dict[str, Any]:
 def test_non_stable_target_without_warnings_is_rejected() -> None:
     with pytest.raises(ValueError, match="must carry at least one warning"):
         DashboardRenderTarget(
-            dashboard_url_path="x",
+            url_path="x",
             view_path=None,
             render_path="x",
             view_index=None,
@@ -64,7 +64,7 @@ def test_non_stable_target_without_warnings_is_rejected() -> None:
 
 def test_stable_target_without_warnings_is_allowed() -> None:
     target = DashboardRenderTarget(
-        dashboard_url_path="x",
+        url_path="x",
         view_path=None,
         render_path="x",
         view_index=None,
@@ -98,7 +98,7 @@ def test_render_paths_return_canonical_metadata_without_mutating_config(
 
     assert paths == [
         {
-            "dashboard_url_path": base_path,
+            "url_path": base_path,
             "view_index": 0,
             "view_path": "home",
             "title": "Home",
@@ -106,7 +106,7 @@ def test_render_paths_return_canonical_metadata_without_mutating_config(
             "stable": True,
         },
         {
-            "dashboard_url_path": base_path,
+            "url_path": base_path,
             "view_index": 1,
             "view_path": "lights",
             "title": "Lights",
@@ -132,7 +132,7 @@ def test_render_paths_report_numeric_fallbacks() -> None:
 
     assert paths == [
         {
-            "dashboard_url_path": "wall-panel",
+            "url_path": "wall-panel",
             "view_index": 0,
             "view_path": "home",
             "title": "Named",
@@ -140,7 +140,7 @@ def test_render_paths_report_numeric_fallbacks() -> None:
             "stable": True,
         },
         {
-            "dashboard_url_path": "wall-panel",
+            "url_path": "wall-panel",
             "view_index": 1,
             "view_path": None,
             "title": "Missing",
@@ -148,7 +148,7 @@ def test_render_paths_report_numeric_fallbacks() -> None:
             "stable": False,
         },
         {
-            "dashboard_url_path": "wall-panel",
+            "url_path": "wall-panel",
             "view_index": 2,
             "view_path": None,
             "title": "Blank",
@@ -156,7 +156,7 @@ def test_render_paths_report_numeric_fallbacks() -> None:
             "stable": False,
         },
         {
-            "dashboard_url_path": "wall-panel",
+            "url_path": "wall-panel",
             "view_index": 3,
             "view_path": None,
             "title": None,
@@ -177,7 +177,7 @@ def test_render_paths_use_numeric_fallback_for_unsafe_configured_view_path() -> 
 
     assert paths == [
         {
-            "dashboard_url_path": "wall-panel",
+            "url_path": "wall-panel",
             "view_index": 0,
             "view_path": "../config",
             "title": "Unsafe",
@@ -219,7 +219,7 @@ def test_render_paths_describe_strategy_dashboard_base_route() -> None:
 
     assert paths == [
         {
-            "dashboard_url_path": "wall-panel",
+            "url_path": "wall-panel",
             "view_index": None,
             "view_path": None,
             "title": None,
@@ -235,7 +235,7 @@ def test_render_paths_describe_strategy_dashboard_base_route() -> None:
 
 
 @pytest.mark.parametrize(
-    ("dashboard_url_path", "base_path", "expected_request"),
+    ("url_path", "base_path", "expected_request"),
     [
         (
             "default",
@@ -254,7 +254,7 @@ def test_render_paths_describe_strategy_dashboard_base_route() -> None:
     ],
 )
 async def test_structured_resolution_returns_canonical_named_view(
-    dashboard_url_path: str,
+    url_path: str,
     base_path: str,
     expected_request: dict[str, Any],
 ) -> None:
@@ -272,12 +272,12 @@ async def test_structured_resolution_returns_canonical_named_view(
     target = await resolve_dashboard_render_target(
         client,
         dashboard_path=None,
-        dashboard_url_path=dashboard_url_path,
+        url_path=url_path,
         view_path="lights",
     )
 
     assert target == DashboardRenderTarget(
-        dashboard_url_path=base_path,
+        url_path=base_path,
         view_path="lights",
         render_path=f"{base_path}/lights",
         view_index=1,
@@ -291,7 +291,7 @@ async def test_structured_resolution_maps_transport_failure_to_tool_error() -> N
         await resolve_dashboard_render_target(
             _FailingAsyncClient(),
             dashboard_path=None,
-            dashboard_url_path="wall-panel",
+            url_path="wall-panel",
             view_path="home",
         )
 
@@ -321,7 +321,7 @@ async def test_dashboard_fetch_maps_only_exact_missing_signals_to_not_found(
         await resolve_dashboard_render_target(
             client,
             dashboard_path=None,
-            dashboard_url_path="wall-panel",
+            url_path="wall-panel",
             view_path="home",
         )
 
@@ -353,7 +353,7 @@ async def test_dashboard_fetch_preserves_non_missing_failures(
         await resolve_dashboard_render_target(
             client,
             dashboard_path=None,
-            dashboard_url_path="wall-panel",
+            url_path="wall-panel",
             view_path="home",
         )
 
@@ -381,7 +381,7 @@ def test_named_view_resolution_reports_missing_and_ambiguous_paths(
     error = _tool_error(exc_info)
     assert error["error"]["code"] == "RESOURCE_NOT_FOUND"
     assert reason in error["error"]["message"]
-    assert error["dashboard_url_path"] == "wall-panel"
+    assert error["url_path"] == "wall-panel"
     assert error["view_path"] == "lights"
     assert error["available_view_paths"] == available
 
@@ -430,7 +430,7 @@ def test_base_route_metadata_does_not_invent_a_view_index(
 
 
 @pytest.mark.parametrize(
-    ("dashboard_path", "dashboard_url_path", "view_path", "expected_code"),
+    ("dashboard_path", "url_path", "view_path", "expected_code"),
     [
         (
             "lovelace/0",
@@ -443,7 +443,7 @@ def test_base_route_metadata_does_not_invent_a_view_index(
 )
 async def test_raw_and_structured_addressing_are_mutually_exclusive(
     dashboard_path: str | None,
-    dashboard_url_path: str | None,
+    url_path: str | None,
     view_path: str | None,
     expected_code: str,
 ) -> None:
@@ -453,7 +453,7 @@ async def test_raw_and_structured_addressing_are_mutually_exclusive(
         await resolve_dashboard_render_target(
             client,
             dashboard_path=dashboard_path,
-            dashboard_url_path=dashboard_url_path,
+            url_path=url_path,
             view_path=view_path,
         )
 
@@ -472,19 +472,19 @@ async def test_raw_numeric_path_warns_with_canonical_stable_view_path() -> None:
     target = await resolve_dashboard_render_target(
         client,
         dashboard_path="wall-panel/1",
-        dashboard_url_path=None,
+        url_path=None,
         view_path=None,
     )
 
     assert target == DashboardRenderTarget(
-        dashboard_url_path="wall-panel",
+        url_path="wall-panel",
         view_path=None,
         render_path="wall-panel/1",
         view_index=1,
         stable=False,
         warnings=(
             "Numeric view index 'wall-panel/1' is fragile; use the stable render "
-            "path 'wall-panel/lights' or dashboard_url_path/view_path addressing.",
+            "path 'wall-panel/lights' or url_path/view_path addressing.",
         ),
     )
     assert client.requests == [
@@ -504,7 +504,7 @@ async def test_raw_js_numeric_route_warns_with_canonical_stable_view_path() -> N
     target = await resolve_dashboard_render_target(
         client,
         dashboard_path="wall-panel/1e0",
-        dashboard_url_path=None,
+        url_path=None,
         view_path=None,
     )
 
@@ -520,7 +520,7 @@ async def test_raw_numeric_path_drops_unverified_trailing_segment() -> None:
     target = await resolve_dashboard_render_target(
         client,
         dashboard_path="wall-panel/1/debug",
-        dashboard_url_path=None,
+        url_path=None,
         view_path=None,
     )
 
@@ -540,7 +540,7 @@ async def test_legacy_lovelace_route_surfaces_original_non_json_toolerror() -> N
         await resolve_dashboard_render_target(
             client,
             dashboard_path="lovelace/0",
-            dashboard_url_path=None,
+            url_path=None,
             view_path=None,
         )
     assert "Connection to Home Assistant lost" in str(exc_info.value)
@@ -554,7 +554,7 @@ async def test_raw_default_numeric_path_uses_stored_stable_alias() -> None:
     target = await resolve_dashboard_render_target(
         client,
         dashboard_path="lovelace/0",
-        dashboard_url_path=None,
+        url_path=None,
         view_path=None,
     )
 
@@ -578,7 +578,7 @@ async def test_raw_default_path_allows_known_no_config_fallback() -> None:
     target = await resolve_dashboard_render_target(
         client,
         dashboard_path="lovelace/0",
-        dashboard_url_path=None,
+        url_path=None,
         view_path=None,
     )
 
@@ -600,7 +600,7 @@ async def test_raw_default_path_does_not_hide_permission_failure() -> None:
         await resolve_dashboard_render_target(
             client,
             dashboard_path="lovelace/0",
-            dashboard_url_path=None,
+            url_path=None,
             view_path=None,
         )
 
@@ -617,7 +617,7 @@ async def test_raw_default_path_does_not_hide_malformed_success(
         await resolve_dashboard_render_target(
             client,
             dashboard_path="lovelace/0",
-            dashboard_url_path=None,
+            url_path=None,
             view_path=None,
         )
 
@@ -626,9 +626,9 @@ async def test_raw_default_path_does_not_hide_malformed_success(
     assert error["payload_type"] == type(invalid_result).__name__
 
 
-@pytest.mark.parametrize("dashboard_url_path", ["", "   "])
+@pytest.mark.parametrize("url_path", ["", "   "])
 async def test_structured_empty_dashboard_path_is_rejected_without_ws(
-    dashboard_url_path: str,
+    url_path: str,
 ) -> None:
     client = _FakeAsyncClient()
 
@@ -636,7 +636,7 @@ async def test_structured_empty_dashboard_path_is_rejected_without_ws(
         await resolve_dashboard_render_target(
             client,
             dashboard_path=None,
-            dashboard_url_path=dashboard_url_path,
+            url_path=url_path,
             view_path="home",
         )
 
@@ -652,7 +652,7 @@ async def test_raw_custom_suffix_must_resolve_to_a_real_view(raw_view: str) -> N
         await resolve_dashboard_render_target(
             client,
             dashboard_path=f"wall-panel/{raw_view}",
-            dashboard_url_path=None,
+            url_path=None,
             view_path=None,
         )
 
@@ -667,7 +667,7 @@ async def test_raw_duplicate_named_suffix_selects_first_but_is_unstable() -> Non
     target = await resolve_dashboard_render_target(
         client,
         dashboard_path="wall-panel/home",
-        dashboard_url_path=None,
+        url_path=None,
         view_path=None,
     )
 
@@ -685,7 +685,7 @@ async def test_raw_strategy_suffix_is_unverified_not_stable() -> None:
     target = await resolve_dashboard_render_target(
         client,
         dashboard_path="wall-panel/runtime/view",
-        dashboard_url_path=None,
+        url_path=None,
         view_path=None,
     )
 
@@ -701,7 +701,7 @@ async def test_raw_multi_segment_cannot_select_slash_configured_path() -> None:
         await resolve_dashboard_render_target(
             client,
             dashboard_path="wall-panel/floor/second",
-            dashboard_url_path=None,
+            url_path=None,
             view_path=None,
         )
 
@@ -714,7 +714,7 @@ async def test_raw_multi_segment_uses_only_frontend_view_suffix() -> None:
     target = await resolve_dashboard_render_target(
         client,
         dashboard_path="wall-panel/floor/second",
-        dashboard_url_path=None,
+        url_path=None,
         view_path=None,
     )
 
@@ -731,7 +731,7 @@ async def test_duplicate_numeric_warning_does_not_recommend_ambiguous_alias() ->
     target = await resolve_dashboard_render_target(
         client,
         dashboard_path="wall-panel/1",
-        dashboard_url_path=None,
+        url_path=None,
         view_path=None,
     )
 
@@ -746,7 +746,7 @@ async def test_numeric_warning_does_not_recommend_normalization_changed_alias() 
     target = await resolve_dashboard_render_target(
         client,
         dashboard_path="wall-panel/0",
-        dashboard_url_path=None,
+        url_path=None,
         view_path=None,
     )
 
@@ -793,7 +793,7 @@ async def test_raw_exact_numeric_path_precedes_index_match(
     target = await resolve_dashboard_render_target(
         client,
         dashboard_path=f"wall-panel/{configured_path}",
-        dashboard_url_path=None,
+        url_path=None,
         view_path=None,
     )
 
@@ -815,7 +815,7 @@ async def test_shadowed_numeric_fallback_uses_equivalent_unshadowed_suffix() -> 
     raw_target = await resolve_dashboard_render_target(
         _FakeAsyncClient(_config_response(config)),
         dashboard_path="wall-panel/1.0",
-        dashboard_url_path=None,
+        url_path=None,
         view_path=None,
     )
 
@@ -891,7 +891,7 @@ async def test_raw_reserved_view_suffix_is_rejected(
         await resolve_dashboard_render_target(
             client,
             dashboard_path=dashboard_path,
-            dashboard_url_path=None,
+            url_path=None,
             view_path=None,
         )
 
@@ -905,11 +905,11 @@ async def test_raw_dashboard_base_is_reported_as_unstable() -> None:
             _config_response({"views": [{"title": "Home", "path": "home"}]})
         ),
         dashboard_path="wall-panel",
-        dashboard_url_path=None,
+        url_path=None,
         view_path=None,
     )
 
-    assert target.dashboard_url_path == "wall-panel"
+    assert target.url_path == "wall-panel"
     assert target.view_path is None
     assert target.view_index is None
     assert target.stable is False
@@ -928,7 +928,7 @@ async def test_raw_route_cannot_target_non_dashboard_frontend_panel() -> None:
         await resolve_dashboard_render_target(
             client,
             dashboard_path="config/integrations",
-            dashboard_url_path=None,
+            url_path=None,
             view_path=None,
         )
 
@@ -974,7 +974,7 @@ async def test_raw_addressing_rejects_unsafe_paths(dashboard_path: str) -> None:
         await resolve_dashboard_render_target(
             client,
             dashboard_path=dashboard_path,
-            dashboard_url_path=None,
+            url_path=None,
             view_path=None,
         )
 
@@ -990,7 +990,7 @@ async def test_structured_addressing_rejects_unsafe_dashboard_before_fetch() -> 
         await resolve_dashboard_render_target(
             client,
             dashboard_path=None,
-            dashboard_url_path="https://evil.example/dashboard",
+            url_path="https://evil.example/dashboard",
             view_path="home",
         )
 
@@ -1007,7 +1007,7 @@ async def test_structured_addressing_falls_back_for_unsafe_named_view() -> None:
     target = await resolve_dashboard_render_target(
         client,
         dashboard_path=None,
-        dashboard_url_path="wall-panel",
+        url_path="wall-panel",
         view_path="home?redirect=evil",
     )
 

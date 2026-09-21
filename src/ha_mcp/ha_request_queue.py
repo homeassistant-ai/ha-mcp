@@ -7,7 +7,11 @@ import logging
 from contextvars import ContextVar
 from typing import Any
 
-from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
+from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
+    CallNext,
+    Middleware,
+    MiddlewareContext,
+)
 
 from .errors import create_timeout_error
 from .tool_dispatch import (

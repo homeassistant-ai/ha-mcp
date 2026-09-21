@@ -12,9 +12,10 @@ import uuid
 from collections.abc import Callable
 from typing import Annotated, Any, Literal, NoReturn, TypedDict
 
-from fastmcp.exceptions import ToolError
-from fastmcp.tools import tool
 from pydantic import AliasChoices, Field
+
+from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.fastmcp.tools import tool
 
 from ..client.rest_client import (
     HomeAssistantAPIError,
@@ -26,6 +27,7 @@ from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_auth_error, create_error_response
 from ..redaction import redact_flow_schema, redaction_enabled
 from ..strict_bps import BestPracticeKeyParam
+from ..utils.registry_update_lock import registry_update_lock
 from .auto_backup import with_auto_backup
 from .component_api import (
     component_supports,
@@ -1453,10 +1455,14 @@ async def validate_registry_ids(
     """Validate that registry references point at entries that actually exist.
 
     Bug 16 (issue #1150) / issue #2159: HA's registry-update APIs accept any
-    string for a cross-registry reference and store it verbatim, so a typo or a
-    since-deleted ID becomes a dangling reference the write tool still reports
-    as a success. Validate before sending so the caller gets a clear error with
-    the available IDs to choose from.
+    string for a cross-registry reference and answer with a success envelope
+    either way, so without this check a typo or a since-deleted ID passes as a
+    completed write. What happens to the bad value differs per reference:
+    area_id / floor_id / category are stored verbatim and become a dangling
+    reference, while an unknown label_id is dropped (the area registry filters
+    the requested set through the label registry), leaving the caller with a
+    success it cannot distinguish from an applied one. Validate before sending
+    so the caller gets a clear error with the available IDs to choose from.
 
     ``categories`` maps a category SCOPE ("helpers", "automation", "script",
     "scene") to the category_id being assigned in that scope; each distinct
@@ -1821,7 +1827,8 @@ async def _entity_registry_update_coro(
         update_message["labels"] = labels
     if icon is not None:
         update_message["icon"] = icon if icon else None
-    return await client.send_websocket_message(update_message)
+    async with registry_update_lock("entity", entity_id):
+        return await client.send_websocket_message(update_message)
 
 
 async def _category_apply_coro(
@@ -2632,7 +2639,8 @@ async def _apply_create_entity_registry(
         update_message["area_id"] = area_id if area_id else None
     if labels is not None:
         update_message["labels"] = labels
-    update_result = await client.send_websocket_message(update_message)
+    async with registry_update_lock("entity", entity_id):
+        update_result = await client.send_websocket_message(update_message)
     if update_result.get("success"):
         if icon is not None:
             helper_data["icon"] = icon if icon else None
@@ -3264,7 +3272,8 @@ async def _apply_update_icon_area_labels(
         registry_update["area_id"] = area_id if area_id else None
     if labels is not None:
         registry_update["labels"] = labels
-    reg_result = await client.send_websocket_message(registry_update)
+    async with registry_update_lock("entity", entity_id):
+        reg_result = await client.send_websocket_message(registry_update)
     if reg_result.get("success"):
         if icon is not None:
             updated_data["icon"] = icon if icon else None
@@ -3328,7 +3337,8 @@ async def _execute_fallback_registry_update(
         fallback_msg["area_id"] = area_id if area_id else None
     if labels is not None:
         fallback_msg["labels"] = labels
-    result = await client.send_websocket_message(fallback_msg)
+    async with registry_update_lock("entity", entity_id):
+        result = await client.send_websocket_message(fallback_msg)
     updated_data: dict[str, Any] = {}
     if result.get("success"):
         updated_data = result.get("result", {}).get("entity_entry", {})

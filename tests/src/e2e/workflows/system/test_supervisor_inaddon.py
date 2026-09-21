@@ -24,10 +24,6 @@ inside HAOS, with assertions adapted for live responses
   per assertion. The 401 wire-contract coverage stays in the mock-tier
   suite; this module covers the 403 path against a real
   insufficient-role token (the SSH addon's ``hassio_role: default``).
-
-See ``docs/superpowers/specs/2026-05-18-1349-closeout-design.md`` — the
-"Token-missing + bad-token paths" section under spec-review fixes for
-the design rationale.
 """
 
 from __future__ import annotations
