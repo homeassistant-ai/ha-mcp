@@ -34,6 +34,7 @@ class PendingApproval:
     _decision: Decision = "pending"
     _event: anyio.Event = field(default_factory=anyio.Event)
     _claimed: bool = False
+    _notified: bool = False
 
     @property
     def decision(self) -> Decision:
@@ -70,6 +71,20 @@ class PendingApproval:
         if self._claimed:
             return False
         self._claimed = True
+        return True
+
+    def mark_notified(self) -> bool:
+        """Take ownership of announcing this entry. False if already taken.
+
+        Concurrent identical calls share one entry (``find_or_create``), and
+        a caller that joins an existing row must not fire a second Home
+        Assistant event for the request the user has already been told
+        about. Same one-shot shape as ``claim()``: there is no ``await``
+        here, so the check-and-set cannot interleave with another task.
+        """
+        if self._notified:
+            return False
+        self._notified = True
         return True
 
     def __post_init__(self) -> None:

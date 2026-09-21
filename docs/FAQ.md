@@ -941,6 +941,62 @@ registry read degrades, registry-derived dimensions (categories, hidden-state,
 areas, labels, Assist) are skipped with a `warnings` note; `deny_entity_ids` and
 `allow_entity_ids`, which need no registry data, still apply.
 
+### Getting notified when a tool call is waiting for approval
+
+A rule in **Tool Security Policies** holds the call and shows it in the
+settings UI, which only helps while that tab is open. Every held request is
+also announced on the Home Assistant event bus as
+`ha_mcp_approval_requested`, so you can build your own notification around
+it:
+
+```yaml
+automation:
+  - alias: Notify me about pending ha-mcp approvals
+    triggers:
+      - trigger: event
+        event_type: ha_mcp_approval_requested
+    actions:
+      - action: notify.mobile_app_my_phone
+        data:
+          title: "Approval needed: {{ trigger.event.data.tool_name }}"
+          message: "{{ trigger.event.data.args }}"
+```
+
+The event data carries `token`, `tool_name`, `args`, `created_at` and
+`expires_at`, plus `matched_rule` whenever a rule matched the call. A policy
+can also gate a call no rule matched — through one of the fail-safes for raw
+WebSocket commands and for selector-based bulk calls — and then there is no
+rule to name and the key is absent.
+
+Two things to know about `args`: each value is capped, so a long one is
+shortened with an `omitted` marker and the settings UI stays the place to
+read it in full; and the event bus reaches every listener, so treat those
+arguments as you would any other bus traffic.
+
+A selector-based `ha_bulk_control` request is announced with `single_use:
+true` and **no** `expires_at`. It is bound to the one call that created it
+and is gone once that call stops waiting, which is well before the policy's
+TTL — approving it later does nothing, and the agent has to call the tool
+again.
+
+Every other request stays approvable for the policy's `approval_ttl_minutes`
+even after the blocked call gave up waiting after `wait_seconds`: approve it
+in the tab and the agent's next identical call goes through, which is what
+the error tells the agent to do.
+
+If no event arrives at all, check the token the server authenticates with:
+Home Assistant only accepts `POST /api/events/<type>` from an admin user, so
+a standalone install running on a non-admin long-lived token gets a 403 that
+goes to the server log and nowhere else. The embedded component provisions
+its own admin token, so it is not affected.
+
+Approving happens in the Tool Security Policies tab — the event is a
+notification, not a decision channel. Deciding from an automation would mean
+accepting a reply from the same event bus an AI agent can write to (it can
+author automations unless the policy gates that too), so the tab stays the
+way to answer. (With developer mode on, `ha_dev_manage_server` can also
+decide a pending request; that is a testing tool and it says so.)
+
 ---
 
 ## Feedback & Help

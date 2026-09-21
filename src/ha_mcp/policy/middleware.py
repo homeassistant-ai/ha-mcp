@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import anyio
 from anyio.to_thread import run_sync as run_in_thread
@@ -28,7 +28,11 @@ from .evaluator import (
     has_dynamic_selector_targets,
     normalize_stringified_containers,
 )
+from .events import emit_approval_requested
 from .model import Policy, Rule
+
+if TYPE_CHECKING:
+    from ..client.rest_client import HomeAssistantClient
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +53,18 @@ class PolicyMiddleware(Middleware):
         policy_provider: Callable[[], Policy],
         queue: ApprovalQueue,
         wait_seconds: int | None = None,
+        get_client: Callable[[], HomeAssistantClient] | None = None,
     ) -> None:
+        """Gate tool calls against ``policy_provider``'s policy.
+
+        ``get_client`` supplies the Home Assistant REST client used to
+        announce a pending approval on the event bus. Without it the gate
+        still works, it just stays invisible outside the settings UI.
+        """
         self._policy_provider = policy_provider
         self._queue = queue
         self._wait_override = wait_seconds
+        self._get_client = get_client
 
     async def on_call_tool(
         self, context: MiddlewareContext, call_next: CallNext
@@ -188,6 +200,7 @@ class PolicyMiddleware(Middleware):
         pending = await self._new_pending(
             name, args_hash, args, policy=policy, dynamic_targets=dynamic_targets
         )
+        await self._announce(pending, rule, dynamic_targets=dynamic_targets)
 
         wait = (
             self._wait_override
@@ -214,6 +227,7 @@ class PolicyMiddleware(Middleware):
             pending = await self._new_pending(
                 name, args_hash, args, policy=policy, dynamic_targets=dynamic_targets
             )
+            await self._announce(pending, rule, dynamic_targets=dynamic_targets)
             self._raise_pending_error(pending, rule, dynamic_targets=dynamic_targets)
         if pending.decision == "denied":
             self._queue.remove(pending.token)
@@ -222,8 +236,69 @@ class PolicyMiddleware(Middleware):
         pending = self._finalize_timed_out_pending(
             pending, dynamic_targets=dynamic_targets, policy=policy, name=name
         )
+        await self._announce_reissued(pending, rule, dynamic_targets=dynamic_targets)
         self._raise_pending_error(pending, rule, dynamic_targets=dynamic_targets)
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
+
+    async def _announce_reissued(
+        self,
+        pending: PendingApproval,
+        rule: Rule | None,
+        *,
+        dynamic_targets: bool,
+    ) -> None:
+        """Announce an entry ``_finalize_timed_out_pending`` just reissued.
+
+        Only a reissue reaches an event here: the entry this call waited on
+        was announced before the wait and ``mark_notified`` refuses a second
+        event for it. A reissue carries a new token, and the token in the
+        first event is dead by then, so a listener holding it needs the new
+        one.
+
+        Never on the dynamic path. There ``_finalize_timed_out_pending``
+        REMOVES the entry rather than reissuing it, so an announcement
+        would advertise a token the queue no longer knows — reachable when
+        the first announcement found no client and left the one-shot
+        unspent.
+        """
+        if dynamic_targets:
+            return
+        await self._announce(pending, rule, dynamic_targets=dynamic_targets)
+
+    async def _announce(
+        self,
+        pending: PendingApproval,
+        rule: Rule | None,
+        *,
+        dynamic_targets: bool = False,
+    ) -> None:
+        """Fire the approval-requested event for a not-yet-announced entry.
+
+        Each pending entry is announced exactly once
+        (``PendingApproval.mark_notified``), so concurrent identical calls
+        that share one queue row also share one notification.
+
+        The client is resolved BEFORE the one-shot is consumed: taking it
+        first would burn the entry's single announcement on a client that
+        never materialised, and a later reissue of that same entry could
+        then never announce either.
+        """
+        if self._get_client is None:
+            return
+        try:
+            client = self._get_client()
+        except Exception:
+            logger.warning(
+                "policy middleware: no Home Assistant client to announce the "
+                "pending approval for tool=%s; the request is still queued "
+                "and visible in the settings UI",
+                pending.tool_name,
+                exc_info=True,
+            )
+            return
+        if not pending.mark_notified():
+            return
+        await emit_approval_requested(client, pending, rule, single_use=dynamic_targets)
 
     def _resolve_already_decided(
         self,

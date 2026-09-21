@@ -1359,6 +1359,7 @@ class HomeAssistantSmartMCPServer:
                 PolicyMiddleware(
                     policy_provider=_policy_provider,
                     queue=self.approval_queue,
+                    get_client=lambda: self.client,
                 )
             )
             logger.info(

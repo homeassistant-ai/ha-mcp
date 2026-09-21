@@ -5,6 +5,7 @@ context.message.name + context.message.arguments and routes accordingly.
 """
 
 import json
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import anyio
@@ -1073,3 +1074,267 @@ async def test_losing_waiters_share_one_replacement_row(
     leftover = queue.list_pending()
     assert len(leftover) == 1
     assert leftover[0].token != approved_token[0]
+
+
+# --- Home Assistant event surface ---
+
+
+@pytest.mark.anyio
+async def test_gated_call_announces_the_pending_request(queue):
+    """The whole point of #2502: the queue must be visible outside the UI."""
+    pol = Policy(rules=[Rule(tool_name="ha_call_service")])
+    client = AsyncMock()
+    mw = PolicyMiddleware(
+        policy_provider=lambda: pol,
+        queue=queue,
+        wait_seconds=0,
+        get_client=lambda: client,
+    )
+
+    with pytest.raises(ToolError):
+        await mw.on_call_tool(
+            make_context("ha_call_service", {"domain": "lock"}), AsyncMock()
+        )
+
+    client.fire_event.assert_awaited_once()
+    event_type, payload = client.fire_event.await_args.args
+    assert event_type == "ha_mcp_approval_requested"
+    assert payload["tool_name"] == "ha_call_service"
+    assert payload["args"] == {"domain": "lock"}
+    assert payload["matched_rule"]["tool_name"] == "ha_call_service"
+    assert payload["token"] == queue.list_pending()[0].token
+
+
+@pytest.mark.anyio
+async def test_a_shared_pending_row_is_announced_once(queue):
+    """A later identical call joins the existing row (``find_or_create``).
+
+    The user was already told about that request, so a second event would
+    duplicate the notification while carrying the same token.
+    """
+    pol = Policy(rules=[Rule(tool_name="ha_call_service")])
+    client = AsyncMock()
+    mw = PolicyMiddleware(
+        policy_provider=lambda: pol,
+        queue=queue,
+        wait_seconds=0,
+        get_client=lambda: client,
+    )
+
+    for _ in range(2):
+        with pytest.raises(ToolError):
+            await mw.on_call_tool(
+                make_context("ha_call_service", {"domain": "lock"}), AsyncMock()
+            )
+
+    assert len(queue.list_pending()) == 1
+    client.fire_event.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_a_failing_announcement_still_gates_the_call(queue):
+    """Delivery is best effort; the gate is not."""
+    pol = Policy(rules=[Rule(tool_name="ha_call_service")])
+    client = AsyncMock()
+    client.fire_event.side_effect = RuntimeError("HA unreachable")
+    mw = PolicyMiddleware(
+        policy_provider=lambda: pol,
+        queue=queue,
+        wait_seconds=0,
+        get_client=lambda: client,
+    )
+    call_next = AsyncMock()
+
+    with pytest.raises(ToolError) as ei:
+        await mw.on_call_tool(
+            make_context("ha_call_service", {"domain": "lock"}), call_next
+        )
+
+    assert json.loads(ei.value.args[0])["error"]["code"] == "USER_APPROVAL_REQUIRED"
+    call_next.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_a_client_that_cannot_be_resolved_does_not_burn_the_announcement(queue):
+    """A failed client lookup must leave the entry announceable.
+
+    ``mark_notified`` is one-shot, so consuming it before the client is in
+    hand would spend the entry's only announcement on a client that never
+    materialised -- and the reissue path could not announce it either.
+    """
+    pol = Policy(rules=[Rule(tool_name="ha_call_service")])
+    client = AsyncMock()
+    calls: list[int] = []
+
+    def flaky_client():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("client not ready")
+        return client
+
+    mw = PolicyMiddleware(
+        policy_provider=lambda: pol,
+        queue=queue,
+        wait_seconds=0,
+        get_client=flaky_client,
+    )
+
+    for _ in range(2):
+        with pytest.raises(ToolError):
+            await mw.on_call_tool(
+                make_context("ha_call_service", {"domain": "lock"}), AsyncMock()
+            )
+
+    client.fire_event.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_a_reissued_entry_is_announced_with_its_new_token(queue):
+    """An entry evicted during the wait is reissued -- under a new token.
+
+    The token in the first event is dead at that point, so an automation
+    holding it has nothing to act on; the replacement has to be announced
+    or the notification path goes quiet for that request.
+    """
+    pol = Policy(
+        rules=[Rule(tool_name="ha_call_service")],
+        approval_ttl_minutes=1,
+        wait_seconds=30,
+    )
+    client = AsyncMock()
+    mw = PolicyMiddleware(
+        policy_provider=lambda: pol,
+        queue=queue,
+        wait_seconds=0,
+        get_client=lambda: client,
+    )
+
+    # Expire the entry the call is waiting on, exactly as the queue's
+    # sweeper would when the TTL elapses mid-wait.
+    async def expire_during_wait(context, pending, wait_seconds):
+        pending.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        queue._sweep_expired()
+
+    mw._wait_for_decision = expire_during_wait  # type: ignore[method-assign]
+
+    with pytest.raises(ToolError):
+        await mw.on_call_tool(
+            make_context("ha_call_service", {"domain": "lock"}), AsyncMock()
+        )
+
+    assert client.fire_event.await_count == 2
+    first, second = (
+        call.args[1]["token"] for call in client.fire_event.await_args_list
+    )
+    assert first != second
+    assert second == queue.list_pending()[0].token
+
+
+@pytest.mark.anyio
+async def test_each_replacement_row_in_a_burst_is_announced(
+    queue, monkeypatch: pytest.MonkeyPatch
+):
+    """A waiter that loses the claim mints a new row -- and announces it.
+
+    Without this the losers' replacement row exists in the settings UI but
+    never reaches the event bus, so a user driving approvals from a
+    notification sees the first request and nothing after it.
+    """
+    args = {"domain": "lock", "service": "unlock"}
+    policy = Policy(rules=[Rule(tool_name="ha_call_service")])
+    client = AsyncMock()
+    mw = PolicyMiddleware(
+        policy_provider=lambda: policy,
+        queue=queue,
+        wait_seconds=5,
+        get_client=lambda: client,
+    )
+    call_next = AsyncMock(return_value="ok")
+    attached: list[int] = []
+
+    await _attach_counting_find_or_create(queue, monkeypatch, attached)
+
+    async def call():
+        try:
+            await mw.on_call_tool(
+                make_context("ha_call_service", dict(args)), call_next
+            )
+        except ToolError:
+            pass
+
+    async def approve_the_shared_row():
+        await _wait_until_attached(attached, 2)
+        pending = queue.list_pending()
+        assert len(pending) == 1
+        queue.approve(pending[0].token)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(call)
+        tg.start_soon(call)
+        tg.start_soon(approve_the_shared_row)
+
+    announced = [call.args[1]["token"] for call in client.fire_event.await_args_list]
+    assert len(announced) == 2, "the replacement row was never announced"
+    assert len(set(announced)) == 2
+    assert announced[1] == queue.list_pending()[0].token
+
+
+@pytest.mark.anyio
+async def test_a_selector_call_is_announced_as_single_use(queue):
+    """A dynamic-selector gate announces no expiry it cannot honour."""
+    pol = Policy(rules=[Rule(tool_name="ha_bulk_control")])
+    client = AsyncMock()
+    mw = PolicyMiddleware(
+        policy_provider=lambda: pol,
+        queue=queue,
+        wait_seconds=0,
+        get_client=lambda: client,
+    )
+
+    with pytest.raises(ToolError):
+        await mw.on_call_tool(
+            make_context("ha_bulk_control", {"selector": {"domain": "light"}}),
+            AsyncMock(),
+        )
+
+    client.fire_event.assert_awaited_once()
+    payload = client.fire_event.await_args.args[1]
+    assert payload["single_use"] is True
+    assert "expires_at" not in payload
+
+
+@pytest.mark.anyio
+async def test_a_removed_selector_entry_is_never_announced(queue):
+    """The single-use entry is gone by the time the retry branch runs.
+
+    Announcing there would hand an automation a token the queue no longer
+    knows — reachable whenever the first announcement found no client and
+    so left the one-shot unspent.
+    """
+    pol = Policy(rules=[Rule(tool_name="ha_bulk_control")])
+    client = AsyncMock()
+    calls: list[int] = []
+
+    def client_missing_once():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("client not ready")
+        return client
+
+    mw = PolicyMiddleware(
+        policy_provider=lambda: pol,
+        queue=queue,
+        wait_seconds=0,
+        get_client=client_missing_once,
+    )
+
+    with pytest.raises(ToolError):
+        await mw.on_call_tool(
+            make_context("ha_bulk_control", {"selector": {"domain": "light"}}),
+            AsyncMock(),
+        )
+
+    client.fire_event.assert_not_awaited()
+    # Nothing survives the call on this path, so there is no token an
+    # announcement could have pointed a listener at.
+    assert queue.list_pending() == []

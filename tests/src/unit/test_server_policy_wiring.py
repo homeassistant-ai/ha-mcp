@@ -90,6 +90,25 @@ def test_policy_middleware_attached_when_enabled():
     assert args[0]._queue is stub.approval_queue
 
 
+def test_policy_middleware_can_reach_the_servers_home_assistant_client():
+    """The announce path needs a client, and only this wiring supplies it.
+
+    Every middleware-level announce test injects its own ``get_client``, so
+    dropping the one in ``_apply_tool_security_policies`` leaves them green
+    while the feature is dead in production: a held call would then be
+    invisible outside the settings UI, which is the whole point of #2502.
+    """
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    stub = _make_server_stub(enable_policies=True)
+    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
+
+    args, _kwargs = stub.mcp.add_middleware.call_args
+    get_client = args[0]._get_client
+    assert get_client is not None, "no client factory: approvals cannot be announced"
+    assert get_client() is stub.client
+
+
 def test_policy_middleware_not_attached_when_disabled():
     """Disabled flag → no queue, no middleware (clean no-op)."""
     from ha_mcp.server import HomeAssistantSmartMCPServer
