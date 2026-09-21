@@ -1049,8 +1049,9 @@ document on purpose, so no surface that reads or writes policy — the
 settings UI, `ha_manage_security_policy`, a version-conflict error body —
 carries it. The file itself is mode 0600 and holds only the digest; on an
 embedded install it lives under the `.ha_mcp` folder of your configuration
-directory, so do not add that folder to the component's custom read
-directories.
+directory. Do not add that folder to the component's **Extra file paths**
+setting: entries there are granted read *and* write, so a tool could not only
+read the digest but replace it with one for a PIN of its own choosing.
 
 Removing the PIN switches the feature off with it. Events that arrive while
 it is off, or without a matching PIN, are refused and logged at WARNING;
