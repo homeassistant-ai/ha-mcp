@@ -514,6 +514,7 @@
     "policies.global.pin.cleared_and_disabled": "PIN removed, and deciding over the event bus switched off with it.",
     "policies.global.pin.confirm_clear": "Remove the approval PIN? Deciding over the event bus switches off with it; the pending list in this tab is unaffected.",
     "policies.operations.set_pin": "Set PIN",
+    "policies.rules.scope_notice": "Policies apply to individual tools. Other tools may perform the same action. For example, requiring approval for <code>ha_call_event</code> does not restrict event firing through <code>ha_call_service</code>.",
     "policies.operations.clear_pin": "Remove PIN"
   },
   "tool_groups": {},

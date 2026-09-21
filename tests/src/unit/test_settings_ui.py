@@ -5079,6 +5079,29 @@ class TestBpsSkillGuideDependency:
         self._teardown()
 
 
+class TestPolicyScopeNotice:
+    """Issue #2515: the page says that a rule gates a tool, not a capability.
+
+    A rule is keyed on the tool name, so a second tool reaching the same
+    capability is not covered — requiring approval for ``ha_call_event``
+    leaves ``ha_call_service``'s raw ``ws_command`` path open. The behaviour
+    is deliberate (gating one tool must not withdraw another), which is
+    exactly why the page has to say it where the rules are written, and not
+    only in the FAQ.
+    """
+
+    def test_the_notice_sits_in_the_rules_section(self) -> None:
+        rules_section = _SETTINGS_HTML.split('<section id="policy-rules">', 1)[1]
+        assert 'data-i18n-html="policies.rules.scope_notice"' in rules_section
+
+    def test_the_notice_names_both_tools(self) -> None:
+        from ha_mcp.settings_ui._i18n import load_catalogs
+
+        english = load_catalogs()["en"]["messages"]["policies.rules.scope_notice"]
+        assert "ha_call_event" in english
+        assert "ha_call_service" in english
+
+
 class TestSidecarPolicyPinGuard:
     """The sidecar writes the same policy file, so it owes the same guard.
 

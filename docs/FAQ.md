@@ -941,6 +941,19 @@ registry read degrades, registry-derived dimensions (categories, hidden-state,
 areas, labels, Assist) are skipped with a `warnings` note; `deny_entity_ids` and
 `allow_entity_ids`, which need no registry data, still apply.
 
+### A rule gates one tool, not one capability
+
+Policies apply to individual tools. Other tools may perform the same action,
+and a rule does not follow the capability across them: requiring approval for
+`ha_call_event` does not restrict event firing through `ha_call_service`,
+whose raw `ws_command` escape hatch reaches the same WebSocket command.
+
+That is deliberate — gating one tool must not silently withdraw another — so
+write the rules for every tool that reaches what you want held. One partial
+safety net exists: an unmatched `ws_command` call is held whenever the policy
+has any rule targeting `ha_call_service` or `*`, so the escape hatch cannot
+slip past a policy that already watches that tool.
+
 ### Getting notified when a tool call is waiting for approval
 
 A rule in **Tool Security Policies** holds the call and shows it in the
