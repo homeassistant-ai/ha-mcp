@@ -5,6 +5,7 @@ context.message.name + context.message.arguments and routes accordingly.
 """
 
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1341,3 +1342,62 @@ async def test_a_removed_selector_entry_is_never_announced(queue):
     # Nothing survives the call on this path, so there is no token an
     # announcement could have pointed a listener at.
     assert queue.list_pending() == []
+
+
+@pytest.mark.anyio
+async def test_the_decision_channel_opens_before_the_request_is_announced(queue):
+    """Order matters: a response to an event nobody is subscribed to is lost.
+
+    The listener is what turns the announcement into something answerable,
+    so it has to be up before the announcement goes out -- an automation
+    that fires its response the moment the notification lands would
+    otherwise race the subscription and lose.
+    """
+    pol = Policy(rules=[Rule(tool_name="ha_call_service")])
+    order: list[str] = []
+    client = AsyncMock()
+    client.fire_event.side_effect = lambda *a, **k: order.append("announced")
+
+    async def ensure() -> None:
+        order.append("subscribed")
+
+    mw = PolicyMiddleware(
+        policy_provider=lambda: pol,
+        queue=queue,
+        wait_seconds=0,
+        get_client=lambda: client,
+        ensure_decisions_listener=ensure,
+    )
+
+    with pytest.raises(ToolError):
+        await mw.on_call_tool(
+            make_context("ha_call_service", {"domain": "lock"}), AsyncMock()
+        )
+
+    assert order == ["subscribed", "announced"]
+
+
+@pytest.mark.anyio
+async def test_a_failing_decision_channel_still_announces(queue, caplog):
+    """A request answerable only in the settings UI beats no request at all."""
+    pol = Policy(rules=[Rule(tool_name="ha_call_service")])
+    client = AsyncMock()
+
+    async def ensure() -> None:
+        raise RuntimeError("no websocket")
+
+    mw = PolicyMiddleware(
+        policy_provider=lambda: pol,
+        queue=queue,
+        wait_seconds=0,
+        get_client=lambda: client,
+        ensure_decisions_listener=ensure,
+    )
+
+    with caplog.at_level(logging.WARNING), pytest.raises(ToolError):
+        await mw.on_call_tool(
+            make_context("ha_call_service", {"domain": "lock"}), AsyncMock()
+        )
+
+    client.fire_event.assert_awaited_once()
+    assert "approval-response channel" in caplog.text

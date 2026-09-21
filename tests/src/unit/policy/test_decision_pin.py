@@ -1,0 +1,179 @@
+"""Test the stored approval PIN.
+
+The security-relevant properties are that the PIN itself is never written
+down, that anything other than the right PIN verifies as false -- including
+every way the file can be missing or broken -- and that the file cannot be
+read by other users on the host.
+"""
+
+from __future__ import annotations
+
+import json
+import stat
+
+import pytest
+
+from ha_mcp.policy.decision_pin import (
+    MAX_PIN_LENGTH,
+    MIN_PIN_LENGTH,
+    PIN_FILENAME,
+    clear_pin,
+    is_pin_set,
+    pin_status,
+    set_pin,
+    validate_pin,
+    verify_pin,
+)
+
+
+@pytest.fixture(autouse=True)
+def fast_hashing(monkeypatch: pytest.MonkeyPatch):
+    """Keep the tests quick without changing what they test.
+
+    The work factor is a cost, not a behaviour: every assertion here holds
+    at any iteration count, and the stored record carries its own so a
+    lowered one still round-trips.
+    """
+    monkeypatch.setattr("ha_mcp.policy.decision_pin.HASH_ITERATIONS", 1000)
+
+
+def test_a_set_pin_verifies(tmp_path):
+    set_pin(tmp_path, "2468")
+
+    assert is_pin_set(tmp_path) is True
+    assert verify_pin(tmp_path, "2468") is True
+
+
+def test_a_wrong_pin_does_not_verify(tmp_path):
+    set_pin(tmp_path, "2468")
+
+    assert verify_pin(tmp_path, "2469") is False
+    assert verify_pin(tmp_path, "") is False
+    assert verify_pin(tmp_path, None) is False
+    assert verify_pin(tmp_path, 2468) is False
+
+
+def test_the_pin_is_not_stored_in_the_clear(tmp_path):
+    set_pin(tmp_path, "2468")
+
+    record = json.loads((tmp_path / PIN_FILENAME).read_text())
+    assert "2468" not in json.dumps(record)
+    assert record["algorithm"] == "pbkdf2_sha256"
+    assert record["salt"] and record["hash"]
+
+
+def test_two_stores_of_the_same_pin_differ(tmp_path, tmp_path_factory):
+    """A per-PIN salt, so one cracked file says nothing about the next."""
+    other = tmp_path_factory.mktemp("other")
+    set_pin(tmp_path, "2468")
+    set_pin(other, "2468")
+
+    first = json.loads((tmp_path / PIN_FILENAME).read_text())
+    second = json.loads((other / PIN_FILENAME).read_text())
+    assert first["salt"] != second["salt"]
+    assert first["hash"] != second["hash"]
+
+
+def test_the_file_is_not_readable_by_others(tmp_path):
+    set_pin(tmp_path, "2468")
+
+    mode = (tmp_path / PIN_FILENAME).stat().st_mode
+    assert not mode & stat.S_IRGRP
+    assert not mode & stat.S_IROTH
+
+
+def test_setting_again_replaces_the_previous_pin(tmp_path):
+    set_pin(tmp_path, "2468")
+    set_pin(tmp_path, "1357")
+
+    assert verify_pin(tmp_path, "1357") is True
+    assert verify_pin(tmp_path, "2468") is False
+
+
+def test_absent_pin_verifies_nothing(tmp_path):
+    assert is_pin_set(tmp_path) is False
+    assert verify_pin(tmp_path, "2468") is False
+    assert verify_pin(tmp_path, "") is False
+    assert pin_status(tmp_path) == {"set": False}
+
+
+def test_clear_removes_the_pin(tmp_path):
+    set_pin(tmp_path, "2468")
+
+    assert clear_pin(tmp_path) is True
+    assert is_pin_set(tmp_path) is False
+    assert verify_pin(tmp_path, "2468") is False
+    assert clear_pin(tmp_path) is False
+
+
+def test_status_reports_existence_and_age_only(tmp_path):
+    set_pin(tmp_path, "2468")
+
+    status = pin_status(tmp_path)
+    assert status["set"] is True
+    assert status["updated_at"]
+    assert "hash" not in status and "salt" not in status
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        "not-an-object",
+        {"algorithm": "pbkdf2_sha256", "iterations": 1000, "salt": "AAAA"},
+        {"algorithm": "md5", "iterations": 1000, "salt": "AAAA", "hash": "AAAA"},
+        {
+            "algorithm": "pbkdf2_sha256",
+            "iterations": 0,
+            "salt": "AAAA",
+            "hash": "AAAA",
+        },
+        {
+            "algorithm": "pbkdf2_sha256",
+            "iterations": "many",
+            "salt": "AAAA",
+            "hash": "AAAA",
+        },
+        {"algorithm": "pbkdf2_sha256", "iterations": 1000, "salt": "!", "hash": "!"},
+    ],
+    ids=[
+        "not-object",
+        "no-hash",
+        "wrong-algorithm",
+        "no-work",
+        "bad-iterations",
+        "bad-base64",
+    ],
+)
+def test_a_broken_record_verifies_nothing(tmp_path, record):
+    """A file that cannot be understood must not read as a PIN that matched."""
+    (tmp_path / PIN_FILENAME).write_text(json.dumps(record))
+
+    assert verify_pin(tmp_path, "2468") is False
+
+
+def test_unparseable_file_verifies_nothing(tmp_path):
+    (tmp_path / PIN_FILENAME).write_text("{ not json")
+
+    assert verify_pin(tmp_path, "2468") is False
+    assert is_pin_set(tmp_path) is False
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    ["", "1", "x" * (MIN_PIN_LENGTH - 1), "x" * (MAX_PIN_LENGTH + 1), 1234, None],
+)
+def test_validate_rejects_unusable_pins(candidate):
+    with pytest.raises(ValueError):
+        validate_pin(candidate)
+
+
+def test_validate_accepts_the_boundaries():
+    assert validate_pin("x" * MIN_PIN_LENGTH)
+    assert validate_pin("x" * MAX_PIN_LENGTH)
+
+
+def test_set_refuses_a_too_short_pin(tmp_path):
+    with pytest.raises(ValueError):
+        set_pin(tmp_path, "12")
+
+    assert is_pin_set(tmp_path) is False

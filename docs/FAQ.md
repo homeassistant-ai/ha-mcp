@@ -990,12 +990,58 @@ a standalone install running on a non-admin long-lived token gets a 403 that
 goes to the server log and nowhere else. The embedded component provisions
 its own admin token, so it is not affected.
 
-Approving happens in the Tool Security Policies tab — the event is a
-notification, not a decision channel. Deciding from an automation would mean
-accepting a reply from the same event bus an AI agent can write to (it can
-author automations unless the policy gates that too), so the tab stays the
-way to answer. (With developer mode on, `ha_dev_manage_server` can also
-decide a pending request; that is a testing tool and it says so.)
+Approving happens in the Tool Security Policies tab by default. Answering
+from an automation is possible too, behind a switch and a PIN — see the next
+question. (With developer mode on, `ha_dev_manage_server` can also decide a
+pending request; that is a testing tool and it says so.)
+
+### Approving or denying from a notification instead of the settings tab
+
+Off by default. On the **Tool Security Policies** tab, set an approval PIN
+and switch on *Allow approve/deny from Home Assistant events*. A pending
+request is then decided by firing `ha_mcp_approval_response` with the token
+from the request event, a decision and the PIN:
+
+```yaml
+script:
+  approve_ha_mcp_request:
+    fields:
+      token:
+        description: The token from the ha_mcp_approval_requested event
+    sequence:
+      - event: ha_mcp_approval_response
+        event_data:
+          token: "{{ token }}"
+          decision: approve        # or: deny
+          pin: !secret ha_mcp_approval_pin
+```
+
+Call that script from whatever answers for you — a notification action, a
+dashboard button, Developer Tools — passing the token the request event
+carried. Keep the PIN in `secrets.yaml` rather than inline. The server does
+not care how the event was fired, which is exactly the limitation below.
+
+**What the PIN does and does not protect.** Home Assistant cannot tell an
+event fired by your automation from one fired by an AI agent: the agent can
+author an automation of its own, and an automation-fired event carries
+neither a distinguishing origin nor a user. The PIN is therefore the only
+thing separating them, and an agent with enough access can obtain it — by
+asking you, or by writing an automation that reads it out of a response
+event you fire. Switching this on accepts that; leaving it off means an
+agent cannot approve its own requests at all. The PIN is stored as a salted
+hash, can only be set by a person in the settings UI, and five wrong PINs
+within five minutes close the channel for the rest of that window — the
+settings tab keeps working throughout. It is kept out of the policy
+document on purpose, so no surface that reads or writes policy — the
+settings UI, `ha_manage_security_policy`, a version-conflict error body —
+carries it. The file itself is mode 0600 and holds only the digest; on an
+embedded install it lives under the `.ha_mcp` folder of your configuration
+directory, so do not add that folder to the component's custom read
+directories.
+
+Removing the PIN switches the feature off with it. Events that arrive while
+it is off, or without a matching PIN, are refused and logged at WARNING;
+the request stays pending and decidable in the tab.
 
 ---
 

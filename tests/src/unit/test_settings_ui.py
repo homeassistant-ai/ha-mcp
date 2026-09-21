@@ -5077,3 +5077,37 @@ class TestBpsSkillGuideDependency:
         assert resp.status_code == 409
         assert "ha_get_skill_guide" in str(json.loads(resp.body))
         self._teardown()
+
+
+class TestSidecarPolicyPinGuard:
+    """The sidecar writes the same policy file, so it owes the same guard.
+
+    Its handler set is a separate implementation of config GET/PUT (the
+    live one needs an approval queue this process does not have), which is
+    exactly where a guard goes missing unnoticed: the switch would be
+    written here and refused by the listener over there.
+    """
+
+    @pytest.mark.anyio
+    async def test_sidecar_refuses_event_decisions_without_a_pin(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        try:
+            from ha_mcp.settings_ui import build_settings_handlers
+
+            handlers = build_settings_handlers(None, is_sidecar=True)
+            request = MagicMock()
+            request.json = AsyncMock(
+                return_value={"rules": [], "event_decisions_enabled": True}
+            )
+
+            response = await handlers["policy_put_config"](request)
+
+            assert response.status_code == 400
+            assert json.loads(response.body)["pin_required"] is True
+        finally:
+            get_data_dir.cache_clear()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -54,17 +54,25 @@ class PolicyMiddleware(Middleware):
         queue: ApprovalQueue,
         wait_seconds: int | None = None,
         get_client: Callable[[], HomeAssistantClient] | None = None,
+        ensure_decisions_listener: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """Gate tool calls against ``policy_provider``'s policy.
 
         ``get_client`` supplies the Home Assistant REST client used to
         announce a pending approval on the event bus. Without it the gate
         still works, it just stays invisible outside the settings UI.
+
+        ``ensure_decisions_listener`` opens the return channel that lets a
+        response event decide the request being announced. It runs before
+        the announcement so a listener cannot answer an event that arrived
+        while nothing was subscribed, and it is a no-op unless the user
+        switched deciding-from-events on.
         """
         self._policy_provider = policy_provider
         self._queue = queue
         self._wait_override = wait_seconds
         self._get_client = get_client
+        self._ensure_decisions_listener = ensure_decisions_listener
 
     async def on_call_tool(
         self, context: MiddlewareContext, call_next: CallNext
@@ -298,7 +306,27 @@ class PolicyMiddleware(Middleware):
             return
         if not pending.mark_notified():
             return
+        await self._ensure_decision_channel()
         await emit_approval_requested(client, pending, rule, single_use=dynamic_targets)
+
+    async def _ensure_decision_channel(self) -> None:
+        """Open the response channel, if the user turned it on.
+
+        Best effort, and deliberately not fatal to the announcement: a
+        request the user can see but not answer from their phone is still
+        a request they can answer in the settings UI.
+        """
+        if self._ensure_decisions_listener is None:
+            return
+        try:
+            await self._ensure_decisions_listener()
+        except Exception:
+            logger.warning(
+                "policy middleware: could not open the approval-response "
+                "channel; the pending request is still queued and visible "
+                "in the settings UI",
+                exc_info=True,
+            )
 
     def _resolve_already_decided(
         self,

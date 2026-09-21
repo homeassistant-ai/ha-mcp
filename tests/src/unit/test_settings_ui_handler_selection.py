@@ -14,6 +14,7 @@ This is a contract test for the branch at
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -133,3 +134,31 @@ async def test_handler_selection(
         live_expected_status if expected_stub_status is None else expected_stub_status
     )
     assert response.status_code == expected
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("setup_name", ["sidecar", "no_server", "no_queue", "live"])
+async def test_the_decision_pin_route_answers_in_every_mode(
+    setup_name: str, tmp_path, monkeypatch
+):
+    """The PIN is a file in the data dir, not an entry in the queue.
+
+    So it is the one policy route the stub set serves for real. It has to
+    be: the config PUT beside it refuses to switch event-bus decisions on
+    while no PIN is stored, and a sidecar that 503'd this route would make
+    that switch permanently unreachable there.
+    """
+    monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+
+    server: object | None = None if setup_name == "no_server" else MagicMock()
+    if setup_name == "no_queue":
+        server.approval_queue = None  # type: ignore[union-attr]
+    elif setup_name in ("sidecar", "live"):
+        server.approval_queue = ApprovalQueue()  # type: ignore[union-attr]
+
+    handlers = build_settings_handlers(server, is_sidecar=setup_name == "sidecar")
+
+    response = await handlers["policy_get_decision_pin"](_fake_get_request())
+
+    assert response.status_code == 200
+    assert json.loads(response.body) == {"set": False}

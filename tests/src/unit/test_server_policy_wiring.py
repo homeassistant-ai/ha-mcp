@@ -162,3 +162,22 @@ def test_raising_migration_does_not_block_startup():
 
     assert getattr(stub, "approval_queue", None) is None
     assert stub.mcp.add_middleware.call_count == 0
+
+
+def test_policy_middleware_can_open_the_decision_channel():
+    """The response listener is wired in, and shares the server's queue.
+
+    Same class of failure as the client factory above: every listener test
+    builds its own, so dropping this wiring leaves them green while no
+    event on the bus can ever decide a request.
+    """
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    stub = _make_server_stub(enable_policies=True)
+    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
+
+    args, _kwargs = stub.mcp.add_middleware.call_args
+    listener = stub.approval_response_listener
+    assert listener is not None
+    assert listener._queue is stub.approval_queue
+    assert args[0]._ensure_decisions_listener == listener.ensure_subscribed

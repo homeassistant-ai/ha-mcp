@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
@@ -18,6 +19,21 @@ def make_app(tmp_path: Path, queue: ApprovalQueue) -> TestClient:
             Route("/api/policy/pending", h["policy_get_pending"], methods=["GET"]),
             Route("/api/policy/approve", h["policy_post_approve"], methods=["POST"]),
             Route("/api/policy/deny", h["policy_post_deny"], methods=["POST"]),
+            Route(
+                "/api/policy/decision-pin",
+                h["policy_get_decision_pin"],
+                methods=["GET"],
+            ),
+            Route(
+                "/api/policy/decision-pin",
+                h["policy_post_decision_pin"],
+                methods=["POST"],
+            ),
+            Route(
+                "/api/policy/decision-pin",
+                h["policy_delete_decision_pin"],
+                methods=["DELETE"],
+            ),
         ]
     )
     return TestClient(app)
@@ -240,3 +256,79 @@ def test_get_pending_returns_full_shape(tmp_path):
     # ISO 8601 with timezone
     assert "T" in payload["created_at"]
     assert "T" in payload["expires_at"]
+
+
+@pytest.fixture
+def fast_hashing(monkeypatch: pytest.MonkeyPatch):
+    """The work factor is a cost, not a behaviour these tests assert on."""
+    monkeypatch.setattr("ha_mcp.policy.decision_pin.HASH_ITERATIONS", 1000)
+
+
+def test_pin_status_starts_unset(tmp_path):
+    c = make_app(tmp_path, ApprovalQueue())
+    assert c.get("/api/policy/decision-pin").json() == {"set": False}
+
+
+def test_setting_a_pin_reports_it_set_without_echoing_it(tmp_path, fast_hashing):
+    c = make_app(tmp_path, ApprovalQueue())
+
+    r = c.post("/api/policy/decision-pin", json={"pin": "2468"})
+
+    assert r.status_code == 200
+    assert r.json()["set"] is True
+    assert "2468" not in r.text
+    assert "2468" not in c.get("/api/policy/decision-pin").text
+
+
+def test_a_too_short_pin_is_rejected(tmp_path, fast_hashing):
+    c = make_app(tmp_path, ApprovalQueue())
+
+    r = c.post("/api/policy/decision-pin", json={"pin": "12"})
+
+    assert r.status_code == 400
+    assert c.get("/api/policy/decision-pin").json()["set"] is False
+
+
+def test_event_decisions_cannot_be_enabled_without_a_pin(tmp_path):
+    """The listener refuses every event without one, so the switch would lie."""
+    c = make_app(tmp_path, ApprovalQueue())
+    body = Policy(rules=[], event_decisions_enabled=True).model_dump(mode="json")
+
+    r = c.put("/api/policy/config", json=body)
+
+    assert r.status_code == 400
+    assert r.json()["pin_required"] is True
+    assert c.get("/api/policy/config").json()["event_decisions_enabled"] is False
+
+
+def test_event_decisions_can_be_enabled_once_a_pin_exists(tmp_path, fast_hashing):
+    c = make_app(tmp_path, ApprovalQueue())
+    c.post("/api/policy/decision-pin", json={"pin": "2468"})
+    body = Policy(rules=[], event_decisions_enabled=True).model_dump(mode="json")
+
+    assert c.put("/api/policy/config", json=body).status_code == 200
+    assert c.get("/api/policy/config").json()["event_decisions_enabled"] is True
+
+
+def test_removing_the_pin_switches_event_decisions_off(tmp_path, fast_hashing):
+    """Otherwise the tab keeps advertising a channel that now refuses everything."""
+    c = make_app(tmp_path, ApprovalQueue())
+    c.post("/api/policy/decision-pin", json={"pin": "2468"})
+    c.put(
+        "/api/policy/config",
+        json=Policy(rules=[], event_decisions_enabled=True).model_dump(mode="json"),
+    )
+
+    r = c.delete("/api/policy/decision-pin")
+
+    assert r.json() == {"set": False, "event_decisions_disabled": True}
+    assert c.get("/api/policy/config").json()["event_decisions_enabled"] is False
+    assert c.get("/api/policy/decision-pin").json() == {"set": False}
+
+
+def test_removing_a_pin_that_was_never_set_is_harmless(tmp_path):
+    c = make_app(tmp_path, ApprovalQueue())
+
+    r = c.delete("/api/policy/decision-pin")
+
+    assert r.json() == {"set": False, "event_decisions_disabled": False}

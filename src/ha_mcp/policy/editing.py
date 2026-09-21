@@ -201,6 +201,7 @@ def _commit_policy(
     ``asyncio.to_thread`` from :func:`set_policy`).
     """
     from ..utils.data_paths import get_data_dir
+    from .decision_pin import is_pin_set
     from .persistence import load_policy, save_policy
 
     data_dir = get_data_dir()
@@ -212,6 +213,19 @@ def _commit_policy(
                 ErrorCode.CONFIG_INVALID,
                 f"existing tool_policy.json is invalid: {exc}",
                 suggestions=["Inspect or delete the file, then retry"],
+            )
+        )
+    if new_policy.event_decisions_enabled and not is_pin_set(data_dir):
+        # The PIN is deliberately unreachable from every MCP tool — it is
+        # the one thing in this feature that must come from the person, not
+        # from the agent. Enabling the toggle without it would produce a
+        # policy the listener refuses to act on anyway.
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "event_decisions_enabled is true but no approval PIN is "
+                "stored. The PIN can only be set by a person, on the Tool "
+                "Security Policies tab of the settings UI.",
             )
         )
     if expected is not None and expected != current.version:

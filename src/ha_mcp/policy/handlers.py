@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse
 
 from ..utils.config_write_lock import config_write_guard
 from .approval_queue import ApprovalQueue
+from .decision_pin import clear_pin, is_pin_set, pin_status, set_pin, validate_pin
 from .model import Policy
 from .persistence import load_policy, save_policy
 from .value_sources import (
@@ -91,6 +92,20 @@ async def _put_config(
     # (set_policy / set_tool) AND against other processes (the stdio
     # sidecar runs this same handler in its own process) so a concurrent
     # writer can't slip between the read and the write and lose an update.
+    if new_policy.event_decisions_enabled and not is_pin_set(data_dir):
+        # Enabling without a PIN would advertise a channel that decides
+        # nothing (the listener refuses every event without one), so the
+        # tab would show a switch the server does not honour.
+        return JSONResponse(
+            {
+                "error": (
+                    "set an approval PIN before allowing approve/deny over "
+                    "the Home Assistant event bus"
+                ),
+                "pin_required": True,
+            },
+            status_code=400,
+        )
     async with config_write_guard():
         current = load_policy(data_dir)
         if new_policy.version != current.version:
@@ -179,6 +194,53 @@ async def _post_deny(queue: ApprovalQueue, request: Request) -> JSONResponse:
     return JSONResponse({"denied": True})
 
 
+async def _get_decision_pin(data_dir: Path) -> JSONResponse:
+    """Whether a PIN exists, and when it was last set. Never the PIN itself."""
+    return JSONResponse(pin_status(data_dir))
+
+
+async def _post_decision_pin(data_dir: Path, request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except (ValueError, TypeError):
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    try:
+        pin = validate_pin(body.get("pin"))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    async with config_write_guard():
+        set_pin(data_dir, pin)
+    logger.info("approval PIN set (event-bus decisions)")
+    return JSONResponse(pin_status(data_dir))
+
+
+async def _delete_decision_pin(data_dir: Path) -> JSONResponse:
+    """Remove the PIN, and with it the switch that depends on it.
+
+    Leaving ``event_decisions_enabled`` on while the PIN is gone would
+    leave the tab claiming a channel that now refuses every event, so the
+    two are cleared together rather than drifting apart.
+    """
+    async with config_write_guard():
+        existed = clear_pin(data_dir)
+        policy = load_policy(data_dir)
+        disabled = policy.event_decisions_enabled
+        if disabled:
+            save_policy(
+                data_dir, policy.model_copy(update={"event_decisions_enabled": False})
+            )
+    if existed:
+        logger.info(
+            "approval PIN removed%s",
+            "; deciding from the event bus was switched off with it"
+            if disabled
+            else "",
+        )
+    return JSONResponse({"set": False, "event_decisions_disabled": disabled})
+
+
 async def _get_tool_schema(server: Any | None, request: Request) -> JSONResponse:
     """Return the predicate-builder hints for one tool.
 
@@ -254,6 +316,33 @@ async def _get_value_source(server: Any | None, request: Request) -> JSONRespons
     return JSONResponse({"source": source, "values": values})
 
 
+def build_decision_pin_handlers(
+    *, data_dir: Path
+) -> dict[str, Callable[[Request], Any]]:
+    """The PIN endpoints, which need no approval queue.
+
+    Split out because the sidecar's stub handler set serves these for real
+    while 503-ing everything that touches the in-memory queue: the PIN is a
+    file in the data dir, and the config PUT next to it refuses to enable
+    event-bus decisions without one.
+    """
+
+    async def get_decision_pin(_: Request) -> JSONResponse:
+        return await _get_decision_pin(data_dir)
+
+    async def post_decision_pin(request: Request) -> JSONResponse:
+        return await _post_decision_pin(data_dir, request)
+
+    async def delete_decision_pin(_: Request) -> JSONResponse:
+        return await _delete_decision_pin(data_dir)
+
+    return {
+        "policy_get_decision_pin": get_decision_pin,
+        "policy_post_decision_pin": post_decision_pin,
+        "policy_delete_decision_pin": delete_decision_pin,
+    }
+
+
 def build_policy_handlers(
     *,
     data_dir: Path,
@@ -290,4 +379,5 @@ def build_policy_handlers(
         "policy_post_deny": post_deny,
         "policy_get_tool_schema": get_tool_schema,
         "policy_get_value_source": get_value_source,
+        **build_decision_pin_handlers(data_dir=data_dir),
     }

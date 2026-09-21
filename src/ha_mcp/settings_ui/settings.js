@@ -2865,7 +2865,89 @@ async function policyLoadConfig() {
   const p = await resp.json();
   document.getElementById('policy-wait-seconds').value = p.wait_seconds ?? 60;
   document.getElementById('policy-ttl-minutes').value = p.approval_ttl_minutes ?? 5;
+  document.getElementById('policy-event-decisions-toggle').checked = !!p.event_decisions_enabled;
+  // Whether the switch above may be used at all depends on the PIN, which
+  // lives outside the policy document — so it is a second fetch, not a
+  // field of the one just read.
+  policyRefreshPinStatus();
   renderPolicyCards(p);
+}
+
+// The PIN itself never reaches the page: this endpoint reports only that
+// one exists, so a reload cannot put it back in front of anyone.
+async function policyRefreshPinStatus() {
+  const statusEl = document.getElementById('policy-pin-status');
+  const toggle = document.getElementById('policy-event-decisions-toggle');
+  if (!statusEl || !toggle) return;
+  let status;
+  try {
+    const r = await fetch('./api/policy/decision-pin');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    status = await r.json();
+  } catch (e) {
+    // Say the state is unknown rather than implying "no PIN" — the switch
+    // stays as the server last reported it, and the save below is what the
+    // server validates anyway.
+    statusEl.textContent = t('policies.global.pin.unknown', {}, 'Could not read whether a PIN is set.');
+    return;
+  }
+  statusEl.textContent = status.set
+    ? t('policies.global.pin.is_set', {}, 'A PIN is set.')
+    : t('policies.global.pin.not_set', {}, 'No PIN set. Set one to allow decisions over the event bus.');
+  // Without a PIN the server refuses the combination, so don't offer it.
+  toggle.disabled = !status.set;
+}
+
+async function policySetPin() {
+  const input = document.getElementById('policy-decision-pin');
+  const label = t('policies.operations.set_pin', {}, 'Set PIN');
+  try {
+    const r = await fetch('./api/policy/decision-pin', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({pin: input.value}),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.error || ('HTTP ' + r.status));
+    input.value = '';
+    showToast(t('policies.global.pin.saved', {}, 'PIN saved.'));
+  } catch (e) {
+    showToast(
+      t('common.operation_failed', {operation: label, detail: e.message}, label + ' failed: ' + e.message),
+      {isError: true}
+    );
+  }
+  await policyRefreshPinStatus();
+}
+
+async function policyClearPin() {
+  if (!confirm(t(
+    'policies.global.pin.confirm_clear',
+    {},
+    'Remove the approval PIN? Deciding over the event bus switches off with it; the pending list in this tab is unaffected.'
+  ))) return;
+  const label = t('policies.operations.clear_pin', {}, 'Remove PIN');
+  try {
+    const r = await fetch('./api/policy/decision-pin', {method: 'DELETE'});
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.error || ('HTTP ' + r.status));
+    if (body.event_decisions_disabled) {
+      document.getElementById('policy-event-decisions-toggle').checked = false;
+      showToast(t(
+        'policies.global.pin.cleared_and_disabled',
+        {},
+        'PIN removed, and deciding over the event bus switched off with it.'
+      ));
+    } else {
+      showToast(t('policies.global.pin.cleared', {}, 'PIN removed.'));
+    }
+  } catch (e) {
+    showToast(
+      t('common.operation_failed', {operation: label, detail: e.message}, label + ' failed: ' + e.message),
+      {isError: true}
+    );
+  }
+  await policyRefreshPinStatus();
 }
 
 function showPolicyLoadError(msg) {
@@ -3579,6 +3661,7 @@ async function saveGlobalSettings() {
   const policy = await resp.json();
   policy.wait_seconds = parseInt(document.getElementById('policy-wait-seconds').value, 10);
   policy.approval_ttl_minutes = parseInt(document.getElementById('policy-ttl-minutes').value, 10);
+  policy.event_decisions_enabled = document.getElementById('policy-event-decisions-toggle').checked;
   try {
     await policyPut(policy, t('policies.operations.save_global', {}, 'Save global settings'));
     statusEl.textContent = t('status.saved', {}, 'Saved.');
@@ -3793,6 +3876,8 @@ async function handleFailedFlagSave(checkbox, previous, saved, spec) {
 }
 
 document.getElementById('policy-save-global-btn').addEventListener('click', saveGlobalSettings);
+document.getElementById('policy-set-pin-btn').addEventListener('click', policySetPin);
+document.getElementById('policy-clear-pin-btn').addEventListener('click', policyClearPin);
 
 // Master toggle on this tab mirrors the Server Settings checkbox.
 // Persist via the same /api/settings/features endpoint so a save here

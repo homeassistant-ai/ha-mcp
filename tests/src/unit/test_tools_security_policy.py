@@ -195,6 +195,48 @@ class TestManagePolicy:
         assert not queue.is_remembered("ha_call_service", "argshash")
 
 
+class TestEventDecisionsNeedAPersonsPin:
+    """Switching on event-bus decisions is not something a tool may do alone.
+
+    The PIN is the one part of this feature no MCP surface can write, so an
+    agent holding this tool can still not hand itself a decision channel.
+    """
+
+    @pytest.fixture
+    def policy_tools(self):
+        return SecurityPolicyTools(MagicMock(), None)
+
+    async def test_set_enabling_without_a_pin_is_rejected(self, policy_tools):
+        with pytest.raises(ToolError, match="approval PIN"):
+            await policy_tools.ha_manage_security_policy(
+                action="set",
+                policy={"rules": [], "event_decisions_enabled": True},
+            )
+        got = await policy_tools.ha_manage_security_policy(action="get")
+        assert got["data"]["policy"]["event_decisions_enabled"] is False
+
+    async def test_set_enabling_with_a_pin_is_allowed(self, policy_tools):
+        from ha_mcp.policy.decision_pin import set_pin
+
+        set_pin(get_data_dir(), "2468")
+
+        await policy_tools.ha_manage_security_policy(
+            action="set",
+            policy={"rules": [], "event_decisions_enabled": True},
+        )
+        got = await policy_tools.ha_manage_security_policy(action="get")
+        assert got["data"]["policy"]["event_decisions_enabled"] is True
+
+    async def test_get_never_carries_the_pin(self, policy_tools):
+        from ha_mcp.policy.decision_pin import set_pin
+
+        set_pin(get_data_dir(), "2468")
+
+        result = await policy_tools.ha_manage_security_policy(action="get")
+        assert "2468" not in json.dumps(result)
+        assert not [k for k in result["data"]["policy"] if "pin" in k.lower()]
+
+
 class TestMissingRulesGuard:
     """A payload without ``rules`` used to validate (the model defaults it
     to []) and silently delete every approval gate."""

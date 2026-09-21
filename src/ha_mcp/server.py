@@ -1332,6 +1332,7 @@ class HomeAssistantSmartMCPServer:
 
         try:
             from .policy.approval_queue import ApprovalQueue
+            from .policy.decisions import ApprovalResponseListener
             from .policy.middleware import PolicyMiddleware
             from .policy.model import Policy
             from .policy.persistence import load_policy
@@ -1354,12 +1355,33 @@ class HomeAssistantSmartMCPServer:
             # roundtrip of a gated tool call.
             return load_policy(data_dir)
 
+        async def _approval_ws_client() -> Any:
+            # Imported at call time, like the rest of this block: the
+            # WebSocket stack is only needed once a gated call is actually
+            # announced, which may never happen.
+            from .client.websocket_client import get_websocket_client
+
+            return await get_websocket_client()
+
+        # Reads the same policy file as the middleware, so the toggle that
+        # opens this channel is the one the user flips in the settings UI,
+        # with no restart in between.
+        self.approval_response_listener = ApprovalResponseListener(
+            policy_provider=_policy_provider,
+            queue=self.approval_queue,
+            data_dir=data_dir,
+            get_ws_client=_approval_ws_client,
+        )
+
         try:
             self.mcp.add_middleware(
                 PolicyMiddleware(
                     policy_provider=_policy_provider,
                     queue=self.approval_queue,
                     get_client=lambda: self.client,
+                    ensure_decisions_listener=(
+                        self.approval_response_listener.ensure_subscribed
+                    ),
                 )
             )
             logger.info(

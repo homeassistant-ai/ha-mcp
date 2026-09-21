@@ -82,6 +82,8 @@ _TOP_LEVEL_ELEMENT_IDS = [
     # ha_manage_security_policy; same save-then-verify flow as the master.
     "policy-manage-tool-toggle",
     "policy-save-global-btn",
+    "policy-set-pin-btn",
+    "policy-clear-pin-btn",
     # Read Only Mode toggle (#1569) — Tools tab, above the search box.
     # Same save-then-verify flow as the policy master toggle.
     "read-only-mode-toggle",
@@ -162,8 +164,12 @@ def _min_dom_row_tail(el_id: str) -> str | None:
         "read-only-mode-toggle",
     ):
         return f'<input id="{el_id}" type="checkbox" />'
-    if el_id == "policy-save-global-btn":
-        return '<button id="policy-save-global-btn"></button>'
+    if el_id in (
+        "policy-save-global-btn",
+        "policy-set-pin-btn",
+        "policy-clear-pin-btn",
+    ):
+        return f'<button id="{el_id}"></button>'
     return f'<div id="{el_id}"></div>'
 
 
@@ -234,6 +240,12 @@ DEFAULT_FETCHES: dict[str, dict] = {
     "/api/settings/backup-config": {
         "status": 200,
         "json": {},
+    },
+    # policyLoadConfig asks whether an approval PIN exists on every load; the
+    # PIN lives outside the policy document, so it is its own endpoint.
+    "/api/policy/decision-pin": {
+        "status": 200,
+        "json": {"set": False},
     },
 }
 
@@ -1258,6 +1270,9 @@ def _policy_panel_dom() -> str:
       <div id="policy-rules-list"></div>
       <input id="policy-wait-seconds" />
       <input id="policy-ttl-minutes" />
+      <input id="policy-event-decisions-toggle" type="checkbox" />
+      <input id="policy-decision-pin" type="password" />
+      <div class="feature-locked-note" id="policy-pin-status"></div>
       <div class="pin-notice" id="policyUnknownNotice"></div>
       <div class="feature-locked-note" id="policy-master-locked"></div>
       <div class="feature-locked-note" id="policy-manage-tool-locked"></div>
