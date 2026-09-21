@@ -1260,6 +1260,9 @@ async def test_each_replacement_row_in_a_burst_is_announced(
                 make_context("ha_call_service", dict(args)), call_next
             )
         except ToolError:
+            # Expected on the caller that loses the claim: it raises
+            # "approval pending" rather than dispatching. This test asserts
+            # on what was announced, not on either call's own outcome.
             pass
 
     async def approve_the_shared_row():
