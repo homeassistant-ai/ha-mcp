@@ -92,22 +92,28 @@ async def _put_config(
     # (set_policy / set_tool) AND against other processes (the stdio
     # sidecar runs this same handler in its own process) so a concurrent
     # writer can't slip between the read and the write and lose an update.
-    if new_policy.event_decisions_enabled and not is_pin_set(data_dir):
-        # Enabling without a PIN would advertise a channel that decides
-        # nothing (the listener refuses every event without one), so the
-        # tab would show a switch the server does not honour.
-        return JSONResponse(
-            {
-                "error": (
-                    "set an approval PIN before allowing approve/deny over "
-                    "the Home Assistant event bus"
-                ),
-                "pin_required": True,
-            },
-            status_code=400,
-        )
     async with config_write_guard():
         current = load_policy(data_dir)
+        # Inside the guard: DELETE /api/policy/decision-pin clears the PIN
+        # under this same lock, and when the stored policy already has the
+        # switch off it does so without bumping the version. Checked before
+        # the lock, that delete could land in between and this write would
+        # then persist the switch with no PIN behind it -- the version check
+        # would not notice, because nothing about the policy changed.
+        if new_policy.event_decisions_enabled and not is_pin_set(data_dir):
+            # Enabling without a PIN would advertise a channel that decides
+            # nothing (the listener refuses every event without one), so the
+            # tab would show a switch the server does not honour.
+            return JSONResponse(
+                {
+                    "error": (
+                        "set an approval PIN before allowing approve/deny over "
+                        "the Home Assistant event bus"
+                    ),
+                    "pin_required": True,
+                },
+                status_code=400,
+            )
         if new_policy.version != current.version:
             return JSONResponse(
                 {

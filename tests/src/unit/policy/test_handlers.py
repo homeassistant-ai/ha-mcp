@@ -332,3 +332,39 @@ def test_removing_a_pin_that_was_never_set_is_harmless(tmp_path):
     r = c.delete("/api/policy/decision-pin")
 
     assert r.json() == {"set": False, "event_decisions_disabled": False}
+
+
+def test_a_pin_deleted_mid_write_still_blocks_the_switch(
+    tmp_path, fast_hashing, monkeypatch
+):
+    """The check has to read the PIN under the same lock the delete takes.
+
+    Clearing the PIN while the stored policy already has the switch off
+    writes nothing and bumps no version, so the optimistic-concurrency check
+    cannot see it. A PIN check taken before the lock is therefore stale by
+    the time the write lands, and the switch would persist with nothing
+    behind it. Simulated by deleting the PIN from inside the load that runs
+    under the lock.
+    """
+    from ha_mcp.policy import handlers
+    from ha_mcp.policy.decision_pin import PIN_FILENAME
+
+    c = make_app(tmp_path, ApprovalQueue())
+    c.post("/api/policy/decision-pin", json={"pin": "2468"})
+    real_load = handlers.load_policy
+
+    def load_and_lose_the_pin(data_dir):
+        (data_dir / PIN_FILENAME).unlink(missing_ok=True)
+        return real_load(data_dir)
+
+    monkeypatch.setattr(handlers, "load_policy", load_and_lose_the_pin)
+
+    r = c.put(
+        "/api/policy/config",
+        json=Policy(rules=[], event_decisions_enabled=True).model_dump(mode="json"),
+    )
+
+    assert r.status_code == 400
+    assert r.json()["pin_required"] is True
+    monkeypatch.undo()
+    assert c.get("/api/policy/config").json()["event_decisions_enabled"] is False

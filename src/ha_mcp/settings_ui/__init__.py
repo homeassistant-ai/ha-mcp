@@ -235,20 +235,6 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
             new_policy = Policy.model_validate(await request.json())
         except (ValidationError, ValueError) as e:
             return JSONResponse({"error": str(e)}, status_code=400)
-        # Mirror the main-server PIN guard. The switch it protects is read by
-        # the server process, not this one, so a sidecar that let it through
-        # would write a policy the listener refuses to act on.
-        if new_policy.event_decisions_enabled and not is_pin_set(data_dir):
-            return JSONResponse(
-                {
-                    "error": (
-                        "set an approval PIN before allowing approve/deny over "
-                        "the Home Assistant event bus"
-                    ),
-                    "pin_required": True,
-                },
-                status_code=400,
-            )
         # Mirror main-server optimistic concurrency: reject if on-disk
         # version moved between this caller's GET and PUT. The guard is
         # what makes that check a real compare-and-swap: this handler runs
@@ -259,6 +245,22 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
 
         async with config_write_guard():
             current = load_policy(data_dir)
+            # Mirror the main-server PIN guard, and for the same reason it
+            # sits inside the lock there: the PIN delete runs under this
+            # lock and leaves the policy version untouched when the switch
+            # was already off, so a check taken before the lock can be stale
+            # by the time this write lands.
+            if new_policy.event_decisions_enabled and not is_pin_set(data_dir):
+                return JSONResponse(
+                    {
+                        "error": (
+                            "set an approval PIN before allowing approve/deny "
+                            "over the Home Assistant event bus"
+                        ),
+                        "pin_required": True,
+                    },
+                    status_code=400,
+                )
             if new_policy.version != current.version:
                 return JSONResponse(
                     {
