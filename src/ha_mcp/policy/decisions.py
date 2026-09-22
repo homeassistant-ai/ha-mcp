@@ -326,21 +326,23 @@ class ApprovalResponseListener:
         # check above would read as a live subscription. Both are set again
         # only once the round trip has actually returned an id.
         #
-        # What cannot be cleaned up is the other side: Home Assistant
-        # identifies a subscription by the id of the command that opened it,
-        # and a cancelled ``subscribe_events`` never returns that id, so an
-        # abandoned attempt whose command did reach HA leaves a subscription
-        # this process can no longer name or release. The next attempt then
-        # opens a second one and the response event is delivered twice. The
-        # consequences are bounded rather than absent: the handler is stored
-        # in a set keyed on its identity, so it is registered once; a
-        # decision is one-shot, so a duplicate cannot dispatch a tool twice;
-        # what a duplicate really costs is small and errs towards closing
-        # the channel rather than opening it: one wrong PIN can be charged
-        # to the budget twice, and the second delivery of a decision that
-        # already applied logs the queue's unknown-token warning, which
-        # reads like a token probe and is not one. The connection dropping
-        # takes both subscriptions with it.
+        # The other side is released by the transport rather than here.
+        # Home Assistant identifies a subscription by the id of the command
+        # that opened it, and while a cancelled ``subscribe_events`` never
+        # returns that id to its CALLER, the id is allocated before the
+        # send and the operation still holds it: it asks Home Assistant to
+        # drop the subscription on its way out. That release is best
+        # effort -- a lost transport, a rejection, or its own deadline all
+        # end it quietly -- so a duplicate is no longer the ordinary
+        # outcome rather than impossible. What a duplicate would still
+        # cost is bounded: the handler is stored in a set keyed on its
+        # identity, so it is registered once; a decision is one-shot, so a
+        # duplicate cannot dispatch a tool twice; the worst of it is one
+        # wrong PIN charged to the budget twice, and a second delivery of
+        # a decision that already applied logging the queue's
+        # unknown-token warning, which reads like a token probe and is
+        # not one. The connection dropping takes both subscriptions with
+        # it.
         self._client = None
         self._subscription_id = None
         subscription_id = await client.subscribe_events(APPROVAL_RESPONSE_EVENT)

@@ -1125,13 +1125,15 @@ bound, and it does not change here.
 report that the tool then succeeded — that is the tool's own business and
 has its own result.
 
-And silence is **not** a refusal. A result is produced only for a response
-the server actually received, which means the feature was on and the
-channel was open. Fire a response while the feature is off, or before
-anything has subscribed, and there is no result event because there was no
-recipient. An automation that treats a missing result as a denial will be
-wrong in exactly the case where you most need to open the settings tab —
-so use the reason when one arrives, and the tab when none does.
+And silence is **not** a refusal. A result is produced only for a response the
+server actually received. Fire a response before anything has subscribed —
+which is the case while the feature has never been switched on — and there is
+no result event, because nothing was listening. A response that does arrive is
+always answered, including when the feature was switched off after the
+subscription opened: that one comes back with the reason `feature_off`. An
+automation that treats a missing result as a denial will be wrong in exactly
+the case where you most need to open the settings tab — so use the reason when
+one arrives, and the tab when none does.
 
 ---
 
