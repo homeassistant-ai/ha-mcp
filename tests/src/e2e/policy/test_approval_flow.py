@@ -20,6 +20,7 @@ Requires Docker (testcontainers); runs in CI.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -35,6 +36,7 @@ from ha_mcp.server import HomeAssistantSmartMCPServer
 from ha_mcp.utils.data_paths import get_data_dir
 
 from ..utilities.assertions import parse_mcp_result, tool_error_to_result
+from ..utilities.wait_helpers import wait_for_ha_event
 
 
 async def _expect_blocked(client: Client, args: dict[str, Any]) -> dict[str, Any]:
@@ -387,3 +389,152 @@ async def test_remember_minutes_skips_approval_within_window(policy_enabled_mcp)
     assert not result_b.is_error
     # Pending must be empty — neither call left an entry behind.
     assert server.approval_queue.list_pending() == []
+
+
+async def _install_event_decision_rule(handlers, *, wait_seconds: int = 30) -> None:
+    """Gate light service calls and open the event-bus decision channel."""
+    current_resp = await handlers["policy_get_config"](_make_request())
+    current = json.loads(current_resp.body)
+    body = {
+        "wait_seconds": wait_seconds,
+        "approval_ttl_minutes": 5,
+        "event_decisions_enabled": True,
+        "rules": [
+            {
+                "tool_name": "ha_call_service",
+                "when": [{"path": "args.domain", "op": "eq", "value": "light"}],
+                "remember_minutes": 0,
+            }
+        ],
+        "version": current["version"],
+    }
+    put_resp = await handlers["policy_put_config"](_make_request(body))
+    assert put_resp.status_code == 200, put_resp.body
+
+
+@pytest.mark.asyncio
+async def test_a_real_event_round_trip_decides_a_held_call(
+    policy_enabled_mcp, ha_container_with_fresh_config
+):
+    """The whole transport, over the real bus: announce → respond → dispatch.
+
+    Every other test of this feature stops at a seam — the HTTP handlers,
+    a mocked subscription, or the listener called directly — so none of
+    them exercises the path a user actually uses: Home Assistant carries
+    the announcement out, and carries the response back in over a
+    WebSocket subscription this server opened itself. A wrong PIN first,
+    because the interesting property is not that a response decides the
+    request but that only the right one does.
+    """
+    client, server, handlers = policy_enabled_mcp
+    base_url = ha_container_with_fresh_config["base_url"]
+    token = ha_container_with_fresh_config.get("token", TEST_TOKEN)
+
+    pin_resp = await handlers["policy_post_decision_pin"](
+        _make_request({"pin": "2468"})
+    )
+    assert pin_resp.status_code == 200, pin_resp.body
+    await _install_event_decision_rule(handlers)
+
+    args = {"domain": "light", "service": "turn_on", "entity_id": "light.bed_light"}
+    call_task: asyncio.Task | None = None
+
+    def start_the_gated_call() -> None:
+        nonlocal call_task
+        call_task = asyncio.create_task(client.call_tool("ha_call_service", args))
+
+    announcement = await wait_for_ha_event(
+        "ha_mcp_approval_requested",
+        start_the_gated_call,
+        timeout=20.0,
+        ha_url=base_url,
+        token=token,
+    )
+    assert announcement is not None, "the held call was never announced on the bus"
+    assert call_task is not None
+    approval_token = announcement["data"]["token"]
+
+    responder = HomeAssistantClient(base_url=base_url, token=token)
+    try:
+        # A wrong PIN decides nothing, and the call keeps waiting.
+        await responder.fire_event(
+            "ha_mcp_approval_response",
+            {"token": approval_token, "decision": "approve", "pin": "9999"},
+        )
+        await asyncio.sleep(2)
+        assert not call_task.done(), (
+            "a wrong PIN released the held call; the PIN is the only thing "
+            "standing between an agent-fired event and its own approval"
+        )
+        assert server.approval_queue.get(approval_token) is not None
+
+        await responder.fire_event(
+            "ha_mcp_approval_response",
+            {"token": approval_token, "decision": "approve", "pin": "2468"},
+        )
+        result = await asyncio.wait_for(call_task, timeout=20)
+    finally:
+        if not call_task.done():
+            call_task.cancel()
+        await responder.close()
+
+    assert not result.is_error, result
+    # Consumed exactly once: the entry is gone, so a replayed response
+    # event carrying the same token cannot dispatch the tool again.
+    assert server.approval_queue.get(approval_token) is None
+
+
+@pytest.mark.asyncio
+async def test_a_real_event_round_trip_denies_a_held_call(
+    policy_enabled_mcp, ha_container_with_fresh_config
+):
+    """Deny travels the same path and produces the denial error."""
+    client, server, handlers = policy_enabled_mcp
+    base_url = ha_container_with_fresh_config["base_url"]
+    token = ha_container_with_fresh_config.get("token", TEST_TOKEN)
+
+    pin_resp = await handlers["policy_post_decision_pin"](
+        _make_request({"pin": "2468"})
+    )
+    assert pin_resp.status_code == 200, pin_resp.body
+    await _install_event_decision_rule(handlers)
+
+    args = {"domain": "light", "service": "turn_off", "entity_id": "light.bed_light"}
+    call_task: asyncio.Task | None = None
+
+    def start_the_gated_call() -> None:
+        nonlocal call_task
+        call_task = asyncio.create_task(client.call_tool("ha_call_service", args))
+
+    announcement = await wait_for_ha_event(
+        "ha_mcp_approval_requested",
+        start_the_gated_call,
+        timeout=20.0,
+        ha_url=base_url,
+        token=token,
+    )
+    assert announcement is not None, "the held call was never announced on the bus"
+    assert call_task is not None
+
+    responder = HomeAssistantClient(base_url=base_url, token=token)
+    try:
+        await responder.fire_event(
+            "ha_mcp_approval_response",
+            {
+                "token": announcement["data"]["token"],
+                "decision": "deny",
+                "pin": "2468",
+            },
+        )
+        try:
+            result = await asyncio.wait_for(call_task, timeout=20)
+        except ToolError as exc:
+            body = tool_error_to_result(exc)
+        else:
+            body = parse_mcp_result(result)
+    finally:
+        if not call_task.done():
+            call_task.cancel()
+        await responder.close()
+
+    assert body.get("error", {}).get("code") == "USER_DENIED", body
