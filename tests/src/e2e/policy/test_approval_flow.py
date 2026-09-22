@@ -456,10 +456,18 @@ async def _respond_and_wait_for_result(
     token it was given -- theirs saying `unknown_token`, because only the
     server that announced the request knows it. ``expect_tool`` is the
     discriminator where one exists: a result naming the tool can only come
-    from the server holding that request. The wrong-PIN case has no tool
-    name to match on, on any server; there the reason is the same
-    (`wrong_pin`) whichever of them answers, since enabling the feature
-    requires a PIN and the guess is wrong against all of them.
+    from the server holding that request.
+
+    The wrong-PIN case has no tool name to match on, on any server, and
+    relies on something narrower than an invariant: no other server in this
+    suite is ever in a state that answers a response with anything but
+    `wrong_pin`, because this is the only file that enables the feature, it
+    always stores the same PIN, and it never switches the toggle back off.
+    None of that is guaranteed by the code -- both gates are re-read per
+    event, so a server that was subscribed while the feature was on can
+    answer `feature_off` later -- so a test that enables the channel with
+    another PIN, or disables it mid-run, has to give this step a
+    discriminator of its own.
 
     A result that named the WRONG token would be filtered out too and time
     out here rather than failing on a token assertion downstream -- the
