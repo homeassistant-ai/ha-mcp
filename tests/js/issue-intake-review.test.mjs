@@ -135,6 +135,16 @@ test("Markdown code and bold markers do not affect quote matching", () => {
     evidence: [{ source_id: "body", quote: "fires events at /auth/authorize" }],
   };
   validateResult(r, makeContext(s));
+  r.facts[0].value = "``";
+  assert.throws(
+    () => validateResult(r, makeContext(s)),
+    /facts\[0\].value/,
+  );
+  r.summary[0].evidence[0].quote = "**";
+  assert.throws(
+    () => validateResult(r, makeContext(s)),
+    /summary\[0\].evidence\[0\].*body/,
+  );
   r.summary[0].evidence[0].quote = "`ha_call_service`, which fires events";
   assert.throws(
     () => validateResult(r, makeContext(s)),
