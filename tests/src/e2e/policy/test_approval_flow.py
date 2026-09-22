@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -412,6 +413,28 @@ async def _install_event_decision_rule(handlers, *, wait_seconds: int = 30) -> N
     assert put_resp.status_code == 200, put_resp.body
 
 
+def _announced_by(
+    server: HomeAssistantSmartMCPServer,
+) -> Callable[[dict[str, Any]], bool]:
+    """Match only the announcements this server issued.
+
+    One Home Assistant serves every test in the lane, so an
+    ``ha_mcp_approval_requested`` event on its bus is not necessarily ours:
+    another test's server announces its own held call on the same bus, and
+    a response to that token is refused here as ``unknown_token`` because
+    this queue never issued it. The queue is the discriminator -- arguments
+    can coincide between tests, an issued token cannot.
+    """
+
+    def issued_here(event: dict[str, Any]) -> bool:
+        announced = (event.get("data") or {}).get("token")
+        return isinstance(announced, str) and (
+            server.approval_queue.get(announced) is not None
+        )
+
+    return issued_here
+
+
 async def _respond_and_wait_for_result(
     responder: HomeAssistantClient,
     payload: dict[str, Any],
@@ -425,6 +448,10 @@ async def _respond_and_wait_for_result(
     to observe what it made of a response is the answer it fires back --
     which is the point of that answer existing. Started before the
     response goes out, because the round trip can complete first.
+
+    Filtered by the token being answered, for the reason ``_announced_by``
+    gives: a result naming a token this call did not send belongs to
+    another test sharing the bus.
     """
     fired: asyncio.Task | None = None
 
@@ -437,6 +464,7 @@ async def _respond_and_wait_for_result(
     result = await wait_for_ha_event(
         "ha_mcp_approval_result",
         fire_the_response,
+        predicate=lambda ev: (ev.get("data") or {}).get("token") == payload["token"],
         timeout=20.0,
         ha_url=base_url,
         token=token,
@@ -480,6 +508,7 @@ async def test_a_real_event_round_trip_decides_a_held_call(
     announcement = await wait_for_ha_event(
         "ha_mcp_approval_requested",
         start_the_gated_call,
+        predicate=_announced_by(server),
         timeout=20.0,
         ha_url=base_url,
         token=token,
@@ -503,7 +532,11 @@ async def test_a_real_event_round_trip_decides_a_held_call(
         assert refusal["data"]["applied"] is False
         assert refusal["data"]["reason"] == "wrong_pin"
         assert refusal["data"]["token"] == approval_token
-        assert "pin" not in json.dumps(refusal["data"])
+        # The PIN itself, not the word: ``reason`` says ``wrong_pin``, so a
+        # substring search for "pin" answers a different question than the
+        # one that matters -- whether the refusal handed the guess back.
+        assert "9999" not in json.dumps(refusal["data"])
+        assert not [key for key in refusal["data"] if "pin" in key.lower()]
         assert not call_task.done(), (
             "a wrong PIN released the held call; the PIN is the only thing "
             "standing between an agent-fired event and its own approval"
@@ -557,6 +590,7 @@ async def test_a_real_event_round_trip_denies_a_held_call(
     announcement = await wait_for_ha_event(
         "ha_mcp_approval_requested",
         start_the_gated_call,
+        predicate=_announced_by(server),
         timeout=20.0,
         ha_url=base_url,
         token=token,
