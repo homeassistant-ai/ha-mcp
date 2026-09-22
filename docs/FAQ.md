@@ -1055,7 +1055,8 @@ event can decide a request — an agent then has no way to approve its own
 requests over the bus. (It says nothing about the developer tool above,
 which stays available wherever developer mode and
 `dev_tools_security_policy_access` are both on.) The PIN is stored as a
-salted hash, can only be set by a person in the settings UI, and five wrong
+salted hash, is set only through the settings UI — no MCP tool takes it, returns
+it, or can write the file it lives in — and five wrong
 PINs within five minutes close the channel for the rest of that window — the
 Pending list on the settings UI the server itself serves keeps working
 throughout. (The stdio sidecar's settings page sets the PIN and edits the
@@ -1066,10 +1067,10 @@ on purpose, so no surface that reads or writes policy — the settings UI,
 file itself is mode 0600 and holds only the digest; on an embedded install
 it lives under the `.ha_mcp` folder of your configuration directory, where
 the component's non-overridable deny floor blocks its filename on read,
-write, listing and deletion. Adding that folder to the component's **Extra
-file paths** setting therefore cannot hand a tool the digest — but it does
-grant read *and* write over everything else in there, which is its own
-decision to make.
+write and deletion, and keeps it out of directory listings. Adding that
+folder to the component's **Extra file paths** setting therefore cannot
+hand a tool the digest — but it does grant read *and* write over
+everything else in there, which is its own decision to make.
 
 Removing the PIN switches the feature off with it. Events that arrive
 without a matching PIN are refused and logged at WARNING. An event that
@@ -1078,6 +1079,13 @@ while the switch has been off for every request announced so far, nothing
 has subscribed to the response event at all, so such an event is never even
 received. Either way the request
 stays pending and decidable in the tab.
+
+Nothing is sent back onto the bus either way. A response event that is
+refused — wrong PIN, expired request, feature switched off — produces a
+log line on the server and no event, so the automation that fired it
+cannot tell you it was refused. Watch the server log while you set this
+up, and treat the settings tab as the place that tells you whether a
+request is still pending.
 
 ---
 

@@ -509,7 +509,7 @@ async def test_a_stalled_setup_gives_up_within_the_budget(
 
 @pytest.mark.anyio
 async def test_the_budget_covers_waiting_for_the_lock(
-    tmp_path, queue, short_setup_budget
+    tmp_path, queue, caplog, short_setup_budget
 ):
     """Waiting behind somebody else's setup costs the caller the same.
 
@@ -518,27 +518,26 @@ async def test_the_budget_covers_waiting_for_the_lock(
     the first one's stalled connect lasts, which is exactly the delay this
     cap exists to bound.
     """
-    released = anyio.Event()
+    listener, _ = make_listener(tmp_path, queue)
+    holder_may_release = anyio.Event()
 
-    async def slow_client() -> Any:
-        await released.wait()
-        return make_ws_client()
-
-    listener = ApprovalResponseListener(
-        policy_provider=lambda: Policy(event_decisions_enabled=True),
-        queue=queue,
-        data_dir=tmp_path,
-        get_ws_client=slow_client,
-    )
+    async def hold_the_lock() -> None:
+        async with listener._lock:
+            await holder_may_release.wait()
 
     async with anyio.create_task_group() as tg:
-        tg.start_soon(listener.ensure_subscribed)
+        tg.start_soon(hold_the_lock)
         await anyio.sleep(0.05)
-        with anyio.fail_after(short_setup_budget + 5):
-            # Blocked on the lock the first attempt holds, and bounded by
-            # the same budget rather than by the first one's stall.
-            await listener.ensure_subscribed()
-        released.set()
+        with caplog.at_level(logging.WARNING):
+            with anyio.fail_after(short_setup_budget + 5):
+                # The holder is not bounded by anything here, so returning
+                # at all is only possible if the budget covers the wait for
+                # the lock. Letting the holder be another ensure_subscribed
+                # would prove nothing: that one times out on its own budget
+                # and releases, so the waiter gets in either way.
+                await listener.ensure_subscribed()
+        assert "gave up opening" in caplog.text
+        holder_may_release.set()
 
 
 @pytest.mark.anyio
@@ -567,3 +566,14 @@ async def test_an_abandoned_setup_leaves_no_subscription_behind(
 
     assert listener._subscription_id is None
     assert listener._client is None
+
+    # The state that matters: the next attempt must actually re-subscribe.
+    # A pairing left behind by the abandoned attempt would send this call
+    # into the early return at the top of _subscribe_locked -- believing it
+    # holds a subscription that was never opened.
+    ws.is_connected = True
+    ws.subscribe_events = AsyncMock(return_value=9)
+    await listener.ensure_subscribed()
+
+    ws.subscribe_events.assert_awaited_once_with(APPROVAL_RESPONSE_EVENT)
+    assert listener._subscription_id == 9

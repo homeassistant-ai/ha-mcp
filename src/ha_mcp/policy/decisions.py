@@ -16,9 +16,10 @@ buy is that the channel is closed to anything that has not been told the
 PIN, which is the difference between "anyone who can fire an event" and
 "someone who has the secret".
 
-Two independent gates therefore guard every decision, both checked here
-rather than at subscription time so that turning the feature off takes
-effect on the next event rather than on the next restart:
+Two independent gates therefore guard every decision, both re-checked
+here on every event rather than only when the subscription was opened, so
+that turning the feature off takes effect on the next event rather than
+on the next restart:
 
 1. ``Policy.event_decisions_enabled`` -- off by default.
 2. A PIN that matches the stored digest (``decision_pin.py``).
@@ -69,11 +70,17 @@ class FailedAttemptLimiter:
     with it. Authorisation runs before the token is looked up, so a guess
     carrying a token the queue never knew is still a guess and still
     spends budget; that is what stops an attacker buying attempts with
-    invented tokens. What is never counted is an event with no PIN to be
-    wrong about: a malformed event, one without a PIN field, and one that
-    arrives before a PIN was configured are badly written automations
-    rather than guesses, and counting them would let such an automation
-    lock out the user's real notification action.
+    invented tokens.
+
+    Nothing the gates refuse before comparing a PIN is counted: a
+    malformed event, one without a PIN field, one that arrives before a
+    PIN was configured, one that arrives while the feature is off, and one
+    refused because the policy file cannot be read. One case does carry a
+    PIN and is still not counted -- a stored record this build cannot
+    decode, where nobody could have typed a PIN that matches, so charging
+    it would close the channel over a configuration fault. Counting any of
+    these would let a badly written automation lock out the user's real
+    notification action.
 
     The block is global rather than per token: the tokens are the thing
     being guessed at, so per-token counting would hand an attacker a fresh
@@ -237,10 +244,12 @@ class ApprovalResponseListener:
         # consequences are bounded rather than absent: the handler is stored
         # in a set keyed on its identity, so it is registered once; a
         # decision is one-shot, so a duplicate cannot dispatch a tool twice;
-        # and the only thing a duplicate really costs is that one wrong PIN
-        # can be charged to the budget twice, which errs towards closing the
-        # channel rather than opening it. The connection dropping takes both
-        # subscriptions with it.
+        # what a duplicate really costs is small and errs towards closing
+        # the channel rather than opening it: one wrong PIN can be charged
+        # to the budget twice, and the second delivery of a decision that
+        # already applied logs the queue's unknown-token warning, which
+        # reads like a token probe and is not one. The connection dropping
+        # takes both subscriptions with it.
         self._client = None
         self._subscription_id = None
         subscription_id = await client.subscribe_events(APPROVAL_RESPONSE_EVENT)
@@ -316,7 +325,11 @@ class ApprovalResponseListener:
             )
 
     async def _authorised(self, pin: Any) -> bool:
-        """Both gates, in the order that costs least when it says no."""
+        """Both gates, cheapest first among those that can answer.
+
+        The policy read leads because everything else depends on the
+        feature being on at all.
+        """
         try:
             policy = await run_in_thread(self._policy_provider)
         except ValueError:

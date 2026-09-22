@@ -294,6 +294,53 @@ class TestMissingRulesGuard:
         assert "ha_call_service" in removed[0]
         assert "ha_restart" in removed[0]
 
+    async def test_switching_the_event_channel_off_warns(self, policy_tools, tmp_path):
+        """Omitting a field is how a whole-document write closes the channel.
+
+        ``set`` replaces the document, so a caller working from an example
+        that predates ``event_decisions_enabled`` sends no such field, and
+        an omitted field reads as false. Without the warning the channel
+        the user opened closes with a plain success.
+        """
+        from ha_mcp.policy.decision_pin import set_pin
+
+        set_pin(tmp_path, "2468")
+        await policy_tools.ha_manage_security_policy(
+            action="set",
+            policy={"rules": [], "event_decisions_enabled": True, "version": 0},
+        )
+
+        result = await policy_tools.ha_manage_security_policy(
+            action="set", policy={"rules": [], "version": 1}
+        )
+
+        switched_off = [
+            w for w in result["warnings"] if "event_decisions_enabled" in w
+        ]
+        assert switched_off, result["warnings"]
+        assert "switched off" in switched_off[0]
+
+    async def test_no_channel_warning_when_the_field_is_kept(
+        self, policy_tools, tmp_path
+    ):
+        """The control: a write that keeps the channel on says nothing."""
+        from ha_mcp.policy.decision_pin import set_pin
+
+        set_pin(tmp_path, "2468")
+        await policy_tools.ha_manage_security_policy(
+            action="set",
+            policy={"rules": [], "event_decisions_enabled": True, "version": 0},
+        )
+
+        result = await policy_tools.ha_manage_security_policy(
+            action="set",
+            policy={"rules": [], "event_decisions_enabled": True, "version": 1},
+        )
+
+        assert not [
+            w for w in result.get("warnings", []) if "event_decisions_enabled" in w
+        ]
+
     async def test_no_removal_warning_when_rules_are_kept(self, policy_tools):
         await policy_tools.ha_manage_security_policy(
             action="set",
