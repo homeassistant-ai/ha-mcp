@@ -531,3 +531,38 @@ def test_setting_the_pin_does_not_hash_on_the_event_loop(
     assert r.status_code == 200
     assert loop_thread and hashed_on
     assert loop_thread[0] not in hashed_on
+
+
+def test_approving_an_expired_request_reports_it_as_unknown(tmp_path):
+    """The tab reads the queue first, so an expired entry is simply gone.
+
+    ``queue.get`` sweeps on the way in, so by the time the handler would
+    decide, the token names nothing and the answer is the 404 the UI
+    already handles. This pins the boundary of the queue-level expiry fix:
+    it changes what a decision arriving on the event bus does, not what
+    this endpoint answers.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    queue = ApprovalQueue()
+    c = make_app(tmp_path, queue)
+    entry = queue.create("ha_call_service", "h", {}, ttl_minutes=5)
+    entry.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+
+    r = c.post("/api/policy/approve", json={"token": entry.token})
+
+    assert r.status_code == 404
+    assert entry.decision == "pending"
+
+
+def test_an_already_decided_request_still_says_so(tmp_path):
+    """The 409 path keeps its meaning for the case it was written for."""
+    queue = ApprovalQueue()
+    c = make_app(tmp_path, queue)
+    entry = queue.create("ha_call_service", "h", {}, ttl_minutes=5)
+    queue.approve(entry.token)
+
+    r = c.post("/api/policy/approve", json={"token": entry.token})
+
+    assert r.status_code == 409
+    assert r.json()["current_decision"] == "approved"

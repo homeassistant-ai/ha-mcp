@@ -228,12 +228,15 @@ class ApprovalQueue:
         be approved -- waking a retry that is holding the same row and
         dispatching the tool long after the window closed.
         """
-        self._sweep_expired()
+        if self._expire(token, "approve"):
+            return False
         entry = self._by_token.get(token)
         if entry is None:
             # WARNING because on a security-gating endpoint this means
             # either a UI bug, a stale tab racing the sweeper, or an
-            # attacker probing tokens — operator should see it.
+            # attacker probing tokens — operator should see it. An entry
+            # that merely ran out of TTL is handled above, at INFO, so a
+            # late click on a phone notification does not read as a probe.
             logger.warning("approval_queue.approve: unknown token %s", token)
             return False
         ok = entry.decide("approved")
@@ -253,7 +256,8 @@ class ApprovalQueue:
         Expires first, for the reason ``approve`` gives: the TTL has to mean
         the same thing to a decision from the bus as to one from the tab.
         """
-        self._sweep_expired()
+        if self._expire(token, "deny"):
+            return False
         entry = self._by_token.get(token)
         if entry is None:
             logger.warning("approval_queue.deny: unknown token %s", token)
@@ -266,6 +270,26 @@ class ApprovalQueue:
                 entry.decision,
             )
         return ok
+
+    def _expire(self, token: str, action: str) -> bool:
+        """Sweep, and report whether ``token`` is gone because its TTL ran out.
+
+        The sweep is what makes the TTL binding for a decision, and the
+        return value is what keeps an ordinary expiry distinguishable from
+        an unknown token: both leave the queue without the entry, but only
+        one of them is worth an operator's attention.
+        """
+        known_before = token in self._by_token
+        self._sweep_expired()
+        if known_before and token not in self._by_token:
+            logger.info(
+                "approval_queue.%s: token %s expired before the decision "
+                "reached it",
+                action,
+                token,
+            )
+            return True
+        return False
 
     def remove(self, token: str) -> None:
         self._by_token.pop(token, None)

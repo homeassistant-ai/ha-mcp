@@ -446,3 +446,37 @@ def test_approve_still_decides_a_live_entry():
 
     assert q.approve(entry.token) is True
     assert entry.decision == "approved"
+
+
+def test_an_expired_token_logs_as_expired_not_as_unknown(caplog):
+    """A late tap on a phone notification is not a token probe.
+
+    The unknown-token line is WARNING because it means a UI bug, a stale
+    tab, or somebody guessing tokens. An entry that simply ran out of TTL
+    is none of those, and it is the ordinary outcome of approving a minute
+    after the window closed.
+    """
+    import logging
+
+    q = ApprovalQueue()
+    entry = q.create("ha_x", "abc", {}, ttl_minutes=5)
+    entry.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+
+    with caplog.at_level(logging.INFO):
+        assert q.approve(entry.token) is False
+
+    assert "expired before the decision reached it" in caplog.text
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_a_genuinely_unknown_token_still_warns(caplog):
+    """The security signal stays a security signal."""
+    import logging
+
+    q = ApprovalQueue()
+
+    with caplog.at_level(logging.INFO):
+        assert q.approve("no-such-token") is False
+
+    assert "unknown token" in caplog.text
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING]
