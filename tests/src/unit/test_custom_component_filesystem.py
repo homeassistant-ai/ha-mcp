@@ -1244,6 +1244,70 @@ class TestDenyFloor:
         assert _violates_deny_floor(tmp_path, "www/notes.txt") is True
         assert _is_path_allowed_for_read(tmp_path, "www/notes.txt") is False
 
+    def test_approval_pin_file_blocked_everywhere(self, tmp_path):
+        # The digest that authorises an approve/deny from the event bus
+        # (issue #2502). It lives in ha-mcp's own data dir, which on an
+        # embedded install sits under the config dir — and an extra file
+        # path covering that dir grants read AND write, so without the
+        # floor a tool could read the digest or replace it with one for a
+        # PIN of its own.
+        assert _violates_deny_floor(tmp_path, ".ha_mcp/approval_pin.json") is True
+        assert _violates_deny_floor(tmp_path, "approval_pin.json") is True
+        assert _violates_deny_floor(tmp_path, "APPROVAL_PIN.JSON") is True
+        assert (
+            _is_path_allowed_for_read(
+                tmp_path, ".ha_mcp/approval_pin.json", [".ha_mcp"]
+            )
+            is False
+        )
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path,
+                ".ha_mcp/approval_pin.json",
+                ALLOWED_WRITE_DIRS,
+                [".ha_mcp"],
+            )
+            is False
+        )
+
+    def test_the_rest_of_the_data_dir_stays_reachable(self, tmp_path):
+        # Narrow by request: protecting the PIN must not take the folder
+        # around it with it. Only the one basename is denied.
+        assert _violates_deny_floor(tmp_path, ".ha_mcp/tool_policy.json") is False
+        assert (
+            _is_path_allowed_for_read(tmp_path, ".ha_mcp/tool_policy.json", [".ha_mcp"])
+            is True
+        )
+        assert (
+            _is_path_allowed_for_dir(
+                tmp_path, ".ha_mcp/tool_policy.json", ALLOWED_WRITE_DIRS, [".ha_mcp"]
+            )
+            is True
+        )
+
+    def test_renamed_symlink_to_the_pin_file_blocked(self, tmp_path):
+        # Same dodge the secrets.yaml floor already closes: an innocuous
+        # name under an allowed dir pointing at the denied file.
+        (tmp_path / ".ha_mcp").mkdir()
+        (tmp_path / ".ha_mcp" / "approval_pin.json").write_text("{}")
+        (tmp_path / "www").mkdir()
+        symlink_or_skip(
+            tmp_path / "www" / "notes.txt", tmp_path / ".ha_mcp" / "approval_pin.json"
+        )
+        assert _violates_deny_floor(tmp_path, "www/notes.txt") is True
+        assert _is_path_allowed_for_read(tmp_path, "www/notes.txt") is False
+
+    def test_root_secrets_exception_cannot_be_pointed_elsewhere(self, tmp_path):
+        # The one permitted basename is the canonical root secrets.yaml,
+        # because that is the path the read handler masks. A symlink there
+        # pointing at another denied file must not inherit the exception.
+        (tmp_path / ".ha_mcp").mkdir()
+        (tmp_path / ".ha_mcp" / "approval_pin.json").write_text("{}")
+        symlink_or_skip(
+            tmp_path / "secrets.yaml", tmp_path / ".ha_mcp" / "approval_pin.json"
+        )
+        assert _violates_deny_floor(tmp_path, "secrets.yaml") is True
+
     def test_case_insensitive_storage_blocked(self, tmp_path):
         # On a case-insensitive FS '.STORAGE' opens the real '.storage'; the
         # floor must match case-insensitively so it can't be bypassed.
