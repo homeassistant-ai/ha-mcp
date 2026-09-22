@@ -934,7 +934,21 @@ class HomeAssistantWebSocketClient:
         except BaseException:
             # Cancellation mid-send: skips the clause above and would leave the
             # pending future registered — drop it before propagating.
+            #
+            # And a cancelled send is not proof that Home Assistant received
+            # nothing. The vendored implementation writes the frame before it
+            # awaits flow-control drainage, so a cancellation landing in that
+            # wait can leave the subscription registered on a socket this
+            # process keeps using -- the same orphan the acknowledgment path
+            # below releases, reached one await earlier. The id is allocated
+            # before the send, so it is still known here; an unsubscribe for
+            # something that was never registered answers not_found, which
+            # the release treats as its ordinary outcome.
             self.cancel_pending_response(message_id)
+            await self._run_cleanup(
+                self._release_abandoned_subscription(message_id),
+                f"abandoned subscribe_events({message_id})",
+            )
             raise
 
         try:
@@ -1023,38 +1037,41 @@ class HomeAssistantWebSocketClient:
         the theme-guard session cleanup, for the same reason.
         """
         task = asyncio.ensure_future(coro)
-        try:
-            await asyncio.wait_for(
-                asyncio.shield(task), timeout=CLEANUP_TIMEOUT_SECONDS
-            )
-        except (Exception, TimeoutError) as e:
-            logger.debug("%s: cleanup did not finish cleanly: %s", what, e)
-        except asyncio.CancelledError:
-            logger.debug("%s: cleanup cancelled before it finished", what)
-            raise
-        finally:
-            # The shield above is what lets the deadline expire without
-            # killing the work -- and it is equally what would let the work
-            # outlive this call, which is the failure being fixed. A task
-            # still running here reads the client's state whenever it gets
-            # there, so it must not get there: stop it, then collect the
-            # outcome so a late failure does not surface as an orphaned
-            # "exception was never retrieved".
-            #
-            # Shielded with anyio's scope rather than asyncio's: a cancel
-            # scope re-delivers its cancellation to the HOST TASK on every
-            # tick while that task is still inside it, and
-            # ``asyncio.shield`` only governs propagation from one awaited
-            # future -- it does not stop a second ``cancel()`` landing on
-            # the task at its next await. ``gather`` propagates that even
-            # with ``return_exceptions=True``, measured, so without this
-            # the drain is skipped under exactly the scopes this runs in --
-            # the approval listener opens its subscription inside a
-            # ``move_on_after`` setup budget, and a cancelled
-            # ``subscribe_events`` is how this method is reached at all.
-            # The caller's cancellation is still delivered, after the drain
-            # rather than instead of it.
-            with anyio.CancelScope(shield=True):
+        # Shielded with anyio's scope rather than asyncio's, and around the
+        # WAIT as much as around the drain: a cancel scope re-delivers its
+        # cancellation to the HOST TASK on every tick while that task is
+        # still inside it, and ``asyncio.shield`` only governs propagation
+        # from one awaited future -- it does not stop a second ``cancel()``
+        # landing on the task at its next await. Such a scope is how this
+        # method is reached in the first place: the approval listener opens
+        # its subscription inside a ``move_on_after`` setup budget, and a
+        # cancelled ``subscribe_events`` is what calls this. Shielding only
+        # the drain leaves the wait below cancelled on its first tick, and
+        # the ``finally`` then stops the work before it ever had its own
+        # budget -- collecting a task is not the same as letting it finish,
+        # and cleanup that has to suspend (an unsubscribe waiting for the
+        # shared send lock) never reaches its release. The caller's
+        # cancellation is still delivered, after the cleanup rather than
+        # instead of it.
+        with anyio.CancelScope(shield=True):
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(task), timeout=CLEANUP_TIMEOUT_SECONDS
+                )
+            except (Exception, TimeoutError) as e:
+                logger.debug("%s: cleanup did not finish cleanly: %s", what, e)
+            except asyncio.CancelledError:
+                logger.debug("%s: cleanup cancelled before it finished", what)
+                raise
+            finally:
+                # The inner ``asyncio.shield`` is what lets the deadline
+                # expire without killing the work -- and it is equally what
+                # would let the work outlive this call, which is the failure
+                # being fixed. A task still running here reads the client's
+                # state whenever it gets there, so it must not get there:
+                # stop it, then collect the outcome so a late failure does
+                # not surface as an orphaned "exception was never
+                # retrieved".
                 if not task.done():
                     task.cancel()
                 await asyncio.gather(task, return_exceptions=True)

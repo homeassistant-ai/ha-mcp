@@ -995,6 +995,48 @@ class TestSubscribeEventsContract:
         )
 
     @pytest.mark.asyncio
+    async def test_cleanup_that_has_to_wait_still_performs_the_release(self):
+        """Finishing the drain is not the same as finishing the cleanup.
+
+        The test above proves the task is collected, because its cleanup
+        does its work inside the ``CancelledError`` handler -- so it passes
+        even when the only thing that ran was the cancellation. Real
+        cleanup suspends first: an unsubscribe waits for the shared send
+        lock, and only then does it release anything. Under a cancel scope
+        that reasserts on every tick, that suspension is where a wait
+        shielded only around the drain loses the work: the wait is
+        cancelled on its first tick and the ``finally`` stops the task
+        before it ever had its own budget. The release here happens on the
+        ordinary path, never in a cancellation handler, so nothing but the
+        cleanup actually finishing can set it.
+        """
+        client = self._prepare_client()
+        released = asyncio.Event()
+        lock_free = asyncio.Event()
+
+        async def _cleanup_waiting_for_a_lock() -> None:
+            await lock_free.wait()
+            released.set()
+
+        async def _free_the_lock() -> None:
+            # After the scope's deadline, so the cleanup is still suspended
+            # at the moment the cancellation is first delivered.
+            await asyncio.sleep(0.05)
+            lock_free.set()
+
+        opener = asyncio.ensure_future(_free_the_lock())
+        try:
+            with anyio.move_on_after(0.01):
+                await client._run_cleanup(_cleanup_waiting_for_a_lock(), "probe")
+        finally:
+            opener.cancel()
+
+        assert released.is_set(), (
+            "the cancel scope stopped the cleanup before it reached its "
+            "release"
+        )
+
+    @pytest.mark.asyncio
     async def test_a_rejection_without_a_code_is_not_a_warning(self, caplog):
         """Home Assistant answers this command with success or not_found.
 
@@ -1123,6 +1165,46 @@ class TestSubscribeEventsContract:
             await asyncio.sleep(0)
             if len(sent_messages) > 1:
                 break
+
+        assert [
+            m
+            for m in sent_messages[1:]
+            if m.get("type") == "unsubscribe_events"
+            and m.get("subscription") == subscribe_id
+        ], f"no unsubscribe for {subscribe_id} in {sent_messages}"
+
+    @pytest.mark.asyncio
+    async def test_cancellation_inside_the_send_also_releases_it(self):
+        """A cancelled send is not proof that nothing reached Home Assistant.
+
+        The frame is written before the send awaits flow-control drainage,
+        so a cancellation landing in that wait leaves the subscription
+        registered just as surely as one landing in the acknowledgment
+        wait -- and on a socket this process keeps using, which is what
+        makes the orphan outlive the call. Dropping only the local pending
+        future, which is all this path used to do, leaves it there.
+        """
+        client = self._prepare_client()
+        sent = asyncio.Event()
+        sent_messages: list[dict] = []
+
+        async def _write_then_block(message: dict) -> None:
+            sent_messages.append(message)
+            if message.get("type") != "subscribe_events":
+                return
+            sent.set()
+            # Flow-control drainage: the frame is out, the send has not
+            # returned, and this is where the cancellation arrives.
+            await asyncio.sleep(3600)
+
+        client.send_json_message = _write_then_block  # type: ignore[method-assign]
+
+        task = asyncio.ensure_future(client.subscribe_events("state_changed"))
+        await sent.wait()
+        subscribe_id = sent_messages[0]["id"]
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
         assert [
             m
