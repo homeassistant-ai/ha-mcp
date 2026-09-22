@@ -124,6 +124,23 @@ test("CRLF evidence matches LF without weakening other quote checks", () => {
     "Client is Claude Desktop.\nVersion 8.4.3.";
   validateResult(carriageResult, makeContext(carriage));
 });
+test("Markdown code and bold markers do not affect quote matching", () => {
+  const s = fixture(),
+    r = answer();
+  s.issue.body = "**`ha_call_event`**, which fires events at /auth/authorize.";
+  r.summary[0].evidence[0].quote = "`ha_call_event`, which fires events";
+  r.facts[0] = {
+    field: "affected_tool",
+    value: "`/auth/authorize`",
+    evidence: [{ source_id: "body", quote: "fires events at /auth/authorize" }],
+  };
+  validateResult(r, makeContext(s));
+  r.summary[0].evidence[0].quote = "`ha_call_service`, which fires events";
+  assert.throws(
+    () => validateResult(r, makeContext(s)),
+    /summary\[0\].evidence\[0\].*body/,
+  );
+});
 test("fact values must occur in their evidence", () => {
   const r = answer();
   r.facts[0].value = "Firefox";
