@@ -1055,22 +1055,22 @@ event can decide a request — an agent then has no way to approve its own
 requests over the bus. (It says nothing about the developer tool above,
 which stays available wherever developer mode and
 `dev_tools_security_policy_access` are both on.) The PIN is stored as a
-salted hash, is set only through the settings UI — no MCP tool takes it, returns
-it, or can write the file it lives in — and five wrong
-PINs within five minutes close the channel for the rest of that window — the
-Pending list on the settings UI the server itself serves keeps working
-throughout. (The stdio sidecar's settings page sets the PIN and edits the
-policy, but cannot list or decide pending approvals: those live in the
-server process it cannot reach.) The PIN is kept out of the policy document
-on purpose, so no surface that reads or writes policy — the settings UI,
-`ha_manage_security_policy`, a version-conflict error body — carries it. The
-file itself is mode 0600 and holds only the digest; on an embedded install
-it lives under the `.ha_mcp` folder of your configuration directory, where
-the component's non-overridable deny floor blocks its filename on read,
-write and deletion, and keeps it out of directory listings. Adding that
-folder to the component's **Extra file paths** setting therefore cannot
-hand a tool the digest — but it does grant read *and* write over
-everything else in there, which is its own decision to make.
+salted hash and is set only through the settings UI — no MCP tool takes it,
+returns it, or can write the file it lives in. Five wrong PINs within five
+minutes close the channel for the rest of that window; the Pending list in the
+settings UI, which the server itself serves, keeps working throughout. (The
+stdio sidecar's settings page sets the PIN and edits the policy, but cannot
+list or decide pending approvals: those live in the server process it cannot
+reach.) The PIN is kept out of the policy document on purpose, so no surface
+that reads or writes policy — the settings UI, `ha_manage_security_policy`, a
+version-conflict error body — carries it. The file itself is mode 0600 and
+holds only the digest; on an embedded install it lives under the `.ha_mcp`
+folder of your configuration directory, where the component's non-overridable
+deny floor blocks its filename on read, write and deletion, and keeps it out
+of directory listings. Adding that folder to the component's **Extra file
+paths** setting therefore cannot hand a tool the digest — but it does grant
+read *and* write over everything else in there, which is its own decision to
+make.
 
 Removing the PIN switches the feature off with it. Events that arrive
 without a matching PIN are refused and logged at WARNING. An event that
