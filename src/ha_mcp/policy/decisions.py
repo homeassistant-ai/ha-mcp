@@ -62,6 +62,13 @@ FAILURE_WINDOW_SECONDS = 300.0
 # for this one request, which the settings UI already covers.
 SETUP_BUDGET_SECONDS = 5.0
 
+# How long releasing a previous connection's subscription may take. It is
+# spent inside the setup budget above, so it is small: the part that stops
+# the duplicate -- dropping the handler -- has already happened by then, and
+# what remains is asking the other side to forget a subscription that no
+# longer reaches us either way.
+RETIRE_BUDGET_SECONDS = 1.0
+
 
 class FailedAttemptLimiter:
     """Bounds PIN guessing against the live server.
@@ -224,6 +231,46 @@ class ApprovalResponseListener:
                 SETUP_BUDGET_SECONDS,
             )
 
+    async def _retire_locked(
+        self, client: HomeAssistantWebSocketClient, subscription_id: int
+    ) -> None:
+        """Stop listening through ``client``'s subscription.
+
+        The handler goes first and is what actually matters: removing it is
+        synchronous and cannot fail, and from that point an event arriving
+        through the old subscription reaches nothing of ours, so the budget
+        cannot be charged twice even if the rest of this is abandoned. The
+        unsubscribe that follows is hygiene on the Home Assistant side --
+        bounded, because it must not spend the setup budget belonging to the
+        subscription being opened, and swallowing rather than raising,
+        because failing to tidy up the old one is no reason to leave the
+        feature without a new one.
+
+        The socket itself is pooled and shared; nothing here closes it.
+        """
+        client.remove_event_handler(APPROVAL_RESPONSE_EVENT, self._handle_event)
+        self._client = None
+        self._subscription_id = None
+        with anyio.move_on_after(RETIRE_BUDGET_SECONDS) as scope:
+            try:
+                await client.unsubscribe_events(subscription_id)
+            except Exception:
+                logger.warning(
+                    "policy decisions: could not release subscription %s on the "
+                    "previous connection; it no longer reaches this process",
+                    subscription_id,
+                    exc_info=True,
+                )
+                return
+        if scope.cancelled_caught:
+            logger.warning(
+                "policy decisions: gave up releasing subscription %s on the "
+                "previous connection after %.0f seconds; it no longer reaches "
+                "this process",
+                subscription_id,
+                RETIRE_BUDGET_SECONDS,
+            )
+
     async def _subscribe_locked(self) -> None:
         client = await self._get_ws_client()
         if client is self._client and self._subscription_id is not None:
@@ -232,6 +279,14 @@ class ApprovalResponseListener:
             # Same client object, dead connection: the server-side
             # subscription went with it, so the id we hold names nothing.
             self._subscription_id = None
+        elif self._client is not None and self._subscription_id is not None:
+            # A different live client. Keeping the old pairing would leave two
+            # subscriptions to the same event on the same Home Assistant, and
+            # the deduplication that exists does not cover it: the handler set
+            # is per client, so each connection dispatches the response once
+            # and one wrong PIN is charged to the budget twice. Retire the
+            # previous one before taking the new.
+            await self._retire_locked(self._client, self._subscription_id)
         # Forget the previous pairing BEFORE subscribing. The call below can
         # be abandoned mid-flight when the setup budget runs out, and a
         # cancellation there must not leave a client/id pair behind that the

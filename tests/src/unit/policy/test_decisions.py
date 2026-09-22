@@ -465,6 +465,73 @@ async def test_a_replaced_client_is_resubscribed(tmp_path, queue):
 
 
 @pytest.mark.anyio
+async def test_a_replaced_client_stops_receiving(tmp_path, queue):
+    """Two live connections to one Home Assistant must not both deliver.
+
+    The handler set is per client, so a second subscription is not
+    deduplicated anywhere: each connection dispatches the same response
+    event once, one wrong PIN is charged to the budget twice, and the user
+    is locked out after fewer than five real guesses. Retiring the previous
+    pairing is what keeps the single-active-listener model true when the
+    effective credentials change.
+
+    Order matters and is asserted: dropping the handler is synchronous and
+    cannot fail, so once it has happened the duplicate cannot be charged
+    even if the unsubscribe that follows is refused or abandoned. The
+    reverse order would leave a window in which it can.
+    """
+    first, second = make_ws_client(), make_ws_client()
+    first.subscribe_events = AsyncMock(return_value=11)
+    order = MagicMock()
+    order.attach_mock(first.remove_event_handler, "removed")
+    order.attach_mock(first.unsubscribe_events, "unsubscribed")
+    listener = ApprovalResponseListener(
+        policy_provider=lambda: Policy(event_decisions_enabled=True),
+        queue=queue,
+        data_dir=tmp_path,
+        get_ws_client=AsyncMock(side_effect=[first, second]),
+    )
+
+    await listener.ensure_subscribed()
+    await listener.ensure_subscribed()
+
+    assert first.remove_event_handler.call_args == first.add_event_handler.call_args
+    first.unsubscribe_events.assert_awaited_once_with(11)
+    assert [name for name, *_ in order.mock_calls] == ["removed", "unsubscribed"]
+    # The socket is pooled and shared; retiring a subscription must not take
+    # it down for whatever else is using it.
+    first.disconnect.assert_not_called()
+    second.unsubscribe_events.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_returning_to_an_earlier_client_retires_the_one_in_between(
+    tmp_path, queue
+):
+    """The switch is not one-way, and the second client is not special.
+
+    Coming back to a connection that is still up does not match the stored
+    pairing either, so it subscribes again -- and the subscription it
+    replaces has to go the same way as the first one did.
+    """
+    first, second = make_ws_client(), make_ws_client()
+    second.subscribe_events = AsyncMock(return_value=22)
+    listener = ApprovalResponseListener(
+        policy_provider=lambda: Policy(event_decisions_enabled=True),
+        queue=queue,
+        data_dir=tmp_path,
+        get_ws_client=AsyncMock(side_effect=[first, second, first]),
+    )
+
+    await listener.ensure_subscribed()
+    await listener.ensure_subscribed()
+    await listener.ensure_subscribed()
+
+    second.unsubscribe_events.assert_awaited_once_with(22)
+    assert second.remove_event_handler.call_args == second.add_event_handler.call_args
+
+
+@pytest.mark.anyio
 async def test_a_failed_subscribe_is_not_fatal(tmp_path, queue, caplog):
     """The gate still works in the settings UI, so this may not raise."""
     ws = make_ws_client()
