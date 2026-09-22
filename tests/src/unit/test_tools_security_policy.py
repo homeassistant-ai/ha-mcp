@@ -314,9 +314,7 @@ class TestMissingRulesGuard:
             action="set", policy={"rules": [], "version": 1}
         )
 
-        switched_off = [
-            w for w in result["warnings"] if "event_decisions_enabled" in w
-        ]
+        switched_off = [w for w in result["warnings"] if "event_decisions_enabled" in w]
         assert switched_off, result["warnings"]
         assert "switched off" in switched_off[0]
 

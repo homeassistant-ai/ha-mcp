@@ -283,8 +283,7 @@ class ApprovalQueue:
         self._sweep_expired()
         if known_before and token not in self._by_token:
             logger.info(
-                "approval_queue.%s: token %s expired before the decision "
-                "reached it",
+                "approval_queue.%s: token %s expired before the decision reached it",
                 action,
                 token,
             )

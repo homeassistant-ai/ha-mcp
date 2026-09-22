@@ -7678,9 +7678,7 @@ class TestApprovalPinRemoval:
         _assert_clean_init(result)
         assert 'data-checked="false"' in self._probe(result.dom)
 
-    def test_a_failed_removal_leaves_the_box_alone(
-        self, settings_script: str
-    ) -> None:
+    def test_a_failed_removal_leaves_the_box_alone(self, settings_script: str) -> None:
         """Nothing was removed, so nothing about the toggle may be implied."""
         fetches = {
             **DEFAULT_FETCHES,

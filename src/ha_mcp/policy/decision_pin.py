@@ -205,7 +205,9 @@ def pin_status(data_dir: Path) -> dict[str, Any]:
     """
     state, record = _load_record(data_dir)
     if record is None:
-        return {"set": False} if state == PIN_ABSENT else {"set": False, "invalid": True}
+        return (
+            {"set": False} if state == PIN_ABSENT else {"set": False, "invalid": True}
+        )
     if _decode_record(record) is None:
         return {"set": False, "invalid": True}
     return {"set": True, "updated_at": record.get("updated_at")}
