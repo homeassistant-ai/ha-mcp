@@ -16,9 +16,13 @@ import pytest
 from ha_mcp.policy.decision_pin import (
     MAX_PIN_LENGTH,
     MIN_PIN_LENGTH,
+    PIN_ABSENT,
     PIN_FILENAME,
+    PIN_INVALID,
+    PIN_SET,
     clear_pin,
     is_pin_set,
+    pin_state,
     pin_status,
     set_pin,
     validate_pin,
@@ -149,6 +153,48 @@ def test_a_broken_record_verifies_nothing(tmp_path, record):
     (tmp_path / PIN_FILENAME).write_text(json.dumps(record))
 
     assert verify_pin(tmp_path, "2468") is False
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {},
+        {"updated_at": "2026-01-01T00:00:00+00:00"},
+        {"algorithm": "pbkdf2_sha256", "iterations": 1000, "salt": "AAAA"},
+        {"algorithm": "md5", "iterations": 1000, "salt": "AAAA", "hash": "AAAA"},
+        {"algorithm": "pbkdf2_sha256", "iterations": 1000, "salt": "", "hash": ""},
+    ],
+    ids=["empty-object", "timestamp-only", "no-hash", "wrong-algorithm", "empty-salt"],
+)
+def test_a_record_nobody_can_match_is_invalid_not_set(tmp_path, record):
+    """One answer for every consumer, so none can advertise what another refuses.
+
+    Status drives the settings UI, ``is_pin_set`` drives the guards that
+    allow the toggle to be switched on, and verification drives the
+    listener. An object that merely looks like a record used to satisfy the
+    first two and fail the third: the tab reported a PIN, the toggle went
+    on, and every response event was then refused -- while spending the
+    wrong-PIN budget on a configuration problem.
+    """
+    (tmp_path / PIN_FILENAME).write_text(json.dumps(record))
+
+    assert pin_state(tmp_path) == PIN_INVALID
+    assert is_pin_set(tmp_path) is False
+    assert pin_status(tmp_path) == {"set": False, "invalid": True}
+    assert verify_pin(tmp_path, "2468") is False
+
+
+def test_the_three_states_are_distinguishable(tmp_path):
+    """Absent and invalid are different problems with different repairs."""
+    assert pin_state(tmp_path) == PIN_ABSENT
+    assert pin_status(tmp_path) == {"set": False}
+
+    (tmp_path / PIN_FILENAME).write_text("{}")
+    assert pin_state(tmp_path) == PIN_INVALID
+
+    set_pin(tmp_path, "2468")
+    assert pin_state(tmp_path) == PIN_SET
+    assert pin_status(tmp_path)["set"] is True
 
 
 def test_unparseable_file_verifies_nothing(tmp_path):

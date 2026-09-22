@@ -36,7 +36,7 @@ import anyio
 from anyio.to_thread import run_sync as run_in_thread
 
 from .approval_queue import ApprovalQueue
-from .decision_pin import is_pin_set, verify_pin
+from .decision_pin import PIN_ABSENT, PIN_INVALID, pin_state, verify_pin
 from .model import Policy
 
 if TYPE_CHECKING:
@@ -52,13 +52,28 @@ APPROVAL_RESPONSE_EVENT = "ha_mcp_approval_response"
 MAX_FAILED_ATTEMPTS = 5
 FAILURE_WINDOW_SECONDS = 300.0
 
+# How long opening the response channel may delay the announcement it runs
+# ahead of. Connecting, authenticating and the subscription round trip each
+# carry their own timeout, and the lock can already be held by another
+# request doing the same; this is the only cap on the sum. Small on purpose:
+# every second here is a second the user has not yet been notified, and it
+# is spent out of the request's own TTL. Overshooting it costs the channel
+# for this one request, which the settings UI already covers.
+SETUP_BUDGET_SECONDS = 5.0
+
 
 class FailedAttemptLimiter:
     """Bounds PIN guessing against the live server.
 
-    Counts only wrong PINs. A malformed or unknown-token event is noise
-    from a badly written automation, not a guess, and counting it would
-    let that automation lock out the user's real notification action.
+    Counts only wrong PINs -- but every wrong PIN, whatever token came
+    with it. Authorisation runs before the token is looked up, so a guess
+    carrying a token the queue never knew is still a guess and still
+    spends budget; that is what stops an attacker buying attempts with
+    invented tokens. What is never counted is an event with no PIN to be
+    wrong about: a malformed event, one without a PIN field, and one that
+    arrives before a PIN was configured are badly written automations
+    rather than guesses, and counting them would let such an automation
+    lock out the user's real notification action.
 
     The block is global rather than per token: the tokens are the thing
     being guessed at, so per-token counting would hand an attacker a fresh
@@ -150,6 +165,19 @@ class ApprovalResponseListener:
         accompanies: a gate that cannot be decided from a notification is
         still a working gate in the settings UI, so a failure here is
         logged and the call it was announcing proceeds.
+
+        Bounded, for the same reason. This runs ahead of the announcement
+        so a fast responder cannot answer a request that has no channel to
+        answer on, which puts connecting, authenticating, waiting for the
+        lock another announcement holds, and a subscription round trip in
+        front of the notification the user is waiting for. Each of those
+        has its own timeout, and together they can still add up to tens of
+        seconds of silence. ``SETUP_BUDGET_SECONDS`` caps the lot: past it
+        the attempt is abandoned and the caller announces anyway, with the
+        subscription left to the next request that comes through here. The
+        budget deliberately covers lock acquisition, because waiting for
+        somebody else's setup costs the user exactly what doing it here
+        would.
         """
         try:
             policy = await run_in_thread(self._policy_provider)
@@ -166,16 +194,25 @@ class ApprovalResponseListener:
             return
         if not policy.event_decisions_enabled:
             return
-        async with self._lock:
-            try:
-                await self._subscribe_locked()
-            except Exception:
-                logger.warning(
-                    "policy decisions: could not subscribe to %s; approvals "
-                    "can still be decided in the settings UI",
-                    APPROVAL_RESPONSE_EVENT,
-                    exc_info=True,
-                )
+        with anyio.move_on_after(SETUP_BUDGET_SECONDS) as scope:
+            async with self._lock:
+                try:
+                    await self._subscribe_locked()
+                except Exception:
+                    logger.warning(
+                        "policy decisions: could not subscribe to %s; approvals "
+                        "can still be decided in the settings UI",
+                        APPROVAL_RESPONSE_EVENT,
+                        exc_info=True,
+                    )
+        if scope.cancelled_caught:
+            logger.warning(
+                "policy decisions: gave up opening the %s channel after %.0f "
+                "seconds; announcing the request anyway. It can be decided in "
+                "the settings UI, and the next request retries the channel.",
+                APPROVAL_RESPONSE_EVENT,
+                SETUP_BUDGET_SECONDS,
+            )
 
     async def _subscribe_locked(self) -> None:
         client = await self._get_ws_client()
@@ -185,11 +222,19 @@ class ApprovalResponseListener:
             # Same client object, dead connection: the server-side
             # subscription went with it, so the id we hold names nothing.
             self._subscription_id = None
-        self._subscription_id = await client.subscribe_events(APPROVAL_RESPONSE_EVENT)
+        # Forget the previous pairing BEFORE subscribing. The call below can
+        # be abandoned mid-flight when the setup budget runs out, and a
+        # cancellation there must not leave a client/id pair behind that the
+        # check above would read as a live subscription. Both are set again
+        # only once the round trip has actually returned an id.
+        self._client = None
+        self._subscription_id = None
+        subscription_id = await client.subscribe_events(APPROVAL_RESPONSE_EVENT)
         # Handlers live in a set keyed on the bound method's identity, so
         # re-registering the same one after a reconnect does not double it.
         client.add_event_handler(APPROVAL_RESPONSE_EVENT, self._handle_event)
         self._client = client
+        self._subscription_id = subscription_id
         logger.info(
             "policy decisions: listening for %s (subscription %s)",
             APPROVAL_RESPONSE_EVENT,
@@ -200,9 +245,14 @@ class ApprovalResponseListener:
         """Apply one ``ha_mcp_approval_response`` event.
 
         The event payload is untrusted input from the bus: every field is
-        checked before it reaches the queue, and nothing from it is
-        logged verbatim -- the PIN travels in it, and Home Assistant's own
-        logs are not where a user's secret should end up.
+        checked before it reaches the queue, and the PIN it carries is
+        never logged -- not here, and not by the WebSocket reader that
+        decodes the event, which redacts it before its own debug line.
+        Home Assistant's own logs are not where a user's secret should end
+        up. The token and the decision ARE logged: they are what ties an
+        applied decision to the bus rather than to a click in the tab, and
+        neither is a secret -- the token names a request the settings UI
+        lists in full, and it dies with that request.
         """
         data = event.get("data")
         if not isinstance(data, dict):
@@ -271,18 +321,31 @@ class ApprovalResponseListener:
             return False
         if self._limiter.blocked():
             logger.warning(
-                "policy decisions: refusing a %s event, more than %d wrong "
-                "PINs within %.0f seconds -- the channel is closed until that "
-                "window passes. Decide in the settings UI meanwhile.",
+                "policy decisions: refusing a %s event, %d wrong PINs within "
+                "%.0f seconds -- the channel is closed until that window "
+                "passes. Decide in the settings UI meanwhile.",
                 APPROVAL_RESPONSE_EVENT,
                 MAX_FAILED_ATTEMPTS,
                 FAILURE_WINDOW_SECONDS,
             )
             return False
-        if not await run_in_thread(is_pin_set, self._data_dir):
+        state = await run_in_thread(pin_state, self._data_dir)
+        if state == PIN_ABSENT:
             logger.warning(
                 "policy decisions: refusing a %s event, no PIN is configured. "
                 "Set one on the Tool Security Policies tab.",
+                APPROVAL_RESPONSE_EVENT,
+            )
+            return False
+        if state == PIN_INVALID:
+            # A stored record this build cannot verify against is a broken
+            # configuration, not a guess: charging the budget for it would
+            # close the channel over something no responder can get right,
+            # and the repair is to set the PIN again.
+            logger.warning(
+                "policy decisions: refusing a %s event, the stored approval "
+                "PIN is unusable. Set the PIN again on the Tool Security "
+                "Policies tab.",
                 APPROVAL_RESPONSE_EVENT,
             )
             return False

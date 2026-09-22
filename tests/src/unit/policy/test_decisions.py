@@ -8,14 +8,16 @@ The limiter is what keeps the second one from being guessed.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import anyio
 import pytest
 
 from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 from ha_mcp.policy.approval_queue import ApprovalQueue
-from ha_mcp.policy.decision_pin import set_pin
+from ha_mcp.policy.decision_pin import PIN_FILENAME, set_pin
 from ha_mcp.policy.decisions import (
     APPROVAL_RESPONSE_EVENT,
     ApprovalResponseListener,
@@ -34,6 +36,19 @@ def anyio_backend():
 @pytest.fixture(autouse=True)
 def fast_hashing(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("ha_mcp.policy.decision_pin.HASH_ITERATIONS", 1000)
+
+
+@pytest.fixture
+def short_setup_budget(monkeypatch: pytest.MonkeyPatch) -> float:
+    """Shrink the channel-setup budget so a stall test costs milliseconds.
+
+    The production value is a user-facing delay, not a number under test:
+    what is under test is that the cap exists and that the caller comes
+    back from it.
+    """
+    budget = 0.2
+    monkeypatch.setattr("ha_mcp.policy.decisions.SETUP_BUDGET_SECONDS", budget)
+    return budget
 
 
 @pytest.fixture
@@ -234,7 +249,8 @@ async def test_a_malformed_event_is_not_a_guess(tmp_path, queue):
 
 
 @pytest.mark.anyio
-async def test_an_unknown_token_is_not_a_guess(tmp_path, queue):
+async def test_an_unknown_token_with_the_right_pin_is_not_a_guess(tmp_path, queue):
+    """The PIN was right, so nothing was guessed -- whatever the token was."""
     set_pin(tmp_path, PIN)
     limiter = FailedAttemptLimiter(max_attempts=2)
     listener, _ = make_listener(tmp_path, queue, limiter=limiter)
@@ -243,6 +259,89 @@ async def test_an_unknown_token_is_not_a_guess(tmp_path, queue):
         await listener._handle_event(response_event("no-such-token"))
 
     assert limiter.blocked() is False
+
+
+@pytest.mark.anyio
+async def test_a_wrong_pin_counts_even_with_an_unknown_token(tmp_path, queue):
+    """Authorisation runs before the token is looked up, so it counts.
+
+    The token is the thing being guessed at. If an invented one bought a
+    free attempt, the budget would bound nothing: an attacker would spend
+    wrong PINs against tokens they made up and never be blocked.
+    """
+    set_pin(tmp_path, PIN)
+    limiter = FailedAttemptLimiter(max_attempts=2)
+    entry = queue.create("ha_call_service", "h", {}, ttl_minutes=5)
+    listener, _ = make_listener(tmp_path, queue, limiter=limiter)
+
+    for _ in range(2):
+        await listener._handle_event(response_event("no-such-token", pin="1111"))
+
+    assert limiter.blocked() is True
+    # And the channel really is closed now, for the real token too.
+    await listener._handle_event(response_event(entry.token))
+    assert queue.get(entry.token).decision == "pending"
+
+
+@pytest.mark.anyio
+async def test_an_expired_entry_is_not_approved(tmp_path, queue):
+    """The TTL binds a decision from the bus as it binds one from the tab.
+
+    The settings UI reads the queue before approving, which expires the
+    entry on the way in. An event does not, so without the sweep in
+    ``approve`` a request whose window closed while its caller was
+    retrying could still be approved -- waking that retry and dispatching
+    the tool well after the entry should have been gone. Nothing polls the
+    queue here, because a poll would expire the entry itself and hide the
+    defect.
+    """
+    set_pin(tmp_path, PIN)
+    entry = queue.create("ha_call_service", "h", {}, ttl_minutes=5)
+    entry.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    listener, _ = make_listener(tmp_path, queue)
+
+    await listener._handle_event(response_event(entry.token))
+
+    assert entry.decision == "pending"
+
+
+@pytest.mark.anyio
+async def test_an_expired_entry_is_not_denied(tmp_path, queue):
+    set_pin(tmp_path, PIN)
+    entry = queue.create("ha_call_service", "h", {}, ttl_minutes=5)
+    entry.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    listener, _ = make_listener(tmp_path, queue)
+
+    await listener._handle_event(response_event(entry.token, decision="deny"))
+
+    assert entry.decision == "pending"
+
+
+@pytest.mark.anyio
+async def test_an_unusable_stored_record_decides_nothing_and_costs_nothing(
+    tmp_path, queue
+):
+    """A broken PIN file is a configuration problem, not a wrong guess.
+
+    Nobody can type a PIN that matches ``{}``, so charging the budget for
+    the attempt would close the channel over something no responder could
+    have got right -- and the repair is to set the PIN again, which the
+    refusal has to point at rather than at the PIN that was typed.
+    """
+    (tmp_path / PIN_FILENAME).write_text("{}", encoding="utf-8")
+    limiter = FailedAttemptLimiter(max_attempts=2)
+    entry = queue.create("ha_call_service", "h", {}, ttl_minutes=5)
+    listener, _ = make_listener(tmp_path, queue, limiter=limiter)
+
+    for _ in range(5):
+        await listener._handle_event(response_event(entry.token))
+
+    assert queue.get(entry.token).decision == "pending"
+    assert limiter.blocked() is False
+    # Setting a real PIN repairs it without any window to wait out.
+    set_pin(tmp_path, PIN)
+    await listener._handle_event(response_event(entry.token))
+    assert queue.get(entry.token).decision == "approved"
 
 
 @pytest.mark.anyio
@@ -376,3 +475,95 @@ async def test_a_failed_subscribe_is_not_fatal(tmp_path, queue, caplog):
         await listener.ensure_subscribed()
 
     assert "could not subscribe" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_a_stalled_setup_gives_up_within_the_budget(
+    tmp_path, queue, caplog, short_setup_budget
+):
+    """A connect that never returns must not hold up the notification.
+
+    The subscription runs ahead of the announcement so a fast responder
+    cannot lose the race, which puts connecting, authenticating and a
+    round trip in front of the only signal the user gets. Each has its own
+    timeout; this is the cap on their sum, and overshooting it costs the
+    channel for one request rather than the notification.
+    """
+
+    async def never_returns() -> Any:
+        await anyio.sleep(3600)
+
+    listener = ApprovalResponseListener(
+        policy_provider=lambda: Policy(event_decisions_enabled=True),
+        queue=queue,
+        data_dir=tmp_path,
+        get_ws_client=never_returns,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        with anyio.fail_after(short_setup_budget + 5):
+            await listener.ensure_subscribed()
+
+    assert "gave up opening" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_the_budget_covers_waiting_for_the_lock(
+    tmp_path, queue, short_setup_budget
+):
+    """Waiting behind somebody else's setup costs the caller the same.
+
+    A budget that started only once the lock was acquired would bound the
+    wrong thing: the second request would sit in the queue for as long as
+    the first one's stalled connect lasts, which is exactly the delay this
+    cap exists to bound.
+    """
+    released = anyio.Event()
+
+    async def slow_client() -> Any:
+        await released.wait()
+        return make_ws_client()
+
+    listener = ApprovalResponseListener(
+        policy_provider=lambda: Policy(event_decisions_enabled=True),
+        queue=queue,
+        data_dir=tmp_path,
+        get_ws_client=slow_client,
+    )
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(listener.ensure_subscribed)
+        await anyio.sleep(0.05)
+        with anyio.fail_after(short_setup_budget + 5):
+            # Blocked on the lock the first attempt holds, and bounded by
+            # the same budget rather than by the first one's stall.
+            await listener.ensure_subscribed()
+        released.set()
+
+
+@pytest.mark.anyio
+async def test_an_abandoned_setup_leaves_no_subscription_behind(
+    tmp_path, queue, short_setup_budget
+):
+    """A cancelled attempt must not read as a live subscription later.
+
+    The next request checks the client/id pair to decide whether it still
+    has a channel. If a timed-out attempt left the previous pair in place,
+    that check would answer yes for a subscription that is gone.
+    """
+    ws = make_ws_client()
+    listener, _ = make_listener(tmp_path, queue, client=ws)
+    await listener.ensure_subscribed()
+    assert listener._subscription_id == 7
+
+    async def never_completes(*_args: Any, **_kwargs: Any) -> int:
+        await anyio.sleep(3600)
+        raise AssertionError("unreachable: the budget cancels this first")
+
+    ws.is_connected = False
+    ws.subscribe_events = AsyncMock(side_effect=never_completes)
+    with anyio.fail_after(short_setup_budget + 5):
+        await listener.ensure_subscribed()
+
+    assert listener._subscription_id is None
+    assert listener._client is None
