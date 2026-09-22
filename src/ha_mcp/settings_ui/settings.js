@@ -2891,9 +2891,21 @@ async function policyRefreshPinStatus() {
     statusEl.textContent = t('policies.global.pin.unknown', {}, 'Could not read whether a PIN is set.');
     return;
   }
-  statusEl.textContent = status.set
-    ? t('policies.global.pin.is_set', {}, 'A PIN is set.')
-    : t('policies.global.pin.not_set', {}, 'No PIN set. Set one to allow decisions over the event bus.');
+  // Three states, not two: a stored record the server cannot verify
+  // against is neither "a PIN is set" nor "no PIN" — nobody can type a
+  // PIN that matches it, and saying so is the only way the user knows to
+  // set a new one rather than to keep retrying the old one.
+  if (status.set) {
+    statusEl.textContent = t('policies.global.pin.is_set', {}, 'A PIN is set.');
+  } else if (status.invalid) {
+    statusEl.textContent = t(
+      'policies.global.pin.invalid',
+      {},
+      'The stored PIN cannot be read and matches nothing. Set a new one.'
+    );
+  } else {
+    statusEl.textContent = t('policies.global.pin.not_set', {}, 'No PIN set. Set one to allow decisions over the event bus.');
+  }
   // Without a PIN the server refuses the combination, so don't offer it.
   toggle.disabled = !status.set;
 }
@@ -2931,8 +2943,14 @@ async function policyClearPin() {
     const r = await fetch('./api/policy/decision-pin', {method: 'DELETE'});
     const body = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(body.error || ('HTTP ' + r.status));
+    // Unchecked on every successful removal, whatever the answer says.
+    // The flag reports only whether the PERSISTED toggle was on, so a box
+    // ticked but not yet saved would otherwise survive the removal: left
+    // checked, then disabled by the status refresh below, and the next
+    // save submits the one combination the server refuses.
+    const toggleEl = document.getElementById('policy-event-decisions-toggle');
+    if (toggleEl) toggleEl.checked = false;
     if (body.event_decisions_disabled) {
-      document.getElementById('policy-event-decisions-toggle').checked = false;
       showToast(t(
         'policies.global.pin.cleared_and_disabled',
         {},

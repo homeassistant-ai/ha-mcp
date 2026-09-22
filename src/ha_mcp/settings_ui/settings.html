@@ -420,7 +420,10 @@
         event — and then approve its own requests. Home Assistant cannot tell an
         event fired by your automation from one fired by an agent, so the PIN is
         the only thing between them. Switching this on accepts that limitation.
-        Deciding here in this tab is unaffected.
+        Deciding in the Pending list is unaffected — on the settings UI the
+        server itself serves. The stdio sidecar's settings page sets the PIN
+        and the policy, but cannot list or decide pending approvals: those
+        live in the server process it cannot reach.
       </div>
     </div>
     <div class="feature-row">
@@ -430,8 +433,9 @@
           At least 4 characters. Stored as a salted hash and never shown
           again, and kept out of the policy document so nothing that reads
           or writes policy carries it. Five wrong PINs within five minutes
-          close the channel for the rest of that window — the pending list
-          here keeps working.
+          close the channel for the rest of that window — the Pending list
+          on the server's own settings UI keeps working (the stdio sidecar
+          page cannot show it).
         </div>
         <div class="feature-locked-note" id="policy-pin-status" role="status" aria-live="polite"></div>
       </div>
