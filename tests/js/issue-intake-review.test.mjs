@@ -148,14 +148,19 @@ test("Markdown code and bold markers do not affect quote matching", () => {
       /summary\[0\].evidence\[0\].*body/,
     );
   }
-  const joined = fixture(),
-    joinedResult = answer();
-  joined.issue.body = "Client is Claude Desktop, rate 2*3 per second.";
-  joinedResult.summary[0].evidence[0].quote = "rate 23 per second";
-  assert.throws(
-    () => validateResult(joinedResult, makeContext(joined)),
-    /summary\[0\].evidence\[0\].*body/,
-  );
+  for (const [body, quote] of [
+    ["rate 2*3 per second.", "rate 23 per second"],
+    ["rate α*β per second.", "rate αβ per second"],
+  ]) {
+    const joined = fixture(),
+      joinedResult = answer();
+    joined.issue.body = `Client is Claude Desktop, ${body}`;
+    joinedResult.summary[0].evidence[0].quote = quote;
+    assert.throws(
+      () => validateResult(joinedResult, makeContext(joined)),
+      /summary\[0\].evidence\[0\].*body/,
+    );
+  }
 });
 test("fact values must occur in their evidence", () => {
   const r = answer();

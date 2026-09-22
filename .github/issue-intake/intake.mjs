@@ -112,7 +112,9 @@ export function validateResult(result, context) {
   // The model adds or drops Markdown ` and * markers when quoting. Markers
   // between two word characters (2*3) are kept so no new words can form.
   const normalize = (text) =>
-    text.replace(/\r\n?/g, "\n").replace(/(?<!\w)[`*]+|[`*]+(?!\w)/g, "");
+    text
+      .replace(/\r\n?/g, "\n")
+      .replace(/(?<![\p{L}\p{N}_])[`*]+|[`*]+(?![\p{L}\p{N}_])/gu, "");
   for (const key of [
     "summary",
     "translation",
