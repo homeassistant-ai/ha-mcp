@@ -75,14 +75,36 @@ def make_listener(
     enabled: bool = True,
     client: MagicMock | None = None,
     limiter: FailedAttemptLimiter | None = None,
+    results: list[dict] | None = None,
 ) -> tuple[ApprovalResponseListener, MagicMock]:
     ws = client or make_ws_client()
+
+    async def _record(
+        token: str,
+        decision: str,
+        *,
+        applied: bool,
+        reason: str,
+        tool_name: str | None = None,
+    ) -> None:
+        assert results is not None
+        results.append(
+            {
+                "token": token,
+                "decision": decision,
+                "applied": applied,
+                "reason": reason,
+                "tool_name": tool_name,
+            }
+        )
+
     listener = ApprovalResponseListener(
         policy_provider=lambda: Policy(event_decisions_enabled=enabled),
         queue=queue,
         data_dir=tmp_path,
         get_ws_client=AsyncMock(return_value=ws),
         limiter=limiter,
+        emit_result=_record if results is not None else None,
     )
     return listener, ws
 
@@ -682,3 +704,198 @@ async def test_an_abandoned_setup_leaves_no_subscription_behind(
 
     ws.subscribe_events.assert_awaited_once_with(APPROVAL_RESPONSE_EVENT)
     assert listener._subscription_id == 9
+
+
+@pytest.mark.anyio
+async def test_an_applied_decision_is_reported_with_its_tool(tmp_path, queue):
+    """The answer the responder has no other way of getting.
+
+    Whoever decided from a phone notification is not watching the server
+    log and may not have the settings tab open at all; without this they
+    cannot tell an applied approval from one the server never received.
+    """
+    set_pin(tmp_path, PIN)
+    entry = queue.create("ha_call_service", "h", {}, ttl_minutes=5)
+    results: list[dict] = []
+    listener, _ = make_listener(tmp_path, queue, results=results)
+
+    await listener._handle_event(response_event(entry.token))
+
+    assert results == [
+        {
+            "token": entry.token,
+            "decision": "approve",
+            "applied": True,
+            "reason": "applied",
+            "tool_name": "ha_call_service",
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_a_denial_reports_the_decision_that_was_asked_for(tmp_path, queue):
+    """``decision`` is the request, ``applied`` is what became of it."""
+    set_pin(tmp_path, PIN)
+    entry = queue.create("ha_write_file", "h", {}, ttl_minutes=5)
+    results: list[dict] = []
+    listener, _ = make_listener(tmp_path, queue, results=results)
+
+    await listener._handle_event(response_event(entry.token, decision="deny"))
+
+    assert results[0]["decision"] == "deny"
+    assert results[0]["applied"] is True
+    assert results[0]["reason"] == "applied"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("setup", "event", "reason"),
+    [
+        pytest.param(
+            lambda tmp_path, queue: None,
+            lambda token: response_event(token, pin="9999"),
+            "wrong_pin",
+            id="wrong-pin",
+        ),
+        pytest.param(
+            lambda tmp_path, queue: None,
+            lambda token: response_event(token, pin=None),
+            "no_pin",
+            id="no-pin",
+        ),
+        pytest.param(
+            lambda tmp_path, queue: (tmp_path / PIN_FILENAME).unlink(),
+            lambda token: response_event(token),
+            "pin_not_set",
+            id="pin-absent",
+        ),
+        pytest.param(
+            lambda tmp_path, queue: (tmp_path / PIN_FILENAME).write_text("{}"),
+            lambda token: response_event(token),
+            "pin_unusable",
+            id="pin-unusable",
+        ),
+    ],
+)
+async def test_every_refusal_says_which_one_it_was(
+    tmp_path, queue, setup, event, reason
+):
+    """A responder has to be able to tell the repairs apart.
+
+    "Nothing happened" covers a PIN that needs retyping, a PIN file that
+    needs replacing, an automation that forgot the field, and a channel
+    that is closed for the next few minutes -- four different things to
+    do. The reasons are short tokens rather than the log sentences beside
+    them, so an automation can branch on them and a reworded log does not
+    move the contract.
+    """
+    set_pin(tmp_path, PIN)
+    entry = queue.create("ha_call_service", "h", {}, ttl_minutes=5)
+    setup(tmp_path, queue)
+    results: list[dict] = []
+    listener, _ = make_listener(tmp_path, queue, results=results)
+
+    await listener._handle_event(event(entry.token))
+
+    assert [r["reason"] for r in results] == [reason]
+    assert results[0]["applied"] is False
+    assert queue.get(entry.token).decision == "pending"
+
+
+@pytest.mark.anyio
+async def test_a_closed_channel_says_so_rather_than_going_quiet(tmp_path, queue):
+    """The one refusal that resolves by waiting."""
+    set_pin(tmp_path, PIN)
+    entry = queue.create("ha_call_service", "h", {}, ttl_minutes=5)
+    results: list[dict] = []
+    listener, _ = make_listener(
+        tmp_path, queue, limiter=FailedAttemptLimiter(max_attempts=1), results=results
+    )
+
+    await listener._handle_event(response_event(entry.token, pin="1111"))
+    await listener._handle_event(response_event(entry.token))
+
+    assert [r["reason"] for r in results] == ["wrong_pin", "rate_limited"]
+
+
+@pytest.mark.anyio
+async def test_the_feature_being_off_is_reported_as_such(tmp_path, queue):
+    set_pin(tmp_path, PIN)
+    entry = queue.create("ha_call_service", "h", {}, ttl_minutes=5)
+    results: list[dict] = []
+    listener, _ = make_listener(tmp_path, queue, enabled=False, results=results)
+
+    await listener._handle_event(response_event(entry.token))
+
+    assert [r["reason"] for r in results] == ["feature_off"]
+
+
+@pytest.mark.anyio
+async def test_an_unknown_token_names_no_tool(tmp_path, queue):
+    """Nothing to name, so nothing is named rather than guessed."""
+    set_pin(tmp_path, PIN)
+    results: list[dict] = []
+    listener, _ = make_listener(tmp_path, queue, results=results)
+
+    await listener._handle_event(response_event("not-a-token"))
+
+    assert results[0]["reason"] == "unknown_token"
+    assert results[0]["tool_name"] is None
+
+
+@pytest.mark.anyio
+async def test_an_expired_request_is_not_reported_as_unknown(tmp_path, queue):
+    """Two different messages for the user: too late, versus never existed."""
+    set_pin(tmp_path, PIN)
+    entry = queue.create("ha_call_service", "h", {}, ttl_minutes=5)
+    entry.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    results: list[dict] = []
+    listener, _ = make_listener(tmp_path, queue, results=results)
+
+    await listener._handle_event(response_event(entry.token))
+
+    assert results[0]["reason"] == "expired"
+
+
+@pytest.mark.anyio
+async def test_a_second_decision_is_reported_as_already_decided(tmp_path, queue):
+    set_pin(tmp_path, PIN)
+    entry = queue.create("ha_call_service", "h", {}, ttl_minutes=5)
+    results: list[dict] = []
+    listener, _ = make_listener(tmp_path, queue, results=results)
+
+    await listener._handle_event(response_event(entry.token))
+    await listener._handle_event(response_event(entry.token, decision="deny"))
+
+    assert [r["reason"] for r in results] == ["applied", "already_decided"]
+    assert queue.get(entry.token).decision == "approved"
+
+
+@pytest.mark.anyio
+async def test_a_malformed_event_is_not_answered(tmp_path, queue):
+    """Nothing to answer to, and answering would be the louder mistake.
+
+    A malformed event carries no token, so a result could only name the
+    event itself -- and a badly written automation firing in a loop would
+    then have the bus answer every one of them.
+    """
+    set_pin(tmp_path, PIN)
+    results: list[dict] = []
+    listener, _ = make_listener(tmp_path, queue, results=results)
+
+    await listener._handle_event({"data": {"decision": "approve"}})
+    await listener._handle_event({"data": "not-an-object"})
+
+    assert results == []
+
+
+@pytest.mark.anyio
+async def test_deciding_works_without_anywhere_to_report_to(tmp_path, queue):
+    """The report is an extra, not a precondition."""
+    set_pin(tmp_path, PIN)
+    entry = queue.create("ha_call_service", "h", {}, ttl_minutes=5)
+    listener, _ = make_listener(tmp_path, queue)
+
+    await listener._handle_event(response_event(entry.token))
+
+    assert queue.get(entry.token).decision == "approved"

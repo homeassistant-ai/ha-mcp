@@ -412,6 +412,40 @@ async def _install_event_decision_rule(handlers, *, wait_seconds: int = 30) -> N
     assert put_resp.status_code == 200, put_resp.body
 
 
+async def _respond_and_wait_for_result(
+    responder: HomeAssistantClient,
+    payload: dict[str, Any],
+    *,
+    base_url: str,
+    token: str,
+) -> dict[str, Any] | None:
+    """Fire one response event and return the result event it produces.
+
+    The listener is subscribed inside the server process, so the only way
+    to observe what it made of a response is the answer it fires back --
+    which is the point of that answer existing. Started before the
+    response goes out, because the round trip can complete first.
+    """
+    fired: asyncio.Task | None = None
+
+    def fire_the_response() -> None:
+        nonlocal fired
+        fired = asyncio.create_task(
+            responder.fire_event("ha_mcp_approval_response", payload)
+        )
+
+    result = await wait_for_ha_event(
+        "ha_mcp_approval_result",
+        fire_the_response,
+        timeout=20.0,
+        ha_url=base_url,
+        token=token,
+    )
+    if fired is not None:
+        await fired
+    return result
+
+
 @pytest.mark.asyncio
 async def test_a_real_event_round_trip_decides_a_held_call(
     policy_enabled_mcp, ha_container_with_fresh_config
@@ -456,22 +490,36 @@ async def test_a_real_event_round_trip_decides_a_held_call(
 
     responder = HomeAssistantClient(base_url=base_url, token=token)
     try:
-        # A wrong PIN decides nothing, and the call keeps waiting.
-        await responder.fire_event(
-            "ha_mcp_approval_response",
+        # A wrong PIN decides nothing, and the call keeps waiting -- and
+        # the responder is told so, which is the only way an automation
+        # can distinguish a refusal from an event nobody received.
+        refusal = await _respond_and_wait_for_result(
+            responder,
             {"token": approval_token, "decision": "approve", "pin": "9999"},
+            base_url=base_url,
+            token=token,
         )
-        await asyncio.sleep(2)
+        assert refusal is not None, "a refused response produced no result event"
+        assert refusal["data"]["applied"] is False
+        assert refusal["data"]["reason"] == "wrong_pin"
+        assert refusal["data"]["token"] == approval_token
+        assert "pin" not in json.dumps(refusal["data"])
         assert not call_task.done(), (
             "a wrong PIN released the held call; the PIN is the only thing "
             "standing between an agent-fired event and its own approval"
         )
         assert server.approval_queue.get(approval_token) is not None
 
-        await responder.fire_event(
-            "ha_mcp_approval_response",
+        applied = await _respond_and_wait_for_result(
+            responder,
             {"token": approval_token, "decision": "approve", "pin": "2468"},
+            base_url=base_url,
+            token=token,
         )
+        assert applied is not None, "an applied response produced no result event"
+        assert applied["data"]["applied"] is True
+        assert applied["data"]["reason"] == "applied"
+        assert applied["data"]["tool_name"] == "ha_call_service"
         result = await asyncio.wait_for(call_task, timeout=20)
     finally:
         if not call_task.done():
@@ -518,14 +566,20 @@ async def test_a_real_event_round_trip_denies_a_held_call(
 
     responder = HomeAssistantClient(base_url=base_url, token=token)
     try:
-        await responder.fire_event(
-            "ha_mcp_approval_response",
+        denial = await _respond_and_wait_for_result(
+            responder,
             {
                 "token": announcement["data"]["token"],
                 "decision": "deny",
                 "pin": "2468",
             },
+            base_url=base_url,
+            token=token,
         )
+        assert denial is not None, "an applied denial produced no result event"
+        assert denial["data"]["decision"] == "deny"
+        assert denial["data"]["applied"] is True
+        assert denial["data"]["reason"] == "applied"
         try:
             result = await asyncio.wait_for(call_task, timeout=20)
         except ToolError as exc:

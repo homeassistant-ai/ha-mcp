@@ -31,12 +31,12 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import anyio
 from anyio.to_thread import run_sync as run_in_thread
 
-from .approval_queue import ApprovalQueue
+from .approval_queue import ApprovalQueue, DecisionOutcome
 from .decision_pin import PIN_ABSENT, PIN_INVALID, pin_state, verify_pin
 from .model import Policy
 
@@ -68,6 +68,37 @@ SETUP_BUDGET_SECONDS = 5.0
 # what remains is asking the other side to forget a subscription that no
 # longer reaches us either way.
 RETIRE_BUDGET_SECONDS = 1.0
+
+# Why an event was refused, as it appears in the result event. Short stable
+# tokens rather than the log sentences next to them: an automation branches
+# on these, and a reworded log line must not change what it sees. None of
+# them says anything about the PIN itself beyond whether one matched.
+REFUSED_POLICY_UNREADABLE = "policy_unreadable"
+REFUSED_FEATURE_OFF = "feature_off"
+REFUSED_RATE_LIMITED = "rate_limited"
+REFUSED_PIN_NOT_SET = "pin_not_set"
+REFUSED_PIN_UNUSABLE = "pin_unusable"
+REFUSED_NO_PIN = "no_pin"
+REFUSED_WRONG_PIN = "wrong_pin"
+
+
+class ResultEmitter(Protocol):
+    """How the listener says what became of a response event.
+
+    A protocol rather than the emitter itself, so the listener does not
+    have to hold a REST client to be constructed or tested. Keyword-only
+    past the first two, matching the emitter it is satisfied by.
+    """
+
+    async def __call__(
+        self,
+        token: str,
+        decision: str,
+        *,
+        applied: bool,
+        reason: str,
+        tool_name: str | None = None,
+    ) -> None: ...
 
 
 class FailedAttemptLimiter:
@@ -165,12 +196,14 @@ class ApprovalResponseListener:
         data_dir: Path,
         get_ws_client: Callable[[], Awaitable[HomeAssistantWebSocketClient]],
         limiter: FailedAttemptLimiter | None = None,
+        emit_result: ResultEmitter | None = None,
     ) -> None:
         self._policy_provider = policy_provider
         self._queue = queue
         self._data_dir = data_dir
         self._get_ws_client = get_ws_client
         self._limiter = limiter or FailedAttemptLimiter()
+        self._emit_result = emit_result
         self._client: HomeAssistantWebSocketClient | None = None
         self._subscription_id: int | None = None
         self._lock = anyio.Lock()
@@ -358,13 +391,12 @@ class ApprovalResponseListener:
                 type(token).__name__,
             )
             return
-        if not await self._authorised(data.get("pin")):
+        refusal = await self._authorised(data.get("pin"))
+        if refusal is not None:
+            await self._report(token, decision, applied=False, reason=refusal)
             return
-        applied = (
-            self._queue.approve(token)
-            if decision == "approve"
-            else self._queue.deny(token)
-        )
+        outcome = self._queue.decide_with_outcome(token, decision)
+        applied = outcome is DecisionOutcome.APPLIED
         if applied:
             logger.info(
                 "policy decisions: %s from the event bus applied to token %s",
@@ -372,21 +404,63 @@ class ApprovalResponseListener:
                 token,
             )
         else:
-            # The queue logs the why (unknown token / already decided) at
-            # its own level; this line is what ties that to the bus rather
-            # than to a click in the settings UI.
+            # The queue logs the why at its own level; this line is what
+            # ties that to the bus rather than to a click in the settings
+            # UI.
             logger.info(
                 "policy decisions: %s from the event bus did not apply to "
-                "token %s (unknown or already decided)",
+                "token %s (%s)",
                 decision,
                 token,
+                outcome.value,
             )
+        # After the decision, not before: reading the entry first would
+        # sweep an expired one away, and the outcome above would then call
+        # it an unknown token rather than an expired request. The entry
+        # survives a decision, so the tool name is available exactly when
+        # there is still a request to name.
+        entry = self._queue.get(token)
+        await self._report(
+            token,
+            decision,
+            applied=applied,
+            reason=outcome.value,
+            tool_name=entry.tool_name if entry is not None else None,
+        )
 
-    async def _authorised(self, pin: Any) -> bool:
+    async def _report(
+        self,
+        token: str,
+        decision: str,
+        *,
+        applied: bool,
+        reason: str,
+        tool_name: str | None = None,
+    ) -> None:
+        """Say on the bus what became of a response event, if anyone can.
+
+        Optional by construction: an installation that never wired a REST
+        client keeps deciding, it just says nothing about it. The decision
+        has already happened by the time this runs, so a failure here
+        cannot undo it -- which is why the emitter swallows its own errors
+        rather than raising into a bus handler that has nowhere to put
+        them.
+        """
+        if self._emit_result is None:
+            return
+        await self._emit_result(
+            token, decision, applied=applied, reason=reason, tool_name=tool_name
+        )
+
+    async def _authorised(self, pin: Any) -> str | None:
         """Both gates, cheapest first among those that can answer.
 
         The policy read leads because everything else depends on the
         feature being on at all.
+
+        Returns ``None`` when the event may decide, and otherwise the
+        reason it may not -- a short stable token, because it is reported
+        back on the bus and an automation has to be able to branch on it.
         """
         try:
             policy = await run_in_thread(self._policy_provider)
@@ -396,14 +470,14 @@ class ApprovalResponseListener:
                 APPROVAL_RESPONSE_EVENT,
                 exc_info=True,
             )
-            return False
+            return REFUSED_POLICY_UNREADABLE
         if not policy.event_decisions_enabled:
             logger.info(
                 "policy decisions: refusing a %s event, deciding from the "
                 "event bus is switched off",
                 APPROVAL_RESPONSE_EVENT,
             )
-            return False
+            return REFUSED_FEATURE_OFF
         if self._limiter.blocked():
             logger.warning(
                 "policy decisions: refusing a %s event, %d wrong PINs within "
@@ -413,7 +487,7 @@ class ApprovalResponseListener:
                 MAX_FAILED_ATTEMPTS,
                 FAILURE_WINDOW_SECONDS,
             )
-            return False
+            return REFUSED_RATE_LIMITED
         state = await run_in_thread(pin_state, self._data_dir)
         if state == PIN_ABSENT:
             logger.warning(
@@ -421,7 +495,7 @@ class ApprovalResponseListener:
                 "Set one on the Tool Security Policies tab.",
                 APPROVAL_RESPONSE_EVENT,
             )
-            return False
+            return REFUSED_PIN_NOT_SET
         if state == PIN_INVALID:
             # A stored record this build cannot verify against is a broken
             # configuration, not a guess: charging the budget for it would
@@ -433,7 +507,7 @@ class ApprovalResponseListener:
                 "Policies tab.",
                 APPROVAL_RESPONSE_EVENT,
             )
-            return False
+            return REFUSED_PIN_UNUSABLE
         if not isinstance(pin, str) or not pin:
             # Carries no PIN to be wrong about, so it is the same class as a
             # missing token: an automation written without reading the FAQ.
@@ -443,7 +517,7 @@ class ApprovalResponseListener:
                 "policy decisions: refusing a %s event, it carries no PIN",
                 APPROVAL_RESPONSE_EVENT,
             )
-            return False
+            return REFUSED_NO_PIN
         if not await run_in_thread(verify_pin, self._data_dir, pin):
             failures = self._limiter.record_failure()
             logger.warning(
@@ -454,6 +528,6 @@ class ApprovalResponseListener:
                 MAX_FAILED_ATTEMPTS,
                 FAILURE_WINDOW_SECONDS,
             )
-            return False
+            return REFUSED_WRONG_PIN
         self._limiter.reset()
-        return True
+        return None

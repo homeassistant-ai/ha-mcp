@@ -1401,11 +1401,53 @@ class HomeAssistantSmartMCPServer:
         # Reads the same policy file as the middleware, so the toggle that
         # opens this channel is the one the user flips in the settings UI,
         # with no restart in between.
+        async def _emit_approval_result(
+            token: str,
+            decision: str,
+            *,
+            applied: bool,
+            reason: str,
+            tool_name: str | None = None,
+        ) -> None:
+            from .client.rest_client import HomeAssistantClient
+            from .policy.events import emit_approval_result
+
+            # Credentials read the way ``_approval_ws_client`` reads them,
+            # and for the same reason: this runs in a bus handler, not in a
+            # request, so in OAuth mode ``self.client`` resolves to nobody
+            # and the proxy raises rather than handing back a usable client.
+            # A fresh REST client over the snapshot keeps the result going
+            # out as the same identity the request was announced with.
+            client = self.client
+            url: str | None
+            token_value: str | None
+            verify_ssl: bool | None
+            try:
+                url = client.base_url
+                token_value = client.token
+                verify_ssl = client.verify_ssl
+            except Exception:
+                logger.debug(
+                    "policy decisions: no credentials for the result event; "
+                    "the decision itself is unaffected",
+                    exc_info=True,
+                )
+                return
+            await emit_approval_result(
+                HomeAssistantClient(url, token_value, verify_ssl=verify_ssl),
+                token,
+                decision,
+                applied=applied,
+                reason=reason,
+                tool_name=tool_name,
+            )
+
         self.approval_response_listener = ApprovalResponseListener(
             policy_provider=_policy_provider,
             queue=self.approval_queue,
             data_dir=data_dir,
             get_ws_client=_approval_ws_client,
+            emit_result=_emit_approval_result,
         )
 
         try:

@@ -24,6 +24,14 @@ logger = logging.getLogger(__name__)
 
 APPROVAL_REQUESTED_EVENT = "ha_mcp_approval_requested"
 
+# What became of a response event this process received. Deliberately not a
+# report on every attempt: an event fired while the feature is off, or while
+# the channel is not open, is never seen here and produces nothing. Silence
+# therefore means "not received", never "refused", and the FAQ says so --
+# an automation that treats a missing result as a denial would be wrong in
+# exactly the case where the user most needs to look at the settings UI.
+APPROVAL_RESULT_EVENT = "ha_mcp_approval_result"
+
 # Per-argument size cap for the event payload. The settings UI shows one
 # admin the full arguments; the event bus fans them out to every listener
 # and to the frontend's event dev-tools, so a whole file or YAML document
@@ -97,6 +105,89 @@ def build_requested_payload(
             "when": [p.model_dump(mode="json") for p in rule.when],
         }
     return payload
+
+
+def build_result_payload(
+    token: str,
+    decision: str,
+    *,
+    applied: bool,
+    reason: str,
+    tool_name: str | None,
+) -> dict[str, Any]:
+    """What one received response event did.
+
+    ``decision`` is what the event ASKED for, not what the server ended up
+    doing; ``applied`` is the latter, and ``reason`` says why when they
+    differ. ``tool_name`` is present only when the request is still known
+    here -- an expired or invented token names nothing, and inventing a
+    label for it would be a guess.
+
+    Two things this payload deliberately does not carry. It never contains
+    the PIN or its digest, in any form, including as a hint about how close
+    a wrong one was. And it makes no claim about who fired the response: the
+    bus cannot tell an automation the user wrote from one an agent wrote, so
+    nothing here pretends otherwise.
+
+    An applied approval also does not mean the tool succeeded. It means the
+    held call was released to run; what it then does is the tool's own
+    business and has its own result.
+    """
+    payload: dict[str, Any] = {
+        "token": token,
+        "decision": decision,
+        "applied": applied,
+        "reason": reason,
+    }
+    if tool_name is not None:
+        payload["tool_name"] = tool_name
+    return payload
+
+
+async def emit_approval_result(
+    client: HomeAssistantClient,
+    token: str,
+    decision: str,
+    *,
+    applied: bool,
+    reason: str,
+    tool_name: str | None = None,
+) -> None:
+    """Fire ``ha_mcp_approval_result`` for one received response event.
+
+    Best effort on the same terms as the announcement: a decision that was
+    applied stays applied even if nobody can be told about it, and the
+    failure is logged rather than raised. The caller is a bus handler with
+    nowhere to return an error to.
+    """
+    try:
+        with anyio.move_on_after(EMIT_TIMEOUT_SECONDS) as scope:
+            await client.fire_event(
+                APPROVAL_RESULT_EVENT,
+                build_result_payload(
+                    token,
+                    decision,
+                    applied=applied,
+                    reason=reason,
+                    tool_name=tool_name,
+                ),
+            )
+        if scope.cancelled_caught:
+            logger.warning(
+                "policy events: firing %s for token=%s timed out after %.0fs; "
+                "the decision itself is unaffected",
+                APPROVAL_RESULT_EVENT,
+                token,
+                EMIT_TIMEOUT_SECONDS,
+            )
+    except Exception:
+        logger.warning(
+            "policy events: failed to fire %s for token=%s; the decision "
+            "itself is unaffected",
+            APPROVAL_RESULT_EVENT,
+            token,
+            exc_info=True,
+        )
 
 
 async def emit_approval_requested(

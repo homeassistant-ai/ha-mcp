@@ -8,6 +8,7 @@ import logging
 import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Any, Literal
 
 import anyio
@@ -90,6 +91,19 @@ class PendingApproval:
     def __post_init__(self) -> None:
         if self.expires_at <= self.created_at:
             raise ValueError("expires_at must be after created_at")
+
+
+# What a decision did, for a caller that has to report it rather than just
+# branch on it. ``approve``/``deny`` keep returning a bool because that is
+# all their callers in the settings UI and the developer tool ever needed;
+# a decision arriving over the event bus has to say WHY it did not apply,
+# and the queue is the only place that knows. The values are part of the
+# event payload, so they are a stable vocabulary rather than prose.
+class DecisionOutcome(StrEnum):
+    APPLIED = "applied"
+    EXPIRED = "expired"
+    UNKNOWN_TOKEN = "unknown_token"
+    ALREADY_DECIDED = "already_decided"
 
 
 class ApprovalQueue:
@@ -217,6 +231,41 @@ class ApprovalQueue:
         self._sweep_expired()
         return [e for e in self._by_token.values() if e.decision == "pending"]
 
+    def decide_with_outcome(
+        self, token: str, decision: Literal["approve", "deny"]
+    ) -> DecisionOutcome:
+        """Decide ``token`` and say what happened, not merely whether it worked.
+
+        Same work as ``approve``/``deny`` -- those delegate here -- with the
+        distinction the logs already draw kept in the return value: a TTL
+        that ran out while a phone notification sat unread is a different
+        thing from a token nobody ever issued, and a caller that has to
+        tell the user which one it was cannot get that from a bool.
+        """
+        action = "approve" if decision == "approve" else "deny"
+        if self._expire(token, action):
+            return DecisionOutcome.EXPIRED
+        entry = self._by_token.get(token)
+        if entry is None:
+            # WARNING because on a security-gating endpoint this means
+            # either a UI bug, a stale tab racing the sweeper, or an
+            # attacker probing tokens -- operator should see it. An entry
+            # that merely ran out of TTL is handled above, at INFO, so a
+            # late click on a phone notification does not read as a probe.
+            logger.warning("approval_queue.%s: unknown token %s", action, token)
+            return DecisionOutcome.UNKNOWN_TOKEN
+        if entry.decide("approved" if decision == "approve" else "denied"):
+            return DecisionOutcome.APPLIED
+        # INFO -- could be a legitimate race (two approvers, or a quick
+        # double-click) rather than a security signal.
+        logger.info(
+            "approval_queue.%s: token %s already decided as %s",
+            action,
+            token,
+            entry.decision,
+        )
+        return DecisionOutcome.ALREADY_DECIDED
+
     def approve(self, token: str) -> bool:
         """Mark the entry approved. False if unknown, expired or already decided.
 
@@ -228,27 +277,7 @@ class ApprovalQueue:
         be approved -- waking a retry that is holding the same row and
         dispatching the tool long after the window closed.
         """
-        if self._expire(token, "approve"):
-            return False
-        entry = self._by_token.get(token)
-        if entry is None:
-            # WARNING because on a security-gating endpoint this means
-            # either a UI bug, a stale tab racing the sweeper, or an
-            # attacker probing tokens — operator should see it. An entry
-            # that merely ran out of TTL is handled above, at INFO, so a
-            # late click on a phone notification does not read as a probe.
-            logger.warning("approval_queue.approve: unknown token %s", token)
-            return False
-        ok = entry.decide("approved")
-        if not ok:
-            # INFO — could be a legitimate race (two approvers, or
-            # quick double-click) rather than a security signal.
-            logger.info(
-                "approval_queue.approve: token %s already decided as %s",
-                token,
-                entry.decision,
-            )
-        return ok
+        return self.decide_with_outcome(token, "approve") is DecisionOutcome.APPLIED
 
     def deny(self, token: str) -> bool:
         """Mark the entry denied. False if unknown, expired or already decided.
@@ -256,20 +285,7 @@ class ApprovalQueue:
         Expires first, for the reason ``approve`` gives: the TTL has to mean
         the same thing to a decision from the bus as to one from the tab.
         """
-        if self._expire(token, "deny"):
-            return False
-        entry = self._by_token.get(token)
-        if entry is None:
-            logger.warning("approval_queue.deny: unknown token %s", token)
-            return False
-        ok = entry.decide("denied")
-        if not ok:
-            logger.info(
-                "approval_queue.deny: token %s already decided as %s",
-                token,
-                entry.decision,
-            )
-        return ok
+        return self.decide_with_outcome(token, "deny") is DecisionOutcome.APPLIED
 
     def _expire(self, token: str, action: str) -> bool:
         """Sweep, and report whether ``token`` is gone because its TTL ran out.

@@ -1080,12 +1080,55 @@ has subscribed to the response event at all, so such an event is never even
 received. Either way the request
 stays pending and decidable in the tab.
 
-Nothing is sent back onto the bus either way. A response event that is
-refused — wrong PIN, expired request, feature switched off — produces a
-log line on the server and no event, so the automation that fired it
-cannot tell you it was refused. Watch the server log while you set this
-up, and treat the settings tab as the place that tells you whether a
-request is still pending.
+### Finding out what became of a response
+
+Every response event the server *receives* is answered on the bus with
+`ha_mcp_approval_result`:
+
+```yaml
+automation:
+  - alias: Tell me whether my approval landed
+    triggers:
+      - trigger: event
+        event_type: ha_mcp_approval_result
+    actions:
+      - action: notify.mobile_app_my_phone
+        data:
+          message: >-
+            {{ trigger.event.data.decision }} →
+            {{ 'applied' if trigger.event.data.applied else
+               trigger.event.data.reason }}
+```
+
+The payload carries `token`, the `decision` that was asked for, whether it
+was `applied`, and a `reason`. `tool_name` is included when the request is
+still known — an expired or invented token names nothing, so the field is
+absent rather than guessed. The reason is one of `applied`, `expired`,
+`unknown_token`, `already_decided`, `wrong_pin`, `no_pin`, `pin_not_set`,
+`pin_unusable`, `rate_limited`, `feature_off` or `policy_unreadable`: short
+tokens, so an automation can branch on them without matching prose.
+
+Four things it deliberately does not do.
+
+It never carries the PIN or its digest, in any form — not even a hint about
+how close a wrong one was.
+
+It makes no claim about **who** responded. The bus cannot tell a response
+your automation fired from one an agent wrote itself, so nothing in the
+payload pretends it can. That limitation is the same one the PIN exists to
+bound, and it does not change here.
+
+`applied: true` means the held call was released to run. It is **not** a
+report that the tool then succeeded — that is the tool's own business and
+has its own result.
+
+And silence is **not** a refusal. A result is produced only for a response
+the server actually received, which means the feature was on and the
+channel was open. Fire a response while the feature is off, or before
+anything has subscribed, and there is no result event because there was no
+recipient. An automation that treats a missing result as a denial will be
+wrong in exactly the case where you most need to open the settings tab —
+so use the reason when one arrives, and the tab when none does.
 
 ---
 

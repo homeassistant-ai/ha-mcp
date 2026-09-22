@@ -6,6 +6,7 @@ failure to deliver it never turns a held tool call into a failed one.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
@@ -16,8 +17,11 @@ import pytest
 from ha_mcp.policy.approval_queue import PendingApproval
 from ha_mcp.policy.events import (
     APPROVAL_REQUESTED_EVENT,
+    APPROVAL_RESULT_EVENT,
     build_requested_payload,
+    build_result_payload,
     emit_approval_requested,
+    emit_approval_result,
 )
 from ha_mcp.policy.model import Predicate, Rule
 
@@ -162,3 +166,83 @@ def test_an_ordinary_request_announces_its_expiry():
 
     assert payload["expires_at"]
     assert "single_use" not in payload
+
+
+def test_the_result_payload_never_carries_the_pin():
+    """The two things this event must never grow, asserted two ways.
+
+    The response event that triggers it carries the PIN, so the payload is
+    one careless spread away from broadcasting the user's secret to every
+    listener on the bus -- and to the frontend's event dev-tools, which is
+    where they would first see it. The key set is the stronger half: a new
+    field cannot be added without this failing, which is what catches the
+    spread nobody meant to write. The value check covers the same field
+    being filled from the wrong place.
+
+    ``wrong_pin`` as a reason is not a leak and the test must not pretend
+    it is: it says a PIN did not match, which is exactly what the
+    responder needs and reveals nothing about either PIN.
+    """
+    secret = "8213"
+    payload = build_result_payload(
+        "tok-1",
+        "approve",
+        applied=False,
+        reason="wrong_pin",
+        tool_name="ha_call_service",
+    )
+
+    assert set(payload) == {"token", "decision", "applied", "reason", "tool_name"}
+    flat = json.dumps(payload)
+    assert secret not in flat
+    assert all(
+        key not in payload for key in ("pin", "hash", "digest", "salt", "iterations")
+    )
+
+
+def test_the_result_payload_omits_a_tool_it_cannot_name():
+    """Absent rather than null or invented: there is no request to name."""
+    payload = build_result_payload(
+        "tok-1", "approve", applied=False, reason="unknown_token", tool_name=None
+    )
+
+    assert "tool_name" not in payload
+    assert payload["applied"] is False
+
+
+def test_the_result_payload_separates_what_was_asked_from_what_happened():
+    """An applied approval is not a claim that the tool then succeeded."""
+    payload = build_result_payload(
+        "tok-1", "approve", applied=False, reason="expired", tool_name="ha_call_service"
+    )
+
+    assert payload["decision"] == "approve"
+    assert payload["applied"] is False
+    assert payload["reason"] == "expired"
+
+
+@pytest.mark.anyio
+async def test_emit_result_fires_the_event_on_the_client():
+    client = AsyncMock()
+
+    await emit_approval_result(client, "tok-1", "deny", applied=True, reason="applied")
+
+    client.fire_event.assert_awaited_once()
+    event_type, payload = client.fire_event.await_args.args
+    assert event_type == APPROVAL_RESULT_EVENT
+    assert payload["token"] == "tok-1"
+    assert payload["applied"] is True
+
+
+@pytest.mark.anyio
+async def test_emit_result_swallows_a_delivery_failure(caplog):
+    """The decision has already happened; it cannot be undone from here."""
+    client = AsyncMock()
+    client.fire_event.side_effect = RuntimeError("bus unavailable")
+
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.policy.events"):
+        await emit_approval_result(
+            client, "tok-1", "approve", applied=True, reason="applied"
+        )
+
+    assert any(APPROVAL_RESULT_EVENT in r.getMessage() for r in caplog.records)
