@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from anyio.to_thread import run_sync as run_in_thread
 from pydantic import ValidationError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -217,7 +218,22 @@ async def _post_decision_pin(data_dir: Path, request: Request) -> JSONResponse:
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     async with config_write_guard():
-        set_pin(data_dir, pin)
+        # Off the event loop: deriving the digest is 200k PBKDF2 rounds --
+        # a quarter of a second of pure CPU by design -- and the file write
+        # blocks on top of that. Verification already runs in a worker; this
+        # is the other half. The guard stays outside, so the write is still
+        # serialised against the policy writers it shares a lock with.
+        try:
+            await run_in_thread(set_pin, data_dir, pin)
+        except OSError as e:
+            logger.exception("approval PIN could not be stored")
+            return JSONResponse(
+                {
+                    "error": f"could not store the approval PIN: {e}",
+                    "storage_failed": True,
+                },
+                status_code=500,
+            )
     logger.info("approval PIN set (event-bus decisions)")
     return JSONResponse(pin_status(data_dir))
 
@@ -228,15 +244,68 @@ async def _delete_decision_pin(data_dir: Path) -> JSONResponse:
     Leaving ``event_decisions_enabled`` on while the PIN is gone would
     leave the tab claiming a channel that now refuses every event, so the
     two are cleared together rather than drifting apart.
+
+    Which is why the policy is read BEFORE anything is deleted: a corrupt
+    policy file raises, and raising after the delete would remove the PIN
+    and report a 500, leaving the caller to guess what happened. Both
+    remaining failures are reported for what they are -- the delete itself
+    failing changes nothing, while a failing save leaves the PIN gone and
+    the toggle still persisted, which the user has to know about because
+    the tab would otherwise show a channel that no longer has a PIN.
     """
     async with config_write_guard():
-        existed = clear_pin(data_dir)
-        policy = load_policy(data_dir)
-        disabled = policy.event_decisions_enabled
-        if disabled:
-            save_policy(
-                data_dir, policy.model_copy(update={"event_decisions_enabled": False})
+        try:
+            policy = load_policy(data_dir)
+        except ValueError as e:
+            return JSONResponse(
+                {
+                    "error": (
+                        f"the policy file must be readable before the PIN can "
+                        f"be removed: {e}"
+                    ),
+                    "policy_file_corrupt": True,
+                },
+                status_code=500,
             )
+        disabled = policy.event_decisions_enabled
+        try:
+            existed = clear_pin(data_dir)
+        except OSError as e:
+            logger.exception("approval PIN could not be removed")
+            return JSONResponse(
+                {
+                    "error": f"could not remove the approval PIN: {e}",
+                    "storage_failed": True,
+                },
+                status_code=500,
+            )
+        if disabled:
+            try:
+                save_policy(
+                    data_dir,
+                    policy.model_copy(update={"event_decisions_enabled": False}),
+                )
+            except OSError as e:
+                logger.exception(
+                    "approval PIN removed, but the event-decisions toggle "
+                    "could not be switched off with it"
+                )
+                return JSONResponse(
+                    {
+                        "error": (
+                            f"the PIN was removed, but switching off deciding "
+                            f"over the event bus failed: {e}. The channel is "
+                            f"closed either way -- every event is refused "
+                            f"without a PIN -- but the saved setting still "
+                            f"says it is on. Save the global settings again "
+                            f"to correct it."
+                        ),
+                        "pin_removed": True,
+                        "event_decisions_disabled": False,
+                        "storage_failed": True,
+                    },
+                    status_code=500,
+                )
     if existed:
         logger.info(
             "approval PIN removed%s",
