@@ -227,6 +227,20 @@ class ApprovalResponseListener:
         # cancellation there must not leave a client/id pair behind that the
         # check above would read as a live subscription. Both are set again
         # only once the round trip has actually returned an id.
+        #
+        # What cannot be cleaned up is the other side: Home Assistant
+        # identifies a subscription by the id of the command that opened it,
+        # and a cancelled ``subscribe_events`` never returns that id, so an
+        # abandoned attempt whose command did reach HA leaves a subscription
+        # this process can no longer name or release. The next attempt then
+        # opens a second one and the response event is delivered twice. The
+        # consequences are bounded rather than absent: the handler is stored
+        # in a set keyed on its identity, so it is registered once; a
+        # decision is one-shot, so a duplicate cannot dispatch a tool twice;
+        # and the only thing a duplicate really costs is that one wrong PIN
+        # can be charged to the budget twice, which errs towards closing the
+        # channel rather than opening it. The connection dropping takes both
+        # subscriptions with it.
         self._client = None
         self._subscription_id = None
         subscription_id = await client.subscribe_events(APPROVAL_RESPONSE_EVENT)
