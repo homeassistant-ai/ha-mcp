@@ -32,9 +32,15 @@ from ha_mcp.policy.decision_pin import (
     verify_pin,
 )
 
-
 DIGEST_B64 = base64.b64encode(b"\x00" * _DIGEST_BYTES).decode("ascii")
 SALT_B64 = base64.b64encode(b"\x00" * 16).decode("ascii")
+# One byte off in either direction. A digest that is merely close to the right
+# length is the case a "too short to be plausible" check would wave through,
+# and it can no more be what a derivation returned than a three-byte one can.
+LONG_DIGEST_B64 = base64.b64encode(b"\x00" * (_DIGEST_BYTES + 1)).decode("ascii")
+SHORT_BY_ONE_DIGEST_B64 = base64.b64encode(b"\x00" * (_DIGEST_BYTES - 1)).decode(
+    "ascii"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -176,6 +182,18 @@ def test_a_broken_record_verifies_nothing(tmp_path, record):
             "salt": SALT_B64,
             "hash": "AAAA",
         },
+        {
+            "algorithm": "pbkdf2_sha256",
+            "iterations": 1000,
+            "salt": SALT_B64,
+            "hash": LONG_DIGEST_B64,
+        },
+        {
+            "algorithm": "pbkdf2_sha256",
+            "iterations": 1000,
+            "salt": SALT_B64,
+            "hash": SHORT_BY_ONE_DIGEST_B64,
+        },
     ],
     ids=[
         "empty-object",
@@ -184,6 +202,8 @@ def test_a_broken_record_verifies_nothing(tmp_path, record):
         "wrong-algorithm",
         "empty-salt",
         "short-digest",
+        "one-byte-too-long",
+        "one-byte-too-short",
     ],
 )
 def test_a_record_nobody_can_match_is_invalid_not_set(tmp_path, record):
