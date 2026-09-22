@@ -563,11 +563,16 @@ async def test_a_real_event_round_trip_decides_a_held_call(
             "standing between an agent-fired event and its own approval"
         )
         # The result event above says a subscribed server refused the guess.
-        # It cannot say WHICH one: a wrong PIN is wrong on every server that
-        # has the channel open, none of them can name the tool behind a token
-        # it never issued, so their refusals are identical to this one. What
-        # is checked here instead is the only thing that belongs to this
-        # server -- its own entry, still undecided, with the call still held.
+        # It cannot say WHICH one, and in this suite it does not have to: a
+        # wrong PIN is wrong on every server that currently has the channel
+        # open, and none of them can name the tool behind a token it never
+        # issued, so their refusals read the same as this one. That holds
+        # because of how the suite is arranged rather than because the code
+        # guarantees it -- a listener whose toggle went off after subscribing
+        # answers `feature_off`, and one that is rate-limited answers
+        # `rate_limited`; see the wait helper's own note. What is checked here
+        # instead is the only thing that belongs to this server -- its own
+        # entry, still undecided, with the call still held.
         refused_entry = server.approval_queue.get(approval_token)
         assert refused_entry is not None, "the wrong PIN consumed the request"
         assert refused_entry.decision == "pending", (
