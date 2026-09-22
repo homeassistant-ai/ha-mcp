@@ -809,8 +809,10 @@ class TestSubscribeEventsContract:
         """
         client = self._prepare_client()
         sent = asyncio.Event()
+        sent_messages: list[dict] = []
 
-        async def _never_resolve(_message: dict) -> None:
+        async def _never_resolve(message: dict) -> None:
+            sent_messages.append(message)
             sent.set()
 
         client.send_json_message = _never_resolve  # type: ignore[method-assign]
@@ -822,7 +824,54 @@ class TestSubscribeEventsContract:
         with pytest.raises(asyncio.CancelledError):
             await task
 
-        assert client._state._pending_requests == {}
+        # Not "the map is empty": the release below is itself a command and
+        # has its own pending entry while it is in flight. What must be gone
+        # is the entry nothing will ever resolve -- the subscribe's own.
+        subscribe_id = sent_messages[0]["id"]
+        assert subscribe_id not in client._state._pending_requests
+
+    @pytest.mark.asyncio
+    async def test_cancellation_asks_home_assistant_to_drop_the_subscription(self):
+        """The id is lost to the caller, not to this operation.
+
+        The command is on the wire before the wait begins, so Home Assistant
+        may have registered the subscription. Nobody else can release it:
+        the caller never receives the id, and the socket stays in the pool,
+        so the orphan outlives the call and every later event arrives once
+        per orphan. The message id allocated before the send is exactly the
+        subscription id Home Assistant used, and this operation still has
+        it while it is being cancelled.
+        """
+        client = self._prepare_client()
+        sent = asyncio.Event()
+        sent_messages: list[dict] = []
+
+        async def _never_resolve(message: dict) -> None:
+            sent_messages.append(message)
+            sent.set()
+
+        client.send_json_message = _never_resolve  # type: ignore[method-assign]
+
+        task = asyncio.ensure_future(client.subscribe_events("state_changed"))
+        await sent.wait()
+        subscribe_id = sent_messages[0]["id"]
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # The release is detached on purpose, so it lands on a later pass of
+        # the loop rather than before the cancellation propagates.
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if len(sent_messages) > 1:
+                break
+
+        assert [
+            m
+            for m in sent_messages[1:]
+            if m.get("type") == "unsubscribe_events"
+            and m.get("subscription") == subscribe_id
+        ], f"no unsubscribe for {subscribe_id} in {sent_messages}"
 
 
 class TestSubscribeCommand:
@@ -1358,3 +1407,78 @@ class TestReceivedFrameRedaction:
         }
         # The original is not mutated: the caller still dispatches it.
         assert payload["nested"]["pin"] == "2468"
+
+
+class _SilentSocket:
+    """A socket that never says anything and records being closed.
+
+    Enough for the reader task to have something to block on and for the
+    auth wait to run out of patience, which is where the cancellation in
+    the test below lands.
+    """
+
+    def __init__(self, closed: asyncio.Event) -> None:
+        self._closed = closed
+
+    async def close(self) -> None:
+        self._closed.set()
+
+    async def recv(self) -> str:
+        await asyncio.sleep(3600)
+        raise AssertionError("unreachable")
+
+    async def send(self, _message: str) -> None:
+        return None
+
+    def __aiter__(self) -> "_SilentSocket":
+        return self
+
+    async def __anext__(self) -> str:
+        await asyncio.sleep(3600)
+        raise StopAsyncIteration
+
+
+class TestConnectCancellation:
+    """Cancelling a connect must not leave the socket and reader behind.
+
+    The client is pooled only once ``connect`` has returned True, so a
+    connection abandoned before that point is reachable from nothing: no
+    later call finds it, no disconnect closes it, and the reader task goes
+    on holding it. The cleanup clause that closes both used to catch
+    ``Exception``, which a cancellation is not.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cancellation_during_auth_closes_socket_and_reader(self, monkeypatch):
+        from ha_mcp.client import websocket_client as wsc
+
+        closed = asyncio.Event()
+
+        async def _connect(*_args, **_kwargs) -> "_SilentSocket":
+            return _SilentSocket(closed)
+
+        monkeypatch.setattr(wsc.websockets, "connect", _connect)
+
+        client = wsc.HomeAssistantWebSocketClient(
+            url="http://homeassistant.local:8123", token="test-token"
+        )
+        task = asyncio.ensure_future(client.connect())
+        for _ in range(200):
+            await asyncio.sleep(0)
+            if client.websocket is not None and client.background_task is not None:
+                break
+        assert client.websocket is not None, "never got as far as the auth wait"
+        reader = client.background_task
+        assert reader is not None
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        for _ in range(200):
+            await asyncio.sleep(0)
+            if closed.is_set() and reader.done():
+                break
+
+        assert closed.is_set(), "the socket was left open"
+        assert reader.done(), "the reader task was left running"

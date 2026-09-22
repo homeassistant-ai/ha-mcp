@@ -15,7 +15,7 @@ import logging
 import ssl
 import time
 from collections import defaultdict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 from urllib.parse import urlparse
 
@@ -343,6 +343,11 @@ class HomeAssistantWebSocketClient:
         self._warned_verify_disabled = False
         self.websocket: websockets.ClientConnection | None = None
         self.background_task: asyncio.Task | None = None
+        # Cleanup started from a cancellation path. The work outlives the
+        # call that scheduled it on purpose -- a cancelled caller must not
+        # be made to wait for tidying up -- and the reference lives here
+        # because an unreferenced task can be collected mid-flight.
+        self._cleanup_tasks: set[asyncio.Task[None]] = set()
         self._send_lock: asyncio.Lock | None = None
         self._lock_loop: asyncio.AbstractEventLoop | None = None
         self._state = WebSocketConnectionState()
@@ -446,7 +451,17 @@ class HomeAssistantWebSocketClient:
             logger.info("WebSocket connected and authenticated successfully")
             return True
 
-        except Exception as e:
+        except BaseException as e:
+            # BaseException, not Exception: a cancelled connect used to skip
+            # this clause entirely, leaving the reader task started above and
+            # the open socket behind with nothing tracking them -- the pool
+            # only takes the client once connect has returned True, so
+            # nothing else would ever close them. The cancellation still
+            # propagates; only the tidying is detached, because awaiting it
+            # here would be cancelled in turn.
+            if not isinstance(e, Exception):
+                self._detach_cleanup(self.disconnect(), "cancelled connect")
+                raise
             self._last_connect_error = f"{type(e).__name__}: {e}"
             self._last_connect_exception = e
             if _is_ssl_error(e) and self.verify_ssl:
@@ -907,7 +922,16 @@ class HomeAssistantWebSocketClient:
             # resolves once the caller is gone. The cleanup is
             # exception-type-independent and the original exception re-raises
             # unchanged.
+            #
+            # The command is already on the wire by this point, so Home
+            # Assistant may well have registered the subscription: releasing
+            # it is this operation's job, not the caller's, because the id it
+            # needs is the one the caller never receives.
             self.cancel_pending_response(message_id)
+            self._detach_cleanup(
+                self._release_abandoned_subscription(message_id),
+                f"abandoned subscribe_events({message_id})",
+            )
             raise
 
         if response.get("type") == "result" and response.get("success"):
@@ -956,6 +980,67 @@ class HomeAssistantWebSocketClient:
             logger.warning(
                 "unsubscribe_events(%s) rejected by HA: %s",
                 subscription_id,
+                e,
+            )
+
+    def _detach_cleanup(self, coro: Coroutine[Any, Any, None], what: str) -> None:
+        """Run ``coro`` to completion outside the caller's cancellation.
+
+        Cleanup scheduled from a cancellation path cannot simply be awaited:
+        the await would be cancelled in turn, and under a cancel scope it is
+        cancelled again on every suspension, so the tidying never happens.
+        Detaching it keeps the cancellation propagating at once -- which is
+        the point of a deadline -- while the work still runs. The task is
+        held in a set because asyncio only keeps a weak reference to a
+        running task and will otherwise collect it mid-flight.
+        """
+        try:
+            task = asyncio.ensure_future(coro)
+        except RuntimeError:
+            # No running loop, e.g. during interpreter shutdown. Nothing to
+            # clean up against either; closing the coroutine keeps it from
+            # warning about never being awaited.
+            coro.close()
+            logger.debug("%s: no running loop, skipped", what)
+            return
+        self._cleanup_tasks.add(task)
+        task.add_done_callback(self._cleanup_tasks.discard)
+
+    async def _release_abandoned_subscription(self, message_id: int) -> None:
+        """Ask Home Assistant to drop a subscription we can no longer name.
+
+        ``subscribe_events`` allocates the message id before sending, so a
+        cancelled call still knows the id Home Assistant would have used --
+        the id is only lost to the *caller*, which never gets its return
+        value. Without this the subscription stays open on a socket this
+        process keeps using, the next attempt opens a second one, and every
+        event is then delivered once per orphan.
+
+        "Subscription not found" is the ordinary outcome here rather than a
+        surprise: the command may never have reached Home Assistant, which
+        is exactly the case that needs no cleanup. It is logged at debug for
+        that reason, where ``unsubscribe_events`` logs a warning -- there,
+        a rejection means a subscription that was known to exist.
+        """
+        if not self._state.is_ready:
+            logger.debug(
+                "abandoned subscribe_events(%s): socket not ready, nothing to release",
+                message_id,
+            )
+            return
+        try:
+            await self.send_command("unsubscribe_events", subscription=message_id)
+        except OSError as e:
+            logger.debug(
+                "abandoned subscribe_events(%s): transport lost before cleanup: %s",
+                message_id,
+                e,
+            )
+        except HomeAssistantCommandError as e:
+            logger.debug(
+                "abandoned subscribe_events(%s): Home Assistant has no such "
+                "subscription, so the command did not reach it: %s",
+                message_id,
                 e,
             )
 
