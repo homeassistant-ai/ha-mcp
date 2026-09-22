@@ -441,6 +441,7 @@ async def _respond_and_wait_for_result(
     *,
     base_url: str,
     token: str,
+    expect_tool: str | None = None,
 ) -> dict[str, Any] | None:
     """Fire one response event and return the result event it produces.
 
@@ -449,26 +450,41 @@ async def _respond_and_wait_for_result(
     which is the point of that answer existing. Started before the
     response goes out, because the round trip can complete first.
 
-    Filtered by the token being answered, for the reason ``_announced_by``
-    gives: a result naming a token this call did not send belongs to
-    another test sharing the bus. A result that named the WRONG token would
-    be filtered out too and time out here rather than failing on the token
-    assertion downstream -- the trade the shared bus forces, and the reason
-    the callers say "naming this token" when the wait comes back empty.
+    The token alone does not say WHICH server answered. Every server
+    subscribed to this Home Assistant receives the response, including the
+    ones other tests in this process left behind, and each answers with the
+    token it was given -- theirs saying `unknown_token`, because only the
+    server that announced the request knows it. ``expect_tool`` is the
+    discriminator where one exists: a result naming the tool can only come
+    from the server holding that request. The wrong-PIN case has no tool
+    name to match on, on any server; there the reason is the same
+    (`wrong_pin`) whichever of them answers, since enabling the feature
+    requires a PIN and the guess is wrong against all of them.
+
+    A result that named the WRONG token would be filtered out too and time
+    out here rather than failing on a token assertion downstream -- the
+    trade the shared bus forces, and the reason the callers say "naming
+    this token" when the wait comes back empty.
 
     The wait awaits the fire itself: the subscription is already open when
     the trigger runs, so a result arriving while the response is still in
     flight is buffered on the socket rather than missed.
     """
-    result = await wait_for_ha_event(
+
+    def is_ours(event: dict[str, Any]) -> bool:
+        data = event.get("data") or {}
+        if data.get("token") != payload["token"]:
+            return False
+        return expect_tool is None or data.get("tool_name") == expect_tool
+
+    return await wait_for_ha_event(
         "ha_mcp_approval_result",
         lambda: responder.fire_event("ha_mcp_approval_response", payload),
-        predicate=lambda ev: (ev.get("data") or {}).get("token") == payload["token"],
+        predicate=is_ours,
         timeout=20.0,
         ha_url=base_url,
         token=token,
     )
-    return result
 
 
 @pytest.mark.asyncio
@@ -545,6 +561,7 @@ async def test_a_real_event_round_trip_decides_a_held_call(
             {"token": approval_token, "decision": "approve", "pin": "2468"},
             base_url=base_url,
             token=token,
+            expect_tool="ha_call_service",
         )
         assert applied is not None, "no result event naming this applied response"
         assert applied["data"]["applied"] is True
@@ -606,6 +623,7 @@ async def test_a_real_event_round_trip_denies_a_held_call(
             },
             base_url=base_url,
             token=token,
+            expect_tool="ha_call_service",
         )
         assert denial is not None, "no result event naming this applied denial"
         assert denial["data"]["decision"] == "deny"
