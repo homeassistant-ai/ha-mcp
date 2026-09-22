@@ -7,6 +7,7 @@ for both standard Home Assistant installations and Supervisor proxy environments
 import asyncio
 import logging
 
+import anyio
 import pytest
 
 
@@ -912,6 +913,117 @@ class TestSubscribeEventsContract:
             if not t.done() and "_never_finishes" in repr(t.get_coro())
         ]
         assert leftover == [], f"cleanup outlived its deadline: {leftover}"
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_caller_still_gets_the_cleanup_finished(self):
+        """Cancelling the caller must not leave the cleanup half-done.
+
+        This is the path the deadline test cannot reach. A cancel scope
+        re-delivers its cancellation to the host task on every tick, so the
+        drain is itself a checkpoint and gets interrupted unless it is
+        shielded -- and the task then goes on touching the client after the
+        call returned, which is the failure the whole mechanism exists to
+        prevent. The cancellation is still delivered to the caller; it just
+        arrives after the cleanup finished rather than instead of it.
+        """
+        client = self._prepare_client()
+        finished = asyncio.Event()
+
+        async def _slow_cleanup() -> None:
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                # A real disconnect closes a socket here: more than one tick.
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                finished.set()
+                raise
+
+        outcome: list[str] = []
+
+        async def caller() -> None:
+            try:
+                await client._run_cleanup(_slow_cleanup(), "probe")
+                outcome.append("returned")
+            except asyncio.CancelledError:
+                outcome.append("propagated")
+
+        task = asyncio.ensure_future(caller())
+        for _ in range(5):
+            await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.wait_for(task, timeout=5)
+
+        assert finished.is_set(), "the cleanup was abandoned half-way"
+        assert outcome == ["propagated"], (
+            f"the caller's cancellation was swallowed: {outcome}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_cancel_scope_cannot_interrupt_the_drain(self):
+        """The realistic cancellation, not the single-shot one.
+
+        A plain ``task.cancel()`` is delivered once, and a shield over the
+        awaited future is enough for that. A cancel scope is different: it
+        re-delivers to the HOST TASK on every tick while the task is inside
+        it, so the drain -- itself an await -- is interrupted unless it is
+        shielded against reassertion. The policy layer wraps tool calls in
+        exactly such scopes, so this is the path this code meets in
+        production, and the previous test could not reach it.
+        """
+        client = self._prepare_client()
+        finished = asyncio.Event()
+
+        async def _slow_cleanup() -> None:
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                # A real disconnect closes a socket here: several ticks,
+                # each one a chance for a reasserted cancellation to land.
+                for _ in range(5):
+                    await asyncio.sleep(0)
+                finished.set()
+                raise
+
+        with anyio.move_on_after(0.01):
+            await client._run_cleanup(_slow_cleanup(), "probe")
+
+        assert finished.is_set(), (
+            "the cancel scope interrupted the drain and the cleanup was "
+            "abandoned half-way"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_rejection_without_a_code_is_not_a_warning(self, caplog):
+        """Home Assistant answers this command with success or not_found.
+
+        So an error carrying no structured code is still that same answer
+        from a build that did not send one, and the routine path -- which
+        runs on every cancelled subscribe -- must not warn about it. The
+        codes worth distinguishing come from the layer above the handler
+        and do carry one.
+        """
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        client = self._prepare_client()
+
+        async def _reject(_command: str, **_kwargs: object) -> dict:
+            raise HomeAssistantCommandError("Subscription not found")
+
+        client.send_command = _reject  # type: ignore[method-assign]
+
+        with caplog.at_level(logging.DEBUG, logger="ha_mcp.client.websocket_client"):
+            await client._release_abandoned_subscription(7)
+
+        records = [
+            r
+            for r in caplog.records
+            if "abandoned subscribe_events(7)" in r.getMessage()
+        ]
+        assert records, "the rejection went unlogged"
+        assert all(r.levelno == logging.DEBUG for r in records), [
+            (r.levelname, r.getMessage()) for r in records
+        ]
 
     @pytest.mark.asyncio
     async def test_a_missing_subscription_is_not_a_warning(self, caplog):

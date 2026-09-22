@@ -19,6 +19,8 @@ from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 from urllib.parse import urlparse
 
+import anyio
+
 # The vendored copy, NEVER the shared site-packages one: inside Home
 # Assistant that copy is unowned — ~20 integration libraries drag it in with
 # conflicting version demands and any of their installs can replace or tear
@@ -58,6 +60,15 @@ CLEANUP_TIMEOUT_SECONDS = 2.0
 # is the ordinary outcome when releasing one that was abandoned before Home
 # Assistant registered it. Everything else is a refusal of the release, and
 # leaves the subscription open.
+#
+# An absent code counts as gone rather than as a refusal. Home Assistant's
+# unsubscribe handler answers either success or not_found and nothing else,
+# so for THIS command an error without a structured code is still that same
+# answer from a build that did not send one. The codes worth distinguishing
+# -- unauthorised, malformed, unknown command -- come from the layer above
+# the handler and do carry one. Treating a missing code as a refusal would
+# put a warning on the routine path, which fires on every cancelled
+# subscribe.
 _SUBSCRIPTION_GONE_CODES = frozenset({"not_found"})
 # How long :meth:`HomeAssistantWebSocketClient.send_command` waits for a reply
 # when the caller names no ``_wait_timeout``. Named rather than inlined because
@@ -1019,16 +1030,29 @@ class HomeAssistantWebSocketClient:
             logger.debug("%s: cleanup cancelled before it finished", what)
             raise
         finally:
-            # The shield is what lets the deadline above expire without
-            # killing the work -- and it is also what would let the work
-            # outlive this call, which is the whole failure being fixed. A
-            # task still running here reads the client's state whenever it
-            # gets there, so it must not get there: stop it, then collect
-            # the outcome so a late failure does not surface as an orphaned
+            # The shield above is what lets the deadline expire without
+            # killing the work -- and it is equally what would let the work
+            # outlive this call, which is the failure being fixed. A task
+            # still running here reads the client's state whenever it gets
+            # there, so it must not get there: stop it, then collect the
+            # outcome so a late failure does not surface as an orphaned
             # "exception was never retrieved".
-            if not task.done():
-                task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            #
+            # Shielded with anyio's scope rather than asyncio's: a cancel
+            # scope re-delivers its cancellation to the HOST TASK on every
+            # tick while that task is still inside it, and
+            # ``asyncio.shield`` only governs propagation from one awaited
+            # future -- it does not stop a second ``cancel()`` landing on
+            # the task at its next await. ``gather`` propagates that even
+            # with ``return_exceptions=True``, measured, so without this
+            # the drain is skipped under exactly the cancel scopes the
+            # policy layer wraps tool calls in. The caller's cancellation
+            # is still delivered, after the drain rather than instead of
+            # it.
+            with anyio.CancelScope(shield=True):
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
     async def _release_abandoned_subscription(self, message_id: int) -> None:
         """Ask Home Assistant to drop a subscription we can no longer name.
@@ -1061,7 +1085,7 @@ class HomeAssistantWebSocketClient:
                 e,
             )
         except HomeAssistantCommandError as e:
-            if e.code in _SUBSCRIPTION_GONE_CODES:
+            if e.code is None or e.code in _SUBSCRIPTION_GONE_CODES:
                 logger.debug(
                     "abandoned subscribe_events(%s): Home Assistant has no such "
                     "subscription, so the command did not reach it: %s",
