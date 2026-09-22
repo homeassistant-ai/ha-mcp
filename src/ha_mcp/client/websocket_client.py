@@ -1045,10 +1045,12 @@ class HomeAssistantWebSocketClient:
             # future -- it does not stop a second ``cancel()`` landing on
             # the task at its next await. ``gather`` propagates that even
             # with ``return_exceptions=True``, measured, so without this
-            # the drain is skipped under exactly the cancel scopes the
-            # policy layer wraps tool calls in. The caller's cancellation
-            # is still delivered, after the drain rather than instead of
-            # it.
+            # the drain is skipped under exactly the scopes this runs in --
+            # the approval listener opens its subscription inside a
+            # ``move_on_after`` setup budget, and a cancelled
+            # ``subscribe_events`` is how this method is reached at all.
+            # The caller's cancellation is still delivered, after the drain
+            # rather than instead of it.
             with anyio.CancelScope(shield=True):
                 if not task.done():
                     task.cancel()

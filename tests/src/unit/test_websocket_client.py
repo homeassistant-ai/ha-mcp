@@ -967,9 +967,10 @@ class TestSubscribeEventsContract:
         awaited future is enough for that. A cancel scope is different: it
         re-delivers to the HOST TASK on every tick while the task is inside
         it, so the drain -- itself an await -- is interrupted unless it is
-        shielded against reassertion. The policy layer wraps tool calls in
-        exactly such scopes, so this is the path this code meets in
-        production, and the previous test could not reach it.
+        shielded against reassertion. This is the path the code meets in
+        production: the approval listener opens its subscription inside a
+        setup-budget scope, and a cancelled ``subscribe_events`` is how the
+        cleanup is reached at all. The previous test could not get here.
         """
         client = self._prepare_client()
         finished = asyncio.Event()
