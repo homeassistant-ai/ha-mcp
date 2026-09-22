@@ -1141,6 +1141,20 @@ event does not go out. An automation that treats a missing result as a denial
 will be wrong in exactly the case where you most need to open the settings tab
 — so use the reason when one arrives, and the tab when none does.
 
+**If you run more than one ha-mcp server against the same Home Assistant**, and
+more than one of them has this channel open, every response event reaches all
+of them. Only the server that announced the request holds the token, so it is
+the one that decides; the others answer the same event on their own terms —
+`unknown_token` for a token they never issued, or a refusal if the PIN was
+wrong, which they check before they look the token up. Two consequences worth
+knowing before you wire an automation to this: one response can produce several
+result events, only one of which is the deciding server's, and each server
+counts the wrong PIN against its own budget, so a run of bad guesses closes the
+channel on all of them at once rather than on one at a time. Matching on the
+tool name picks out the deciding server's result, since only it can name the
+tool; a refusal names none, by design. Several clients sharing one server do
+not run into any of this — it takes two servers on one Home Assistant.
+
 ---
 
 ## Feedback & Help
