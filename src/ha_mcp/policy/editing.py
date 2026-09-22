@@ -164,6 +164,18 @@ def _pre_save_warnings(
             f"This write removed {len(removed)} existing rule(s), covering: "
             f"{names}. Resend them if that was not intended."
         )
+    if current.event_decisions_enabled and not new_policy.event_decisions_enabled:
+        # Whole-document replacement makes an omitted field indistinguishable
+        # from a deliberate false, and a document copied from an example that
+        # predates the field carries neither. Closing a channel the user opened
+        # is not something the caller should have to diff the response to spot.
+        warnings.append(
+            "This write switched off deciding approvals from Home Assistant "
+            "events (event_decisions_enabled). Omitting the field has the "
+            "same effect as sending false, so resend the document with "
+            '"event_decisions_enabled": true if that was not intended. The '
+            "stored PIN is untouched either way."
+        )
     if not new_policy.rules:
         return warnings
     policies_enabled = get_global_settings().enable_tool_security_policies
@@ -216,10 +228,15 @@ def _commit_policy(
             )
         )
     if new_policy.event_decisions_enabled and not is_pin_set(data_dir):
-        # The PIN is deliberately unreachable from every MCP tool — it is
-        # the one thing in this feature that must come from the person, not
-        # from the agent. Enabling the toggle without it would produce a
-        # policy the listener refuses to act on anyway.
+        # No MCP tool takes the PIN as a parameter, returns it, or writes
+        # the file it lives in: the component's deny floor blocks that
+        # basename on read, write, list and delete, whatever extra file
+        # paths an operator configures. It is the one thing in this feature
+        # meant to come from the person rather than from the agent — which
+        # is a statement about this server's surface, not a guarantee about
+        # every path to the disk an operator may open by other means.
+        # Enabling the toggle without a PIN would produce a policy the
+        # listener refuses to act on anyway.
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,

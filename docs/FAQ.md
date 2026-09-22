@@ -984,7 +984,16 @@ rule to name and the key is absent.
 Two things to know about `args`: each value is capped, so a long one is
 shortened with an `omitted` marker and the settings UI stays the place to
 read it in full; and the event bus reaches every listener, so treat those
-arguments as you would any other bus traffic.
+arguments as you would any other bus traffic. The cap is a size limit, not
+a redaction — a short argument is broadcast exactly as it is.
+
+The announcement is one best-effort attempt per held request, not a
+delivery guarantee. If firing the event fails or times out it is logged as
+a warning and the request still waits in the settings UI; nothing re-sends
+it. A retry of the same call joins the same held request and is not
+announced a second time — one request, one notification. Only a request
+that is replaced by a new one is announced again, with the new token; the
+token from the previous event is dead by then.
 
 A selector-based `ha_bulk_control` request is announced with `single_use:
 true` and **no** `expires_at`. It is bound to the one call that created it
@@ -1005,8 +1014,9 @@ its own admin token, so it is not affected.
 
 Approving happens in the Tool Security Policies tab by default. Answering
 from an automation is possible too, behind a switch and a PIN — see the next
-question. (With developer mode on, `ha_dev_manage_server` can also decide a
-pending request; that is a testing tool and it says so.)
+question. (`ha_dev_manage_server` can also decide a pending request, but only
+where two separate settings are both on: developer mode, and
+`dev_tools_security_policy_access`. That is a testing tool and it says so.)
 
 ### Approving or denying from a notification instead of the settings tab
 
@@ -1040,22 +1050,34 @@ author an automation of its own, and an automation-fired event carries
 neither a distinguishing origin nor a user. The PIN is therefore the only
 thing separating them, and an agent with enough access can obtain it — by
 asking you, or by writing an automation that reads it out of a response
-event you fire. Switching this on accepts that; leaving it off means an
-agent cannot approve its own requests at all. The PIN is stored as a salted
-hash, can only be set by a person in the settings UI, and five wrong PINs
-within five minutes close the channel for the rest of that window — the
-settings tab keeps working throughout. It is kept out of the policy
-document on purpose, so no surface that reads or writes policy — the
-settings UI, `ha_manage_security_policy`, a version-conflict error body —
-carries it. The file itself is mode 0600 and holds only the digest; on an
-embedded install it lives under the `.ha_mcp` folder of your configuration
-directory. Do not add that folder to the component's **Extra file paths**
-setting: entries there are granted read *and* write, so a tool could not only
-read the digest but replace it with one for a PIN of its own choosing.
+event you fire. Switching this on accepts that; leaving it off means no
+event can decide a request — an agent then has no way to approve its own
+requests over the bus. (It says nothing about the developer tool above,
+which stays available wherever developer mode and
+`dev_tools_security_policy_access` are both on.) The PIN is stored as a
+salted hash, can only be set by a person in the settings UI, and five wrong
+PINs within five minutes close the channel for the rest of that window — the
+Pending list on the settings UI the server itself serves keeps working
+throughout. (The stdio sidecar's settings page sets the PIN and edits the
+policy, but cannot list or decide pending approvals: those live in the
+server process it cannot reach.) The PIN is kept out of the policy document
+on purpose, so no surface that reads or writes policy — the settings UI,
+`ha_manage_security_policy`, a version-conflict error body — carries it. The
+file itself is mode 0600 and holds only the digest; on an embedded install
+it lives under the `.ha_mcp` folder of your configuration directory, where
+the component's non-overridable deny floor blocks its filename on read,
+write, listing and deletion. Adding that folder to the component's **Extra
+file paths** setting therefore cannot hand a tool the digest — but it does
+grant read *and* write over everything else in there, which is its own
+decision to make.
 
-Removing the PIN switches the feature off with it. Events that arrive while
-it is off, or without a matching PIN, are refused and logged at WARNING;
-the request stays pending and decidable in the tab.
+Removing the PIN switches the feature off with it. Events that arrive
+without a matching PIN are refused and logged at WARNING. An event that
+arrives while the feature is off is refused too, but logged at INFO — and
+while the switch has been off for every request announced so far, nothing
+has subscribed to the response event at all, so such an event is never even
+received. Either way the request
+stays pending and decidable in the tab.
 
 ---
 

@@ -39,7 +39,13 @@ EMIT_TIMEOUT_SECONDS = 5.0
 
 
 def _cap_value(value: Any) -> Any:
-    """Shorten one argument value to something safe to broadcast."""
+    """Shorten one argument value for the broadcast.
+
+    A size limit and nothing more: it does not redact. A short value goes
+    out in full whatever it holds, so an argument carrying a secret is
+    broadcast as it stands. The cap bounds how much of a large payload
+    reaches every listener; it does not make the content safe.
+    """
     if isinstance(value, str):
         if len(value) <= ARG_VALUE_LIMIT:
             return value
