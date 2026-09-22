@@ -82,9 +82,12 @@ class FailedAttemptLimiter:
     these would let a badly written automation lock out the user's real
     notification action.
 
-    The block is global rather than per token: the tokens are the thing
-    being guessed at, so per-token counting would hand an attacker a fresh
-    budget with every new pending request.
+    The block is global rather than per token because the PIN is what is
+    being guessed, and one PIN covers every pending request. A token is not
+    a secret to guess at -- it is announced on the bus to whoever listens --
+    so counting per token would reset the PIN budget for each one, and a
+    guesser would only have to wait for the next request to get another
+    five.
 
     Global means global to this process, matching the approval queue it
     guards: both live in memory, both are documented single-process, and a
