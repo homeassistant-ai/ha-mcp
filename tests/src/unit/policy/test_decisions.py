@@ -505,6 +505,44 @@ async def test_a_replaced_client_stops_receiving(tmp_path, queue):
 
 
 @pytest.mark.anyio
+async def test_a_retirement_that_hangs_still_lets_the_new_one_open(
+    tmp_path, queue, caplog, monkeypatch
+):
+    """The old connection must not be able to hold the new one hostage.
+
+    Retirement runs inside the setup budget, which is the time before the
+    user is told anything at all. An unresponsive previous connection --
+    dropped without a FIN, say -- would otherwise spend that budget on
+    tidying, and the request would be announced late or not at all. The
+    bound is why the handler is dropped first: by the time this gives up,
+    the duplicate delivery it was there to stop has already stopped.
+    """
+    monkeypatch.setattr("ha_mcp.policy.decisions.RETIRE_BUDGET_SECONDS", 0.05)
+    first, second = make_ws_client(), make_ws_client()
+
+    async def _never_returns(_subscription_id: int) -> None:
+        await anyio.sleep(3600)
+
+    first.unsubscribe_events = AsyncMock(side_effect=_never_returns)
+    listener = ApprovalResponseListener(
+        policy_provider=lambda: Policy(event_decisions_enabled=True),
+        queue=queue,
+        data_dir=tmp_path,
+        get_ws_client=AsyncMock(side_effect=[first, second]),
+    )
+
+    await listener.ensure_subscribed()
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.policy.decisions"):
+        await listener.ensure_subscribed()
+
+    second.subscribe_events.assert_awaited_once()
+    assert first.remove_event_handler.call_args == first.add_event_handler.call_args
+    assert any(
+        "gave up releasing subscription" in r.getMessage() for r in caplog.records
+    ), [r.getMessage() for r in caplog.records]
+
+
+@pytest.mark.anyio
 async def test_returning_to_an_earlier_client_retires_the_one_in_between(
     tmp_path, queue
 ):

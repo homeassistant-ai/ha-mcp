@@ -5,6 +5,7 @@ for both standard Home Assistant installations and Supervisor proxy environments
 """
 
 import asyncio
+import logging
 
 import pytest
 
@@ -853,6 +854,66 @@ class TestSubscribeEventsContract:
         assert sent_messages == []
 
     @pytest.mark.asyncio
+    async def test_a_lost_transport_during_release_is_not_a_warning(self, caplog):
+        """The connection going away IS the cleanup, so it is not news.
+
+        Pinned on the level, not just on "it did not raise": the same call
+        in ``unsubscribe_events`` logs a warning, because there the
+        subscription was known to exist. Here the ordinary outcome is that
+        there was nothing to release, and a warning would train the reader
+        to ignore the case where there was.
+        """
+        client = self._prepare_client()
+
+        async def _raise(_message: dict) -> None:
+            raise OSError("connection reset")
+
+        client.send_json_message = _raise  # type: ignore[method-assign]
+
+        with caplog.at_level(logging.DEBUG, logger="ha_mcp.client.websocket_client"):
+            await client._release_abandoned_subscription(7)
+
+        records = [
+            r
+            for r in caplog.records
+            if "abandoned subscribe_events(7)" in r.getMessage()
+        ]
+        assert records, "the lost transport went unlogged"
+        assert all(r.levelno == logging.DEBUG for r in records), [
+            (r.levelname, r.getMessage()) for r in records
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_rejected_release_is_not_a_warning(self, caplog):
+        """ "Subscription not found" here means the command never arrived.
+
+        Which is the case that needed no cleanup at all. Distinguishing it
+        from a real leak is the whole reason this method does not just call
+        ``unsubscribe_events``, so the level is the assertion.
+        """
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        client = self._prepare_client()
+
+        async def _reject(_command: str, **_kwargs: object) -> dict:
+            raise HomeAssistantCommandError("Subscription not found")
+
+        client.send_command = _reject  # type: ignore[method-assign]
+
+        with caplog.at_level(logging.DEBUG, logger="ha_mcp.client.websocket_client"):
+            await client._release_abandoned_subscription(7)
+
+        records = [
+            r
+            for r in caplog.records
+            if "abandoned subscribe_events(7)" in r.getMessage()
+        ]
+        assert records, "the rejection went unlogged"
+        assert all(r.levelno == logging.DEBUG for r in records), [
+            (r.levelname, r.getMessage()) for r in records
+        ]
+
+    @pytest.mark.asyncio
     async def test_cancellation_asks_home_assistant_to_drop_the_subscription(self):
         """The id is lost to the caller, not to this operation.
 
@@ -1469,6 +1530,54 @@ class TestConnectCancellation:
     on holding it. The cleanup clause that closes both used to catch
     ``Exception``, which a cancellation is not.
     """
+
+    @pytest.mark.asyncio
+    async def test_a_second_connect_is_not_torn_down_by_the_first(self, monkeypatch):
+        """Cleanup must act on what it was cleaning up.
+
+        Left to run later, it reads the client's state at execution time:
+        measured on the detached version, a second connect on the same
+        object had its socket closed by the first attempt's cleanup while
+        the abandoned socket stayed open -- the inverse of the intent.
+        No caller reconnects an instance in place today, so this pins a
+        property rather than a live path; it is the property the fix is
+        about.
+        """
+        from ha_mcp.client import websocket_client as wsc
+
+        first_closed, second_closed = asyncio.Event(), asyncio.Event()
+        sockets = iter((_SilentSocket(first_closed), _SilentSocket(second_closed)))
+
+        async def _connect(*_args, **_kwargs) -> "_SilentSocket":
+            return next(sockets)
+
+        monkeypatch.setattr(wsc.websockets, "connect", _connect)
+        client = wsc.HomeAssistantWebSocketClient(
+            url="http://homeassistant.local:8123", token="test-token"
+        )
+
+        first = asyncio.ensure_future(client.connect())
+        for _ in range(200):
+            await asyncio.sleep(0)
+            if client.websocket is not None and client.background_task is not None:
+                break
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+
+        second = asyncio.ensure_future(client.connect())
+        for _ in range(200):
+            await asyncio.sleep(0)
+            if second_closed.is_set() or second.done():
+                break
+
+        assert first_closed.is_set(), "the abandoned socket was left open"
+        assert not second_closed.is_set(), (
+            "the first attempt's cleanup closed the second attempt's socket"
+        )
+        second.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await second
 
     @pytest.mark.asyncio
     async def test_cancellation_during_auth_closes_socket_and_reader(self, monkeypatch):

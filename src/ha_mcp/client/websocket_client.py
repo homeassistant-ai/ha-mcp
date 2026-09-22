@@ -46,6 +46,13 @@ logger = logging.getLogger(__name__)
 # overflowed the previous 20MB cap (#1721).
 MAX_WS_MESSAGE_BYTES = 64 * 1024 * 1024
 
+
+# How long a cancellation path waits for its own cleanup. Bounded because
+# the caller is already being torn down and must not be held indefinitely;
+# awaited rather than abandoned because a cleanup that outlives its call
+# acts on whatever the client looks like later, not on what it was cleaning
+# up. Matches the theme-guard session close, which solves the same problem.
+CLEANUP_TIMEOUT_SECONDS = 2.0
 # How long :meth:`HomeAssistantWebSocketClient.send_command` waits for a reply
 # when the caller names no ``_wait_timeout``. Named rather than inlined because
 # callers that schedule retries have to budget around it: a caller whose retry
@@ -343,11 +350,6 @@ class HomeAssistantWebSocketClient:
         self._warned_verify_disabled = False
         self.websocket: websockets.ClientConnection | None = None
         self.background_task: asyncio.Task | None = None
-        # Cleanup started from a cancellation path. The work outlives the
-        # call that scheduled it on purpose -- a cancelled caller must not
-        # be made to wait for tidying up -- and the reference lives here
-        # because an unreferenced task can be collected mid-flight.
-        self._cleanup_tasks: set[asyncio.Task[None]] = set()
         self._send_lock: asyncio.Lock | None = None
         self._lock_loop: asyncio.AbstractEventLoop | None = None
         self._state = WebSocketConnectionState()
@@ -460,7 +462,7 @@ class HomeAssistantWebSocketClient:
             # propagates; only the tidying is detached, because awaiting it
             # here would be cancelled in turn.
             if not isinstance(e, Exception):
-                self._detach_cleanup(self.disconnect(), "cancelled connect")
+                await self._run_cleanup(self.disconnect(), "cancelled connect")
                 raise
             self._last_connect_error = f"{type(e).__name__}: {e}"
             self._last_connect_exception = e
@@ -928,7 +930,7 @@ class HomeAssistantWebSocketClient:
             # it is this operation's job, not the caller's, because the id it
             # needs is the one the caller never receives.
             self.cancel_pending_response(message_id)
-            self._detach_cleanup(
+            await self._run_cleanup(
                 self._release_abandoned_subscription(message_id),
                 f"abandoned subscribe_events({message_id})",
             )
@@ -983,28 +985,35 @@ class HomeAssistantWebSocketClient:
                 e,
             )
 
-    def _detach_cleanup(self, coro: Coroutine[Any, Any, None], what: str) -> None:
-        """Run ``coro`` to completion outside the caller's cancellation.
+    async def _run_cleanup(self, coro: Coroutine[Any, Any, None], what: str) -> None:
+        """Run ``coro`` to completion or to a deadline, from a cancelled path.
 
-        Cleanup scheduled from a cancellation path cannot simply be awaited:
-        the await would be cancelled in turn, and under a cancel scope it is
-        cancelled again on every suspension, so the tidying never happens.
-        Detaching it keeps the cancellation propagating at once -- which is
-        the point of a deadline -- while the work still runs. The task is
-        held in a set because asyncio only keeps a weak reference to a
-        running task and will otherwise collect it mid-flight.
+        Cleanup scheduled while a cancellation is propagating cannot simply
+        be awaited: the await is cancelled in turn, and under a cancel scope
+        again at every suspension, so the tidying never happens. It also
+        must not merely be detached. A detached task reads the client's
+        state when it eventually runs, not when it was scheduled, so a
+        second ``connect()`` on the same object races it -- measured, the
+        stale task closed the NEW socket and left the old one open, the
+        exact failure this cleanup exists to prevent.
+
+        So the work is owned by a task, which makes it survive the
+        cancellation, and awaited through a shield with a deadline, which
+        makes it finish before control returns to anyone. The same shape as
+        the theme-guard session cleanup, for the same reason.
         """
+        task = asyncio.ensure_future(coro)
         try:
-            task = asyncio.ensure_future(coro)
-        except RuntimeError:
-            # No running loop, e.g. during interpreter shutdown. Nothing to
-            # clean up against either; closing the coroutine keeps it from
-            # warning about never being awaited.
-            coro.close()
-            logger.debug("%s: no running loop, skipped", what)
-            return
-        self._cleanup_tasks.add(task)
-        task.add_done_callback(self._cleanup_tasks.discard)
+            await asyncio.wait_for(
+                asyncio.shield(task), timeout=CLEANUP_TIMEOUT_SECONDS
+            )
+        except (Exception, TimeoutError) as e:
+            logger.debug("%s: cleanup did not finish cleanly: %s", what, e)
+        except asyncio.CancelledError:
+            # The shield took the cancellation; the task itself keeps going.
+            # Nothing further to wait on here -- the caller is being torn
+            # down and the deadline above already bounded the attempt.
+            logger.debug("%s: cleanup cancelled, task left to finish", what)
 
     async def _release_abandoned_subscription(self, message_id: int) -> None:
         """Ask Home Assistant to drop a subscription we can no longer name.
