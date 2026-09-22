@@ -1615,8 +1615,6 @@ class TestReceivedFrameRedaction:
         usually a typo of the real thing — and the reader cannot tell them
         apart anyway, which is the point of redacting by field name.
         """
-        import logging
-
         client = self._client()
         seen: list[dict] = []
 

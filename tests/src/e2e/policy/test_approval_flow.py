@@ -451,26 +451,23 @@ async def _respond_and_wait_for_result(
 
     Filtered by the token being answered, for the reason ``_announced_by``
     gives: a result naming a token this call did not send belongs to
-    another test sharing the bus.
+    another test sharing the bus. A result that named the WRONG token would
+    be filtered out too and time out here rather than failing on the token
+    assertion downstream -- the trade the shared bus forces, and the reason
+    the callers say "naming this token" when the wait comes back empty.
+
+    The wait awaits the fire itself: the subscription is already open when
+    the trigger runs, so a result arriving while the response is still in
+    flight is buffered on the socket rather than missed.
     """
-    fired: asyncio.Task | None = None
-
-    def fire_the_response() -> None:
-        nonlocal fired
-        fired = asyncio.create_task(
-            responder.fire_event("ha_mcp_approval_response", payload)
-        )
-
     result = await wait_for_ha_event(
         "ha_mcp_approval_result",
-        fire_the_response,
+        lambda: responder.fire_event("ha_mcp_approval_response", payload),
         predicate=lambda ev: (ev.get("data") or {}).get("token") == payload["token"],
         timeout=20.0,
         ha_url=base_url,
         token=token,
     )
-    if fired is not None:
-        await fired
     return result
 
 
@@ -528,7 +525,7 @@ async def test_a_real_event_round_trip_decides_a_held_call(
             base_url=base_url,
             token=token,
         )
-        assert refusal is not None, "a refused response produced no result event"
+        assert refusal is not None, "no result event naming this refused response"
         assert refusal["data"]["applied"] is False
         assert refusal["data"]["reason"] == "wrong_pin"
         assert refusal["data"]["token"] == approval_token
@@ -549,7 +546,7 @@ async def test_a_real_event_round_trip_decides_a_held_call(
             base_url=base_url,
             token=token,
         )
-        assert applied is not None, "an applied response produced no result event"
+        assert applied is not None, "no result event naming this applied response"
         assert applied["data"]["applied"] is True
         assert applied["data"]["reason"] == "applied"
         assert applied["data"]["tool_name"] == "ha_call_service"
@@ -610,7 +607,7 @@ async def test_a_real_event_round_trip_denies_a_held_call(
             base_url=base_url,
             token=token,
         )
-        assert denial is not None, "an applied denial produced no result event"
+        assert denial is not None, "no result event naming this applied denial"
         assert denial["data"]["decision"] == "deny"
         assert denial["data"]["applied"] is True
         assert denial["data"]["reason"] == "applied"

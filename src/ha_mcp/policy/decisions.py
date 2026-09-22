@@ -98,7 +98,8 @@ class ResultEmitter(Protocol):
         applied: bool,
         reason: str,
         tool_name: str | None = None,
-    ) -> None: ...
+    ) -> None:
+        """Fire the result event for one received response."""
 
 
 class FailedAttemptLimiter:

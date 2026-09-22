@@ -470,17 +470,7 @@ class HomeAssistantWebSocketClient:
             logger.info("WebSocket connected and authenticated successfully")
             return True
 
-        except BaseException as e:
-            # BaseException, not Exception: a cancelled connect used to skip
-            # this clause entirely, leaving the reader task started above and
-            # the open socket behind with nothing tracking them -- the pool
-            # only takes the client once connect has returned True, so
-            # nothing else would ever close them. The cancellation still
-            # propagates; only the tidying is detached, because awaiting it
-            # here would be cancelled in turn.
-            if not isinstance(e, Exception):
-                await self._run_cleanup(self.disconnect(), "cancelled connect")
-                raise
+        except Exception as e:
             self._last_connect_error = f"{type(e).__name__}: {e}"
             self._last_connect_exception = e
             if _is_ssl_error(e) and self.verify_ssl:
@@ -495,6 +485,19 @@ class HomeAssistantWebSocketClient:
                 logger.error(f"WebSocket connection failed: {e}")
             await self.disconnect()
             return False
+
+        except BaseException:
+            # Everything that is not an ``Exception`` -- a cancellation above
+            # all -- used to skip the clause above entirely, leaving the
+            # reader task started earlier and the open socket behind with
+            # nothing tracking them: the pool only takes the client once
+            # connect has returned True, so nothing else would ever close
+            # them. Ordered after the ``Exception`` handler so the ordinary
+            # failure path is unchanged, and it re-raises unconditionally --
+            # only the tidying happens here, and it is bounded because
+            # awaiting it plainly would be cancelled in turn.
+            await self._run_cleanup(self.disconnect(), "cancelled connect")
+            raise
 
     async def disconnect(self) -> None:
         """Disconnect from WebSocket."""
