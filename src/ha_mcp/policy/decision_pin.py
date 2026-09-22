@@ -160,7 +160,14 @@ def _load_record(data_dir: Path) -> tuple[str, dict[str, Any] | None]:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return PIN_ABSENT, None
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
+        # ValueError rather than JSONDecodeError alone: reading the bytes can
+        # fail before the parser ever sees them. A file holding invalid UTF-8
+        # raises UnicodeDecodeError here, and that is the same answer to the
+        # same question -- there is something in this path and it cannot be
+        # used -- so it belongs on the repair-job branch rather than escaping
+        # to the caller, where it becomes an unstructured 500 on the status
+        # endpoint and a generic traceback in the listener.
         logger.warning("approval PIN file %s is unreadable", path, exc_info=True)
         return PIN_INVALID, None
     if not isinstance(raw, dict):
@@ -186,7 +193,12 @@ def _decode_record(record: dict[str, Any]) -> tuple[bytes, bytes, int] | None:
         expected = base64.b64decode(record["hash"], validate=True)
         iterations = int(record["iterations"])
         algorithm = record["algorithm"]
-    except (KeyError, TypeError, ValueError, binascii.Error):
+    except (KeyError, TypeError, ValueError, OverflowError, binascii.Error):
+        # OverflowError is not a ValueError: a JSON work factor written in
+        # exponent form, ``1e309``, parses to an infinite float, and int()
+        # refuses to convert it. Without this the record escapes as an
+        # exception instead of being reported as one nobody can use, and it
+        # does so before the ceiling below ever gets to reject it.
         return None
     if (
         algorithm != SUPPORTED_ALGORITHM

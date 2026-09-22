@@ -296,6 +296,45 @@ def test_a_file_that_cannot_be_loaded_is_invalid_not_absent(tmp_path, content):
     assert verify_pin(tmp_path, "2468") is False
 
 
+def test_bytes_that_are_not_utf8_are_invalid_not_an_exception(tmp_path):
+    """Reading the file can fail before the parser is reached.
+
+    ``UnicodeDecodeError`` is a ``ValueError`` but not a
+    ``JSONDecodeError``, so it used to escape every consumer: the status
+    endpoint answered with an unstructured 500 and the listener logged a
+    generic traceback, neither of which tells the user their PIN file
+    needs replacing.
+    """
+    (tmp_path / PIN_FILENAME).write_bytes(
+        b'{"algorithm": "pbkdf2_sha256", "salt": "\xff\xfe"}'
+    )
+
+    assert pin_state(tmp_path) == PIN_INVALID
+    assert pin_status(tmp_path) == {"set": False, "invalid": True}
+    assert is_pin_set(tmp_path) is False
+    assert verify_pin(tmp_path, "2468") is False
+
+
+def test_a_work_factor_that_is_not_an_integer_is_invalid_not_an_exception(tmp_path):
+    """The work factor reaches ``int()`` before the ceiling can judge it.
+
+    JSON exponent form parses to a float, and ``1e309`` parses to an
+    infinite one, which ``int()`` refuses with ``OverflowError`` -- not a
+    ``ValueError``, so it escaped alongside the record it describes. No
+    hashing starts either way; what was missing was the answer that sends
+    the user to the repair.
+    """
+    (tmp_path / PIN_FILENAME).write_text(
+        '{"algorithm":"pbkdf2_sha256","iterations":1e309,'
+        f'"salt":"{SALT_B64}","hash":"{DIGEST_B64}"}}'
+    )
+
+    assert pin_state(tmp_path) == PIN_INVALID
+    assert pin_status(tmp_path) == {"set": False, "invalid": True}
+    assert is_pin_set(tmp_path) is False
+    assert verify_pin(tmp_path, "2468") is False
+
+
 def test_no_file_at_all_is_absent(tmp_path):
     """The control for the test above: nothing there is not "invalid"."""
     assert pin_state(tmp_path) == PIN_ABSENT
