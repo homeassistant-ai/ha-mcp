@@ -8,6 +8,7 @@ The limiter is what keeps the second one from being guessed.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -76,6 +77,7 @@ def make_listener(
     client: MagicMock | None = None,
     limiter: FailedAttemptLimiter | None = None,
     results: list[dict] | None = None,
+    policy_provider: Callable[[], Policy] | None = None,
 ) -> tuple[ApprovalResponseListener, MagicMock]:
     ws = client or make_ws_client()
 
@@ -99,7 +101,8 @@ def make_listener(
         )
 
     listener = ApprovalResponseListener(
-        policy_provider=lambda: Policy(event_decisions_enabled=enabled),
+        policy_provider=policy_provider
+        or (lambda: Policy(event_decisions_enabled=enabled)),
         queue=queue,
         data_dir=tmp_path,
         get_ws_client=AsyncMock(return_value=ws),
@@ -828,6 +831,33 @@ async def test_the_feature_being_off_is_reported_as_such(tmp_path, queue):
     await listener._handle_event(response_event(entry.token))
 
     assert [r["reason"] for r in results] == ["feature_off"]
+
+
+@pytest.mark.anyio
+async def test_a_policy_that_cannot_be_read_is_reported_as_such(tmp_path, queue):
+    """The refusal a responder cannot fix by retyping anything.
+
+    An unreadable policy file leaves the channel unable to say whether it
+    is wanted, so the event is refused -- and saying so is the difference
+    between an automation author retrying a PIN and an operator repairing
+    a file.
+    """
+    set_pin(tmp_path, PIN)
+    entry = queue.create("ha_call_service", "h", {}, ttl_minutes=5)
+    results: list[dict] = []
+
+    def unreadable() -> Policy:
+        raise ValueError("tool_policy.json is not valid JSON")
+
+    listener, _ = make_listener(
+        tmp_path, queue, policy_provider=unreadable, results=results
+    )
+
+    await listener._handle_event(response_event(entry.token))
+
+    assert [r["reason"] for r in results] == ["policy_unreadable"]
+    assert results[0]["applied"] is False
+    assert queue.get(entry.token).decision == "pending"
 
 
 @pytest.mark.anyio
