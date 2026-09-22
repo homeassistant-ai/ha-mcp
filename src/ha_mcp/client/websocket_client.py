@@ -1035,6 +1035,11 @@ class HomeAssistantWebSocketClient:
         cancellation, and awaited through a shield with a deadline, which
         makes it finish before control returns to anyone. The same shape as
         the theme-guard session cleanup, for the same reason.
+
+        The shield holds against an anyio cancel scope, which is the shape
+        this is reached under. A plain ``asyncio.Task.cancel()`` -- what
+        ``asyncio.timeout`` issues -- goes through it: measured, the wait
+        below then ends at the caller's deadline with the cleanup untouched.
         """
         task = asyncio.ensure_future(coro)
         # Shielded with anyio's scope rather than asyncio's, and around the
@@ -1050,9 +1055,15 @@ class HomeAssistantWebSocketClient:
         # the ``finally`` then stops the work before it ever had its own
         # budget -- collecting a task is not the same as letting it finish,
         # and cleanup that has to suspend (an unsubscribe waiting for the
-        # shared send lock) never reaches its release. The caller's
-        # cancellation is still delivered, after the cleanup rather than
-        # instead of it.
+        # shared send lock) never reaches its release.
+        #
+        # What this does NOT do is re-deliver the cancellation it shielded:
+        # measured, an enclosing ``move_on_after`` ends with
+        # ``cancelled_caught`` False when this returns normally. Each call
+        # site raises on its way out, and that raise is what delivers the
+        # caller's cancellation -- after the cleanup rather than instead of
+        # it. A caller added on a non-raising path would swallow its own
+        # deadline here.
         with anyio.CancelScope(shield=True):
             try:
                 await asyncio.wait_for(

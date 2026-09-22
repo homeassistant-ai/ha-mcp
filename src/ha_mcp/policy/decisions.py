@@ -56,10 +56,15 @@ FAILURE_WINDOW_SECONDS = 300.0
 # How long opening the response channel may delay the announcement it runs
 # ahead of. Connecting, authenticating and the subscription round trip each
 # carry their own timeout, and the lock can already be held by another
-# request doing the same; this is the only cap on the sum. Small on purpose:
-# every second here is a second the user has not yet been notified, and it
-# is spent out of the request's own TTL. Overshooting it costs the channel
-# for this one request, which the settings UI already covers.
+# request doing the same; this caps that sum. It does not cap the whole
+# delay: cancelling the attempt hands the subscription it may already have
+# opened to the client's own cleanup budget (``CLEANUP_TIMEOUT_SECONDS``),
+# which is spent after this one is up rather than inside it, and is at its
+# longest exactly when this budget expired because Home Assistant stopped
+# answering. Small on purpose: every second here is a second the user has
+# not yet been notified, and it is spent out of the request's own TTL.
+# Overshooting it costs the channel for this one request, which the
+# settings UI already covers.
 SETUP_BUDGET_SECONDS = 5.0
 
 # How long releasing a previous connection's subscription may take. It is
@@ -223,12 +228,19 @@ class ApprovalResponseListener:
         lock another announcement holds, and a subscription round trip in
         front of the notification the user is waiting for. Each of those
         has its own timeout, and together they can still add up to tens of
-        seconds of silence. ``SETUP_BUDGET_SECONDS`` caps the lot: past it
-        the attempt is abandoned and the caller announces anyway, with the
-        subscription left to the next request that comes through here. The
-        budget deliberately covers lock acquisition, because waiting for
-        somebody else's setup costs the user exactly what doing it here
+        seconds of silence. ``SETUP_BUDGET_SECONDS`` caps the attempt: past
+        it the attempt is abandoned and the caller announces anyway, with
+        the subscription left to the next request that comes through here.
+        The budget deliberately covers lock acquisition, because waiting
+        for somebody else's setup costs the user exactly what doing it here
         would.
+
+        Abandoning is not instant. A subscribe cancelled mid-flight may
+        already have registered on Home Assistant's side, and releasing it
+        is the transport's job rather than this one's -- so the cancelled
+        attempt waits out the client's own cleanup budget before it returns
+        here. That is time on top of the budget above, and the lock is held
+        for it.
         """
         try:
             policy = await run_in_thread(self._policy_provider)
@@ -258,9 +270,10 @@ class ApprovalResponseListener:
                     )
         if scope.cancelled_caught:
             logger.warning(
-                "policy decisions: gave up opening the %s channel after %.0f "
-                "seconds; announcing the request anyway. It can be decided in "
-                "the settings UI, and the next request retries the channel.",
+                "policy decisions: gave up opening the %s channel past its "
+                "%.0f-second budget; announcing the request anyway. It can be "
+                "decided in the settings UI, and the next request retries the "
+                "channel.",
                 APPROVAL_RESPONSE_EVENT,
                 SETUP_BUDGET_SECONDS,
             )

@@ -774,7 +774,7 @@ class TestSubscribeEventsContract:
         )
 
     @pytest.mark.asyncio
-    async def test_cancellation_during_send_drops_the_pending_future(self):
+    async def test_cancellation_during_send_drops_the_pending_future(self, monkeypatch):
         """Cancelling mid-transmission drops the pending-request entry.
 
         ``CancelledError`` is a BaseException and skips the transmission
@@ -782,6 +782,11 @@ class TestSubscribeEventsContract:
         clause the registered future stayed in ``_pending_requests`` with the
         caller gone and no result ever arriving to pop it.
         """
+        from ha_mcp.client import websocket_client as wsc
+
+        # The same path now releases the subscription over a mock that never
+        # answers, so shorten the budget it would otherwise sit out.
+        monkeypatch.setattr(wsc, "CLEANUP_TIMEOUT_SECONDS", 0.05)
         client = self._prepare_client()
         sending = asyncio.Event()
 
@@ -803,12 +808,19 @@ class TestSubscribeEventsContract:
         assert client._state._pending_requests == {}
 
     @pytest.mark.asyncio
-    async def test_cancellation_during_result_wait_drops_the_pending_future(self):
+    async def test_cancellation_during_result_wait_drops_the_pending_future(
+        self, monkeypatch
+    ):
         """Cancelling while awaiting the subscribe ack drops the pending entry.
 
         The wait cleaned up on ``TimeoutError`` only, so a cancelled caller
         (e.g. a tool leg cancelled by its parent) leaked one entry per call.
         """
+        from ha_mcp.client import websocket_client as wsc
+
+        # This path releases the subscription over a mock that never answers,
+        # so shorten the budget it would otherwise sit out.
+        monkeypatch.setattr(wsc, "CLEANUP_TIMEOUT_SECONDS", 0.05)
         client = self._prepare_client()
         sent = asyncio.Event()
         sent_messages: list[dict] = []
@@ -960,7 +972,7 @@ class TestSubscribeEventsContract:
         )
 
     @pytest.mark.asyncio
-    async def test_a_cancel_scope_cannot_interrupt_the_drain(self):
+    async def test_a_cancel_scope_cannot_interrupt_the_drain(self, monkeypatch):
         """The realistic cancellation, not the single-shot one.
 
         A plain ``task.cancel()`` is delivered once, and a shield over the
@@ -972,6 +984,11 @@ class TestSubscribeEventsContract:
         setup-budget scope, and a cancelled ``subscribe_events`` is how the
         cleanup is reached at all. The previous test could not get here.
         """
+        from ha_mcp.client import websocket_client as wsc
+
+        # The cleanup below never finishes on its own, so the wait runs to
+        # the budget. What is under test is the drain, not the budget.
+        monkeypatch.setattr(wsc, "CLEANUP_TIMEOUT_SECONDS", 0.05)
         client = self._prepare_client()
         finished = asyncio.Event()
 
@@ -1011,29 +1028,34 @@ class TestSubscribeEventsContract:
         cleanup actually finishing can set it.
         """
         client = self._prepare_client()
-        released = asyncio.Event()
+        entered = asyncio.Event()
         lock_free = asyncio.Event()
+        released = asyncio.Event()
 
         async def _cleanup_waiting_for_a_lock() -> None:
+            entered.set()
             await lock_free.wait()
             released.set()
 
-        async def _free_the_lock() -> None:
-            # After the scope's deadline, so the cleanup is still suspended
-            # at the moment the cancellation is first delivered.
-            await asyncio.sleep(0.05)
+        async def _cancel_once_it_waits(scope: anyio.CancelScope) -> None:
+            # No clock in this test: a deadline would only make the ordering
+            # likely. Waiting for the cleanup to suspend, cancelling, and
+            # only then freeing the lock makes it certain -- the release
+            # cannot happen before the cancellation was delivered.
+            await entered.wait()
+            scope.cancel()
+            await asyncio.sleep(0)
             lock_free.set()
 
-        opener = asyncio.ensure_future(_free_the_lock())
-        try:
-            with anyio.move_on_after(0.01):
+        with anyio.CancelScope() as scope:
+            canceller = asyncio.ensure_future(_cancel_once_it_waits(scope))
+            try:
                 await client._run_cleanup(_cleanup_waiting_for_a_lock(), "probe")
-        finally:
-            opener.cancel()
+            finally:
+                canceller.cancel()
 
         assert released.is_set(), (
-            "the cancel scope stopped the cleanup before it reached its "
-            "release"
+            "the cancel scope stopped the cleanup before it reached its release"
         )
 
     @pytest.mark.asyncio
@@ -1131,7 +1153,9 @@ class TestSubscribeEventsContract:
         ]
 
     @pytest.mark.asyncio
-    async def test_cancellation_asks_home_assistant_to_drop_the_subscription(self):
+    async def test_cancellation_asks_home_assistant_to_drop_the_subscription(
+        self, monkeypatch
+    ):
         """The id is lost to the caller, not to this operation.
 
         The command is on the wire before the wait begins, so Home Assistant
@@ -1142,6 +1166,12 @@ class TestSubscribeEventsContract:
         subscription id Home Assistant used, and this operation still has
         it while it is being cancelled.
         """
+        from ha_mcp.client import websocket_client as wsc
+
+        # The release goes out over the same mock and gets no answer, so the
+        # call sits out the cleanup budget. What is under test is the
+        # message, not the budget.
+        monkeypatch.setattr(wsc, "CLEANUP_TIMEOUT_SECONDS", 0.05)
         client = self._prepare_client()
         sent = asyncio.Event()
         sent_messages: list[dict] = []
@@ -1159,13 +1189,9 @@ class TestSubscribeEventsContract:
         with pytest.raises(asyncio.CancelledError):
             await task
 
-        # The release is detached on purpose, so it lands on a later pass of
-        # the loop rather than before the cancellation propagates.
-        for _ in range(20):
-            await asyncio.sleep(0)
-            if len(sent_messages) > 1:
-                break
-
+        # The release goes out before the cancellation propagates -- the
+        # cleanup is awaited inside a shield, and the caller's `raise` comes
+        # after it -- so by here the message is already on the mock.
         assert [
             m
             for m in sent_messages[1:]
@@ -1174,7 +1200,7 @@ class TestSubscribeEventsContract:
         ], f"no unsubscribe for {subscribe_id} in {sent_messages}"
 
     @pytest.mark.asyncio
-    async def test_cancellation_inside_the_send_also_releases_it(self):
+    async def test_cancellation_inside_the_send_also_releases_it(self, monkeypatch):
         """A cancelled send is not proof that nothing reached Home Assistant.
 
         The frame is written before the send awaits flow-control drainage,
@@ -1184,6 +1210,12 @@ class TestSubscribeEventsContract:
         makes the orphan outlive the call. Dropping only the local pending
         future, which is all this path used to do, leaves it there.
         """
+        from ha_mcp.client import websocket_client as wsc
+
+        # The release goes out over the same stalled mock and never gets an
+        # answer, so the call sits out the cleanup budget. What is under
+        # test is the message, not the budget.
+        monkeypatch.setattr(wsc, "CLEANUP_TIMEOUT_SECONDS", 0.05)
         client = self._prepare_client()
         sent = asyncio.Event()
         sent_messages: list[dict] = []

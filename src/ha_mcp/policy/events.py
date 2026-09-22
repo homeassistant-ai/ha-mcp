@@ -132,9 +132,10 @@ def build_result_payload(
     bus cannot tell an automation the user wrote from one an agent wrote, so
     nothing here pretends otherwise.
 
-    An applied approval also does not mean the tool succeeded. It means the
-    held call was released to run; what it then does is the tool's own
-    business and has its own result.
+    An applied decision also does not mean the tool succeeded. It means the
+    decision that was asked for was carried out: an approval let the held
+    call run, a denial rejected it. What happens after that is the tool's
+    own business and has its own result.
     """
     payload: dict[str, Any] = {
         "token": token,
