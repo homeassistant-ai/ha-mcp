@@ -1123,9 +1123,9 @@ your automation fired from one an agent wrote itself, so nothing in the
 payload pretends it can. That limitation is the same one the PIN exists to
 bound, and it does not change here.
 
-`applied: true` means the held call was released to run. It is **not** a
-report that the tool then succeeded — that is the tool's own business and
-has its own result.
+`applied: true` means the decision that was asked for was applied — an approval
+let the held call run, a denial rejected it. It is **not** a report that the
+tool then succeeded — that is the tool's own business and has its own result.
 
 And silence is **not** a refusal. A result is produced only for a well-formed
 response the server actually received. Fire a response before anything has

@@ -25,11 +25,14 @@ logger = logging.getLogger(__name__)
 APPROVAL_REQUESTED_EVENT = "ha_mcp_approval_requested"
 
 # What became of a response event this process received. Deliberately not a
-# report on every attempt: an event fired while the feature is off, or while
-# the channel is not open, is never seen here and produces nothing. Silence
-# therefore means "not received", never "refused", and the FAQ says so --
-# an automation that treats a missing result as a denial would be wrong in
-# exactly the case where the user most needs to look at the settings UI.
+# report on every attempt: an event fired while nothing is subscribed is
+# never seen here and produces nothing, and one that is seen can still go
+# unanswered when the result cannot be delivered. Silence therefore says
+# nothing about the decision -- least of all "refused" -- and the FAQ says
+# so; an automation that treats a missing result as a denial would be wrong
+# in exactly the case where the user most needs to look at the settings UI.
+# Being switched off is not silence either: a subscription opened while the
+# feature was on goes on receiving, and answers with a feature_off refusal.
 APPROVAL_RESULT_EVENT = "ha_mcp_approval_result"
 
 # Per-argument size cap for the event payload. The settings UI shows one
