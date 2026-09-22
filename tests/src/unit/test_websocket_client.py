@@ -831,6 +831,28 @@ class TestSubscribeEventsContract:
         assert subscribe_id not in client._state._pending_requests
 
     @pytest.mark.asyncio
+    async def test_release_sends_nothing_once_the_socket_is_gone(self):
+        """A dropped connection took the subscription with it.
+
+        Pinned separately from the release itself, because "no unsubscribe
+        was sent" is the same observation in both cases and the reason
+        differs: here there is nothing to release, and attempting it would
+        raise inside a detached task where nobody retrieves the exception.
+        """
+        client = self._prepare_client()
+        client._state.mark_disconnected()
+        sent_messages: list[dict] = []
+
+        async def _record(message: dict) -> None:
+            sent_messages.append(message)
+
+        client.send_json_message = _record  # type: ignore[method-assign]
+
+        await client._release_abandoned_subscription(7)
+
+        assert sent_messages == []
+
+    @pytest.mark.asyncio
     async def test_cancellation_asks_home_assistant_to_drop_the_subscription(self):
         """The id is lost to the caller, not to this operation.
 
