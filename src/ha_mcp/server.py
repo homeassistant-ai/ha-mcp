@@ -1361,7 +1361,23 @@ class HomeAssistantSmartMCPServer:
             # announced, which may never happen.
             from .client.websocket_client import get_websocket_client
 
-            return await get_websocket_client()
+            # Keyed to the credentials the announcement itself goes out
+            # with, the way ``HomeAssistantClient.send_websocket_message``
+            # does it. In OAuth mode ``self.client`` is a proxy resolving to
+            # the current request's client, while the global settings hold
+            # only the ``oauth-mode-token`` placeholder -- so an
+            # unparameterised call would authenticate the response
+            # subscription as nobody, and a request could be announced over
+            # REST on a channel that can never carry the answer back.
+            # ``getattr`` leaves the token deployments exactly as they were:
+            # no client, or no credentials on it, means the pooled default
+            # connection.
+            client = self.client
+            return await get_websocket_client(
+                url=getattr(client, "base_url", None),
+                token=getattr(client, "token", None),
+                verify_ssl=getattr(client, "verify_ssl", None),
+            )
 
         # Reads the same policy file as the middleware, so the toggle that
         # opens this channel is the one the user flips in the settings UI,

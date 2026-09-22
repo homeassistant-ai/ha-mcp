@@ -10,7 +10,7 @@ client, register every tool module, and run ``_initialize_server``).
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 
 def _make_server_stub(*, enable_policies: bool) -> MagicMock:
@@ -181,3 +181,76 @@ def test_policy_middleware_can_open_the_decision_channel():
     assert listener is not None
     assert listener._queue is stub.approval_queue
     assert args[0]._ensure_decisions_listener == listener.ensure_subscribed
+
+
+def test_the_response_subscription_uses_the_requests_own_credentials():
+    """OAuth mode: the subscription must authenticate as the caller does.
+
+    ``self.client`` is a proxy there, resolving to the client built from the
+    current request's OAuth claims, while the global settings hold only the
+    ``oauth-mode-token`` placeholder. An unparameterised
+    ``get_websocket_client()`` would therefore open the response channel as
+    nobody — the announcement goes out over REST with valid credentials and
+    succeeds, while the channel that has to carry the answer back fails
+    authentication. The failure is silent by construction: announcing works,
+    deciding never does.
+    """
+    import anyio
+
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    stub = _make_server_stub(enable_policies=True)
+    stub.client = MagicMock(
+        base_url="http://ha.local:8123",
+        token="request-scoped-token",
+        verify_ssl=False,
+    )
+    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
+
+    captured: dict[str, object] = {}
+
+    async def fake_get_websocket_client(**kwargs):
+        captured.update(kwargs)
+        return MagicMock()
+
+    with patch(
+        "ha_mcp.client.websocket_client.get_websocket_client",
+        new=fake_get_websocket_client,
+    ):
+        anyio.run(stub.approval_response_listener._get_ws_client)
+
+    assert captured == {
+        "url": "http://ha.local:8123",
+        "token": "request-scoped-token",
+        "verify_ssl": False,
+    }
+
+
+def test_a_client_without_credentials_falls_back_to_the_pooled_connection():
+    """Token deployments keep the behaviour they had.
+
+    There ``self.client`` carries the same credentials the settings do, and
+    a client that exposes none at all must still produce a usable call
+    rather than an AttributeError on the announce path.
+    """
+    import anyio
+
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    stub = _make_server_stub(enable_policies=True)
+    stub.client = object()
+    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
+
+    captured: dict[str, object] = {}
+
+    async def fake_get_websocket_client(**kwargs):
+        captured.update(kwargs)
+        return MagicMock()
+
+    with patch(
+        "ha_mcp.client.websocket_client.get_websocket_client",
+        new=fake_get_websocket_client,
+    ):
+        anyio.run(stub.approval_response_listener._get_ws_client)
+
+    assert captured == {"url": None, "token": None, "verify_ssl": None}
