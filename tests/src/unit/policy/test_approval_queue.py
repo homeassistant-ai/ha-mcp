@@ -411,3 +411,38 @@ def test_consume_populates_remember_cache_only_for_the_winner():
     q.clear_remember_cache()
     assert q.consume_and_maybe_remember(entry, remember_minutes=10) is False
     assert q.is_remembered("ha_x", "abc") is False
+
+
+def test_approve_refuses_an_expired_entry():
+    """The TTL is enforced in the decision itself, not only on the way in.
+
+    Every reader (``get``, ``find``, ``list_pending``) sweeps, so a caller
+    that reads before deciding never meets an expired entry. A decision
+    arriving from the Home Assistant event bus does not read first, and
+    approving there would wake a waiter still holding the row -- long past
+    the window the user was shown.
+    """
+    q = ApprovalQueue()
+    entry = q.create("ha_x", "abc", {}, ttl_minutes=5)
+    entry.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+
+    assert q.approve(entry.token) is False
+    assert entry.decision == "pending"
+
+
+def test_deny_refuses_an_expired_entry():
+    q = ApprovalQueue()
+    entry = q.create("ha_x", "abc", {}, ttl_minutes=5)
+    entry.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+
+    assert q.deny(entry.token) is False
+    assert entry.decision == "pending"
+
+
+def test_approve_still_decides_a_live_entry():
+    """The sweep must not cost the ordinary case its decision."""
+    q = ApprovalQueue()
+    entry = q.create("ha_x", "abc", {}, ttl_minutes=5)
+
+    assert q.approve(entry.token) is True
+    assert entry.decision == "approved"

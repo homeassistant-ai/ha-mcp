@@ -218,7 +218,17 @@ class ApprovalQueue:
         return [e for e in self._by_token.values() if e.decision == "pending"]
 
     def approve(self, token: str) -> bool:
-        """Mark the entry approved. Returns False if unknown or already decided."""
+        """Mark the entry approved. False if unknown, expired or already decided.
+
+        The sweep is what makes the TTL binding for every decider, not only
+        for the ones that happen to read the queue first. The settings UI
+        calls ``get`` before approving and so expires the entry on the way
+        in; a decision arriving on the event bus does not, and without this
+        an entry whose TTL elapsed while its caller was retrying could still
+        be approved -- waking a retry that is holding the same row and
+        dispatching the tool long after the window closed.
+        """
+        self._sweep_expired()
         entry = self._by_token.get(token)
         if entry is None:
             # WARNING because on a security-gating endpoint this means
@@ -238,7 +248,12 @@ class ApprovalQueue:
         return ok
 
     def deny(self, token: str) -> bool:
-        """Mark the entry denied. Returns False if unknown or already decided."""
+        """Mark the entry denied. False if unknown, expired or already decided.
+
+        Expires first, for the reason ``approve`` gives: the TTL has to mean
+        the same thing to a decision from the bus as to one from the tab.
+        """
+        self._sweep_expired()
         entry = self._by_token.get(token)
         if entry is None:
             logger.warning("approval_queue.deny: unknown token %s", token)
