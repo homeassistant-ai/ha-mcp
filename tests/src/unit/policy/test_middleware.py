@@ -1374,7 +1374,11 @@ async def test_the_decision_channel_opens_before_the_request_is_announced(queue)
             make_context("ha_call_service", {"domain": "lock"}), AsyncMock()
         )
 
-    assert order == ["subscribed", "announced"]
+    # Further "subscribed" entries may follow: with wait_seconds=0 this call
+    # passes the announce path twice, and the channel attempt is deliberately
+    # not tied to the one-shot that suppresses the second event.
+    assert order[:2] == ["subscribed", "announced"]
+    assert order.count("announced") == 1
 
 
 @pytest.mark.anyio
@@ -1401,3 +1405,83 @@ async def test_a_failing_decision_channel_still_announces(queue, caplog):
 
     client.fire_event.assert_awaited_once()
     assert "approval-response channel" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_an_identical_retry_tries_the_channel_again(queue):
+    """A failed subscription has to be recoverable by the retry that follows.
+
+    Identical calls share one queue row, and that row is announced once.
+    While channel recovery hung off the same one-shot, a subscription that
+    failed on the first call could never be retried for the request that is
+    actually waiting: the retry reuses the entry, finds it already
+    announced, and used to return before trying. Recovery then depended on
+    some future, different request turning up.
+    """
+    pol = Policy(rules=[Rule(tool_name="ha_call_service")])
+    client = AsyncMock()
+    attempts: list[str] = []
+
+    async def ensure() -> None:
+        attempts.append("tried")
+        if len(attempts) == 1:
+            raise RuntimeError("no websocket")
+
+    mw = PolicyMiddleware(
+        policy_provider=lambda: pol,
+        queue=queue,
+        wait_seconds=0,
+        get_client=lambda: client,
+        ensure_decisions_listener=ensure,
+    )
+
+    for _ in range(2):
+        with pytest.raises(ToolError):
+            await mw.on_call_tool(
+                make_context("ha_call_service", {"domain": "lock"}), AsyncMock()
+            )
+
+    assert len(attempts) > 1
+    # The dedup it must not break: one request, one notification, however
+    # many times the same call comes back.
+    assert client.fire_event.await_count == 1
+
+
+@pytest.mark.anyio
+async def test_a_channel_lost_after_the_announcement_is_reopened(queue):
+    """A reconnect drops the subscription; the entry stays announced.
+
+    The two failures are independent, so the announcement latch must not
+    decide whether the channel is looked at again. The listener itself
+    re-subscribes when it sees a dead connection -- it only ever gets the
+    chance if something calls it.
+    """
+    pol = Policy(rules=[Rule(tool_name="ha_call_service")])
+    client = AsyncMock()
+    attempts: list[str] = []
+
+    async def ensure() -> None:
+        attempts.append("tried")
+
+    mw = PolicyMiddleware(
+        policy_provider=lambda: pol,
+        queue=queue,
+        wait_seconds=0,
+        get_client=lambda: client,
+        ensure_decisions_listener=ensure,
+    )
+
+    with pytest.raises(ToolError):
+        await mw.on_call_tool(
+            make_context("ha_call_service", {"domain": "lock"}), AsyncMock()
+        )
+    announced = len(attempts)
+
+    # The connection dies here, invisibly. The same call comes back.
+    with pytest.raises(ToolError):
+        await mw.on_call_tool(
+            make_context("ha_call_service", {"domain": "lock"}), AsyncMock()
+        )
+
+    assert len(attempts) > announced
+    assert client.fire_event.await_count == 1

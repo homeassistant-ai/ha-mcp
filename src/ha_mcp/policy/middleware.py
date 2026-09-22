@@ -257,11 +257,13 @@ class PolicyMiddleware(Middleware):
     ) -> None:
         """Announce an entry ``_finalize_timed_out_pending`` just reissued.
 
-        Only a reissue reaches an event here: the entry this call waited on
-        was announced before the wait and ``mark_notified`` refuses a second
-        event for it. A reissue carries a new token, and the token in the
-        first event is dead by then, so a listener holding it needs the new
-        one.
+        What usually reaches an event here is a reissue: the entry this
+        call waited on was announced before the wait and ``mark_notified``
+        refuses a second event for it. A reissue carries a new token, and
+        the token in the first event is dead by then, so a listener holding
+        it needs the new one. Not only a reissue, though -- when the first
+        announcement found no client it left the one-shot unspent, and the
+        same entry can still take its first event here.
 
         Never on the dynamic path. There ``_finalize_timed_out_pending``
         REMOVES the entry rather than reissuing it, so an announcement
@@ -290,6 +292,16 @@ class PolicyMiddleware(Middleware):
         first would burn the entry's single announcement on a client that
         never materialised, and a later reissue of that same entry could
         then never announce either.
+
+        Opening the response channel is NOT tied to that one-shot. The
+        announcement is per entry; the channel is per connection, and the
+        two fail independently -- a subscription that never opened, or one
+        a reconnect dropped afterwards, leaves an entry that is already
+        marked notified with no way back. Identical retries reuse that
+        entry, so gating recovery on the latch would mean the channel can
+        only ever be restored by a request nobody has asked for yet. The
+        attempt therefore runs on every pass through here, and only the
+        event itself is suppressed for an entry already announced.
         """
         if self._get_client is None:
             return
@@ -304,9 +316,12 @@ class PolicyMiddleware(Middleware):
                 exc_info=True,
             )
             return
-        if not pending.mark_notified():
-            return
+        first_announcement = pending.mark_notified()
+        # Ahead of the event either way, so a responder that answers the
+        # instant the notification arrives finds the channel already open.
         await self._ensure_decision_channel()
+        if not first_announcement:
+            return
         await emit_approval_requested(client, pending, rule, single_use=dynamic_targets)
 
     async def _ensure_decision_channel(self) -> None:
