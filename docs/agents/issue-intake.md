@@ -29,7 +29,9 @@ read-only sandbox with shell, hosted web search and command network disabled.
 It receives neither a GitHub token nor the App private key. Hosted apps are off.
 
 The result has a schema-enforced `needs_translation` boolean. Summaries and
-translations cite source excerpts; matching normalizes CRLF to LF. Each extracted
+translations cite source excerpts; matching normalizes CRLF to LF and ignores
+`` ` `` and `*` markers unless they sit between two word characters, rejecting
+quotes or values left empty. Each extracted
 fact value must occur in its cited quote. `missing_fields` contains every
 outstanding question. `already_requested` is a subset with evidence from a
 maintainer, used only to avoid repeating that question. It never means answered.

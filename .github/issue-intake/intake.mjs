@@ -109,9 +109,10 @@ export function validateResult(result, context) {
     );
   }
   const sources = new Map(context.sources.map((s) => [s.source_id, s]));
-  // The model adds or drops Markdown code/bold markers when quoting.
+  // The model adds or drops Markdown ` and * markers when quoting. Markers
+  // between two word characters (2*3) are kept so no new words can form.
   const normalize = (text) =>
-    text.replace(/\r\n?/g, "\n").replace(/[`*]/g, "");
+    text.replace(/\r\n?/g, "\n").replace(/(?<!\w)[`*]+|[`*]+(?!\w)/g, "");
   for (const key of [
     "summary",
     "translation",

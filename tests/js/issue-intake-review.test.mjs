@@ -140,14 +140,20 @@ test("Markdown code and bold markers do not affect quote matching", () => {
     () => validateResult(r, makeContext(s)),
     /facts\[0\].value/,
   );
-  r.summary[0].evidence[0].quote = "**";
+  r.facts[0].value = "`/auth/authorize`";
+  for (const quote of ["**", "`ha_call_service`, which fires events"]) {
+    r.summary[0].evidence[0].quote = quote;
+    assert.throws(
+      () => validateResult(r, makeContext(s)),
+      /summary\[0\].evidence\[0\].*body/,
+    );
+  }
+  const joined = fixture(),
+    joinedResult = answer();
+  joined.issue.body = "Client is Claude Desktop, rate 2*3 per second.";
+  joinedResult.summary[0].evidence[0].quote = "rate 23 per second";
   assert.throws(
-    () => validateResult(r, makeContext(s)),
-    /summary\[0\].evidence\[0\].*body/,
-  );
-  r.summary[0].evidence[0].quote = "`ha_call_service`, which fires events";
-  assert.throws(
-    () => validateResult(r, makeContext(s)),
+    () => validateResult(joinedResult, makeContext(joined)),
     /summary\[0\].evidence\[0\].*body/,
   );
 });
