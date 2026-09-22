@@ -235,7 +235,7 @@ async def _post_decision_pin(data_dir: Path, request: Request) -> JSONResponse:
                 status_code=500,
             )
     logger.info("approval PIN set (event-bus decisions)")
-    return JSONResponse(pin_status(data_dir))
+    return JSONResponse(await run_in_thread(pin_status, data_dir))
 
 
 async def _delete_decision_pin(data_dir: Path) -> JSONResponse:
@@ -257,6 +257,9 @@ async def _delete_decision_pin(data_dir: Path) -> JSONResponse:
         try:
             policy = load_policy(data_dir)
         except ValueError as e:
+            logger.exception(
+                "approval PIN not removed: the policy file could not be read"
+            )
             return JSONResponse(
                 {
                     "error": (

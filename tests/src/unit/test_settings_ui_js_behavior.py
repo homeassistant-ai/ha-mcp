@@ -7699,3 +7699,66 @@ class TestApprovalPinRemoval:
         )
         _assert_clean_init(result)
         assert 'data-checked="true"' in self._probe(result.dom)
+
+
+class TestApprovalPinInvalidStatus:
+    """A stored record that matches nothing is its own state in the tab.
+
+    Reported as "no PIN set", the user is told to do the thing they
+    already did; the repair for a record the server cannot decode is to
+    set a new PIN, and the status line is where that is said.
+    """
+
+    def test_an_unusable_record_says_so_and_keeps_the_toggle_locked(
+        self, settings_script: str
+    ) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/decision-pin": {
+                "status": 200,
+                "json": {"set": False, "invalid": True},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              await window.policyRefreshPinStatus();
+              const probe = document.createElement('div');
+              probe.id = '__pin_invalid_probe';
+              probe.dataset.status = document.getElementById('policy-pin-status').textContent;
+              probe.dataset.disabled = String(
+                document.getElementById('policy-event-decisions-toggle').disabled
+              );
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        probe = re.search(r'<div[^>]*id="__pin_invalid_probe"[^>]*>', result.dom)
+        assert probe is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        assert "cannot be read" in probe.group(0), probe.group(0)
+        assert 'data-disabled="true"' in probe.group(0), probe.group(0)
+
+    def test_a_plain_missing_pin_still_says_no_pin_set(
+        self, settings_script: str
+    ) -> None:
+        """The control: absent and invalid must not render the same line."""
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=DEFAULT_FETCHES,
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              await window.policyRefreshPinStatus();
+              const probe = document.createElement('div');
+              probe.id = '__pin_absent_probe';
+              probe.dataset.status = document.getElementById('policy-pin-status').textContent;
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        probe = re.search(r'<div[^>]*id="__pin_absent_probe"[^>]*>', result.dom)
+        assert probe is not None
+        assert "No PIN set" in probe.group(0), probe.group(0)

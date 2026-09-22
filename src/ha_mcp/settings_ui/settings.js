@@ -2942,14 +2942,18 @@ async function policyClearPin() {
   try {
     const r = await fetch('./api/policy/decision-pin', {method: 'DELETE'});
     const body = await r.json().catch(() => ({}));
+    // Unchecked whenever the PIN is actually gone — including the error
+    // the server sends when it removed the PIN but could not persist the
+    // toggle with it (pin_removed on a 500). The flag below reports only
+    // whether the PERSISTED toggle was on, so a box ticked but not yet
+    // saved would otherwise survive the removal: left checked, then
+    // disabled by the status refresh, and the next save submits the one
+    // combination the server refuses.
+    if (r.ok || body.pin_removed) {
+      const toggleEl = document.getElementById('policy-event-decisions-toggle');
+      if (toggleEl) toggleEl.checked = false;
+    }
     if (!r.ok) throw new Error(body.error || ('HTTP ' + r.status));
-    // Unchecked on every successful removal, whatever the answer says.
-    // The flag reports only whether the PERSISTED toggle was on, so a box
-    // ticked but not yet saved would otherwise survive the removal: left
-    // checked, then disabled by the status refresh below, and the next
-    // save submits the one combination the server refuses.
-    const toggleEl = document.getElementById('policy-event-decisions-toggle');
-    if (toggleEl) toggleEl.checked = false;
     if (body.event_decisions_disabled) {
       showToast(t(
         'policies.global.pin.cleared_and_disabled',
