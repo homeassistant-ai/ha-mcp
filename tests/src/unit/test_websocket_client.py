@@ -1259,3 +1259,100 @@ class TestPendingFutureCancelGuards:
 
         assert state._pending_requests == {}
         assert state._event_responses == {}
+
+
+class TestReceivedFrameRedaction:
+    """The debug line that prints whole received frames must not print a PIN.
+
+    The approval-response event carries the user's approval PIN in its data
+    (issue #2502). ``_message_handler`` logs every decoded frame at DEBUG
+    before dispatching it, so an operator who turns on debug logging to
+    diagnose something else would otherwise find that PIN in Home
+    Assistant's log in clear text. Redaction applies to the log copy only —
+    the handler still has to receive the real PIN, or nothing could verify
+    it.
+    """
+
+    @staticmethod
+    def _client():
+        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
+
+        return HomeAssistantWebSocketClient(
+            url="http://homeassistant.local:8123", token="test-token"
+        )
+
+    @staticmethod
+    def _frame(pin: str) -> str:
+        import json
+
+        return json.dumps(
+            {
+                "id": 7,
+                "type": "event",
+                "event": {
+                    "event_type": "ha_mcp_approval_response",
+                    "data": {
+                        "token": "tok-123",
+                        "decision": "approve",
+                        "pin": pin,
+                    },
+                },
+            }
+        )
+
+    @pytest.mark.parametrize("pin", ["2468", "wrong-pin-9999"])
+    def test_the_pin_is_redacted_in_the_log_but_not_in_the_dispatch(self, pin, caplog):
+        """Both the right PIN and a wrong one: neither reaches the log.
+
+        A wrong PIN is as much the user's secret as a right one — it is
+        usually a typo of the real thing — and the reader cannot tell them
+        apart anyway, which is the point of redacting by field name.
+        """
+        import logging
+
+        client = self._client()
+        seen: list[dict] = []
+
+        async def handler(event):
+            seen.append(event)
+
+        client.add_event_handler("ha_mcp_approval_response", handler)
+
+        class _OneFrame:
+            def __init__(self, frame):
+                self._frames = [frame]
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not self._frames:
+                    raise StopAsyncIteration
+                return self._frames.pop()
+
+        client.websocket = _OneFrame(self._frame(pin))
+
+        with caplog.at_level(logging.DEBUG, logger="ha_mcp.client.websocket_client"):
+            asyncio.run(client._message_handler())
+
+        assert seen and seen[0]["data"]["pin"] == pin
+        assert pin not in caplog.text
+        assert "<redacted>" in caplog.text
+        # The rest of the frame is still there — redaction must not cost
+        # the log line its diagnostic value.
+        assert "tok-123" in caplog.text
+
+    def test_other_fields_are_untouched(self):
+        from ha_mcp.client.websocket_client import _redacted_for_log
+
+        payload = {
+            "a": 1,
+            "nested": {"pin": "2468", "keep": ["x", {"pin": "1234"}]},
+        }
+
+        assert _redacted_for_log(payload) == {
+            "a": 1,
+            "nested": {"pin": "<redacted>", "keep": ["x", {"pin": "<redacted>"}]},
+        }
+        # The original is not mutated: the caller still dispatches it.
+        assert payload["nested"]["pin"] == "2468"

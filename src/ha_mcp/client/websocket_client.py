@@ -53,6 +53,38 @@ MAX_WS_MESSAGE_BYTES = 64 * 1024 * 1024
 # later than it planned when the command hangs instead.
 DEFAULT_COMMAND_WAIT_TIMEOUT = 30.0
 
+# Field names whose value must never reach the log, matched case-insensitively
+# wherever they appear in a received frame. The approval-response event carries
+# the user's approval PIN in ``event.data.pin`` (issue #2502), and the debug
+# line below prints whole decoded frames -- so without this, turning on debug
+# logging would write that PIN into Home Assistant's log in clear text.
+_REDACTED_LOG_FIELDS = frozenset({"pin"})
+_REDACTED_PLACEHOLDER = "<redacted>"
+
+
+def _redacted_for_log(value: Any) -> Any:
+    """A copy of ``value`` with ``_REDACTED_LOG_FIELDS`` masked.
+
+    Only for logging: the caller keeps handling the original, so redaction
+    cannot change what the client does with a frame -- verification still
+    sees the real PIN. Containers are rebuilt rather than mutated for the
+    same reason. Anything that is not a dict or a list is returned as it
+    is, which is why this stays cheap enough to run per frame; the caller
+    runs it only when DEBUG is actually enabled.
+    """
+    if isinstance(value, dict):
+        return {
+            key: (
+                _REDACTED_PLACEHOLDER
+                if isinstance(key, str) and key.lower() in _REDACTED_LOG_FIELDS
+                else _redacted_for_log(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redacted_for_log(item) for item in value]
+    return value
+
 
 def _extract_ws_error(error: Any) -> tuple[str, str | None]:
     """Split an HA WebSocket ``error`` payload into ``(message, code)``.
@@ -473,7 +505,10 @@ class HomeAssistantWebSocketClient:
             async for message in self.websocket:
                 try:
                     data = json.loads(message)
-                    logger.debug(f"WebSocket received: {data}")
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "WebSocket received: %s", _redacted_for_log(data)
+                        )
                     await self._process_message(data)
                 except json.JSONDecodeError as e:
                     logger.error(f"Invalid JSON received: {e}")
