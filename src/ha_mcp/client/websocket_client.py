@@ -53,6 +53,12 @@ MAX_WS_MESSAGE_BYTES = 64 * 1024 * 1024
 # acts on whatever the client looks like later, not on what it was cleaning
 # up. Matches the theme-guard session close, which solves the same problem.
 CLEANUP_TIMEOUT_SECONDS = 2.0
+
+# Structured error codes that mean the subscription is already gone, which
+# is the ordinary outcome when releasing one that was abandoned before Home
+# Assistant registered it. Everything else is a refusal of the release, and
+# leaves the subscription open.
+_SUBSCRIPTION_GONE_CODES = frozenset({"not_found"})
 # How long :meth:`HomeAssistantWebSocketClient.send_command` waits for a reply
 # when the caller names no ``_wait_timeout``. Named rather than inlined because
 # callers that schedule retries have to budget around it: a caller whose retry
@@ -1010,10 +1016,19 @@ class HomeAssistantWebSocketClient:
         except (Exception, TimeoutError) as e:
             logger.debug("%s: cleanup did not finish cleanly: %s", what, e)
         except asyncio.CancelledError:
-            # The shield took the cancellation; the task itself keeps going.
-            # Nothing further to wait on here -- the caller is being torn
-            # down and the deadline above already bounded the attempt.
-            logger.debug("%s: cleanup cancelled, task left to finish", what)
+            logger.debug("%s: cleanup cancelled before it finished", what)
+            raise
+        finally:
+            # The shield is what lets the deadline above expire without
+            # killing the work -- and it is also what would let the work
+            # outlive this call, which is the whole failure being fixed. A
+            # task still running here reads the client's state whenever it
+            # gets there, so it must not get there: stop it, then collect
+            # the outcome so a late failure does not surface as an orphaned
+            # "exception was never retrieved".
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def _release_abandoned_subscription(self, message_id: int) -> None:
         """Ask Home Assistant to drop a subscription we can no longer name.
@@ -1046,12 +1061,28 @@ class HomeAssistantWebSocketClient:
                 e,
             )
         except HomeAssistantCommandError as e:
-            logger.debug(
-                "abandoned subscribe_events(%s): Home Assistant has no such "
-                "subscription, so the command did not reach it: %s",
-                message_id,
-                e,
-            )
+            if e.code in _SUBSCRIPTION_GONE_CODES:
+                logger.debug(
+                    "abandoned subscribe_events(%s): Home Assistant has no such "
+                    "subscription, so the command did not reach it: %s",
+                    message_id,
+                    e,
+                )
+            else:
+                # Anything else is a rejection of the unsubscribe itself --
+                # not authorised, malformed, a command this build does not
+                # know. The subscription is then still open on a socket this
+                # process keeps using, which is the leak this method exists
+                # to prevent, so it must not disappear at debug level with
+                # the routine case.
+                logger.warning(
+                    "abandoned subscribe_events(%s): Home Assistant refused "
+                    "the release (code %s); the subscription may still be "
+                    "open: %s",
+                    message_id,
+                    e.code,
+                    e,
+                )
 
     async def subscribe_command(
         self,

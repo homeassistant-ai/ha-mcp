@@ -884,19 +884,50 @@ class TestSubscribeEventsContract:
         ]
 
     @pytest.mark.asyncio
-    async def test_a_rejected_release_is_not_a_warning(self, caplog):
-        """ "Subscription not found" here means the command never arrived.
+    async def test_cleanup_does_not_outlive_its_own_deadline(self, monkeypatch):
+        """The shield keeps the deadline from killing the work, not from ending it.
 
-        Which is the case that needed no cleanup at all. Distinguishing it
-        from a real leak is the whole reason this method does not just call
-        ``unsubscribe_events``, so the level is the assertion.
+        Without the cancel-and-drain, a cleanup that runs past the deadline
+        keeps going and reads the client's state whenever it gets there --
+        which is the stale-task failure the shielded wait was introduced to
+        fix, reintroduced through its own timeout path. The session close in
+        the theme guard drains for the same reason.
+        """
+        from ha_mcp.client import websocket_client as wsc
+
+        client = self._prepare_client()
+        monkeypatch.setattr(wsc, "CLEANUP_TIMEOUT_SECONDS", 0.05)
+        started = asyncio.Event()
+
+        async def _never_finishes() -> None:
+            started.set()
+            await asyncio.sleep(3600)
+
+        await client._run_cleanup(_never_finishes(), "probe")
+
+        assert started.is_set(), "the cleanup never ran at all"
+        leftover = [
+            t
+            for t in asyncio.all_tasks()
+            if not t.done() and "_never_finishes" in repr(t.get_coro())
+        ]
+        assert leftover == [], f"cleanup outlived its deadline: {leftover}"
+
+    @pytest.mark.asyncio
+    async def test_a_missing_subscription_is_not_a_warning(self, caplog):
+        """ "Not found" here means the command never arrived.
+
+        Which is the case that needed no cleanup at all, so it is routine
+        rather than news -- unlike in ``unsubscribe_events``, where a
+        rejection means a subscription that was known to exist. Keyed on
+        Home Assistant's structured code, not on the message text.
         """
         from ha_mcp.client.rest_client import HomeAssistantCommandError
 
         client = self._prepare_client()
 
         async def _reject(_command: str, **_kwargs: object) -> dict:
-            raise HomeAssistantCommandError("Subscription not found")
+            raise HomeAssistantCommandError("Subscription not found", "not_found")
 
         client.send_command = _reject  # type: ignore[method-assign]
 
@@ -910,6 +941,37 @@ class TestSubscribeEventsContract:
         ]
         assert records, "the rejection went unlogged"
         assert all(r.levelno == logging.DEBUG for r in records), [
+            (r.levelname, r.getMessage()) for r in records
+        ]
+
+    @pytest.mark.asyncio
+    async def test_any_other_refusal_of_the_release_is_a_warning(self, caplog):
+        """A refused release leaves the subscription open.
+
+        Not authorised, malformed, a command this build does not know --
+        none of those mean "already gone", and all of them leave the orphan
+        on a socket this process keeps using. Folding them in with the
+        routine case at debug level is how a real leak goes unnoticed.
+        """
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        client = self._prepare_client()
+
+        async def _reject(_command: str, **_kwargs: object) -> dict:
+            raise HomeAssistantCommandError("Unauthorized", "unauthorized")
+
+        client.send_command = _reject  # type: ignore[method-assign]
+
+        with caplog.at_level(logging.DEBUG, logger="ha_mcp.client.websocket_client"):
+            await client._release_abandoned_subscription(7)
+
+        records = [
+            r
+            for r in caplog.records
+            if "abandoned subscribe_events(7)" in r.getMessage()
+        ]
+        assert records, "the refusal went unlogged"
+        assert all(r.levelno == logging.WARNING for r in records), [
             (r.levelname, r.getMessage()) for r in records
         ]
 
