@@ -49,10 +49,11 @@ _SALT_BYTES = 16
 SUPPORTED_ALGORITHM = "pbkdf2_sha256"
 
 # What the stored file amounts to, as far as every consumer is concerned.
-# The three states are distinct on purpose: a record this build cannot
-# verify against is a configuration problem the user has to repair, not a
-# PIN somebody typed wrongly, and the two must not be reported -- or
-# counted -- as the same thing. Status, the guards that allow the toggle to
+# The three states are distinct on purpose: anything that is there and
+# cannot be used -- unreadable, unparseable, or an object this build
+# cannot decode -- is a configuration problem the user has to repair, not
+# a PIN somebody typed wrongly, and the two must not be reported, or
+# counted, as the same thing. Status, the guards that allow the toggle to
 # be switched on, and verification all decide from this one answer, so the
 # settings UI cannot advertise a PIN the listener would refuse.
 PIN_ABSENT = "absent"
@@ -121,28 +122,39 @@ def clear_pin(data_dir: Path) -> bool:
     return True
 
 
-def _load_record(data_dir: Path) -> dict[str, Any] | None:
+def _load_record(data_dir: Path) -> tuple[str, dict[str, Any] | None]:
+    """The stored file as ``(state, record)``.
+
+    Unreadable is not absent, and the difference has to survive the return
+    rather than only reach the log: a file that exists and cannot be used
+    is a repair job, while an absent one is a PIN nobody has set yet. Told
+    apart, the settings UI can say which of the two it is instead of
+    telling a user with a corrupt file to set the PIN they already set.
+
+    ``PIN_SET`` here means only that an object was loaded; whether it is a
+    record this build can verify against is ``_decode_record``'s half of
+    the question, and ``pin_state`` puts the two together.
+    """
     path = _pin_path(data_dir)
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return None
+        return PIN_ABSENT, None
     except (OSError, json.JSONDecodeError):
-        # Unreadable is not "absent": say so, and let every caller treat it
-        # as a PIN that cannot authorise anything rather than as an open door.
         logger.warning("approval PIN file %s is unreadable", path, exc_info=True)
-        return None
+        return PIN_INVALID, None
     if not isinstance(raw, dict):
         logger.warning("approval PIN file %s is not an object", path)
-        return None
-    return raw
+        return PIN_INVALID, None
+    return PIN_SET, raw
 
 
 def _decode_record(record: dict[str, Any]) -> tuple[bytes, bytes, int] | None:
     """The salt, expected digest and work factor of ``record``, or ``None``
     when it is not something this build can verify a PIN against.
 
-    The single place that decides what "a stored PIN" means. An object that
+    One half of what "a stored PIN" means; ``_load_record`` is the other,
+    deciding whether there is an object here at all. An object that
     only looks like a record -- ``{}``, a record written by a future build
     naming another algorithm, a truncated salt -- fails here, and every
     consumer therefore treats it as a configuration problem instead of one
@@ -162,9 +174,9 @@ def _decode_record(record: dict[str, Any]) -> tuple[bytes, bytes, int] | None:
 
 def pin_state(data_dir: Path) -> str:
     """``PIN_ABSENT``, ``PIN_INVALID`` or ``PIN_SET`` for the stored file."""
-    record = _load_record(data_dir)
+    state, record = _load_record(data_dir)
     if record is None:
-        return PIN_ABSENT
+        return state
     if _decode_record(record) is None:
         logger.warning(
             "approval PIN file %s holds no usable record (expected a %r "
@@ -185,13 +197,15 @@ def is_pin_set(data_dir: Path) -> bool:
 def pin_status(data_dir: Path) -> dict[str, Any]:
     """What the settings UI may know about the PIN: that it exists, and when.
 
-    A record that cannot be verified against reports ``set: False`` with
-    ``invalid: True``, so the tab offers to set a new PIN -- and leaves the
-    toggle it guards disabled -- rather than showing a PIN that works.
+    A file that exists but cannot be verified against -- unreadable, not
+    JSON, not an object, or an object this build cannot decode -- reports
+    ``set: False`` with ``invalid: True``, so the tab offers to set a new
+    PIN, and leaves the toggle it guards disabled, instead of either
+    showing a PIN that works or telling the user to set one they have.
     """
-    record = _load_record(data_dir)
+    state, record = _load_record(data_dir)
     if record is None:
-        return {"set": False}
+        return {"set": False} if state == PIN_ABSENT else {"set": False, "invalid": True}
     if _decode_record(record) is None:
         return {"set": False, "invalid": True}
     return {"set": True, "updated_at": record.get("updated_at")}
@@ -206,7 +220,7 @@ def verify_pin(data_dir: Path, candidate: Any) -> bool:
     ``pin_state`` first -- a False from a record that cannot be decoded is
     a broken configuration, not a guess.
     """
-    record = _load_record(data_dir)
+    _state, record = _load_record(data_dir)
     if record is None or not isinstance(candidate, str):
         return False
     decoded = _decode_record(record)

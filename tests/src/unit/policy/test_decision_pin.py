@@ -197,10 +197,31 @@ def test_the_three_states_are_distinguishable(tmp_path):
     assert pin_status(tmp_path)["set"] is True
 
 
-def test_unparseable_file_verifies_nothing(tmp_path):
-    (tmp_path / PIN_FILENAME).write_text("{ not json")
+@pytest.mark.parametrize(
+    "content",
+    ["{ not json", "[]", '"a string"', ""],
+    ids=["unparseable", "json-array", "json-string", "empty-file"],
+)
+def test_a_file_that_cannot_be_loaded_is_invalid_not_absent(tmp_path, content):
+    """A file that is there and unusable is a repair job, not a missing PIN.
 
+    Reported as absent, every consumer tells the user to set a PIN they
+    have already set: the tab says "No PIN set", the listener refuses
+    events with "no PIN is configured", and a policy save that enables the
+    channel is rejected for a missing PIN. The file is right there.
+    """
+    (tmp_path / PIN_FILENAME).write_text(content)
+
+    assert pin_state(tmp_path) == PIN_INVALID
+    assert pin_status(tmp_path) == {"set": False, "invalid": True}
+    assert is_pin_set(tmp_path) is False
     assert verify_pin(tmp_path, "2468") is False
+
+
+def test_no_file_at_all_is_absent(tmp_path):
+    """The control for the test above: nothing there is not "invalid"."""
+    assert pin_state(tmp_path) == PIN_ABSENT
+    assert pin_status(tmp_path) == {"set": False}
     assert is_pin_set(tmp_path) is False
 
 
