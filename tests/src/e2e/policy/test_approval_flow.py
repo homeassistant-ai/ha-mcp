@@ -562,7 +562,17 @@ async def test_a_real_event_round_trip_decides_a_held_call(
             "a wrong PIN released the held call; the PIN is the only thing "
             "standing between an agent-fired event and its own approval"
         )
-        assert server.approval_queue.get(approval_token) is not None
+        # The result event above says a subscribed server refused the guess.
+        # It cannot say WHICH one: a wrong PIN is wrong on every server that
+        # has the channel open, none of them can name the tool behind a token
+        # it never issued, so their refusals are identical to this one. What
+        # is checked here instead is the only thing that belongs to this
+        # server -- its own entry, still undecided, with the call still held.
+        refused_entry = server.approval_queue.get(approval_token)
+        assert refused_entry is not None, "the wrong PIN consumed the request"
+        assert refused_entry.decision == "pending", (
+            f"the wrong PIN decided the request as {refused_entry.decision!r}"
+        )
 
         applied = await _respond_and_wait_for_result(
             responder,
