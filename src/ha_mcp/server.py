@@ -1433,14 +1433,21 @@ class HomeAssistantSmartMCPServer:
                     exc_info=True,
                 )
                 return
-            await emit_approval_result(
-                HomeAssistantClient(url, token_value, verify_ssl=verify_ssl),
-                token,
-                decision,
-                applied=applied,
-                reason=reason,
-                tool_name=tool_name,
-            )
+            # Owned here, so closed here: this client is built per event and
+            # carries its own httpx connection pool, which nothing else will
+            # ever reclaim. A wrong PIN retried by a chatty automation would
+            # otherwise open one per attempt.
+            async with HomeAssistantClient(
+                url, token_value, verify_ssl=verify_ssl
+            ) as result_client:
+                await emit_approval_result(
+                    result_client,
+                    token,
+                    decision,
+                    applied=applied,
+                    reason=reason,
+                    tool_name=tool_name,
+                )
 
         self.approval_response_listener = ApprovalResponseListener(
             policy_provider=_policy_provider,

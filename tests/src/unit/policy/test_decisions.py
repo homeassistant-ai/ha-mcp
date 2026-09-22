@@ -765,13 +765,13 @@ async def test_a_denial_reports_the_decision_that_was_asked_for(tmp_path, queue)
         ),
         pytest.param(
             lambda tmp_path, queue: (tmp_path / PIN_FILENAME).unlink(),
-            lambda token: response_event(token),
+            response_event,
             "pin_not_set",
             id="pin-absent",
         ),
         pytest.param(
             lambda tmp_path, queue: (tmp_path / PIN_FILENAME).write_text("{}"),
-            lambda token: response_event(token),
+            response_event,
             "pin_unusable",
             id="pin-unusable",
         ),

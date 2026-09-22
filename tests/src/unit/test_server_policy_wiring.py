@@ -10,7 +10,7 @@ client, register every tool module, and run ``_initialize_server``).
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def _make_server_stub(*, enable_policies: bool) -> MagicMock:
@@ -302,3 +302,44 @@ def test_a_client_that_cannot_resolve_credentials_fails_the_channel_not_the_call
         "a failed credential resolution must not fall through to the pooled "
         "default connection"
     )
+
+
+def test_the_result_event_closes_the_client_it_built():
+    """One client per event, and nothing else will ever reclaim it.
+
+    The emitter runs in a bus handler rather than a request, so it cannot
+    use the shared client in OAuth mode and builds its own from the same
+    credential snapshot the subscription uses. That client carries its own
+    httpx connection pool. Left open, every decided approval, every wrong
+    PIN and every rate-limited retry adds one -- a chatty automation turns
+    a feature into a file-descriptor leak. Asserted on the close, not on
+    the fire, because firing works either way.
+    """
+    import anyio
+
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    stub = _make_server_stub(enable_policies=True)
+    stub.client = MagicMock(
+        base_url="http://ha.local:8123", token="tok", verify_ssl=True
+    )
+    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
+
+    built: list[MagicMock] = []
+
+    def fake_client(*_args, **_kwargs):
+        client = MagicMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=None)
+        client.fire_event = AsyncMock()
+        built.append(client)
+        return client
+
+    emitter = stub.approval_response_listener._emit_result
+    assert emitter is not None, "the listener was wired without a result emitter"
+
+    with patch("ha_mcp.client.rest_client.HomeAssistantClient", new=fake_client):
+        anyio.run(lambda: emitter("tok-1", "approve", applied=True, reason="applied"))
+
+    assert len(built) == 1
+    built[0].__aexit__.assert_awaited_once()

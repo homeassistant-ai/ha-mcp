@@ -393,6 +393,13 @@ class ApprovalResponseListener:
             return
         refusal = await self._authorised(data.get("pin"))
         if refusal is not None:
+            # No tool name on this branch, deliberately, and not merely
+            # because the lookup has not happened yet. Whoever fired this
+            # event has not authenticated: naming the tool would answer,
+            # for any token they care to invent, whether it exists here and
+            # what it gates. The limiter bounds how fast that can be asked,
+            # not whether it is answered. The reason alone tells a
+            # legitimate responder what to do.
             await self._report(token, decision, applied=False, reason=refusal)
             return
         outcome = self._queue.decide_with_outcome(token, decision)

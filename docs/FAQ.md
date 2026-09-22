@@ -1100,10 +1100,13 @@ automation:
                trigger.event.data.reason }}
 ```
 
-The payload carries `token`, the `decision` that was asked for, whether it
-was `applied`, and a `reason`. `tool_name` is included when the request is
-still known — an expired or invented token names nothing, so the field is
-absent rather than guessed. The reason is one of `applied`, `expired`,
+The payload carries `token`, the `decision` that was asked for, whether it was
+`applied`, and a `reason`. `tool_name` appears only once the response has been
+accepted and the token looked up. A refused response never names a tool, not
+even for a token that exists: whoever fired it has not authenticated, and
+answering would tell them which tokens are live and what they gate. Past that
+point the field is still absent for an expired or invented token, because
+there is then nothing to name. The reason is one of `applied`, `expired`,
 `unknown_token`, `already_decided`, `wrong_pin`, `no_pin`, `pin_not_set`,
 `pin_unusable`, `rate_limited`, `feature_off` or `policy_unreadable`: short
 tokens, so an automation can branch on them without matching prose.
