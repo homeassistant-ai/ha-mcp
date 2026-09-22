@@ -230,8 +230,9 @@ def _commit_policy(
     if new_policy.event_decisions_enabled and not is_pin_set(data_dir):
         # No MCP tool takes the PIN as a parameter, returns it, or writes
         # the file it lives in: the component's deny floor blocks that
-        # basename on read, write, list and delete, whatever extra file
-        # paths an operator configures. It is the one thing in this feature
+        # basename on read, write and delete and keeps it out of a
+        # directory listing, whatever extra file paths an operator
+        # configures. It is the one thing in this feature
         # meant to come from the person rather than from the agent — which
         # is a statement about this server's surface, not a guarantee about
         # every path to the disk an operator may open by other means.

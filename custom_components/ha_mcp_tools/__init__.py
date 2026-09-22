@@ -1325,6 +1325,16 @@ def _list_files_sync(
     for item in target_dir.iterdir():
         if pattern and not fnmatch.fnmatch(item.name, pattern):
             continue
+        # The deny floor gates the directory being listed, not the entries
+        # coming back from it, so a name it protects would otherwise be
+        # enumerable inside an allowed directory -- reporting its size and
+        # mtime for a file no handler will open. Matched on the entry's own
+        # name, which is what the floor denies; nothing here resolves a
+        # symlink, because a link's own name is not the protected one and
+        # reading through it is refused anyway.
+        lowered = item.name.lower()
+        if lowered in DENY_READ_BASENAMES or lowered in DENY_PATH_SEGMENTS:
+            continue
         stat = item.stat()
         # Config-relative paths report relative to the config dir; absolute
         # HAOS sibling-volume paths (issue #1586) are not under it, so report

@@ -75,8 +75,9 @@ ALLOWED_WRITE_DIRS = ["www", "themes", "custom_templates", "dashboards"]
 DENY_PATH_SEGMENTS = frozenset({".storage"})
 
 # Basenames the floor denies wherever they appear. Despite the historical
-# name, this set is enforced on every read, write, list and delete, so an
-# entry here is out of reach in all four directions.
+# name, this set is enforced on every read, write and delete, and the file
+# lister drops an entry carrying one of these names from its results, so a
+# name here is neither openable nor enumerable through the component.
 #
 # secrets.yaml is reachable ONLY as the canonical config-root file, where the
 # read handler masks its values. Any OTHER secrets.yaml surfaced via a custom

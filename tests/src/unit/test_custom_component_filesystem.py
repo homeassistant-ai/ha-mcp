@@ -2567,3 +2567,45 @@ class TestListAllowlistPackageFolder:
         assert not _is_path_allowed_for_dir(
             tmp_path, ".storage", ALLOWED_READ_DIRS, None, {".storage"}
         )
+
+
+class TestListingHidesDeniedNames:
+    """A listing returns entries; the floor gates the directory it lists.
+
+    Without filtering the results, a directory an operator added as an
+    extra path enumerates the names the floor protects — reporting the
+    approval PIN file's size and mtime for a file no handler will open.
+    """
+
+    def test_a_denied_basename_is_not_enumerated(self, tmp_path):
+        data_dir = tmp_path / ".ha_mcp"
+        data_dir.mkdir()
+        (data_dir / "approval_pin.json").write_text("{}")
+        (data_dir / "tool_policy.json").write_text("{}")
+
+        result = _list_files_sync(data_dir, tmp_path, None)
+
+        names = [f["name"] for f in result["files"]]
+        assert "tool_policy.json" in names, "the control entry must be listed"
+        assert "approval_pin.json" not in names
+
+    def test_a_denied_segment_is_not_enumerated(self, tmp_path):
+        (tmp_path / "www").mkdir()
+        (tmp_path / "www" / ".storage").mkdir()
+        (tmp_path / "www" / "style.css").write_text("body{}")
+
+        result = _list_files_sync(tmp_path / "www", tmp_path, None)
+
+        names = [f["name"] for f in result["files"]]
+        assert "style.css" in names
+        assert ".storage" not in names
+
+    def test_case_variants_are_hidden_too(self, tmp_path):
+        (tmp_path / "www").mkdir()
+        (tmp_path / "www" / "APPROVAL_PIN.JSON").write_text("{}")
+        (tmp_path / "www" / "Secrets.YAML").write_text("k: v")
+        (tmp_path / "www" / "ok.txt").write_text("x")
+
+        result = _list_files_sync(tmp_path / "www", tmp_path, None)
+
+        assert [f["name"] for f in result["files"]] == ["ok.txt"]
