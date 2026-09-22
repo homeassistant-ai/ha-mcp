@@ -288,12 +288,14 @@ def test_a_client_that_cannot_resolve_credentials_fails_the_channel_not_the_call
         called.append(kwargs)
         return MagicMock()
 
-    with patch(
-        "ha_mcp.client.websocket_client.get_websocket_client",
-        new=fake_get_websocket_client,
+    with (
+        patch(
+            "ha_mcp.client.websocket_client.get_websocket_client",
+            new=fake_get_websocket_client,
+        ),
+        pytest.raises(RuntimeError),
     ):
-        with pytest.raises(RuntimeError):
-            anyio.run(stub.approval_response_listener._get_ws_client)
+        anyio.run(stub.approval_response_listener._get_ws_client)
 
     assert called == [], (
         "a failed credential resolution must not fall through to the pooled "

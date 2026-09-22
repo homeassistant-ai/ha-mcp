@@ -86,6 +86,17 @@ def _redacted_for_log(value: Any) -> Any:
     return value
 
 
+def _log_received_frame(data: Any) -> None:
+    """Debug-log one received frame, with secret fields masked.
+
+    Its own function so the redaction cannot cost the message loop a
+    branch it does not need: the guard keeps the copy from being built at
+    all when DEBUG is off, which is every production deployment.
+    """
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("WebSocket received: %s", _redacted_for_log(data))
+
+
 def _extract_ws_error(error: Any) -> tuple[str, str | None]:
     """Split an HA WebSocket ``error`` payload into ``(message, code)``.
 
@@ -505,10 +516,7 @@ class HomeAssistantWebSocketClient:
             async for message in self.websocket:
                 try:
                     data = json.loads(message)
-                    if logger.isEnabledFor(logging.DEBUG):
-                        logger.debug(
-                            "WebSocket received: %s", _redacted_for_log(data)
-                        )
+                    _log_received_frame(data)
                     await self._process_message(data)
                 except json.JSONDecodeError as e:
                     logger.error(f"Invalid JSON received: {e}")
