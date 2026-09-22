@@ -46,6 +46,19 @@ MAX_PIN_LENGTH = 64
 HASH_ITERATIONS = 200_000
 _SALT_BYTES = 16
 
+SUPPORTED_ALGORITHM = "pbkdf2_sha256"
+
+# What the stored file amounts to, as far as every consumer is concerned.
+# The three states are distinct on purpose: a record this build cannot
+# verify against is a configuration problem the user has to repair, not a
+# PIN somebody typed wrongly, and the two must not be reported -- or
+# counted -- as the same thing. Status, the guards that allow the toggle to
+# be switched on, and verification all decide from this one answer, so the
+# settings UI cannot advertise a PIN the listener would refuse.
+PIN_ABSENT = "absent"
+PIN_INVALID = "invalid"
+PIN_SET = "set"
+
 
 def _pin_path(data_dir: Path) -> Path:
     return data_dir / PIN_FILENAME
@@ -77,7 +90,7 @@ def set_pin(data_dir: Path, pin: str) -> None:
     validate_pin(pin)
     salt = secrets.token_bytes(_SALT_BYTES)
     record = {
-        "algorithm": "pbkdf2_sha256",
+        "algorithm": SUPPORTED_ALGORITHM,
         "iterations": HASH_ITERATIONS,
         "salt": base64.b64encode(salt).decode("ascii"),
         "hash": base64.b64encode(_derive(pin, salt, HASH_ITERATIONS)).decode("ascii"),
@@ -125,16 +138,62 @@ def _load_record(data_dir: Path) -> dict[str, Any] | None:
     return raw
 
 
+def _decode_record(record: dict[str, Any]) -> tuple[bytes, bytes, int] | None:
+    """The salt, expected digest and work factor of ``record``, or ``None``
+    when it is not something this build can verify a PIN against.
+
+    The single place that decides what "a stored PIN" means. An object that
+    only looks like a record -- ``{}``, a record written by a future build
+    naming another algorithm, a truncated salt -- fails here, and every
+    consumer therefore treats it as a configuration problem instead of one
+    reporting a PIN that another then refuses.
+    """
+    try:
+        salt = base64.b64decode(record["salt"], validate=True)
+        expected = base64.b64decode(record["hash"], validate=True)
+        iterations = int(record["iterations"])
+        algorithm = record["algorithm"]
+    except (KeyError, TypeError, ValueError, binascii.Error):
+        return None
+    if algorithm != SUPPORTED_ALGORITHM or iterations < 1 or not salt or not expected:
+        return None
+    return salt, expected, iterations
+
+
+def pin_state(data_dir: Path) -> str:
+    """``PIN_ABSENT``, ``PIN_INVALID`` or ``PIN_SET`` for the stored file."""
+    record = _load_record(data_dir)
+    if record is None:
+        return PIN_ABSENT
+    if _decode_record(record) is None:
+        logger.warning(
+            "approval PIN file %s holds no usable record (expected a %r "
+            "digest with a salt, a hash and a positive work factor); it "
+            "cannot authorise anything until a new PIN is set",
+            _pin_path(data_dir),
+            SUPPORTED_ALGORITHM,
+        )
+        return PIN_INVALID
+    return PIN_SET
+
+
 def is_pin_set(data_dir: Path) -> bool:
-    """Whether a usable PIN exists."""
-    return _load_record(data_dir) is not None
+    """Whether a PIN exists that a response event could actually match."""
+    return pin_state(data_dir) == PIN_SET
 
 
 def pin_status(data_dir: Path) -> dict[str, Any]:
-    """What the settings UI may know about the PIN: that it exists, and when."""
+    """What the settings UI may know about the PIN: that it exists, and when.
+
+    A record that cannot be verified against reports ``set: False`` with
+    ``invalid: True``, so the tab offers to set a new PIN -- and leaves the
+    toggle it guards disabled -- rather than showing a PIN that works.
+    """
     record = _load_record(data_dir)
     if record is None:
         return {"set": False}
+    if _decode_record(record) is None:
+        return {"set": False, "invalid": True}
     return {"set": True, "updated_at": record.get("updated_at")}
 
 
@@ -143,25 +202,19 @@ def verify_pin(data_dir: Path, candidate: Any) -> bool:
 
     False whenever anything is missing or malformed, including the file
     itself: this gates a decision, so the absence of a PIN must never read
-    as a PIN that matched.
+    as a PIN that matched. Callers that count wrong PINs must check
+    ``pin_state`` first -- a False from a record that cannot be decoded is
+    a broken configuration, not a guess.
     """
     record = _load_record(data_dir)
     if record is None or not isinstance(candidate, str):
         return False
-    try:
-        salt = base64.b64decode(record["salt"], validate=True)
-        expected = base64.b64decode(record["hash"], validate=True)
-        iterations = int(record["iterations"])
-        algorithm = record["algorithm"]
-    except (KeyError, TypeError, ValueError, binascii.Error):
-        logger.warning("approval PIN record is malformed; refusing to verify")
-        return False
-    if algorithm != "pbkdf2_sha256" or iterations < 1:
+    decoded = _decode_record(record)
+    if decoded is None:
         logger.warning(
-            "approval PIN record names an unsupported algorithm (%r) or "
-            "work factor (%r); refusing to verify",
-            algorithm,
-            iterations,
+            "approval PIN record is malformed or names an unsupported "
+            "algorithm; refusing to verify"
         )
         return False
+    salt, expected, iterations = decoded
     return hmac.compare_digest(_derive(candidate, salt, iterations), expected)
