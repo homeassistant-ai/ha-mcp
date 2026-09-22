@@ -1369,14 +1369,30 @@ class HomeAssistantSmartMCPServer:
             # unparameterised call would authenticate the response
             # subscription as nobody, and a request could be announced over
             # REST on a channel that can never carry the answer back.
-            # ``getattr`` leaves the token deployments exactly as they were:
-            # no client, or no credentials on it, means the pooled default
-            # connection.
+            # Read once, and catch the miss explicitly: a per-attribute
+            # ``getattr`` with a default would swallow an AttributeError
+            # raised anywhere INSIDE the OAuth proxy's resolution, hand
+            # back None, and silently authenticate as the placeholder the
+            # whole change exists to avoid. Three separate reads would also
+            # be three separate resolutions, with nothing tying them to one
+            # client. A client with no credentials at all is the token
+            # deployments' normal case: pooled default connection.
             client = self.client
+            try:
+                url = client.base_url
+                token = client.token
+                verify_ssl = client.verify_ssl
+            except AttributeError:
+                logger.debug(
+                    "policy decisions: %s exposes no per-request credentials; "
+                    "opening the approval-response channel on the pooled "
+                    "default connection",
+                    type(client).__name__,
+                    exc_info=True,
+                )
+                url = token = verify_ssl = None
             return await get_websocket_client(
-                url=getattr(client, "base_url", None),
-                token=getattr(client, "token", None),
-                verify_ssl=getattr(client, "verify_ssl", None),
+                url=url, token=token, verify_ssl=verify_ssl
             )
 
         # Reads the same policy file as the middleware, so the toggle that

@@ -1347,12 +1347,14 @@ class TestReceivedFrameRedaction:
 
         payload = {
             "a": 1,
-            "nested": {"pin": "2468", "keep": ["x", {"pin": "1234"}]},
+            "nested": {"pin": "2468", "keep": ["x", {"PIN": "1234"}]},
         }
 
+        # Case-insensitive: an automation is free to spell the field PIN,
+        # and Home Assistant passes event data through as authored.
         assert _redacted_for_log(payload) == {
             "a": 1,
-            "nested": {"pin": "<redacted>", "keep": ["x", {"pin": "<redacted>"}]},
+            "nested": {"pin": "<redacted>", "keep": ["x", {"PIN": "<redacted>"}]},
         }
         # The original is not mutated: the caller still dispatches it.
         assert payload["nested"]["pin"] == "2468"

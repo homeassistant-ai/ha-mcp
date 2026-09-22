@@ -254,3 +254,48 @@ def test_a_client_without_credentials_falls_back_to_the_pooled_connection():
         anyio.run(stub.approval_response_listener._get_ws_client)
 
     assert captured == {"url": None, "token": None, "verify_ssl": None}
+
+
+def test_a_client_that_cannot_resolve_credentials_fails_the_channel_not_the_call():
+    """OAuth mode with no request context raises, and must not read as "none".
+
+    ``OAuthProxyClient.__getattr__`` resolves the current request's client
+    and raises ``HomeAssistantAuthError`` when there is no token in
+    context. That is not an AttributeError, so it propagates out of the
+    factory — which is the wanted outcome: opening the response channel on
+    the pooled default connection would authenticate it as the placeholder
+    principal, the exact state this wiring exists to prevent. The caller
+    treats a failure here as best-effort (the gated call still proceeds and
+    stays decidable in the settings UI), so the propagation costs nothing
+    but visibility.
+    """
+    import anyio
+    import pytest
+
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    class _RaisingProxy:
+        def __getattr__(self, name):
+            raise RuntimeError(f"no OAuth context for {name}")
+
+    stub = _make_server_stub(enable_policies=True)
+    stub.client = _RaisingProxy()
+    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
+
+    called: list[dict] = []
+
+    async def fake_get_websocket_client(**kwargs):
+        called.append(kwargs)
+        return MagicMock()
+
+    with patch(
+        "ha_mcp.client.websocket_client.get_websocket_client",
+        new=fake_get_websocket_client,
+    ):
+        with pytest.raises(RuntimeError):
+            anyio.run(stub.approval_response_listener._get_ws_client)
+
+    assert called == [], (
+        "a failed credential resolution must not fall through to the pooled "
+        "default connection"
+    )
