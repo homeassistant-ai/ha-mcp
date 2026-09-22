@@ -261,7 +261,8 @@ def test_a_client_that_cannot_resolve_credentials_fails_the_channel_not_the_call
 
     ``OAuthProxyClient.__getattr__`` resolves the current request's client
     and raises ``HomeAssistantAuthError`` when there is no token in
-    context. That is not an AttributeError, so it propagates out of the
+    context — which this test gets by using the real proxy rather than a
+    stand-in. That is not an AttributeError, so it propagates out of the
     factory — which is the wanted outcome: opening the response channel on
     the pooled default connection would authenticate it as the placeholder
     principal, the exact state this wiring exists to prevent. The caller
@@ -272,14 +273,14 @@ def test_a_client_that_cannot_resolve_credentials_fails_the_channel_not_the_call
     import anyio
     import pytest
 
+    from ha_mcp.__main__ import OAuthProxyClient
+    from ha_mcp.client.rest_client import HomeAssistantAuthError
     from ha_mcp.server import HomeAssistantSmartMCPServer
 
-    class _RaisingProxy:
-        def __getattr__(self, name):
-            raise RuntimeError(f"no OAuth context for {name}")
-
     stub = _make_server_stub(enable_policies=True)
-    stub.client = _RaisingProxy()
+    # The real proxy, outside a request context — no stand-in, so the test
+    # cannot drift from what __getattr__ actually raises there.
+    stub.client = OAuthProxyClient("http://ha.local:8123")
     HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
 
     called: list[dict] = []
@@ -293,7 +294,7 @@ def test_a_client_that_cannot_resolve_credentials_fails_the_channel_not_the_call
             "ha_mcp.client.websocket_client.get_websocket_client",
             new=fake_get_websocket_client,
         ),
-        pytest.raises(RuntimeError),
+        pytest.raises(HomeAssistantAuthError),
     ):
         anyio.run(stub.approval_response_listener._get_ws_client)
 
