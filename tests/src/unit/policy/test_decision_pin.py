@@ -8,12 +8,14 @@ read by other users on the host.
 
 from __future__ import annotations
 
+import base64
 import json
 import stat
 
 import pytest
 
 from ha_mcp.policy.decision_pin import (
+    _DIGEST_BYTES,
     MAX_HASH_ITERATIONS,
     MAX_PIN_LENGTH,
     MIN_PIN_LENGTH,
@@ -29,6 +31,10 @@ from ha_mcp.policy.decision_pin import (
     validate_pin,
     verify_pin,
 )
+
+
+DIGEST_B64 = base64.b64encode(b"\x00" * _DIGEST_BYTES).decode("ascii")
+SALT_B64 = base64.b64encode(b"\x00" * 16).decode("ascii")
 
 
 @pytest.fixture(autouse=True)
@@ -164,8 +170,21 @@ def test_a_broken_record_verifies_nothing(tmp_path, record):
         {"algorithm": "pbkdf2_sha256", "iterations": 1000, "salt": "AAAA"},
         {"algorithm": "md5", "iterations": 1000, "salt": "AAAA", "hash": "AAAA"},
         {"algorithm": "pbkdf2_sha256", "iterations": 1000, "salt": "", "hash": ""},
+        {
+            "algorithm": "pbkdf2_sha256",
+            "iterations": 1000,
+            "salt": SALT_B64,
+            "hash": "AAAA",
+        },
     ],
-    ids=["empty-object", "timestamp-only", "no-hash", "wrong-algorithm", "empty-salt"],
+    ids=[
+        "empty-object",
+        "timestamp-only",
+        "no-hash",
+        "wrong-algorithm",
+        "empty-salt",
+        "short-digest",
+    ],
 )
 def test_a_record_nobody_can_match_is_invalid_not_set(tmp_path, record):
     """One answer for every consumer, so none can advertise what another refuses.
@@ -202,8 +221,8 @@ def test_a_work_factor_above_the_ceiling_is_invalid_not_set(tmp_path):
             {
                 "algorithm": "pbkdf2_sha256",
                 "iterations": iterations,
-                "salt": "AAAA",
-                "hash": "AAAA",
+                "salt": SALT_B64,
+                "hash": DIGEST_B64,
             }
         )
 

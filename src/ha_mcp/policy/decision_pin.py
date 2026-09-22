@@ -59,6 +59,15 @@ _SALT_BYTES = 16
 
 SUPPORTED_ALGORITHM = "pbkdf2_sha256"
 
+# How many bytes ``_derive`` returns under that algorithm. A stored digest of
+# any other length cannot be what a derivation produced, so no PIN can ever
+# match it -- which makes it a broken record rather than a set PIN, and that
+# distinction is the whole point of the three states below. The salt has no
+# equivalent check on purpose: a short salt is weak, but verification still
+# derives against the same bytes that were stored, so such a record does
+# match its PIN and is not this function's business to refuse.
+_DIGEST_BYTES = hashlib.sha256().digest_size
+
 # What the stored file amounts to, as far as every consumer is concerned.
 # The three states are distinct on purpose: anything that is there and
 # cannot be used -- unreadable, unparseable, or an object this build
@@ -167,10 +176,10 @@ def _decode_record(record: dict[str, Any]) -> tuple[bytes, bytes, int] | None:
     One half of what "a stored PIN" means; ``_load_record`` is the other,
     deciding whether there is an object here at all. An object that
     only looks like a record -- ``{}``, a record written by a future build
-    naming another algorithm, a truncated salt, a work factor outside
-    ``MAX_HASH_ITERATIONS`` -- fails here, and every consumer therefore
-    treats it as a configuration problem instead of one reporting a PIN
-    that another then refuses.
+    naming another algorithm, a work factor outside ``MAX_HASH_ITERATIONS``,
+    a digest that is not the length a derivation produces -- fails here, and
+    every consumer therefore treats it as a configuration problem instead of
+    one reporting a PIN that another then refuses.
     """
     try:
         salt = base64.b64decode(record["salt"], validate=True)
@@ -183,7 +192,7 @@ def _decode_record(record: dict[str, Any]) -> tuple[bytes, bytes, int] | None:
         algorithm != SUPPORTED_ALGORITHM
         or not 1 <= iterations <= MAX_HASH_ITERATIONS
         or not salt
-        or not expected
+        or len(expected) != _DIGEST_BYTES
     ):
         return None
     return salt, expected, iterations
@@ -197,10 +206,12 @@ def pin_state(data_dir: Path) -> str:
     if _decode_record(record) is None:
         logger.warning(
             "approval PIN file %s holds no usable record (expected a %r "
-            "digest with a salt, a hash and a work factor of at most %d); it "
+            "digest with a salt, a %d-byte hash and a work factor of at "
+            "most %d); it "
             "cannot authorise anything until a new PIN is set",
             _pin_path(data_dir),
             SUPPORTED_ALGORITHM,
+            _DIGEST_BYTES,
             MAX_HASH_ITERATIONS,
         )
         return PIN_INVALID
