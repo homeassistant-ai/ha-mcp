@@ -1082,8 +1082,10 @@ stays pending and decidable in the tab.
 
 ### Finding out what became of a response
 
-Every response event the server *receives* is answered on the bus with
-`ha_mcp_approval_result`:
+Every response event the server can make sense of is answered on the bus with
+`ha_mcp_approval_result`, best effort — on the same terms as the announcement,
+so a result that cannot be delivered is logged rather than raised and the
+decision itself stands either way:
 
 ```yaml
 automation:
@@ -1129,14 +1131,15 @@ And silence is **not** a refusal. A result is produced only for a well-formed
 response the server actually received. Fire a response before anything has
 subscribed — which is the case while the feature has never been switched on —
 and there is no result event, because nothing was listening. An event whose
-data is not an object, or whose `token` or `decision` is missing or invalid,
-is dropped with a log line and no result: there is nothing in it to answer. A
-well-formed response that does arrive is always answered, including when the
-feature was switched off after the subscription opened: that one comes back
-with the reason `feature_off`. An
-automation that treats a missing result as a denial will be wrong in exactly
-the case where you most need to open the settings tab — so use the reason when
-one arrives, and the tab when none does.
+data is not an object, or whose `token` or `decision` is missing or invalid, is
+dropped with a log line and no result: there is nothing in it to answer. A
+well-formed response that does arrive is answered where it can be, including
+when the feature was switched off after the subscription opened: that one comes
+back with the reason `feature_off`. Where the credentials the result would be
+fired with cannot be resolved at all, the decision still stands and the result
+event does not go out. An automation that treats a missing result as a denial
+will be wrong in exactly the case where you most need to open the settings tab
+— so use the reason when one arrives, and the tab when none does.
 
 ---
 
