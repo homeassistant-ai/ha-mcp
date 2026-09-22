@@ -44,6 +44,17 @@ MAX_PIN_LENGTH = 64
 # slowest supported hardware buys the offline attacker four orders of
 # magnitude over a bare digest and costs the user nothing they can feel.
 HASH_ITERATIONS = 200_000
+
+# Ceiling on the work factor a *stored* record may name. The factor is read
+# back out of the file rather than assumed, so that a PIN set by an older
+# build keeps verifying after this constant is raised -- which also means a
+# record that names an absurd factor would be honoured, and one verification
+# would then occupy a worker thread for as long as the number says. Ten times
+# the current factor leaves room for the raise this file is designed to
+# survive and is already several times the strongest published PBKDF2-SHA256
+# recommendation, so a record above it is a damaged or restored file, not a
+# newer one: it is reported as a repair job like any other unusable record.
+MAX_HASH_ITERATIONS = 10 * HASH_ITERATIONS
 _SALT_BYTES = 16
 
 SUPPORTED_ALGORITHM = "pbkdf2_sha256"
@@ -156,9 +167,10 @@ def _decode_record(record: dict[str, Any]) -> tuple[bytes, bytes, int] | None:
     One half of what "a stored PIN" means; ``_load_record`` is the other,
     deciding whether there is an object here at all. An object that
     only looks like a record -- ``{}``, a record written by a future build
-    naming another algorithm, a truncated salt -- fails here, and every
-    consumer therefore treats it as a configuration problem instead of one
-    reporting a PIN that another then refuses.
+    naming another algorithm, a truncated salt, a work factor outside
+    ``MAX_HASH_ITERATIONS`` -- fails here, and every consumer therefore
+    treats it as a configuration problem instead of one reporting a PIN
+    that another then refuses.
     """
     try:
         salt = base64.b64decode(record["salt"], validate=True)
@@ -167,7 +179,12 @@ def _decode_record(record: dict[str, Any]) -> tuple[bytes, bytes, int] | None:
         algorithm = record["algorithm"]
     except (KeyError, TypeError, ValueError, binascii.Error):
         return None
-    if algorithm != SUPPORTED_ALGORITHM or iterations < 1 or not salt or not expected:
+    if (
+        algorithm != SUPPORTED_ALGORITHM
+        or not 1 <= iterations <= MAX_HASH_ITERATIONS
+        or not salt
+        or not expected
+    ):
         return None
     return salt, expected, iterations
 
@@ -180,10 +197,11 @@ def pin_state(data_dir: Path) -> str:
     if _decode_record(record) is None:
         logger.warning(
             "approval PIN file %s holds no usable record (expected a %r "
-            "digest with a salt, a hash and a positive work factor); it "
+            "digest with a salt, a hash and a work factor of at most %d); it "
             "cannot authorise anything until a new PIN is set",
             _pin_path(data_dir),
             SUPPORTED_ALGORITHM,
+            MAX_HASH_ITERATIONS,
         )
         return PIN_INVALID
     return PIN_SET

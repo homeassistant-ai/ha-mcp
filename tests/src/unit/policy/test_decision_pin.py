@@ -14,6 +14,7 @@ import stat
 import pytest
 
 from ha_mcp.policy.decision_pin import (
+    MAX_HASH_ITERATIONS,
     MAX_PIN_LENGTH,
     MIN_PIN_LENGTH,
     PIN_ABSENT,
@@ -178,6 +179,40 @@ def test_a_record_nobody_can_match_is_invalid_not_set(tmp_path, record):
     """
     (tmp_path / PIN_FILENAME).write_text(json.dumps(record))
 
+    assert pin_state(tmp_path) == PIN_INVALID
+    assert is_pin_set(tmp_path) is False
+    assert pin_status(tmp_path) == {"set": False, "invalid": True}
+    assert verify_pin(tmp_path, "2468") is False
+
+
+def test_a_work_factor_above_the_ceiling_is_invalid_not_set(tmp_path):
+    """The factor comes out of the file, so the file can name an absurd one.
+
+    Verification spends it in a worker thread, so a record restored from a
+    damaged or doctored file would otherwise tie one up for as long as the
+    number says while still reporting a usable PIN. The ceiling is the same
+    kind of answer as every other unreadable record: a repair job. Both
+    arms are asserted because only the boundary discriminates -- a bound
+    that rejected the legitimate factor too would satisfy the first
+    assertion just as well.
+    """
+
+    def record(iterations: int) -> str:
+        return json.dumps(
+            {
+                "algorithm": "pbkdf2_sha256",
+                "iterations": iterations,
+                "salt": "AAAA",
+                "hash": "AAAA",
+            }
+        )
+
+    path = tmp_path / PIN_FILENAME
+
+    path.write_text(record(MAX_HASH_ITERATIONS))
+    assert pin_state(tmp_path) == PIN_SET
+
+    path.write_text(record(MAX_HASH_ITERATIONS + 1))
     assert pin_state(tmp_path) == PIN_INVALID
     assert is_pin_set(tmp_path) is False
     assert pin_status(tmp_path) == {"set": False, "invalid": True}
