@@ -255,6 +255,10 @@ def test_a_work_factor_above_the_ceiling_is_invalid_not_set(tmp_path):
     assert pin_state(tmp_path) == PIN_INVALID
     assert is_pin_set(tmp_path) is False
     assert pin_status(tmp_path) == {"set": False, "invalid": True}
+    # Regression guard, not a discriminator: this record's digest is a constant
+    # and no derivation returns it, so verification refuses it whatever the
+    # ceiling does. It is here so a future loosening cannot make the module
+    # answer True for a record the two assertions above call unusable.
     assert verify_pin(tmp_path, "2468") is False
 
 
