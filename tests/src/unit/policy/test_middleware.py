@@ -13,7 +13,11 @@ import anyio
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
-from ha_mcp.policy.approval_queue import ApprovalQueue, compute_args_hash
+from ha_mcp.policy.approval_queue import (
+    ApprovalQueue,
+    PendingApproval,
+    compute_args_hash,
+)
 from ha_mcp.policy.middleware import PROXY_META_TOOLS, PolicyMiddleware
 from ha_mcp.policy.model import Policy, Predicate, Rule
 
@@ -1435,13 +1439,21 @@ async def test_an_identical_retry_tries_the_channel_again(queue):
         ensure_decisions_listener=ensure,
     )
 
-    for _ in range(2):
-        with pytest.raises(ToolError):
-            await mw.on_call_tool(
-                make_context("ha_call_service", {"domain": "lock"}), AsyncMock()
-            )
+    with pytest.raises(ToolError):
+        await mw.on_call_tool(
+            make_context("ha_call_service", {"domain": "lock"}), AsyncMock()
+        )
+    after_first_call = len(attempts)
 
-    assert len(attempts) > 1
+    with pytest.raises(ToolError):
+        await mw.on_call_tool(
+            make_context("ha_call_service", {"domain": "lock"}), AsyncMock()
+        )
+
+    # Counted per call, not per pass: the first call already traverses the
+    # announce path twice (wait_seconds=0), so a bare "more than one
+    # attempt" would be satisfied without a second call ever running.
+    assert len(attempts) > after_first_call
     # The dedup it must not break: one request, one notification, however
     # many times the same call comes back.
     assert client.fire_event.await_count == 1
@@ -1485,3 +1497,42 @@ async def test_a_channel_lost_after_the_announcement_is_reopened(queue):
 
     assert len(attempts) > announced
     assert client.fire_event.await_count == 1
+
+
+@pytest.mark.anyio
+async def test_the_channel_attempt_runs_before_the_announcement_latch(queue):
+    """A slow channel attempt must not be able to eat the announcement.
+
+    ``mark_notified`` is a latch with no reset: an entry marked announced
+    while the event was never fired is invisible to its own retries, which
+    reuse the entry and suppress the event. The channel setup can take
+    seconds — connect, authenticate, wait for the lock — so taking the
+    latch first would put that whole window between "announced" and
+    announced.
+    """
+    pol = Policy(rules=[Rule(tool_name="ha_call_service")])
+    client = AsyncMock()
+    notified_when_channel_opened: list[bool] = []
+    entries: list[PendingApproval] = []
+
+    async def ensure() -> None:
+        entry = queue.list_pending()[0]
+        entries.append(entry)
+        notified_when_channel_opened.append(entry._notified)
+
+    mw = PolicyMiddleware(
+        policy_provider=lambda: pol,
+        queue=queue,
+        wait_seconds=0,
+        get_client=lambda: client,
+        ensure_decisions_listener=ensure,
+    )
+
+    with pytest.raises(ToolError):
+        await mw.on_call_tool(
+            make_context("ha_call_service", {"domain": "lock"}), AsyncMock()
+        )
+
+    assert notified_when_channel_opened[0] is False
+    assert entries[0]._notified is True
+    client.fire_event.assert_awaited_once()

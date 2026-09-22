@@ -269,7 +269,9 @@ class PolicyMiddleware(Middleware):
         REMOVES the entry rather than reissuing it, so an announcement
         would advertise a token the queue no longer knows — reachable when
         the first announcement found no client and left the one-shot
-        unspent.
+        unspent. That also forgoes the channel-recovery attempt in
+        ``_announce``, which costs nothing here: the entry this call would
+        have announced is gone, and the next request runs the attempt.
         """
         if dynamic_targets:
             return
@@ -282,7 +284,8 @@ class PolicyMiddleware(Middleware):
         *,
         dynamic_targets: bool = False,
     ) -> None:
-        """Fire the approval-requested event for a not-yet-announced entry.
+        """Open the response channel, and fire the approval-requested event
+        for an entry that has not been announced yet.
 
         Each pending entry is announced exactly once
         (``PendingApproval.mark_notified``), so concurrent identical calls
@@ -300,8 +303,10 @@ class PolicyMiddleware(Middleware):
         marked notified with no way back. Identical retries reuse that
         entry, so gating recovery on the latch would mean the channel can
         only ever be restored by a request nobody has asked for yet. The
-        attempt therefore runs on every pass through here, and only the
-        event itself is suppressed for an entry already announced.
+        attempt therefore runs on every pass that gets as far as a client,
+        and only the event itself is suppressed for an entry already
+        announced. Where there is no client at all, neither happens: the
+        early returns below cover both.
         """
         if self._get_client is None:
             return
@@ -316,11 +321,14 @@ class PolicyMiddleware(Middleware):
                 exc_info=True,
             )
             return
-        first_announcement = pending.mark_notified()
-        # Ahead of the event either way, so a responder that answers the
-        # instant the notification arrives finds the channel already open.
+        # Ahead of the event, so a responder that answers the instant the
+        # notification arrives finds the channel already open -- and ahead of
+        # the one-shot, because this await is not short: a cancellation
+        # between taking the latch and firing the event would leave the entry
+        # marked announced with nothing ever announced, and every identical
+        # retry reuses that entry.
         await self._ensure_decision_channel()
-        if not first_announcement:
+        if not pending.mark_notified():
             return
         await emit_approval_requested(client, pending, rule, single_use=dynamic_targets)
 
