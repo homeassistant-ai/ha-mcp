@@ -124,6 +124,44 @@ test("CRLF evidence matches LF without weakening other quote checks", () => {
     "Client is Claude Desktop.\nVersion 8.4.3.";
   validateResult(carriageResult, makeContext(carriage));
 });
+test("Markdown code and bold markers do not affect quote matching", () => {
+  const s = fixture(),
+    r = answer();
+  s.issue.body = "**`ha_call_event`**, which fires events at /auth/authorize.";
+  r.summary[0].evidence[0].quote = "`ha_call_event`, which fires events";
+  r.facts[0] = {
+    field: "affected_tool",
+    value: "`/auth/authorize`",
+    evidence: [{ source_id: "body", quote: "fires events at /auth/authorize" }],
+  };
+  validateResult(r, makeContext(s));
+  r.facts[0].value = "``";
+  assert.throws(
+    () => validateResult(r, makeContext(s)),
+    /facts\[0\].value/,
+  );
+  r.facts[0].value = "`/auth/authorize`";
+  for (const quote of ["**", "`ha_call_service`, which fires events"]) {
+    r.summary[0].evidence[0].quote = quote;
+    assert.throws(
+      () => validateResult(r, makeContext(s)),
+      /summary\[0\].evidence\[0\].*body/,
+    );
+  }
+  for (const [body, quote] of [
+    ["rate 2*3 per second.", "rate 23 per second"],
+    ["rate α*β per second.", "rate αβ per second"],
+  ]) {
+    const joined = fixture(),
+      joinedResult = answer();
+    joined.issue.body = `Client is Claude Desktop, ${body}`;
+    joinedResult.summary[0].evidence[0].quote = quote;
+    assert.throws(
+      () => validateResult(joinedResult, makeContext(joined)),
+      /summary\[0\].evidence\[0\].*body/,
+    );
+  }
+});
 test("fact values must occur in their evidence", () => {
   const r = answer();
   r.facts[0].value = "Firefox";

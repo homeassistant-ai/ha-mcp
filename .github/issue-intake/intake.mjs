@@ -109,7 +109,12 @@ export function validateResult(result, context) {
     );
   }
   const sources = new Map(context.sources.map((s) => [s.source_id, s]));
-  const normalize = (text) => text.replace(/\r\n?/g, "\n");
+  // The model adds or drops Markdown ` and * markers when quoting. Markers
+  // between two word characters (2*3) are kept so no new words can form.
+  const normalize = (text) =>
+    text
+      .replace(/\r\n?/g, "\n")
+      .replace(/(?<![\p{L}\p{N}_])[`*]+|[`*]+(?![\p{L}\p{N}_])/gu, "");
   for (const key of [
     "summary",
     "translation",
@@ -123,7 +128,7 @@ export function validateResult(result, context) {
         if (
           !source ||
           !normalize(source.text).includes(normalize(e.quote)) ||
-          !e.quote.trim()
+          !normalize(e.quote).trim()
         )
           throw Error(
             `${key}[${index}].evidence[${position}]: quote does not match ${source ? e.source_id : "a supplied source_id"}`,
@@ -133,6 +138,7 @@ export function validateResult(result, context) {
   }
   for (const [index, fact] of result.facts.entries()) {
     if (
+      !normalize(fact.value).trim() ||
       !fact.evidence.some((e) =>
         normalize(e.quote).includes(normalize(fact.value)),
       )
