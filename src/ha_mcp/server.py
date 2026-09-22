@@ -1378,6 +1378,9 @@ class HomeAssistantSmartMCPServer:
             # client. A client with no credentials at all is the token
             # deployments' normal case: pooled default connection.
             client = self.client
+            url: str | None
+            token: str | None
+            verify_ssl: bool | None
             try:
                 url = client.base_url
                 token = client.token
