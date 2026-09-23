@@ -187,6 +187,22 @@ class TestAsyncDiagnose:
         assert fake_core.calls[-1] == "render:None:False"
 
     @pytest.mark.asyncio
+    async def test_slow_failure_is_not_rendered_again_on_the_loop(
+        self, fake_core, monkeypatch
+    ) -> None:
+        fake_core.render_error = _wrapped(_runtime_error_at_template_line(1))
+        clock = iter([100.0, 100.0 + template_diagnose.LOOP_RERENDER_BUDGET_S + 5])
+        monkeypatch.setattr(template_diagnose, "monotonic", lambda: next(clock))
+        diagnosis = await template_diagnose.async_diagnose(
+            FakeHass(), "{{ slow_then_fail }}", None, False, 30.0
+        )
+        assert diagnosis == {
+            "stage": "render",
+            "error": "ZeroDivisionError: division by zero",
+        }
+        assert not any(call.startswith("render:") for call in fake_core.calls)
+
+    @pytest.mark.asyncio
     async def test_template_that_renders_reports_no_failure(self, fake_core) -> None:
         diagnosis = await template_diagnose.async_diagnose(
             FakeHass(), "{{ 1 }}", None, False, 3.0

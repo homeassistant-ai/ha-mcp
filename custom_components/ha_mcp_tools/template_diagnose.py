@@ -14,9 +14,16 @@ timed out and never rendered on the event loop.
 
 from __future__ import annotations
 
+from time import monotonic
 from typing import Any
 
 JINJA_TEMPLATE_FILENAME = "<template>"
+
+# A failed render is repeated on the event loop only when the worker-thread
+# render showed it fails this quickly; Core has already rendered it on the loop
+# once for render_template, and a slow failure repeated would block Home
+# Assistant for as long again. Such a failure is reported without its line.
+LOOP_RERENDER_BUDGET_S = 1.0
 
 
 def template_error_line(exc: BaseException) -> int | None:
@@ -74,14 +81,16 @@ async def async_diagnose(
     except TemplateError as err:
         return describe_failure(template, "compile", err)
 
+    started = monotonic()
     try:
         if await tpl.async_render_will_timeout(timeout, variables, strict=strict):
             return {"stage": "timeout"}
-    except TemplateError:
-        # This render finished within the timeout, but Core flattens the
-        # worker thread's error into a message, dropping the traceback that
-        # names the line; the render below repeats it on the loop to keep it.
-        pass
+    except TemplateError as err:
+        if monotonic() - started > LOOP_RERENDER_BUDGET_S:
+            return {"stage": "render", "error": str(err)}
+        # Core flattens the worker thread's error into a message, dropping the
+        # traceback that names the line; the render below repeats it on the
+        # loop to keep it.
 
     try:
         tpl.async_render(variables, strict=strict)
