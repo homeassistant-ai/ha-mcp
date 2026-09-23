@@ -900,8 +900,8 @@ class HomeAssistantSmartMCPServer:
         # which measures both sides at test time.
         #
         # It was the largest full description in the GATEWAY catalog this was
-        # measured against, not in the repo: ha_eval_template (5834) and
-        # ha_get_system_health (5811) are both larger and both unmapped.
+        # measured against, not in the repo: ha_get_system_health (5811) is
+        # larger and unmapped.
         # The reduction is smaller than pure compression would give because
         # the safety content below is kept inline. The routing matrix STAYS —
         # the `action` parameter's own Field description says "Valid (scope,
