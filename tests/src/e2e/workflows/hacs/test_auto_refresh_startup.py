@@ -113,6 +113,19 @@ HACS_WS_READY_TIMEOUT = sum(RETRY_DELAYS) + DEFAULT_COMMAND_WAIT_TIMEOUT
 POSITIVE_LANE_TIMEOUT = HACS_WS_READY_TIMEOUT + NUDGE_MARKER_TIMEOUT + 60.0
 
 
+# Config-entry states in which HACS's setup has stopped short of loading and
+# will not register its WebSocket handlers during this test. The seeded entry
+# calls GitHub during setup, and a rate-limited shared runner leaves it here.
+_HACS_SETUP_STOPPED_STATES = frozenset({"setup_error", "setup_retry", "not_loaded"})
+
+
+async def _hacs_entry_state(client: HomeAssistantWebSocketClient) -> str | None:
+    """The seeded HACS config entry's state, or None when there is no entry."""
+    response = await client.send_command("config_entries/get", domain="hacs")
+    entries = response.get("result") or []
+    return entries[0].get("state") if entries else None
+
+
 async def _wait_for_hacs_ws_ready(container_info: dict) -> None:
     """Block until the container's HACS answers ``hacs/repositories/list``."""
     client = HomeAssistantWebSocketClient(
@@ -144,6 +157,15 @@ async def _wait_for_hacs_ws_ready(container_info: dict) -> None:
                     or "unknown command" in str(err).lower()
                 ):
                     raise
+                state = await _hacs_entry_state(client)
+                if state in _HACS_SETUP_STOPPED_STATES:
+                    # Container weather, not the nudge: the other HACS suites
+                    # skip on the same condition (test_list_integrations).
+                    pytest.skip(
+                        f"the seeded HACS entry is {state} in this container "
+                        "(GitHub rate-limiting during its setup), so HACS never "
+                        "registers the WebSocket handlers the startup nudge needs"
+                    )
             if asyncio.get_running_loop().time() >= deadline:
                 pytest.fail(
                     "HACS never registered its WebSocket handlers within "
