@@ -74,11 +74,25 @@ ALLOWED_WRITE_DIRS = ["www", "themes", "custom_templates", "dashboards"]
 # leak secrets and hand out the key to this component's own auth gate.
 DENY_PATH_SEGMENTS = frozenset({".storage"})
 
+# Basenames the floor denies wherever they appear. Despite the historical
+# name, this set is enforced on every read, write and delete, and the file
+# lister drops an entry carrying one of these names from its results, so a
+# name here is neither openable nor enumerable through the component.
+#
 # secrets.yaml is reachable ONLY as the canonical config-root file, where the
 # read handler masks its values. Any OTHER secrets.yaml surfaced via a custom
 # dir would be returned UNMASKED (masking keys off the literal root path), so
 # the floor blocks the basename everywhere except that one canonical location.
-DENY_READ_BASENAMES = frozenset({"secrets.yaml"})
+#
+# approval_pin.json holds the digest of the PIN that authorises an approve or
+# deny arriving on the event bus (issue #2502). It lives in ha-mcp's own data
+# directory, which on an embedded install sits under the configuration
+# directory, and an extra file path covering that directory grants read AND
+# write: a tool could copy the digest to attack it offline, or simply replace
+# it with the digest of a PIN of its own and decide its own approvals. Denying
+# the basename leaves the rest of the data directory reachable, which is what
+# the rest of it is for.
+DENY_READ_BASENAMES = frozenset({"secrets.yaml", "approval_pin.json"})
 
 # HAOS sibling-volume mounts (issue #1586). These live OUTSIDE the config dir,
 # so the config-relative custom-directory allowlist (issue #1567) cannot reach

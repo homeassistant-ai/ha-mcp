@@ -20,7 +20,9 @@ Requires Docker (testcontainers); runs in CI.
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -35,6 +37,7 @@ from ha_mcp.server import HomeAssistantSmartMCPServer
 from ha_mcp.utils.data_paths import get_data_dir
 
 from ..utilities.assertions import parse_mcp_result, tool_error_to_result
+from ..utilities.wait_helpers import wait_for_ha_event
 
 
 async def _expect_blocked(client: Client, args: dict[str, Any]) -> dict[str, Any]:
@@ -387,3 +390,277 @@ async def test_remember_minutes_skips_approval_within_window(policy_enabled_mcp)
     assert not result_b.is_error
     # Pending must be empty — neither call left an entry behind.
     assert server.approval_queue.list_pending() == []
+
+
+async def _install_event_decision_rule(handlers, *, wait_seconds: int = 30) -> None:
+    """Gate light service calls and open the event-bus decision channel."""
+    current_resp = await handlers["policy_get_config"](_make_request())
+    current = json.loads(current_resp.body)
+    body = {
+        "wait_seconds": wait_seconds,
+        "approval_ttl_minutes": 5,
+        "event_decisions_enabled": True,
+        "rules": [
+            {
+                "tool_name": "ha_call_service",
+                "when": [{"path": "args.domain", "op": "eq", "value": "light"}],
+                "remember_minutes": 0,
+            }
+        ],
+        "version": current["version"],
+    }
+    put_resp = await handlers["policy_put_config"](_make_request(body))
+    assert put_resp.status_code == 200, put_resp.body
+
+
+def _announced_by(
+    server: HomeAssistantSmartMCPServer,
+) -> Callable[[dict[str, Any]], bool]:
+    """Match only the announcements this server issued.
+
+    One Home Assistant serves every test in the lane, so an
+    ``ha_mcp_approval_requested`` event on its bus is not necessarily ours:
+    another test's server announces its own held call on the same bus, and
+    a response to that token is refused here as ``unknown_token`` because
+    this queue never issued it. The queue is the discriminator -- arguments
+    can coincide between tests, an issued token cannot.
+    """
+
+    def issued_here(event: dict[str, Any]) -> bool:
+        announced = (event.get("data") or {}).get("token")
+        return isinstance(announced, str) and (
+            server.approval_queue.get(announced) is not None
+        )
+
+    return issued_here
+
+
+async def _respond_and_wait_for_result(
+    responder: HomeAssistantClient,
+    payload: dict[str, Any],
+    *,
+    base_url: str,
+    token: str,
+    expect_tool: str | None = None,
+) -> dict[str, Any] | None:
+    """Fire one response event and return the result event it produces.
+
+    The listener is subscribed inside the server process, so the only way
+    to observe what it made of a response is the answer it fires back --
+    which is the point of that answer existing. Started before the
+    response goes out, because the round trip can complete first.
+
+    The token alone does not say WHICH server answered. Every server
+    subscribed to this Home Assistant receives the response, including the
+    ones other tests in this process left behind, and each answers with the
+    token it was given -- theirs saying `unknown_token`, because only the
+    server that announced the request knows it. ``expect_tool`` is the
+    discriminator where one exists: a result naming the tool can only come
+    from the server holding that request.
+
+    The wrong-PIN case has no tool name to match on, on any server, and
+    relies on something narrower than an invariant: no other server in this
+    suite is ever in a state that answers a response with anything but
+    `wrong_pin`, because this is the only file that enables the feature, it
+    always stores the same PIN, and it never switches the toggle back off.
+    None of that is guaranteed by the code -- both gates are re-read per
+    event, so a server that was subscribed while the feature was on can
+    answer `feature_off` later -- so a test that enables the channel with
+    another PIN, or disables it mid-run, has to give this step a
+    discriminator of its own.
+
+    A result that named the WRONG token would be filtered out too and time
+    out here rather than failing on a token assertion downstream -- the
+    trade the shared bus forces, and the reason the callers say "naming
+    this token" when the wait comes back empty.
+
+    The wait awaits the fire itself: the subscription is already open when
+    the trigger runs, so a result arriving while the response is still in
+    flight is buffered on the socket rather than missed.
+    """
+
+    def is_ours(event: dict[str, Any]) -> bool:
+        data = event.get("data") or {}
+        if data.get("token") != payload["token"]:
+            return False
+        return expect_tool is None or data.get("tool_name") == expect_tool
+
+    return await wait_for_ha_event(
+        "ha_mcp_approval_result",
+        lambda: responder.fire_event("ha_mcp_approval_response", payload),
+        predicate=is_ours,
+        timeout=20.0,
+        ha_url=base_url,
+        token=token,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_real_event_round_trip_decides_a_held_call(
+    policy_enabled_mcp, ha_container_with_fresh_config
+):
+    """The whole transport, over the real bus: announce → respond → dispatch.
+
+    Every other test of this feature stops at a seam — the HTTP handlers,
+    a mocked subscription, or the listener called directly — so none of
+    them exercises the path a user actually uses: Home Assistant carries
+    the announcement out, and carries the response back in over a
+    WebSocket subscription this server opened itself. A wrong PIN first,
+    because the interesting property is not that a response decides the
+    request but that only the right one does.
+    """
+    client, server, handlers = policy_enabled_mcp
+    base_url = ha_container_with_fresh_config["base_url"]
+    token = ha_container_with_fresh_config.get("token", TEST_TOKEN)
+
+    pin_resp = await handlers["policy_post_decision_pin"](
+        _make_request({"pin": "2468"})
+    )
+    assert pin_resp.status_code == 200, pin_resp.body
+    await _install_event_decision_rule(handlers)
+
+    args = {"domain": "light", "service": "turn_on", "entity_id": "light.bed_light"}
+    call_task: asyncio.Task | None = None
+
+    def start_the_gated_call() -> None:
+        nonlocal call_task
+        call_task = asyncio.create_task(client.call_tool("ha_call_service", args))
+
+    announcement = await wait_for_ha_event(
+        "ha_mcp_approval_requested",
+        start_the_gated_call,
+        predicate=_announced_by(server),
+        timeout=20.0,
+        ha_url=base_url,
+        token=token,
+    )
+    assert announcement is not None, "the held call was never announced on the bus"
+    assert call_task is not None
+    approval_token = announcement["data"]["token"]
+
+    responder = HomeAssistantClient(base_url=base_url, token=token)
+    try:
+        # A wrong PIN decides nothing, and the call keeps waiting -- and
+        # the responder is told so, which is the only way an automation
+        # can distinguish a refusal from an event nobody received.
+        refusal = await _respond_and_wait_for_result(
+            responder,
+            {"token": approval_token, "decision": "approve", "pin": "9999"},
+            base_url=base_url,
+            token=token,
+        )
+        assert refusal is not None, "no result event naming this refused response"
+        assert refusal["data"]["applied"] is False
+        assert refusal["data"]["reason"] == "wrong_pin"
+        assert refusal["data"]["token"] == approval_token
+        # The PIN itself, not the word: ``reason`` says ``wrong_pin``, so a
+        # substring search for "pin" answers a different question than the
+        # one that matters -- whether the refusal handed the guess back.
+        assert "9999" not in json.dumps(refusal["data"])
+        assert not [key for key in refusal["data"] if "pin" in key.lower()]
+        assert not call_task.done(), (
+            "a wrong PIN released the held call; the PIN is the only thing "
+            "standing between an agent-fired event and its own approval"
+        )
+        # The result event above says a subscribed server refused the guess.
+        # It cannot say WHICH one, and in this suite it does not have to: a
+        # wrong PIN is wrong on every server that currently has the channel
+        # open, and none of them can name the tool behind a token it never
+        # issued, so their refusals read the same as this one. That holds
+        # because of how the suite is arranged rather than because the code
+        # guarantees it -- a listener whose toggle went off after subscribing
+        # answers `feature_off`, and one that is rate-limited answers
+        # `rate_limited`; see the wait helper's own note. What is checked here
+        # instead is the only thing that belongs to this server -- its own
+        # entry, still undecided, with the call still held.
+        refused_entry = server.approval_queue.get(approval_token)
+        assert refused_entry is not None, "the wrong PIN consumed the request"
+        assert refused_entry.decision == "pending", (
+            f"the wrong PIN decided the request as {refused_entry.decision!r}"
+        )
+
+        applied = await _respond_and_wait_for_result(
+            responder,
+            {"token": approval_token, "decision": "approve", "pin": "2468"},
+            base_url=base_url,
+            token=token,
+            expect_tool="ha_call_service",
+        )
+        assert applied is not None, "no result event naming this applied response"
+        assert applied["data"]["applied"] is True
+        assert applied["data"]["reason"] == "applied"
+        assert applied["data"]["tool_name"] == "ha_call_service"
+        result = await asyncio.wait_for(call_task, timeout=20)
+    finally:
+        if not call_task.done():
+            call_task.cancel()
+        await responder.close()
+
+    assert not result.is_error, result
+    # Consumed exactly once: the entry is gone, so a replayed response
+    # event carrying the same token cannot dispatch the tool again.
+    assert server.approval_queue.get(approval_token) is None
+
+
+@pytest.mark.asyncio
+async def test_a_real_event_round_trip_denies_a_held_call(
+    policy_enabled_mcp, ha_container_with_fresh_config
+):
+    """Deny travels the same path and produces the denial error."""
+    client, server, handlers = policy_enabled_mcp
+    base_url = ha_container_with_fresh_config["base_url"]
+    token = ha_container_with_fresh_config.get("token", TEST_TOKEN)
+
+    pin_resp = await handlers["policy_post_decision_pin"](
+        _make_request({"pin": "2468"})
+    )
+    assert pin_resp.status_code == 200, pin_resp.body
+    await _install_event_decision_rule(handlers)
+
+    args = {"domain": "light", "service": "turn_off", "entity_id": "light.bed_light"}
+    call_task: asyncio.Task | None = None
+
+    def start_the_gated_call() -> None:
+        nonlocal call_task
+        call_task = asyncio.create_task(client.call_tool("ha_call_service", args))
+
+    announcement = await wait_for_ha_event(
+        "ha_mcp_approval_requested",
+        start_the_gated_call,
+        predicate=_announced_by(server),
+        timeout=20.0,
+        ha_url=base_url,
+        token=token,
+    )
+    assert announcement is not None, "the held call was never announced on the bus"
+    assert call_task is not None
+
+    responder = HomeAssistantClient(base_url=base_url, token=token)
+    try:
+        denial = await _respond_and_wait_for_result(
+            responder,
+            {
+                "token": announcement["data"]["token"],
+                "decision": "deny",
+                "pin": "2468",
+            },
+            base_url=base_url,
+            token=token,
+            expect_tool="ha_call_service",
+        )
+        assert denial is not None, "no result event naming this applied denial"
+        assert denial["data"]["decision"] == "deny"
+        assert denial["data"]["applied"] is True
+        assert denial["data"]["reason"] == "applied"
+        try:
+            result = await asyncio.wait_for(call_task, timeout=20)
+        except ToolError as exc:
+            body = tool_error_to_result(exc)
+        else:
+            body = parse_mcp_result(result)
+    finally:
+        if not call_task.done():
+            call_task.cancel()
+        await responder.close()
+
+    assert body.get("error", {}).get("code") == "USER_DENIED", body

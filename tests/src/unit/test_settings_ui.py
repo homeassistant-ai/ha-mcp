@@ -5077,3 +5077,60 @@ class TestBpsSkillGuideDependency:
         assert resp.status_code == 409
         assert "ha_get_skill_guide" in str(json.loads(resp.body))
         self._teardown()
+
+
+class TestPolicyScopeNotice:
+    """Issue #2515: the page says that a rule gates a tool, not a capability.
+
+    A rule is keyed on the tool name, so a second tool reaching the same
+    capability is not covered — requiring approval for ``ha_call_event``
+    leaves ``ha_call_service``'s raw ``ws_command`` path open. The behaviour
+    is deliberate (gating one tool must not withdraw another), which is
+    exactly why the page has to say it where the rules are written, and not
+    only in the FAQ.
+    """
+
+    def test_the_notice_sits_in_the_rules_section(self) -> None:
+        rules_section = _SETTINGS_HTML.split('<section id="policy-rules">', 1)[1]
+        assert 'data-i18n-html="policies.rules.scope_notice"' in rules_section
+
+    def test_the_notice_names_both_tools(self) -> None:
+        from ha_mcp.settings_ui._i18n import load_catalogs
+
+        english = load_catalogs()["en"]["messages"]["policies.rules.scope_notice"]
+        assert "ha_call_event" in english
+        assert "ha_call_service" in english
+
+
+class TestSidecarPolicyPinGuard:
+    """The sidecar writes the same policy file, so it owes the same guard.
+
+    Its handler set is a separate implementation of config GET/PUT (the
+    live one needs an approval queue this process does not have), which is
+    exactly where a guard goes missing unnoticed: the switch would be
+    written here and refused by the listener over there.
+    """
+
+    @pytest.mark.anyio
+    async def test_sidecar_refuses_event_decisions_without_a_pin(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("HA_MCP_CONFIG_DIR", str(tmp_path))
+        from ha_mcp.utils.data_paths import get_data_dir
+
+        get_data_dir.cache_clear()
+        try:
+            from ha_mcp.settings_ui import build_settings_handlers
+
+            handlers = build_settings_handlers(None, is_sidecar=True)
+            request = MagicMock()
+            request.json = AsyncMock(
+                return_value={"rules": [], "event_decisions_enabled": True}
+            )
+
+            response = await handlers["policy_put_config"](request)
+
+            assert response.status_code == 400
+            assert json.loads(response.body)["pin_required"] is True
+        finally:
+            get_data_dir.cache_clear()

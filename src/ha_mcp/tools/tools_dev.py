@@ -892,8 +892,13 @@ class DevTools:
                 default=None,
                 description=(
                     "set_policy: the full policy object "
-                    "{wait_seconds, approval_ttl_minutes, rules, version, "
-                    "schema_version}"
+                    "{wait_seconds, approval_ttl_minutes, "
+                    "event_decisions_enabled, rules, version, "
+                    "schema_version}. Replaces the WHOLE document: a field "
+                    "you omit reverts to its default, so send back an "
+                    "edited copy of get_policy rather than a fragment "
+                    "(omitting event_decisions_enabled switches the "
+                    "event-bus approval channel off)"
                 ),
             ),
         ] = None,

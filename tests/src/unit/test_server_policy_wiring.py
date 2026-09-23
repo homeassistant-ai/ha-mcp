@@ -10,7 +10,7 @@ client, register every tool module, and run ``_initialize_server``).
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def _make_server_stub(*, enable_policies: bool) -> MagicMock:
@@ -90,6 +90,25 @@ def test_policy_middleware_attached_when_enabled():
     assert args[0]._queue is stub.approval_queue
 
 
+def test_policy_middleware_can_reach_the_servers_home_assistant_client():
+    """The announce path needs a client, and only this wiring supplies it.
+
+    Every middleware-level announce test injects its own ``get_client``, so
+    dropping the one in ``_apply_tool_security_policies`` leaves them green
+    while the feature is dead in production: a held call would then be
+    invisible outside the settings UI, which is the whole point of #2502.
+    """
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    stub = _make_server_stub(enable_policies=True)
+    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
+
+    args, _kwargs = stub.mcp.add_middleware.call_args
+    get_client = args[0]._get_client
+    assert get_client is not None, "no client factory: approvals cannot be announced"
+    assert get_client() is stub.client
+
+
 def test_policy_middleware_not_attached_when_disabled():
     """Disabled flag → no queue, no middleware (clean no-op)."""
     from ha_mcp.server import HomeAssistantSmartMCPServer
@@ -143,3 +162,184 @@ def test_raising_migration_does_not_block_startup():
 
     assert getattr(stub, "approval_queue", None) is None
     assert stub.mcp.add_middleware.call_count == 0
+
+
+def test_policy_middleware_can_open_the_decision_channel():
+    """The response listener is wired in, and shares the server's queue.
+
+    Same class of failure as the client factory above: every listener test
+    builds its own, so dropping this wiring leaves them green while no
+    event on the bus can ever decide a request.
+    """
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    stub = _make_server_stub(enable_policies=True)
+    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
+
+    args, _kwargs = stub.mcp.add_middleware.call_args
+    listener = stub.approval_response_listener
+    assert listener is not None
+    assert listener._queue is stub.approval_queue
+    assert args[0]._ensure_decisions_listener == listener.ensure_subscribed
+
+
+def test_the_response_subscription_uses_the_requests_own_credentials():
+    """OAuth mode: the subscription must authenticate as the caller does.
+
+    ``self.client`` is a proxy there, resolving to the client built from the
+    current request's OAuth claims, while the global settings hold only the
+    ``oauth-mode-token`` placeholder. An unparameterised
+    ``get_websocket_client()`` would therefore open the response channel as
+    nobody — the announcement goes out over REST with valid credentials and
+    succeeds, while the channel that has to carry the answer back fails
+    authentication. The failure is silent by construction: announcing works,
+    deciding never does.
+    """
+    import anyio
+
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    stub = _make_server_stub(enable_policies=True)
+    stub.client = MagicMock(
+        base_url="http://ha.local:8123",
+        token="request-scoped-token",
+        verify_ssl=False,
+    )
+    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
+
+    captured: dict[str, object] = {}
+
+    async def fake_get_websocket_client(**kwargs):
+        captured.update(kwargs)
+        return MagicMock()
+
+    with patch(
+        "ha_mcp.client.websocket_client.get_websocket_client",
+        new=fake_get_websocket_client,
+    ):
+        anyio.run(stub.approval_response_listener._get_ws_client)
+
+    assert captured == {
+        "url": "http://ha.local:8123",
+        "token": "request-scoped-token",
+        "verify_ssl": False,
+    }
+
+
+def test_a_client_without_credentials_falls_back_to_the_pooled_connection():
+    """Token deployments keep the behaviour they had.
+
+    There ``self.client`` carries the same credentials the settings do, and
+    a client that exposes none at all must still produce a usable call
+    rather than an AttributeError on the announce path.
+    """
+    import anyio
+
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    stub = _make_server_stub(enable_policies=True)
+    stub.client = object()
+    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
+
+    captured: dict[str, object] = {}
+
+    async def fake_get_websocket_client(**kwargs):
+        captured.update(kwargs)
+        return MagicMock()
+
+    with patch(
+        "ha_mcp.client.websocket_client.get_websocket_client",
+        new=fake_get_websocket_client,
+    ):
+        anyio.run(stub.approval_response_listener._get_ws_client)
+
+    assert captured == {"url": None, "token": None, "verify_ssl": None}
+
+
+def test_a_client_that_cannot_resolve_credentials_fails_the_channel_not_the_call():
+    """OAuth mode with no request context raises, and must not read as "none".
+
+    ``OAuthProxyClient.__getattr__`` resolves the current request's client
+    and raises ``HomeAssistantAuthError`` when there is no token in
+    context — which this test gets by using the real proxy rather than a
+    stand-in. That is not an AttributeError, so it propagates out of the
+    factory — which is the wanted outcome: opening the response channel on
+    the pooled default connection would authenticate it as the placeholder
+    principal, the exact state this wiring exists to prevent. The caller
+    treats a failure here as best-effort (the gated call still proceeds and
+    stays decidable in the settings UI), so the propagation costs nothing
+    but visibility.
+    """
+    import anyio
+    import pytest
+
+    from ha_mcp.__main__ import OAuthProxyClient
+    from ha_mcp.client.rest_client import HomeAssistantAuthError
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    stub = _make_server_stub(enable_policies=True)
+    # The real proxy, outside a request context — no stand-in, so the test
+    # cannot drift from what __getattr__ actually raises there.
+    stub.client = OAuthProxyClient("http://ha.local:8123")
+    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
+
+    called: list[dict] = []
+
+    async def fake_get_websocket_client(**kwargs):
+        called.append(kwargs)
+        return MagicMock()
+
+    with (
+        patch(
+            "ha_mcp.client.websocket_client.get_websocket_client",
+            new=fake_get_websocket_client,
+        ),
+        pytest.raises(HomeAssistantAuthError),
+    ):
+        anyio.run(stub.approval_response_listener._get_ws_client)
+
+    assert called == [], (
+        "a failed credential resolution must not fall through to the pooled "
+        "default connection"
+    )
+
+
+def test_the_result_event_closes_the_client_it_built():
+    """One client per event, and nothing else will ever reclaim it.
+
+    The emitter runs in a bus handler rather than a request, so it cannot
+    use the shared client in OAuth mode and builds its own from the same
+    credential snapshot the subscription uses. That client carries its own
+    httpx connection pool. Left open, every decided approval, every wrong
+    PIN and every rate-limited retry adds one -- a chatty automation turns
+    a feature into a file-descriptor leak. Asserted on the close, not on
+    the fire, because firing works either way.
+    """
+    import anyio
+
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    stub = _make_server_stub(enable_policies=True)
+    stub.client = MagicMock(
+        base_url="http://ha.local:8123", token="tok", verify_ssl=True
+    )
+    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
+
+    built: list[MagicMock] = []
+
+    def fake_client(*_args, **_kwargs):
+        client = MagicMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=None)
+        client.fire_event = AsyncMock()
+        built.append(client)
+        return client
+
+    emitter = stub.approval_response_listener._emit_result
+    assert emitter is not None, "the listener was wired without a result emitter"
+
+    with patch("ha_mcp.client.rest_client.HomeAssistantClient", new=fake_client):
+        anyio.run(lambda: emitter("tok-1", "approve", applied=True, reason="applied"))
+
+    assert len(built) == 1
+    built[0].__aexit__.assert_awaited_once()

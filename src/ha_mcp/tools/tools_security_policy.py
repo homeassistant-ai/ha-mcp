@@ -81,7 +81,10 @@ class SecurityPolicyTools:
                 default=None,
                 description=(
                     "set: the full policy object "
-                    "{wait_seconds, approval_ttl_minutes, rules, version}"
+                    "{wait_seconds, approval_ttl_minutes, "
+                    "event_decisions_enabled, rules, version}. Replaces the "
+                    "WHOLE document, so an omitted field reverts to its "
+                    "default"
                 ),
             ),
         ] = None,
@@ -109,7 +112,10 @@ class SecurityPolicyTools:
         approval wait time or how long an approval is remembered.
 
         Caveats: set replaces the WHOLE document, so send back an edited
-        copy of what get returned, not a fragment. Writes are
+        copy of what get returned, not a fragment. An omitted field is not
+        left alone, it reverts to its default: dropping
+        event_decisions_enabled switches off approving from Home Assistant
+        events, and the response says so in a warning when it does. Writes are
         version-guarded: pass the version from the last get (or leave it in
         the policy body) and a concurrent edit is rejected instead of
         silently overwritten. Rule edits apply to the running server
@@ -118,7 +124,7 @@ class SecurityPolicyTools:
 
         EXAMPLES:
         ha_manage_security_policy("get")
-        ha_manage_security_policy("set", policy={"wait_seconds": 60, "approval_ttl_minutes": 5, "rules": [{"tool_name": "ha_call_service"}], "version": 3})
+        ha_manage_security_policy("set", policy={"wait_seconds": 60, "approval_ttl_minutes": 5, "event_decisions_enabled": False, "rules": [{"tool_name": "ha_call_service"}], "version": 3})
         """
         try:
             if action == "get":
