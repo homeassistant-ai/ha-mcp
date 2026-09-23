@@ -26,6 +26,15 @@ JINJA_TEMPLATE_FILENAME = "<template>"
 LOOP_RERENDER_BUDGET_S = 1.0
 
 
+def _discard_template_log(level: int, message: str) -> None:
+    """Keep the diagnosis renders' undefined-variable messages out of HA's log.
+
+    Without a ``log_fn`` Core writes them to Home Assistant's log at WARNING or
+    ERROR; its own ``render_template`` routes them to the client instead, and
+    the caller already has them from there.
+    """
+
+
 def template_error_line(exc: BaseException) -> int | None:
     """Return the 1-based line a failure points at, or None if it names none.
 
@@ -83,7 +92,9 @@ async def async_diagnose(
 
     started = monotonic()
     try:
-        if await tpl.async_render_will_timeout(timeout, variables, strict=strict):
+        if await tpl.async_render_will_timeout(
+            timeout, variables, strict=strict, log_fn=_discard_template_log
+        ):
             return {"stage": "timeout"}
     except TemplateError as err:
         if monotonic() - started > LOOP_RERENDER_BUDGET_S:
@@ -93,7 +104,7 @@ async def async_diagnose(
         # loop to keep it.
 
     try:
-        tpl.async_render(variables, strict=strict)
+        tpl.async_render(variables, strict=strict, log_fn=_discard_template_log)
     except TemplateError as err:
         return describe_failure(template, "render", err)
     return {"stage": "none"}

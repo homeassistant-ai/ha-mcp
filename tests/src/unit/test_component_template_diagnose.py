@@ -16,8 +16,6 @@ from typing import Any
 
 import pytest
 
-from custom_components.ha_mcp_tools import template_diagnose
-
 # Import through the sibling module: it installs the ``homeassistant.*`` stubs
 # and the real voluptuous before any ``custom_components`` import.
 from . import test_component_ws_search as _base
@@ -30,6 +28,8 @@ from .test_component_ws_search import (
 )
 
 _REAL_VOL = _base._REAL_VOL
+
+from custom_components.ha_mcp_tools import template_diagnose  # noqa: E402
 
 
 class _StubTemplateError(Exception):
@@ -108,10 +108,12 @@ class _FakeTemplate:
     render_error: BaseException | None = None
     will_timeout: bool = False
     calls: list[str]
+    log_fns: list[Any]
 
     def __init__(self, template: str, hass: Any) -> None:
         self.template = template
         type(self).calls = []
+        type(self).log_fns = []
 
     def ensure_valid(self) -> None:
         type(self).calls.append("ensure_valid")
@@ -119,16 +121,20 @@ class _FakeTemplate:
             raise self.compile_error
 
     async def async_render_will_timeout(
-        self, timeout: float, variables: Any, strict: bool = False
+        self, timeout: float, variables: Any, strict: bool = False, log_fn: Any = None
     ) -> bool:
         type(self).calls.append(f"will_timeout:{timeout}:{variables}:{strict}")
+        type(self).log_fns.append(log_fn)
         if self.render_error is not None:
             # Core re-raises a worker-thread error without its traceback.
             raise _StubTemplateError(str(self.render_error))
         return self.will_timeout
 
-    def async_render(self, variables: Any, strict: bool = False) -> Any:
+    def async_render(
+        self, variables: Any, strict: bool = False, log_fn: Any = None
+    ) -> Any:
         type(self).calls.append(f"render:{variables}:{strict}")
+        type(self).log_fns.append(log_fn)
         if self.render_error is not None:
             raise self.render_error
         return "ok"
@@ -201,6 +207,18 @@ class TestAsyncDiagnose:
             "error": "ZeroDivisionError: division by zero",
         }
         assert not any(call.startswith("render:") for call in fake_core.calls)
+
+    @pytest.mark.asyncio
+    async def test_both_renders_keep_their_messages_out_of_the_log(
+        self, fake_core
+    ) -> None:
+        """Without a log_fn Core logs undefined values at WARNING/ERROR."""
+        fake_core.render_error = _wrapped(_runtime_error_at_template_line(1))
+        await template_diagnose.async_diagnose(
+            FakeHass(), "{{ d.split('-') }}", None, False, 3.0
+        )
+        assert fake_core.log_fns == [template_diagnose._discard_template_log] * 2
+        assert template_diagnose._discard_template_log(40, "message") is None
 
     @pytest.mark.asyncio
     async def test_template_that_renders_reports_no_failure(self, fake_core) -> None:
