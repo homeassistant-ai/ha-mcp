@@ -1251,7 +1251,7 @@
         "policy": {
           "type": "dict[str, Any] | None",
           "default": null,
-          "description": "set_policy: the full policy object {wait_seconds, approval_ttl_minutes, rules, version, schema_version}"
+          "description": "set_policy: the full policy object {wait_seconds, approval_ttl_minutes, event_decisions_enabled, rules, version, schema_version}. Replaces the WHOLE document: a field you omit reverts to its default, so send back an edited copy of get_policy rather than a fragment (omitting event_decisions_enabled switches the event-bus approval channel off)"
         },
         "expected_version": {
           "type": "int | None",
@@ -4056,7 +4056,7 @@
   {
     "name": "ha_manage_security_policy",
     "title": "Manage Security Policy",
-    "description": "Manage the tool security policy that gates high-stakes tool calls behind user approval.\n\nWhen NOT to use: this tool cannot see or decide pending approval\nrequests — listing, approving, and denying them is developer-mode\nonly (ha_dev_manage_server). For ordinary Home Assistant entity,\nautomation, or dashboard work use the ha_config_* tools.\n\nWhen to use: to read the current policy, to add or remove per-tool\napproval rules and their matching conditions, and to change the\napproval wait time or how long an approval is remembered.\n\nCaveats: set replaces the WHOLE document, so send back an edited\ncopy of what get returned, not a fragment. Writes are\nversion-guarded: pass the version from the last get (or leave it in\nthe policy body) and a concurrent edit is rejected instead of\nsilently overwritten. Rule edits apply to the running server\nimmediately and can remove approval gates. Whether this tool itself\nis registered is a separate setting that takes effect on restart.\n\nEXAMPLES:\nha_manage_security_policy(\"get\")\nha_manage_security_policy(\"set\", policy={\"wait_seconds\": 60, \"approval_ttl_minutes\": 5, \"rules\": [{\"tool_name\": \"ha_call_service\"}], \"version\": 3})",
+    "description": "Manage the tool security policy that gates high-stakes tool calls behind user approval.\n\nWhen NOT to use: this tool cannot see or decide pending approval\nrequests — listing, approving, and denying them is developer-mode\nonly (ha_dev_manage_server). For ordinary Home Assistant entity,\nautomation, or dashboard work use the ha_config_* tools.\n\nWhen to use: to read the current policy, to add or remove per-tool\napproval rules and their matching conditions, and to change the\napproval wait time or how long an approval is remembered.\n\nCaveats: set replaces the WHOLE document, so send back an edited\ncopy of what get returned, not a fragment. An omitted field is not\nleft alone, it reverts to its default: dropping\nevent_decisions_enabled switches off approving from Home Assistant\nevents, and the response says so in a warning when it does. Writes are\nversion-guarded: pass the version from the last get (or leave it in\nthe policy body) and a concurrent edit is rejected instead of\nsilently overwritten. Rule edits apply to the running server\nimmediately and can remove approval gates. Whether this tool itself\nis registered is a separate setting that takes effect on restart.\n\nEXAMPLES:\nha_manage_security_policy(\"get\")\nha_manage_security_policy(\"set\", policy={\"wait_seconds\": 60, \"approval_ttl_minutes\": 5, \"event_decisions_enabled\": False, \"rules\": [{\"tool_name\": \"ha_call_service\"}], \"version\": 3})",
     "inputSchema": {
       "properties": {
         "action": {
@@ -4066,7 +4066,7 @@
         "policy": {
           "type": "dict[str, Any] | None",
           "default": null,
-          "description": "set: the full policy object {wait_seconds, approval_ttl_minutes, rules, version}"
+          "description": "set: the full policy object {wait_seconds, approval_ttl_minutes, event_decisions_enabled, rules, version}. Replaces the WHOLE document, so an omitted field reverts to its default"
         },
         "expected_version": {
           "type": "int | None",
