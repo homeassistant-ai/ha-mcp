@@ -1621,6 +1621,46 @@ class TestSubscribeCommand:
         assert not client._late_releases
         assert not client._state._abandoned_subscriptions
 
+    async def _release_cut_short(self, client, monkeypatch, *, swap_socket: bool):
+        """Run release_subscription with a first attempt the deadline cuts off.
+
+        Stands in for a send lock held past the cleanup deadline: the first
+        release never gets to send; any later attempt returns at once.
+        """
+        monkeypatch.setattr(
+            "ha_mcp.client.websocket_client.CLEANUP_TIMEOUT_SECONDS", 0.01
+        )
+        attempts: list[int] = []
+
+        async def _release(message_id: int) -> None:
+            attempts.append(message_id)
+            if len(attempts) == 1:
+                await asyncio.Event().wait()
+
+        monkeypatch.setattr(client, "_release_abandoned_subscription", _release)
+        original_socket = object()
+        client.websocket = original_socket
+        await client.release_subscription(7)
+        if swap_socket:
+            client.websocket = object()
+        await asyncio.gather(*client._late_releases)
+        return attempts
+
+    @pytest.mark.asyncio
+    async def test_release_cut_short_by_the_deadline_is_finished(self, monkeypatch):
+        """The ack is already consumed, so nothing else would release it."""
+        client = self._prepare_client()
+        attempts = await self._release_cut_short(client, monkeypatch, swap_socket=False)
+        assert attempts == [7, 7]
+        assert not client._late_releases
+
+    @pytest.mark.asyncio
+    async def test_release_is_not_finished_on_a_new_socket(self, monkeypatch):
+        """A reconnect restarts ids, so the old id could name another subscription."""
+        client = self._prepare_client()
+        attempts = await self._release_cut_short(client, monkeypatch, swap_socket=True)
+        assert attempts == [7]
+
     @pytest.mark.asyncio
     async def test_reset_forgets_abandoned_subscriptions(self, monkeypatch):
         """The socket that held them is gone, and ids restart on the next one."""

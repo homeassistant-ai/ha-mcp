@@ -1058,8 +1058,10 @@ class HomeAssistantWebSocketClient:
                 e,
             )
 
-    async def _run_cleanup(self, coro: Coroutine[Any, Any, None], what: str) -> None:
+    async def _run_cleanup(self, coro: Coroutine[Any, Any, None], what: str) -> bool:
         """Run ``coro`` to completion or to a deadline, from a cancelled path.
+
+        Returns whether it finished; False means the deadline stopped it.
 
         Cleanup scheduled while a cancellation is propagating cannot simply
         be awaited: the await is cancelled in turn, and under a cancel scope
@@ -1122,9 +1124,11 @@ class HomeAssistantWebSocketClient:
                 # stop it, then collect the outcome so a late failure does
                 # not surface as an orphaned "exception was never
                 # retrieved".
-                if not task.done():
+                finished = task.done()
+                if not finished:
                     task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+        return finished
 
     async def _release_abandoned_subscription(self, message_id: int) -> None:
         """Ask Home Assistant to drop a subscription we can no longer name.
@@ -1276,10 +1280,28 @@ class HomeAssistantWebSocketClient:
         socket.
         """
         self._state.unregister_subscription_queue(subscription_id)
-        await self._run_cleanup(
+        socket = self.websocket
+        if await self._run_cleanup(
             self._release_abandoned_subscription(subscription_id),
             f"subscription {subscription_id}",
-        )
+        ):
+            return
+        # The deadline stopped the release before ``unsubscribe_events`` went
+        # out (the send lock was held throughout), and the subscription's ack
+        # has already been consumed, so nothing else will release it.
+        task = asyncio.ensure_future(self._finish_release(subscription_id, socket))
+        self._late_releases.add(task)
+        task.add_done_callback(self._late_releases.discard)
+
+    async def _finish_release(self, subscription_id: int, socket: Any) -> None:
+        """Complete a release the cleanup deadline cut short, on the same socket.
+
+        A reconnect drops the subscription with the old socket and restarts
+        message ids, so on a new socket the id could name an unrelated one.
+        """
+        if self.websocket is not socket:
+            return
+        await self._release_abandoned_subscription(subscription_id)
 
     async def unsubscribe_command(
         self,
