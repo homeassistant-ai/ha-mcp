@@ -155,6 +155,9 @@ class WebSocketConnectionState:
         # registered for a given id, every event with that id is pushed
         # into it instead of going to ``event_type``-keyed handlers.
         self._subscription_queues: dict[int, asyncio.Queue[dict[str, Any]]] = {}
+        # Ids of subscribe commands whose caller gave up before Home Assistant
+        # acknowledged them. See ``take_abandoned_subscription``.
+        self._abandoned_subscriptions: set[int] = set()
 
     def next_message_id(self) -> int:
         """Reserve the next available WebSocket message identifier."""
@@ -213,6 +216,24 @@ class WebSocketConnectionState:
             # Same GC guard as cancel_pending_request above.
             future.exception()
 
+    def mark_abandoned_subscription(self, message_id: int) -> None:
+        """Record a subscribe command whose acknowledgement nobody awaits."""
+        self._abandoned_subscriptions.add(message_id)
+
+    def take_abandoned_subscription(self, message_id: int) -> bool:
+        """Forget an abandoned subscribe command; True if it was one.
+
+        Home Assistant may register a subscription only after the caller has
+        given up and the immediate release answered ``not_found`` — a
+        ``render_template`` setup waits out the template's own timeout first.
+        Its late acknowledgement then arrives with no pending request, and
+        this is how the dispatch recognises that it still has to release it.
+        """
+        if message_id in self._abandoned_subscriptions:
+            self._abandoned_subscriptions.discard(message_id)
+            return True
+        return False
+
     def store_auth_message(self, message_type: str, data: dict[str, Any]) -> None:
         """Store an authentication handshake message."""
         self._auth_messages[message_type] = data
@@ -267,6 +288,8 @@ class WebSocketConnectionState:
         for queue in self._subscription_queues.values():
             queue.shutdown(immediate=True)
         self._subscription_queues.clear()
+        # Subscriptions die with the socket, and ids restart on the next one.
+        self._abandoned_subscriptions.clear()
 
         self._auth_messages.clear()
 
@@ -370,6 +393,9 @@ class HomeAssistantWebSocketClient:
         self._send_lock: asyncio.Lock | None = None
         self._lock_loop: asyncio.AbstractEventLoop | None = None
         self._state = WebSocketConnectionState()
+        # Releases of subscriptions acknowledged after their caller gave up,
+        # held here so the tasks are not garbage-collected mid-flight.
+        self._late_releases: set[asyncio.Task[None]] = set()
         # Reason the most recent connect() attempt failed (exception text),
         # or None. Surfaced by callers so the agent sees *why* a WebSocket
         # connection failed instead of an opaque "Failed to connect" string.
@@ -603,6 +629,14 @@ class HomeAssistantWebSocketClient:
             if future:
                 if not future.cancelled():
                     future.set_result(data)
+                return
+            if self._state.take_abandoned_subscription(message_id):
+                if message_type == "result" and data.get("success"):
+                    task = asyncio.ensure_future(
+                        self._release_abandoned_subscription(message_id)
+                    )
+                    self._late_releases.add(task)
+                    task.add_done_callback(self._late_releases.discard)
                 return
 
         # Handle events
@@ -948,6 +982,7 @@ class HomeAssistantWebSocketClient:
             # something that was never registered answers not_found, which
             # the release treats as its ordinary outcome.
             self.cancel_pending_response(message_id)
+            self._state.mark_abandoned_subscription(message_id)
             await self._run_cleanup(
                 self._release_abandoned_subscription(message_id),
                 f"abandoned subscribe_events({message_id})",
@@ -967,6 +1002,7 @@ class HomeAssistantWebSocketClient:
             # it is this operation's job, not the caller's, because the id it
             # needs is the one the caller never receives.
             self.cancel_pending_response(message_id)
+            self._state.mark_abandoned_subscription(message_id)
             await self._run_cleanup(
                 self._release_abandoned_subscription(message_id),
                 f"abandoned subscribe_events({message_id})",
@@ -1196,6 +1232,7 @@ class HomeAssistantWebSocketClient:
             # Assistant's side too, as subscribe_events does.
             self._state.unregister_subscription_queue(message_id)
             self.cancel_pending_response(message_id)
+            self._state.mark_abandoned_subscription(message_id)
             await self._run_cleanup(
                 self._release_abandoned_subscription(message_id),
                 f"abandoned {command_type}({message_id})",
@@ -1213,6 +1250,7 @@ class HomeAssistantWebSocketClient:
             # unchanged.
             self._state.unregister_subscription_queue(message_id)
             self.cancel_pending_response(message_id)
+            self._state.mark_abandoned_subscription(message_id)
             await self._run_cleanup(
                 self._release_abandoned_subscription(message_id),
                 f"abandoned {command_type}({message_id})",

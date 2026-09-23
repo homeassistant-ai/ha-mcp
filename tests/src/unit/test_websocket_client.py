@@ -1568,6 +1568,70 @@ class TestSubscribeCommand:
         assert len(released) == 1
         assert not client._state._subscription_queues
 
+    async def _abandon_one(self, client, monkeypatch) -> tuple[int, list[int]]:
+        """Abandon a subscribe before its ack; return (id, release calls)."""
+        sent: dict[str, int] = {}
+
+        async def _drop(message: dict) -> None:
+            sent["id"] = message["id"]
+
+        client.send_json_message = _drop  # type: ignore[method-assign]
+        released: list[int] = []
+
+        async def _release(message_id: int) -> None:
+            released.append(message_id)
+
+        monkeypatch.setattr(client, "_release_abandoned_subscription", _release)
+        with pytest.raises(TimeoutError):
+            await client.subscribe_command("render_template", wait_timeout=0.01)
+        return sent["id"], released
+
+    @pytest.mark.asyncio
+    async def test_late_ack_of_an_abandoned_subscription_is_released(self, monkeypatch):
+        """HA can register the subscription after the immediate release.
+
+        ``render_template`` registers only after its guarded render, so the
+        cancel-time ``unsubscribe_events`` can answer ``not_found`` and the
+        subscription appears afterwards. Its late ack must trigger a release.
+        """
+        client = self._prepare_client()
+        sub_id, released = await self._abandon_one(client, monkeypatch)
+        assert released == [sub_id]
+
+        await client._process_message(
+            {"id": sub_id, "type": "result", "success": True, "result": None}
+        )
+        await asyncio.gather(*client._late_releases)
+
+        assert released == [sub_id, sub_id]
+        assert not client._state._abandoned_subscriptions
+
+    @pytest.mark.asyncio
+    async def test_late_rejection_of_an_abandoned_subscription_is_dropped(
+        self, monkeypatch
+    ):
+        client = self._prepare_client()
+        sub_id, released = await self._abandon_one(client, monkeypatch)
+
+        await client._process_message(
+            {"id": sub_id, "type": "result", "success": False, "error": {}}
+        )
+
+        assert released == [sub_id]
+        assert not client._late_releases
+        assert not client._state._abandoned_subscriptions
+
+    @pytest.mark.asyncio
+    async def test_reset_forgets_abandoned_subscriptions(self, monkeypatch):
+        """The socket that held them is gone, and ids restart on the next one."""
+        client = self._prepare_client()
+        await self._abandon_one(client, monkeypatch)
+        assert client._state._abandoned_subscriptions
+
+        client._state.reset_connection()
+
+        assert not client._state._abandoned_subscriptions
+
     @pytest.mark.asyncio
     async def test_unsubscribe_command_drops_queue_and_sends_unsubscribe(self):
         """Cleanup tears down the queue and tells HA to release the subscription."""
