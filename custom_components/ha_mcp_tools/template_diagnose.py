@@ -30,8 +30,9 @@ def _discard_template_log(level: int, message: str) -> None:
     """Keep the diagnosis renders' undefined-variable messages out of HA's log.
 
     Without a ``log_fn`` Core writes them to Home Assistant's log at WARNING or
-    ERROR; its own ``render_template`` routes them to the client instead, and
-    the caller already has them from there.
+    ERROR. The caller already has them from ``render_template``, or, when
+    ``report_errors`` is off, Core has already written them to its log itself;
+    either way logging them again only adds noise.
     """
 
 
