@@ -12,11 +12,6 @@ land in the first place, because a partial run that trips the merge gate is
 held back whole and re-planned the next day. Two copies of these rules would
 mean the engine accepting exactly what the gate later refuses -- red every
 morning, no forward progress, until someone hand-edits a catalog.
-
-The two calls differ in three deliberate respects, all selected by one
-``gate`` argument and spelled out on ``_parity_fault``: the engine does not
-compare number multisets, does not count literal occurrences, and does not
-report a dropped unit.
 """
 
 from __future__ import annotations
@@ -27,7 +22,7 @@ import sys
 from collections import Counter
 from functools import cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 # Both calls into the pipeline below name a sibling script, and importing this
 # module does not put `scripts/` on the path -- `translate_locales` does that
@@ -253,6 +248,45 @@ def _numbers(text: str) -> Counter[tuple[str, ...]]:
     return Counter(_canonical_number(token) for token in _NUMBER_RE.findall(text))
 
 
+_ENGLISH_NUMBER_WORDS = {
+    word: str(value)
+    for value, word in enumerate(
+        [
+            "zero",
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight",
+            "nine",
+            "ten",
+            "eleven",
+            "twelve",
+        ]
+    )
+}
+_ENGLISH_NUMBER_WORD_RE = re.compile(
+    rf"\b({'|'.join(_ENGLISH_NUMBER_WORDS)})\b", re.IGNORECASE
+)
+
+
+def _spelled_numbers(english: str) -> Counter[tuple[str, ...]]:
+    """The numbers the English writes as words, as the digits a locale may use.
+
+    "Five wrong PINs within five minutes" states two fives, and Korean writes
+    them "5회" and "5분". Only the English side is read: a digit the English
+    sets must come back as that digit, while a number it spells out may come
+    back as a word or as digits, so no locale's number words are needed.
+    """
+    return Counter(
+        (_ENGLISH_NUMBER_WORDS[word.lower()],)
+        for word in _ENGLISH_NUMBER_WORD_RE.findall(english)
+    )
+
+
 def _attaches_a_word(digits: str, translated: str) -> bool:
     """Whether the translation writes a word onto these digits.
 
@@ -319,7 +353,6 @@ def _unit_fault(
     carried: set[str],
     translated: str,
     *,
-    require_unit: bool,
     claim: str,
 ) -> str | None:
     """What one digits-and-unit claim contradicts, or None.
@@ -328,20 +361,17 @@ def _unit_fault(
     counts as a unit, so the decision lives here once: a translation carrying
     some unit for these digits must carry the right one, and a translation
     carrying none has dropped it -- unless it attached a word instead, which is
-    a unit spelled out, or the caller is the engine, which tolerates the drop.
+    a unit spelled out.
     """
     if carried:
         return None if expected in carried else claim
-    if require_unit and not _attaches_a_word(digits, translated):
+    if not _attaches_a_word(digits, translated):
         return f"{claim} dropped"
     return None
 
 
-def _lost_magnitudes(
-    english: str, translated: str, *, require_unit: bool = True
-) -> list[str]:
-    """Magnitude suffixes the translation contradicts, and at the merge gate
-    the ones it drops.
+def _lost_magnitudes(english: str, translated: str) -> list[str]:
+    """Magnitude suffixes the translation contradicts or drops.
 
     A unit is part of the claim, and the value comparison cannot see it: "5K"
     and "5M" carry the same digits, and so do "90%" and a bare "90". The
@@ -368,12 +398,7 @@ def _lost_magnitudes(
 
     A translation that attaches nothing at all to the digits -- "Grenze ist
     1-256" for "limit is 1-256 MB" -- states a bound without its unit, and
-    ``require_unit`` decides whether that reports. It is the same asymmetry
-    ``gate`` encodes for the numbers: at the merge gate a human reads the
-    failure and the key can carry a tolerance, so the drop is worth naming; on
-    the engine path a refusal holds a whole partial run back, and the cheapest
-    correct rendering of a unit is not always an abbreviation.
-    A spelled-out unit is not a dropped one and is silent under either mode:
+    reports. A spelled-out unit is not a dropped one and is silent:
     "предел 1-256 гигабайт" attaches a word to the digits, which is what
     separates it from the bare bound. Only horizontal space may sit between,
     so "256. Die Grenze" is still a drop -- that word starts a sentence rather
@@ -390,7 +415,6 @@ def _lost_magnitudes(
             unit.upper(),
             _storage_units_carried(digits, translated),
             translated,
-            require_unit=require_unit,
             claim=f"{digits} {unit}",
         )
         if fault:
@@ -418,7 +442,6 @@ def _lost_magnitudes(
             suffix.upper(),
             _magnitude_suffixes_carried(digits, translated),
             translated,
-            require_unit=require_unit,
             claim=f"{digits}{suffix}",
         )
         if fault:
@@ -485,7 +508,6 @@ def _parity_fault(
     *,
     tolerated_losses: Counter[tuple[str, ...]] | None = None,
     tolerated_additions: Counter[tuple[str, ...]] | None = None,
-    gate: Literal["merge", "engine"] = "merge",
 ) -> str:
     """Everything one English/translated pair contradicts, or "" if nothing.
 
@@ -497,51 +519,25 @@ def _parity_fault(
     ``test_the_comparison_runs_every_arm`` holds each one to a case it must
     report, which only works if there is a single place they are summed.
 
-    ``gate`` names which of the two callers is asking, because three of the
-    arms can be asked a stricter question by one of them than by the other.
-    One dial rather than three: every one of the three splits on the same
-    property -- whether a human reads the failure and the key can carry a
-    tolerance (merge) or a refusal holds a whole partial run back (engine) --
-    so three independent switches would only make it possible to set them
-    inconsistently.
+    The engine and the merge gate ask exactly this, with no setting between
+    them. A string the engine accepts and the merge gate refuses lands as a
+    backfilled key no later run re-queues, and from then on the whole push is
+    held back every day; a string the engine refuses costs that one key a
+    retry. So anything the merge gate would name is refused at acceptance.
 
-    ``"merge"`` compares number multisets in both directions and subtracts a
-    tolerance by occurrence, counts how often each literal survives, and
-    reports a unit the translation dropped.
-
-    ``"engine"`` narrows all three. Numbers report only when one was swapped
-    for another -- when the pair loses a number AND gains one -- and the
-    corpus is the reason: across the 6751 shipped pairs, every number
-    difference is one-sided (Russian spells "the 5 experimental sub-flags"
-    out in words; Chinese keeps a clause the English rendering cuts) and NONE
-    is a swap. Asking the full multiset at acceptance time would refuse those
-    two correct strings on every run, retry once, and leave their keys to be
-    planned again tomorrow -- the daily stall this call exists to prevent.
-    Asking nothing let a swapped number through to land as a backfilled key,
-    where the merge gate reports it and holds the whole tree back instead. The
-    swap is the shape that is wrong in every language, so it is the shape the
-    engine refuses.
-
-    Literal counting narrows for the same reason: a faithful translation may
-    name a repeated identifier once and pronominalise the second mention, and
-    at acceptance time there is nowhere to record that per key. Four shipped
-    English strings name an identifier twice, so the merge side keeps the
-    count -- with only presence, a translation that corrupts one of the two
-    occurrences passes both gates.
-
-    The dropped-unit arm narrows on the same grounds; ``_lost_magnitudes``
-    spells out what separates a dropped unit from a spelled-out one.
+    Numbers compare as multisets in both directions. A digit the translation
+    adds passes when the English spells that number out, so "five minutes" may
+    come back as "5분"; a digit the English sets must come back as a digit.
     """
     losses = tolerated_losses if tolerated_losses is not None else Counter()
     additions = tolerated_additions if tolerated_additions is not None else Counter()
     lost_numbers = (_numbers(english) - _numbers(translated)) - losses
-    gained_numbers = (_numbers(translated) - _numbers(english)) - additions
-    merge_gate = gate == "merge"
-    if not merge_gate and not (lost_numbers and gained_numbers):
-        lost_numbers = gained_numbers = Counter()
+    gained_numbers = (
+        (_numbers(translated) - _numbers(english)) - _spelled_numbers(english)
+    ) - additions
     lost = (
-        _lost_literals(english, translated, count_occurrences=merge_gate)
-        + _lost_magnitudes(english, translated, require_unit=merge_gate)
+        _lost_literals(english, translated)
+        + _lost_magnitudes(english, translated)
         + _reversed_ordered_pairs(english, translated)
         + _localised_hardcoded_name(english, translated)
         + _invented_files(english, translated)
@@ -617,9 +613,7 @@ def _carries(literal: str, translated: str) -> bool:
     return _occurrences(literal, translated) > 0
 
 
-def _lost_literals(
-    english: str, translated: str, *, count_occurrences: bool = True
-) -> list[str]:
+def _lost_literals(english: str, translated: str) -> list[str]:
     """English literals absent from the translation, as substrings.
 
     Substring rather than token equality on purpose: German writes
@@ -639,23 +633,11 @@ def _lost_literals(
     what keeps a name that later gains an extractable shape from reporting
     twice under two different descriptions.
 
-    ``count_occurrences`` compares how OFTEN the name survives, the same way
-    the number arm compares multisets. Four shipped English strings name an
-    identifier twice -- ``ha_get_skill_guide`` in the strict-best-practices
-    help, ``skill_content`` in the one beside it, ``ChatGPT`` in two notices --
-    and asking only whether the name survives *somewhere* accepts a translation
-    that corrupts one of the two. Both sides are counted with the same
-    instrument; measured across the 6751 shipped pairs, counting reports
-    nothing that presence did not, so it is exposure it covers rather than a
-    fault it found.
-
-    It is off for the engine, and for the same reason the number multisets are:
-    a faithful translation may state a repeated name once and pronominalise the
-    second mention, and there is nowhere to record a per-key tolerance at
-    acceptance time. Refusing that costs a retry and leaves the key to be
-    planned again tomorrow, which is the daily stall the engine-side call
-    exists to prevent. The merge-time check, which can carry a tolerance and is
-    read by a human when it fails, keeps the count.
+    Occurrences are counted, not just found. Four shipped English strings
+    name an identifier twice -- ``ha_get_skill_guide`` in the
+    strict-best-practices help, ``skill_content`` in the one beside it,
+    ``ChatGPT`` in two notices -- and asking only whether the name survives
+    *somewhere* accepts a translation that corrupts one of the two.
     """
     protected = _untranslatable_names()
     candidates = {
@@ -673,7 +655,7 @@ def _lost_literals(
         # against it vacuously true and the literal unreportable for good, so
         # it falls back to demanding the name once, which is what the presence
         # test demanded before counting existed.
-        expected = (_occurrences(literal, english) if count_occurrences else 1) or 1
+        expected = _occurrences(literal, english) or 1
         kept = _occurrences(literal, translated)
         if kept >= expected:
             continue
