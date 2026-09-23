@@ -251,7 +251,21 @@ def _numbers(text: str) -> Counter[tuple[str, ...]]:
 _ENGLISH_NUMBER_WORDS = {
     word: str(value)
     for value, word in enumerate(
-        ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"]
+        [
+            "zero",
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight",
+            "nine",
+            "ten",
+            "eleven",
+            "twelve",
+        ]
     )
 }
 _ENGLISH_NUMBER_WORD_RE = re.compile(
