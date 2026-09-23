@@ -594,8 +594,11 @@ class HomeAssistantWebSocketClient:
             self._state.store_auth_message(message_type, data)
             return
 
-        # Handle command responses
-        if message_id is not None:
+        # Handle command responses. An event frame is never the reply to a
+        # command, even when it shares the command's id and arrives first:
+        # render_template reports template errors as events before its result
+        # frame (#2522).
+        if message_id is not None and message_type != "event":
             future = self._state.resolve_pending_request(message_id)
             if future:
                 if not future.cancelled():
@@ -818,9 +821,9 @@ class HomeAssistantWebSocketClient:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Send a command that returns a result followed by an event response.
 
-        Some HA WebSocket commands (e.g. system_health/info, render_template)
-        reply with an immediate result message and then deliver the actual data
-        in a subsequent event message sharing the same message ID.
+        Some HA WebSocket commands (e.g. system_health/info) reply with an
+        immediate result message and then deliver the actual data in a
+        subsequent event message sharing the same message ID.
 
         Args:
             command_type: Type of command to send.
@@ -1145,7 +1148,7 @@ class HomeAssistantWebSocketClient:
         self,
         command_type: str,
         *,
-        timeout: float = 30.0,
+        wait_timeout: float = 30.0,
         **kwargs: Any,
     ) -> tuple[int, asyncio.Queue[dict[str, Any]]]:
         """Send a subscribe-style command and return (subscription_id, queue).
@@ -1158,10 +1161,15 @@ class HomeAssistantWebSocketClient:
         event-type handler registry; use this method for everything
         else.
 
+        ``wait_timeout`` is named apart from ``**kwargs`` because those become
+        fields of the command, and some commands (``render_template``) carry a
+        ``timeout`` field of their own.
+
         Returns:
             (subscription_id, queue) — ``await queue.get()`` yields each
             incoming ``{"id": N, "type": "event", "event": ...}`` payload.
-            Cancel the subscription via :meth:`unsubscribe_command`.
+            Cancel the subscription via :meth:`unsubscribe_command`, or
+            :meth:`release_subscription` from a ``finally``.
         """
         if not self._state.is_ready:
             raise HomeAssistantConnectionError("WebSocket not authenticated")
@@ -1183,20 +1191,32 @@ class HomeAssistantWebSocketClient:
         except BaseException:
             # Cancellation mid-send: skips the clause above and would leave BOTH
             # the queue and the pending future registered — the queue never
-            # drains and buffers every later event for this id forever.
+            # drains and buffers every later event for this id forever. The
+            # frame may already be on the wire, so release it on Home
+            # Assistant's side too, as subscribe_events does.
             self._state.unregister_subscription_queue(message_id)
             self.cancel_pending_response(message_id)
+            await self._run_cleanup(
+                self._release_abandoned_subscription(message_id),
+                f"abandoned {command_type}({message_id})",
+            )
             raise
 
         try:
-            response = await asyncio.wait_for(result_future, timeout=timeout)
+            response = await asyncio.wait_for(result_future, timeout=wait_timeout)
         except BaseException:
             # A cancelled caller leaks the pending future AND the subscription
             # queue, which keeps accumulating events with no reader. The
-            # cleanup is exception-type-independent and the original exception
-            # re-raises unchanged.
+            # command is on the wire, so Home Assistant may have registered
+            # the subscription: the caller never receives its id, so releasing
+            # it is this method's job. The original exception re-raises
+            # unchanged.
             self._state.unregister_subscription_queue(message_id)
             self.cancel_pending_response(message_id)
+            await self._run_cleanup(
+                self._release_abandoned_subscription(message_id),
+                f"abandoned {command_type}({message_id})",
+            )
             raise
 
         if response.get("type") == "result" and response.get("success"):
@@ -1206,6 +1226,21 @@ class HomeAssistantWebSocketClient:
         error_msg, error_code = _extract_ws_error(response.get("error", {}))
         raise HomeAssistantCommandError(
             f"subscribe_command({command_type!r}) failed: {error_msg}", error_code
+        )
+
+    async def release_subscription(self, subscription_id: int) -> None:
+        """Release a :meth:`subscribe_command` subscription from a ``finally``.
+
+        Unlike :meth:`unsubscribe_command` this never raises and survives the
+        caller's cancellation: a failed or timed-out release must not replace
+        the result the caller already has, and a cancelled caller must still
+        release, or Home Assistant keeps the subscription for the life of the
+        socket.
+        """
+        self._state.unregister_subscription_queue(subscription_id)
+        await self._run_cleanup(
+            self._release_abandoned_subscription(subscription_id),
+            f"subscription {subscription_id}",
         )
 
     async def unsubscribe_command(
