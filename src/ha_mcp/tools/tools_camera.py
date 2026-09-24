@@ -15,7 +15,7 @@ from pydantic import Field
 
 from ha_mcp._vendor.fastmcp.tools import tool
 from ha_mcp._vendor.fastmcp.utilities.types import Image
-from ha_mcp.image_info import read_image_dimensions
+from ha_mcp.image_info import resolve_image_info
 
 from .helpers import log_tool_usage, register_tool_methods
 from .tool_hints import read_only_hints
@@ -144,8 +144,12 @@ class CameraTools:
             self._check_response(response, entity_id)
 
             content_type = response.headers.get("content-type", "image/jpeg")
-            image_format = _detect_image_format(content_type)
-            image_size = read_image_dimensions(response.content, image_format)
+            # Cameras can mislabel their payload, so resolve the format
+            # from the bytes: the reported label, size, and Image block
+            # must all describe what was actually served.
+            image_format, image_size = resolve_image_info(
+                response.content, _detect_image_format(content_type)
+            )
             # Sample the clock the moment HA handed us the bytes; the zone
             # is resolved separately so a slow timezone lookup only delays
             # the label, never the timestamp.
