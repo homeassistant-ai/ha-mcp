@@ -12,10 +12,11 @@ headers, so the info text reports the assets' actual dimensions.
 
 import re
 
+import pytest
+
 from tests.src.e2e.utilities.assertions import (
-    assert_mcp_success,
-    extract_error_message,
-    parse_mcp_result,
+    assert_mcp_failure,
+    assert_search_results,
     safe_call_tool,
 )
 
@@ -27,75 +28,66 @@ INFO_TEXT_RE = re.compile(
 )
 
 
+def _blocks_of_type(result, block_type: str) -> list:
+    """Content blocks of a raw CallToolResult matching *block_type*."""
+    return [block for block in result.content if block.type == block_type]
+
+
 class TestCameraToolsE2E:
     """E2E tests for camera tools (require running Home Assistant)."""
 
-    def test_camera_tools_registered(self, mcp_client):
+    @pytest.mark.asyncio
+    async def test_camera_tools_registered(self, mcp_client):
         """Camera tools should be registered in the MCP client."""
-        tools_response = mcp_client.list_tools()
-        tools = tools_response.tools
-        tool_names = {t.name for t in tools}
+        tools = await mcp_client.list_tools()
+        tool_names = {tool.name for tool in tools}
 
         assert "ha_get_camera_image" in tool_names, (
             "ha_get_camera_image tool should be registered"
         )
 
-    def test_non_camera_entity_rejected(self, mcp_client):
+    @pytest.mark.asyncio
+    async def test_non_camera_entity_rejected(self, mcp_client):
         """Non-camera entities should be rejected with a clear error."""
-        result = safe_call_tool(
+        data = await safe_call_tool(
             mcp_client,
             "ha_get_camera_image",
-            {
-                "entity_id": "light.kitchen",
-            },
+            {"entity_id": "light.kitchen"},
         )
 
-        assert result.isError, "Should be an error for non-camera entity"
-        if result.isError:
-            error_message = extract_error_message(result)
-            assert "not a camera entity" in error_message.lower(), (
-                f"Error message should mention non-camera entity, got: {error_message}"
-            )
+        assert_mcp_failure(
+            data,
+            "ha_get_camera_image (non-camera entity)",
+            expected_error="not a camera entity",
+        )
 
-    def test_get_camera_image_returns_image_and_info(self, mcp_client):
+    @pytest.mark.asyncio
+    async def test_get_camera_image_returns_image_and_info(self, mcp_client):
         """A live camera snapshot should return an image plus the info text block.
 
         The demo cameras serve static JPEG/PNG assets with real headers, so
         the info text must name the format, the served dimensions, and the
         retrieval time.
         """
-        # Find an available camera entity (the demo integration provides them).
-        search_result = safe_call_tool(
+        search_data = await safe_call_tool(
             mcp_client,
             "ha_search",
-            {
-                "domain": "camera",
-            },
+            {"domain_filter": "camera"},
+        )
+        assert_search_results(search_data, min_results=1, domain_filter="camera")
+        camera_entity = search_data["entities"][0]["entity_id"]
+
+        # The info text is plain (non-JSON) text, so the shared parsing
+        # helper can only surface it as ``raw_response`` — and the image
+        # block cannot be surfaced through it at all. Verify both blocks on
+        # the raw CallToolResult instead (as the other direct-call e2e
+        # tests do).
+        result = await mcp_client.call_tool(
+            "ha_get_camera_image", {"entity_id": camera_entity}
         )
 
-        assert_mcp_success(search_result, "ha_search for camera entities")
-
-        search_text = parse_mcp_result(search_result)
-        camera_match = re.search(r"camera\.\w+", search_text)
-        assert camera_match, (
-            f"No camera.* entity found in search results: {search_text[:200]}"
-        )
-        camera_entity = camera_match.group(0)
-
-        result = safe_call_tool(
-            mcp_client,
-            "ha_get_camera_image",
-            {
-                "entity_id": camera_entity,
-            },
-        )
-
-        assert_mcp_success(result, f"ha_get_camera_image for {camera_entity}")
-        assert result.content, "Should return content blocks"
-        assert len(result.content) >= 2, "Expected both a text block and an image block"
-
-        image_blocks = [block for block in result.content if block.type == "image"]
-        text_blocks = [block for block in result.content if block.type == "text"]
+        image_blocks = _blocks_of_type(result, "image")
+        text_blocks = _blocks_of_type(result, "text")
 
         assert len(image_blocks) == 1, "Expected exactly one image block"
         assert image_blocks[0].data, "Image data should not be empty"
@@ -109,43 +101,25 @@ class TestCameraToolsE2E:
             f"Unexpected info text format: {info_text!r}"
         )
 
-    def test_get_camera_image_with_resize(self, mcp_client):
+    @pytest.mark.asyncio
+    async def test_get_camera_image_with_resize(self, mcp_client):
         """A resize request should return both blocks; the size reflects the
         image as actually served (Home Assistant may or may not rescale)."""
-        search_result = safe_call_tool(
+        search_data = await safe_call_tool(
             mcp_client,
             "ha_search",
-            {
-                "domain": "camera",
-            },
+            {"domain_filter": "camera"},
         )
+        assert_search_results(search_data, min_results=1, domain_filter="camera")
+        camera_entity = search_data["entities"][0]["entity_id"]
 
-        assert_mcp_success(search_result, "ha_search for camera entities")
-
-        search_text = parse_mcp_result(search_result)
-        camera_match = re.search(r"camera\.\w+", search_text)
-        assert camera_match, (
-            f"No camera.* entity found in search results: {search_text[:200]}"
-        )
-        camera_entity = camera_match.group(0)
-
-        result = safe_call_tool(
-            mcp_client,
+        result = await mcp_client.call_tool(
             "ha_get_camera_image",
-            {
-                "entity_id": camera_entity,
-                "width": 640,
-                "height": 480,
-            },
+            {"entity_id": camera_entity, "width": 640, "height": 480},
         )
 
-        assert_mcp_success(
-            result, f"ha_get_camera_image with resize for {camera_entity}"
-        )
-        assert result.content, "Should return content blocks"
-
-        image_blocks = [block for block in result.content if block.type == "image"]
-        text_blocks = [block for block in result.content if block.type == "text"]
+        image_blocks = _blocks_of_type(result, "image")
+        text_blocks = _blocks_of_type(result, "text")
 
         assert len(image_blocks) == 1, "Expected exactly one image block"
         assert image_blocks[0].data, "Image data should not be empty"
