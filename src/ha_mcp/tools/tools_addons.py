@@ -4035,9 +4035,10 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 " reloads the store so Supervisor re-scans its repositories (e.g. after"
                 " editing a local app's config.yaml) — it takes neither 'slug' nor "
                 "'repository', refreshes available metadata only, and installs nothing;"
-                " follow with action='update'. Returns 'changed' and "
-                "'updates_available', null when the store could not be read (see "
-                "'warnings').",
+                " follow with action='update' for a newer version, or action='rebuild' "
+                "for a local app whose source changed without a version change. Returns"
+                " 'changed' and 'updates_available', null when the store could not be "
+                "read (see 'warnings').",
                 default=None,
             ),
         ] = None,
