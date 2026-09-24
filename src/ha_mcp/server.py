@@ -662,11 +662,23 @@ class HomeAssistantSmartMCPServer:
         "ha_config_set_automation": (
             "create update modify edit automation triggers conditions actions "
             "new automation write save take control blueprint detach "
-            "unlink standalone convert"
+            "unlink standalone convert enable disable turn on off run trigger now"
         ),
         "ha_config_set_script": (
             "create update modify edit script sequence actions new script write "
-            "save take control blueprint detach unlink standalone convert"
+            "save take control blueprint detach unlink standalone convert "
+            "run start stop execute"
+        ),
+        "ha_config_set_scene": (
+            "create update modify edit scene entities snapshot activate apply turn on"
+        ),
+        "ha_manage_updates": (
+            "update updates install skip firmware core os repair repairs issue "
+            "ignore dismiss unignore"
+        ),
+        "ha_set_integration": (
+            "integration config entry enable disable add options reconfigure "
+            "log level debug logging"
         ),
         "ha_config_set_yaml": (
             "edit yaml configuration.yaml packages template sensor "
@@ -743,7 +755,9 @@ class HomeAssistantSmartMCPServer:
             "to convert a blueprint-backed automation into an editable "
             "standalone one (the UI's Take control action). Omit "
             "`identifier` to create a new automation. Reusing an identifier targets "
-            "the same automation; changing its alias requires config_hash from a prior read.\n\n"
+            "the same automation; changing its alias requires config_hash from a prior read. "
+            "`enabled` turns it on or off and `run_actions` runs it now, with a "
+            "write or alone with `identifier`.\n\n"
             "For schema details, examples, and native-vs-template "
             "guidance, see ha_get_skill_guide or your locally "
             "installed skills."
@@ -763,7 +777,8 @@ class HomeAssistantSmartMCPServer:
             "`config_hash` from ha_config_get_script), or "
             "`take_control_of_blueprint` to convert a blueprint-backed "
             "script into an editable standalone one. `script_id` names "
-            "the script in every mode.\n\n"
+            "the script in every mode. `run` ('start' / 'stop'), used alone "
+            "with `script_id`, starts or stops the script.\n\n"
             "For schema details and examples, see "
             "ha_get_skill_guide or your locally installed skills."
         ),
@@ -782,7 +797,8 @@ class HomeAssistantSmartMCPServer:
             "Create or update a Home Assistant scene.\n\n"
             "Supports two modes: full `config` replacement, or surgical "
             "`python_transform` on an existing scene (requires "
-            "`config_hash`). `scene_id` names the scene in both modes.\n\n"
+            "`config_hash`). `scene_id` names the scene in both modes. "
+            "`activate` activates the scene, with a write or alone.\n\n"
             "For schema details and examples, see "
             "ha_get_skill_guide or your locally installed skills."
         ),
@@ -846,8 +862,10 @@ class HomeAssistantSmartMCPServer:
             "ha_get_skill_guide or your locally installed skills."
         ),
         "ha_call_service": (
-            "Execute a Home Assistant service to control entities or "
-            "trigger automations. Calls `<domain>.<service>` "
+            "Call any Home Assistant service or one-shot WebSocket command: "
+            "the catch-all escape hatch. Prefer a dedicated tool when one "
+            "covers the job (automations, scripts, scenes, apps, updates and "
+            "repairs, integration log levels). Calls `<domain>.<service>` "
             "(e.g., light.turn_on, climate.set_temperature). Use "
             "ha_search to find entity IDs and ha_get_state "
             "to read current values before changing them.\n\n"

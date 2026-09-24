@@ -2700,7 +2700,8 @@ class TestSceneNotStorageScene:
     has no editable ``scenes.yaml`` config (a Hue/vendor scene, or a raw-YAML
     scene) surfaces ``CONFIG_NOT_FOUND`` - never the misleading
     ``ENTITY_NOT_FOUND``, since the entity is present. When the registry exposed
-    the owning ``platform`` the message names it and points at ``scene.turn_on``.
+    the owning ``platform`` the message names it and points at activating it
+    through ``ha_config_set_scene(activate=True)``.
     """
 
     async def test_get_scene_not_storage_scene_maps_to_config_not_found(
@@ -2720,13 +2721,13 @@ class TestSceneNotStorageScene:
         assert error["code"] != "ENTITY_NOT_FOUND"
         msg = error["message"].lower()
         assert "exists" in msg and "hue" in msg
-        assert any("turn_on" in s for s in error["suggestions"])
+        assert any("activate=True" in s for s in error["suggestions"])
 
     async def test_get_scene_not_storage_scene_unknown_platform_stays_generic(
         self, tools, mock_client
     ):
         """No platform exposed → still CONFIG_NOT_FOUND, generic message (no
-        fabricated integration name), still points at scene.turn_on."""
+        fabricated integration name), still points at activating the scene."""
         mock_client.get_scene_config = AsyncMock(
             side_effect=SceneStorageConfigNotFoundError(
                 "yaml_scene", platform=None, storage_key="yaml_scene"
@@ -2738,7 +2739,7 @@ class TestSceneNotStorageScene:
 
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == "CONFIG_NOT_FOUND"
-        assert any("turn_on" in s for s in error["suggestions"])
+        assert any("activate=True" in s for s in error["suggestions"])
 
     async def test_remove_scene_not_storage_scene_maps_to_config_not_found(
         self, tools, mock_client

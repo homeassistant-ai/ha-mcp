@@ -1576,17 +1576,18 @@ async def wait_for_automation_entity_by_unique_id(
 
 
 @asynccontextmanager
-async def automation_reload_waiter(
-    client: Any, *, enabled: bool = True, timeout: float = 10.0
+async def config_reload_waiter(
+    client: Any, event_type: str, *, enabled: bool = True, timeout: float = 10.0
 ) -> AsyncIterator[Callable[[], Awaitable[bool | None]]]:
-    """Subscribe to ``automation_reloaded`` around an automation config write.
+    """Subscribe to a ``<domain>_reloaded`` event around a config write.
 
-    Home Assistant answers ``POST /config/automation/config/<id>`` before the
-    reload it schedules has run, and that reload replaces the entity when the
-    config changed. A state change sent in between hits no entity and is lost,
-    so callers subscribe before the write and wait on the yielded callable
-    before acting on the entity. HA fires the event after every automation
-    reload, including one that found the config unchanged.
+    Home Assistant answers ``POST /config/<domain>/config/<id>`` before the
+    reload it schedules has run, and that reload replaces entities (all scenes;
+    an automation whose config changed). A runtime action sent in between hits
+    no entity and is lost, so callers subscribe before the write and wait on
+    the yielded callable before acting on the entity. HA fires
+    ``automation_reloaded`` and ``scene_reloaded`` after every such reload;
+    scripts fire no reload event, so they cannot use this.
 
     The callable returns True once a reload completed, False on timeout, and
     None when no subscription exists (``enabled`` False or no WebSocket).
@@ -1601,12 +1602,12 @@ async def automation_reload_waiter(
     sub_ids: list[int] = []
     subscribed = ws_client is not None and await _ws_subscribe_all(
         ws_client,
-        ("automation_reloaded",),
+        (event_type,),
         handler,
         attached_handlers,
         sub_ids,
-        "automation reload",
-        "automation",
+        "config reload",
+        event_type,
     )
 
     async def wait_for_reload() -> bool | None:
@@ -1615,7 +1616,7 @@ async def automation_reload_waiter(
         try:
             await asyncio.wait_for(reloaded.wait(), timeout=timeout)
         except TimeoutError:
-            logger.warning("automation_reloaded not received within %ss", timeout)
+            logger.warning("%s not received within %ss", event_type, timeout)
             return False
         return True
 
@@ -1624,6 +1625,27 @@ async def automation_reload_waiter(
     finally:
         if ws_client is not None:
             await _ws_cleanup(ws_client, attached_handlers, sub_ids, handler)
+
+
+def note_reload_outcome(
+    result: dict[str, Any], reloaded: bool | None, *, domain: str, requested: bool
+) -> None:
+    """Warn when a runtime change could not be ordered after a config reload.
+
+    ``reloaded`` is the ``config_reload_waiter`` verdict: False when the
+    reload was never confirmed, None when nothing could watch for it.
+    """
+    if not requested or reloaded:
+        return
+    reason = (
+        f"did not confirm the {domain} reload"
+        if reloaded is False
+        else f"could not be watched for the {domain} reload (no WebSocket)"
+    )
+    result.setdefault("warnings", []).append(
+        f"Home Assistant {reason}; the requested runtime change may be "
+        "reverted or lost when the reload completes."
+    )
 
 
 async def fetch_entity_category(

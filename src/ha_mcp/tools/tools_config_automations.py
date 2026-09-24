@@ -60,10 +60,11 @@ from .util_helpers import (
     attach_skill_content,
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
-    automation_reload_waiter,
     coerce_to_list,
+    config_reload_waiter,
     fetch_entity_category,
     merge_validation_meta,
+    note_reload_outcome,
     parse_json_param,
     wait_for_automation_entity_by_unique_id,
     wait_for_entity_registered,
@@ -338,9 +339,9 @@ def _validate_automation_identifier(identifier: str | None) -> None:
 
 
 def _skip_automation_runtime_backup(kwargs: dict[str, Any]) -> bool:
-    """Skip config snapshots for runtime-only enabled changes."""
+    """Skip config snapshots for runtime-only calls (enabled / run_actions)."""
     return (
-        kwargs.get("enabled") is not None
+        (kwargs.get("enabled") is not None or bool(kwargs.get("run_actions")))
         and kwargs.get("config") is None
         and kwargs.get("python_transform") is None
         and not kwargs.get("take_control_of_blueprint")
@@ -370,10 +371,10 @@ async def _resolve_post_write_automation_entity(
     return entity_id
 
 
-async def _resolve_enabled_target(
+async def _resolve_runtime_target(
     client: Any, identifier: str, response: dict[str, Any]
 ) -> str | None:
-    """Resolve the entity to receive a runtime enabled-state change."""
+    """Resolve the entity to receive a runtime change (enabled / run_actions)."""
     if identifier.startswith("automation."):
         return identifier
     # A config write reloads the automation and replaces its entity when the
@@ -384,23 +385,6 @@ async def _resolve_enabled_target(
     )
 
 
-def _note_reload_outcome(
-    result: dict[str, Any], reloaded: bool | None, enabled: bool | None
-) -> None:
-    """Warn when an enabled change could not be ordered after the reload."""
-    if enabled is None or reloaded:
-        return
-    reason = (
-        "did not confirm the automation reload"
-        if reloaded is False
-        else "could not be watched for the automation reload (no WebSocket)"
-    )
-    result.setdefault("warnings", []).append(
-        f"Home Assistant {reason}; the requested enabled state may be "
-        "reverted when the reload completes."
-    )
-
-
 def _sync_post_write_automation_result(
     response: dict[str, Any], entity_id: str | None
 ) -> None:
@@ -408,6 +392,11 @@ def _sync_post_write_automation_result(
     if entity_id:
         response["entity_id"] = entity_id
         response.pop("entity_not_verified", None)
+
+
+# Standalone runtime calls raise on a service failure; after a config write the
+# same failure is a partial-success warning because the write already landed.
+_STANDALONE_RUNTIME_ACTIONS = ("set_enabled", "run_actions")
 
 
 def _reject_enabled_in_config(config: Any) -> None:
@@ -740,6 +729,18 @@ class AutomationConfigTools:
                 default=None,
             ),
         ] = None,
+        run_actions: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Run the automation's actions now, skipping its triggers and "
+                    "conditions (automation.trigger, the UI's Run actions). Applied "
+                    "after `enabled` and after any config write. Can be used "
+                    "standalone with identifier and no config."
+                ),
+                default=False,
+            ),
+        ] = False,
         MandatoryBPS: Annotated[
             bool,
             Field(default=True),
@@ -791,6 +792,7 @@ class AutomationConfigTools:
         - From a blueprint: ha_config_set_automation(config={"alias": "Motion Light Kitchen", "use_blueprint": {"path": "homeassistant/motion_light.yaml", "input": {"motion_entity": "binary_sensor.kitchen_motion", "light_target": {"entity_id": "light.kitchen"}}}})
         - Update: current = ha_config_get_automation(identifier="automation.x"); ha_config_set_automation(identifier="automation.x", config_hash=current["config_hash"], config={...})
         - Disable: ha_config_set_automation(identifier="automation.x", enabled=False)
+        - Run now: ha_config_set_automation(identifier="automation.x", run_actions=True)
         - Take control: ha_config_set_automation(identifier="automation.x", take_control_of_blueprint=True)
 
         TAKE CONTROL is one-way: later blueprint edits stop reaching the
@@ -833,22 +835,23 @@ class AutomationConfigTools:
                 # wins, so it can still lock against a config it read itself.
                 config_hash = config_hash or taken.config_hash
 
-            enabled_only_response = await self._maybe_set_enabled_only(
+            runtime_only_response = await self._maybe_set_runtime_only(
                 identifier,
                 config,
                 python_transform,
                 category,
                 enabled,
+                run_actions,
                 wait,
             )
-            if enabled_only_response is not None:
+            if runtime_only_response is not None:
                 attach_skill_content(
-                    enabled_only_response,
+                    runtime_only_response,
                     MandatoryBPS=MandatoryBPS,
                     canonical_files=_AUTOMATION_SKILL_FILES,
                     referenced_files=bp_warnings.referenced_files,
                 )
-                return enabled_only_response
+                return runtime_only_response
 
             if python_transform is not None:
                 response, bp_warnings = await self._run_python_transform(
@@ -859,6 +862,7 @@ class AutomationConfigTools:
                     MandatoryBPS,
                     enabled,
                     wait,
+                    run_actions=run_actions,
                 )
                 return response
 
@@ -933,6 +937,7 @@ class AutomationConfigTools:
                 resolved_id,
                 detached_blueprint,
                 enabled,
+                run_actions=run_actions,
             )
 
         except ToolError as te:
@@ -1061,17 +1066,20 @@ class AutomationConfigTools:
         )
         return TakenControl(taken, blueprint_path, fetched_hash)
 
-    async def _maybe_set_enabled_only(
+    async def _maybe_set_runtime_only(
         self,
         identifier: str | None,
         config: Any,
         python_transform: str | None,
         category: str | None,
         enabled: bool | None,
+        run_actions: bool,
         wait: bool,
     ) -> dict[str, Any] | None:
-        """Handle a standalone runtime state request, if one was supplied."""
-        if enabled is None or config is not None or python_transform is not None:
+        """Handle a standalone runtime request (enabled / run_actions), if any."""
+        if (enabled is None and not run_actions) or (
+            config is not None or python_transform is not None
+        ):
             return None
         if category is not None:
             raise_tool_error(
@@ -1080,27 +1088,36 @@ class AutomationConfigTools:
                     "category requires a config update",
                     suggestions=[
                         "Pass config or python_transform when assigning a category",
-                        "Omit category for a standalone enabled state change",
+                        "Omit category for a standalone enabled or run_actions call",
                     ],
-                    context={"action": "set_enabled", "category": category},
+                    context={"action": "set_runtime", "category": category},
                 )
             )
-        return await self._set_enabled_only(identifier, enabled, wait)
+        return await self._set_runtime_only(
+            identifier, enabled, wait, run_actions=run_actions
+        )
 
-    async def _set_enabled_only(
-        self, identifier: str | None, enabled: bool, wait: bool
+    async def _set_runtime_only(
+        self,
+        identifier: str | None,
+        enabled: bool | None,
+        wait: bool,
+        *,
+        run_actions: bool = False,
     ) -> dict[str, Any]:
-        """Set an existing automation's runtime state without replacing config."""
+        """Apply enabled and/or run_actions to an existing automation, no config."""
+        action = "set_enabled" if enabled is not None else "run_actions"
         if not identifier:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "identifier is required when setting enabled without config",
+                    "identifier is required when setting enabled or run_actions "
+                    "without config",
                     suggestions=[
                         "Pass an automation entity_id or unique_id",
                         "Use ha_search(domain_filter='automation') to find automations",
                     ],
-                    context={"action": "set_enabled", "enabled": enabled},
+                    context={"action": action, "enabled": enabled},
                 )
             )
         entity_id = await self._resolve_automation_entity_id_strict(identifier)
@@ -1108,19 +1125,20 @@ class AutomationConfigTools:
             await self._raise_automation_not_found(identifier)
         response: dict[str, Any] = {
             "success": True,
-            "action": "set_enabled",
+            "action": action,
             "automation_id": entity_id,
         }
-        await self._apply_enabled_state(
+        await self._apply_runtime_state(
             response,
             entity_id,
             enabled,
             wait,
             identifier=identifier,
+            run_actions=run_actions,
         )
         return response
 
-    async def _apply_enabled_state(
+    async def _apply_runtime_state(
         self,
         response: dict[str, Any],
         entity_id: str | None,
@@ -1128,31 +1146,58 @@ class AutomationConfigTools:
         wait: bool,
         *,
         identifier: str | None = None,
+        run_actions: bool = False,
     ) -> str | None:
-        """Turn the automation on or off without touching its stored config.
+        """Apply enabled and then run_actions without touching the stored config.
 
-        Resolves ``entity_id`` from ``identifier`` when it is None. On the
-        standalone ``set_enabled`` action a service failure raises a ToolError;
-        after a config write it is reported as a partial-success warning, since
-        the write itself already landed. Returns the resolved entity_id.
+        Resolves ``entity_id`` from ``identifier`` when it is None. On a
+        standalone call a service failure raises a ToolError; after a config
+        write it is reported as a partial-success warning, since the write
+        itself already landed. Returns the resolved entity_id.
         """
-        if enabled is None:
+        if enabled is None and not run_actions:
             return entity_id
         if entity_id is None and identifier:
-            entity_id = await _resolve_enabled_target(
+            entity_id = await _resolve_runtime_target(
                 self._client, identifier, response
             )
         if entity_id is None:
-            response["enabled_requested"] = enabled
-            response["enabled_applied"] = False
+            retry_args: list[str] = []
+            if enabled is not None:
+                response["enabled_requested"] = enabled
+                response["enabled_applied"] = False
+                retry_args.append(f"enabled={enabled}")
+            if run_actions:
+                response["actions_triggered"] = False
+                retry_args.append("run_actions=True")
             retry_id = identifier or response.get("unique_id") or "<automation id>"
             response.setdefault("warnings", []).append(
                 "Automation was written, but its entity_id could not be resolved; "
-                "the requested enabled state was not applied. Retry with "
+                "the requested runtime change was not applied. Retry with "
                 f"ha_config_set_automation(identifier='{retry_id}', "
-                f"enabled={enabled}) once the automation is loaded."
+                f"{', '.join(retry_args)}) once the automation is loaded."
             )
             return None
+        if enabled is not None:
+            await self._apply_enabled_state(
+                response, entity_id, enabled, wait, identifier=identifier
+            )
+        if run_actions:
+            await self._run_automation_actions(
+                response, entity_id, identifier=identifier
+            )
+        return entity_id
+
+    async def _apply_enabled_state(
+        self,
+        response: dict[str, Any],
+        entity_id: str,
+        enabled: bool,
+        wait: bool,
+        *,
+        identifier: str | None = None,
+    ) -> None:
+        """Turn the resolved automation on or off, then optionally verify it."""
         try:
             await _set_automation_enabled(self._client, entity_id, enabled)
         except (
@@ -1160,7 +1205,7 @@ class AutomationConfigTools:
             HomeAssistantAuthError,
             HomeAssistantConnectionError,
         ) as exc:
-            if response.get("action") == "set_enabled":
+            if response.get("action") in _STANDALONE_RUNTIME_ACTIONS:
                 exception_to_structured_error(
                     exc,
                     context={
@@ -1181,12 +1226,48 @@ class AutomationConfigTools:
                 "Automation config was written, but the requested enabled state "
                 f"could not be applied: {exc}"
             )
-            return entity_id
+            return
         response["enabled"] = enabled
         response["enabled_applied"] = True
         if wait:
             await self._verify_enabled_state(response, entity_id, enabled)
-        return entity_id
+
+    async def _run_automation_actions(
+        self,
+        response: dict[str, Any],
+        entity_id: str,
+        *,
+        identifier: str | None = None,
+    ) -> None:
+        """Run the automation's actions now via automation.trigger."""
+        try:
+            await self._client.call_service(
+                "automation", "trigger", {"entity_id": entity_id}
+            )
+        except (
+            HomeAssistantAPIError,
+            HomeAssistantAuthError,
+            HomeAssistantConnectionError,
+        ) as exc:
+            if response.get("action") in _STANDALONE_RUNTIME_ACTIONS:
+                exception_to_structured_error(
+                    exc,
+                    context={
+                        "action": "run_actions",
+                        "identifier": identifier,
+                        "entity_id": entity_id,
+                    },
+                )
+            logger.warning(
+                "Actions not run for %s after config write: %s", entity_id, exc
+            )
+            response["actions_triggered"] = False
+            response.setdefault("warnings", []).append(
+                "Automation config was written, but its actions could not be "
+                f"run: {exc}"
+            )
+            return
+        response["actions_triggered"] = True
 
     async def _verify_enabled_state(
         self, response: dict[str, Any], entity_id: str, enabled: bool
@@ -1220,6 +1301,8 @@ class AutomationConfigTools:
         MandatoryBPS: bool,
         enabled: bool | None,
         wait: bool,
+        *,
+        run_actions: bool = False,
     ) -> tuple[dict[str, Any], BestPracticeCheckResult]:
         """Execute python_transform mode and return (response, bp_warnings)."""
         if not identifier:
@@ -1292,13 +1375,19 @@ class AutomationConfigTools:
         # storage key; thread it so the upsert skips the redundant re-resolve
         # (issue #1813 Phase 0). Fall back to the raw identifier if the fetched
         # body carried no ``id`` (not expected for a real automation).
-        async with automation_reload_waiter(
-            self._client, enabled=enabled is not None
+        runtime_requested = enabled is not None or run_actions
+        async with config_reload_waiter(
+            self._client, "automation_reloaded", enabled=runtime_requested
         ) as wait_for_reload:
             result = await self._upsert_automation(
                 transformed_config, identifier, resolved_id
             )
-            _note_reload_outcome(result, await wait_for_reload(), enabled)
+            note_reload_outcome(
+                result,
+                await wait_for_reload(),
+                domain="automation",
+                requested=runtime_requested,
+            )
         for warning in conflict_warnings:
             result.setdefault("warnings", []).append(warning)
         refetched = await self._get_automation_config_internal(identifier)
@@ -1317,12 +1406,13 @@ class AutomationConfigTools:
                 "automation",
             )
 
-        entity_id = await self._apply_enabled_state(
+        entity_id = await self._apply_runtime_state(
             result,
             entity_id,
             enabled,
             wait,
             identifier=identifier or result.get("unique_id"),
+            run_actions=run_actions,
         )
         _sync_post_write_automation_result(result, entity_id)
 
@@ -1358,6 +1448,8 @@ class AutomationConfigTools:
         resolved_id: str | None = None,
         detached_blueprint: str | None = None,
         enabled: bool | None = None,
+        *,
+        run_actions: bool = False,
     ) -> dict[str, Any]:
         """Execute config-replacement mode and return the tool response.
 
@@ -1371,18 +1463,24 @@ class AutomationConfigTools:
         is threaded to the upsert so it skips the redundant
         re-resolve; None falls back to resolving inside the REST client.
         """
-        async with automation_reload_waiter(
-            self._client, enabled=enabled is not None
+        runtime_requested = enabled is not None or run_actions
+        async with config_reload_waiter(
+            self._client, "automation_reloaded", enabled=runtime_requested
         ) as wait_for_reload:
             result = await self._upsert_automation(config_dict, identifier, resolved_id)
-            _note_reload_outcome(result, await wait_for_reload(), enabled)
+            note_reload_outcome(
+                result,
+                await wait_for_reload(),
+                domain="automation",
+                requested=runtime_requested,
+            )
 
         for warning in conflict_warnings or []:
             result.setdefault("warnings", []).append(warning)
 
         post_write_identifier = identifier or result.get("unique_id")
         # A create already polled for the entity inside the upsert; with wait=True
-        # the resolver below polls again. Either way, _apply_enabled_state must
+        # the resolver below polls again. Either way, _apply_runtime_state must
         # not start a further poll of its own.
         entity_already_polled = wait or bool(result.get("entity_not_verified"))
         entity_id = await _resolve_post_write_automation_entity(
@@ -1430,12 +1528,13 @@ class AutomationConfigTools:
                 "automation",
             )
 
-        entity_id = await self._apply_enabled_state(
+        entity_id = await self._apply_runtime_state(
             result,
             entity_id,
             enabled,
             wait,
             identifier=None if entity_already_polled else post_write_identifier,
+            run_actions=run_actions,
         )
         _sync_post_write_automation_result(result, entity_id)
 

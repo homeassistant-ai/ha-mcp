@@ -1,10 +1,11 @@
-"""Runtime on/off control through ha_config_set_automation(enabled=...) (#2404)."""
+"""Runtime control through ha_config_set_automation(enabled=..., run_actions=...)."""
 
 from uuid import uuid4
 
 import pytest
 
 from ...utilities.assertions import MCPAssertions
+from ...utilities.wait_helpers import wait_for_tool_result
 
 
 def _config(identifier: str, **extra: object) -> dict[str, object]:
@@ -117,3 +118,51 @@ async def test_python_transform_cannot_store_enabled(mcp_client, cleanup_tracker
         "ha_config_get_automation", {"identifier": identifier}
     )
     assert after["config_hash"] == before["config_hash"]
+
+
+async def _last_triggered_after(mcp_client, entity_id: str, previous: object) -> object:
+    """Wait for the automation's last_triggered attribute to move past ``previous``."""
+    data = await wait_for_tool_result(
+        mcp_client,
+        tool_name="ha_get_state",
+        arguments={"entity_id": entity_id, "fields": ["attributes"]},
+        predicate=lambda d: (
+            d.get("data", {}).get("attributes", {}).get("last_triggered")
+            not in (None, previous)
+        ),
+        description=f"{entity_id} last_triggered moves past {previous!r}",
+    )
+    return data["data"]["attributes"]["last_triggered"]
+
+
+@pytest.mark.automation
+async def test_run_actions_standalone_and_after_write(mcp_client, cleanup_tracker):
+    """run_actions runs the automation now, alone or after a config write."""
+    mcp = MCPAssertions(mcp_client)
+    identifier = f"runtime_enabled_{uuid4().hex}"
+    cleanup_tracker.track("automation", identifier)
+    config = _config(identifier)
+
+    created = await mcp.call_tool_success(
+        "ha_config_set_automation", {"identifier": identifier, "config": config}
+    )
+    entity_id = created["automation_id"]
+
+    ran = await mcp.call_tool_success(
+        "ha_config_set_automation", {"identifier": identifier, "run_actions": True}
+    )
+    assert ran["action"] == "run_actions"
+    assert ran["actions_triggered"] is True
+    first = await _last_triggered_after(mcp_client, entity_id, None)
+
+    updated = await mcp.call_tool_success(
+        "ha_config_set_automation",
+        {
+            "identifier": identifier,
+            "config": {**config, "description": "changed"},
+            "run_actions": True,
+        },
+    )
+    assert updated["actions_triggered"] is True
+    assert not any("automation reload" in w for w in updated.get("warnings", []))
+    await _last_triggered_after(mcp_client, entity_id, first)
