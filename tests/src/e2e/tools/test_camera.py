@@ -22,7 +22,7 @@ from tests.src.e2e.utilities.assertions import (
 # The info text: format (plus the served dimensions when the payload header
 # parses) and the retrieval timestamp in HA local time with UTC offset.
 INFO_TEXT_RE = re.compile(
-    r"Camera snapshot \((JPEG|PNG|GIF)(, \d+x\d+)?\. Retrieved: "
+    r"Camera snapshot \((JPEG|PNG|GIF)(, \d+x\d+)?\)\. Retrieved: "
     r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}"
 )
 
