@@ -420,9 +420,9 @@ def _validate_enabled_constraint(
                 )
                 suggestions = [
                     "Use ha_config_set_automation(identifier=..., enabled=...) to "
-                    "disable the automation (keeps it visible and manageable)",
+                    + "disable the automation (keeps it visible and manageable)",
                     "Use ha_config_set_automation(identifier=..., enabled=True) to "
-                    "re-enable it later",
+                    + "re-enable it later",
                     "ha_set_entity(enabled=False) is for registry-level disable — it fully hides the entity",
                 ]
             raise_tool_error(

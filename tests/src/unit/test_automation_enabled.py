@@ -122,6 +122,43 @@ async def test_set_automation_enabled_routes_false_to_turn_off() -> None:
 
 @pytest.mark.unit
 @pytest.mark.anyio
+async def test_config_update_waits_for_reregistration_when_wait_false(
+    monkeypatch,
+) -> None:
+    client = _FakeClient()
+    tools = tools_config_automations.AutomationConfigTools(client)
+    discovered: list[str] = []
+
+    async def wait_for_unique_id(client, identifier):
+        discovered.append(identifier)
+        return "automation.actual"
+
+    monkeypatch.setattr(
+        tools_config_automations,
+        "wait_for_automation_entity_by_unique_id",
+        wait_for_unique_id,
+    )
+
+    result = await tools._run_config_update(
+        {"alias": "Morning", "triggers": [], "actions": []},
+        "stored-id",
+        None,
+        False,
+        tools_config_automations.BestPracticeCheckResult(),
+        {},
+        False,
+        enabled=False,
+    )
+
+    assert discovered == ["stored-id"]
+    assert result["enabled_applied"] is True
+    assert client.calls == [
+        ("automation", "turn_off", {"entity_id": "automation.actual"})
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
 async def test_config_update_reports_resolved_entity_id_when_upsert_omits_it() -> None:
     client = _FakeClient()
     client.states = [

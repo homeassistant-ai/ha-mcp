@@ -368,6 +368,19 @@ async def _resolve_post_write_automation_entity(
     return entity_id
 
 
+async def _resolve_enabled_target(
+    client: Any, identifier: str, response: dict[str, Any]
+) -> str | None:
+    """Resolve the entity to receive a runtime enabled-state change."""
+    if identifier.startswith("automation."):
+        return identifier
+    # HA re-registers the entity on every config write, so a single lookup
+    # can miss it even when the caller passed wait=False.
+    return await _resolve_post_write_automation_entity(
+        client, identifier, None, True, response
+    )
+
+
 def _sync_post_write_automation_result(
     response: dict[str, Any], entity_id: str | None
 ) -> None:
@@ -387,7 +400,7 @@ def _reject_enabled_in_config(config: Any) -> None:
                 "automation config key",
                 suggestions=[
                     "Remove 'enabled' from config and pass enabled=True or False "
-                    "to ha_config_set_automation",
+                    + "to ha_config_set_automation",
                     "Use enabled=None to leave the current runtime state unchanged",
                 ],
                 context={"action": "set", "invalid_key": "enabled"},
@@ -1272,7 +1285,9 @@ class AutomationConfigTools:
         if enabled is None:
             return entity_id
         if entity_id is None and identifier:
-            entity_id = await self._resolve_automation_entity_id(identifier)
+            entity_id = await _resolve_enabled_target(
+                self._client, identifier, response
+            )
         if entity_id is None:
             response.setdefault("warnings", []).append(
                 "Automation was written, but its entity_id could not be resolved; "
