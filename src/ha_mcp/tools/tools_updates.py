@@ -892,7 +892,10 @@ class UpdateTools:
                 )
             )
         ignore = action == "ignore_repair"
-        known = await self._known_repair_keys()
+        # list_issues omits inactive issues, which the registry keeps (ignored
+        # ones included) across a restart; un-ignoring those must still reach
+        # Home Assistant, so only ignore is checked against the active list.
+        known = await self._known_repair_keys() if ignore else None
         results: list[dict[str, Any]] = []
         succeeded = 0
         for item in items:

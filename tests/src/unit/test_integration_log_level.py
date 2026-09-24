@@ -39,6 +39,8 @@ async def test_sets_level_like_the_integration_page(level: str, sent: str) -> No
     assert result["action"] == "set_log_level"
     assert result["domain"] == "zha"
     assert result["log_level"] == level
+    # NOTSET clears the override; it does not restore a configuration.yaml level.
+    assert ("inherited" in result["note"]) is (level == "DEFAULT")
 
 
 @pytest.mark.unit

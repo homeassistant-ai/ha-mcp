@@ -1224,12 +1224,7 @@ class ServiceTools:
     ) -> NoReturn:
         """Raise a structured ToolError for an unexpected ha_call_service failure."""
         suggestions = _build_service_suggestions(domain, service, entity_id)
-        if entity_id and entity_id.startswith("automation."):
-            suggestions.append(
-                "To run an automation now: "
-                f"ha_config_set_automation(identifier='{entity_id}', run_actions=True)"
-            )
-        elif entity_id:
+        if entity_id:
             suggestions.append(
                 f"For universal control: ha_call_service('homeassistant', 'toggle', entity_id='{entity_id}')"
             )

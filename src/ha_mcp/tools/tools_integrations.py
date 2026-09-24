@@ -1943,7 +1943,9 @@ class IntegrationTools:
                     "page's Enable/Disable debug logging: pass the integration "
                     "with 'domain' (no config flow runs) or 'entry_id', and "
                     "nothing else. Lasts through the next Home Assistant "
-                    "restart. DEFAULT returns to the configured level."
+                    "restart. DEFAULT clears the override: the integration then "
+                    "logs at the inherited default level, and a level set for it "
+                    "in configuration.yaml returns only after a restart."
                 ),
             ),
         ] = None,
@@ -2167,7 +2169,13 @@ class IntegrationTools:
             "action": "set_log_level",
             "domain": domain,
             "log_level": log_level,
-            "note": "Applies now and through the next Home Assistant restart.",
+            "note": (
+                "Override cleared: the integration now logs at the inherited "
+                "default level; a level set for it in configuration.yaml returns "
+                "after the next restart."
+                if log_level == "DEFAULT"
+                else "Applies now and through the next Home Assistant restart."
+            ),
         }
 
     async def _set_entry_enabled(self, entry_id: str, enabled: bool) -> dict[str, Any]:

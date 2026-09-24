@@ -27,7 +27,8 @@ def _client(*replies: dict[str, Any]) -> MagicMock:
     ("action", "ignore"), [("ignore_repair", True), ("unignore_repair", False)]
 )
 async def test_sets_ignored_flag_on_listed_issue(action: str, ignore: bool) -> None:
-    client = _client(_LISTED, {"success": True, "result": None})
+    ok = {"success": True, "result": None}
+    client = _client(_LISTED, ok) if ignore else _client(ok)
 
     result = await UpdateTools(client).ha_manage_updates(
         action=action, repairs=[{"domain": "sun", "issue_id": "abc"}]
@@ -120,3 +121,23 @@ async def test_malformed_repairs_are_rejected(repairs: Any) -> None:
 def test_repair_actions_are_writes_in_read_only_mode(action: str) -> None:
     exemption = READ_ONLY_EXEMPT_TOOLS["ha_manage_updates"]
     assert exemption.blocked_write({"action": action}) is not None
+
+
+@pytest.mark.unit
+async def test_unignore_reaches_issues_missing_from_the_active_list() -> None:
+    """An inactive issue is absent from list_issues but still un-ignorable."""
+    client = _client({"success": True, "result": None})
+
+    result = await UpdateTools(client).ha_manage_updates(
+        action="unignore_repair", repairs=[{"domain": "sun", "issue_id": "inactive"}]
+    )
+
+    assert result["success"] is True
+    client.send_websocket_message.assert_awaited_once_with(
+        {
+            "type": "repairs/ignore_issue",
+            "domain": "sun",
+            "issue_id": "inactive",
+            "ignore": False,
+        }
+    )

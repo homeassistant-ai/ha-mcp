@@ -14,8 +14,17 @@ from ...utilities.assertions import MCPAssertions
 
 
 @pytest.mark.updates
-@pytest.mark.parametrize("action", ["ignore_repair", "unignore_repair"])
-async def test_unknown_repair_is_reported_not_found(mcp_client, action):
+@pytest.mark.parametrize(
+    ("action", "code"),
+    [
+        # ignore is checked against the active issue list first.
+        ("ignore_repair", "RESOURCE_NOT_FOUND"),
+        # unignore goes straight to Home Assistant, which also knows inactive
+        # issues, and refuses an issue its registry does not have.
+        ("unignore_repair", "SERVICE_CALL_FAILED"),
+    ],
+)
+async def test_unknown_repair_is_reported_per_item(mcp_client, action, code):
     mcp = MCPAssertions(mcp_client)
     issue_id = f"missing_{uuid4().hex[:12]}"
 
@@ -26,7 +35,7 @@ async def test_unknown_repair_is_reported_not_found(mcp_client, action):
 
     assert result["requested"] == 1
     assert result["failed"] == 1
-    assert result["results"][0]["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert result["results"][0]["error"]["code"] == code
 
 
 @pytest.mark.updates
