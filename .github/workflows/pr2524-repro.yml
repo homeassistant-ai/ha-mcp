@@ -1,0 +1,34 @@
+name: PR 2524 release regression
+on:
+  push:
+    branches: [test/pr-2524-release-errors]
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: kingpanther13/ha-mcp-fork
+          ref: 342f1d47380a268b6b4e0c941b1f516879a5b030
+          path: subject
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: '3.13'
+      - name: Install dependencies and regression test
+        working-directory: subject
+        run: |
+          uv sync --all-extras --dev
+          cp ../harness/tests/src/unit/test_websocket_late_release.py tests/src/unit/
+      - name: Run regression against PR head
+        working-directory: subject
+        env:
+          HA_MCP_CONFIG_DIR: /tmp/ha-mcp-pr2524
+        run: uv run pytest tests/src/unit/test_websocket_late_release.py -v --tb=short --maxfail=0
