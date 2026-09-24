@@ -1294,13 +1294,25 @@ class HomeAssistantWebSocketClient:
         task.add_done_callback(self._late_release_done)
 
     def _late_release_done(self, task: asyncio.Task[None]) -> None:
-        """Collect detached cleanup failures just as ``_run_cleanup`` does."""
+        """Collect cleanup outcomes while keeping unexpected failures visible."""
         self._late_releases.discard(task)
         if task.cancelled():
             return
         error = task.exception()
-        if error is not None:
+        if isinstance(
+            error,
+            (
+                HomeAssistantConnectionError,
+                HomeAssistantCommandTimeout,
+                websockets.exceptions.ConnectionClosed,
+            ),
+        ):
             logger.debug("Background subscription release failed: %s", error)
+        elif error is not None:
+            logger.error(
+                "Unexpected background subscription release failure",
+                exc_info=(type(error), error, error.__traceback__),
+            )
 
     async def _finish_release(self, subscription_id: int, socket: Any) -> None:
         """Complete a release the cleanup deadline cut short, on the same socket.
