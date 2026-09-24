@@ -1,0 +1,688 @@
+name: PR 2524 non-E2E preflight
+on:
+  push:
+    branches: [test/pr-2524-non-e2e]
+permissions:
+  contents: read
+
+env:
+  PREFLIGHT_BASE_REF: master
+  PYTHON_VERSION: "3.13"
+  UV_CACHE_DIR: /tmp/.uv-cache
+  # renovate: datasource=docker depName=ghcr.io/home-assistant/home-assistant
+  HA_IMAGE_GHCR: "ghcr.io/home-assistant/home-assistant:2026.9.3"
+  # Disable Testcontainers' Ryuk reaper: it has been reported to leave
+  # zombie containers on GHA runners (see #366, Ilya0527 2026-05-18).
+  # The E2E fixture in tests/src/e2e/conftest.py relies instead on the
+  # enclosing ``with container:`` context manager — Python guarantees
+  # its ``__exit__`` fires on both normal and exception flows, so the
+  # Ryuk safety net is not needed for deterministic cleanup. Refs #366.
+  TESTCONTAINERS_RYUK_DISABLED: "true"
+
+jobs:
+  component-version-gate:
+    name: Component Version Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: f7e11768cd7b5cd18c18ce59ea31645fbb322ee2
+          persist-credentials: false
+      - name: Fail component changes riding an already-released version
+        env:
+          BASE_REF: master
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! git fetch --depth=1 origin "$BASE_REF" \
+            || ! base_sha=$(git rev-parse "origin/$BASE_REF"); then
+            echo "::warning::could not resolve the base ref - skipping the version gate (the release-time backstop still applies)"
+            exit 0
+          fi
+          if git diff --quiet "$base_sha" HEAD -- custom_components/ha_mcp_tools; then
+            echo "no component changes - gate not applicable"
+            exit 0
+          fi
+          VER=$(python3 -c "import json; print(json.load(open('custom_components/ha_mcp_tools/manifest.json'))['version'])")
+          if ! latest=$(gh api repos/homeassistant-ai/ha-mcp-integration/releases/latest --jq .tag_name); then
+            echo "::warning::could not read the mirror's latest stable release - skipping the version gate (the release-time backstop still applies)"
+            exit 0
+          fi
+          stable="${latest#v}"
+          echo "component changed; manifest=${VER} released-stable=${stable}"
+          # Strict version comparison, not equality: a version BEHIND the
+          # released stable (a stale tree or bad merge resurrecting an old
+          # manifest) must fail here too, not slip through to a late
+          # release-time failure. sort -V gives semver ordering; both inputs
+          # come from our own manifest / release automation.
+          if [ "$VER" = "$stable" ]; then
+            verdict=equal
+          elif [ "$(printf '%s\n%s\n' "$stable" "$VER" | sort -V | tail -1)" = "$VER" ]; then
+            verdict=ahead
+          else
+            verdict=behind
+          fi
+          case "$verdict" in
+            ahead)
+              echo "version gate ok: pending ${VER} is strictly ahead of released ${stable}" ;;
+            equal)
+              echo "::error::This PR changes custom_components/ha_mcp_tools but keeps the component version at ${VER}, which is already released as the mirror's latest stable - merged this way the changes never ship (the stable tag step skips existing tags; dev pre-release tags sort below the equal stable). Master is level with stable: bump manifest.json + const.py (and the parity-test literal) once to open the next pending version, per docs/agents/custom-component.md#version-cycle."
+              exit 1 ;;
+            behind)
+              echo "::error::This PR changes custom_components/ha_mcp_tools with version ${VER}, which is BEHIND the mirror's released stable ${stable} - a stale tree or bad merge resurrected an old version. Restore the version to lead the released stable per docs/agents/custom-component.md#version-cycle."
+              exit 1 ;;
+          esac
+
+  fast-checks:
+    name: Fast Checks
+    runs-on: ubuntu-latest
+    # 15 covers the serial worst case: two Docker image pulls (~1 min), one
+    # `uv sync --dev`, the HA-constraints fetch budget (3 x 10s + backoff,
+    # sized in tests/src/unit/test_ha_constraint_alignment.py — the fetch must
+    # exit on its own code, never as an opaque runner kill), and the four
+    # linters. Observed full-lane time: ~1.5 min; the headroom is for cold
+    # caches and slow image pulls.
+    timeout-minutes: 15
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        ref: f7e11768cd7b5cd18c18ce59ea31645fbb322ee2
+        persist-credentials: false
+
+    - name: Docs Size Check
+      run: |
+        max_chars=16000
+        max_lines=200
+        chars=$(LC_ALL=C.UTF-8 wc -m < AGENTS.md)
+        lines=$(wc -l < AGENTS.md)
+        if [ "$chars" -gt "$max_chars" ] || [ "$lines" -gt "$max_lines" ]; then
+          echo "::error file=AGENTS.md::AGENTS.md is ${chars} Unicode characters and ${lines} lines; keep the canonical startup guidance at or below ${max_chars} characters and ${max_lines} lines, and move scoped detail to linked documents."
+          exit 1
+        fi
+
+    - name: HACS validation
+      if: success() || failure()
+      uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa # main
+      with:
+        category: integration
+
+    # Drop vendored third-party fixtures (e.g. the upstream HACS integration
+    # used as an e2e fixture) so hassfest only validates integrations this repo
+    # owns. Mirrors scripts/codeql_quality_gate.py's PATHS_IGNORE convention.
+    # Restored right after Hassfest so the later checks see the tracked tree
+    # again (a fresh CI checkout holds nothing untracked here).
+    - name: Remove vendored test fixtures
+      if: success() || failure()
+      run: rm -rf tests/initial_test_state
+
+    - name: Hassfest
+      if: success() || failure()
+      uses: home-assistant/actions/hassfest@58bff37c8947f690ace498be413a9b78d6f30f93 # master
+
+    - name: Restore vendored test fixtures
+      # The restore must be verified: the fixture tree holds 59 tracked .py
+      # files that ast-grep and the changed-files format check walk, so a
+      # silently failed restore would stamp green checks on a reduced file set.
+      if: success() || failure()
+      run: |
+        git checkout HEAD -- tests/initial_test_state
+        if ! git diff --quiet HEAD -- tests/initial_test_state; then
+          echo "::error::tests/initial_test_state was not fully restored; the lint steps below would silently skip its files"
+          exit 1
+        fi
+
+    - name: Install uv
+      # Pinned, not "latest": the folded jobs got uv from the Renovate-pinned
+      # container image, and `uv lock --check` is sensitive to the uv version.
+      # renovate.json groups this github-releases pin with the unit-tests
+      # job's container image tag (group "uv"), so both move in one Renovate
+      # PR and cannot drift apart.
+      if: success() || failure()
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      with:
+        # renovate: datasource=github-releases depName=astral-sh/uv
+        version: "0.12.15"
+
+    - name: Set up Python
+      if: success() || failure()
+      run: uv python install ${{ env.PYTHON_VERSION }}
+
+    - name: Verify uv.lock is in sync with pyproject.toml
+      if: success() || failure()
+      run: uv lock --check
+
+    - name: Check dependency alignment with HA core constraints
+      if: success() || failure()
+      # Mechanical link to HA's own package_constraints.txt (#2135/#2146):
+      # where HA pins a shared dependency exactly, ha-mcp must admit the pin;
+      # where HA is loose, ha-mcp must not pin exactly (an exact pin forces
+      # pip to replace the image-shipped copy in place — the torn-install
+      # window). Check the current E2E image AND the HACS minimum: a Core
+      # image update must not silently strand users on the supported floor.
+      # This is direct-dependency coverage at the endpoints. Existing current
+      # Core/beta E2E lanes cover actual installs and runtime compatibility.
+      # Rules unit-tested offline in
+      # tests/src/unit/test_ha_constraint_alignment.py.
+      #
+      # Exit codes are load-bearing: 1 is a real drift violation and fails
+      # the job; 78 means HA's constraints file was UNREACHABLE, which is an
+      # outage on someone else's server and must not red-light every open PR
+      # — it warns and passes, the same fail-open the component-version gate
+      # above uses when the mirror API is unreadable. Every other code
+      # (including argparse's 2 for a usage error, uv's own 2, and a 4xx
+      # meaning the constraints file moved) fails the job: those are our
+      # problems, and failing open on them would leave this gate green
+      # forever while it checked nothing.
+      run: |
+        minimum=$(python3 -c 'import json; print(json.load(open("hacs.json"))["homeassistant"])')
+        [[ "$minimum" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]+$ ]]
+        failed=0
+        for ha_version in "${HA_IMAGE_GHCR##*:}" "$minimum"; do
+          status=0
+          uv run --no-project --with packaging python \
+            scripts/check_ha_constraint_alignment.py \
+            --ha-version "$ha_version" || status=$?
+          if [ "$status" -eq 78 ]; then
+            echo "::warning::could not reach HA ${ha_version} constraints - dependency alignment for this version was not verified"
+          elif [ "$status" -ne 0 ]; then
+            failed=1
+          fi
+        done
+        exit "$failed"
+
+    - name: Install dependencies
+      # One install for ruff, ast-grep and mypy. The three folded jobs each ran
+      # their own; this is where most of the fold's wall-clock saving comes from.
+      if: success() || failure()
+      run: uv sync --dev
+
+    - name: Run ruff check
+      if: success() || failure()
+      run: uv run ruff check src/ tests/ custom_components/ homeassistant-addon/ homeassistant-addon-webhook-proxy/ homeassistant-addon-webhook-proxy-dev/ packaging/ scripts/
+
+    - name: Run ruff format check on changed Python files
+      if: success() || failure()
+      run: |
+        # Changed-files-only gate per the maintainer call on issue #1318:
+        # new edits must be formatted; pre-existing format-debt on
+        # untouched files stays grandfathered. Avoids the disruption of a
+        # repo-wide sweep while still preventing fresh debt from landing.
+        if [ -z "${PREFLIGHT_BASE_REF}" ]; then
+          echo "::notice::no PR base ref (workflow_dispatch) - the ruff format check did not run"
+          exit 0
+        fi
+        git fetch --depth=1 origin "${PREFLIGHT_BASE_REF}"
+        base_sha=$(git rev-parse "origin/${PREFLIGHT_BASE_REF}")
+        changed_py=$(git diff --name-only --diff-filter=ACMR "${base_sha}" -- '*.py')
+        if [ -z "$changed_py" ]; then
+          echo "::notice::no Python files changed - the ruff format check did not run"
+          exit 0
+        fi
+        count=$(echo "$changed_py" | wc -l)
+        echo "Checking ruff format on $count changed Python files:"
+        echo "$changed_py" | sed 's/^/  /'
+        echo "$changed_py" | xargs uv run ruff format --check
+
+    - name: Run ast-grep
+      if: success() || failure()
+      run: uv run ast-grep scan
+
+    - name: Run mypy
+      if: success() || failure()
+      # Accumulate, don't abort: under the default `bash -e` the first failing
+      # invocation would hide the other trees' errors — the same failure mode
+      # the per-step `if:` guards exist to prevent, one level down.
+      run: |
+        status=0
+        uv run mypy src/ custom_components/ homeassistant-addon/ scripts/ || status=1
+        uv run mypy homeassistant-addon-webhook-proxy/ || status=1
+        uv run mypy homeassistant-addon-webhook-proxy-dev/ || status=1
+        exit "$status"
+
+  # Anchors the docs-site accessibility work (#1574/#1595): astro check (types
+  # + a11y diagnostics), eslint-plugin-astro + jsx-a11y, and an axe-core audit
+  # over the built pages — all blocking. The baseline is clean, so any
+  # regression fails the PR.
+  site-checks:
+    name: Site (astro check + eslint a11y)
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: site
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        ref: f7e11768cd7b5cd18c18ce59ea31645fbb322ee2
+        persist-credentials: false
+
+    - name: Setup Node
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      with:
+        # Corepack is bundled only through Node 24; `corepack npm ci` enforces packageManager.
+        node-version: "22"
+        cache: npm
+        cache-dependency-path: site/package-lock.json
+
+    - name: Install dependencies
+      run: corepack npm ci
+
+    - name: Astro type & diagnostics check
+      run: npm run check
+
+    - name: ESLint (eslint-plugin-astro + jsx-a11y)
+      run: npm run lint
+
+    - name: Build site
+      run: npm run build
+
+    - name: Accessibility audit (axe-core)
+      # Blocking: the baseline is clean (0 violations across all pages), so a
+      # new axe-core violation fails the PR rather than slipping through.
+      run: npm run audit:a11y
+
+  # Fast unit tests (no Docker, no HA instance needed)
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    container:
+      # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
+      image: ghcr.io/astral-sh/uv:0.12.17-python3.13-trixie-slim
+    # Bumped 5 → 8 for the issue #2027 regression tests, which spawn real
+    # subprocesses — including a full stdio server session — costing tens
+    # of seconds on a slow runner. 8 → 10 after #2360: pytest alone is ~3.6
+    # min and the `npm ci` step swung from 1s to 4 min during an npm registry
+    # incident, so 8 left no room for one slow install.
+    timeout-minutes: 10
+
+    steps:
+    - name: Restore apt download cache
+      # Cache apt downloads used by this containerized job.
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: /var/cache/apt/archives
+        key: apt-trixie-git-jq-v1
+
+    - name: Install git and jq for workflow contract tests
+      run: |
+        # Keep cached .debs after install so the cache stays warm for
+        # future runs (default Debian behaviour deletes them).
+        rm -f /etc/apt/apt.conf.d/docker-clean
+        echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
+          > /etc/apt/apt.conf.d/keep-downloaded
+        apt-get update -qq
+        apt-get install -y -qq git jq >/dev/null
+
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        ref: f7e11768cd7b5cd18c18ce59ea31645fbb322ee2
+        persist-credentials: false
+        submodules: true
+
+    - name: Set up Node.js
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      with:
+        # Corepack is bundled only through Node 24; `corepack npm ci` enforces packageManager.
+        node-version: "24"
+        cache: npm
+        cache-dependency-path: tests/js/package-lock.json
+
+    - name: Install Python dependencies
+      run: uv sync --all-extras --dev
+
+    - name: Install JS test dependencies (jsdom, esbuild)
+      # `npm ci` enforces package-lock.json — same reproducibility
+      # discipline as uv.lock on the Python side. setup-node caches npm's
+      # download cache; node_modules is intentionally recreated by npm ci.
+      run: cd tests/js && corepack npm ci
+
+    - name: Run unit tests
+      run: uv run pytest tests/src/unit/ -n auto --tb=short -v
+
+    - name: Run add-on structure tests
+      # tests/addon/ validates add-on packaging / config.yaml structure (e.g.
+      # the backup-filename-safe name guard, #1707) — previously these ran
+      # nowhere in CI. Excludes test_addon_startup.py, which spins up real
+      # Docker containers (testcontainers) this lint/unit runner doesn't have.
+      run: >-
+        uv run pytest tests/addon/ -n auto --tb=short -v
+        --ignore=tests/addon/test_addon_startup.py
+
+  # Comprehensive E2E validation for all PRs
+  docker-validation:
+    name: Docker & Add-on Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        ref: f7e11768cd7b5cd18c18ce59ea31645fbb322ee2
+        persist-credentials: false
+        submodules: true
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      with:
+        cache-binary: true
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      with:
+        # renovate: datasource=github-releases depName=astral-sh/uv
+        version: "0.12.15"
+
+    - name: Set up Python
+      run: uv python install ${{ env.PYTHON_VERSION }}
+
+    - name: Install test dependencies
+      run: uv sync --dev
+
+    - name: Run add-on tests
+      run: uv run pytest tests/addon/ --ignore=tests/addon/test_skills_config.py --tb=short -v
+
+    - name: Validate docker-compose configuration
+      run: uv run pytest tests/test_docker/test_docker_compose.py -v
+
+    - name: Build and test standalone Docker image
+      run: uv run pytest tests/test_docker/test_docker_build.py -v
+  code-quality-gate:
+    name: CodeQL Gate
+    runs-on: ubuntu-latest
+    # BACKSTOP ONLY, and it must never be the cap that fires. A JOB cap
+    # "automatically cancels" the job (workflow-syntax docs), and a cancelled
+    # run skips every `success() || failure()` step, so a job cap that fired
+    # first would take the second language's report down with it. A STEP cap
+    # instead kills only that step's process ("killing the process"), so the
+    # step FAILS, `failure()` stays true, and the later steps still report.
+    #
+    # That only holds if EVERY step is capped and this number exceeds their
+    # sum - otherwise the uncapped steps eat the margin and the job cap
+    # becomes the binding constraint after all. Every step below therefore
+    # carries a budget; they total 57. The 3 minutes of slack cover what
+    # cannot carry a budget of its own: job setup, per-step overhead, and the
+    # implicit post-job steps. test_codeql_workflow_shape.py asserts all three
+    # halves - no uncapped step, and a slack of at least those 3 minutes.
+    #
+    # The budgets are sized off an observed run, generously, but they do turn
+    # slow infrastructure into a red required check where it used to be merely
+    # slow: a cold Python setup or a stalled artifact upload now fails the
+    # gate rather than dragging it out. That is the trade for a hung analysis
+    # no longer being able to hide the other language's result.
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        timeout-minutes: 2
+        with:
+          ref: f7e11768cd7b5cd18c18ce59ea31645fbb322ee2
+          persist-credentials: false
+
+      - name: Set up Python
+        timeout-minutes: 2
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+
+      - name: Install CodeQL CLI
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh extensions install github/gh-codeql
+          gh codeql set-version latest
+
+      - name: Create CodeQL database (python)
+        timeout-minutes: 8
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh codeql database create ha-mcp-db-python \
+            --language=python \
+            --build-mode=none \
+            --source-root . \
+            --overwrite
+
+      - name: Analyze with python quality + security suites
+        timeout-minutes: 12
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh codeql database analyze ha-mcp-db-python \
+            codeql/python-queries:codeql-suites/python-code-quality.qls \
+            codeql/python-queries:codeql-suites/python-code-scanning.qls \
+            --format=sarif-latest \
+            --output quality-python.sarif \
+            --download
+
+      - name: Upload SARIF artifact (python)
+        if: success() || failure()
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: codeql-quality-sarif-python
+          path: quality-python.sarif
+          if-no-files-found: warn
+
+      - name: Gate on findings (python)
+        if: success() || failure()
+        timeout-minutes: 2
+        run: python scripts/codeql_quality_gate.py quality-python.sarif
+
+      - name: Create CodeQL database (javascript)
+        if: success() || failure()
+        timeout-minutes: 8
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh codeql database create ha-mcp-db-javascript \
+            --language=javascript \
+            --build-mode=none \
+            --source-root . \
+            --overwrite
+
+      - name: Analyze with javascript quality + security suites
+        if: success() || failure()
+        timeout-minutes: 12
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh codeql database analyze ha-mcp-db-javascript \
+            codeql/javascript-queries:codeql-suites/javascript-code-quality.qls \
+            codeql/javascript-queries:codeql-suites/javascript-code-scanning.qls \
+            --format=sarif-latest \
+            --output quality-javascript.sarif \
+            --download
+
+      - name: Upload SARIF artifact (javascript)
+        if: success() || failure()
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: codeql-quality-sarif-javascript
+          path: quality-javascript.sarif
+          if-no-files-found: warn
+
+      - name: Gate on findings (javascript)
+        if: success() || failure()
+        timeout-minutes: 2
+        run: python scripts/codeql_quality_gate.py quality-javascript.sarif
+  build:
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: ha-mcp-linux
+            binary_ext: ''
+            platform: linux
+          - os: windows-latest
+            artifact_name: ha-mcp-windows
+            binary_ext: '.exe'
+            platform: win32
+          - os: macos-latest
+            artifact_name: ha-mcp-macos-arm64
+            binary_ext: ''
+            platform: darwin
+
+    runs-on: ${{ matrix.os }}
+    name: Build on ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: f7e11768cd7b5cd18c18ce59ea31645fbb322ee2
+          persist-credentials: false
+          # Pull the skills-vendor submodule so PyInstaller's
+          # `collect_all('ha_mcp')` packages the bundled skill files into
+          # the test binary. Without this, PR CI binaries ship with an
+          # empty skills directory — same root cause as #1280, just on
+          # the PR-test path instead of the stable-release path.
+          submodules: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          # renovate: datasource=github-releases depName=astral-sh/uv
+          version: "0.12.15"
+
+      - name: Create virtual environment and install dependencies
+        run: |
+          uv sync --frozen --group dev
+        shell: bash
+
+      - name: Activate venv (Unix)
+        if: runner.os != 'Windows'
+        run: echo "$PWD/.venv/bin" >> $GITHUB_PATH
+
+      - name: Activate venv (Windows)
+        if: runner.os == 'Windows'
+        run: echo "$PWD/.venv/Scripts" >> $env:GITHUB_PATH
+        shell: pwsh
+
+      - name: Build binary
+        run: uv run --frozen pyinstaller packaging/binary/ha-mcp.spec
+
+      - name: Run smoke test (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x dist/ha-mcp
+          # Run the built-in smoke test to verify all libraries are bundled
+          ./dist/ha-mcp --smoke-test
+
+      - name: Run smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Run the built-in smoke test to verify all libraries are bundled
+          & "dist\ha-mcp.exe" --smoke-test
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Smoke test failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+
+      - name: Rename binary for artifact
+        shell: bash
+        run: |
+          mv dist/ha-mcp${{ matrix.binary_ext }} dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.artifact_name }}${{ matrix.binary_ext }}
+          if-no-files-found: error
+
+  create-mcpb:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: f7e11768cd7b5cd18c18ce59ea31645fbb322ee2
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+
+      - name: Download Windows binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ha-mcp-windows
+          path: mcpb-bundle
+
+      - name: Download macOS binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ha-mcp-macos-arm64
+          path: mcpb-bundle
+
+      - name: Set version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            VERSION="${VERSION:-0.0.0-dev}"
+          else
+            # For pull_request, use dev version
+            VERSION="0.0.0-dev"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Create combined mcpb bundle
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Rename binaries to standard names
+          mv mcpb-bundle/ha-mcp-windows.exe mcpb-bundle/ha-mcp.exe
+          mv mcpb-bundle/ha-mcp-macos-arm64 mcpb-bundle/ha-mcp
+
+          # Copy icons to bundle (light + dark variants + main icon)
+          cp packaging/mcpb/icon-16.png mcpb-bundle/
+          cp packaging/mcpb/icon-32.png mcpb-bundle/
+          cp packaging/mcpb/icon-64.png mcpb-bundle/
+          cp packaging/mcpb/icon-128.png mcpb-bundle/
+          cp packaging/mcpb/icon-256.png mcpb-bundle/
+          cp packaging/mcpb/icon-512.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-16.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-32.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-64.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-128.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-256.png mcpb-bundle/
+          cp packaging/mcpb/icon-dark-512.png mcpb-bundle/
+          cp packaging/mcpb/icon-512.png mcpb-bundle/icon.png
+
+          # Generate manifest.json (multi-platform)
+          python packaging/mcpb/generate_manifest.py "$VERSION"
+
+          # Create .mcpb file (zip archive)
+          cd mcpb-bundle
+          zip -r ../ha-mcp.mcpb *
+          cd ..
+
+          # List contents for verification
+          echo "=== MCPB Contents ==="
+          unzip -l ha-mcp.mcpb
+
+      - name: Upload mcpb artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ha-mcp-mcpb
+          path: ha-mcp.mcpb
+          if-no-files-found: error
