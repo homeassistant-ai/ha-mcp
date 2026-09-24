@@ -84,10 +84,7 @@ async def test_config_write_disable_survives_reload(mcp_client, cleanup_tracker)
         },
     )
     assert updated["enabled_applied"] is True
-    assert not any(
-        "did not confirm the automation reload" in w
-        for w in updated.get("warnings", [])
-    )
+    assert not any("automation reload" in w for w in updated.get("warnings", []))
     assert await _state(mcp, entity_id) == "off"
 
 

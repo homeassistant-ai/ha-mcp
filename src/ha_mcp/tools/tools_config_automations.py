@@ -384,13 +384,21 @@ async def _resolve_enabled_target(
     )
 
 
-def _note_reload_outcome(result: dict[str, Any], reloaded: bool | None) -> None:
-    """Warn when an enabled change may be undone by an unconfirmed reload."""
-    if reloaded is False:
-        result.setdefault("warnings", []).append(
-            "Home Assistant did not confirm the automation reload; a requested "
-            "enabled state may be reverted when the reload completes."
-        )
+def _note_reload_outcome(
+    result: dict[str, Any], reloaded: bool | None, enabled: bool | None
+) -> None:
+    """Warn when an enabled change could not be ordered after the reload."""
+    if enabled is None or reloaded:
+        return
+    reason = (
+        "did not confirm the automation reload"
+        if reloaded is False
+        else "could not be watched for the automation reload (no WebSocket)"
+    )
+    result.setdefault("warnings", []).append(
+        f"Home Assistant {reason}; the requested enabled state may be "
+        "reverted when the reload completes."
+    )
 
 
 def _sync_post_write_automation_result(
@@ -1466,7 +1474,7 @@ class AutomationConfigTools:
             result = await self._upsert_automation(
                 transformed_config, identifier, resolved_id
             )
-            _note_reload_outcome(result, await wait_for_reload())
+            _note_reload_outcome(result, await wait_for_reload(), enabled)
         for warning in conflict_warnings:
             result.setdefault("warnings", []).append(warning)
         refetched = await self._get_automation_config_internal(identifier)
@@ -1543,7 +1551,7 @@ class AutomationConfigTools:
             self._client, enabled=enabled is not None
         ) as wait_for_reload:
             result = await self._upsert_automation(config_dict, identifier, resolved_id)
-            _note_reload_outcome(result, await wait_for_reload())
+            _note_reload_outcome(result, await wait_for_reload(), enabled)
 
         for warning in conflict_warnings or []:
             result.setdefault("warnings", []).append(warning)

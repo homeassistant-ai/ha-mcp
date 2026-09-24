@@ -284,7 +284,7 @@ async def test_config_update_reports_runtime_state_failure_as_partial_success() 
     assert result["success"] is True
     assert result["enabled_requested"] is False
     assert result["enabled_applied"] is False
-    assert "config was written" in result["warnings"][0]
+    assert any("config was written" in w for w in result["warnings"])
 
 
 @pytest.mark.unit
@@ -874,3 +874,31 @@ async def test_config_update_applies_enabled_only_after_reload(monkeypatch) -> N
 
     assert order == ["subscribe", "write", "reloaded", "unsubscribe", "turn_off"]
     assert any("did not confirm the automation reload" in w for w in result["warnings"])
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+@pytest.mark.parametrize(("enabled", "warned"), [(False, True), (None, False)])
+async def test_config_update_without_reload_subscription_warns_only_for_enabled(
+    enabled, warned
+) -> None:
+    client = _FakeClient()
+    client.upsert_entity_id = "automation.morning"
+    tools = tools_config_automations.AutomationConfigTools(client)
+
+    result = await tools._run_config_update(
+        {"alias": "Morning", "triggers": [], "actions": []},
+        "automation.morning",
+        None,
+        False,
+        tools_config_automations.BestPracticeCheckResult(),
+        {},
+        False,
+        enabled=enabled,
+    )
+
+    has_warning = any(
+        "could not be watched for the automation reload" in w
+        for w in result.get("warnings", [])
+    )
+    assert has_warning is warned
