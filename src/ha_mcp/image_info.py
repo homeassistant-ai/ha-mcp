@@ -1,9 +1,11 @@
-"""Resolve basic facts (dimensions) from raw image bytes.
+"""Resolve basic facts (format, dimensions) from raw image bytes.
 
 Pure-stdlib header parsing — no image library required. Camera snapshots
-are the target: JPEG (the camera proxy default), PNG, and GIF. Every parse
-path is best-effort: callers treat ``None`` as "dimensions could not be
-determined" and must degrade gracefully rather than fail the request.
+are the target: JPEG (the camera proxy default), PNG, and GIF. The
+resolver always returns a format together with the dimensions, so the
+reported label can never describe different bytes than the size. Every
+parse path is best-effort: undecodable payloads yield no dimensions,
+and callers must degrade gracefully rather than fail the request.
 """
 
 _JPEG_SOF_MARKERS = frozenset(
@@ -28,40 +30,43 @@ _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _GIF_SIGNATURES = (b"GIF87a", b"GIF89a")
 
 
-def read_image_dimensions(data: bytes, image_format: str) -> tuple[int, int] | None:
-    """Return ``(width, height)`` for *data*, or ``None`` when undetermined.
+def resolve_image_info(
+    data: bytes, declared_format: str
+) -> tuple[str, tuple[int, int] | None]:
+    """Resolve the payload's actual format and its dimensions.
 
-    Dispatches on the declared *image_format* (from the Content-Type
+    Dispatches on the declared *declared_format* (from the Content-Type
     header) but verifies the payload's magic bytes: when a camera
-    mislabels its format, the sniff fallback parses whatever the bytes
-    actually are.
+    mislabels its format, the sniff result wins, so the returned format
+    and dimensions always describe the same bytes. When no sniff
+    matches, the declared format is kept and no dimensions are
+    reported.
     """
-    fmt = (image_format or "").lower()
+    fmt = (declared_format or "").lower()
     if fmt in ("jpeg", "jpg"):
-        dims = _jpeg_dimensions(data)
+        if data[:2] == b"\xff\xd8":
+            return "jpeg", _jpeg_dimensions(data)
     elif fmt == "png":
-        dims = _png_dimensions(data)
+        if data[:8] == _PNG_SIGNATURE:
+            return fmt, _png_dimensions(data)
     elif fmt == "gif":
-        dims = _gif_dimensions(data)
-    else:
-        dims = None
-    if dims is not None:
-        return dims
+        if data[:6] in _GIF_SIGNATURES:
+            return fmt, _gif_dimensions(data)
     # Declared format and payload disagree — trust the magic bytes.
     if data[:2] == b"\xff\xd8":
-        return _jpeg_dimensions(data)
+        return "jpeg", _jpeg_dimensions(data)
     if data[:8] == _PNG_SIGNATURE:
-        return _png_dimensions(data)
+        return "png", _png_dimensions(data)
     if data[:6] in _GIF_SIGNATURES:
-        return _gif_dimensions(data)
-    return None
+        return "gif", _gif_dimensions(data)
+    return fmt, None
 
 
 def _jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
     """Walk JPEG segments to the first SOF marker, which carries the size.
 
     Only the header is parsed; the compressed scan data is never decoded.
-Check the SOF segment length before reading dimensions    The declared segment length is validated before the dimension fields
+    The declared segment length is validated before the dimension fields
     are read, so a corrupt length can neither reach past the end of the
     buffer nor report bytes outside the segment as the image size.
     """

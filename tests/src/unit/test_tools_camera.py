@@ -9,6 +9,19 @@ from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_camera import CameraTools
 
 
+def _png(width: int, height: int) -> bytes:
+    """Minimal structurally-valid PNG header with the given dimensions."""
+    ihdr_payload = (
+        width.to_bytes(4, "big") + height.to_bytes(4, "big") + b"\x08\x06\x00\x00\x00"
+    )
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + len(ihdr_payload).to_bytes(4, "big")
+        + b"IHDR"
+        + ihdr_payload
+    )
+
+
 class TestHaGetCameraImage:
     """Test ha_get_camera_image tool validation logic."""
 
@@ -104,6 +117,25 @@ class TestHaGetCameraImage:
         assert image.data == mock_response.content
         assert text.startswith("Camera snapshot (JPEG, 800x600).")
         assert "Retrieved: " in text
+
+    @pytest.mark.asyncio
+    async def test_mislabeled_content_type_follows_payload(self, mock_client):
+        """A mislabeled Content-Type must not mix formats in the response.
+
+        PNG bytes served under a JPEG header: the text label, the reported
+        size, and the Image block must all describe the PNG payload.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = _png(640, 480)
+        mock_response.headers = {"content-type": "image/jpeg"}
+        mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
+
+        tools = CameraTools(mock_client)
+        text, image = await tools.ha_get_camera_image(entity_id="camera.front_door")
+
+        assert image._format == "png"
+        assert text.startswith("Camera snapshot (PNG, 640x480).")
 
     @pytest.mark.asyncio
     async def test_info_text_uses_ha_timezone(self, mock_client):
