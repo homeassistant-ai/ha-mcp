@@ -9,7 +9,8 @@ import json
 import logging
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from datetime import tzinfo as _TZInfo
 from typing import Any
@@ -1572,6 +1573,57 @@ async def wait_for_automation_entity_by_unique_id(
             captured["last_api_error"],
         )
     return None
+
+
+@asynccontextmanager
+async def automation_reload_waiter(
+    client: Any, *, enabled: bool = True, timeout: float = 10.0
+) -> AsyncIterator[Callable[[], Awaitable[bool | None]]]:
+    """Subscribe to ``automation_reloaded`` around an automation config write.
+
+    Home Assistant answers ``POST /config/automation/config/<id>`` before the
+    reload it schedules has run, and that reload replaces the entity when the
+    config changed. A state change sent in between hits no entity and is lost,
+    so callers subscribe before the write and wait on the yielded callable
+    before acting on the entity. HA fires the event after every automation
+    reload, including one that found the config unchanged.
+
+    The callable returns True once a reload completed, False on timeout, and
+    None when no subscription exists (``enabled`` False or no WebSocket).
+    """
+    reloaded = asyncio.Event()
+
+    async def handler(event: dict[str, Any]) -> None:
+        reloaded.set()
+
+    ws_client = await _get_waiter_ws_client(client) if enabled else None
+    attached_handlers: list[str] = []
+    sub_ids: list[int] = []
+    subscribed = ws_client is not None and await _ws_subscribe_all(
+        ws_client,
+        ("automation_reloaded",),
+        handler,
+        attached_handlers,
+        sub_ids,
+        "automation reload",
+        "automation",
+    )
+
+    async def wait_for_reload() -> bool | None:
+        if not subscribed:
+            return None
+        try:
+            await asyncio.wait_for(reloaded.wait(), timeout=timeout)
+        except TimeoutError:
+            logger.warning("automation_reloaded not received within %ss", timeout)
+            return False
+        return True
+
+    try:
+        yield wait_for_reload
+    finally:
+        if ws_client is not None:
+            await _ws_cleanup(ws_client, attached_handlers, sub_ids, handler)
 
 
 async def fetch_entity_category(
