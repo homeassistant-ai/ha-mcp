@@ -5,7 +5,9 @@ for both standard Home Assistant installations and Supervisor proxy environments
 """
 
 import asyncio
+import logging
 
+import anyio
 import pytest
 
 
@@ -772,7 +774,7 @@ class TestSubscribeEventsContract:
         )
 
     @pytest.mark.asyncio
-    async def test_cancellation_during_send_drops_the_pending_future(self):
+    async def test_cancellation_during_send_drops_the_pending_future(self, monkeypatch):
         """Cancelling mid-transmission drops the pending-request entry.
 
         ``CancelledError`` is a BaseException and skips the transmission
@@ -780,6 +782,11 @@ class TestSubscribeEventsContract:
         clause the registered future stayed in ``_pending_requests`` with the
         caller gone and no result ever arriving to pop it.
         """
+        from ha_mcp.client import websocket_client as wsc
+
+        # The same path now releases the subscription over a mock that never
+        # answers, so shorten the budget it would otherwise sit out.
+        monkeypatch.setattr(wsc, "CLEANUP_TIMEOUT_SECONDS", 0.05)
         client = self._prepare_client()
         sending = asyncio.Event()
 
@@ -801,16 +808,25 @@ class TestSubscribeEventsContract:
         assert client._state._pending_requests == {}
 
     @pytest.mark.asyncio
-    async def test_cancellation_during_result_wait_drops_the_pending_future(self):
+    async def test_cancellation_during_result_wait_drops_the_pending_future(
+        self, monkeypatch
+    ):
         """Cancelling while awaiting the subscribe ack drops the pending entry.
 
         The wait cleaned up on ``TimeoutError`` only, so a cancelled caller
         (e.g. a tool leg cancelled by its parent) leaked one entry per call.
         """
+        from ha_mcp.client import websocket_client as wsc
+
+        # This path releases the subscription over a mock that never answers,
+        # so shorten the budget it would otherwise sit out.
+        monkeypatch.setattr(wsc, "CLEANUP_TIMEOUT_SECONDS", 0.05)
         client = self._prepare_client()
         sent = asyncio.Event()
+        sent_messages: list[dict] = []
 
-        async def _never_resolve(_message: dict) -> None:
+        async def _never_resolve(message: dict) -> None:
+            sent_messages.append(message)
             sent.set()
 
         client.send_json_message = _never_resolve  # type: ignore[method-assign]
@@ -822,7 +838,412 @@ class TestSubscribeEventsContract:
         with pytest.raises(asyncio.CancelledError):
             await task
 
-        assert client._state._pending_requests == {}
+        # Not "the map is empty": the release below is itself a command and
+        # has its own pending entry while it is in flight. What must be gone
+        # is the entry nothing will ever resolve -- the subscribe's own.
+        subscribe_id = sent_messages[0]["id"]
+        assert subscribe_id not in client._state._pending_requests
+
+    @pytest.mark.asyncio
+    async def test_release_sends_nothing_once_the_socket_is_gone(self):
+        """A dropped connection took the subscription with it.
+
+        Pinned separately from the release itself, because "no unsubscribe
+        was sent" is the same observation in both cases and the reason
+        differs: here there is nothing to release, and attempting it would
+        raise inside a detached task where nobody retrieves the exception.
+        """
+        client = self._prepare_client()
+        client._state.mark_disconnected()
+        sent_messages: list[dict] = []
+
+        async def _record(message: dict) -> None:
+            sent_messages.append(message)
+
+        client.send_json_message = _record  # type: ignore[method-assign]
+
+        await client._release_abandoned_subscription(7)
+
+        assert sent_messages == []
+
+    @pytest.mark.asyncio
+    async def test_a_lost_transport_during_release_is_not_a_warning(self, caplog):
+        """The connection going away IS the cleanup, so it is not news.
+
+        Pinned on the level, not just on "it did not raise": the same call
+        in ``unsubscribe_events`` logs a warning, because there the
+        subscription was known to exist. Here the ordinary outcome is that
+        there was nothing to release, and a warning would train the reader
+        to ignore the case where there was.
+        """
+        client = self._prepare_client()
+
+        async def _raise(_message: dict) -> None:
+            raise OSError("connection reset")
+
+        client.send_json_message = _raise  # type: ignore[method-assign]
+
+        with caplog.at_level(logging.DEBUG, logger="ha_mcp.client.websocket_client"):
+            await client._release_abandoned_subscription(7)
+
+        records = [
+            r
+            for r in caplog.records
+            if "abandoned subscribe_events(7)" in r.getMessage()
+        ]
+        assert records, "the lost transport went unlogged"
+        assert all(r.levelno == logging.DEBUG for r in records), [
+            (r.levelname, r.getMessage()) for r in records
+        ]
+
+    @pytest.mark.asyncio
+    async def test_cleanup_does_not_outlive_its_own_deadline(self, monkeypatch):
+        """The shield keeps the deadline from killing the work, not from ending it.
+
+        Without the cancel-and-drain, a cleanup that runs past the deadline
+        keeps going and reads the client's state whenever it gets there --
+        which is the stale-task failure the shielded wait was introduced to
+        fix, reintroduced through its own timeout path. The session close in
+        the theme guard drains for the same reason.
+        """
+        from ha_mcp.client import websocket_client as wsc
+
+        client = self._prepare_client()
+        monkeypatch.setattr(wsc, "CLEANUP_TIMEOUT_SECONDS", 0.05)
+        started = asyncio.Event()
+
+        async def _never_finishes() -> None:
+            started.set()
+            await asyncio.sleep(3600)
+
+        await client._run_cleanup(_never_finishes(), "probe")
+
+        assert started.is_set(), "the cleanup never ran at all"
+        leftover = [
+            t
+            for t in asyncio.all_tasks()
+            if not t.done() and "_never_finishes" in repr(t.get_coro())
+        ]
+        assert leftover == [], f"cleanup outlived its deadline: {leftover}"
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_caller_still_gets_the_cleanup_finished(self):
+        """Cancelling the caller must not leave the cleanup half-done.
+
+        This is the path the deadline test cannot reach. A cancel scope
+        re-delivers its cancellation to the host task on every tick, so the
+        drain is itself a checkpoint and gets interrupted unless it is
+        shielded -- and the task then goes on touching the client after the
+        call returned, which is the failure the whole mechanism exists to
+        prevent. The cancellation is still delivered to the caller; it just
+        arrives after the cleanup finished rather than instead of it.
+        """
+        client = self._prepare_client()
+        finished = asyncio.Event()
+
+        async def _slow_cleanup() -> None:
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                # A real disconnect closes a socket here: more than one tick.
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                finished.set()
+                raise
+
+        outcome: list[str] = []
+
+        async def caller() -> None:
+            try:
+                await client._run_cleanup(_slow_cleanup(), "probe")
+                outcome.append("returned")
+            except asyncio.CancelledError:
+                outcome.append("propagated")
+
+        task = asyncio.ensure_future(caller())
+        for _ in range(5):
+            await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.wait_for(task, timeout=5)
+
+        assert finished.is_set(), "the cleanup was abandoned half-way"
+        assert outcome == ["propagated"], (
+            f"the caller's cancellation was swallowed: {outcome}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_cancel_scope_cannot_interrupt_the_drain(self, monkeypatch):
+        """The realistic cancellation, not the single-shot one.
+
+        A plain ``task.cancel()`` is delivered once, and a shield over the
+        awaited future is enough for that. A cancel scope is different: it
+        re-delivers to the HOST TASK on every tick while the task is inside
+        it, so the drain -- itself an await -- is interrupted unless it is
+        shielded against reassertion. This is the path the code meets in
+        production: the approval listener opens its subscription inside a
+        setup-budget scope, and a cancelled ``subscribe_events`` is how the
+        cleanup is reached at all. The previous test could not get here.
+        """
+        from ha_mcp.client import websocket_client as wsc
+
+        # The cleanup below never finishes on its own, so the wait runs to
+        # the budget. What is under test is the drain, not the budget.
+        monkeypatch.setattr(wsc, "CLEANUP_TIMEOUT_SECONDS", 0.05)
+        client = self._prepare_client()
+        finished = asyncio.Event()
+
+        async def _slow_cleanup() -> None:
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                # A real disconnect closes a socket here: several ticks,
+                # each one a chance for a reasserted cancellation to land.
+                for _ in range(5):
+                    await asyncio.sleep(0)
+                finished.set()
+                raise
+
+        with anyio.move_on_after(0.01):
+            await client._run_cleanup(_slow_cleanup(), "probe")
+
+        assert finished.is_set(), (
+            "the cancel scope interrupted the drain and the cleanup was "
+            "abandoned half-way"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cleanup_that_has_to_wait_still_performs_the_release(self):
+        """Finishing the drain is not the same as finishing the cleanup.
+
+        The test above proves the task is collected, because its cleanup
+        does its work inside the ``CancelledError`` handler -- so it passes
+        even when the only thing that ran was the cancellation. Real
+        cleanup suspends first: an unsubscribe waits for the shared send
+        lock, and only then does it release anything. Under a cancel scope
+        that reasserts on every tick, that suspension is where a wait
+        shielded only around the drain loses the work: the wait is
+        cancelled on its first tick and the ``finally`` stops the task
+        before it ever had its own budget. The release here happens on the
+        ordinary path, never in a cancellation handler, so nothing but the
+        cleanup actually finishing can set it.
+        """
+        client = self._prepare_client()
+        entered = asyncio.Event()
+        lock_free = asyncio.Event()
+        released = asyncio.Event()
+
+        async def _cleanup_waiting_for_a_lock() -> None:
+            entered.set()
+            await lock_free.wait()
+            released.set()
+
+        async def _cancel_once_it_waits(scope: anyio.CancelScope) -> None:
+            # No clock in this test: a deadline would only make the ordering
+            # likely. Waiting for the cleanup to suspend, cancelling, and
+            # only then freeing the lock makes it certain -- the release
+            # cannot happen before the cancellation was delivered.
+            await entered.wait()
+            scope.cancel()
+            await asyncio.sleep(0)
+            lock_free.set()
+
+        with anyio.CancelScope() as scope:
+            canceller = asyncio.ensure_future(_cancel_once_it_waits(scope))
+            try:
+                await client._run_cleanup(_cleanup_waiting_for_a_lock(), "probe")
+            finally:
+                canceller.cancel()
+
+        assert released.is_set(), (
+            "the cancel scope stopped the cleanup before it reached its release"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_rejection_without_a_code_is_not_a_warning(self, caplog):
+        """Home Assistant answers this command with success or not_found.
+
+        So an error carrying no structured code is still that same answer
+        from a build that did not send one, and the routine path -- which
+        runs on every cancelled subscribe -- must not warn about it. The
+        codes worth distinguishing come from the layer above the handler
+        and do carry one.
+        """
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        client = self._prepare_client()
+
+        async def _reject(_command: str, **_kwargs: object) -> dict:
+            raise HomeAssistantCommandError("Subscription not found")
+
+        client.send_command = _reject  # type: ignore[method-assign]
+
+        with caplog.at_level(logging.DEBUG, logger="ha_mcp.client.websocket_client"):
+            await client._release_abandoned_subscription(7)
+
+        records = [
+            r
+            for r in caplog.records
+            if "abandoned subscribe_events(7)" in r.getMessage()
+        ]
+        assert records, "the rejection went unlogged"
+        assert all(r.levelno == logging.DEBUG for r in records), [
+            (r.levelname, r.getMessage()) for r in records
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_missing_subscription_is_not_a_warning(self, caplog):
+        """ "Not found" here means the command never arrived.
+
+        Which is the case that needed no cleanup at all, so it is routine
+        rather than news -- unlike in ``unsubscribe_events``, where a
+        rejection means a subscription that was known to exist. Keyed on
+        Home Assistant's structured code, not on the message text.
+        """
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        client = self._prepare_client()
+
+        async def _reject(_command: str, **_kwargs: object) -> dict:
+            raise HomeAssistantCommandError("Subscription not found", "not_found")
+
+        client.send_command = _reject  # type: ignore[method-assign]
+
+        with caplog.at_level(logging.DEBUG, logger="ha_mcp.client.websocket_client"):
+            await client._release_abandoned_subscription(7)
+
+        records = [
+            r
+            for r in caplog.records
+            if "abandoned subscribe_events(7)" in r.getMessage()
+        ]
+        assert records, "the rejection went unlogged"
+        assert all(r.levelno == logging.DEBUG for r in records), [
+            (r.levelname, r.getMessage()) for r in records
+        ]
+
+    @pytest.mark.asyncio
+    async def test_any_other_refusal_of_the_release_is_a_warning(self, caplog):
+        """A refused release leaves the subscription open.
+
+        Not authorised, malformed, a command this build does not know --
+        none of those mean "already gone", and all of them leave the orphan
+        on a socket this process keeps using. Folding them in with the
+        routine case at debug level is how a real leak goes unnoticed.
+        """
+        from ha_mcp.client.rest_client import HomeAssistantCommandError
+
+        client = self._prepare_client()
+
+        async def _reject(_command: str, **_kwargs: object) -> dict:
+            raise HomeAssistantCommandError("Unauthorized", "unauthorized")
+
+        client.send_command = _reject  # type: ignore[method-assign]
+
+        with caplog.at_level(logging.DEBUG, logger="ha_mcp.client.websocket_client"):
+            await client._release_abandoned_subscription(7)
+
+        records = [
+            r
+            for r in caplog.records
+            if "abandoned subscribe_events(7)" in r.getMessage()
+        ]
+        assert records, "the refusal went unlogged"
+        assert all(r.levelno == logging.WARNING for r in records), [
+            (r.levelname, r.getMessage()) for r in records
+        ]
+
+    @pytest.mark.asyncio
+    async def test_cancellation_asks_home_assistant_to_drop_the_subscription(
+        self, monkeypatch
+    ):
+        """The id is lost to the caller, not to this operation.
+
+        The command is on the wire before the wait begins, so Home Assistant
+        may have registered the subscription. Nobody else can release it:
+        the caller never receives the id, and the socket stays in the pool,
+        so the orphan outlives the call and every later event arrives once
+        per orphan. The message id allocated before the send is exactly the
+        subscription id Home Assistant used, and this operation still has
+        it while it is being cancelled.
+        """
+        from ha_mcp.client import websocket_client as wsc
+
+        # The release goes out over the same mock and gets no answer, so the
+        # call sits out the cleanup budget. What is under test is the
+        # message, not the budget.
+        monkeypatch.setattr(wsc, "CLEANUP_TIMEOUT_SECONDS", 0.05)
+        client = self._prepare_client()
+        sent = asyncio.Event()
+        sent_messages: list[dict] = []
+
+        async def _never_resolve(message: dict) -> None:
+            sent_messages.append(message)
+            sent.set()
+
+        client.send_json_message = _never_resolve  # type: ignore[method-assign]
+
+        task = asyncio.ensure_future(client.subscribe_events("state_changed"))
+        await sent.wait()
+        subscribe_id = sent_messages[0]["id"]
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # The release goes out before the cancellation propagates -- the
+        # cleanup is awaited inside a shield, and the caller's `raise` comes
+        # after it -- so by here the message is already on the mock.
+        assert [
+            m
+            for m in sent_messages[1:]
+            if m.get("type") == "unsubscribe_events"
+            and m.get("subscription") == subscribe_id
+        ], f"no unsubscribe for {subscribe_id} in {sent_messages}"
+
+    @pytest.mark.asyncio
+    async def test_cancellation_inside_the_send_also_releases_it(self, monkeypatch):
+        """A cancelled send is not proof that nothing reached Home Assistant.
+
+        The frame is written before the send awaits flow-control drainage,
+        so a cancellation landing in that wait leaves the subscription
+        registered just as surely as one landing in the acknowledgment
+        wait -- and on a socket this process keeps using, which is what
+        makes the orphan outlive the call. Dropping only the local pending
+        future, which is all this path used to do, leaves it there.
+        """
+        from ha_mcp.client import websocket_client as wsc
+
+        # The release goes out over the same stalled mock and never gets an
+        # answer, so the call sits out the cleanup budget. What is under
+        # test is the message, not the budget.
+        monkeypatch.setattr(wsc, "CLEANUP_TIMEOUT_SECONDS", 0.05)
+        client = self._prepare_client()
+        sent = asyncio.Event()
+        sent_messages: list[dict] = []
+
+        async def _write_then_block(message: dict) -> None:
+            sent_messages.append(message)
+            if message.get("type") != "subscribe_events":
+                return
+            sent.set()
+            # Flow-control drainage: the frame is out, the send has not
+            # returned, and this is where the cancellation arrives.
+            await asyncio.sleep(3600)
+
+        client.send_json_message = _write_then_block  # type: ignore[method-assign]
+
+        task = asyncio.ensure_future(client.subscribe_events("state_changed"))
+        await sent.wait()
+        subscribe_id = sent_messages[0]["id"]
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert [
+            m
+            for m in sent_messages[1:]
+            if m.get("type") == "unsubscribe_events"
+            and m.get("subscription") == subscribe_id
+        ], f"no unsubscribe for {subscribe_id} in {sent_messages}"
 
 
 class TestSubscribeCommand:
@@ -1259,3 +1680,223 @@ class TestPendingFutureCancelGuards:
 
         assert state._pending_requests == {}
         assert state._event_responses == {}
+
+
+class TestReceivedFrameRedaction:
+    """The debug line that prints whole received frames must not print a PIN.
+
+    The approval-response event carries the user's approval PIN in its data
+    (issue #2502). ``_message_handler`` logs every decoded frame at DEBUG
+    before dispatching it, so an operator who turns on debug logging to
+    diagnose something else would otherwise find that PIN in Home
+    Assistant's log in clear text. Redaction applies to the log copy only —
+    the handler still has to receive the real PIN, or nothing could verify
+    it.
+    """
+
+    @staticmethod
+    def _client():
+        from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
+
+        return HomeAssistantWebSocketClient(
+            url="http://homeassistant.local:8123", token="test-token"
+        )
+
+    @staticmethod
+    def _frame(pin: str) -> str:
+        import json
+
+        return json.dumps(
+            {
+                "id": 7,
+                "type": "event",
+                "event": {
+                    "event_type": "ha_mcp_approval_response",
+                    "data": {
+                        "token": "tok-123",
+                        "decision": "approve",
+                        "pin": pin,
+                    },
+                },
+            }
+        )
+
+    @pytest.mark.parametrize("pin", ["2468", "wrong-pin-9999"])
+    def test_the_pin_is_redacted_in_the_log_but_not_in_the_dispatch(self, pin, caplog):
+        """Both the right PIN and a wrong one: neither reaches the log.
+
+        A wrong PIN is as much the user's secret as a right one — it is
+        usually a typo of the real thing — and the reader cannot tell them
+        apart anyway, which is the point of redacting by field name.
+        """
+        client = self._client()
+        seen: list[dict] = []
+
+        async def handler(event):
+            seen.append(event)
+
+        client.add_event_handler("ha_mcp_approval_response", handler)
+
+        class _OneFrame:
+            def __init__(self, frame):
+                self._frames = [frame]
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not self._frames:
+                    raise StopAsyncIteration
+                return self._frames.pop()
+
+        client.websocket = _OneFrame(self._frame(pin))
+
+        with caplog.at_level(logging.DEBUG, logger="ha_mcp.client.websocket_client"):
+            asyncio.run(client._message_handler())
+
+        assert seen and seen[0]["data"]["pin"] == pin
+        assert pin not in caplog.text
+        assert "<redacted>" in caplog.text
+        # The rest of the frame is still there — redaction must not cost
+        # the log line its diagnostic value.
+        assert "tok-123" in caplog.text
+
+    def test_other_fields_are_untouched(self):
+        from ha_mcp.client.websocket_client import _redacted_for_log
+
+        payload = {
+            "a": 1,
+            "nested": {"pin": "2468", "keep": ["x", {"PIN": "1234"}]},
+        }
+
+        # Case-insensitive: an automation is free to spell the field PIN,
+        # and Home Assistant passes event data through as authored.
+        assert _redacted_for_log(payload) == {
+            "a": 1,
+            "nested": {"pin": "<redacted>", "keep": ["x", {"PIN": "<redacted>"}]},
+        }
+        # The original is not mutated: the caller still dispatches it.
+        assert payload["nested"]["pin"] == "2468"
+
+
+class _SilentSocket:
+    """A socket that never says anything and records being closed.
+
+    Enough for the reader task to have something to block on and for the
+    auth wait to run out of patience, which is where the cancellation in
+    the test below lands.
+    """
+
+    def __init__(self, closed: asyncio.Event) -> None:
+        self._closed = closed
+
+    async def close(self) -> None:
+        self._closed.set()
+
+    async def recv(self) -> str:
+        await asyncio.sleep(3600)
+        raise AssertionError("unreachable")
+
+    async def send(self, _message: str) -> None:
+        return None
+
+    def __aiter__(self) -> "_SilentSocket":
+        return self
+
+    async def __anext__(self) -> str:
+        await asyncio.sleep(3600)
+        raise StopAsyncIteration
+
+
+class TestConnectCancellation:
+    """Cancelling a connect must not leave the socket and reader behind.
+
+    The client is pooled only once ``connect`` has returned True, so a
+    connection abandoned before that point is reachable from nothing: no
+    later call finds it, no disconnect closes it, and the reader task goes
+    on holding it. The cleanup clause that closes both used to catch
+    ``Exception``, which a cancellation is not.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_second_connect_is_not_torn_down_by_the_first(self, monkeypatch):
+        """Cleanup must act on what it was cleaning up.
+
+        Left to run later, it reads the client's state at execution time:
+        measured on the detached version, a second connect on the same
+        object had its socket closed by the first attempt's cleanup while
+        the abandoned socket stayed open -- the inverse of the intent.
+        No caller reconnects an instance in place today, so this pins a
+        property rather than a live path; it is the property the fix is
+        about.
+        """
+        from ha_mcp.client import websocket_client as wsc
+
+        first_closed, second_closed = asyncio.Event(), asyncio.Event()
+        sockets = iter((_SilentSocket(first_closed), _SilentSocket(second_closed)))
+
+        async def _connect(*_args, **_kwargs) -> "_SilentSocket":
+            return next(sockets)
+
+        monkeypatch.setattr(wsc.websockets, "connect", _connect)
+        client = wsc.HomeAssistantWebSocketClient(
+            url="http://homeassistant.local:8123", token="test-token"
+        )
+
+        first = asyncio.ensure_future(client.connect())
+        for _ in range(200):
+            await asyncio.sleep(0)
+            if client.websocket is not None and client.background_task is not None:
+                break
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+
+        second = asyncio.ensure_future(client.connect())
+        for _ in range(200):
+            await asyncio.sleep(0)
+            if second_closed.is_set() or second.done():
+                break
+
+        assert first_closed.is_set(), "the abandoned socket was left open"
+        assert not second_closed.is_set(), (
+            "the first attempt's cleanup closed the second attempt's socket"
+        )
+        second.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await second
+
+    @pytest.mark.asyncio
+    async def test_cancellation_during_auth_closes_socket_and_reader(self, monkeypatch):
+        from ha_mcp.client import websocket_client as wsc
+
+        closed = asyncio.Event()
+
+        async def _connect(*_args, **_kwargs) -> "_SilentSocket":
+            return _SilentSocket(closed)
+
+        monkeypatch.setattr(wsc.websockets, "connect", _connect)
+
+        client = wsc.HomeAssistantWebSocketClient(
+            url="http://homeassistant.local:8123", token="test-token"
+        )
+        task = asyncio.ensure_future(client.connect())
+        for _ in range(200):
+            await asyncio.sleep(0)
+            if client.websocket is not None and client.background_task is not None:
+                break
+        assert client.websocket is not None, "never got as far as the auth wait"
+        reader = client.background_task
+        assert reader is not None
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        for _ in range(200):
+            await asyncio.sleep(0)
+            if closed.is_set() and reader.done():
+                break
+
+        assert closed.is_set(), "the socket was left open"
+        assert reader.done(), "the reader task was left running"

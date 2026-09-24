@@ -1,0 +1,168 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA-MCP fərdi komponenti",
+        "description": "Əlavə etmək istədiyinizi seçin. **HA-MCP Server** tam ha-mcp serverini Home Assistant daxilində işlədir və Home Assistant webhook-u vasitəsilə ona giriş imkanı verir - əksər istifadəçilərin istədiyi quraşdırma budur. Bu, müstəqil serverdir və bütün digər quraşdırma üsullarını tam əvəz edir: tətbiq (əlavə), Docker, uvx/PyPI, stdio; onu işlədirsinizsə, digərlərindən birini eyni vaxtda işlətməyin. **HA-MCP File & YAML Tools** iki vəzifəni yerinə yetirir. ha-mcp serveriniz Home Assistant xaricində işləyirsə - tətbiq, Docker, uvx/PyPI, stdio - bu qeyd həmin serverə xaricdən istifadə edə bilmədiyi, proses daxilindəki komponent imkanlarını da verir (proses daxilində sürətli axtarış, konfiqurasiya qeydinin metaməlumatları, reyestrdən oxuma). Buna görə onu hər bir xarici quraşdırmaya əlavə etmək faydalıdır. Həmçinin ha-mcp-nin istəyə bağlı fayl/YAML alətlərinin istifadə etdiyi imtiyazlı fayl və YAML redaktə xidmətlərinə girişi tənzimləyir. Əvəzində HA-MCP Server qeydini əlavə etsəniz, həmin qeyd bu ortaq imkanları artıq təmin edir və ikinci qeyd yalnız istəyə bağlı fayl/YAML alətlərinə girişi təmin etmək üçün lazım olur. O, bütün server növləri ilə işləyir və sonradan istənilən vaxt əlavə edilə bilər.",
+        "menu_options": {
+          "server": "HA-MCP Server (tövsiyə olunur)",
+          "tools": "HA-MCP File & YAML Tools (istəyə bağlı)"
+        }
+      },
+      "tools": {
+        "title": "HA-MCP File & YAML Tools",
+        "description": "İmtiyazlı fayl və YAML konfiqurasiya xidmətlərini quraşdırır. Bu xidmətlərə giriş ha-mcp-nin istəyə bağlı fayl/YAML redaktə alətləri ilə məhdudlaşır (funksiya bayraqları, standart halda deaktivdir) - bu, proses daxilində işləyən HA-MCP Server daxil olmaqla bütün server növlərinə aiddir. ha-mcp serveriniz Home Assistant xaricində işləyirsə, bu qeyd ona xaricdən istifadə edə bilmədiyi, proses daxilindəki komponent imkanlarını da verir (proses daxilində sürətli axtarış, konfiqurasiya qeydinin metaməlumatları, reyestrdən oxuma). Fayl/YAML alətləri deaktiv olduqda belə bu imkanlar faydalıdır. Bu qeydi istənilən vaxt əlavə edə və ya çıxara bilərsiniz."
+      },
+      "server": {
+        "title": "HA-MCP Server",
+        "description": "Tam ha-mcp serverini Home Assistant daxilində işlədir və Home Assistant webhook-u vasitəsilə ona uzaqdan giriş imkanı verir (Nabu Casa və ya istənilən əks proksi vasitəsilə əlçatandır). Bu, müstəqil serverdir və tətbiq (əlavə), Docker, uvx/PyPI və stdio quraşdırma üsullarını tam əvəz edir - onu başqa ha-mcp serveri ilə eyni vaxtda işlətməyin. Başlatmaq üçün **Göndər** düyməsini seçin; portu, şəbəkə ünvanına bağlanmanı və doğrulamanı daha sonra inteqrasiya parametrlərində dəyişə bilərsiniz."
+      }
+    },
+    "abort": {
+      "already_configured": "Bu qeyd artıq quraşdırılıb.",
+      "unsupported_home_assistant": "Proses daxilində işləyən HA-MCP Server üçün Home Assistant versiyası {required} və ya daha yeni olmalıdır, lakin bu quraşdırmada {installed} versiyası işləyir. Bu komponentin HA-MCP File & YAML Tools qeydindən tətbiq (əlavə) və ya Docker konteyneri kimi işləyən xarici ha-mcp serveri ilə yenə də istifadə edə bilərsiniz."
+    }
+  },
+  "options": {
+    "step": {
+      "tools_info": {
+        "title": "HA-MCP File & YAML Tools",
+        "description": "ha-mcp-nin istəyə bağlı fayl/YAML alətlərinin istifadə etdiyi imtiyazlı fayl və YAML redaktə xidmətlərini konfiqurasiya edin. Bu parametrlər ha-mcp serverinin öz parametrlər interfeysində də görünür və yenidən başlatmadan dərhal tətbiq olunur. Ləğv edilə bilməyən qadağa həssas yolları (məsələn, .storage) və etimad sərhədini müəyyən edən açarları (homeassistant, http, frontend, lovelace) bloklamağa davam edir.",
+        "data": {
+          "allowed_dirs": "Əlavə fayl yolları",
+          "extra_yaml_keys": "Yazmağa icazə verilən əlavə YAML açarları"
+        },
+        "data_description": {
+          "allowed_dirs": "Konfiqurasiya qovluğuna nəzərən yollar, o cümlədən sensor.yaml kimi dəqiq fayl adları və ya /share, /media, /ssl və /backup daxilindəki yollar. Hər qeyd həmin yol və onun daxilindəki hər şey üçün oxuma və yazma icazəsi verir; hər yolu ayrıca siyahı elementi kimi daxil edin. Qeydlər simvolbəsimvol uyğunlaşdırılır; * kimi əvəzedici simvollar dəstəklənmir. Qovluq sərhədindən kənara çıxan və digər icazə verilməyən yollar nəzərə alınmır.",
+          "extra_yaml_keys": "Bu quraşdırmada əsasən YAML istifadə edən inteqrasiyalar (məsələn, alert2) üçün ha_config_set_yaml alətinin daxili açarlardan əlavə yaza biləcəyi ən üst səviyyəli açarlar. Etimad sərhədini müəyyən edən açarlar nəzərə alınmır."
+        }
+      },
+      "init": {
+        "title": "HA-MCP Server",
+        "description": "HA-MCP serverini konfiqurasiya edin. {panel_hint}Buradakı dəyişikliklər yadda saxlanıldıqda tətbiq olunur.\n\n{versions}\n\n{connect_url}\n\n{oauth_creds}",
+        "data": {
+          "channel": "Buraxılış kanalı",
+          "auto_update": "Avtomatik server yeniləmələri",
+          "server_port": "MCP serverinin dinləmə portu",
+          "bind_host": "Şəbəkə üzərindən giriş",
+          "webhook_auth": "Doğrulama rejimi",
+          "oauth_client_id_override": "Köhnə OAuth: fərdi müştəri ID-si (istəyə bağlı)",
+          "oauth_client_secret_override": "Köhnə OAuth: fərdi müştəri gizli açarı (istəyə bağlı)",
+          "oauth_regenerate": "Köhnə OAuth: müştəri ID-sini/gizli açarını indi yenidən yarat",
+          "pip_spec": "Proqramçı: ha-mcp paketini əvəz etmə",
+          "server_url": "Home Assistant URL-i (qabaqcıl)",
+          "external_url": "Xarici URL (istəyə bağlı)",
+          "webhook_id_override": "Fərdi webhook gizli açarı (istəyə bağlı)",
+          "secret_path_override": "Birbaşa giriş üçün fərdi yol (istəyə bağlı)",
+          "regenerate_secrets": "Əlaqə üçün gizli açarları indi yenidən yarat",
+          "enable_webhook": "Webhook vasitəsilə uzaqdan giriş",
+          "enable_llm_api": "Söhbət agenti üçün LLM API",
+          "llm_api_exposure": "Söhbət agentinə təqdim olunan alətlər",
+          "enable_startup_notification": "Başlanğıc bildirişi",
+          "enable_sidebar_panel": "Yan paneldəki parametrlər paneli"
+        },
+        "data_description": {
+          "channel": "Sabit kanalı ən son sabit buraxılışı, Hazırlanma kanalı isə ən yeni hazırlanma yığımını quraşdırır. Avtomatik yeniləmələr aktiv olduqda yenidən yükləmə və ya yenidən başlatma zamanı, eləcə də vaxtaşırı yoxlama nəticəsində seçilmiş kanalın ən yeni yığımı quraşdırılır. Aşağıdakı proqramçı üçün paket əvəzləməsi üstün tutulur və avtomatik yeniləmələri söndürür.",
+          "auto_update": "Aktiv olduqda seçilmiş kanalın ən yeni buraxılışı avtomatik quraşdırılır - yenidən yükləmə və ya yenidən başlatma zamanı və vaxtaşırı yoxlama vasitəsilə. Deaktiv olduqda siz bu seçimi yenidən aktivləşdirənədək server hazırda quraşdırılmış versiyada qalır. Bu, yalnız ha-mcp server paketini idarə edir; HA-MCP fərdi komponentinin öz yeniləmələri əvvəlki kimi HACS vasitəsilə gəlir.",
+          "server_port": "Bu serverin dinlədiyi port. ha-mcp tətbiqi (əlavə) 9583 portundan istifadə edir, buna görə hər ikisinin eyni vaxtda işləməsi üçün burada standart port 9584 seçilib - tətbiqi (əlavə) işlətmirsinizsə, istənilən boş port uyğundur.",
+          "bind_host": "MCP serverinin portu ilə birbaşa kimin əlaqə yarada biləcəyini müəyyən edir. Standart seçim tətbiqlə (əlavə) eynidir: serverə lokal şəbəkənizdən giriş mümkündür və gizli yol giriş məlumatı kimi istifadə olunur. Yalnız Home Assistant işləyən kompüterin özündən əlaqələrə icazə vermək üçün yalnız bu kompüterə giriş seçimini seçin - webhook URL-i və yan panel hər iki halda işləyir.",
+          "webhook_auth": "MCP müştərilərinin webhook URL-ində özlərini necə doğruladığını müəyyən edir. Gizli URL istifadə edildikdə keçidin özü yeganə giriş məlumatıdır - OAuth ondan istifadə edən müştərilər üçün yenə də işləyir, lakin hər giriş avtomatik təsdiqlənir: hesaba daxil olmaq, müştəri ID-si və ya gizli açar tələb olunmur. Home Assistant ilə giriş seçildikdə claude.ai kimi müştərilər Home Assistant administrator hesabı ilə daxil olur (OAuth). Köhnə OAuth istifadə edildikdə bu inteqrasiya öz giriş xidmətini işlədir və tələb edən müştərilərə yapışdırmaq üçün müştəri ID-si və gizli açar verir - onu tam aktivləşdirmək və ya söndürmək üçün Home Assistant-ı yenidən başlatmaq lazım ola bilər.",
+          "oauth_client_id_override": "Köhnə OAuth üçün avtomatik yaradılmış müştəri ID-sini əvəz edir. Mövcud ID-ni saxlamaq üçün boş buraxın. Yalnız doğrulama rejimi köhnə OAuth olduqda istifadə olunur.",
+          "oauth_client_secret_override": "Köhnə OAuth üçün avtomatik yaradılmış müştəri gizli açarını əvəz edir. Mövcud açarı saxlamaq üçün boş buraxın. Yalnız doğrulama rejimi köhnə OAuth olduqda istifadə olunur.",
+          "oauth_regenerate": "Birdəfəlik əməliyyat: köhnə OAuth rejimi üçün yeni müştəri ID-si və gizli açar yaradır. Yalnız düzəliş bildirişinin tələb etdiyi kimi Home Assistant yenidən başladıldıqdan sonra qüvvəyə minir - siz yenidən başladanadək əvvəlki müştəri ID-si və gizli açar işləməyə davam edir, yeniləri isə işləmir. Həmçinin yuxarıdakı iki əvəzləmə sahəsini təmizləyir.",
+          "pip_spec": "Boş buraxın. Yalnız müəyyən ha-mcp yığımını sınamaq üçündür (məsələn, buraxılışdan əvvəlki konkret versiyanı seçmək üçün); buraxılış kanalını əvəz edir və sahə təmizlənənədək avtomatik yeniləmələri söndürür.",
+          "server_url": "Proses daxilindəki serverin sizin Home Assistant quraşdırmanızla əlaqə yaratmaq üçün istifadə etdiyi URL (adətən bu quraşdırmanın özü). Onu bu quraşdırmanın port və SSL parametrlərindən müəyyən etmək üçün boş buraxın; yalnız serverə fərqli marşrut lazım olduqda dəyər daxil edin.",
+          "external_url": "Əsas əlaqə URL-i kimi göstərilir - Home Assistant sizin domeniniz və ya əks proksi arxasında olduqda bundan istifadə edin. Protokol sxemi daxil olmaqla tam əsas ünvanı daxil edin. Ünvan birbaşa Home Assistant-a yönəlməlidir - brauzerdə açıldıqda HA giriş səhifəniz görünməlidir - və :8123 kimi port (və ya hər hansı digər port) göstərilməməlidir, əks halda uzaqdakı MCP müştəriləri onunla əlaqə yarada bilməyəcək. Nabu Casa / lokal ünvanın avtomatik istifadə olunması üçün boş buraxın.",
+          "webhook_id_override": "Əlaqə URL-indəki (/api/webhook/...) təsadüfi webhook gizli açarını əvəz edir. URL giriş məlumatıdır - uzun və təxmin edilməsi çətin olan dəyərdən istifadə edin. Mövcud dəyəri saxlamaq üçün boş buraxın.",
+          "secret_path_override": "Server portunda birbaşa giriş üçün istifadə olunan təsadüfi yolu əvəz edir. Eyni qayda tətbiq olunur: yol giriş məlumatıdır. Mövcud yolu saxlamaq üçün boş buraxın.",
+          "regenerate_secrets": "Birdəfəlik əməliyyat: yeni təsadüfi webhook gizli açarı və birbaşa giriş yolu yaradır, köhnə əlaqə URL-lərini dərhal etibarsız edir. Həmçinin yuxarıdakı iki əvəzləmə sahəsini təmizləyir.",
+          "enable_webhook": "Yalnız lokal giriş rejimi üçün söndürün: Home Assistant webhook-u ümumiyyətlə qeydiyyata alınmır, buna görə heç nə - Nabu Casa daxil olmaqla - Home Assistant vasitəsilə serverə giriş əldə edə bilmir. Serverin birbaşa giriş portu və yan panel işləməyə davam edir.",
+          "enable_llm_api": "Bütün alətləri Home Assistant səsli və mətnli söhbət agentlərinə (OpenAI, Google, Ollama, ...) təqdim edin: aktiv olduqda agentlər Home Assistant-ı idarə et bölməsində 'HA-MCP Server' seçib Assist söhbətindən və səslə alətləri idarə edə bilər. Aktivləşdirmə yalnız seçmək imkanı yaradır - agent üçün onu seçənədək heç bir alət təqdim olunmur. İstifadə təlimatı: {llm_api_docs_url}",
+          "llm_api_exposure": "Söhbət agentlərinə təqdim olunan alətlər toplusunun forması. Alət axtarışı (standart) agentin kontekstini kiçik saxlayır: sancaqlanmış alətlər və axtarış/icra meta-alətləri olan yığcam API. Tam kataloq təqdim olunan hər bir aləti birbaşa siyahıya alır - böyük kontekstli modellər üçün daha uyğundur. Hər ikisi seçimi ikisini də yanaşı qeydiyyata alır ki, hər agent Home Assistant-ı idarə et bölməsində öz seçimini edə bilsin. Hər alətin təqdim olunması HA-MCP parametrlər panelində idarə olunur; təfərrüatlar: {llm_api_docs_url}",
+          "enable_startup_notification": "Server hər dəfə başladıqda yalnız administratorlar üçün əlçatan olan parametrlər səhifələrinə yönəldən bildiriş göstərin. Bildirişsiz başlatmaq üçün söndürün - əlaqə URL-ləri yenə də Home Assistant jurnalında görünür.",
+          "enable_sidebar_panel": "HA-MCP parametrlər panelini yan paneldə göstərin (yalnız administratorlar üçün). Yan paneldəki qeydi çıxarmaq üçün söndürün - server parametrləri bu ekranda əlçatan qalır."
+        }
+      }
+    }
+  },
+  "issues": {
+    "server_start_failed": {
+      "title": "Proses daxilindəki HA-MCP serverini başlatmaq mümkün olmadı",
+      "description": "Proses daxilindəki HA-MCP serverini Home Assistant daxilində başlatmaq mümkün olmadı:\n\n{detail}\n\nHome Assistant jurnallarını yoxlayın, sonra yenidən cəhd etmək üçün inteqrasiyanı yenidən yükləyin (və ya əsas problemi aradan qaldırıb yenidən yükləyin)."
+    },
+    "server_package_install_failed": {
+      "title": "Proses daxilindəki HA-MCP server paketini quraşdırmaq mümkün olmadı",
+      "description": "Proses daxilindəki server üçün ha-mcp paketinin quraşdırılması uğursuz oldu:\n\n{detail}\n\nYuxarıda təsvir olunan uyğunluq və ya quraşdırma problemini aradan qaldırın, sonra yenidən cəhd etmək üçün inteqrasiyanı yenidən yükləyin."
+    },
+    "component_outdated": {
+      "title": "HA-MCP fərdi komponentini HACS vasitəsilə yenilə",
+      "description": "Quraşdırılmış ha-mcp serveri üçün HA-MCP fərdi komponentinin {required} və ya daha yeni versiyası tələb olunur, lakin sizdə {installed} versiyası var. Komponenti HACS vasitəsilə yeniləyin (HA-MCP fərdi komponentinin qeydini açın və hələ yeniləmə görünmürsə, 'Məlumatları yenilə' seçimindən istifadə edin) və Home Assistant-ı yenidən başladın. Bu müddətdə server işləməyə davam edir, lakin komponent yenilənənədək bəzi yeni funksiyalar işləməyə bilər."
+    },
+    "server_update_held": {
+      "title": "HA-MCP server yeniləməsi komponentin yenilənməsini gözləyir",
+      "description": "ha-mcp serverinin {latest} versiyası mövcuddur, lakin həmin buraxılışda HA-MCP fərdi komponenti də yenilənib ({shipped} versiyasına; sizdə {running} versiyası işləyir). Hazırda işləyən komponentin heç vaxt sınaqdan keçirilmədiyi server versiyasının başladılmaması üçün komponent yenilənənədək avtomatik server yeniləməsi dayandırılıb.\n\nKomponenti HACS vasitəsilə yeniləyin (HA-MCP fərdi komponentinin qeydini açın və hələ yeniləmə görünmürsə, 'Məlumatları yenilə' seçimindən istifadə edin), sonra Home Assistant-ı yenidən başladın - bundan sonra server yeniləməsi avtomatik quraşdırılır. Server yeniləməsini hər halda quraşdırmaq üçün HA-MCP server yeniləmə obyektində Quraşdır düyməsinə basın."
+    },
+    "legacy_hacs_source": {
+      "title": "Komponent köhnə repozitoriyadan quraşdırılıb",
+      "description": "HACS bu komponent üçün əsas ha-mcp server repozitoriyasını izləyir, buna görə burada komponentin öz versiya nömrələri və buraxılış qeydləri (2.x) əvəzinə serverin versiya nömrələrini və buraxılış qeydlərini göstərir. Yeniləmələr işləməyə davam edir, lakin bu şəkildə yanlış etiketlənir. Düzəltmək üçün bu repozitoriyanı HACS-dən çıxarın (inteqrasiya parametrləriniz və konfiqurasiya qeydləriniz saxlanılır), homeassistant-ai/ha-mcp-integration ünvanını fərdi repozitoriya kimi əlavə edin, komponenti oradan yenidən quraşdırın və Home Assistant-ı yenidən başladın."
+    },
+    "legacy_oauth_restart": {
+      "title": "Köhnə OAuth parametrlərini tətbiq etmək üçün Home Assistant-ı yenidən başlat",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Home Assistant yenidən başladılsın?",
+            "description": "Bu formanı göndərdikdə Home Assistant yenidən başladılacaq və köhnə OAuth parametrləri tətbiq olunacaq.\n\nİndi yenidən başlatmaq üçün **Göndər** düyməsinə basın."
+          }
+        }
+      }
+    }
+  },
+  "selector": {
+    "server_channel": {
+      "options": {
+        "stable": "Sabit (tövsiyə olunur)",
+        "dev": "Hazırlanma (ən son yığım)"
+      }
+    },
+    "server_webhook_auth": {
+      "options": {
+        "none": "Gizli webhook URL-i (standart)",
+        "ha_auth": "Home Assistant ilə daxil ol (OAuth)",
+        "legacy": "Köhnə OAuth (bu inteqrasiya yapışdırmaq üçün müştəri ID-si/gizli açar verir)"
+      }
+    },
+    "llm_api_exposure": {
+      "options": {
+        "tool_search": "Alət axtarışı (yığcam, standart)",
+        "full": "Tam kataloq",
+        "both": "Hər ikisi (hər agent üçün seç)"
+      }
+    }
+  },
+  "entity": {
+    "update": {
+      "server_update": {
+        "name": "Yenilə"
+      }
+    }
+  },
+  "common": {
+    "connect_direct_access": "Home Assistant işləyən kompüterdən birbaşa giriş: {url}",
+    "connect_local_lan": "Lokal/LAN (Şəbəkə üzərindən giriş seçimi \"Local network\" olduqda): {url}",
+    "connect_remote_url": "Uzaqdan əlaqə URL-i: {url}",
+    "connect_urls_label": "Əlaqə URL-ləri:",
+    "connect_urls_pending": "Server başladıqdan sonra əlaqə URL-ləri burada (və Home Assistant jurnalında) görünür.",
+    "connect_webhook_disabled": "Webhook vasitəsilə uzaqdan giriş deaktivdir (yalnız lokal giriş rejimi).",
+    "oauth_creds_pending": "Server başladıqdan sonra müştəri ID-si və müştəri gizli açarı burada görünür.",
+    "oauth_not_serving": "Köhnə OAuth bunları hələ istifadəyə vermir — aktivləşdirmək üçün tələb olunduqda Home Assistant-ı yenidən başladın.",
+    "oauth_select_legacy_mode": "Müştəri ID-si və müştəri gizli açarı yaratmaq üçün yuxarıdakı doğrulama rejimi seçimində köhnə OAuth seçin və yadda saxlayın.",
+    "panel_hint": "Alətlərin idarə olunması və server parametrləri üçün [HA-MCP parametrlər panelini](/ha-mcp) açın.",
+    "tools_module_installed": "Beta/qabaqcıl fayl və YAML alətləri modulu (istəyə bağlı): Quraşdırılıb",
+    "tools_module_not_installed": "Beta/qabaqcıl fayl və YAML alətləri modulu (istəyə bağlı): Quraşdırılmayıb — əlavə etmək üçün bu inteqrasiyanın səhifəsində \"Add entry\" düyməsinə basın və \"HA-MCP File & YAML Tools\" seçin",
+    "tools_module_not_loaded": "Beta/qabaqcıl fayl və YAML alətləri modulu (istəyə bağlı): Quraşdırılıb, lakin yüklənməyib — bu inteqrasiyanın səhifəsində \"HA-MCP File & YAML Tools\" qeydini aktivləşdirin və ya yenidən yükləyin",
+    "version_line": "Komponent {component_version} - ha-mcp serveri {server_version} ({channel} kanalı)",
+    "version_not_installed": "hələ quraşdırılmayıb",
+    "version_unknown": "naməlum"
+  }
+}

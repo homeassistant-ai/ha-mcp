@@ -321,6 +321,20 @@ def test_bad_environment_grants_are_rejected(tmp_path, name):
     assert b"::error::" in result.stdout
 
 
+@pytest.mark.parametrize("mode", ["disabled", "cached", "live"])
+def test_hosted_web_search_is_an_independent_caller_capability(tmp_path, mode):
+    result = prepare(tmp_path, WEB_SEARCH_INPUT=mode, NETWORK_ACCESS_INPUT="false")
+    assert result.returncode == 0, result.stderr.decode()
+    assert f"CODEX_ACTION_WEB_SEARCH={mode}" in (tmp_path / "env").read_text()
+
+
+def test_invalid_web_search_mode_fails_before_credentials(tmp_path):
+    result = prepare(tmp_path, WEB_SEARCH_INPUT='live"; echo unsafe')
+    assert result.returncode != 0
+    assert not list(tmp_path.glob("codex-action-state/home.*"))
+    assert b"::error::" in result.stdout
+
+
 @pytest.mark.parametrize("name", ["codex-review-issues", "codex-review-prs"])
 def test_report_publication_treats_legacy_commands_as_data(tmp_path, name):
     job = next(iter(load(f".github/workflows/{name}.yml")["jobs"].values()))
@@ -361,6 +375,11 @@ def test_default_capabilities_do_not_grant_network_or_extra_env(tmp_path):
     config = tomllib.loads(profile.read_text())
     assert config["permissions"]["ci-action"]["network"]["enabled"] is False
     assert config["shell_environment_policy"]["set"] == {}
+    assert "CODEX_ACTION_WEB_SEARCH=\n" in (tmp_path / "env").read_text()
+    assert (
+        load(".github/actions/codex-run/action.yml")["inputs"]["web-search"]["default"]
+        == ""
+    )
 
 
 def test_invalid_network_access_is_rejected(tmp_path):
@@ -370,7 +389,10 @@ def test_invalid_network_access_is_rejected(tmp_path):
 
 
 @pytest.mark.parametrize("status", [0, 124, 137, 42])
-def test_agent_returns_status_and_private_log_without_publishing(tmp_path, status):
+@pytest.mark.parametrize("web_search", ["", "disabled"])
+def test_agent_returns_status_and_private_log_without_publishing(
+    tmp_path, status, web_search
+):
     (tmp_path / "instructions").write_text("caller instructions")
     script = r"""
     timeout() { shift 3; "$@"; }
@@ -386,6 +408,7 @@ def test_agent_returns_status_and_private_log_without_publishing(tmp_path, statu
         CODEX_ACTION_INSTRUCTIONS=posix(tmp_path / "instructions"),
         CODEX_ACTION_SCHEMA="",
         CODEX_ACTION_ALLOW_SHELL="false",
+        CODEX_ACTION_WEB_SEARCH=web_search,
         CODEX_ACTION_TIMEOUT_MINUTES="1",
         MODEL_INPUT="gpt-6-astra",
         REASONING_EFFORT_INPUT="low",
@@ -402,6 +425,9 @@ def test_agent_returns_status_and_private_log_without_publishing(tmp_path, statu
         "shell_tool",
     ]:
         assert flag in args
+    assert ('web_search="disabled"' in args) == bool(web_search)
+    if not web_search:
+        assert not any(arg.startswith("web_search=") for arg in args)
     assert (tmp_path / "stdin.txt").read_text() == "caller instructions"
     if status:
         assert b"::error::" in result.stdout

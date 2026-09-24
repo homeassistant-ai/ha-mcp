@@ -1,0 +1,197 @@
+---
+# GENERATED FILE — do not edit. Translations live in
+# src/ha_mcp/settings_ui/locales/az.json (keys addon.*, features.*,
+# addon_stable.*); regenerate with: python scripts/generate_locales.py
+configuration:
+  backup_hint:
+    name: HA-nın tam anlıq nüsxəsi üçün tövsiyə səviyyəsi (LLM üçün)
+    description: 'Riskli əməliyyatlardan (məs. cihazların kütləvi silinməsindən) əvvəl
+
+      Home Assistant-ın tar arxivində tam ehtiyat nüsxəsinin yaradılmasını nə vaxt
+
+      tövsiyə etmək barədə LLM-in `ha_manage_backup(scope=''snapshot'')` alətinin
+      təsvirində
+
+      gördüyü tövsiyənin ifadə tərzini tənzimləyir. YALNIZ LLM-ə ünvanlanan
+
+      bu bir cümləyə təsir edir.
+
+
+      Avtomatlaşdırmaların / skriptlərin / köməkçilərin / və s. hər redaktəsindən
+      əvvəl avtomatik anlıq nüsxə yaratmaq üçün
+
+      aşağıdakı ayrıca **Redaktələrin avtomatik ehtiyat nüsxəsini aktivləşdir** seçimindən
+      istifadə edin.'
+  secret_path:
+    name: Gizli yolun əvəzlənməsi
+    description: 'MCP serveri üçün istəyə bağlı fərdi HTTP yolu. Avtomatik yaradılmış
+      təhlükəsiz yoldan istifadə etmək üçün boş saxlayın.
+
+      '
+  enable_tool_search:
+    name: Alət axtarışını aktivləşdir
+    description: 'Tam alət kataloqunu axtarış əsasında aşkarlama ilə əvəz edin. Boşdayanma
+      zamanı kontekst həcmini təxminən 90% azaldaraq təqribən 5K tokenə endirir. ⚠️
+      Öz daxili alət axtarışı / təxirə salınmış alətləri olan müştərilərdə (claude.ai,
+      Claude Desktop, Claude Code) bunu aktivləşdirməyin — iki axtarış qatı toqquşur
+      və həmin müştərilərdə daxili alət axtarışı daha yaxşı seçimdir; bunu deaktiv
+      saxlayın. Alətlərin təxirə salınıb-salınmaması müştəri və model birləşməsindən
+      asılıdır: quruluşunuz tam kataloqu əvvəlcədən yükləyirsə, bundan istifadə edin
+      — təxirə salınmış alətləri özündə dəstəkləməyən modellər (məs. Gemini, OpenAI
+      ilə uyğun lokal modellər, Claude Haiku), modeldən asılı olmayaraq bütün alət
+      sxemlərini birbaşa kontekstə daxil edən müştərilər (məs. GitHub Copilot CLI)
+      və ya daha kiçik kontekst pəncərələri üçün. Bəzi Codex modelləri və ChatGPT
+      də təxirə salınmış alətləri dəstəkləyir — bu seçimi lazımsız yerə aktiv saxlamamaq
+      üçün müştərinizin/modelinizin funksiyalarını birbaşa yoxlayın. Alətlər ha_search_tools
+      vasitəsilə tapılır və kateqoriyalara ayrılmış proksilər (oxuma/yazma/silmə)
+      vasitəsilə icra olunur. Qüvvəyə minməsi üçün tətbiqi (əlavəni) yenidən başlatmaq
+      tələb olunur — sonra alət siyahısının yenidən yüklənməsi üçün AI müştərinizdə
+      MCP serverinə yenidən qoşulun və ya onu yeniləyin. Təkcə tətbiqi (əlavəni) yenidən
+      başlatmaq müştərinin keşindəki alət siyahısını yeniləmir; bu, buradakı istənilən
+      parametr dəyişdirildikdən sonra keçərlidir.'
+  tool_search_max_results:
+    name: Alət axtarışında maksimum nəticə sayı
+    description: 'Alət axtarışı aktiv olduqda ha_search_tools tərəfindən qaytarılan
+      alətlərin maksimum sayı. Daha aşağı dəyərlər (2-3) kontekst tokenlərinə qənaət
+      edir, lakin uyğun alətləri nəzərdən qaçıra bilər. Aralıq: 2-10. Yenidən başlatma
+      tələb olunur.'
+  enable_tool_security_policies:
+    name: Alətlərin təhlükəsizlik siyasətlərini aktivləşdir (qabaqcıl)
+    description: Ciddi nəticələr doğura bilən alət çağırışları (kilid/siqnalizasiya
+      idarəetməsi, avtomatlaşdırmaların yazılması və s.) üçün istifadəçi təsdiqi tələb
+      edir. Qorunan alət çağırıldıqda agent istifadəçidən veb interfeysdə Alətlərin
+      təhlükəsizlik siyasətləri bölməsini açmağı və çağırışın davam etməsi üçün Təsdiqlə
+      düyməsinə basmağı istəyir. Hər alət üçün qaydalar və istəyə bağlı arqument şərtləri
+      Alətlərin təhlükəsizlik siyasətləri bölməsində konfiqurasiya olunur. Standart
+      olaraq deaktivdir. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.
+  enable_security_policy_tool:
+    name: AI agentlərinə alətlərin təhlükəsizlik siyasətlərini redaktə etməyə icazə
+      ver
+    description: 'Qoşulmuş AI agentlərinə alətlərin təhlükəsizlik siyasətlərini oxumağa
+      və yenidən yazmağa imkan verən ha_manage_security_policy alətini qeydiyyata
+      alır — bu, təsdiq tələblərinin çıxarılmasını da əhatə edir. Standart olaraq
+      deaktivdir. Yuxarıdakı Alətlərin təhlükəsizlik siyasətləri seçimindən asılı
+      deyil: bu seçim qaydaların tətbiq olunmasını deyil, onları kimin redaktə edə
+      biləcəyini idarə edir. Alət gözləyən təsdiq sorğularını görə və ya onlar barədə
+      qərar verə bilməz. İnsan nəzarətini saxlamaq üçün aləti aktivləşdirməzdən əvvəl
+      ona təsdiq tələbi qoyun: veb interfeysin Alətlər vərəqində Təhlükəsizlik siyasətini
+      idarə et aləti üçün "security gated" seçimini aktivləşdirin. Qüvvəyə minməsi
+      üçün yenidən başlatmaq tələb olunur.'
+  read_only_mode:
+    name: Yalnız oxuma rejimi
+    description: Bütün yazma alətlərini söndürür və alətlərin hər hansı yazma və ya
+      dağıdıcı əməliyyat çağırışı etmə imkanını aradan qaldırır. Həm oxuma, həm də
+      yazma funksiyası olan alətlər — ehtiyat nüsxələr, tətbiqlər (əlavələr), enerji
+      tərcihləri, səs emalı ardıcıllıqları və aktiv olduqda kod rejimi — yazma əməliyyatları
+      bloklanmaqla istifadəyə açıq qalır. Veb interfeysin Alətlər bölməsindəki seçimlə
+      eynidir. Standart olaraq deaktivdir. Qüvvəyə minməsi üçün yenidən başlatma tələb
+      olunur.
+  redact_secrets:
+    name: Məxfi məlumatları gizlət
+    description: Alət cavabları AI köməkçisinə çatmazdan əvvəl onlardan məxfi məlumatları
+      gizlədir. Parol kimi işarələnmiş tətbiq (əlavə) seçimləri və inteqrasiya sahələri
+      təyin edilib/boş göstəricisi ilə əvəz olunur (beləliklə, "bu giriş məlumatı
+      konfiqurasiya edilibmi?" sualını cavablandırmaq mümkün qalır), digər alət cavabları
+      isə serverin artıq gördüyü məxfi dəyərlərdən təmizlənir (6 simvoldan qısa dəyərlər
+      nəzərə alınmır, çünki kiçik fraqmentlərin əvəzlənməsi əlaqəsiz çıxışı korlayardı).
+      Sxemdə parol kimi işarələnməyən sahələr aşkarlana bilmir. Standart olaraq deaktivdir.
+  enable_mandatory_bps:
+    name: Yazma zamanı ən yaxşı təcrübələr üzrə bacarıq təlimatlarını əlavə et
+    description: 'Yazma alətlərinin bacarıq məzmunu təqdim etməsi funksiyası üçün
+      əsas seçim (problem #1182). Aktiv olduqda (standart vəziyyət) altı konfiqurasiya
+      yazma aləti (avtomatlaşdırmalar, skriptlər, səhnələr, köməkçilər, idarə panelləri,
+      xam YAML) hər uğurlu yazmada Home Assistant üzrə ən yaxşı təcrübələrin əsas
+      istinad fayllarını `skill_content` daxilində əlavə edir, həmçinin ən yaxşı təcrübə
+      xəbərdarlıqlarında istinad edilən bölmələri avtomatik daxil edir. Hər alət həmçinin
+      hər çağırış üçün `MandatoryBPS` parametri təqdim edir; agent məzmunu əldə etdikdən
+      sonra sonrakı çağırışlarda bunu false edə bilər. Bu əsas seçim deaktiv olduqda
+      çağırış parametrindən və ya BP xəbərdarlıqlarından asılı olmayaraq HEÇ BİR skill_content
+      göndərilmir. İlk seçim kimi aktiv saxlanması tövsiyə olunur; yalnız çox kiçik
+      kontekst pəncərələri olan modellər üçün söndürün. Bunun söndürülməsi yazma dəqiqliyini
+      azalda bilər. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.'
+  enable_strict_mandatory_bps:
+    name: Ən yaxşı təcrübələrə ciddi riayət rejimi
+    description: 'Ciddi rejim: müştəri ən yaxşı təcrübələri oxuduğunu sübut edənədək
+      onun alətdən istifadəsinə mane olur. Aktiv olduqda ən yaxşı təcrübələrə əsaslanan
+      altı yazma aləti (avtomatlaşdırmalar, skriptlər, səhnələr, köməkçilər, idarə
+      panelləri, xam YAML) bloklanır və müştərini ha_get_skill_guide vasitəsilə ən
+      yaxşı təcrübələr üzrə bacarıq təlimatını oxumağa və oradan aldığı təsdiq açarını
+      geri ötürməyə yönəldən xəta qaytarır. Aktiv olduqda ha_get_skill_guide aləti
+      aktiv vəziyyətdə kilidlənir — təsdiq açarını yalnız o təqdim edir. Yuxarıdakı
+      "Attach best-practice skills on writes" seçiminə tabedir və həmin seçim deaktiv
+      olduqda təsirsizdir. Qüvvəyə minməsi üçün yenidən başlatma tələb olunur.'
+  ha_tool_concurrency:
+    name: Home Assistant alətlərinin paralel icrası
+    description: Bütün sessiyalar üzrə Home Assistant alətlərinin üst səviyyəli çağırışlarının
+      eyni vaxtda icrası üçün istəyə bağlı limit. Daxili REST, WebSocket və hər alətin
+      daxilində şaxələnən çağırışların paralel icrası dəyişmir. 0 məhdudiyyətsiz davranışı
+      saxlayır. İcra üçün boş yer gözləyən çağırış 60 saniyədən sonra uğursuz olur.
+  disabled_tools:
+    name: Deaktiv alətlər (vergüllə ayrılmış)
+    description: Burada sadalanan alətlər məcburi söndürülür və veb Parametrlər interfeysində
+      (Alətlər vərəqində) kilidlənir — əvvəlcə bu seçimdəki təyinatı ləğv etmədən
+      onları orada yenidən aktivləşdirmək mümkün deyil. Məcburi alətlərin kiçik bir
+      qrupu (ha_search, ha_get_overview, ha_get_state, ha_report_issue, ha_manage_backup)
+      söndürülə bilməz və burada sadalansa belə işləməyə davam edir. ha_get_skill_guide
+      yalnız ən yaxşı təcrübələrə ciddi riayət rejimi (enable_strict_mandatory_bps)
+      deaktiv olduqda söndürülə bilər. Vergüllə ayrılmış alət adları (məs. ha_call_event,ha_eval_template).
+  pinned_tools:
+    name: Sancaqlanmış alətlər (vergüllə ayrılmış)
+    description: Burada sadalanan alətlər sancaqlanmış vəziyyətdə kilidlənir — Alətlər
+      vərəqinin yuxarısında görünür və əvvəlcə bu seçimdəki təyinatı ləğv etmədən
+      veb Parametrlər interfeysindən sancaqlarını çıxarmaq mümkün deyil. Alət axtarışı
+      ilə birlikdə faydalıdır. Vergüllə ayrılmış alət adları.
+  enable_auto_backup:
+    name: Redaktələrin avtomatik ehtiyat nüsxəsini aktivləşdir
+    description: 'Ehtiyat nüsxə mexanizmi ilə əhatə olunan hər yazma/dağıdıcı MCP
+      alət çağırışından (avtomatlaşdırma, skript, səhnə, köməkçi, idarə paneli, idarə
+      paneli resursu, etiket, kateqoriya, qrup, zona, sahə, təqvim, todo, obyekt,
+      cihaz, inteqrasiya və müvafiq çıxarma/silmə alətləri) əvvəl obyekt üzrə anlıq
+      nüsxə yaradır. Avtomatik ehtiyat nüsxə tezliyi limiti bunun nə qədər tez-tez
+      baş verdiyini məhdudlaşdırır: 0 (standart) hər belə çağırışda, N>0 isə hər obyekt
+      üçün N dəqiqə ərzində ən çox bir anlıq nüsxə yaradır. Anlıq nüsxələr /data/ha_mcp_backups/
+      altında YAML faylları kimi saxlanılır (HAMCP_BACKUP_DIR vasitəsilə dəyişdirilə
+      bilər) və veb parametrlər interfeysindəki Ehtiyat nüsxələr vərəqi və ya ha_manage_backup(scope=''edits'',
+      ...) vasitəsilə siyahılanır, bərpa edilir və ya silinir. Bu domenlər üçün nüsxənin
+      yaradılması imkan daxilində yerinə yetirilir — uğursuzluq zamanı jurnala WARNING
+      yazılır və yazma əməliyyatı davam edir. Fayl və birbaşa YAML alətləri istisnadır:
+      ha_write_file, ha_delete_file və ha_config_set_yaml anlıq nüsxəni ilkin şərt
+      sayır, buna görə bu seçim deaktiv olduqda həmin alətlərlə yazma rədd edilir,
+      nüsxə yaratmaq alınmadıqda isə yazma bloklanır. Standart olaraq aktivdir; seçimi
+      söndürmək imkan daxilində yaradılan nüsxələrdən imtina edir və bununla birlikdə
+      fayl və birbaşa YAML alətlərini də istifadədən çıxarır. Qüvvəyə minməsi üçün
+      yenidən başlatmaq tələb olunur.'
+  auto_backup_throttle_minutes:
+    name: Avtomatik ehtiyat nüsxə tezliyi limiti (dəqiqə)
+    description: Hər obyekt üçün tezlik məhdudiyyətinin müddəti. 0 (standart) ehtiyat
+      nüsxə mexanizmi ilə əhatə olunan hər yazma əməliyyatında anlıq nüsxə yaradır.
+      N>0 hər obyekt üçün N dəqiqə ərzində ən çox bir anlıq nüsxə yaradır. Aralıq
+      0–1440.
+  auto_backup_retain_per_entity:
+    name: Avtomatik ehtiyat nüsxələrin saxlanma sayı (hər obyekt üzrə)
+    description: Hər obyekt üçün saxlanılan anlıq nüsxələrin maksimum sayı. Bu limiti
+      aşan köhnə anlıq nüsxələr hər uğurlu nüsxə yaratma zamanı silinir. Standart
+      dəyər 100, aralıq 1–10000.
+  enable_snapshot_delete:
+    name: Anlıq nüsxələrin silinməsinə icazə ver
+    description: ha_manage_backup alətinə HA-nın tam anlıq nüsxələrinin tar arxivlərini
+      silməyə imkan verir (scope='snapshot', action='delete'). Standart olaraq deaktivdir
+      — səhv dəyişiklikdən sonra anlıq nüsxə son bərpa nöqtəsi ola bilər, buna görə
+      insan burada bu seçimi aktivləşdirməlidir. Aktiv olduqda belə planlaşdırılmış
+      ehtiyat nüsxələr, qalan ən yeni anlıq nüsxə və aşağıdakı minimum yaş həddinə
+      çatmamış bütün nüsxələr qorunur.
+  snapshot_delete_min_age_days:
+    name: Silmək üçün anlıq nüsxənin minimum yaşı (gün)
+    description: Anlıq nüsxənin silinə bilməsi üçün yaradılmasından ən azı bu qədər
+      vaxt keçməlidir. Aralıq 0–365; 0 minimum həddi söndürür (ən yeni anlıq nüsxənin
+      və planlaşdırılmış ehtiyat nüsxələrin qorunması qüvvədə qalır). Standart dəyər
+      7.
+  verify_ssl:
+    name: TLS sertifikatını yoxla
+    description: Home Assistant serverinin TLS sertifikatını yoxlayın. Tətbiq (əlavə)
+      Supervisor proksisi vasitəsilə qoşulur, buna görə adətən bu seçimin təsiri olmur
+      və aktiv saxlanmalıdır. Yalnız tətbiqi (əlavəni) HA ilə özünün imzaladığı sertifikatı
+      olan və ya host adı uyğun gəlməyən ictimai HTTPS host adı üzərindən əlaqə yaratmaq
+      üçün yenidən konfiqurasiya etmisinizsə söndürün. Söndürmək ötürülmənin təhlükəsizliyini
+      zəiflədir — buna ehtiyacınız olduğunu dəqiq bilmirsinizsə, aktiv saxlayın. Qüvvəyə
+      minməsi üçün yenidən başlatmaq tələb olunur.

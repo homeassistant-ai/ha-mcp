@@ -31,6 +31,7 @@ from .._version import get_version, is_embedded, is_running_in_addon
 from ..client.supervisor_client import make_supervisor_httpx_client
 from ..config import Settings, get_global_settings
 from ..errors import create_validation_error
+from ..utils.mcp_client_host import detect_client_host
 from ..utils.usage_logger import (
     AVG_LOG_ENTRIES_PER_TOOL,
     get_recent_logs,
@@ -71,6 +72,33 @@ MISSING_TOOL_HINT = (
     "use the connector's refresh option, or simply disconnect and reconnect it; "
     "in Claude Code run /mcp and reconnect the server. Only file a bug if the "
     "tool is still missing after a refresh."
+)
+
+# Known Claude Desktop bugs that present as ha-mcp failures. Both live in
+# the client, never reach this server, and already have upstream tickets, so
+# the agent must rule them out before filing here.
+KNOWN_CLIENT_ISSUES_HINT = (
+    "KNOWN CLAUDE DESKTOP ISSUES (not ha-mcp bugs; check before filing):\n"
+    "1. A write tool (dashboard, automation, script, helper, service call) "
+    "hangs and the client reports a 4-minute timeout with no result, while "
+    "read tools work. Cause: Claude Desktop's manual-approval dialog for a "
+    "local MCP server accepts the click before the call is fully generated "
+    "and silently drops the call. The server never receives it. Tracked in "
+    "homeassistant-ai/ha-mcp#2367 and anthropics/claude-code#92014. Tell the "
+    "user to retry and wait a few seconds before clicking Allow once, or to "
+    "set the write tools to Always allow (Settings -> Connectors -> the "
+    "server -> Tool permissions). A dropped call never reached Home "
+    "Assistant, but the same timeout can also hide a call that landed and "
+    "lost only its result (anthropics/claude-code#80012), so read the target "
+    "back before repeating a write that is not idempotent.\n"
+    "2. Every tool call fails with 'expected nonoptional, received "
+    "undefined' when an optional parameter is omitted. Cause: Claude Desktop "
+    "2.110.0 rejects omitted optional MCP parameters. Tracked in "
+    "homeassistant-ai/ha-mcp#2472 and anthropics/claude-code#94608 (fixed "
+    "upstream). Tell the user to update Claude Desktop to 2.2553.0 or later; "
+    "if they cannot update, downgrading to 1.52386.6 (links in #2472) also "
+    "works.\n"
+    "Only file a bug if the problem persists after the matching workaround."
 )
 
 # Max characters to include from addon container logs.
@@ -440,6 +468,72 @@ def _format_client_info_for_template(info: dict[str, str]) -> str:
     return base
 
 
+# Claude Desktop advertises every stdio server as ``local-agent-mode-<server
+# name> 1.0.0`` (#1701, #2472, #2484), so the name alone never says which
+# Desktop release is involved.
+_CLAUDE_DESKTOP_STDIO_PREFIX = "local-agent-mode-"
+HOST_NOT_DETECTED = "not detected"
+
+# stdio-to-HTTP bridges present their own identity in the handshake, so the
+# server never sees the real client behind them. ``mcp 0.1.0`` is the Python
+# MCP SDK's default clientInfo, which is what fastmcp-remote and mcp-proxy
+# style bridges send (observed live from Claude Desktop -> fastmcp-remote ->
+# component, 2026-09).
+_STDIO_BRIDGE_NAMES = {
+    "mcp": "Python MCP SDK default identity, i.e. a fastmcp-remote / mcp-proxy style bridge",
+    "mcp-remote": "mcp-remote bridge",
+    "mcp-proxy": "mcp-proxy bridge",
+    "fastmcp-remote": "fastmcp-remote bridge",
+}
+
+
+def _http_user_agent() -> str:
+    """The request's ``User-Agent``, or ``""`` outside an HTTP request."""
+    value = get_http_headers(include={"user-agent"}).get("user-agent", "")
+    return str(value).strip()
+
+
+def _format_client_host_for_template(diagnostic_info: dict[str, Any]) -> str:
+    """Render what the server could learn about the host app beyond ``clientInfo``.
+
+    Over stdio the host is the process that spawned ha-mcp, so the parent
+    chain names it and, for Claude Desktop, gives the release. Over HTTP the
+    ``User-Agent`` is the only extra signal (and for Anthropic's connector
+    broker it carries no app version). The wording tells the agent exactly
+    when it still has to ask the user.
+    """
+    client_info = diagnostic_info.get("mcp_client_info") or {}
+    client_host = diagnostic_info.get("mcp_client_host") or {}
+    user_agent = diagnostic_info.get("http_user_agent") or ""
+    parts: list[str] = []
+    name = client_info.get("name") or ""
+    if name.startswith(_CLAUDE_DESKTOP_STDIO_PREFIX):
+        parts.append("Claude Desktop (local agent mode)")
+    # "mcp" is only the SDK default when paired with its literal 0.1.0; a
+    # client that names itself "mcp" with a real version is not a bridge.
+    bridge = _STDIO_BRIDGE_NAMES.get(name.lower())
+    if name.lower() == "mcp" and client_info.get("version") != "0.1.0":
+        bridge = None
+    if bridge:
+        parts.append(
+            f"stdio bridge ({bridge}); the real client app is hidden behind "
+            "it, ask the user which app and version launched the bridge, do "
+            "not guess"
+        )
+    if diagnostic_info.get("mcp_transport") == "stdio":
+        if client_host:
+            version = client_host.get("version") or "unknown"
+            parts.append(
+                f"{client_host.get('name') or 'unknown'} {version} "
+                "_(from the parent process)_"
+            )
+        else:
+            parts.append(HOST_NOT_DETECTED)
+    elif user_agent and client_info.get("title") != "from HTTP User-Agent":
+        parts.append(f"User-Agent `{user_agent}`")
+    return "; ".join(parts) or HOST_NOT_DETECTED
+
+
 def _detect_mcp_transport() -> str:
     """Best-effort MCP transport detection.
 
@@ -468,6 +562,12 @@ def _detect_mcp_transport() -> str:
     if transport_env == "streamable-http":
         return "http"
     if os.environ.get("MCP_HTTP_PORT") or os.environ.get("FASTMCP_PORT"):
+        return "http"
+
+    # The in-process server inside HA core only ever serves HTTP, and HA's
+    # stdin is not a TTY, so the isatty fallback below would label every
+    # embedded install "stdio" (seen on a live component install, 8.5.0).
+    if is_embedded():
         return "http"
 
     # Home Assistant add-on always runs HTTP via homeassistant-addon/start.py.
@@ -729,6 +829,7 @@ def _build_formatted_report(
         f"Installation Method: {diagnostic_info['installation_method']}",
         f"MCP Transport: {mcp_transport}",
         f"MCP Client: {_format_client_info_for_template(client_info)}",
+        f"MCP Client Host: {_format_client_host_for_template(diagnostic_info)}",
         f"Operating System: {platform_info['os']} {platform_info['os_release']} ({platform_info['architecture']})",
         f"Python Version: {platform_info['python_version']}",
         f"Home Assistant Version: {diagnostic_info['home_assistant_version']}",
@@ -906,7 +1007,8 @@ class BugReportTools:
                     "None = full response. Typical for a runtime bug: "
                     "'runtime_bug_template,suggested_title,"
                     "runtime_bug_submit_url,duplicate_check_urls,"
-                    "anonymization_guide,instructions'; for agent feedback "
+                    "anonymization_guide,missing_tool_hint,"
+                    "known_client_issues_hint,instructions'; for agent feedback "
                     "swap in agent_behavior_template and "
                     "agent_behavior_submit_url. The templates already embed "
                     "the relevant logs, so the raw log keys are only needed "
@@ -917,7 +1019,8 @@ class BugReportTools:
                     "runtime_bug_template, agent_behavior_template, "
                     "anonymization_guide, suggested_title, "
                     "runtime_bug_submit_url, agent_behavior_submit_url, "
-                    "duplicate_check_urls, missing_tool_hint, instructions."
+                    "duplicate_check_urls, missing_tool_hint, "
+                    "known_client_issues_hint, instructions."
                 ),
             ),
         ] = None,
@@ -988,6 +1091,12 @@ class BugReportTools:
         config_toggles = _get_config_toggles()
         mcp_transport = _detect_mcp_transport()
         client_info = _extract_client_info(ctx)
+        client_host = (
+            await asyncio.to_thread(detect_client_host)
+            if mcp_transport == "stdio"
+            else {}
+        )
+        user_agent = _http_user_agent()
         installed_version = await asyncio.to_thread(_detect_installed_version)
         component_version = await self._detect_component_version()
         tools_entry_status = await self._detect_tools_entry_status()
@@ -1008,6 +1117,8 @@ class BugReportTools:
             "websockets_dependency": _websockets_dependency_state(),
             "mcp_transport": mcp_transport,
             "mcp_client_info": client_info,
+            "mcp_client_host": client_host,
+            "http_user_agent": user_agent,
             "config_toggles": config_toggles,
             "connection_status": "Unknown",
             "home_assistant_version": "Unknown",
@@ -1139,6 +1250,7 @@ class BugReportTools:
             "agent_behavior_submit_url": agent_behavior_submit_url,
             "duplicate_check_urls": duplicate_check_urls,
             "missing_tool_hint": MISSING_TOOL_HINT,
+            "known_client_issues_hint": KNOWN_CLIENT_ISSUES_HINT,
             "instructions": (
                 "WORKFLOW FOR PRESENTING BUG REPORTS:\n\n"
                 "0. **PRE-CHECK — is the problem a missing/unavailable tool?** If "
@@ -1148,6 +1260,12 @@ class BugReportTools:
                 "client tool list (not a server bug), fixed by refreshing or "
                 "reconnecting the MCP connection. Only continue with this report "
                 "if the tool is still missing after the user refreshes.\n\n"
+                "0b. **PRE-CHECK — is it a known Claude Desktop bug?** A write "
+                "tool that hangs to a 4-minute timeout, or every call failing "
+                "with 'expected nonoptional, received undefined', is a client "
+                "bug with an upstream ticket. See the `known_client_issues_hint` "
+                "field for the workaround to give the user, and only continue "
+                "if the problem persists after it.\n\n"
                 "1. **Check for duplicates FIRST** (before presenting the template):\n"
                 "   - Use the duplicate_check_urls to search for similar issues\n"
                 '   - If gh CLI is available: use `gh issue list --search "keyword"`\n'
@@ -1183,7 +1301,19 @@ class BugReportTools:
                 "     for triage — do not skip it.\n"
                 "   `MCP Transport` and `MCP Client` are auto-detected by the server (the latter\n"
                 "   from the MCP `initialize` handshake); leave both as-is unless they're clearly\n"
-                "   wrong.\n\n"
+                "   wrong.\n"
+                "   - `**MCP Client Host:**` — the app that launched ha-mcp and its release, read\n"
+                "     from the parent process over stdio. Claude Desktop only advertises\n"
+                "     `local-agent-mode-<server> 1.0.0` in the handshake, and Desktop releases are\n"
+                "     what client-side regressions hinge on (#2472). If this line says\n"
+                '     "not detected", "stdio bridge", or the version is "unknown", ASK the\n'
+                "     user which app and version they are using (Claude Desktop: Settings ->\n"
+                "     About; Claude Code: `claude --version`) and write THEIR answer on this\n"
+                "     line. NEVER fill it in yourself: you cannot know the app or its version,\n"
+                "     and a guessed value sends triage the wrong way. If the user does not\n"
+                '     know, write "unknown (user asked)". An `MCP Client` of `mcp 0.1.0` is\n'
+                "     a bridge such as fastmcp-remote, not the real client, so the same rule\n"
+                "     applies there.\n\n"
                 "5. **Present the anonymized report to the user**:\n"
                 "   a. Show the suggested_title (user can edit if needed) and tell them GitHub's\n"
                 "      title field is now pre-filled via the submission URL — they don't need to\n"
@@ -1518,6 +1648,7 @@ ha_call_service(domain="light", service="turn_on", entity_id="light.example")
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
 - **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
+- **MCP Client Host:** {_format_client_host_for_template(diagnostic_info)} _(auto-detected; if this says "not detected" or "unknown", ask the user which app and version launched ha-mcp and write it here)_
 - **AI Model:**
 - **Operating System:** {platform_info.get("os", "Unknown")} {platform_info.get("os_release", "")} ({platform_info.get("architecture", "Unknown")})
 - **Python Version:** {platform_info.get("python_version", "Unknown")}
@@ -1685,6 +1816,7 @@ def _generate_agent_behavior_template(
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
 - **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
+- **MCP Client Host:** {_format_client_host_for_template(diagnostic_info)} _(auto-detected; if this says "not detected" or "unknown", ask the user which app and version launched ha-mcp and write it here)_
 - **AI Model:**
 - **Home Assistant Version:** {diagnostic_info.get("home_assistant_version", "Unknown")}
 

@@ -217,12 +217,22 @@ class HomeAssistantSmartMCPServer:
         # of the full description we just discarded).
         self._apply_lite_docstrings()
 
+        # Append the Claude Desktop approval note to write tools. After
+        # lite docstrings so the note survives the replacement.
+        self._apply_write_tool_note()
+
         # Enrich tool descriptions with BM25 keyword boosts. Runs
         # unconditionally so Claude's native deferred-tool search
         # (claude.ai) benefits even when ENABLE_TOOL_SEARCH is off.
         # Must come before _apply_tool_search so CategorizedSearchTransform
         # indexes the enriched descriptions.
         self._apply_search_keyword_enrichment()
+
+        # Capability-specific metadata supersedes legacy/lite descriptions,
+        # and must reach the catalog before categorized search indexes it.
+        from .transforms import ComponentSearchSchemaTransform
+
+        self.mcp.add_transform(ComponentSearchSchemaTransform(self.client))
 
         # Apply tool search transform (must come after all tools and
         # the skill guide tool are registered so it can wrap everything)
@@ -248,20 +258,24 @@ class HomeAssistantSmartMCPServer:
 
         self.mcp.add_middleware(ToolSearchHintMiddleware())
 
-        # Stamp every tools/list entry with its conversation-agent LLM API
-        # exposure + pinned state (#1745). Additive metadata only — regular
-        # clients are unaffected; the ha_mcp_tools custom component filters
-        # what it offers to Home Assistant conversation agents on it.
-        from .llm_exposure import LlmExposureMiddleware
+        # Only the custom component's conversation-agent LLM API consumes the
+        # private per-tool stamp. Avoid adding it to standalone/add-on catalogs,
+        # or to an embedded server whose LLM API is disabled (#2479).
+        from .config import should_emit_llm_api_metadata
 
-        # policy_live: whether the gating middleware/queue actually wired at
-        # startup — stamped so a client can distinguish "configured" from
-        # "enforcing" on the very connection it is using (#1990).
-        self.mcp.add_middleware(
-            LlmExposureMiddleware(
-                policy_live=lambda: getattr(self, "approval_queue", None) is not None
+        if should_emit_llm_api_metadata():
+            from .llm_exposure import LlmExposureMiddleware
+
+            # policy_live: whether the gating middleware/queue actually wired
+            # at startup — stamped so the component can distinguish configured
+            # from enforcing on the connection it is using (#1990).
+            self.mcp.add_middleware(
+                LlmExposureMiddleware(
+                    policy_live=lambda: (
+                        getattr(self, "approval_queue", None) is not None
+                    )
+                )
             )
-        )
 
         # Entity visibility enforce mode, INBOUND half (#2015) — always
         # installed, consults the live config per request (no-op unless
@@ -754,10 +768,13 @@ class HomeAssistantSmartMCPServer:
             "ha_get_skill_guide or your locally installed skills."
         ),
         "ha_config_get_scene": (
-            "Get a Home Assistant scene configuration by "
-            "scene_id or entity_id. Returns the full config plus a "
+            "Get a Home Assistant scene configuration by scene_id or entity_id, "
+            "or omit scene_id to list/search scenes. Use query for names/IDs "
+            "and search_in_config=True for full stored attribute values. "
+            "Pass a returned scene_id to get the full config plus a "
             "stable config_hash for use with python_transform on "
-            "ha_config_set_scene.\n\n"
+            "ha_config_set_scene. Integration-managed scenes have no editable "
+            "storage config; partial content searches are not exhaustive.\n\n"
             "For schema details, see "
             "ha_get_skill_guide."
         ),
@@ -1127,6 +1144,20 @@ class HomeAssistantSmartMCPServer:
                 "default."
             )
 
+    def _apply_write_tool_note(self) -> None:
+        """Append the Claude Desktop manual-approval note to write tools.
+
+        Applied unconditionally: the dropped calls never reach the server
+        (issue #2367), so the tool description is the only channel that
+        reaches the agent before the user clicks approve.
+        """
+        try:
+            from .transforms import WriteToolNoteTransform
+
+            self.mcp.add_transform(WriteToolNoteTransform())
+        except Exception:
+            logger.exception("Failed to apply WriteToolNoteTransform")
+
     def _apply_search_keyword_enrichment(self) -> None:
         """Append BM25 keyword boosts to tool descriptions.
 
@@ -1301,6 +1332,7 @@ class HomeAssistantSmartMCPServer:
 
         try:
             from .policy.approval_queue import ApprovalQueue
+            from .policy.decisions import ApprovalResponseListener
             from .policy.middleware import PolicyMiddleware
             from .policy.model import Policy
             from .policy.persistence import load_policy
@@ -1323,11 +1355,117 @@ class HomeAssistantSmartMCPServer:
             # roundtrip of a gated tool call.
             return load_policy(data_dir)
 
+        async def _approval_ws_client() -> Any:
+            # Imported at call time, like the rest of this block: the
+            # WebSocket stack is only needed once a gated call is actually
+            # announced, which may never happen.
+            from .client.websocket_client import get_websocket_client
+
+            # Keyed to the credentials the announcement itself goes out
+            # with, the way ``HomeAssistantClient.send_websocket_message``
+            # does it. In OAuth mode ``self.client`` is a proxy resolving to
+            # the current request's client, while the global settings hold
+            # only the ``oauth-mode-token`` placeholder -- so an
+            # unparameterised call would authenticate the response
+            # subscription as nobody, and a request could be announced over
+            # REST on a channel that can never carry the answer back.
+            # Read once, and catch the miss explicitly: a per-attribute
+            # ``getattr`` with a default would swallow an AttributeError
+            # raised anywhere INSIDE the OAuth proxy's resolution, hand
+            # back None, and silently authenticate as the placeholder the
+            # whole change exists to avoid. Three separate reads would also
+            # be three separate resolutions, with nothing tying them to one
+            # client. A client with no credentials at all is the token
+            # deployments' normal case: pooled default connection.
+            client = self.client
+            url: str | None
+            token: str | None
+            verify_ssl: bool | None
+            try:
+                url = client.base_url
+                token = client.token
+                verify_ssl = client.verify_ssl
+            except AttributeError:
+                logger.debug(
+                    "policy decisions: %s exposes no per-request credentials; "
+                    "opening the approval-response channel on the pooled "
+                    "default connection",
+                    type(client).__name__,
+                    exc_info=True,
+                )
+                url = token = verify_ssl = None
+            return await get_websocket_client(
+                url=url, token=token, verify_ssl=verify_ssl
+            )
+
+        # Reads the same policy file as the middleware, so the toggle that
+        # opens this channel is the one the user flips in the settings UI,
+        # with no restart in between.
+        async def _emit_approval_result(
+            token: str,
+            decision: str,
+            *,
+            applied: bool,
+            reason: str,
+            tool_name: str | None = None,
+        ) -> None:
+            from .client.rest_client import HomeAssistantClient
+            from .policy.events import emit_approval_result
+
+            # Credentials read the way ``_approval_ws_client`` reads them,
+            # and for the same reason: this runs in a bus handler, not in a
+            # request, so in OAuth mode ``self.client`` resolves to nobody
+            # and the proxy raises rather than handing back a usable client.
+            # A fresh REST client over the snapshot keeps the result going
+            # out as the same identity the request was announced with.
+            client = self.client
+            url: str | None
+            token_value: str | None
+            verify_ssl: bool | None
+            try:
+                url = client.base_url
+                token_value = client.token
+                verify_ssl = client.verify_ssl
+            except Exception:
+                logger.debug(
+                    "policy decisions: no credentials for the result event; "
+                    "the decision itself is unaffected",
+                    exc_info=True,
+                )
+                return
+            # Owned here, so closed here: this client is built per event and
+            # carries its own httpx connection pool, which nothing else will
+            # ever reclaim. A wrong PIN retried by a chatty automation would
+            # otherwise open one per attempt.
+            async with HomeAssistantClient(
+                url, token_value, verify_ssl=verify_ssl
+            ) as result_client:
+                await emit_approval_result(
+                    result_client,
+                    token,
+                    decision,
+                    applied=applied,
+                    reason=reason,
+                    tool_name=tool_name,
+                )
+
+        self.approval_response_listener = ApprovalResponseListener(
+            policy_provider=_policy_provider,
+            queue=self.approval_queue,
+            data_dir=data_dir,
+            get_ws_client=_approval_ws_client,
+            emit_result=_emit_approval_result,
+        )
+
         try:
             self.mcp.add_middleware(
                 PolicyMiddleware(
                     policy_provider=_policy_provider,
                     queue=self.approval_queue,
+                    get_client=lambda: self.client,
+                    ensure_decisions_listener=(
+                        self.approval_response_listener.ensure_subscribed
+                    ),
                 )
             )
             logger.info(

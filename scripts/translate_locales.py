@@ -520,16 +520,7 @@ def _validate(item: WorkItem, translated: Any) -> str | None:
     # push is held back whole, the progress file is discarded, and the run
     # re-spends its quota planning the same work again. Rejecting the one
     # string instead costs one retry and leaves the key for tomorrow.
-    #
-    # Asked at the engine's setting, which narrows three arms the merge gate
-    # runs in full (``locale_rules._parity_fault`` names each). Numbers are
-    # the reason the dial exists: the two recorded tolerances are number
-    # entries and the engine cannot read them, so a full multiset here would
-    # refuse two correct strings on every run -- while asking nothing left a
-    # freshly written key unchecked here and checked there, which lands the
-    # fault and holds the whole tree back. Both failures cost a human one
-    # tolerance entry; only this one keeps the cost to a single key.
-    fault = locale_rules._parity_fault(item.english, translated, gate="engine")
+    fault = locale_rules._parity_fault(item.english, translated)
     if fault:
         return f"contradicts the English source: {fault}"
     return None

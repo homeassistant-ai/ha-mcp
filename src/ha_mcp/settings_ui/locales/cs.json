@@ -498,7 +498,25 @@
     "addon.verify_ssl.description": "Ověřit TLS certifikát serveru Home Assistant. Aplikace (doplněk) se připojuje přes proxy Supervisor, takže to obvykle nemá žádný vliv a mělo by to zůstat zapnuté. Zakazujte pouze v případě, že jste přenastavili aplikaci (doplněk) tak, aby komunikovala s HA přes veřejný HTTPS hostname s The self-signed certifikátem nebo neshodou hostname. Vypnutí oslabuje zabezpečení přenosu – nechte zapnuté, pokud víte, že to potřebujete. Vyžaduje restart, aby se projevilo.",
     "addon.ha_tool_concurrency.name": "Souběžnost nástrojů Home Assistant",
     "addon.ha_tool_concurrency.description": "Volitelný limit pro vnější volání nástrojů Home Assistant napříč všemi relacemi. Vnitřní souběžnost REST, WebSocket a distribuce pro jednotlivé nástroje zůstává nezměněna. Hodnota 0 zachovává neomezené chování. Volání čekající na kapacitu selže po 60 sekundách.",
-    "addon_stable.enable_tool_search.description": "Nahradit úplný katalog nástrojů vyhledáváním. Snižuje klidový kontext přibližně o 90 %, na asi 5 tisíc tokenů. ⚠️ NEZAPÍNEJTE toto v klientech s vlastním vestavěným vyhledáváním nástrojů / odloženými nástroji (claude.ai, Claude Desktop, Claude Code) – obě vrstvy vyhledávání se střetávají a vestavěné vyhledávání nástrojů v klientovi je zde lepší volbou; nechte to vypnuté. Zda jsou nástroje odloženy, závisí na kombinaci vašeho klienta a modelu: použijte toto, když vaše nastavení načítá celý katalog předem – modely bez nativních odložených nástrojů (např. Gemini, lokální modely kompatibilní s OpenAI, Claude Haiku), klienti, kteří vkládají všechna schémata nástrojů bez ohledu na model (např. GitHub Copilot CLI), nebo menší kontextová okna. Některé modely Codex a ChatGPT také obsahují odložené nástroje – ověřte si funkce přímo u svého klienta/modelu, abyste to nenechávali zbytečně zapnuté. Nástroje se vyhledávají přes ha_search_tools a spouštějí se přes kategorizované proxy (read/write/delete). Vyžaduje restart aplikace (doplněku), aby se projevila změna – poté znovu připojte nebo obnovte MCP server ve svém AI klientovi, aby se znovu načetl seznam nástrojů. Samotný restart aplikace (doplněku) NEAKTUALIZUJE mezipaměť seznamu nástrojů klienta; toto platí po změně jakéhokoli nastavení zde."
+    "addon_stable.enable_tool_search.description": "Nahradit úplný katalog nástrojů vyhledáváním. Snižuje klidový kontext přibližně o 90 %, na asi 5 tisíc tokenů. ⚠️ NEZAPÍNEJTE toto v klientech s vlastním vestavěným vyhledáváním nástrojů / odloženými nástroji (claude.ai, Claude Desktop, Claude Code) – obě vrstvy vyhledávání se střetávají a vestavěné vyhledávání nástrojů v klientovi je zde lepší volbou; nechte to vypnuté. Zda jsou nástroje odloženy, závisí na kombinaci vašeho klienta a modelu: použijte toto, když vaše nastavení načítá celý katalog předem – modely bez nativních odložených nástrojů (např. Gemini, lokální modely kompatibilní s OpenAI, Claude Haiku), klienti, kteří vkládají všechna schémata nástrojů bez ohledu na model (např. GitHub Copilot CLI), nebo menší kontextová okna. Některé modely Codex a ChatGPT také obsahují odložené nástroje – ověřte si funkce přímo u svého klienta/modelu, abyste to nenechávali zbytečně zapnuté. Nástroje se vyhledávají přes ha_search_tools a spouštějí se přes kategorizované proxy (read/write/delete). Vyžaduje restart aplikace (doplněku), aby se projevila změna – poté znovu připojte nebo obnovte MCP server ve svém AI klientovi, aby se znovu načetl seznam nástrojů. Samotný restart aplikace (doplněku) NEAKTUALIZUJE mezipaměť seznamu nástrojů klienta; toto platí po změně jakéhokoli nastavení zde.",
+    "policies.global.event_decisions.label": "Povolit schválení/zamítnutí z událostí Home Assistant",
+    "policies.global.event_decisions.help": "Ve výchozím nastavení vypnuto. Pokud je zapnuto, událost <code>ha_mcp_approval_response</code> obsahující token čekajícího požadavku, rozhodnutí a níže uvedený PIN o tomto požadavku rozhodne — takže vaše vlastní automatizace oznámení jej může schválit z telefonu. Před zapnutím je vyžadován PIN.",
+    "policies.global.event_decisions.warning": "AI agent s dostatečným přístupem může tento PIN uhodnout nebo získat — tím, že si o něj řekne, nebo napsáním automatizace, která jej přečte z odpovědní události — a poté schválit své vlastní požadavky. Home Assistant nedokáže rozlišit událost vyvolanou vaší automatizací od události vyvolané agentem, takže PIN je jedinou překážkou mezi nimi. Zapnutím této funkce berete toto omezení na vědomí. Rozhodování v seznamu čekajících je nedotčeno — v uživatelském rozhraní nastavení, které server sám obsluhuje. Stránka nastavení stdio sidecaru nastavuje PIN a politiku, ale nemůže zobrazovat seznam čekajících schválení ani o nich rozhodovat: ty se nacházejí v procesu serveru, kam nedosáhne.",
+    "policies.global.pin.label": "Schvalovací PIN",
+    "policies.global.pin.help": "Nejméně 4 znaky. Uloženo jako hash se solením a již se nikdy nezobrazí, přičemž je drženo mimo dokument politiky, takže jej nenese nic, co čte nebo zapisuje politiku. Pět chybných PINů během pěti minut uzavře kanál po zbytek tohoto okna — seznam čekajících v uživatelském rozhraní nastavení samotného serveru funguje dál (stránka stdio sidecaru jej nedokáže zobrazit).",
+    "policies.global.pin.set": "Nastavit PIN",
+    "policies.global.pin.clear": "Odebrat PIN",
+    "policies.global.pin.is_set": "PIN je nastaven.",
+    "policies.global.pin.invalid": "Uložený PIN nelze přečíst a neodpovídá ničemu. Nastavte nový.",
+    "policies.global.pin.not_set": "Není nastaven žádný PIN. Nastavte jej pro povolení rozhodování přes sběrnici událostí.",
+    "policies.global.pin.unknown": "Nepodařilo se zjistit, zda je PIN nastaven.",
+    "policies.global.pin.saved": "PIN uložen.",
+    "policies.global.pin.cleared": "PIN odebrán.",
+    "policies.global.pin.cleared_and_disabled": "PIN byl odebrán a rozhodování přes sběrnici událostí bylo s ním vypnuto.",
+    "policies.global.pin.confirm_clear": "Odebrat schvalovací PIN? Rozhodování přes sběrnici událostí se tím vypne; seznam čekajících na této kartě zůstane nedotčen.",
+    "policies.operations.set_pin": "Nastavit PIN",
+    "policies.rules.scope_notice": "Politiky se vztahují na jednotlivé nástroje. Ostatní nástroje mohou provádět stejnou akci. Vyžadování schválení pro <code>ha_call_event</code> například neomezuje vyvolávání událostí prostřednictvím <code>ha_call_service</code>.",
+    "policies.operations.clear_pin": "Odebrat PIN"
   },
   "tools": {
     "ha_bulk_control": {
@@ -542,8 +560,8 @@
       "description": "Získat informace o štítku – vypsat všechny štítky nebo získat konkrétní podle ID."
     },
     "ha_config_get_scene": {
-      "title": "Získat konfiguraci scény",
-      "description": "Načíst konfiguraci scény Home Assistant."
+      "title": "Získat nebo najít scény",
+      "description": "Získejte kompletní konfiguraci scény nebo vyhledejte a seznamte scény bez scene_id."
     },
     "ha_config_get_script": {
       "title": "Získat konfiguraci skriptu",
@@ -599,7 +617,7 @@
     },
     "ha_config_set_calendar_event": {
       "title": "Vytvořit nebo aktualizovat událost kalendáře",
-      "description": "Vytvořit novou událost v kalendáři."
+      "description": "Vytvořte novou událost v kalendáři nebo aktualizujte stávající."
     },
     "ha_config_set_category": {
       "title": "Vytvořit nebo aktualizovat kategorii",

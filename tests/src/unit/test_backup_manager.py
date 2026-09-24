@@ -32,7 +32,6 @@ from ha_mcp.backup_manager import (
     _build_text_diff_response,
     _compute_json_patch,
     _entity_id_aliases,
-    _fetch_calendar_event,
     _fetch_todo_item,
     _pointer_segment,
     _require_dict,
@@ -41,7 +40,12 @@ from ha_mcp.backup_manager import (
     _summarize_patch_counts,
     get_backup_manager,
 )
-from ha_mcp.client.rest_client import HomeAssistantError
+from ha_mcp.client.rest_client import (
+    HomeAssistantCommandError,
+    HomeAssistantCommandTimeout,
+    HomeAssistantConnectionError,
+    HomeAssistantError,
+)
 from ha_mcp.errors import ErrorCode, create_error_response
 from ha_mcp.tools.auto_backup import with_auto_backup
 
@@ -59,6 +63,27 @@ class _StubSettings:
 class _StubClient:
     """Bare-bones client object — handlers receive it but our test handlers
     don't dereference anything off it."""
+
+
+class _CalendarRestClient(_StubClient):
+    """Stub exposing the REST ``_request`` the calendar fetcher reads through.
+
+    ``events`` may be a list (every window answers the same) or a list of
+    per-call responses, which lets a test distinguish the configured window
+    from the wide sweep that follows a miss.
+    """
+
+    def __init__(self, events: Any, *, per_call: list[Any] | None = None) -> None:
+        self._events = events
+        self._per_call = per_call
+        self.calls: list[tuple[str, Any]] = []
+
+    async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+        assert method == "GET"
+        self.calls.append((path, kwargs.get("params") or {}))
+        if self._per_call is not None:
+            return self._per_call[len(self.calls) - 1]
+        return self._events
 
 
 def _mk_manager(tmp_path: Path, **settings_overrides: Any) -> BackupManager:
@@ -420,27 +445,363 @@ class TestFetcherIdResolution:
         with pytest.raises(ToolError):
             await bm._fetch_dashboard(_StubClient(), "x_dash")
 
-    async def test_fetch_calendar_event_matches_uid(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_fetch_calendar_event_matches_uid(self) -> None:
         # Hard guard for the calendar lane (the e2e is skippable): the
-        # pre-delete fetch must find the event by uid and tag the calendar.
-        async def fake_ws(_client: Any, _msg: dict[str, Any]) -> Any:
-            return {
-                "response": {
-                    "events": {
-                        "calendar.fam": {
-                            "events": [{"uid": "evt-1", "summary": "Dinner"}]
-                        }
-                    }
-                }
-            }
-
-        monkeypatch.setattr(bm, "_ws_send", fake_ws)
-        got = await bm._fetch_calendar_event(_StubClient(), "calendar.fam::evt-1")
+        # pre-write fetch must find the event by uid and tag the calendar.
+        # The REST calendar view is the only read that carries ``uid`` —
+        # ``calendar.get_events`` strips it to LIST_EVENT_FIELDS, so a
+        # service-backed fetch could never match and silently captured
+        # nothing.
+        client = _CalendarRestClient(
+            [
+                {"uid": "other", "summary": "Lunch"},
+                {
+                    "uid": "evt-1",
+                    "summary": "Dinner",
+                    "start": {"dateTime": "2026-06-15T18:00:00-04:00"},
+                    "end": {"dateTime": "2026-06-15T19:00:00-04:00"},
+                },
+            ]
+        )
+        got = await bm._fetch_calendar_event(client, "calendar.fam::evt-1")
         assert got is not None
         assert got["uid"] == "evt-1"
         assert got["calendar_entity_id"] == "calendar.fam"
+        assert client.calls and client.calls[0][0] == "/calendars/calendar.fam"
+        # The window is passed as query params, not baked into the path.
+        assert set(client.calls[0][1]) == {"start", "end"}
+
+    async def test_fetch_calendar_event_missing_uid_returns_none(self) -> None:
+        client = _CalendarRestClient([{"uid": "other", "summary": "Lunch"}])
+        assert await bm._fetch_calendar_event(client, "calendar.fam::evt-1") is None
+        # A miss sweeps a second, wider window before giving up.
+        assert len(client.calls) == 2
+
+    async def test_fetch_calendar_event_queries_around_the_recurrence_id(
+        self,
+    ) -> None:
+        # An occurrence far outside every now-relative window must still be
+        # captured; its recurrence_id names the date, so one request finds it.
+        target = {
+            "uid": "evt-1",
+            "summary": "Decade out",
+            "recurrence_id": "20360615T090000",
+        }
+        client = _CalendarRestClient([target])
+        got = await bm._fetch_calendar_event(
+            client, "calendar.fam::evt-1::20360615T090000"
+        )
+        assert got == {"calendar_entity_id": "calendar.fam", **target}
+        assert len(client.calls) == 1
+        assert client.calls[0][1]["start"].startswith("2036-06-14")
+        assert client.calls[0][1]["end"].startswith("2036-06-16")
+
+    async def test_fetch_calendar_event_sweeps_wider_window_on_miss(self) -> None:
+        # An event outside the configured lookahead (booked far ahead, or
+        # already past) must still be captured: no snapshot means the prior
+        # values are unrecoverable after the write.
+        target = {"uid": "evt-1", "summary": "Anniversary"}
+        client = _CalendarRestClient(None, per_call=[[], [target]])
+        got = await bm._fetch_calendar_event(client, "calendar.fam::evt-1")
+        assert got == {"calendar_entity_id": "calendar.fam", **target}
+        assert len(client.calls) == 2
+        narrow, wide = client.calls[0][1], client.calls[1][1]
+        assert wide["start"] < narrow["start"], (narrow, wide)
+        assert wide["end"] > narrow["end"], (narrow, wide)
+
+    async def test_fetch_calendar_event_hit_skips_the_wide_sweep(self) -> None:
+        target = {"uid": "evt-1", "summary": "Dinner"}
+        client = _CalendarRestClient([target])
+        assert await bm._fetch_calendar_event(client, "calendar.fam::evt-1") == {
+            "calendar_entity_id": "calendar.fam",
+            **target,
+        }
+        assert len(client.calls) == 1
+
+    async def test_fetch_calendar_event_selects_the_named_occurrence(self) -> None:
+        # A series expands into occurrences that all share the uid, so the
+        # recurrence_id in the key picks the one the write targets.
+        first = {
+            "uid": "evt-1",
+            "summary": "Standup",
+            "recurrence_id": "20260615T090000",
+            "rrule": "FREQ=WEEKLY;BYDAY=MO",
+        }
+        second = {
+            "uid": "evt-1",
+            "summary": "Standup",
+            "recurrence_id": "20260622T090000",
+            "rrule": "FREQ=WEEKLY;BYDAY=MO",
+        }
+        client = _CalendarRestClient([first, second])
+        got = await bm._fetch_calendar_event(
+            client, "calendar.fam::evt-1::20260622T090000"
+        )
+        assert got == {"calendar_entity_id": "calendar.fam", **second}
+
+    async def test_fetch_calendar_event_skips_a_series_wide_write(self) -> None:
+        # Without a recurrence_id the write targets the whole series, whose
+        # own start the calendar view never exposes. A snapshot of one
+        # occurrence would restore a single date and report success, so the
+        # capture is skipped instead.
+        occurrence = {
+            "uid": "evt-1",
+            "summary": "Standup",
+            "recurrence_id": "20260615T090000",
+            "rrule": "FREQ=WEEKLY;BYDAY=MO",
+        }
+        client = _CalendarRestClient([occurrence])
+        assert await bm._fetch_calendar_event(client, "calendar.fam::evt-1") is None
+
+    async def test_fetch_calendar_event_non_list_body_raises(self) -> None:
+        # Parity with the registry fetchers: a degraded 200 must raise rather
+        # than masquerade as ``entity_missing``.
+        client = _CalendarRestClient({"unexpected": "dict body"})
+        with pytest.raises(HomeAssistantError, match="Expected a list"):
+            await bm._fetch_calendar_event(client, "calendar.fam::evt-1")
+
+    async def test_restore_calendar_event_updates_in_place(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An edited event still exists under its uid: restoring must put the
+        # captured values back, not create a duplicate alongside it.
+        sent: list[dict[str, Any]] = []
+
+        async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
+            sent.append(msg)
+            return {"ok": True}
+
+        async def fail_post(*_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError("restore must not re-create an existing event")
+
+        monkeypatch.setattr(bm, "_ws_send", fake_ws)
+        monkeypatch.setattr(bm, "_rest_post", fail_post)
+        await bm._restore_calendar_event(
+            _StubClient(),
+            "calendar.fam::evt-1",
+            {
+                "calendar_entity_id": "calendar.fam",
+                "uid": "evt-1",
+                "summary": "Dinner",
+                "location": "Home",
+                "start": {"dateTime": "2026-06-15T18:00:00-04:00"},
+                "end": {"dateTime": "2026-06-15T19:00:00-04:00"},
+            },
+        )
+        assert len(sent) == 1
+        assert sent[0]["type"] == "calendar/event/update"
+        assert sent[0]["uid"] == "evt-1"
+        # description is sent empty: HA merges the update into the stored
+        # event, so omitting it would keep a description the write added.
+        assert sent[0]["event"] == {
+            "summary": "Dinner",
+            "dtstart": "2026-06-15T18:00:00-04:00",
+            "dtend": "2026-06-15T19:00:00-04:00",
+            "location": "Home",
+            "description": "",
+        }
+
+    async def test_restore_calendar_event_recreates_when_update_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Snapshot of a DELETED event (or a calendar without UPDATE_EVENT):
+        # the in-place attempt fails, so the event is re-created, and an
+        # all-day snapshot must go back as date-only fields.
+        posted: list[tuple[str, Any]] = []
+
+        async def failing_ws(_client: Any, _msg: dict[str, Any]) -> Any:
+            raise HomeAssistantCommandError(
+                "Command failed: Error while updating event: No existing item "
+                "with uid/recurrence_id: evt-1/None"
+            )
+
+        async def fake_post(_client: Any, path: str, payload: Any) -> Any:
+            posted.append((path, payload))
+            return {"ok": True}
+
+        monkeypatch.setattr(bm, "_ws_send", failing_ws)
+        monkeypatch.setattr(bm, "_rest_post", fake_post)
+        await bm._restore_calendar_event(
+            _StubClient(),
+            "calendar.fam::evt-1",
+            {
+                "calendar_entity_id": "calendar.fam",
+                "uid": "evt-1",
+                "summary": "Vacation",
+                "start": {"date": "2026-07-04"},
+                "end": {"date": "2026-07-11"},
+            },
+        )
+        assert posted == [
+            (
+                "services/calendar/create_event",
+                {
+                    "entity_id": "calendar.fam",
+                    "summary": "Vacation",
+                    "start_date": "2026-07-04",
+                    "end_date": "2026-07-11",
+                },
+            )
+        ]
+
+    async def test_restore_calendar_event_never_replays_an_rrule(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Every expanded occurrence carries the series' rule; sending it back
+        # would fork the occurrence into a second series under the same uid.
+        sent: list[dict[str, Any]] = []
+
+        async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
+            sent.append(msg)
+            return {"ok": True}
+
+        monkeypatch.setattr(bm, "_ws_send", fake_ws)
+        await bm._restore_calendar_event(
+            _StubClient(),
+            "calendar.fam::evt-1::20260615T090000",
+            {
+                "calendar_entity_id": "calendar.fam",
+                "uid": "evt-1",
+                "recurrence_id": "20260615T090000",
+                "summary": "Standup",
+                "rrule": "FREQ=WEEKLY;BYDAY=MO",
+                "start": {"dateTime": "2026-06-15T09:00:00-04:00"},
+                "end": {"dateTime": "2026-06-15T09:15:00-04:00"},
+            },
+        )
+        assert sent[0]["recurrence_id"] == "20260615T090000"
+        assert "rrule" not in sent[0]["event"]
+
+    async def test_restore_calendar_event_reads_recurrence_id_from_the_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sent: list[dict[str, Any]] = []
+
+        async def fake_ws(_client: Any, msg: dict[str, Any]) -> Any:
+            sent.append(msg)
+            return {"ok": True}
+
+        monkeypatch.setattr(bm, "_ws_send", fake_ws)
+        await bm._restore_calendar_event(
+            _StubClient(),
+            "calendar.fam::evt-1::20260615T090000",
+            {
+                "summary": "Standup",
+                "start": {"dateTime": "2026-06-15T09:00:00-04:00"},
+                "end": {"dateTime": "2026-06-15T09:15:00-04:00"},
+            },
+        )
+        assert sent[0]["uid"] == "evt-1"
+        assert sent[0]["recurrence_id"] == "20260615T090000"
+
+    async def test_restore_missing_occurrence_raises_instead_of_recreating(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An occurrence that is gone cannot be put back into its series;
+        # create_event would only add a detached event beside it.
+        async def failing_ws(_client: Any, _msg: dict[str, Any]) -> Any:
+            raise HomeAssistantCommandError(
+                "Command failed: No existing item with uid/recurrence_id"
+            )
+
+        async def fail_post(*_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError("an occurrence must not be re-created")
+
+        monkeypatch.setattr(bm, "_ws_send", failing_ws)
+        monkeypatch.setattr(bm, "_rest_post", fail_post)
+        with pytest.raises(HomeAssistantError, match="no longer exists"):
+            await bm._restore_calendar_event(
+                _StubClient(),
+                "calendar.fam::evt-1::20260615T090000",
+                {
+                    "calendar_entity_id": "calendar.fam",
+                    "uid": "evt-1",
+                    "recurrence_id": "20260615T090000",
+                    "summary": "Standup",
+                    "start": {"dateTime": "2026-06-15T09:00:00-04:00"},
+                    "end": {"dateTime": "2026-06-15T09:15:00-04:00"},
+                },
+            )
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            pytest.param(
+                HomeAssistantConnectionError("WebSocket closed"),
+                id="connection",
+            ),
+            pytest.param(HomeAssistantCommandTimeout("Command timeout"), id="timeout"),
+            pytest.param(
+                HomeAssistantCommandError("Command failed: Invalid rrule"),
+                id="other_command_failure",
+            ),
+        ],
+    )
+    async def test_restore_calendar_event_does_not_recreate_on_ambiguous_error(
+        self, error: BaseException, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Only a failure PROVING the update never landed may re-create; a
+        # dropped connection, a timeout or an unclassified command failure
+        # could each have applied it, and re-creating would duplicate the
+        # event instead of restoring it.
+        async def failing_ws(_client: Any, _msg: dict[str, Any]) -> Any:
+            raise error
+
+        async def fail_post(*_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError("must not re-create on an ambiguous failure")
+
+        monkeypatch.setattr(bm, "_ws_send", failing_ws)
+        monkeypatch.setattr(bm, "_rest_post", fail_post)
+        with pytest.raises(type(error)):
+            await bm._restore_calendar_event(
+                _StubClient(),
+                "calendar.fam::evt-1",
+                {
+                    "calendar_entity_id": "calendar.fam",
+                    "uid": "evt-1",
+                    "summary": "Dinner",
+                    "start": {"dateTime": "2026-06-15T18:00:00-04:00"},
+                    "end": {"dateTime": "2026-06-15T19:00:00-04:00"},
+                },
+            )
+
+    async def test_restore_calendar_event_recreates_when_update_unsupported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # HA's ``not_supported`` code proves the calendar can never accept the
+        # update, so re-creating is the only restore it can offer.
+        posted: list[tuple[str, Any]] = []
+
+        async def failing_ws(_client: Any, _msg: dict[str, Any]) -> Any:
+            raise HomeAssistantCommandError(
+                "Command failed: Calendar does not support event update",
+                "not_supported",
+            )
+
+        async def fake_post(_client: Any, path: str, payload: Any) -> Any:
+            posted.append((path, payload))
+            return {"ok": True}
+
+        monkeypatch.setattr(bm, "_ws_send", failing_ws)
+        monkeypatch.setattr(bm, "_rest_post", fake_post)
+        await bm._restore_calendar_event(
+            _StubClient(),
+            "calendar.fam::evt-1",
+            {
+                "calendar_entity_id": "calendar.fam",
+                "uid": "evt-1",
+                "summary": "Dinner",
+                "start": {"dateTime": "2026-06-15T18:00:00-04:00"},
+                "end": {"dateTime": "2026-06-15T19:00:00-04:00"},
+            },
+        )
+        assert [path for path, _ in posted] == ["services/calendar/create_event"]
+
+    async def test_restore_calendar_event_without_bounds_raises(self) -> None:
+        with pytest.raises(HomeAssistantError):
+            await bm._restore_calendar_event(
+                _StubClient(), "calendar.fam::evt-1", {"summary": "No times"}
+            )
 
     async def test_fetch_helper_registry_without_unique_id_returns_none(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1796,25 +2157,26 @@ class TestRequireDict:
 
 
 class TestExecuteScriptFetchers:
-    """Calendar / todo fetchers route the ``execute_script`` envelope
-    through ``_require_dict`` (Boy-Scout parity with the registry
-    fetchers): a malformed 200 raises instead of masquerading as
-    ``entity_missing``, while a genuine uid miss still returns ``None``."""
+    """The todo fetcher routes the ``execute_script`` envelope through
+    ``_require_dict`` (Boy-Scout parity with the registry fetchers): a
+    malformed 200 raises instead of masquerading as ``entity_missing``,
+    while a genuine uid miss still returns ``None``. The calendar fetcher
+    reads the REST calendar view instead (the only response carrying
+    ``uid``) and gets the same treatment from ``_require_list`` —
+    see ``TestFetchers``."""
 
-    @pytest.mark.parametrize("fetcher", [_fetch_calendar_event, _fetch_todo_item])
     async def test_non_dict_envelope_raises(
-        self, fetcher: Any, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def _ws_send(_client: Any, _message: dict[str, Any]) -> Any:
             return ["unexpected", "list", "body"]
 
         monkeypatch.setattr(bm, "_ws_send", _ws_send)
         with pytest.raises(HomeAssistantError, match="Expected a dict"):
-            await fetcher(object(), "calendar.x::uid-1")
+            await _fetch_todo_item(object(), "todo.x::uid-1")
 
-    @pytest.mark.parametrize("fetcher", [_fetch_calendar_event, _fetch_todo_item])
     async def test_missing_uid_still_returns_none(
-        self, fetcher: Any, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # A well-formed dict whose nested lookup finds no matching uid is a
         # real miss — it must stay ``None`` (entity_missing), not raise.
@@ -1822,22 +2184,10 @@ class TestExecuteScriptFetchers:
             return {"response": {}}
 
         monkeypatch.setattr(bm, "_ws_send", _ws_send)
-        assert await fetcher(object(), "calendar.x::absent-uid") is None
+        assert await _fetch_todo_item(object(), "todo.x::absent-uid") is None
 
-    @pytest.mark.parametrize(
-        "fetcher, nested_key, id_key, entity",
-        [
-            (_fetch_calendar_event, "events", "calendar_entity_id", "calendar.x"),
-            (_fetch_todo_item, "items", "todo_entity_id", "todo.x"),
-        ],
-    )
     async def test_matching_uid_returns_entry(
-        self,
-        fetcher: Any,
-        nested_key: str,
-        id_key: str,
-        entity: str,
-        monkeypatch: pytest.MonkeyPatch,
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # A well-formed envelope whose nested lookup finds the uid returns the
         # matching entry, merged with the ``<domain>_entity_id`` key the
@@ -1847,11 +2197,11 @@ class TestExecuteScriptFetchers:
         entry = {"uid": uid, "summary": "thing"}
 
         async def _ws_send(_client: Any, _message: dict[str, Any]) -> Any:
-            return {"response": {nested_key: {entity: {nested_key: [entry]}}}}
+            return {"response": {"items": {"todo.x": {"items": [entry]}}}}
 
         monkeypatch.setattr(bm, "_ws_send", _ws_send)
-        result = await fetcher(object(), f"{entity}::{uid}")
-        assert result == {id_key: entity, **entry}
+        result = await _fetch_todo_item(object(), f"todo.x::{uid}")
+        assert result == {"todo_entity_id": "todo.x", **entry}
 
 
 class TestSummarizePatchCounts:

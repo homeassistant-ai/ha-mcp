@@ -103,6 +103,13 @@
       "transformTemplates": [
         "{\"releases\": [{\"version\": supervisor}], \"sourceUrl\": \"https://github.com/home-assistant/supervisor\"}"
       ]
+    },
+    "ha-os-stable": {
+      "defaultRegistryUrlTemplate": "https://version.home-assistant.io/stable.json",
+      "format": "json",
+      "transformTemplates": [
+        "{\"releases\": [{\"version\": hassos.ova}], \"sourceUrl\": \"https://github.com/home-assistant/operating-system\"}"
+      ]
     }
   },
   "packageRules": [
@@ -200,7 +207,7 @@
       "prConcurrentLimit": 0
     },
     {
-      "description": "Supervisor uses zero-padded calendar versions; stable.json determines promotion, not the GitHub release list.",
+      "description": "Supervisor uses zero-padded calendar versions; stable.json determines promotion, not the GitHub release list. The OS pin follows stable.json for the same reason: the GitHub release object is published hours before its per-board assets upload, so the release list is not the promotion signal.",
       "matchDepNames": [
         "home-assistant/supervisor"
       ],

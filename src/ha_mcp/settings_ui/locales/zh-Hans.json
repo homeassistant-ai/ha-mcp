@@ -498,7 +498,25 @@
     "addon.verify_ssl.description": "验证 Home Assistant 服务器的 TLS 证书。应用（add-on）通过 Supervisor 代理连接，因此此设置通常无效，应保持启用状态。仅当您重新配置了应用（add-on），使其通过具有自签名证书或主机名不匹配的公共 HTTPS 主机名与 HA 通信时，才可以禁用。禁用会削弱传输安全性 — 除非您确有需要，否则请保持开启。需要重启才能生效。",
     "addon.ha_tool_concurrency.name": "Home Assistant 工具并发数",
     "addon.ha_tool_concurrency.description": "对所有会话中外部 Home Assistant 工具调用的可选限制。内部的 REST、WebSocket 以及每个工具的扇出并发保持不变。设置为 0 则保持无限制。等待容量的调用将在 60 秒后失败。",
-    "addon_stable.enable_tool_search.description": "将完整的工具目录替换为基于搜索的发现。可将空闲上下文减少约 90%，至大约 5K 个 token。⚠️ 请勿在具有内置工具搜索/延迟工具功能的客户端（claude.ai、Claude Desktop、Claude Code）中启用此功能 — 两个搜索层会发生冲突，而客户端的内置工具搜索在此类情况下是更好的选择；请将其关闭。工具是否延迟加载取决于您的客户端和模型组合：在您的设置会预先加载完整目录时使用此功能 — 不支持原生延迟工具的模型（例如 Gemini、OpenAI 兼容的本地模型、Claude Haiku）、无论模型如何都内联所有工具架构的客户端（例如 GitHub Copilot CLI），或较小的上下文窗口。某些 Codex 模型和 ChatGPT 也包含延迟工具 — 请直接检查您的客户端/模型以确认其功能，以免不必要地启用此功能。通过 ha_search_tools 查找工具，并通过分类代理（读/写/删除）执行。需要重启应用（add-on）才能生效 — 然后在您的 AI 客户端中重新连接或刷新 MCP 服务器以重新加载工具列表。仅重启应用（add-on）并不会刷新客户端缓存的工具列表；这在更改此处的任何设置后适用。"
+    "addon_stable.enable_tool_search.description": "将完整的工具目录替换为基于搜索的发现。可将空闲上下文减少约 90%，至大约 5K 个 token。⚠️ 请勿在具有内置工具搜索/延迟工具功能的客户端（claude.ai、Claude Desktop、Claude Code）中启用此功能 — 两个搜索层会发生冲突，而客户端的内置工具搜索在此类情况下是更好的选择；请将其关闭。工具是否延迟加载取决于您的客户端和模型组合：在您的设置会预先加载完整目录时使用此功能 — 不支持原生延迟工具的模型（例如 Gemini、OpenAI 兼容的本地模型、Claude Haiku）、无论模型如何都内联所有工具架构的客户端（例如 GitHub Copilot CLI），或较小的上下文窗口。某些 Codex 模型和 ChatGPT 也包含延迟工具 — 请直接检查您的客户端/模型以确认其功能，以免不必要地启用此功能。通过 ha_search_tools 查找工具，并通过分类代理（读/写/删除）执行。需要重启应用（add-on）才能生效 — 然后在您的 AI 客户端中重新连接或刷新 MCP 服务器以重新加载工具列表。仅重启应用（add-on）并不会刷新客户端缓存的工具列表；这在更改此处的任何设置后适用。",
+    "policies.global.event_decisions.label": "允许从 Home Assistant 事件中进行批准/拒绝",
+    "policies.global.event_decisions.help": "默认关闭。开启后，携带待处理请求令牌、决定以及下方 PIN 码的 <code>ha_mcp_approval_response</code> 事件将决定该请求——因此您的通知自动化可以通过手机批准它。启用前需要设置 PIN 码。",
+    "policies.global.event_decisions.warning": "拥有足够访问权限的 AI 助手可以猜测或获取此 PIN 码（通过向您索取，或编写从响应事件中读取该 PIN 码的自动化），进而批准其自身的请求。Home Assistant 无法区分是由您的自动化触发的事件还是由助手触发的事件，因此 PIN 码是它们之间的唯一防线。开启此功能即表示接受该局限性。待处理列表中的决策不受影响——该列表位于服务器自身提供的设置 UI 上。stdio 旁车程序的设置页面可设置 PIN 码和策略，但无法列出或决定待处理的批准：这些操作存在于其无法访问的服务器进程中。",
+    "policies.global.pin.label": "审批 PIN 码",
+    "policies.global.pin.help": "至少 4 个字符。以加盐哈希形式存储且绝不再显示，并且不会保存在策略文档中，因此任何读取或写入策略的内容都不会携带它。五分钟内连续输入五次错误 PIN 码将在该时间窗口的剩余时间内关闭通道——服务器自身设置 UI 上的待处理列表仍然正常工作（stdio 旁车程序页面无法显示它）。",
+    "policies.global.pin.set": "设置 PIN 码",
+    "policies.global.pin.clear": "移除 PIN 码",
+    "policies.global.pin.is_set": "已设置 PIN 码。",
+    "policies.global.pin.invalid": "无法读取所存储的 PIN 码且与任何内容均不匹配。请设置一个新 PIN 码。",
+    "policies.global.pin.not_set": "未设置 PIN 码。请设置一个以允许通过事件总线进行决策。",
+    "policies.global.pin.unknown": "无法读取是否已设置 PIN 码。",
+    "policies.global.pin.saved": "PIN 码已保存。",
+    "policies.global.pin.cleared": "PIN 码已移除。",
+    "policies.global.pin.cleared_and_disabled": "PIN 码已移除，通过事件总线进行决策的功能也随之关闭。",
+    "policies.global.pin.confirm_clear": "确定移除审批 PIN 码吗？通过事件总线进行决策的功能将随之关闭；此标签页中的待处理列表不受影响。",
+    "policies.operations.set_pin": "设置 PIN 码",
+    "policies.rules.scope_notice": "策略适用于单个工具。其他工具可能会执行相同的操作。例如，要求对 <code>ha_call_event</code> 进行批准并不会限制通过 <code>ha_call_service</code> 触发事件。",
+    "policies.operations.clear_pin": "移除 PIN 码"
   },
   "tool_groups": {
     "Apps (add-ons)": "应用（add-on）",
@@ -573,8 +591,8 @@
       "description": "获取标签信息——列出所有标签或按 ID 查看特定标签。"
     },
     "ha_config_get_scene": {
-      "title": "获取场景配置",
-      "description": "获取 Home Assistant 场景配置。"
+      "title": "获取或查找场景",
+      "description": "获取场景的完整配置，或者在不提供 scene_id 的情况下列出并搜索场景。"
     },
     "ha_config_get_script": {
       "title": "获取脚本配置",
@@ -630,7 +648,7 @@
     },
     "ha_config_set_calendar_event": {
       "title": "创建或更新日历事件",
-      "description": "在日历中创建新事件。"
+      "description": "在日历中创建新事件，或更新现有事件。"
     },
     "ha_config_set_category": {
       "title": "创建或更新类别",

@@ -498,7 +498,25 @@
     "addon.verify_ssl.description": "Verifieer het TLS-certificaat van de Home Assistant-server. De app (add-on) maakt verbinding via de Supervisor-proxy, dus dit heeft normaal gesproken geen effect en moet ingeschakeld blijven. Schakel dit alleen uit als je de app (add-on) zo hebt geconfigureerd dat deze via een openbare HTTPS-hostnaam met een zelfondertekend certificaat of een niet-overeenkomende hostnaam met HA communiceert. Uitschakelen verzwakt de transportbeveiliging — laat ingeschakeld tenzij je zeker weet dat je het nodig hebt. Vereist een herstart om van kracht te worden.",
     "addon.ha_tool_concurrency.name": "Home Assistant tool concurrency",
     "addon.ha_tool_concurrency.description": "Optionele limiet voor uiterste Home Assistant-toolaanroepen over alle sessies. Interne REST-, WebSocket- en per-tool fan-out gelijktijdigheid blijft ongewijzigd. 0 behoudt onbeperkt gedrag. Een aanroep die wacht op capaciteit mislukt na 60 seconden.",
-    "addon_stable.enable_tool_search.description": "Vervang de volledige toolcatalogus door zoekgebaseerde ontdekking. Vermindert inactieve context met ongeveer 90%, tot ongeveer 5K tokens. ⚠️ Schakel dit NIET in bij clients met een ingebouwde toolzoekfunctie / uitgestelde tools (claude.ai, Claude Desktop, Claude Code) — de twee zoeklagen conflicteren en de ingebouwde toolzoekfunctie van de client heeft daar de voorkeur; laat dit uitgeschakeld. Of tools worden uitgesteld hangt af van je client- en modelcombinatie: gebruik dit wanneer je opstelling de volledige catalogus vooraf laadt — modellen zonder native uitgestelde tools (bijv. Gemini, OpenAI-compatibele lokale modellen, Claude Haiku), clients die alle toolschema's inline opnemen ongeacht het model (bijv. GitHub Copilot CLI), of kleinere contextvensters. Sommige Codex-modellen en ChatGPT bevatten ook uitgestelde tools — controleer je client/model direct om de functies te bevestigen zodat je dit niet onnodig ingeschakeld laat. Tools worden gevonden via ha_search_tools en uitgevoerd via gecategoriseerde proxy's (lezen/schrijven/verwijderen). Vereist een herstart van de app (add-on) om van kracht te worden — maak daarna opnieuw verbinding of vernieuw de MCP-server in je AI-client zodat deze de toollijst opnieuw laadt. Alleen de app (add-on) herstarten vernieuwt de gecached toollijst van een client NIET; dit is van toepassing na het wijzigen van een instelling hier."
+    "addon_stable.enable_tool_search.description": "Vervang de volledige toolcatalogus door zoekgebaseerde ontdekking. Vermindert inactieve context met ongeveer 90%, tot ongeveer 5K tokens. ⚠️ Schakel dit NIET in bij clients met een ingebouwde toolzoekfunctie / uitgestelde tools (claude.ai, Claude Desktop, Claude Code) — de twee zoeklagen conflicteren en de ingebouwde toolzoekfunctie van de client heeft daar de voorkeur; laat dit uitgeschakeld. Of tools worden uitgesteld hangt af van je client- en modelcombinatie: gebruik dit wanneer je opstelling de volledige catalogus vooraf laadt — modellen zonder native uitgestelde tools (bijv. Gemini, OpenAI-compatibele lokale modellen, Claude Haiku), clients die alle toolschema's inline opnemen ongeacht het model (bijv. GitHub Copilot CLI), of kleinere contextvensters. Sommige Codex-modellen en ChatGPT bevatten ook uitgestelde tools — controleer je client/model direct om de functies te bevestigen zodat je dit niet onnodig ingeschakeld laat. Tools worden gevonden via ha_search_tools en uitgevoerd via gecategoriseerde proxy's (lezen/schrijven/verwijderen). Vereist een herstart van de app (add-on) om van kracht te worden — maak daarna opnieuw verbinding of vernieuw de MCP-server in je AI-client zodat deze de toollijst opnieuw laadt. Alleen de app (add-on) herstarten vernieuwt de gecached toollijst van een client NIET; dit is van toepassing na het wijzigen van een instelling hier.",
+    "policies.global.event_decisions.label": "Goedkeuren/afwijzen toestaan via Home Assistant-gebeurtenissen",
+    "policies.global.event_decisions.help": "Standaard uitgeschakeld. Indien ingeschakeld, beslist een <code>ha_mcp_approval_response</code>-gebeurtenis met het token van een openstaand verzoek, een beslissing en de onderstaande pincode over dat verzoek — zodat je eigen meldingsautomatisering dit vanaf een telefoon kan goedkeuren. Vereist een pincode voordat dit kan worden ingeschakeld.",
+    "policies.global.event_decisions.warning": "Een AI-agent met voldoende toegang kan deze pincode raden of verkrijgen — door erom te vragen, of door een automatisering te schrijven die deze uitleest uit een antwoordgebeurtenis — en zo zijn eigen verzoeken goedkeuren. Home Assistant kan een gebeurtenis die door je automatisering is gestart niet onderscheiden van een die door een agent is gestart, dus de pincode is het enige dat ertussenstaat. Dit inschakelen betekent dat je die beperking accepteert. Beslissingen nemen in de lijst met openstaande verzoeken blijft ongewijzigd — op de instellingen-gebruikersinterface die de server zelf aanbiedt. De instellingenpagina van de stdio-sidecar stelt de pincode en het beleid in, maar kan openstaande goedkeuringen niet weergeven of erover beslissen: die bevinden zich in het serverproces dat deze niet kan bereiken.",
+    "policies.global.pin.label": "Goedkeuringspincode",
+    "policies.global.pin.help": "Minimaal 4 tekens. Opgeslagen als een gehashte waarde met zout en nooit meer getoond, en buiten het beleidsdocument gehouden zodat niets dat beleid leest of schrijft deze meedraagt. Vijf fout ingevoerde pincodes binnen vijf minuten sluiten het kanaal voor de rest van dat venster — de lijst met openstaande verzoeken in de instellingen-gebruikersinterface van de server blijft werken (de pagina van de stdio-sidecar kan deze niet weergeven).",
+    "policies.global.pin.set": "Pincode instellen",
+    "policies.global.pin.clear": "Pincode verwijderen",
+    "policies.global.pin.is_set": "Er is een pincode ingesteld.",
+    "policies.global.pin.invalid": "De opgeslagen pincode kan niet worden gelezen en komt met niets overeen. Stel een nieuwe in.",
+    "policies.global.pin.not_set": "Geen pincode ingesteld. Stel er een in om beslissingen via de gebeurtenissenbus toe te staan.",
+    "policies.global.pin.unknown": "Kan niet aflezen of er een pincode is ingesteld.",
+    "policies.global.pin.saved": "Pincode opgeslagen.",
+    "policies.global.pin.cleared": "Pincode verwijderd.",
+    "policies.global.pin.cleared_and_disabled": "Pincode verwijderd, en beslissen via de gebeurtenissenbus is hiermee uitgeschakeld.",
+    "policies.global.pin.confirm_clear": "De goedkeuringspincode verwijderen? Beslissen via de gebeurtenissenbus wordt hiermee uitgeschakeld; de lijst met openstaande verzoeken in dit tabblad blijft ongewijzigd.",
+    "policies.operations.set_pin": "Pincode instellen",
+    "policies.rules.scope_notice": "Beleid is van toepassing op individuele tools. Andere tools kunnen dezelfde actie uitvoeren. Het vereisen van goedkeuring voor bijvoorbeeld <code>ha_call_event</code> beperkt het afvuren van gebeurtenissen via <code>ha_call_service</code> niet.",
+    "policies.operations.clear_pin": "Pincode verwijderen"
   },
   "tools": {
     "ha_bulk_control": {
@@ -542,8 +560,8 @@
       "description": "Haal labelinformatie op - lijst alle labels of haal een specifieke op via ID."
     },
     "ha_config_get_scene": {
-      "title": "Haal Scène Config op",
-      "description": "Haal de Home Assistant-scèneconfiguratie op."
+      "title": "Scènes ophalen of zoeken",
+      "description": "Haal de volledige configuratie van een scène op, of lijst en zoek scènes zonder scene_id."
     },
     "ha_config_get_script": {
       "title": "Haal Script Config op",
@@ -599,7 +617,7 @@
     },
     "ha_config_set_calendar_event": {
       "title": "Maak of Werk Kalendergebeurtenis bij",
-      "description": "Maak een nieuwe gebeurtenis in een kalender."
+      "description": "Maak een nieuwe gebeurtenis aan in een kalender of werk een bestaande bij."
     },
     "ha_config_set_category": {
       "title": "Maak of Werk Categorie bij",

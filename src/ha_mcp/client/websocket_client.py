@@ -15,9 +15,11 @@ import logging
 import ssl
 import time
 from collections import defaultdict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 from urllib.parse import urlparse
+
+import anyio
 
 # The vendored copy, NEVER the shared site-packages one: inside Home
 # Assistant that copy is unowned — ~20 integration libraries drag it in with
@@ -46,12 +48,77 @@ logger = logging.getLogger(__name__)
 # overflowed the previous 20MB cap (#1721).
 MAX_WS_MESSAGE_BYTES = 64 * 1024 * 1024
 
+
+# How long a cancellation path waits for its own cleanup. Bounded because
+# the caller is already being torn down and must not be held indefinitely;
+# awaited rather than abandoned because a cleanup that outlives its call
+# acts on whatever the client looks like later, not on what it was cleaning
+# up. Matches the theme-guard session close, which solves the same problem.
+CLEANUP_TIMEOUT_SECONDS = 2.0
+
+# Structured error codes that mean the subscription is already gone, which
+# is the ordinary outcome when releasing one that was abandoned before Home
+# Assistant registered it. Everything else is a refusal of the release, and
+# leaves the subscription open.
+#
+# An absent code counts as gone rather than as a refusal. Home Assistant's
+# unsubscribe handler answers either success or not_found and nothing else,
+# so for THIS command an error without a structured code is still that same
+# answer from a build that did not send one. The codes worth distinguishing
+# -- unauthorised, malformed, unknown command -- come from the layer above
+# the handler and do carry one. Treating a missing code as a refusal would
+# put a warning on the routine path, which fires on every cancelled
+# subscribe.
+_SUBSCRIPTION_GONE_CODES = frozenset({"not_found"})
 # How long :meth:`HomeAssistantWebSocketClient.send_command` waits for a reply
 # when the caller names no ``_wait_timeout``. Named rather than inlined because
 # callers that schedule retries have to budget around it: a caller whose retry
 # delay assumes a fast failure will start its next attempt one whole timeout
 # later than it planned when the command hangs instead.
 DEFAULT_COMMAND_WAIT_TIMEOUT = 30.0
+
+# Field names whose value must never reach the log, matched case-insensitively
+# wherever they appear in a received frame. The approval-response event carries
+# the user's approval PIN in ``event.data.pin`` (issue #2502), and the debug
+# line below prints whole decoded frames -- so without this, turning on debug
+# logging would write that PIN into Home Assistant's log in clear text.
+_REDACTED_LOG_FIELDS = frozenset({"pin"})
+_REDACTED_PLACEHOLDER = "<redacted>"
+
+
+def _redacted_for_log(value: Any) -> Any:
+    """A copy of ``value`` with ``_REDACTED_LOG_FIELDS`` masked.
+
+    Only for logging: the caller keeps handling the original, so redaction
+    cannot change what the client does with a frame -- verification still
+    sees the real PIN. Containers are rebuilt rather than mutated for the
+    same reason. Anything that is not a dict or a list is returned as it
+    is, which is why this stays cheap enough to run per frame; the caller
+    runs it only when DEBUG is actually enabled.
+    """
+    if isinstance(value, dict):
+        return {
+            key: (
+                _REDACTED_PLACEHOLDER
+                if isinstance(key, str) and key.lower() in _REDACTED_LOG_FIELDS
+                else _redacted_for_log(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redacted_for_log(item) for item in value]
+    return value
+
+
+def _log_received_frame(data: Any) -> None:
+    """Debug-log one received frame, with secret fields masked.
+
+    Its own function so the redaction cannot cost the message loop a
+    branch it does not need: the guard keeps the copy from being built at
+    all when DEBUG is off, which is every production deployment.
+    """
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("WebSocket received: %s", _redacted_for_log(data))
 
 
 def _extract_ws_error(error: Any) -> tuple[str, str | None]:
@@ -419,6 +486,19 @@ class HomeAssistantWebSocketClient:
             await self.disconnect()
             return False
 
+        except BaseException:
+            # Everything that is not an ``Exception`` -- a cancellation above
+            # all -- used to skip the clause above entirely, leaving the
+            # reader task started earlier and the open socket behind with
+            # nothing tracking them: the pool only takes the client once
+            # connect has returned True, so nothing else would ever close
+            # them. Ordered after the ``Exception`` handler so the ordinary
+            # failure path is unchanged, and it re-raises unconditionally --
+            # only the tidying happens here, and it is bounded because
+            # awaiting it plainly would be cancelled in turn.
+            await self._run_cleanup(self.disconnect(), "cancelled connect")
+            raise
+
     async def disconnect(self) -> None:
         """Disconnect from WebSocket."""
         if self.background_task:
@@ -473,7 +553,7 @@ class HomeAssistantWebSocketClient:
             async for message in self.websocket:
                 try:
                     data = json.loads(message)
-                    logger.debug(f"WebSocket received: {data}")
+                    _log_received_frame(data)
                     await self._process_message(data)
                 except json.JSONDecodeError as e:
                     logger.error(f"Invalid JSON received: {e}")
@@ -854,7 +934,21 @@ class HomeAssistantWebSocketClient:
         except BaseException:
             # Cancellation mid-send: skips the clause above and would leave the
             # pending future registered — drop it before propagating.
+            #
+            # And a cancelled send is not proof that Home Assistant received
+            # nothing. The vendored implementation writes the frame before it
+            # awaits flow-control drainage, so a cancellation landing in that
+            # wait can leave the subscription registered on a socket this
+            # process keeps using -- the same orphan the acknowledgment path
+            # below releases, reached one await earlier. The id is allocated
+            # before the send, so it is still known here; an unsubscribe for
+            # something that was never registered answers not_found, which
+            # the release treats as its ordinary outcome.
             self.cancel_pending_response(message_id)
+            await self._run_cleanup(
+                self._release_abandoned_subscription(message_id),
+                f"abandoned subscribe_events({message_id})",
+            )
             raise
 
         try:
@@ -864,7 +958,16 @@ class HomeAssistantWebSocketClient:
             # resolves once the caller is gone. The cleanup is
             # exception-type-independent and the original exception re-raises
             # unchanged.
+            #
+            # The command is already on the wire by this point, so Home
+            # Assistant may well have registered the subscription: releasing
+            # it is this operation's job, not the caller's, because the id it
+            # needs is the one the caller never receives.
             self.cancel_pending_response(message_id)
+            await self._run_cleanup(
+                self._release_abandoned_subscription(message_id),
+                f"abandoned subscribe_events({message_id})",
+            )
             raise
 
         if response.get("type") == "result" and response.get("success"):
@@ -915,6 +1018,128 @@ class HomeAssistantWebSocketClient:
                 subscription_id,
                 e,
             )
+
+    async def _run_cleanup(self, coro: Coroutine[Any, Any, None], what: str) -> None:
+        """Run ``coro`` to completion or to a deadline, from a cancelled path.
+
+        Cleanup scheduled while a cancellation is propagating cannot simply
+        be awaited: the await is cancelled in turn, and under a cancel scope
+        again at every suspension, so the tidying never happens. It also
+        must not merely be detached. A detached task reads the client's
+        state when it eventually runs, not when it was scheduled, so a
+        second ``connect()`` on the same object races it -- measured, the
+        stale task closed the NEW socket and left the old one open, the
+        exact failure this cleanup exists to prevent.
+
+        So the work is owned by a task, which makes it survive the
+        cancellation, and awaited through a shield with a deadline, which
+        makes it finish before control returns to anyone. The same shape as
+        the theme-guard session cleanup, for the same reason.
+
+        The shield holds against an anyio cancel scope, which is the shape
+        this is reached under. A plain ``asyncio.Task.cancel()`` -- what
+        ``asyncio.timeout`` issues -- goes through it: measured, the wait
+        below then ends at the caller's deadline with the cleanup untouched.
+        """
+        task = asyncio.ensure_future(coro)
+        # Shielded with anyio's scope rather than asyncio's, and around the
+        # WAIT as much as around the drain: a cancel scope re-delivers its
+        # cancellation to the HOST TASK on every tick while that task is
+        # still inside it, and ``asyncio.shield`` only governs propagation
+        # from one awaited future -- it does not stop a second ``cancel()``
+        # landing on the task at its next await. Such a scope is how this
+        # method is reached in the first place: the approval listener opens
+        # its subscription inside a ``move_on_after`` setup budget, and a
+        # cancelled ``subscribe_events`` is what calls this. Shielding only
+        # the drain leaves the wait below cancelled on its first tick, and
+        # the ``finally`` then stops the work before it ever had its own
+        # budget -- collecting a task is not the same as letting it finish,
+        # and cleanup that has to suspend (an unsubscribe waiting for the
+        # shared send lock) never reaches its release.
+        #
+        # What this does NOT do is re-deliver the cancellation it shielded:
+        # measured, an enclosing ``move_on_after`` ends with
+        # ``cancelled_caught`` False when this returns normally. Each call
+        # site raises on its way out, and that raise is what delivers the
+        # caller's cancellation -- after the cleanup rather than instead of
+        # it. A caller added on a non-raising path would swallow its own
+        # deadline here.
+        with anyio.CancelScope(shield=True):
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(task), timeout=CLEANUP_TIMEOUT_SECONDS
+                )
+            except (Exception, TimeoutError) as e:
+                logger.debug("%s: cleanup did not finish cleanly: %s", what, e)
+            except asyncio.CancelledError:
+                logger.debug("%s: cleanup cancelled before it finished", what)
+                raise
+            finally:
+                # The inner ``asyncio.shield`` is what lets the deadline
+                # expire without killing the work -- and it is equally what
+                # would let the work outlive this call, which is the failure
+                # being fixed. A task still running here reads the client's
+                # state whenever it gets there, so it must not get there:
+                # stop it, then collect the outcome so a late failure does
+                # not surface as an orphaned "exception was never
+                # retrieved".
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def _release_abandoned_subscription(self, message_id: int) -> None:
+        """Ask Home Assistant to drop a subscription we can no longer name.
+
+        ``subscribe_events`` allocates the message id before sending, so a
+        cancelled call still knows the id Home Assistant would have used --
+        the id is only lost to the *caller*, which never gets its return
+        value. Without this the subscription stays open on a socket this
+        process keeps using, the next attempt opens a second one, and every
+        event is then delivered once per orphan.
+
+        "Subscription not found" is the ordinary outcome here rather than a
+        surprise: the command may never have reached Home Assistant, which
+        is exactly the case that needs no cleanup. It is logged at debug for
+        that reason, where ``unsubscribe_events`` logs a warning -- there,
+        a rejection means a subscription that was known to exist.
+        """
+        if not self._state.is_ready:
+            logger.debug(
+                "abandoned subscribe_events(%s): socket not ready, nothing to release",
+                message_id,
+            )
+            return
+        try:
+            await self.send_command("unsubscribe_events", subscription=message_id)
+        except OSError as e:
+            logger.debug(
+                "abandoned subscribe_events(%s): transport lost before cleanup: %s",
+                message_id,
+                e,
+            )
+        except HomeAssistantCommandError as e:
+            if e.code is None or e.code in _SUBSCRIPTION_GONE_CODES:
+                logger.debug(
+                    "abandoned subscribe_events(%s): Home Assistant has no such "
+                    "subscription, so the command did not reach it: %s",
+                    message_id,
+                    e,
+                )
+            else:
+                # Anything else is a rejection of the unsubscribe itself --
+                # not authorised, malformed, a command this build does not
+                # know. The subscription is then still open on a socket this
+                # process keeps using, which is the leak this method exists
+                # to prevent, so it must not disappear at debug level with
+                # the routine case.
+                logger.warning(
+                    "abandoned subscribe_events(%s): Home Assistant refused "
+                    "the release (code %s); the subscription may still be "
+                    "open: %s",
+                    message_id,
+                    e.code,
+                    e,
+                )
 
     async def subscribe_command(
         self,

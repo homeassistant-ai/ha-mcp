@@ -26,7 +26,7 @@ try {
   for (const [depName, datasource] of [
     ['ghcr.io/home-assistant/home-assistant', 'docker'],
     ['home-assistant/supervisor', 'custom.ha-supervisor-stable'],
-    ['home-assistant/operating-system', 'github-releases'],
+    ['home-assistant/operating-system', 'custom.ha-os-stable'],
   ]) {
     const config = await applyPackageRules({
       ...getConfig(), ...repository, depName, packageName: depName,

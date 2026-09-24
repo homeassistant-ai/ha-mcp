@@ -3,7 +3,7 @@ Calendar Management E2E Tests
 
 Tests the calendar event management tools:
 - ha_config_get_calendar_events - Get events from a calendar
-- ha_config_set_calendar_event - Create a calendar event
+- ha_config_set_calendar_event - Create a calendar event, or update one by uid
 - ha_config_remove_calendar_event - Delete a calendar event
 
 Note: These tests require calendar integrations to be configured in Home Assistant.
@@ -747,6 +747,307 @@ class TestCalendarEventLifecycle:
 
         logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
         logger.info("Invalid entity delete test completed")
+
+    @staticmethod
+    def _event_bound(event: dict, key: str) -> datetime:
+        """Return an event's ``start``/``end`` as a datetime across backend shapes."""
+        value = event.get(key)
+        if isinstance(value, dict):
+            value = value.get("dateTime") or value.get("date")
+        return datetime.fromisoformat(str(value))
+
+    async def _supports_event_update(self, mcp_client, entity_id: str) -> bool:
+        """Whether the calendar advertises CalendarEntityFeature.UPDATE_EVENT (4).
+
+        The state read is asserted, so a failed lookup fails the test instead
+        of masking as a skip.
+        """
+        data = await MCPAssertions(mcp_client).call_tool_success(
+            "ha_get_state", {"entity_id": entity_id}
+        )
+        record = data.get("data", data)
+        assert "attributes" in record, f"no attributes in state for {entity_id}"
+        features = record["attributes"].get("supported_features") or 0
+        return bool(int(features) & 4)
+
+    async def test_update_calendar_event(self, mcp_client, deletable_event_uid):
+        """
+        Test: Update an existing calendar event by uid
+
+        Renames the event and shifts it an hour later, then reads it back to
+        prove the SAME uid now carries the new summary and no longer carries
+        the old one. Local Calendar's ``async_update_event`` preserves the uid
+        (the ical store excludes ``uid`` from the applied update), so the
+        fixture's teardown still deletes the event by the uid it captured.
+
+        Negative path: updating a uid that does not exist must fail with
+        actionable suggestions.
+        """
+        calendar_entity, event_uid = deletable_event_uid
+        # The fixture only proves create support; ``calendar/event/update`` is
+        # refused by integrations without UPDATE_EVENT (core Google, CalDAV).
+        # The seeded local_calendar advertises it, so this never skips in CI.
+        if not await self._supports_event_update(mcp_client, calendar_entity):
+            pytest.skip(f"Calendar {calendar_entity} does not support event update")
+        logger.info(
+            f"Testing ha_config_set_calendar_event update for {calendar_entity} "
+            f"with uid={event_uid}..."
+        )
+
+        now = datetime.now(UTC)
+        list_args = {
+            "entity_id": calendar_entity,
+            "start": now.isoformat(),
+            "end": (now + timedelta(days=3)).isoformat(),
+        }
+
+        def _by_uid(data: dict) -> list[dict]:
+            return [e for e in data.get("events", []) if e.get("uid") == event_uid]
+
+        before = await wait_for_tool_result(
+            mcp_client,
+            "ha_config_get_calendar_events",
+            list_args,
+            predicate=lambda d: bool(_by_uid(d)),
+            timeout=15,
+            description=f"read-back of event '{event_uid}' before update",
+        )
+        original = _by_uid(before)[0]
+        original_summary = original.get("summary")
+        old_start = self._event_bound(original, "start")
+
+        new_summary = f"E2E Updated Test Event {uuid.uuid4().hex[:8]}"
+        new_start = old_start + timedelta(hours=1)
+        new_end = new_start + timedelta(hours=1)
+
+        # The seeded local_calendar is writable and implements event update, so
+        # this must succeed rather than skip.
+        update_result = await mcp_client.call_tool(
+            "ha_config_set_calendar_event",
+            {
+                "entity_id": calendar_entity,
+                "summary": new_summary,
+                "start": new_start.isoformat(),
+                "end": new_end.isoformat(),
+                "uid": event_uid,
+            },
+        )
+        update_data = assert_mcp_success(update_result, "update calendar event")
+        assert update_data.get("success") is True, (
+            f"Update should return success=True; got {update_data}"
+        )
+        assert update_data.get("uid") == event_uid, (
+            f"Update should echo the target uid; got {update_data}"
+        )
+
+        after = await wait_for_tool_result(
+            mcp_client,
+            "ha_config_get_calendar_events",
+            list_args,
+            predicate=lambda d: any(
+                e.get("summary") == new_summary for e in _by_uid(d)
+            ),
+            timeout=15,
+            description=f"read-back of updated event '{new_summary}'",
+        )
+        updated = _by_uid(after)
+        assert updated, f"event '{event_uid}' disappeared after update"
+        assert all(e.get("summary") == new_summary for e in updated), (
+            f"expected every occurrence of {event_uid} to carry the new "
+            f"summary, got {[e.get('summary') for e in updated]}"
+        )
+        assert all(e.get("summary") != original_summary for e in updated), (
+            f"old summary '{original_summary}' still present on {event_uid}"
+        )
+        # Aware datetimes compare across offsets, so HA's local-time read-back
+        # matches the UTC values we sent.
+        for occurrence in updated:
+            assert self._event_bound(occurrence, "start") == new_start, (
+                f"start not shifted on {event_uid}: {occurrence.get('start')}"
+            )
+            assert self._event_bound(occurrence, "end") == new_end, (
+                f"end not shifted on {event_uid}: {occurrence.get('end')}"
+            )
+        logger.info(f"Event {event_uid} updated to '{new_summary}'")
+
+        mcp = MCPAssertions(mcp_client)
+        missing_uid = f"missing-{uuid.uuid4().hex[:8]}"
+        negative = await mcp.call_tool_failure(
+            "ha_config_set_calendar_event",
+            {
+                "entity_id": calendar_entity,
+                "summary": "Should not be written",
+                "start": new_start.isoformat(),
+                "end": new_end.isoformat(),
+                "uid": missing_uid,
+            },
+        )
+        negative_error = negative.get("error", {})
+        assert negative_error.get("suggestions") or negative_error.get("suggestion"), (
+            f"Update failure should provide helpful suggestion(s); got {negative_error}"
+        )
+
+        logger.info("ha_config_set_calendar_event update test completed")
+
+    async def test_update_one_occurrence_leaves_the_series_alone(self, mcp_client):
+        """
+        Test: Update a single occurrence of a recurring series by recurrence_id
+
+        Every occurrence of a series shares the event uid and differs only by
+        recurrence_id, so a uid-only update would hit whichever occurrence the
+        backend returned first. Targets the SECOND occurrence, then asserts the
+        other two kept their summary and their rrule. The edited one loses its
+        rrule because Home Assistant forks it into a standalone event, which is
+        why a restore must never replay the rule onto it.
+        """
+        calendar_entity = await self._find_writable_calendar(mcp_client)
+        if not calendar_entity:
+            pytest.skip("No calendar entities available for testing")
+        if not await self._supports_event_update(mcp_client, calendar_entity):
+            pytest.skip(f"Calendar {calendar_entity} does not support event update")
+
+        summary = f"E2E Series Test Event {uuid.uuid4().hex[:8]}"
+        rrule = "FREQ=DAILY;COUNT=3"
+        now = datetime.now(UTC)
+        start = (now + timedelta(days=1)).replace(
+            hour=9, minute=0, second=0, microsecond=0
+        )
+        end = start + timedelta(minutes=30)
+        list_args = {
+            "entity_id": calendar_entity,
+            "start": start.isoformat(),
+            "end": (start + timedelta(days=2, hours=4)).isoformat(),
+        }
+        mcp = MCPAssertions(mcp_client)
+
+        def _series(data: dict, wanted: str) -> list[dict]:
+            return [e for e in data.get("events", []) if e.get("summary") == wanted]
+
+        create_data = await safe_call_tool(
+            mcp_client,
+            "ha_config_set_calendar_event",
+            {
+                "entity_id": calendar_entity,
+                "summary": summary,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "rrule": rrule,
+            },
+        )
+        if not create_data.get("success"):
+            pytest.skip(
+                f"Calendar {calendar_entity} does not support recurring "
+                f"event creation: {extract_error_message(create_data) or 'Unknown'}"
+            )
+
+        series_uid: str | None = None
+        try:
+            events_data = await wait_for_tool_result(
+                mcp_client,
+                "ha_config_get_calendar_events",
+                list_args,
+                predicate=lambda d: len(_series(d, summary)) >= 3,
+                timeout=15,
+                description=f"3 occurrences of '{summary}'",
+            )
+            occurrences = sorted(
+                _series(events_data, summary), key=lambda e: str(e.get("start"))
+            )
+            series_uid = occurrences[0].get("uid")
+            assert series_uid, "series occurrences should carry a uid"
+
+            target = occurrences[1]
+            recurrence_id = target.get("recurrence_id")
+            assert recurrence_id, (
+                f"every occurrence of a series carries a recurrence_id; got {target}"
+            )
+
+            new_summary = f"{summary} EDITED"
+            new_start = self._event_bound(target, "start") + timedelta(hours=2)
+            new_end = new_start + timedelta(minutes=30)
+            update_data = await mcp.call_tool_success(
+                "ha_config_set_calendar_event",
+                {
+                    "entity_id": calendar_entity,
+                    "summary": new_summary,
+                    "start": new_start.isoformat(),
+                    "end": new_end.isoformat(),
+                    "uid": series_uid,
+                    "recurrence_id": recurrence_id,
+                },
+            )
+            assert update_data.get("recurrence_id") == recurrence_id
+
+            after = await wait_for_tool_result(
+                mcp_client,
+                "ha_config_get_calendar_events",
+                list_args,
+                predicate=lambda d: bool(_series(d, new_summary)),
+                timeout=15,
+                description=f"read-back of edited occurrence '{new_summary}'",
+            )
+            edited = _series(after, new_summary)
+            assert len(edited) == 1, f"exactly one occurrence should change: {edited}"
+            assert edited[0].get("uid") == series_uid, (
+                "an edited occurrence keeps the series uid"
+            )
+            assert edited[0].get("recurrence_id") == recurrence_id, (
+                "the occurrence that changed must be the one the update targeted"
+            )
+            assert not edited[0].get("rrule"), (
+                "an edited occurrence is forked into a standalone event and "
+                f"must not keep the series rule: {edited[0]}"
+            )
+
+            untouched = _series(after, summary)
+            assert len(untouched) == 2, (
+                f"the other 2 occurrences must be unchanged, got {untouched}"
+            )
+            assert all(e.get("rrule") == rrule for e in untouched), (
+                f"the remaining occurrences keep the series rule: {untouched}"
+            )
+        finally:
+            if series_uid:
+                try:
+                    await mcp_client.call_tool(
+                        "ha_config_remove_calendar_event",
+                        {"entity_id": calendar_entity, "uid": series_uid},
+                    )
+                except Exception as cleanup_error:
+                    logger.warning(
+                        f"Cleanup of series {series_uid} on {calendar_entity}: "
+                        f"{cleanup_error}"
+                    )
+
+    async def test_update_calendar_event_invalid_entity(self, mcp_client):
+        """
+        Test: Update event with invalid calendar entity
+
+        Verifies the entity_id format guard fires in update mode too.
+        """
+        logger.info(
+            "Testing ha_config_set_calendar_event update with invalid entity..."
+        )
+
+        now = datetime.now(UTC)
+        start = (now + timedelta(days=1)).isoformat()
+        end = (now + timedelta(days=1, hours=1)).isoformat()
+
+        mcp = MCPAssertions(mcp_client)
+        data = await mcp.call_tool_failure(
+            "ha_config_set_calendar_event",
+            {
+                "entity_id": "not_a_valid_calendar",
+                "summary": "Test Event",
+                "start": start,
+                "end": end,
+                "uid": "some-event-uid",
+            },
+            expected_error="calendar.",
+        )
+
+        logger.info(f"Validation error (expected): {data.get('error', 'Unknown')}")
+        logger.info("Invalid entity update test completed")
 
 
 @pytest.mark.calendar

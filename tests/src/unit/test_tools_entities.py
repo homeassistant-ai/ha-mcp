@@ -2,6 +2,8 @@
 
 import json
 import logging
+from collections.abc import Callable
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1424,12 +1426,11 @@ class TestHaSetEntityBulkOperations:
         }
         update_ack = {"success": True, "result": {"entity_entry": entity_entry}}
         mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                _registry_list("label_id", "outdoor"),
-                update_ack,
-                update_ack,
-                update_ack,
-            ]
+            side_effect=lambda message: (
+                _registry_list("label_id", "outdoor")
+                if message["type"] == "config/label_registry/list"
+                else update_ack
+            )
         )
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
@@ -1528,15 +1529,15 @@ class TestHaSetEntityBulkOperations:
             "aliases": [],
             "labels": ["outdoor"],
         }
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                _registry_list("label_id", "outdoor"),
-                # light.a succeeds
-                {"success": True, "result": {"entity_entry": entity_entry}},
-                # light.b fails
-                {"success": False, "error": {"message": "Entity not found"}},
-            ]
-        )
+
+        def send(message: dict[str, Any]) -> dict[str, Any]:
+            if message["type"] == "config/label_registry/list":
+                return _registry_list("label_id", "outdoor")
+            if message["entity_id"] == "light.a":
+                return {"success": True, "result": {"entity_entry": entity_entry}}
+            return {"success": False, "error": {"message": "Entity not found"}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=send)
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
@@ -1575,49 +1576,19 @@ class TestHaSetEntityBulkOperations:
     @pytest.mark.asyncio
     async def test_bulk_label_add_operation(self, mock_mcp, mock_client):
         """Bulk operation with label_operation='add' should work."""
-        mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                _registry_list("label_id", "new_label"),
-                # Get labels for light.a
-                {"success": True, "result": {"labels": ["existing"]}},
-                # Update light.a
-                {
+
+        def send(message: dict[str, Any]) -> dict[str, Any]:
+            if message["type"] == "config/label_registry/list":
+                return _registry_list("label_id", "new_label")
+            if message["type"] == "config/entity_registry/get":
+                labels = {"light.a": ["existing"], "light.b": ["other"]}
+                return {
                     "success": True,
-                    "result": {
-                        "entity_entry": {
-                            "entity_id": "light.a",
-                            "name": None,
-                            "original_name": "A",
-                            "icon": None,
-                            "area_id": None,
-                            "disabled_by": None,
-                            "hidden_by": None,
-                            "aliases": [],
-                            "labels": ["existing", "new_label"],
-                        }
-                    },
-                },
-                # Get labels for light.b
-                {"success": True, "result": {"labels": ["other"]}},
-                # Update light.b
-                {
-                    "success": True,
-                    "result": {
-                        "entity_entry": {
-                            "entity_id": "light.b",
-                            "name": None,
-                            "original_name": "B",
-                            "icon": None,
-                            "area_id": None,
-                            "disabled_by": None,
-                            "hidden_by": None,
-                            "aliases": [],
-                            "labels": ["other", "new_label"],
-                        }
-                    },
-                },
-            ]
-        )
+                    "result": {"labels": labels[message["entity_id"]]},
+                }
+            return {"success": True, "result": {"entity_entry": dict(message)}}
+
+        mock_client.send_websocket_message = AsyncMock(side_effect=send)
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
 
@@ -1629,6 +1600,11 @@ class TestHaSetEntityBulkOperations:
 
         assert result["success"] is True
         assert result["succeeded_count"] == 2
+        entries = {
+            entry["entity_id"]: entry["entity_entry"] for entry in result["succeeded"]
+        }
+        assert set(entries["light.a"]["labels"]) == {"existing", "new_label"}
+        assert set(entries["light.b"]["labels"]) == {"other", "new_label"}
 
     @pytest.mark.asyncio
     async def test_bulk_categories_set(self, mock_mcp, mock_client):
@@ -1647,11 +1623,11 @@ class TestHaSetEntityBulkOperations:
         }
         update_ack = {"success": True, "result": {"entity_entry": entity_entry}}
         mock_client.send_websocket_message = AsyncMock(
-            side_effect=[
-                _registry_list("category_id", "cat_id"),
-                update_ack,
-                update_ack,
-            ]
+            side_effect=lambda message: (
+                _registry_list("category_id", "cat_id")
+                if message["type"] == "config/category_registry/list"
+                else update_ack
+            )
         )
         register_entity_tools(mock_mcp, mock_client)
         tool = self.registered_tools["ha_set_entity"]
@@ -2395,3 +2371,232 @@ class TestHaGetEntityRegistryOptions:
         result = await tool(entity_id="sensor.legacy")
 
         assert result["entity_entry"]["config_entry_id"] is None
+
+
+class TestHaSetEntityAliases:
+    """ha_set_entity aliases keep HA's computed-name (``null``) entry (#2495)."""
+
+    @pytest.fixture
+    def set_entity_tool(self, mock_client: MagicMock) -> Callable[..., Any]:
+        mcp = MagicMock()
+        tools: dict[str, Any] = {}
+
+        def capture_add_tool(method: Callable[..., Any]) -> None:
+            fmcp = getattr(method, "__fastmcp__", None)
+            tools[(fmcp.name if fmcp else None) or method.__name__] = method
+
+        mcp.add_tool = capture_add_tool
+        register_entity_tools(mcp, mock_client)
+        tool: Callable[..., Any] = tools["ha_set_entity"]
+        return tool
+
+    @pytest.fixture
+    def mock_client(self) -> MagicMock:
+        client = MagicMock()
+        client.send_websocket_message = AsyncMock()
+        return client
+
+    @staticmethod
+    def _update_call(mock_client: MagicMock) -> dict[str, Any]:
+        calls: list[dict[str, Any]] = [
+            c[0][0]
+            for c in mock_client.send_websocket_message.call_args_list
+            if c[0][0]["type"] == "config/entity_registry/update"
+        ]
+        assert len(calls) == 1
+        return calls[0]
+
+    @pytest.mark.asyncio
+    async def test_plain_list_keeps_existing_computed_name(
+        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
+    ) -> None:
+        """Registry has [null]; a string-only list must not drop it."""
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"aliases": [None]}},
+            {"success": True, "result": {"entity_entry": {"entity_id": "light.t"}}},
+        ]
+
+        result = await set_entity_tool(entity_id="light.t", aliases=["Maanlamp"])
+
+        assert result["success"] is True
+        get_call = mock_client.send_websocket_message.call_args_list[0][0][0]
+        assert get_call == {
+            "type": "config/entity_registry/get",
+            "entity_id": "light.t",
+        }
+        assert self._update_call(mock_client)["aliases"] == [None, "Maanlamp"]
+
+    @pytest.mark.asyncio
+    async def test_plain_list_respects_disabled_computed_name(
+        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
+    ) -> None:
+        """Registry has no null (switch off); the list is sent as given."""
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"aliases": ["old"]}},
+            {"success": True, "result": {"entity_entry": {"entity_id": "light.t"}}},
+        ]
+
+        await set_entity_tool(entity_id="light.t", aliases=["new"])
+
+        assert self._update_call(mock_client)["aliases"] == ["new"]
+
+    @pytest.mark.asyncio
+    async def test_empty_list_keeps_computed_name(
+        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
+    ) -> None:
+        """Clearing aliases must not make the entity unaddressable by name."""
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"aliases": [None, "old"]}},
+            {"success": True, "result": {"entity_entry": {"entity_id": "light.t"}}},
+        ]
+
+        await set_entity_tool(entity_id="light.t", aliases=[])
+
+        assert self._update_call(mock_client)["aliases"] == [None]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "aliases",
+        [[None, "Maanlamp"], '[null, "Maanlamp"]'],
+        ids=["list", "json-string"],
+    )
+    async def test_explicit_null_passes_through_without_lookup(
+        self,
+        set_entity_tool: Callable[..., Any],
+        mock_client: MagicMock,
+        aliases: list[str | None] | str,
+    ) -> None:
+        """Caller-provided null is authoritative: no registry read, sent verbatim."""
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"entity_entry": {"entity_id": "light.t"}},
+        }
+
+        result = await set_entity_tool(entity_id="light.t", aliases=aliases)
+
+        assert result["success"] is True
+        assert mock_client.send_websocket_message.call_count == 1
+        assert self._update_call(mock_client)["aliases"] == [None, "Maanlamp"]
+
+    @pytest.mark.asyncio
+    async def test_lookup_failure_is_reported(
+        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
+    ) -> None:
+        """A failed registry read must not fall through to a name-dropping write."""
+        mock_client.send_websocket_message.return_value = {
+            "success": False,
+            "error": {"message": "boom"},
+        }
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id="light.t", aliases=["x"])
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "SERVICE_CALL_FAILED"
+        assert "boom" in error_data["error"]["message"]
+        assert mock_client.send_websocket_message.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_switch_off_strips_null_without_lookup(
+        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
+    ) -> None:
+        """use_entity_name_alias=False removes the own-name entry, even if passed."""
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"entity_entry": {"entity_id": "light.t"}},
+        }
+
+        result = await set_entity_tool(
+            entity_id="light.t",
+            aliases=[None, "Maanlamp"],
+            use_entity_name_alias=False,
+        )
+
+        assert mock_client.send_websocket_message.call_count == 1
+        assert self._update_call(mock_client)["aliases"] == ["Maanlamp"]
+        assert "entity-name alias off" in result["updates"]
+
+    @pytest.mark.asyncio
+    async def test_switch_on_adds_null_without_lookup(
+        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
+    ) -> None:
+        mock_client.send_websocket_message.return_value = {
+            "success": True,
+            "result": {"entity_entry": {"entity_id": "light.t"}},
+        }
+
+        result = await set_entity_tool(
+            entity_id="light.t", aliases=["Maanlamp"], use_entity_name_alias=True
+        )
+
+        assert mock_client.send_websocket_message.call_count == 1
+        assert self._update_call(mock_client)["aliases"] == [None, "Maanlamp"]
+        assert "entity-name alias on" in result["updates"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("switch", "expected"),
+        [(False, ["old"]), (True, [None, "old"])],
+        ids=["off", "on"],
+    )
+    async def test_switch_alone_rewrites_current_aliases(
+        self,
+        set_entity_tool: Callable[..., Any],
+        mock_client: MagicMock,
+        switch: bool,
+        expected: list[str | None],
+    ) -> None:
+        """Without aliases, the switch reads the registry and keeps the strings."""
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"aliases": [None, "old"]}},
+            {"success": True, "result": {"entity_entry": {"entity_id": "light.t"}}},
+        ]
+
+        result = await set_entity_tool(
+            entity_id="light.t", use_entity_name_alias=switch
+        )
+
+        assert result["success"] is True
+        assert self._update_call(mock_client)["aliases"] == expected
+
+    @pytest.mark.asyncio
+    async def test_kept_null_is_reported_in_updates(
+        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
+    ) -> None:
+        mock_client.send_websocket_message.side_effect = [
+            {"success": True, "result": {"aliases": [None]}},
+            {"success": True, "result": {"entity_entry": {"entity_id": "light.t"}}},
+        ]
+
+        result = await set_entity_tool(entity_id="light.t", aliases=["x"])
+
+        assert "entity-name alias kept" in result["updates"]
+
+    @pytest.mark.asyncio
+    async def test_switch_rejected_in_bulk(
+        self, set_entity_tool: Callable[..., Any], mock_client: MagicMock
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(
+                entity_id=["light.a", "light.b"], use_entity_name_alias=False
+            )
+
+        body = json.loads(str(exc_info.value))
+        assert body["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        assert "use_entity_name_alias" in body["error"]["message"]
+        mock_client.send_websocket_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("aliases", [[1, "x"], '["x", 2]', "not json"])
+    async def test_non_string_entries_rejected(
+        self,
+        set_entity_tool: Callable[..., Any],
+        mock_client: MagicMock,
+        aliases: list[Any] | str,
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity_tool(entity_id="light.t", aliases=aliases)
+
+        error_data = json.loads(str(exc_info.value))
+        assert error_data["error"]["code"] == "VALIDATION_INVALID_PARAMETER"
+        mock_client.send_websocket_message.assert_not_called()

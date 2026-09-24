@@ -6,6 +6,7 @@ via the Home Assistant entity registry API.
 """
 
 import asyncio
+import json
 import logging
 import re
 from typing import Annotated, Any, Literal
@@ -21,6 +22,7 @@ from ..client.rest_client import (
 )
 from ..client.websocket_client import get_websocket_client
 from ..errors import ErrorCode, create_error_response
+from ..utils.registry_update_lock import registry_update_lock
 from .auto_backup import with_auto_backup
 from .component_api import (
     DEVICE_REGISTRY_CHILD_SEMANTICS,
@@ -278,7 +280,7 @@ def _build_state_tag_fields(
     updates_made: list[str],
     enabled: bool | None,
     hidden: bool | None,
-    parsed_aliases: list[str] | None,
+    parsed_aliases: list[str | None] | None,
     parsed_categories: dict[str, str | None] | None,
     final_labels: list[str] | None,
     label_operation: str,
@@ -450,6 +452,40 @@ def _parse_string_list_field(
     return None
 
 
+def _parse_aliases_param(
+    aliases: str | list[str | None] | None,
+) -> list[str | None] | None:
+    """Parse aliases, keeping ``null`` entries.
+
+    HA stores the entity's own (computed) name as a ``null`` entry in
+    ``aliases`` (issue #2495); it must survive the round trip.
+    """
+    if aliases is None:
+        return None
+    parsed: Any = aliases
+    if isinstance(aliases, str):
+        try:
+            parsed = json.loads(aliases)
+        except (json.JSONDecodeError, RecursionError) as e:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"Invalid aliases parameter: Invalid JSON in aliases: {e}",
+                )
+            )
+    if not isinstance(parsed, list) or not all(
+        item is None or isinstance(item, str) for item in parsed
+    ):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Invalid aliases parameter: aliases must be a JSON array of "
+                "strings (null entries stand for the entity's own name)",
+            )
+        )
+    return parsed
+
+
 def _parse_categories_param(
     categories: dict[str, str | None] | None,
 ) -> dict[str, str | None] | None:
@@ -580,6 +616,52 @@ class EntityTools:
         if not result.get("success"):
             return None, _extract_ws_error(result)
         return (result.get("result") or {}).get("labels") or [], None
+
+    async def _get_entity_aliases(self, entity_id: str) -> list[str | None]:
+        """Fetch the entity's current registry aliases (``null`` = own name)."""
+        get_msg: dict[str, Any] = {
+            "type": "config/entity_registry/get",
+            "entity_id": entity_id,
+        }
+        result = await self._client.send_websocket_message(get_msg)
+        if not result.get("success"):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to get current aliases for {entity_id}: "
+                    f"{_extract_ws_error(result)}",
+                    context={"entity_id": entity_id},
+                )
+            )
+        aliases: list[str | None] = (result.get("result") or {}).get("aliases") or []
+        return aliases
+
+    async def _resolve_final_aliases(
+        self,
+        entity_id: str,
+        parsed_aliases: list[str | None] | None,
+        use_entity_name_alias: bool | None,
+    ) -> tuple[list[str | None] | None, str | None]:
+        """Apply the own-name (``null``) alias switch; returns (aliases, note).
+
+        With no explicit switch, the registry's existing ``null`` survives a
+        string-only write — HA's Voice settings dialog does the same (#2495).
+        """
+        if use_entity_name_alias is None:
+            if parsed_aliases is None or None in parsed_aliases:
+                return parsed_aliases, None
+            if None in await self._get_entity_aliases(entity_id):
+                return [None, *parsed_aliases], "entity-name alias kept"
+            return parsed_aliases, None
+        source = (
+            parsed_aliases
+            if parsed_aliases is not None
+            else await self._get_entity_aliases(entity_id)
+        )
+        strings: list[str | None] = [a for a in source if a is not None]
+        if use_entity_name_alias:
+            return [None, *strings], "entity-name alias on"
+        return strings, "entity-name alias off"
 
     async def _resolve_final_labels(
         self,
@@ -1034,7 +1116,7 @@ class EntityTools:
         icon: str | None,
         enabled: bool | None,
         hidden: bool | None,
-        parsed_aliases: list[str] | None,
+        parsed_aliases: list[str | None] | None,
         parsed_categories: dict[str, str | None] | None,
         parsed_labels: list[str] | None,
         label_operation: str,
@@ -1043,65 +1125,71 @@ class EntityTools:
         new_device_name: str | None = None,
         device_class: str | None = None,
         parsed_options: dict[str, dict[str, Any]] | None = None,
-        preflighted: bool = False,
+        use_entity_name_alias: bool | None = None,
     ) -> dict[str, Any]:
         """Update a single entity. Orchestrates the phase pipeline."""
-        # Phase 1: For add/remove label operations, fetch current labels first
-        final_labels = await self._resolve_final_labels(
-            entity_id, parsed_labels, label_operation
-        )
-
-        # Phase 2: Build update message for entity registry
-        message: dict[str, Any] = {
-            "type": "config/entity_registry/update",
-            "entity_id": entity_id,
-        }
-        updates_made: list[str] = []
-        _build_name_visibility_fields(
-            message, updates_made, area_id, name, icon, device_class
-        )
-        _build_state_tag_fields(
-            message,
-            updates_made,
-            enabled,
-            hidden,
-            parsed_aliases,
-            parsed_categories,
-            final_labels,
-            label_operation,
-            parsed_labels,
-        )
-        if new_entity_id is not None:
-            self._validate_entity_rename(
-                entity_id, new_entity_id, message, updates_made
+        async with registry_update_lock("entity", entity_id):
+            # Phase 1: For add/remove label operations, fetch current labels first
+            final_labels = await self._resolve_final_labels(
+                entity_id, parsed_labels, label_operation
             )
-        # expose_to and device_name are appended to updates_made only after their
-        # WS phases run (Phases 5-6), so the Phase-4 error context never claims
-        # they were applied before they ran.
-        has_deferred_work = parsed_expose_to is not None or new_device_name is not None
-        if not updates_made and not parsed_options and not has_deferred_work:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "No updates specified",
-                    suggestions=[
-                        "Provide at least one of: area_id, name, icon, device_class, enabled, hidden, aliases, categories, labels, options, expose_to, new_entity_id, or new_device_name"
-                    ],
+            parsed_aliases, alias_note = await self._resolve_final_aliases(
+                entity_id, parsed_aliases, use_entity_name_alias
+            )
+
+            # Phase 2: Build update message for entity registry
+            message: dict[str, Any] = {
+                "type": "config/entity_registry/update",
+                "entity_id": entity_id,
+            }
+            updates_made: list[str] = []
+            _build_name_visibility_fields(
+                message, updates_made, area_id, name, icon, device_class
+            )
+            _build_state_tag_fields(
+                message,
+                updates_made,
+                enabled,
+                hidden,
+                parsed_aliases,
+                parsed_categories,
+                final_labels,
+                label_operation,
+                parsed_labels,
+            )
+            if alias_note:
+                updates_made.append(alias_note)
+            if new_entity_id is not None:
+                self._validate_entity_rename(
+                    entity_id, new_entity_id, message, updates_made
                 )
+            # expose_to and device_name are appended to updates_made only after their
+            # WS phases run (Phases 5-6), so the Phase-4 error context never claims
+            # they were applied before they ran.
+            has_deferred_work = (
+                parsed_expose_to is not None or new_device_name is not None
             )
+            if not updates_made and not parsed_options and not has_deferred_work:
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "No updates specified",
+                        suggestions=[
+                            "Provide at least one of: area_id, name, icon, device_class, enabled, hidden, aliases, use_entity_name_alias, categories, labels, options, expose_to, new_entity_id, or new_device_name"
+                        ],
+                    )
+                )
 
-        # Save original entity_id before potential rename
-        original_entity_id = entity_id
+            # Save original entity_id before potential rename
+            original_entity_id = entity_id
 
-        # Issue #2159: validate cross-registry references immediately before
-        # the write — the narrowest window against a concurrent registry
-        # deletion (#2160 placed the area check here for the same reason).
-        # The bulk path preflights its shared labels/categories once at tool
-        # entry and passes preflighted=True so N entities don't repeat the
-        # lookups. For label add, only the added IDs are checked: the merged
-        # set may legitimately carry pre-existing dangling labels, whose
-        # cleanup path (label_operation="remove") must stay open.
-        if not preflighted:
+            # Issue #2159: validate cross-registry references immediately before
+            # the write — the narrowest window against a concurrent registry
+            # deletion (#2160 placed the area check here for the same reason).
+            # Bulk calls also revalidate here after waiting for the entity lock.
+            # For label add, only the added IDs are checked: the merged
+            # set may legitimately carry pre-existing dangling labels, whose
+            # cleanup path (label_operation="remove") must stay open.
             await validate_registry_ids(
                 self._client,
                 area_id,
@@ -1110,14 +1198,14 @@ class EntityTools:
                 fail_closed=True,
             )
 
-        # Phase 3: Send entity registry update (covers all fields except expose_to)
-        (
-            entity_id,
-            entity_entry,
-            has_registry_updates,
-        ) = await self._execute_registry_update(
-            entity_id, message, updates_made, new_entity_id
-        )
+            # Phase 3: Send entity registry update (covers all fields except expose_to)
+            (
+                entity_id,
+                entity_entry,
+                has_registry_updates,
+            ) = await self._execute_registry_update(
+                entity_id, message, updates_made, new_entity_id
+            )
 
         # Phase 4: Per-domain options
         entity_entry, options_succeeded = await self._apply_options_updates(
@@ -1243,7 +1331,6 @@ class EntityTools:
                     parsed_labels,
                     label_operation,
                     None,  # expose_to batched separately below
-                    preflighted=True,  # labels/categories validated at entry
                 )
                 for eid in entity_ids
             ],
@@ -1644,10 +1731,28 @@ class EntityTools:
             ),
         ] = None,
         aliases: Annotated[
-            str | list[str] | None,
+            str | list[str | None] | None,
             JSON_STRING_COERCION,
             Field(
-                description="List of voice assistant aliases for the entity (replaces existing aliases). Single entity only.",
+                description=(
+                    "List of voice assistant aliases for the entity (replaces existing "
+                    "aliases). A null entry is the entity's own name (HA's 'use entity "
+                    "name' switch); it is kept automatically unless your list already "
+                    "contains null. To turn that switch off or on, use "
+                    "use_entity_name_alias. Single entity only."
+                ),
+                default=None,
+            ),
+        ] = None,
+        use_entity_name_alias: Annotated[
+            bool | None,
+            Field(
+                description=(
+                    "HA's 'use entity name' voice-alias switch. True keeps the entity's "
+                    "own name answering in Assist, False turns it off so only the "
+                    "aliases match. Omit to leave it as is. Works with or without "
+                    "aliases. Single entity only."
+                ),
                 default=None,
             ),
         ] = None,
@@ -1721,7 +1826,7 @@ class EntityTools:
 
         BULK OPERATIONS:
         When entity_id is a list, only labels, expose_to, and categories parameters are supported.
-        Other parameters (area_id, name, icon, device_class, options, enabled, hidden, aliases, new_entity_id, new_device_name) require single entity.
+        Other parameters (area_id, name, icon, device_class, options, enabled, hidden, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.
 
         LABEL OPERATIONS:
         - label_operation="set" (default): Replace all labels with the provided list. Use [] to clear.
@@ -1813,6 +1918,7 @@ class EntityTools:
                 "enabled": enabled,
                 "hidden": hidden,
                 "aliases": aliases,
+                "use_entity_name_alias": use_entity_name_alias,
                 "new_entity_id": new_entity_id,
                 "new_device_name": new_device_name,
             }
@@ -1826,7 +1932,7 @@ class EntityTools:
                         f"Bulk operations (multiple entity_ids) only support categories, labels, and expose_to. "
                         f"Single-entity parameters provided: {non_null_single_params}",
                         suggestions=[
-                            "Use a single entity_id for area_id, name, icon, device_class, options, enabled, hidden, or aliases",
+                            "Use a single entity_id for area_id, name, icon, device_class, options, enabled, hidden, aliases, or use_entity_name_alias",
                             "Or remove single-entity parameters to use bulk categories/labels/expose_to",
                         ],
                     )
@@ -1834,18 +1940,15 @@ class EntityTools:
 
             _validate_enabled_constraint(enabled, entity_ids)
 
-            parsed_aliases = _parse_string_list_field(aliases, "aliases")
+            parsed_aliases = _parse_aliases_param(aliases)
             parsed_categories = _parse_categories_param(categories)
             parsed_labels = _parse_string_list_field(labels, "labels")
             parsed_options = _parse_options_param(options)
             parsed_expose_to = _parse_expose_to_param(expose_to)
 
-            # Issue #2159 bulk preflight: labels/categories are shared across
-            # the fan-out, so validate them once here instead of once per
-            # entity inside _update_single_entity (area_id was rejected for
-            # bulk above). The single-entity path instead validates
-            # immediately before its registry write, minimizing the
-            # check-to-write window.
+            # Reject invalid shared references before any bulk writes. Each
+            # entity also revalidates under its lock to catch references deleted
+            # while waiting, preserving per-entity partial-progress reporting.
             if is_bulk:
                 await validate_registry_ids(
                     self._client,
@@ -1873,6 +1976,7 @@ class EntityTools:
                     new_device_name=new_device_name,
                     device_class=device_class,
                     parsed_options=parsed_options,
+                    use_entity_name_alias=use_entity_name_alias,
                 )
 
             # Bulk case
@@ -1970,7 +2074,7 @@ class EntityTools:
         - hidden_by: Why hidden (null=visible, "user"/"integration"/etc)
         - enabled: Boolean shorthand (True if disabled_by is null)
         - hidden: Boolean shorthand (True if hidden_by is not null)
-        - aliases: Voice assistant aliases
+        - aliases: Voice assistant aliases (a null entry = the entity's own name)
         - labels: Assigned label IDs
         - categories: Category assignments (dict mapping scope to category_id)
         - device_class: User "Show As" override (null = use original_device_class)

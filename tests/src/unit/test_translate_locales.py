@@ -82,23 +82,21 @@ class TestValidate:
     def test_accepts_a_plain_translation(self) -> None:
         assert _validate(_item(english="Hello"), "Hallo") is None
 
-    def test_refuses_a_swapped_number_and_accepts_a_spelled_out_one(self) -> None:
-        """The engine asks the narrow question, and the corpus says which.
+    def test_refuses_any_number_the_english_does_not_state(self) -> None:
+        """A swapped, dropped or invented number, or an English digit spelled out.
 
-        Across the 6751 shipped pairs every number difference is one-sided —
-        Russian writes "the 5 experimental sub-flags" in words, Chinese keeps
-        a clause the English rendering cuts — and none is a swap. Comparing
-        full multisets here would refuse those two correct strings on every
-        run and leave their keys to be planned again tomorrow; comparing
-        nothing let a swapped number land as a backfilled key, where the
-        merge gate reports it and holds the whole tree back. A swap is wrong
-        in every language, so that is what this refuses.
+        The engine asks what the merge gate asks: a number difference let
+        through here lands as a backfilled key the merge gate then refuses,
+        and that holds the whole push back every day.
         """
-        assert _validate(_item(english="Range 1-600."), "Bereich 1-900.") is not None
-        assert (
-            _validate(_item(english="keeps 30 entries"), "behaelt 50 Eintraege")
-            is not None
-        )
+        for english, bad in (
+            ("Range 1-600.", "Bereich 1-900."),
+            ("keeps 30 entries", "behaelt 50 Eintraege"),
+            ("keeps 30 entries", "behaelt Eintraege"),
+            ("keeps entries", "behaelt 30 Eintraege"),
+            ("the 5 experimental sub-flags", "die fuenf experimentellen Unterschalter"),
+        ):
+            assert _validate(_item(english=english), bad) is not None, (english, bad)
         assert _validate(_item(english="Range 1-600."), "Bereich 1-600.") is None
 
     def test_rejects_empty_and_non_string(self) -> None:
@@ -138,37 +136,38 @@ class TestValidate:
         red every day, the push is held back whole, and the run re-spends its
         quota planning work it cannot land. One rejection and one retry costs
         a single string instead. The first three cases below are the faults
-        #2180 repaired by hand; the fourth is the unit contradiction the same
-        arm reports.
+        #2180 repaired by hand; the rest are a wrong unit, a dropped unit, and
+        a repeated identifier the translation corrupts once.
         """
         for english, bad in (
             ("See docs/beta.md for limits.", "Siehe die Beta-Dokumentation."),
             ("Set enable_tool_search to true.", "Aktiviere die Werkzeugsuche."),
             ("roughly 90% less", "etwa 46K weniger"),
             ("limit is 1-256 MB", "Grenze ist 1-256 GB"),
+            ("limit is 1-256 MB", "Grenze ist 1-256"),
+            (
+                "call ha_get_skill_guide, then ha_get_skill_guide again",
+                "rufe ha_get_skill_guide, dann wrong_tool erneut",
+            ),
         ):
             assert _validate(_item(english=english), bad) is not None, (
                 f"the engine accepted {bad!r} for {english!r}, which the "
                 "merge-time literal-parity check refuses"
             )
 
-    def test_accepts_a_number_the_translation_spells_out(self) -> None:
-        """The one arm the engine deliberately does not run.
+    def test_accepts_digits_for_a_number_the_english_spells_out(self) -> None:
+        """Korean writes "five minutes" as "5분"; the word may stay a word too.
 
-        Both tolerances the merge-time check carries are number-count
-        tolerances: Russian writes "the 5 experimental sub-flags" in words,
-        Chinese keeps a clause the English rendering cuts. Comparing number
-        multisets here would refuse correct output on every run, retry once,
-        and leave the key to be planned again tomorrow — the stall the call
-        above exists to prevent, moved one step upstream.
+        Locale Sync accepted this string and the pre-push check refused it,
+        blocking the whole push on every run until the two agreed.
         """
-        assert (
-            _validate(
-                _item(english="the 5 experimental sub-flags"),
-                "die fuenf experimentellen Unterschalter",
-            )
-            is None
-        )
+        english = "Five wrong PINs within five minutes close the channel."
+        for translated in (
+            "5분 동안 5회 이상 잘못된 PIN을 입력하면 채널이 차단됩니다.",
+            "Fuenf falsche PINs innerhalb von fuenf Minuten sperren den Kanal.",
+        ):
+            assert _validate(_item(english=english), translated) is None, translated
+        assert _validate(_item(english=english), "6분 동안 5회 잘못된 PIN") is not None
 
     def test_markup_rules_apply_only_to_messages(self) -> None:
         # Tool and component strings render through escapeHtml / HA core, so

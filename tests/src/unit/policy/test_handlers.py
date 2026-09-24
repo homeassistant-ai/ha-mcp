@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
@@ -18,6 +19,21 @@ def make_app(tmp_path: Path, queue: ApprovalQueue) -> TestClient:
             Route("/api/policy/pending", h["policy_get_pending"], methods=["GET"]),
             Route("/api/policy/approve", h["policy_post_approve"], methods=["POST"]),
             Route("/api/policy/deny", h["policy_post_deny"], methods=["POST"]),
+            Route(
+                "/api/policy/decision-pin",
+                h["policy_get_decision_pin"],
+                methods=["GET"],
+            ),
+            Route(
+                "/api/policy/decision-pin",
+                h["policy_post_decision_pin"],
+                methods=["POST"],
+            ),
+            Route(
+                "/api/policy/decision-pin",
+                h["policy_delete_decision_pin"],
+                methods=["DELETE"],
+            ),
         ]
     )
     return TestClient(app)
@@ -240,3 +256,313 @@ def test_get_pending_returns_full_shape(tmp_path):
     # ISO 8601 with timezone
     assert "T" in payload["created_at"]
     assert "T" in payload["expires_at"]
+
+
+@pytest.fixture
+def fast_hashing(monkeypatch: pytest.MonkeyPatch):
+    """The work factor is a cost, not a behaviour these tests assert on."""
+    monkeypatch.setattr("ha_mcp.policy.decision_pin.HASH_ITERATIONS", 1000)
+
+
+def test_pin_status_starts_unset(tmp_path):
+    c = make_app(tmp_path, ApprovalQueue())
+    assert c.get("/api/policy/decision-pin").json() == {"set": False}
+
+
+def test_setting_a_pin_reports_it_set_without_echoing_it(tmp_path, fast_hashing):
+    c = make_app(tmp_path, ApprovalQueue())
+
+    r = c.post("/api/policy/decision-pin", json={"pin": "2468"})
+
+    assert r.status_code == 200
+    assert r.json()["set"] is True
+    assert "2468" not in r.text
+    assert "2468" not in c.get("/api/policy/decision-pin").text
+
+
+def test_a_too_short_pin_is_rejected(tmp_path, fast_hashing):
+    c = make_app(tmp_path, ApprovalQueue())
+
+    r = c.post("/api/policy/decision-pin", json={"pin": "12"})
+
+    assert r.status_code == 400
+    assert c.get("/api/policy/decision-pin").json()["set"] is False
+
+
+def test_event_decisions_cannot_be_enabled_without_a_pin(tmp_path):
+    """The listener refuses every event without one, so the switch would lie."""
+    c = make_app(tmp_path, ApprovalQueue())
+    body = Policy(rules=[], event_decisions_enabled=True).model_dump(mode="json")
+
+    r = c.put("/api/policy/config", json=body)
+
+    assert r.status_code == 400
+    assert r.json()["pin_required"] is True
+    assert c.get("/api/policy/config").json()["event_decisions_enabled"] is False
+
+
+def test_event_decisions_can_be_enabled_once_a_pin_exists(tmp_path, fast_hashing):
+    c = make_app(tmp_path, ApprovalQueue())
+    c.post("/api/policy/decision-pin", json={"pin": "2468"})
+    body = Policy(rules=[], event_decisions_enabled=True).model_dump(mode="json")
+
+    assert c.put("/api/policy/config", json=body).status_code == 200
+    assert c.get("/api/policy/config").json()["event_decisions_enabled"] is True
+
+
+def test_removing_the_pin_switches_event_decisions_off(tmp_path, fast_hashing):
+    """Otherwise the tab keeps advertising a channel that now refuses everything."""
+    c = make_app(tmp_path, ApprovalQueue())
+    c.post("/api/policy/decision-pin", json={"pin": "2468"})
+    c.put(
+        "/api/policy/config",
+        json=Policy(rules=[], event_decisions_enabled=True).model_dump(mode="json"),
+    )
+
+    r = c.delete("/api/policy/decision-pin")
+
+    assert r.json() == {"set": False, "event_decisions_disabled": True}
+    assert c.get("/api/policy/config").json()["event_decisions_enabled"] is False
+    assert c.get("/api/policy/decision-pin").json() == {"set": False}
+
+
+def test_removing_a_pin_that_was_never_set_is_harmless(tmp_path):
+    c = make_app(tmp_path, ApprovalQueue())
+
+    r = c.delete("/api/policy/decision-pin")
+
+    assert r.json() == {"set": False, "event_decisions_disabled": False}
+
+
+def test_a_pin_deleted_mid_write_still_blocks_the_switch(
+    tmp_path, fast_hashing, monkeypatch
+):
+    """The check has to read the PIN under the same lock the delete takes.
+
+    Clearing the PIN while the stored policy already has the switch off
+    writes nothing and bumps no version, so the optimistic-concurrency check
+    cannot see it. A PIN check taken before the lock is therefore stale by
+    the time the write lands, and the switch would persist with nothing
+    behind it. Simulated by deleting the PIN from inside the load that runs
+    under the lock.
+    """
+    from ha_mcp.policy import handlers
+    from ha_mcp.policy.decision_pin import PIN_FILENAME
+
+    c = make_app(tmp_path, ApprovalQueue())
+    c.post("/api/policy/decision-pin", json={"pin": "2468"})
+    real_load = handlers.load_policy
+
+    def load_and_lose_the_pin(data_dir):
+        (data_dir / PIN_FILENAME).unlink(missing_ok=True)
+        return real_load(data_dir)
+
+    monkeypatch.setattr(handlers, "load_policy", load_and_lose_the_pin)
+
+    r = c.put(
+        "/api/policy/config",
+        json=Policy(rules=[], event_decisions_enabled=True).model_dump(mode="json"),
+    )
+
+    assert r.status_code == 400
+    assert r.json()["pin_required"] is True
+    monkeypatch.undo()
+    assert c.get("/api/policy/config").json()["event_decisions_enabled"] is False
+
+
+def test_a_corrupt_policy_blocks_the_removal_instead_of_half_doing_it(
+    tmp_path, fast_hashing
+):
+    """Read the policy first: a file that cannot be parsed stops everything.
+
+    Deleting first and reading afterwards meant a corrupt policy file took
+    the PIN with it and then returned a 500 — the caller could not tell
+    whether the PIN was gone, and the tab still showed the toggle on.
+    """
+    from ha_mcp.policy.persistence import POLICY_FILENAME
+
+    c = make_app(tmp_path, ApprovalQueue())
+    c.post("/api/policy/decision-pin", json={"pin": "2468"})
+    (tmp_path / POLICY_FILENAME).write_text("{ not json", encoding="utf-8")
+
+    r = c.delete("/api/policy/decision-pin")
+
+    assert r.status_code == 500
+    assert r.json()["policy_file_corrupt"] is True
+    # The PIN is still there, which is what makes the failure recoverable.
+    assert c.get("/api/policy/decision-pin").json()["set"] is True
+
+
+def test_a_failed_policy_save_reports_what_actually_happened(
+    tmp_path, fast_hashing, monkeypatch
+):
+    """PIN gone, toggle still persisted: the caller has to be told.
+
+    The channel is closed either way — every event is refused without a
+    PIN — but the stored setting no longer matches, and a plain 500 would
+    leave the user with a tab claiming a live channel.
+    """
+    from ha_mcp.policy import handlers
+
+    c = make_app(tmp_path, ApprovalQueue())
+    c.post("/api/policy/decision-pin", json={"pin": "2468"})
+    c.put(
+        "/api/policy/config",
+        json=Policy(rules=[], event_decisions_enabled=True).model_dump(mode="json"),
+    )
+
+    def no_disk(*_args, **_kwargs):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(handlers, "save_policy", no_disk)
+    r = c.delete("/api/policy/decision-pin")
+    monkeypatch.undo()
+
+    assert r.status_code == 500
+    body = r.json()
+    assert body["pin_removed"] is True
+    assert body["event_decisions_disabled"] is False
+    assert c.get("/api/policy/decision-pin").json()["set"] is False
+    assert c.get("/api/policy/config").json()["event_decisions_enabled"] is True
+
+
+def test_a_failed_pin_delete_changes_nothing_and_says_so(
+    tmp_path, fast_hashing, monkeypatch
+):
+    from ha_mcp.policy import handlers
+
+    c = make_app(tmp_path, ApprovalQueue())
+    c.post("/api/policy/decision-pin", json={"pin": "2468"})
+
+    def no_disk(*_args, **_kwargs):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(handlers, "clear_pin", no_disk)
+    r = c.delete("/api/policy/decision-pin")
+    monkeypatch.undo()
+
+    assert r.status_code == 500
+    assert r.json()["storage_failed"] is True
+    assert c.get("/api/policy/decision-pin").json()["set"] is True
+
+
+def test_removing_the_pin_with_the_toggle_already_off_touches_no_policy(
+    tmp_path, fast_hashing, monkeypatch
+):
+    """Nothing to switch off, so nothing is written — and no version moves."""
+    from ha_mcp.policy import handlers
+
+    c = make_app(tmp_path, ApprovalQueue())
+    c.post("/api/policy/decision-pin", json={"pin": "2468"})
+    before = c.get("/api/policy/config").json()["version"]
+
+    saves: list[object] = []
+    real_save = handlers.save_policy
+    monkeypatch.setattr(
+        handlers,
+        "save_policy",
+        lambda *a, **k: (saves.append(a), real_save(*a, **k))[1],
+    )
+    r = c.delete("/api/policy/decision-pin")
+    monkeypatch.undo()
+
+    assert r.json() == {"set": False, "event_decisions_disabled": False}
+    assert saves == []
+    assert c.get("/api/policy/config").json()["version"] == before
+
+
+def test_a_failed_pin_write_is_an_actionable_error(tmp_path, fast_hashing, monkeypatch):
+    """A storage failure names itself instead of arriving as a bare 500."""
+    from ha_mcp.policy import handlers
+
+    c = make_app(tmp_path, ApprovalQueue())
+
+    def no_disk(*_args, **_kwargs):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(handlers, "set_pin", no_disk)
+    r = c.post("/api/policy/decision-pin", json={"pin": "2468"})
+    monkeypatch.undo()
+
+    assert r.status_code == 500
+    assert r.json()["storage_failed"] is True
+    assert "no space left on device" in r.json()["error"]
+    assert c.get("/api/policy/decision-pin").json()["set"] is False
+
+
+def test_setting_the_pin_does_not_hash_on_the_event_loop(
+    tmp_path, fast_hashing, monkeypatch
+):
+    """The 200k-round derivation and the file write belong in a worker.
+
+    Verification already runs in one; creation ran on the loop, where a
+    quarter-second of pure CPU blocks every other request the server is
+    serving. Pinned by the thread identity the hashing actually runs on.
+    """
+    import threading
+
+    from ha_mcp.policy import decision_pin, handlers
+
+    c = make_app(tmp_path, ApprovalQueue())
+    # The event-loop thread is NOT this test's thread: the test client runs
+    # the loop in a worker of its own. Comparing against the test thread
+    # would therefore pass whatever the handler does, so the loop thread is
+    # captured from inside the handler itself — validate_pin runs on it,
+    # before the offload.
+    loop_thread: list[int] = []
+    real_validate = handlers.validate_pin
+
+    def note_loop_thread(*args, **kwargs):
+        loop_thread.append(threading.get_ident())
+        return real_validate(*args, **kwargs)
+
+    hashed_on: list[int] = []
+    real_derive = decision_pin._derive
+
+    def note_hash_thread(*args, **kwargs):
+        hashed_on.append(threading.get_ident())
+        return real_derive(*args, **kwargs)
+
+    monkeypatch.setattr(handlers, "validate_pin", note_loop_thread)
+    monkeypatch.setattr(decision_pin, "_derive", note_hash_thread)
+    r = c.post("/api/policy/decision-pin", json={"pin": "2468"})
+    monkeypatch.undo()
+
+    assert r.status_code == 200
+    assert loop_thread and hashed_on
+    assert loop_thread[0] not in hashed_on
+
+
+def test_approving_an_expired_request_reports_it_as_unknown(tmp_path):
+    """The tab reads the queue first, so an expired entry is simply gone.
+
+    ``queue.get`` sweeps on the way in, so by the time the handler would
+    decide, the token names nothing and the answer is the 404 the UI
+    already handles. This pins the boundary of the queue-level expiry fix:
+    it changes what a decision arriving on the event bus does, not what
+    this endpoint answers.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    queue = ApprovalQueue()
+    c = make_app(tmp_path, queue)
+    entry = queue.create("ha_call_service", "h", {}, ttl_minutes=5)
+    entry.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+
+    r = c.post("/api/policy/approve", json={"token": entry.token})
+
+    assert r.status_code == 404
+    assert entry.decision == "pending"
+
+
+def test_an_already_decided_request_still_says_so(tmp_path):
+    """The 409 path keeps its meaning for the case it was written for."""
+    queue = ApprovalQueue()
+    c = make_app(tmp_path, queue)
+    entry = queue.create("ha_call_service", "h", {}, ttl_minutes=5)
+    queue.approve(entry.token)
+
+    r = c.post("/api/policy/approve", json={"token": entry.token})
+
+    assert r.status_code == 409
+    assert r.json()["current_decision"] == "approved"

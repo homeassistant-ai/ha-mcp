@@ -104,6 +104,12 @@ class TestBuildSettingsHandlers:
             "policy_post_deny",
             "policy_get_tool_schema",
             "policy_get_value_source",
+            # Approval PIN for event-bus decisions (#2502). Served for real
+            # in every mode, including the sidecar's stub set: the PIN is a
+            # file in the shared data dir, not an entry in the queue.
+            "policy_get_decision_pin",
+            "policy_post_decision_pin",
+            "policy_delete_decision_pin",
             # Advanced settings handlers.
             "get_advanced_settings",
             "save_advanced_settings",

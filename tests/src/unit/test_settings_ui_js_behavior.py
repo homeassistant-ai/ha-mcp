@@ -82,6 +82,8 @@ _TOP_LEVEL_ELEMENT_IDS = [
     # ha_manage_security_policy; same save-then-verify flow as the master.
     "policy-manage-tool-toggle",
     "policy-save-global-btn",
+    "policy-set-pin-btn",
+    "policy-clear-pin-btn",
     # Read Only Mode toggle (#1569) — Tools tab, above the search box.
     # Same save-then-verify flow as the policy master toggle.
     "read-only-mode-toggle",
@@ -162,8 +164,12 @@ def _min_dom_row_tail(el_id: str) -> str | None:
         "read-only-mode-toggle",
     ):
         return f'<input id="{el_id}" type="checkbox" />'
-    if el_id == "policy-save-global-btn":
-        return '<button id="policy-save-global-btn"></button>'
+    if el_id in (
+        "policy-save-global-btn",
+        "policy-set-pin-btn",
+        "policy-clear-pin-btn",
+    ):
+        return f'<button id="{el_id}"></button>'
     return f'<div id="{el_id}"></div>'
 
 
@@ -234,6 +240,12 @@ DEFAULT_FETCHES: dict[str, dict] = {
     "/api/settings/backup-config": {
         "status": 200,
         "json": {},
+    },
+    # policyLoadConfig asks whether an approval PIN exists on every load; the
+    # PIN lives outside the policy document, so it is its own endpoint.
+    "/api/policy/decision-pin": {
+        "status": 200,
+        "json": {"set": False},
     },
 }
 
@@ -1258,6 +1270,9 @@ def _policy_panel_dom() -> str:
       <div id="policy-rules-list"></div>
       <input id="policy-wait-seconds" />
       <input id="policy-ttl-minutes" />
+      <input id="policy-event-decisions-toggle" type="checkbox" />
+      <input id="policy-decision-pin" type="password" />
+      <div class="feature-locked-note" id="policy-pin-status"></div>
       <div class="pin-notice" id="policyUnknownNotice"></div>
       <div class="feature-locked-note" id="policy-master-locked"></div>
       <div class="feature-locked-note" id="policy-manage-tool-locked"></div>
@@ -7570,3 +7585,178 @@ class TestFeatureGatedStubRow:
         assert "disabled" in gate, (
             f"gate switch must stay locked while policies are off: {gate}"
         )
+
+
+class TestApprovalPinRemoval:
+    """The local checkbox after a successful PIN removal (#2502 review).
+
+    The DELETE answer's ``event_decisions_disabled`` reports whether the
+    PERSISTED toggle was on. A box the user ticked but has not saved yet is
+    invisible to that flag, so keying the local reset on it left the
+    checkbox ticked, the status refresh then disabled it (no PIN), and the
+    next Save submitted the one combination the server refuses.
+    """
+
+    @staticmethod
+    def _fetches(*, event_decisions_disabled: bool) -> dict:
+        return {
+            **DEFAULT_FETCHES,
+            "/api/policy/decision-pin": {
+                "byMethod": {
+                    "DELETE": {
+                        "status": 200,
+                        "json": {
+                            "set": False,
+                            "event_decisions_disabled": event_decisions_disabled,
+                        },
+                    },
+                    "GET": {"status": 200, "json": {"set": False}},
+                }
+            },
+        }
+
+    @staticmethod
+    def _invoke() -> str:
+        return """
+              await new Promise(r => setTimeout(r, 250));
+              window.confirm = () => true;
+              const cb = document.getElementById('policy-event-decisions-toggle');
+              cb.checked = true;
+              const pre = document.createElement('div');
+              pre.id = '__pin_pre_probe';
+              pre.dataset.checked = String(cb.checked);
+              document.body.appendChild(pre);
+              document.getElementById('policy-clear-pin-btn').click();
+              await new Promise(r => setTimeout(r, 150));
+              const probe = document.createElement('div');
+              probe.id = '__pin_removal_probe';
+              probe.dataset.checked = String(cb.checked);
+              document.body.appendChild(probe);
+            """
+
+    def _probe(self, dom: str) -> str:
+        # The box really was ticked before the click: without this, a page
+        # that never got it ticked would satisfy every "cleared" assertion
+        # below for the wrong reason.
+        pre = re.search(r'<div[^>]*id="__pin_pre_probe"[^>]*>', dom)
+        assert pre is not None and 'data-checked="true"' in pre.group(0), (
+            f"the toggle was not ticked before the removal: {pre and pre.group(0)}"
+        )
+        probe = re.search(r'<div[^>]*id="__pin_removal_probe"[^>]*>', dom)
+        assert probe is not None, f"probe missing; dom tail: {dom[-1500:]}"
+        return probe.group(0)
+
+    def test_an_unsaved_tick_is_cleared_when_the_server_says_nothing_changed(
+        self, settings_script: str
+    ) -> None:
+        """The persisted toggle was already off — the box must still clear.
+
+        This is the sequence that used to break: tick the box without
+        saving, then remove the PIN. The server reports
+        ``event_decisions_disabled: false`` because nothing was persisted,
+        and the box used to stay ticked.
+        """
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=self._fetches(event_decisions_disabled=False),
+            invoke=self._invoke(),
+        )
+        _assert_clean_init(result)
+        assert 'data-checked="false"' in self._probe(result.dom)
+
+    def test_the_box_is_cleared_when_the_server_switched_it_off(
+        self, settings_script: str
+    ) -> None:
+        """The case that already worked, kept working."""
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=self._fetches(event_decisions_disabled=True),
+            invoke=self._invoke(),
+        )
+        _assert_clean_init(result)
+        assert 'data-checked="false"' in self._probe(result.dom)
+
+    def test_a_failed_removal_leaves_the_box_alone(self, settings_script: str) -> None:
+        """Nothing was removed, so nothing about the toggle may be implied."""
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/decision-pin": {
+                "byMethod": {
+                    "DELETE": {"status": 500, "json": {"error": "no"}},
+                    "GET": {"status": 200, "json": {"set": True}},
+                }
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke=self._invoke(),
+        )
+        _assert_clean_init(result)
+        assert 'data-checked="true"' in self._probe(result.dom)
+
+
+class TestApprovalPinInvalidStatus:
+    """A stored record that matches nothing is its own state in the tab.
+
+    Reported as "no PIN set", the user is told to do the thing they
+    already did; the repair for a record the server cannot decode is to
+    set a new PIN, and the status line is where that is said.
+    """
+
+    def test_an_unusable_record_says_so_and_keeps_the_toggle_locked(
+        self, settings_script: str
+    ) -> None:
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/decision-pin": {
+                "status": 200,
+                "json": {"set": False, "invalid": True},
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              await window.policyRefreshPinStatus();
+              const probe = document.createElement('div');
+              probe.id = '__pin_invalid_probe';
+              probe.dataset.status = document.getElementById('policy-pin-status').textContent;
+              probe.dataset.disabled = String(
+                document.getElementById('policy-event-decisions-toggle').disabled
+              );
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        probe = re.search(r'<div[^>]*id="__pin_invalid_probe"[^>]*>', result.dom)
+        assert probe is not None, f"probe missing; dom tail: {result.dom[-1500:]}"
+        assert "cannot be read" in probe.group(0), probe.group(0)
+        assert 'data-disabled="true"' in probe.group(0), probe.group(0)
+
+    def test_a_plain_missing_pin_still_says_no_pin_set(
+        self, settings_script: str
+    ) -> None:
+        """The control: absent and invalid must not render the same line."""
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=DEFAULT_FETCHES,
+            invoke="""
+              await new Promise(r => setTimeout(r, 250));
+              await window.policyRefreshPinStatus();
+              const probe = document.createElement('div');
+              probe.id = '__pin_absent_probe';
+              probe.dataset.status = document.getElementById('policy-pin-status').textContent;
+              document.body.appendChild(probe);
+            """,
+        )
+        _assert_clean_init(result)
+        probe = re.search(r'<div[^>]*id="__pin_absent_probe"[^>]*>', result.dom)
+        assert probe is not None
+        assert "No PIN set" in probe.group(0), probe.group(0)

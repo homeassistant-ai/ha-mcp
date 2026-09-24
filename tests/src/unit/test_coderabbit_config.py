@@ -292,40 +292,13 @@ def test_agents_md_documents_the_real_auto_review_settings() -> None:
     )
 
 
-def test_issue_enrichment_is_enabled() -> None:
-    """Issue triage now rests on this block; the schema default is ``false``.
-
-    CodeRabbit's docs say enrichment is "enabled by default", but the schema
-    the file points at says ``auto_enrich.enabled`` defaults to ``false`` —
-    and the schema is what applied in practice: no issue opened after the app
-    install got an enrichment comment until this was set. With the GitHub
-    Models triage bot deleted, a typo'd key here means new issues silently
-    get no triage at all, from either system.
-    """
+def test_issue_intake_has_exclusive_ownership() -> None:
+    """CodeRabbit must not compete with the factual issue-intake workflow."""
     enrich = _config()["issue_enrichment"]
-
-    assert enrich["auto_enrich"]["enabled"] is True, (
-        "issue_enrichment.auto_enrich.enabled must be true — the schema "
-        "default is false, and this block is the repo's only issue triage."
-    )
-    labeling = enrich["labeling"]
-    assert labeling["auto_apply_labels"] is True, (
-        "auto_apply_labels must be true — false (the default) demotes every "
-        "labeling_instruction to a suggestion inside the enrichment comment."
-    )
-    instructions = labeling["labeling_instructions"]
-    assert instructions, (
-        "labeling_instructions is empty — auto-labeling has nothing to apply"
-    )
-    for entry in instructions:
-        assert entry.get("label") and entry.get("instructions"), (
-            f"labeling_instructions entry {entry!r} needs both `label` and "
-            "`instructions`"
-        )
-        assert len(entry["instructions"]) <= 3000, (
-            f"instructions for {entry['label']!r} exceed the schema's 3000-char "
-            "maxLength — CodeRabbit rejects the config"
-        )
+    assert enrich["auto_enrich"]["enabled"] is False
+    assert enrich["labeling"]["auto_apply_labels"] is False
+    assert enrich["planning"]["enabled"] is False
+    assert (REPO_ROOT / ".github/workflows/issue-intake.yml").is_file()
 
 
 def test_auto_planning_stays_off() -> None:

@@ -61,12 +61,12 @@ async def test_delete_forwards_recurrence_params():
         entity_id="calendar.test",
         uid="evt-123",
         recurrence_id="20260101T100000",
-        recurrence_range="THIS_AND_FUTURE",
+        recurrence_range="THISANDFUTURE",
     )
 
     message = client.send_websocket_message.await_args.args[0]
     assert message["recurrence_id"] == "20260101T100000"
-    assert message["recurrence_range"] == "THIS_AND_FUTURE"
+    assert message["recurrence_range"] == "THISANDFUTURE"
 
 
 @pytest.mark.asyncio
@@ -91,3 +91,41 @@ async def test_delete_failure_surfaces_structured_error():
         "not found" in s.lower() or "uid" in s.lower() or "event" in s.lower()
         for s in suggestions
     )
+
+
+@pytest.mark.parametrize("bad", ["", "   "])
+@pytest.mark.asyncio
+async def test_delete_rejects_blank_recurrence_id(bad):
+    """A blank recurrence_id reaches HA as a real one and matches nothing."""
+    client = _make_mock_client()
+
+    tools = CalendarTools(client)
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_remove_calendar_event(
+            entity_id="calendar.test",
+            uid="series-1",
+            recurrence_id=bad,
+        )
+
+    message = str(exc_info.value)
+    assert "VALIDATION_INVALID_PARAMETER" in message
+    assert '"parameter": "recurrence_id"' in message, message
+    client.send_websocket_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_rejects_recurrence_range_without_recurrence_id():
+    """Without an occurrence id, ical deletes the ENTIRE series instead."""
+    client = _make_mock_client()
+
+    tools = CalendarTools(client)
+    with pytest.raises(ToolError) as exc_info:
+        await tools.ha_config_remove_calendar_event(
+            entity_id="calendar.test",
+            uid="series-1",
+            recurrence_range="THISANDFUTURE",
+        )
+
+    assert "VALIDATION_INVALID_PARAMETER" in str(exc_info.value)
+    assert "recurrence_id" in str(exc_info.value)
+    client.send_websocket_message.assert_not_awaited()

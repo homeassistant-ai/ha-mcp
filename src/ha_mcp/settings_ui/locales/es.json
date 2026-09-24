@@ -498,7 +498,25 @@
     "addon.verify_ssl.description": "Verifica el certificado TLS del servidor de Home Assistant. La app (add-on) se conecta a través del proxy del Supervisor, por lo que normalmente esto no tiene efecto y debe permanecer habilitado. Desactívalo solo si has reconfigurado la app (add-on) para comunicarse con HA a través de un nombre de host HTTPS público con un certificado autofirmado o un error de coincidencia en el nombre de host. Desactivarlo debilita la seguridad del transporte; déjalo activado a menos que sepas que lo necesitas. Requiere reiniciar para aplicar los cambios.",
     "addon.ha_tool_concurrency.name": "Concurrencia de herramientas de Home Assistant",
     "addon.ha_tool_concurrency.description": "Límite opcional en las llamadas externas a herramientas de Home Assistant en todas las sesiones. La concurrencia interna de REST, WebSocket y de distribución por herramienta no se modifica. 0 mantiene el comportamiento ilimitado. Una llamada que espera capacidad falla después de 60 segundos.",
-    "addon_stable.enable_tool_search.description": "Reemplaza el catálogo completo de herramientas por un descubrimiento basado en búsquedas. Reduce el contexto inactivo en aproximadamente un 90 %, a unos 5K tokens. ⚠️ NO habilites esto en clientes que tengan su propia búsqueda de herramientas integrada / herramientas diferidas (claude.ai, Claude Desktop, Claude Code); ambas capas de búsqueda entran en conflicto y la búsqueda de herramientas integrada del cliente es la mejor opción en ese caso; déjalo desactivado. El hecho de que las herramientas se diferieran depende de tu combinación de cliente y modelo: úsalo cuando tu configuración cargue el catálogo completo de entrada (modelos sin herramientas diferidas nativas, por ejemplo, Gemini, modelos locales compatibles con OpenAI, Claude Haiku), clientes que insertan todos los esquemas de herramientas sin importar el modelo (por ejemplo, GitHub Copilot CLI), o ventanas de contexto más pequeñas. Algunos modelos de Codex y ChatGPT también incluyen herramientas diferidas; comprueba directamente tu cliente/modelo para confirmar sus características y no dejar esto habilitado innecesariamente. Las herramientas se encuentran mediante ha_search_tools y se ejecutan a través de proxies categorizados (lectura/escritura/eliminación). Requiere reiniciar la app (add-on) para que surta efecto; a continuación, reconecta o actualiza el servidor MCP en tu cliente de IA para que recargue la lista de herramientas. Reiniciar solo la app (add-on) NO actualiza la lista de herramientas almacenada en caché del cliente; esto se aplica después de cambiar cualquier configuración aquí."
+    "addon_stable.enable_tool_search.description": "Reemplaza el catálogo completo de herramientas por un descubrimiento basado en búsquedas. Reduce el contexto inactivo en aproximadamente un 90 %, a unos 5K tokens. ⚠️ NO habilites esto en clientes que tengan su propia búsqueda de herramientas integrada / herramientas diferidas (claude.ai, Claude Desktop, Claude Code); ambas capas de búsqueda entran en conflicto y la búsqueda de herramientas integrada del cliente es la mejor opción en ese caso; déjalo desactivado. El hecho de que las herramientas se diferieran depende de tu combinación de cliente y modelo: úsalo cuando tu configuración cargue el catálogo completo de entrada (modelos sin herramientas diferidas nativas, por ejemplo, Gemini, modelos locales compatibles con OpenAI, Claude Haiku), clientes que insertan todos los esquemas de herramientas sin importar el modelo (por ejemplo, GitHub Copilot CLI), o ventanas de contexto más pequeñas. Algunos modelos de Codex y ChatGPT también incluyen herramientas diferidas; comprueba directamente tu cliente/modelo para confirmar sus características y no dejar esto habilitado innecesariamente. Las herramientas se encuentran mediante ha_search_tools y se ejecutan a través de proxies categorizados (lectura/escritura/eliminación). Requiere reiniciar la app (add-on) para que surta efecto; a continuación, reconecta o actualiza el servidor MCP en tu cliente de IA para que recargue la lista de herramientas. Reiniciar solo la app (add-on) NO actualiza la lista de herramientas almacenada en caché del cliente; esto se aplica después de cambiar cualquier configuración aquí.",
+    "policies.global.event_decisions.label": "Permitir aprobar/denegar desde eventos de Home Assistant",
+    "policies.global.event_decisions.help": "Desactivado por defecto. Si está activado, un evento <code>ha_mcp_approval_response</code> que contenga el token de una solicitud pendiente, una decisión y el PIN de abajo decidirá esa solicitud, por lo que tu propia automatización de notificaciones podrá aprobarla desde un teléfono. Requiere un PIN antes de poder activarse.",
+    "policies.global.event_decisions.warning": "Un agente de IA con suficiente acceso puede adivinar u obtener este PIN (pidiéndotelo o escribiendo una automatización que lo lea de un evento de respuesta) y así aprobar sus propias solicitudes. Home Assistant no puede distinguir un evento lanzado por tu automatización de uno lanzado por un agente, por lo que el PIN es lo único que se interpone entre ambos. Activar esto implica aceptar dicha limitación. Las decisiones en la lista de pendientes no se ven afectadas, realizadas en la propia interfaz de ajustes que sirve el servidor. La página de ajustes del sidecar de stdio establece el PIN y la política, pero no puede listar ni decidir aprobaciones pendientes: estas residen en el proceso del servidor al que no puede acceder.",
+    "policies.global.pin.label": "PIN de aprobación",
+    "policies.global.pin.help": "Al menos 4 caracteres. Se almacena como un hash con sal y no se vuelve a mostrar, y se mantiene fuera del documento de política para que nada que lea o escriba políticas lo transporte. Cinco PINs incorrectos en cinco minutos cierran el canal durante el resto de esa ventana; la lista de pendientes en la propia interfaz de ajustes del servidor sigue funcionando (la página del sidecar de stdio no puede mostrarla).",
+    "policies.global.pin.set": "Establecer PIN",
+    "policies.global.pin.clear": "Eliminar PIN",
+    "policies.global.pin.is_set": "Hay un PIN establecido.",
+    "policies.global.pin.invalid": "No se puede leer el PIN almacenado y no coincide con ninguno. Establece uno nuevo.",
+    "policies.global.pin.not_set": "Ningún PIN establecido. Establece uno para permitir decisiones a través del bus de eventos.",
+    "policies.global.pin.unknown": "No se pudo leer si hay un PIN establecido.",
+    "policies.global.pin.saved": "PIN guardado.",
+    "policies.global.pin.cleared": "PIN eliminado.",
+    "policies.global.pin.cleared_and_disabled": "PIN eliminado, y las decisiones a través del bus de eventos desactivadas junto con él.",
+    "policies.global.pin.confirm_clear": "¿Eliminar el PIN de aprobación? Las decisiones a través del bus de eventos se desactivarán junto con él; la lista de pendientes en esta pestaña no se ve afectada.",
+    "policies.operations.set_pin": "Establecer PIN",
+    "policies.rules.scope_notice": "Las políticas se aplican a herramientas individuales. Otras herramientas pueden realizar la misma acción. Por ejemplo, requerir aprobación para <code>ha_call_event</code> no restringe el lanzamiento de eventos a través de <code>ha_call_service</code>.",
+    "policies.operations.clear_pin": "Eliminar PIN"
   },
   "tool_groups": {
     "Apps (add-ons)": "Apps (add-ons)",
@@ -573,8 +591,8 @@
       "description": "Lista todas las etiquetas u obtiene una concreta por su ID."
     },
     "ha_config_get_scene": {
-      "title": "Obtener configuración de escena",
-      "description": "Consulta la configuración de una escena de Home Assistant."
+      "title": "Obtener o buscar escenas",
+      "description": "Obtiene la configuración completa de una escena, o lista y busca escenas sin scene_id."
     },
     "ha_config_get_script": {
       "title": "Obtener configuración de script",
@@ -630,7 +648,7 @@
     },
     "ha_config_set_calendar_event": {
       "title": "Crear o actualizar evento de calendario",
-      "description": "Crea un evento nuevo en un calendario."
+      "description": "Crea un nuevo evento en un calendario o actualiza uno existente."
     },
     "ha_config_set_category": {
       "title": "Crear o actualizar categoría",
