@@ -861,9 +861,11 @@ class UpdateTools:
             return None
         issues = (result.get("result") or {}).get("issues") or []
         return {
-            (issue.get("domain"), issue.get("issue_id"))
+            (issue["domain"], issue["issue_id"])
             for issue in issues
             if isinstance(issue, dict)
+            and isinstance(issue.get("domain"), str)
+            and isinstance(issue.get("issue_id"), str)
         }
 
     async def _set_repairs_ignored(
