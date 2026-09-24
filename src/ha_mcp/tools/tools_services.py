@@ -69,8 +69,14 @@ class ServiceDiscoveryTools:
     @log_tool_usage
     async def ha_list_services(
         self,
-        domain: str | None = None,
-        query: str | None = None,
+        domain: Annotated[
+            str | None,
+            Field(description="Filter by domain (e.g., 'light', 'switch', 'climate')."),
+        ] = None,
+        query: Annotated[
+            str | None,
+            Field(description="Search in service names and descriptions."),
+        ] = None,
         limit: Annotated[
             int,
             Field(
@@ -132,14 +138,6 @@ class ServiceDiscoveryTools:
         Discovers services/actions that can be called via ha_call_service.
         Use domain or query filters to narrow results. Defaults to summary mode
         (name + description only) to keep responses compact.
-
-        Args:
-            domain: Filter by domain (e.g., 'light', 'switch', 'climate').
-            query: Search in service names and descriptions.
-            limit: Max services per page (default: 50).
-            offset: Pagination offset (default: 0).
-            detail_level: 'summary' (default) returns name/description only;
-                         'full' includes parameter field schemas.
 
         Examples:
             # Browse first page of all services (compact)

@@ -365,7 +365,8 @@ class ResourceTools:
         include_content: Annotated[
             bool,
             Field(
-                description="Include full decoded content for inline resources. "
+                description="Include full decoded content for inline resources "
+                'in the "_content" field. '
                 "Default False to save tokens (shows 150-char preview instead)."
             ),
         ] = False,
@@ -396,10 +397,6 @@ class ResourceTools:
         instead of the full encoded URL to save tokens.
 
         `inline_count` and `by_type` summarise every resource, not just this page.
-
-        Args:
-            include_content: If True, includes full decoded content for inline
-                resources in "_content" field. Default False (150-char preview only).
 
         Resource types:
         - module: ES6 JavaScript modules (modern custom cards)

@@ -28,7 +28,9 @@ import tempfile
 import urllib.parse
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.server.context import Context
@@ -1309,11 +1311,32 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @log_tool_usage
     async def ha_manage_custom_tool(
         ctx: Context,
-        code: str | None = None,
-        justification: str | None = None,
-        save_as: str | None = None,
-        run_saved: str | None = None,
-        list_saved: bool = False,
+        code: Annotated[
+            str | None,
+            Field(
+                description="Python code to execute.  Last expression is the return value."
+            ),
+        ] = None,
+        justification: Annotated[
+            str | None,
+            Field(description="Why no existing tool works (required with code)."),
+        ] = None,
+        save_as: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Save the tool under this name for reuse "
+                    "(alphanumeric/underscores, max 64 chars)."
+                )
+            ),
+        ] = None,
+        run_saved: Annotated[
+            str | None,
+            Field(description="Name of a previously saved tool to re-run."),
+        ] = None,
+        list_saved: Annotated[
+            bool, Field(description="Set True to list all saved tools.")
+        ] = False,
     ) -> dict[str, Any]:
         """Create and run a custom tool in a sandbox, or manage saved custom tools.
 
@@ -1374,13 +1397,6 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ```python
         delete_saved_tool("old_movie_mode")
         ```
-
-        Args:
-            code: Python code to execute.  Last expression is the return value.
-            justification: Why no existing tool works (required with code).
-            save_as: Save the tool under this name for reuse (alphanumeric/underscores, max 64 chars).
-            run_saved: Name of a previously saved tool to re-run.
-            list_saved: Set True to list all saved tools.
         """
         _validate_custom_tool_modes(code, run_saved, list_saved)
 
