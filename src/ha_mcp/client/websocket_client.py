@@ -1299,7 +1299,12 @@ class HomeAssistantWebSocketClient:
         if task.cancelled():
             return
         error = task.exception()
-        if isinstance(
+        if isinstance(error, HomeAssistantCommandTimeout) and self._state.is_ready:
+            logger.warning(
+                "Background subscription release timed out; could not confirm "
+                "subscription cleanup in Home Assistant"
+            )
+        elif isinstance(
             error,
             (
                 HomeAssistantConnectionError,
