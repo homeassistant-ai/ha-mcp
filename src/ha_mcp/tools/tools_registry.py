@@ -930,7 +930,7 @@ class RegistryTools:
                 default=50,
                 ge=1,
                 le=200,
-                description="Max devices to return per page in list mode (default: 50)",
+                description="Max devices to return per page in list mode",
             ),
         ] = 50,
         offset: Annotated[
@@ -938,7 +938,7 @@ class RegistryTools:
             Field(
                 default=0,
                 ge=0,
-                description="Number of devices to skip for pagination (default: 0)",
+                description="Number of devices to skip for pagination",
             ),
         ] = 0,
         detail_level: Annotated[
@@ -946,8 +946,8 @@ class RegistryTools:
             Field(
                 default="summary",
                 description=(
-                    "'summary': basic device info and protocol identifiers (default for list mode). "
-                    "'full': include entities and all integration details."
+                    "'summary': basic device info and protocol identifiers. 'full': include"
+                    " entities and all integration details."
                 ),
             ),
         ] = "summary",

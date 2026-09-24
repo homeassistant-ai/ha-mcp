@@ -3925,7 +3925,7 @@ class HelperConfigTools:
                 default=100,
                 ge=1,
                 le=500,
-                description="Max helpers to return per page (default: 100)",
+                description="Max helpers to return per page",
             ),
         ] = 100,
         offset: Annotated[
@@ -3933,7 +3933,7 @@ class HelperConfigTools:
             Field(
                 default=0,
                 ge=0,
-                description="Number of helpers to skip for pagination (default: 0)",
+                description="Number of helpers to skip for pagination",
             ),
         ] = 0,
     ) -> dict[str, Any]:
@@ -4605,7 +4605,7 @@ class HelperConfigTools:
             list[dict[str, Any]] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Schedule time ranges for Tuesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
+                description="Schedule time ranges for Tuesday; same shape as monday.",
                 default=None,
             ),
         ] = None,
@@ -4613,7 +4613,7 @@ class HelperConfigTools:
             list[dict[str, Any]] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Schedule time ranges for Wednesday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
+                description="Schedule time ranges for Wednesday; same shape as monday.",
                 default=None,
             ),
         ] = None,
@@ -4621,7 +4621,7 @@ class HelperConfigTools:
             list[dict[str, Any]] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Schedule time ranges for Thursday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
+                description="Schedule time ranges for Thursday; same shape as monday.",
                 default=None,
             ),
         ] = None,
@@ -4629,7 +4629,7 @@ class HelperConfigTools:
             list[dict[str, Any]] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Schedule time ranges for Friday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
+                description="Schedule time ranges for Friday; same shape as monday.",
                 default=None,
             ),
         ] = None,
@@ -4637,7 +4637,7 @@ class HelperConfigTools:
             list[dict[str, Any]] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Schedule time ranges for Saturday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
+                description="Schedule time ranges for Saturday; same shape as monday.",
                 default=None,
             ),
         ] = None,
@@ -4645,7 +4645,7 @@ class HelperConfigTools:
             list[dict[str, Any]] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Schedule time ranges for Sunday. List of {'from': 'HH:MM', 'to': 'HH:MM'} dicts. Optional 'data' dict for additional attributes.",
+                description="Schedule time ranges for Sunday; same shape as monday.",
                 default=None,
             ),
         ] = None,
@@ -4687,10 +4687,8 @@ class HelperConfigTools:
             str | None,
             Field(
                 description=(
-                    "Tag ID for tag. On create, omit to auto-generate a unique "
-                    "uuid4 hex (HA's tag/create requires this field; the tool "
-                    "fills it in for you). On update, the tag's existing tag_id "
-                    "is required (passed via helper_id)."
+                    "Tag ID. On create, omit to auto-generate a uuid4 hex. On update, the "
+                    "existing tag_id is required (passed via helper_id)."
                 ),
                 default=None,
             ),
@@ -4729,7 +4727,8 @@ class HelperConfigTools:
         wait: Annotated[
             bool,
             Field(
-                description="Wait for helper entity to be queryable before returning. Default: True. Set to False for bulk operations.",
+                description="Wait for helper entity to be queryable before returning. Set to False "
+                "for bulk operations.",
                 default=True,
             ),
         ] = True,
@@ -4738,9 +4737,8 @@ class HelperConfigTools:
             Field(
                 description=(
                     "Explicit intent: 'create' a new helper or 'update' an existing one. "
-                    "Pass 'create' or 'update' "
-                    "to disambiguate (e.g. so a typo in helper_id surfaces as a clear "
-                    "'helper not found' error instead of being mistaken for a create call)."
+                    "Pass it so a helper_id typo fails as 'helper not found' instead of "
+                    "creating a helper."
                 ),
                 default=None,
             ),

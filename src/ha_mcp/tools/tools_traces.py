@@ -73,14 +73,15 @@ class TraceTools:
         deduplicate: Annotated[
             bool,
             Field(
-                description="Deduplicate variables across action steps (default: True). Set to False to include full variables at every step.",
+                description="Deduplicate variables across action steps. Set to False to include "
+                "full variables at every step.",
                 default=True,
             ),
         ] = True,
         detailed: Annotated[
             bool,
             Field(
-                description="Include extra diagnostic data: logbook entries and context metadata (default: False). Use when standard trace lacks detail for debugging.",
+                description="Include extra diagnostic data: logbook entries and context metadata.",
                 default=False,
             ),
         ] = False,
@@ -106,7 +107,8 @@ class TraceTools:
         order: Annotated[
             Literal["newest", "oldest"],
             Field(
-                description="Order traces are returned in. 'newest' (default) returns most-recent first; 'oldest' returns chronological-first.",
+                description="Order traces are returned in. 'newest' returns most-recent first; "
+                "'oldest' returns chronological-first.",
                 default="newest",
             ),
         ] = "newest",

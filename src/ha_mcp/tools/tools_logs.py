@@ -185,13 +185,10 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Literal["newest", "oldest"],
             Field(
                 description=(
-                    "Sort order for time-ordered sources (logbook, system, "
-                    "error_log, supervisor, system_service, fault_log): "
-                    "'newest' (default) "
-                    "returns most-recent first; 'oldest' returns chronological-"
-                    "first. Ignored for source='logger', and for "
-                    "source='error_log' with structured=True (that summary is "
-                    "ranked by occurrence count, not by time)."
+                    "Sort order for time-ordered sources (logbook, system, error_log, "
+                    "supervisor, system_service, fault_log): 'newest' (default) returns "
+                    "most-recent first; 'oldest' returns chronological-first. Ignored for "
+                    "source='logger', and for source='error_log' with structured=True."
                 )
             ),
         ] = "newest",
@@ -222,10 +219,8 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             Field(
                 description=(
                     "source='error_log' only. When True, return a deduplicated, "
-                    "component-grouped summary of the log (counted issues sorted "
-                    "by frequency) instead of raw text. Use this on busy "
-                    "instances where the raw log is large enough to exhaust "
-                    "context. Ignored for other sources."
+                    "component-grouped summary of the log (counted issues sorted by "
+                    "frequency) instead of raw text. Ignored for other sources."
                 )
             ),
         ] = False,
@@ -235,8 +230,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ge=1,
                 description=(
                     f"Max distinct issues to return when structured=True "
-                    f"(default {_DEFAULT_TOP_N}, capped at {MAX_LIMIT}). Bounds "
-                    "the response regardless of log size."
+                    f"(default {_DEFAULT_TOP_N}, capped at {MAX_LIMIT})."
                 ),
             ),
         ] = None,

@@ -558,18 +558,18 @@ class CalendarTools:
         ],
         description: Annotated[
             str | None,
-            Field(description="Optional event description", default=None),
+            Field(description="Event description", default=None),
         ] = None,
         location: Annotated[
-            str | None, Field(description="Optional event location", default=None)
+            str | None, Field(description="Event location", default=None)
         ] = None,
         rrule: Annotated[
             str | None,
             Field(
                 description=(
-                    "Optional RFC 5545 recurrence rule, without 'RRULE:' prefix "
-                    "(e.g., 'FREQ=WEEKLY;BYDAY=MO' or 'FREQ=MONTHLY;BYDAY=3SA'). "
-                    "Creates a recurring event series."
+                    "RFC 5545 recurrence rule, without 'RRULE:' prefix (e.g., "
+                    "'FREQ=WEEKLY;BYDAY=MO' or 'FREQ=MONTHLY;BYDAY=3SA'). Creates a "
+                    "recurring event series."
                 ),
                 default=None,
             ),
@@ -854,18 +854,15 @@ class CalendarTools:
         ],
         recurrence_id: Annotated[
             str | None,
-            Field(
-                description="Optional recurrence ID for recurring events", default=None
-            ),
+            Field(description="Recurrence ID for recurring events", default=None),
         ] = None,
         recurrence_range: Annotated[
             Literal["THISANDFUTURE"] | None,
             Field(
                 description=(
-                    "Optional recurrence range ('THISANDFUTURE' to delete this "
-                    "and future occurrences). Home Assistant compares this "
-                    "value verbatim, so no other spelling (including "
-                    "'THIS_AND_FUTURE') selects the range."
+                    "Recurrence range: 'THISANDFUTURE' to delete this and future "
+                    "occurrences. Home Assistant compares this value verbatim, so no other "
+                    "spelling (including 'THIS_AND_FUTURE') selects the range."
                 ),
                 default=None,
             ),

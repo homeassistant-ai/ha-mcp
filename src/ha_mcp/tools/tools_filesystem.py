@@ -677,9 +677,8 @@ class FilesystemTools:
                 ge=1,
                 le=10000,
                 description=(
-                    "For log files, return only the last N lines. "
-                    "Recommended for home-assistant.log to avoid large responses. "
-                    "Default: None (return full file, or last 1000 lines for logs)"
+                    "For log files, return only the last N lines. Default: None (return "
+                    "full file, or last 1000 lines for logs)"
                 ),
             ),
         ] = None,
@@ -688,11 +687,9 @@ class FilesystemTools:
             Field(
                 default=None,
                 description=(
-                    "Dotted YAML key path (e.g. 'alert2', 'mqtt.sensor'). When "
-                    "set, the response also carries 'subtree': the round-trip "
-                    "text of just that key's value. To look a key up across "
-                    "packages/*.yaml, or to get it as structured data, use "
-                    "ha_config_get_yaml instead."
+                    "Dotted YAML key path (e.g. 'alert2', 'mqtt.sensor'). When set, the "
+                    "response also carries 'subtree': the round-trip text of just that "
+                    "key's value."
                 ),
             ),
         ] = None,
@@ -824,10 +821,7 @@ class FilesystemTools:
             bool,
             Field(
                 default=False,
-                description=(
-                    "Whether to overwrite if file exists. "
-                    "Default is False to prevent accidental overwrites."
-                ),
+                description=("Whether to overwrite if the file exists."),
             ),
         ] = False,
         create_dirs: Annotated[
@@ -835,8 +829,7 @@ class FilesystemTools:
             Field(
                 default=True,
                 description=(
-                    "Whether to create parent directories if they don't exist. "
-                    "Default is True."
+                    "Whether to create parent directories if they don't exist."
                 ),
             ),
         ] = True,
@@ -958,10 +951,7 @@ class FilesystemTools:
             bool,
             Field(
                 default=False,
-                description=(
-                    "Must be True to confirm deletion. "
-                    "This is a safety measure to prevent accidental deletions."
-                ),
+                description=("Must be True to confirm deletion."),
             ),
         ] = False,
     ) -> dict[str, Any]:

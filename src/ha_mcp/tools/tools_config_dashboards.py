@@ -1796,9 +1796,8 @@ class DashboardConfigTools:
         url_path: Annotated[
             str | None,
             Field(
-                description="Dashboard URL path (e.g., 'lovelace-home'). "
-                "Use 'default' for default dashboard. "
-                "If omitted with list_only=True, lists all dashboards."
+                description="Dashboard URL path (e.g., 'lovelace-home'). Use 'default' for default "
+                "dashboard."
             ),
         ] = None,
         list_only: Annotated[
@@ -1834,50 +1833,38 @@ class DashboardConfigTools:
         include_config: Annotated[
             bool,
             Field(
-                description="In search mode: include each matched card's own configuration "
-                "object in results (increases output size). Note that a matched container "
-                "card's config contains its descendants, which are themselves separate "
-                "matches with their own config, so deeply-nested stacks multiply the "
-                "payload — keep the default (False) unless you need the bodies. Does not "
-                "affect whether the full dashboard config is returned — search mode always "
-                "returns matches only, not the full dashboard. Config bodies are surfaced "
-                "only for dashboards provably in storage mode; for a YAML or unconfirmed "
-                "dashboard the bodies are withheld (they may carry resolved !secret values) "
-                "and the response says so, with match locations still reported. Ignored "
-                "outside search mode."
+                description="In search mode: include each matched card's own configuration object "
+                "in results. A container card's body includes its descendants, which "
+                "are also separate matches with their own bodies, so nested stacks "
+                "multiply the payload. Bodies are returned only for dashboards provably"
+                " in storage mode; for a YAML or unconfirmed dashboard they are "
+                "withheld (they may carry resolved !secret values) and the response "
+                "says so, with match locations still reported. Ignored outside search "
+                "mode."
             ),
         ] = False,
         include_screenshot: Annotated[
             bool,
             Field(
-                description="Get mode only: also return rendered image(s) of the "
-                "dashboard for visual verification. Requires the 'dashboard "
-                "screenshot' beta feature + engine add-on/sidecar. If the "
-                "feature is disabled the config is returned with a warning; if "
-                "the engine is configured but the render fails, the call errors "
-                "(the screenshot is the requested payload). Ignored in "
-                "list/search mode."
+                description="Get mode only: also return rendered image(s) of the dashboard for "
+                "visual verification. Requires the 'dashboard screenshot' beta feature "
+                "+ engine add-on/sidecar. If the feature is disabled the config is "
+                "returned with a warning; if the engine is configured but the render "
+                "fails, the call errors. Ignored in list/search mode."
             ),
         ] = False,
         view_path: Annotated[
             str | None,
             Field(
-                description="Get mode: return ONLY the view whose "
-                "Lovelace views[].path matches (response carries 'view' + "
-                "'view_index' instead of the full 'config') — use this to keep "
-                "multi-view dashboards from blowing up the response when you "
-                "only need one view. Does not require any beta feature. With "
-                "include_screenshot, also selects the view to render. Ignored "
-                "in list/search mode. Omit for the full config."
+                description="Get mode: return ONLY the view whose Lovelace views[].path matches "
+                "(response carries 'view' + 'view_index' instead of the full 'config')."
+                " With include_screenshot, also selects the view to render. Ignored in "
+                "list/search mode."
             ),
         ] = None,
         mode: Annotated[
             Literal["search"] | None,
-            Field(
-                description="Set to 'search' (requires query). "
-                "Leave unset for the default list/get/single-dashboard-search "
-                "behavior selected by list_only / entity_id / card_type / heading."
-            ),
+            Field(description="Set to 'search' (requires query)."),
         ] = None,
         query: Annotated[
             str | None,
@@ -2823,11 +2810,10 @@ class DashboardConfigTools:
         return_screenshot: Annotated[
             bool,
             Field(
-                description="After writing, also return rendered image(s) of the "
-                "dashboard so you can see what it looks like in a single call "
-                "(the dashboard creation/iteration loop). Requires the "
-                "'dashboard screenshot' beta feature + engine add-on/sidecar; "
-                "if unavailable, the write result is returned with a warning."
+                description="After writing, also return rendered image(s) of the dashboard. "
+                "Requires the 'dashboard screenshot' beta feature + engine "
+                "add-on/sidecar; if unavailable, the write result is returned with a "
+                "warning."
             ),
         ] = False,
         view_path: Annotated[

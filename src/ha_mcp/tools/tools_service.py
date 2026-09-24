@@ -1831,9 +1831,8 @@ class ServiceTools:
             str | None,
             Field(
                 description=(
-                    "Service domain (e.g. 'light', 'climate', 'automation'). "
-                    "Required for a service call; must be omitted when ws_command "
-                    "is set."
+                    "Service domain (e.g. 'light', 'climate', 'automation'). Required for a"
+                    " service call."
                 ),
             ),
         ] = None,
@@ -1842,8 +1841,7 @@ class ServiceTools:
             Field(
                 description=(
                     "Service name within domain (e.g. 'turn_on', 'set_temperature', "
-                    "'trigger'). Required for a service call; must be omitted when "
-                    "ws_command is set."
+                    "'trigger'). Required for a service call."
                 ),
             ),
         ] = None,
@@ -1851,10 +1849,9 @@ class ServiceTools:
             str | None,
             Field(
                 description=(
-                    "Entity ID(s) the service call targets — one ID "
-                    "('light.living_room') or several comma-separated "
-                    "('light.a,light.b'). Optional for services that don't target "
-                    "a specific entity. Must be omitted when ws_command is set."
+                    "Entity ID(s) the service call targets — one ID ('light.living_room') "
+                    "or several comma-separated ('light.a,light.b'). Optional for services "
+                    "that don't target a specific entity."
                 ),
             ),
         ] = None,
@@ -1874,10 +1871,8 @@ class ServiceTools:
             bool,
             Field(
                 description=(
-                    "If True, the service's response data is returned once, as "
-                    "the top-level 'service_response' key — never nested inside "
-                    "'result' (default: False). Must stay False when ws_command "
-                    "is set."
+                    "If True, the service's response data is returned once, as the "
+                    "top-level 'service_response' key — never nested inside 'result'."
                 ),
             ),
         ] = False,
@@ -1899,14 +1894,10 @@ class ServiceTools:
             bool,
             Field(
                 description=(
-                    "Return HA's raw changed-state records unchanged (default: "
-                    "False). Use as an escape hatch when you need the full "
-                    "propagation chain or raw attribute payload (debug / "
-                    "inspection). With return_response=True the response data "
-                    "still surfaces once as the top-level service_response key, "
-                    "never nested in result. "
-                    "WARNING: brings back token-bloat for nested-group targets — "
-                    "prefer result_fields / result_attribute_keys for targeted control."
+                    "Return HA's raw changed-state records unchanged. With "
+                    "return_response=True the response data still surfaces once as the "
+                    "top-level service_response key, never nested in result. Large for "
+                    "nested-group targets — prefer result_fields / result_attribute_keys."
                 ),
             ),
         ] = False,
@@ -1916,10 +1907,10 @@ class ServiceTools:
             Field(
                 default=None,
                 description=(
-                    "Project each record in 'result' to only these top-level keys "
-                    "(e.g. ['entity_id', 'state']). Mirrors ha_get_state's fields=. "
-                    "Setting this DISABLES default compaction — no entity-id filter, "
-                    "no metadata strip — and applies the explicit projection instead."
+                    "Project each record in 'result' to only these top-level keys (e.g. "
+                    "['entity_id', 'state']). Setting this DISABLES default compaction — no"
+                    " entity-id filter, no metadata strip — and applies the explicit "
+                    "projection instead."
                 ),
             ),
         ] = None,
@@ -1929,10 +1920,9 @@ class ServiceTools:
             Field(
                 default=None,
                 description=(
-                    "Project each record's 'attributes' dict to only these keys "
-                    "(e.g. ['brightness', 'rgb_color']). Mirrors ha_get_state's "
-                    "attribute_keys=. Setting this DISABLES default compaction. "
-                    "Requires 'attributes' to be present in result_fields (or "
+                    "Project each record's 'attributes' dict to only these keys (e.g. "
+                    "['brightness', 'rgb_color']). Setting this DISABLES default "
+                    "compaction. Requires 'attributes' to be present in result_fields (or "
                     "result_fields=None)."
                 ),
             ),
@@ -2170,8 +2160,7 @@ class ServiceTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Single operation ID or list of operation IDs to check. "
-                    "Use a single string for one operation, or a list for bulk status checks."
+                    "Single operation ID, or a list of IDs for a bulk status check."
                 ),
             ),
         ],

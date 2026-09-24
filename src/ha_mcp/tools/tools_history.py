@@ -231,8 +231,9 @@ class HistoryTools:
             Literal["history", "statistics"],
             Field(
                 description=(
-                    'Data source: "history" (default) for raw state changes at full resolution (~10 day retention), '
-                    'or "statistics" for pre-aggregated long-term data (permanent, requires state_class).'
+                    'Data source: "history" for raw state changes at full resolution (~10 '
+                    'day retention), or "statistics" for pre-aggregated long-term data '
+                    "(permanent, requires state_class)."
                 ),
                 default="history",
             ),
@@ -255,21 +256,25 @@ class HistoryTools:
         minimal_response: Annotated[
             bool,
             Field(
-                description='Return only states/timestamps without attributes. Default: true. Ignored when source="statistics"',
+                description="Return only states/timestamps without attributes. Ignored when "
+                'source="statistics"',
                 default=True,
             ),
         ] = True,
         significant_changes_only: Annotated[
             bool,
             Field(
-                description='Filter to significant state changes only. Default: true. Ignored when source="statistics"',
+                description="Filter to significant state changes only. Ignored when "
+                'source="statistics"',
                 default=True,
             ),
         ] = True,
         limit: Annotated[
             int | None,
             Field(
-                description='Max entries per entity. Default: 100, Max: 1000. For source="history": state changes. For source="statistics": aggregated rows. With multiple entity_ids, total rows returned can reach limit × len(entity_ids).',
+                description='Max entries per entity. Default: 100. For source="history": state '
+                'changes. For source="statistics": aggregated rows. With multiple '
+                "entity_ids, total rows returned can reach limit × len(entity_ids).",
                 default=None,
                 ge=1,
                 le=1000,
@@ -278,7 +283,7 @@ class HistoryTools:
         offset: Annotated[
             int | None,
             Field(
-                description="Number of entries to skip per entity for pagination. Default: 0.",
+                description="Number of entries to skip per entity for pagination.",
                 default=None,
                 ge=0,
             ),
@@ -287,7 +292,8 @@ class HistoryTools:
         period: Annotated[
             str,
             Field(
-                description='Aggregation period: "5minute", "hour", "day", "week", "month", "year". Default: "day". Ignored when source="history"',
+                description='Aggregation period: "5minute", "hour", "day", "week", "month", "year".'
+                ' Ignored when source="history"',
                 default="day",
             ),
         ] = "day",
@@ -304,9 +310,8 @@ class HistoryTools:
             Field(
                 default="desc",
                 description=(
-                    'Sort order for history entries. "desc" (default): newest first. '
-                    '"asc": oldest first (chronological, as returned by HA API). '
-                    'Ignored when source="statistics".'
+                    'Sort order for history entries. "desc": newest first. "asc": oldest '
+                    'first. Ignored when source="statistics".'
                 ),
             ),
         ] = "desc",
@@ -316,11 +321,10 @@ class HistoryTools:
             Field(
                 default=None,
                 description=(
-                    "Return only the specified top-level response keys to reduce "
-                    "response size. None = full response (default). "
-                    "History keys: success, source, entities, period, query_params. "
-                    "Statistics keys: success, source, entities, period_type, time_range, "
-                    "statistic_types, query_params, warnings."
+                    "Return only the specified top-level response keys to reduce response "
+                    "size. None = full response. History keys: success, source, entities, "
+                    "period, query_params. Statistics keys: success, source, entities, "
+                    "period_type, time_range, statistic_types, query_params, warnings."
                 ),
             ),
         ] = None,

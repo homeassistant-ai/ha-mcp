@@ -918,38 +918,35 @@ class UpdateTools:
             list[str] | str | None,
             JSON_STRING_COERCION,
             Field(
-                description="For install: apply every pending update in these "
-                "categories ('addons', 'hacs', 'devices', 'other'). Mirrors the "
-                "HA 2026.7 'Update all' button: core/os/supervisor are excluded "
-                "by design (target those individually via entity_ids) and "
-                "skipped updates are never included.",
+                description="For install: apply every pending update in these categories ('addons',"
+                " 'hacs', 'devices', 'other'). As with the HA 'Update all' button, "
+                "core/os/supervisor are excluded (target those individually via "
+                "entity_ids) and skipped updates are never included.",
                 default=None,
             ),
         ] = None,
         include_skipped: Annotated[
             bool,
             Field(
-                description="For list: include updates that have been skipped "
-                "(default: False).",
+                description="For list: include updates that have been skipped.",
                 default=False,
             ),
         ] = False,
         include_release_notes: Annotated[
             bool,
             Field(
-                description="For get on a Core update entity: fetch multi-version "
-                "release notes and breaking changes for all versions between "
-                "installed and latest (default: False). Adds breaking_changes, "
-                "multi_version_release_notes, and installed_integrations to the "
-                "response.",
+                description="For get on a Core update entity: fetch multi-version release notes and"
+                " breaking changes for all versions between installed and latest. Adds "
+                "breaking_changes, multi_version_release_notes, and "
+                "installed_integrations to the response.",
                 default=False,
             ),
         ] = False,
         backup: Annotated[
             bool,
             Field(
-                description="For install: create a backup before installing where "
-                "the update entity supports it (apps/add-ons). Default: False.",
+                description="For install: create a backup before installing where the update entity"
+                " supports it (apps/add-ons).",
                 default=False,
             ),
         ] = False,

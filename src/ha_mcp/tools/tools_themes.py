@@ -228,14 +228,12 @@ class ThemesTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Guard for action='set_engine_theme': the stored theme is "
-                    "read immediately before the write and the write is "
-                    "skipped if it no longer equals this. Omitting this value "
-                    "or passing null both mean 'expect no stored theme', "
-                    "enforced like any other value; the guard is always "
-                    "applied unless force is set. Best-effort, not atomic -- Home Assistant exposes no "
-                    "conditional write, so a change landing between that read "
-                    "and the write is not caught."
+                    "Guard for action='set_engine_theme': the stored theme is read "
+                    "immediately before the write and the write is skipped if it no longer "
+                    "equals this. Omitting this value or passing null both mean 'expect no "
+                    "stored theme', enforced like any other value; the guard is always "
+                    "applied unless force is set. Best-effort, not atomic: a change landing"
+                    " between that read and the write is not caught."
                 ),
                 default=None,
             ),
@@ -244,9 +242,8 @@ class ThemesTools:
             bool,
             Field(
                 description=(
-                    "action='set_engine_theme' only: skip the expected_current "
-                    "guard and overwrite unconditionally. Leave false unless "
-                    "you intend to discard whatever is stored."
+                    "action='set_engine_theme' only: skip the expected_current guard and "
+                    "overwrite unconditionally."
                 ),
                 default=False,
             ),

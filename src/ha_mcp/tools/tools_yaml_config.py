@@ -348,8 +348,8 @@ class YamlConfigTools:
             Field(
                 default=None,
                 description=(
-                    "YAML content for the value under yaml_path. Required for "
-                    "'add' and 'replace' actions. Must be valid YAML."
+                    "YAML content for the value under yaml_path. Required for 'add' and "
+                    "'replace' actions."
                 ),
             ),
         ] = None,
@@ -358,9 +358,8 @@ class YamlConfigTools:
             Field(
                 default="configuration.yaml",
                 description=(
-                    "Relative path to the YAML config file. Defaults to "
-                    "'configuration.yaml'. Also supports 'packages/*.yaml' and "
-                    "'themes/*.yaml'."
+                    "Relative path to the YAML config file. Also supports 'packages/*.yaml'"
+                    " and 'themes/*.yaml'."
                 ),
             ),
         ] = "configuration.yaml",

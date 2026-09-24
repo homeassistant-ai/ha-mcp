@@ -1676,12 +1676,10 @@ class EntityTools:
             str | None,
             Field(
                 description=(
-                    "Override the entity's display device class — what the HA UI's "
-                    "'Show As' dropdown writes. Use empty string '' to clear the "
-                    "override and fall back to the integration default. None (the "
-                    "default) means 'no change' — pass an explicit '' to clear. "
-                    "Examples: 'window', 'door', 'motion' for "
-                    "binary_sensor; 'temperature', 'humidity' for sensor."
+                    "Override the entity's display device class — what the HA UI's 'Show "
+                    "As' dropdown writes. Use empty string '' to clear the override and "
+                    "fall back to the integration default. Examples: 'window', 'door', "
+                    "'motion' for binary_sensor; 'temperature', 'humidity' for sensor."
                 ),
                 default=None,
             ),
@@ -1693,12 +1691,10 @@ class EntityTools:
                 description=(
                     "Per-domain entity registry options (e.g. sensor 'display_precision', "
                     "weather 'forecast_type'). Pass a dict mapping domain to a sub-dict, "
-                    'e.g. {"sensor": {"display_precision": 2}}. '
-                    "Multiple domains are sent as separate registry updates. "
-                    "For 'Show As' use the dedicated `device_class` parameter — that is "
-                    "what the HA UI Show As dropdown writes. Voice-assistant exposure is "
-                    "stored under `options.<assistant>.should_expose` but must be managed "
-                    "via the dedicated `expose_to` parameter, not this options dict."
+                    'e.g. {"sensor": {"display_precision": 2}}. Multiple domains are sent '
+                    "as separate registry updates. For 'Show As' use device_class; for "
+                    "voice-assistant exposure use expose_to, not "
+                    "options.<assistant>.should_expose."
                 ),
                 default=None,
             ),

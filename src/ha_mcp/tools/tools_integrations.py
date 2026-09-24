@@ -496,8 +496,7 @@ class IntegrationTools:
         query: Annotated[
             str | None,
             Field(
-                description="When listing, search by domain or title. "
-                "Uses exact substring matching by default; set exact_match=False for fuzzy.",
+                description="When listing, search by domain or title.",
                 default=None,
             ),
         ] = None,
@@ -527,9 +526,8 @@ class IntegrationTools:
         include_schema: Annotated[
             bool,
             Field(
-                description="When entry_id is set, also return the options flow schema "
-                "(available fields and their types). Use before ha_config_set_helper "
-                "to understand what can be updated. Only applies when supports_options=true.",
+                description="When entry_id is set, also return the options flow schema (available "
+                "fields and their types). Only applies when supports_options=true.",
                 default=False,
             ),
         ] = False,
@@ -537,10 +535,8 @@ class IntegrationTools:
             bool,
             Field(
                 description=(
-                    "When entry_id is set, include config subentries for the "
-                    "integration entry. Useful for integrations that expose "
-                    "conversation agents, devices, or other extension points "
-                    "as subentries."
+                    "When entry_id is set, include config subentries for the integration "
+                    "entry."
                 ),
                 default=False,
             ),
@@ -592,8 +588,8 @@ class IntegrationTools:
             bool,
             Field(
                 description=(
-                    "Use exact substring matching for query filter (default: True). "
-                    "Set to False for fuzzy matching when the query may contain typos."
+                    "Use exact substring matching for query filter. Set to False for fuzzy "
+                    "matching when the query may contain typos."
                 ),
                 default=True,
             ),
@@ -604,7 +600,7 @@ class IntegrationTools:
                 default=50,
                 ge=1,
                 le=200,
-                description="Max entries to return per page in list mode (default: 50)",
+                description="Max entries to return per page in list mode",
             ),
         ] = 50,
         offset: Annotated[
@@ -612,23 +608,19 @@ class IntegrationTools:
             Field(
                 default=0,
                 ge=0,
-                description="Number of entries to skip for pagination (default: 0)",
+                description="Number of entries to skip for pagination",
             ),
         ] = 0,
         include_diagnostics: Annotated[
             bool,
             Field(
                 description=(
-                    "When entry_id is set, also fetch the integration's diagnostics "
-                    "dump — integration-defined JSON (commonly includes redacted "
-                    "config, device list, state snapshots; exact top-level keys "
-                    "vary by integration). The canonical artifact users grab via "
-                    "Settings → Devices & Services → [integration] → ⋯ → Download "
-                    "diagnostics. Use when triaging integration bugs or filing "
-                    "ha_report_issue for a specific integration. Payloads can be "
+                    "When entry_id is set, also fetch the integration's diagnostics dump — "
+                    "integration-defined JSON (commonly includes redacted config, device "
+                    "list, state snapshots; exact top-level keys vary by integration), the "
+                    "same artifact as the UI's 'Download diagnostics'. Payloads can be "
                     "large (Hue ~290 KB, ZHA/MQTT/ESPHome several MB) — pair with "
-                    "diagnostics_fields or diagnostics_truncate_at_bytes to fit "
-                    "the LLM context budget."
+                    "diagnostics_fields or diagnostics_truncate_at_bytes."
                 ),
                 default=False,
             ),
@@ -637,17 +629,14 @@ class IntegrationTools:
             bool,
             Field(
                 description=(
-                    "When entry_id is a KNX config entry, also return the parsed "
-                    "ETS project: the full group-address table (address, name, "
-                    "DPT, description) under knx_project.group_addresses, plus the "
-                    "group-range hierarchy and project metadata. This is the "
-                    "parsed-project GA table that is NOT in the diagnostics dump; "
-                    "per-entity GA assignments are already covered by "
-                    "include_diagnostics (config_store / configuration_yaml). "
-                    "Ignored (with a warning) when the entry is not a KNX "
-                    "integration. The KNX integration exposes a single project, "
-                    "so the result is the same regardless of which KNX entry_id "
-                    "is used."
+                    "When entry_id is a KNX config entry, also return the parsed ETS "
+                    "project: the full group-address table (address, name, DPT, "
+                    "description) under knx_project.group_addresses, plus the group-range "
+                    "hierarchy and project metadata. This GA table is not in the "
+                    "diagnostics dump; per-entity GA assignments are (config_store / "
+                    "configuration_yaml). Ignored (with a warning) when the entry is not a "
+                    "KNX integration. KNX exposes a single project, so the result is the "
+                    "same for every KNX entry_id."
                 ),
                 default=False,
             ),
@@ -656,11 +645,9 @@ class IntegrationTools:
             str | None,
             Field(
                 description=(
-                    "Optional. When set with include_diagnostics=True, returns the "
-                    "device-scoped diagnostics dump for that specific device under "
-                    "the integration (rather than the full integration dump). Some "
-                    "integrations only expose config-entry-level dumps; others "
-                    "expose both."
+                    "With include_diagnostics=True, return the device-scoped diagnostics "
+                    "dump for this device instead of the full integration dump. Some "
+                    "integrations only expose config-entry-level dumps."
                 ),
                 default=None,
             ),
@@ -670,13 +657,11 @@ class IntegrationTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Optional list of top-level keys to keep from the diagnostics "
-                    "data payload (e.g. ['home_assistant', 'issues']). Trims the "
-                    "payload before it hits the LLM context budget. Accepts a JSON "
-                    "list or comma-separated string. Only applies when "
-                    "include_diagnostics=True and the data payload is a dict. "
-                    "Unknown keys are silently dropped and surfaced via the "
-                    "omitted_fields sub-key."
+                    "Top-level keys to keep from the diagnostics data payload (e.g. "
+                    "['home_assistant', 'issues']). Accepts a JSON list or comma-separated "
+                    "string. Only applies when include_diagnostics=True and the data "
+                    "payload is a dict. Unknown keys are dropped and listed under "
+                    "omitted_fields."
                 ),
                 default=None,
             ),
@@ -685,12 +670,12 @@ class IntegrationTools:
             int | None,
             Field(
                 description=(
-                    "Optional byte cap on the serialized diagnostics payload "
-                    "(after diagnostics_fields and diagnostics_data_path have "
-                    "been applied). On hit, drops data and emits truncated=true, "
-                    "bytes_total, byte_cap, plus available_fields (when the "
-                    "capped value is a dict). Recommended starting point: "
-                    "20000 bytes. Only applies when include_diagnostics=True."
+                    "Byte cap on the serialized diagnostics payload (after "
+                    "diagnostics_fields and diagnostics_data_path have been applied). On "
+                    "hit, drops data and emits truncated=true, bytes_total, byte_cap, plus "
+                    "available_fields (when the capped value is a dict). Recommended "
+                    "starting point: 20000 bytes. Only applies when "
+                    "include_diagnostics=True."
                 ),
                 default=None,
                 ge=1,
@@ -700,16 +685,12 @@ class IntegrationTools:
             str | None,
             Field(
                 description=(
-                    "Optional dotted path into the diagnostics data sub-tree "
-                    "(e.g. '<list-valued path>' for per-device records, "
-                    "'home_assistant.version' for HA core version; the exact "
-                    "key path varies by integration version). Walks into the "
-                    "post-fields payload. Resolution failures replace data "
-                    "with null and surface data_path_error. Use this when the "
-                    "interesting payload lives several levels deep — top-level "
-                    "diagnostics_fields can't address sub-trees on integrations "
-                    "where the bulk lives under one key (ZHA, MQTT, ESPHome). "
-                    "Only applies when include_diagnostics=True."
+                    "Dotted path into the diagnostics data sub-tree (e.g. '<list-valued "
+                    "path>' for per-device records, 'home_assistant.version' for HA core "
+                    "version; the exact key path varies by integration version). Walks into"
+                    " the post-fields payload. Resolution failures replace data with null "
+                    "and surface data_path_error. Only applies when "
+                    "include_diagnostics=True."
                 ),
                 default=None,
             ),
@@ -718,11 +699,10 @@ class IntegrationTools:
             int | None,
             Field(
                 description=(
-                    "Pagination start index (default 0) for list-valued "
-                    "diagnostics_data_path results. Ignored when "
-                    "diagnostics_data_path is unset, diagnostics_data_limit is "
-                    "unset, or the resolved value is not a list. Only applies "
-                    "when include_diagnostics=True."
+                    "Pagination start index for list-valued diagnostics_data_path results. "
+                    "Ignored when diagnostics_data_path is unset, diagnostics_data_limit is"
+                    " unset, or the resolved value is not a list. Only applies when "
+                    "include_diagnostics=True."
                 ),
                 default=0,
                 ge=0,
@@ -732,15 +712,11 @@ class IntegrationTools:
             int | None,
             Field(
                 description=(
-                    "Pagination window size for list-valued "
-                    "diagnostics_data_path results. When set with a "
-                    "list-resolved path, swaps data for a pagination envelope "
-                    "{path, items, offset, limit, total, has_more}. Default "
-                    "None returns the full resolved value. Workflow: probe "
-                    "with a list-valued diagnostics_data_path and "
-                    "diagnostics_data_limit=10 to walk a large list one page "
-                    "at a time (the exact path varies by integration version). "
-                    "Only applies when include_diagnostics=True."
+                    "Pagination window size for list-valued diagnostics_data_path results. "
+                    "When set with a list-resolved path, swaps data for a pagination "
+                    "envelope {path, items, offset, limit, total, has_more}. Default None "
+                    "returns the full resolved value. Only applies when "
+                    "include_diagnostics=True."
                 ),
                 default=None,
                 ge=1,

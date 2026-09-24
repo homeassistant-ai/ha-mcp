@@ -156,23 +156,21 @@ class HacsTools:
         ] = None,
         installed_only: Annotated[
             bool,
-            Field(
-                description="Only return installed repositories (action='search', default: False)"
-            ),
+            Field(description="Only return installed repositories (action='search')"),
         ] = False,
         max_results: Annotated[
             int,
             Field(
                 ge=1,
                 le=100,
-                description="Maximum number of results (action='search', default: 10, max: 100)",
+                description="Maximum number of results (action='search')",
             ),
         ] = 10,
         offset: Annotated[
             int,
             Field(
                 ge=0,
-                description="Results to skip for pagination (action='search', default: 0)",
+                description="Results to skip for pagination (action='search')",
             ),
         ] = 0,
         repository_id: Annotated[

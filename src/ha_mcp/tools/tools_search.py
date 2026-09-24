@@ -2183,12 +2183,10 @@ class SearchTools:
             Field(
                 default=None,
                 description=(
-                    "Configuration types to include in body search: "
-                    "'automation', 'script', 'scene', 'helper', 'dashboard'. "
-                    "Explicitly providing this selects configuration-only "
-                    "search and skips entities. Omit it for entity discovery. "
-                    "Default = automation+script+scene+helper. Pass as list "
-                    "or JSON-array string."
+                    "Configuration types to include in body search: 'automation', 'script',"
+                    " 'scene', 'helper', 'dashboard'. Explicitly providing this selects "
+                    "configuration-only search and skips entities. Omit it for entity "
+                    "discovery. Default = automation+script+scene+helper."
                 ),
             ),
         ] = None,
@@ -2197,9 +2195,7 @@ class SearchTools:
             Field(
                 default=10,
                 ge=1,
-                description=(
-                    "Maximum results per surface (entities, configs). Default: 10."
-                ),
+                description=("Maximum results per surface (entities, configs)."),
             ),
         ] = 10,
         offset: Annotated[
@@ -2215,8 +2211,8 @@ class SearchTools:
             Field(
                 default=True,
                 description=(
-                    "Exact substring matching (default). Set False for "
-                    "fuzzy matching when the query may have typos."
+                    "Exact substring matching. Set False for fuzzy matching when the query "
+                    "may have typos."
                 ),
             ),
         ] = True,
@@ -2236,8 +2232,8 @@ class SearchTools:
             Field(
                 default=False,
                 description=(
-                    "Include full configuration bodies in body-search "
-                    "results. Default: False (summary only)."
+                    "Include full configuration bodies in body-search results. Otherwise "
+                    "summaries only."
                 ),
             ),
         ] = False,
@@ -2331,13 +2327,11 @@ class SearchTools:
                 ge=0.001,
                 le=300,
                 description=(
-                    "Per-call override for the per-id config-fetch wall-clock "
-                    "budget (seconds). Replaces the per-type "
-                    "HAMCP_*_CONFIG_TIME_BUDGET defaults for the automation, "
-                    "script, AND scene branches. Use when a `partial: True` "
-                    "response names time-budget skipping. Stateless per-call: "
-                    "one caller raising the budget doesn't affect others. "
-                    "None = use the per-type env defaults."
+                    "Per-call override for the per-id config-fetch wall-clock budget "
+                    "(seconds). Replaces the per-type HAMCP_*_CONFIG_TIME_BUDGET defaults "
+                    "for the automation, script, AND scene branches. Use when a `partial: "
+                    "True` response names time-budget skipping. None = use the per-type env"
+                    " defaults."
                 ),
             ),
         ] = None,
@@ -4009,10 +4003,9 @@ class SearchTools:
             Field(
                 default="minimal",
                 description=(
-                    "'minimal': 10 entities/domain, top-5 states (default); "
-                    "'standard': 200 entities/page, top-10 states (use offset for more); "
-                    "'full': 200 entities/page + entity_id + state + full states. "
-                    "Use 'domains', 'limit', or max_entities_per_domain to control size"
+                    "'minimal': 10 entities/domain, top-5 states; 'standard': 200 "
+                    "entities/page, top-10 states (use offset for more); 'full': 200 "
+                    "entities/page + entity_id + state + full states."
                 ),
             ),
         ] = "minimal",
@@ -4022,8 +4015,8 @@ class SearchTools:
             Field(
                 default=None,
                 description=(
-                    "Filter to specific domains (e.g. 'light,sensor' or ['light','sensor']). "
-                    "None = all domains. Useful to avoid context window overload."
+                    "Filter to specific domains (e.g. 'light,sensor' or "
+                    "['light','sensor']). None = all domains."
                 ),
             ),
         ] = None,
@@ -4033,9 +4026,8 @@ class SearchTools:
                 default=None,
                 ge=1,
                 description=(
-                    "Max total entities across all domains (default: unlimited for minimal, "
-                    "200 for standard/full). "
-                    "Use with offset for pagination."
+                    "Max total entities across all domains (default: unlimited for minimal,"
+                    " 200 for standard/full)."
                 ),
             ),
         ] = None,
@@ -4044,7 +4036,7 @@ class SearchTools:
             Field(
                 default=0,
                 ge=0,
-                description="Number of entities to skip for pagination (default: 0)",
+                description="Number of entities to skip for pagination",
             ),
         ] = 0,
         max_entities_per_domain: Annotated[
@@ -4072,20 +4064,14 @@ class SearchTools:
             bool | None,
             Field(
                 default=True,
-                description="Include active persistent notifications (default: True). Set False to skip.",
+                description="Include active persistent notifications.",
             ),
         ] = True,
         include_dismissed_repairs: Annotated[
             bool | None,
             Field(
                 default=False,
-                description=(
-                    "Include user-dismissed/ignored repairs (default: False). "
-                    "Matches the HA Repairs UI which hides dismissed items by default. "
-                    "To dismiss/ignore a repair, call ha_call_service with "
-                    'ws_command="repairs/ignore_issue" and data={"domain": ..., '
-                    '"issue_id": ..., "ignore": true}.'
-                ),
+                description=("Include user-dismissed/ignored repairs."),
             ),
         ] = False,
         fields: Annotated[
@@ -4094,23 +4080,18 @@ class SearchTools:
             Field(
                 default=None,
                 description=(
-                    "Return only the specified top-level response keys to reduce "
-                    'response size (e.g. ["system_info", "domain_stats"]). '
-                    "None = full response (default). "
-                    "Available keys: success, system_summary, domain_stats, "
-                    "area_analysis, ai_insights, pagination, partial, warnings, "
-                    "device_types, service_availability, system_info, "
-                    "notification_count, notifications, repair_count, "
-                    "dismissed_repair_count, repairs, repairs_error, "
-                    "tool_discovery, settings_url, settings_url_hint, "
-                    "read_only_mode, read_only_mode_hint, ha_mcp_update. Note: "
-                    "``settings_url`` (stdio mode), ``settings_url_hint`` "
-                    "(standalone HTTP/Docker mode), the ``read_only_mode`` / "
-                    "``read_only_mode_hint`` pair (only while Read Only Mode "
-                    "is on), and ``ha_mcp_update`` (when an update check applies) "
-                    "are emitted regardless of ``fields=`` projection so the "
-                    "settings page, the active mode, and a newer ha-mcp release "
-                    "stay discoverable; see the tool description."
+                    "Return only the specified top-level response keys to reduce response "
+                    'size (e.g. ["system_info", "domain_stats"]). None = full response. '
+                    "Available keys: success, system_summary, domain_stats, area_analysis, "
+                    "ai_insights, pagination, partial, warnings, device_types, "
+                    "service_availability, system_info, notification_count, notifications, "
+                    "repair_count, dismissed_repair_count, repairs, repairs_error, "
+                    "tool_discovery, settings_url, settings_url_hint, read_only_mode, "
+                    "read_only_mode_hint, ha_mcp_update. Note: ``settings_url`` (stdio "
+                    "mode), ``settings_url_hint`` (standalone HTTP/Docker mode), the "
+                    "``read_only_mode`` / ``read_only_mode_hint`` pair (only while Read "
+                    "Only Mode is on), and ``ha_mcp_update`` (when an update check applies)"
+                    " are emitted regardless of ``fields=`` projection."
                 ),
             ),
         ] = None,
@@ -4810,9 +4791,8 @@ class SearchTools:
                 default=None,
                 description=(
                     "Return only the specified top-level entity record keys to reduce "
-                    'response size (e.g. ["state", "attributes"]). '
-                    "None = full entity record (default). "
-                    "Available keys: entity_id, state, attributes, last_changed, "
+                    'response size (e.g. ["state", "attributes"]). None = full entity '
+                    "record. Available keys: entity_id, state, attributes, last_changed, "
                     "last_reported, last_updated, context."
                 ),
             ),
@@ -4824,9 +4804,8 @@ class SearchTools:
                 default=None,
                 description=(
                     "Return only the specified keys from each entity's attributes dict "
-                    '(e.g. ["brightness", "color_temp_kelvin"] for lights). '
-                    "None = full attributes (default). "
-                    "Unknown keys are silently dropped."
+                    '(e.g. ["brightness", "color_temp_kelvin"] for lights). None = full '
+                    "attributes. Unknown keys are silently dropped."
                 ),
             ),
         ] = None,

@@ -409,15 +409,13 @@ class EnergyTools:
             str | dict[_PrefsKey, str] | None,
             Field(
                 description=(
-                    "Hash from a previous mode='get' call. REQUIRED for "
-                    "mode='set' unless dry_run=True. Two forms: str (full-"
-                    "blob lock) or dict (per-key lock, taken from the "
-                    "config_hash_per_key field of mode='get'). Pass the dict "
-                    "form as a native object, NOT a JSON-encoded string — a "
-                    "stringified dict is treated as a full-blob token and will "
-                    "report RESOURCE_LOCKED; clients that can only send strings "
-                    "should use the str full-blob form. See the tool docstring "
-                    "for fail-closed semantics. Ignored by convenience modes."
+                    "Hash from a previous mode='get' call. REQUIRED for mode='set' unless "
+                    "dry_run=True. Two forms: str (full-blob lock) or dict (per-key lock, "
+                    "taken from the config_hash_per_key field of mode='get'). Pass the dict"
+                    " form as a native object, NOT a JSON-encoded string — a stringified "
+                    "dict is treated as a full-blob token and will report RESOURCE_LOCKED; "
+                    "clients that can only send strings should use the str full-blob form. "
+                    "Ignored by convenience modes."
                 ),
                 default=None,
             ),
@@ -426,18 +424,15 @@ class EnergyTools:
             bool,
             Field(
                 description=(
-                    "If True, no write is performed. For mode='set': runs a "
-                    "local shape check on the proposed config AND calls the "
-                    "server's energy/validate against the CURRENT persisted "
-                    "state (Home Assistant's validate endpoint cannot validate "
-                    "an unsubmitted payload). For convenience modes: simulates "
-                    "the mutation against a fresh read and reports what would "
-                    "change without writing — but still raises "
-                    "RESOURCE_ALREADY_EXISTS (duplicate add_device, or duplicate "
-                    "add_source for solar/battery/gas/water), RESOURCE_NOT_FOUND "
-                    "(missing remove_device), or VALIDATION_FAILED (post-mutator "
-                    "shape error) when the proposed mutation is not applicable. "
-                    "Default False."
+                    "If True, no write is performed. For mode='set': runs a local shape "
+                    "check on the proposed config AND calls the server's energy/validate "
+                    "against the CURRENT persisted state. For convenience modes: simulates "
+                    "the mutation against a fresh read and reports what would change "
+                    "without writing — but still raises RESOURCE_ALREADY_EXISTS (duplicate "
+                    "add_device, or duplicate add_source for solar/battery/gas/water), "
+                    "RESOURCE_NOT_FOUND (missing remove_device), or VALIDATION_FAILED "
+                    "(post-mutator shape error) when the proposed mutation is not "
+                    "applicable."
                 ),
                 default=False,
             ),
@@ -456,10 +451,7 @@ class EnergyTools:
         name: Annotated[
             str | None,
             Field(
-                description=(
-                    "Optional display name for mode='add_device'. Only used "
-                    "when adding a new device entry; ignored otherwise."
-                ),
+                description=("Display name for mode='add_device'; ignored otherwise."),
                 default=None,
             ),
         ] = None,
@@ -467,13 +459,11 @@ class EnergyTools:
             str | None,
             Field(
                 description=(
-                    "Optional 'parent' statistic for mode='add_device'. Set "
-                    "this to a statistic that already INCLUDES this device's "
-                    "consumption (e.g., a whole-home or circuit-level meter "
-                    "that this device feeds into). The Energy Dashboard will "
-                    "subtract this device's reading from the parent so the "
-                    "parent's contribution is not double-counted. Ignored "
-                    "otherwise."
+                    "'Parent' statistic for mode='add_device'. Set this to a statistic that"
+                    " already INCLUDES this device's consumption (e.g., a whole-home or "
+                    "circuit-level meter that this device feeds into). The Energy Dashboard"
+                    " will subtract this device's reading from the parent so the parent's "
+                    "contribution is not double-counted. Ignored otherwise."
                 ),
                 default=None,
             ),
@@ -483,8 +473,7 @@ class EnergyTools:
             Field(
                 description=(
                     "If True, mode='add_device' / 'remove_device' targets "
-                    "'device_consumption_water' instead of 'device_consumption'. "
-                    "Default False."
+                    "'device_consumption_water' instead of 'device_consumption'."
                 ),
                 default=False,
             ),

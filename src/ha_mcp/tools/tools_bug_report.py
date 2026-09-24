@@ -987,10 +987,8 @@ class BugReportTools:
                 ge=1,
                 le=16,
                 description=(
-                    "Number of tool calls made since the issue started. "
-                    "This determines how many log entries to include. "
-                    "Count how many ha_* tools were called from when the issue began. "
-                    "Default: 10. Max: 16 (limited by 200-entry log buffer: 16*4*3=192)"
+                    "Number of ha_* tool calls made since the issue started; determines how"
+                    " many log entries to include."
                 ),
             ),
         ] = 10,

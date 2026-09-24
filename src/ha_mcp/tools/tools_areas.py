@@ -285,12 +285,10 @@ class AreaTools:
             Field(
                 default=None,
                 description=(
-                    "Return only the specified top-level response keys to reduce "
-                    'response size (e.g. ["floors"]). '
-                    "None = full response (default). "
-                    "Available keys: success, floor_count, area_count, "
-                    "unassigned_count, orphaned_count, floors, unassigned_areas, "
-                    "orphaned_areas, message."
+                    "Return only the specified top-level response keys to reduce response "
+                    'size (e.g. ["floors"]). None = full response. Available keys: success,'
+                    " floor_count, area_count, unassigned_count, orphaned_count, floors, "
+                    "unassigned_areas, orphaned_areas, message."
                 ),
             ),
         ] = None,
@@ -300,11 +298,11 @@ class AreaTools:
             Field(
                 default=None,
                 description=(
-                    "Project each area record (in floors[].areas, unassigned_areas, "
-                    'and orphaned_areas) to only the specified keys. E.g. ["area_id", '
-                    '"name"] returns slim area records. None = full records (default). '
-                    "Unknown keys yield empty records. Available keys: area_id, name, "
-                    "icon, floor_id, aliases, picture, labels."
+                    "Project each area record (in floors[].areas, unassigned_areas, and "
+                    'orphaned_areas) to only the specified keys. E.g. ["area_id", "name"] '
+                    "returns slim area records. None = full records. Unknown keys yield "
+                    "empty records. Available keys: area_id, name, icon, floor_id, aliases,"
+                    " picture, labels."
                 ),
             ),
         ] = None,

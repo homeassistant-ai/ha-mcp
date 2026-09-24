@@ -3830,13 +3830,11 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         slug: Annotated[
             str,
             Field(
-                description="App (add-on) slug (e.g., '<prefix>_nodered', '<prefix>_frigate'). "
-                "Slug prefixes vary by app repository — call ha_get_app() "
-                "to discover the actual installed slug. Required for every mode "
-                "except the store-repository actions "
-                "(action='add_repository'/'remove_repository'), which use "
-                "'repository' instead and take no slug, and the store-wide "
-                "action (action='check_updates'), which takes neither.",
+                description="App (add-on) slug (e.g., '<prefix>_nodered', '<prefix>_frigate'). Slug"
+                " prefixes vary by app repository — call ha_get_app() to discover the "
+                "actual installed slug. Required except for action='add_repository' / "
+                "'remove_repository' (which take 'repository' instead) and "
+                "action='check_updates' (which takes neither).",
                 default="",
             ),
         ] = "",
@@ -3852,7 +3850,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         method: Annotated[
             str,
             Field(
-                description="Proxy mode only. HTTP method: GET, POST, PUT, DELETE, PATCH. Defaults to GET.",
+                description="Proxy mode only. HTTP method: GET, POST, PUT, DELETE, PATCH.",
                 default="GET",
             ),
         ] = "GET",
@@ -3866,25 +3864,25 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         debug: Annotated[
             bool,
             Field(
-                description="Proxy mode only. Include diagnostic info (request URL, headers sent, response headers). Default: false.",
+                description="Proxy mode only. Include diagnostic info (request URL, headers sent, "
+                "response headers).",
                 default=False,
             ),
         ] = False,
         port: Annotated[
             int | None,
             Field(
-                description="Proxy mode only. Connect to this port instead of the Ingress port. "
-                "Use ha_get_app(slug='...') to find available ports. Some apps, including "
-                "Node-RED, reject direct access unless their leave_front_door_open option is "
-                "enabled and the app is restarted; related errors include an actionable, "
-                "security-qualified ha_manage_app options command.",
+                description="Proxy mode only. Connect to this port instead of the Ingress port. Use"
+                " ha_get_app(slug='...') to find available ports. Some apps, including "
+                "Node-RED, reject direct access unless their leave_front_door_open "
+                "option is enabled and the app is restarted.",
                 default=None,
             ),
         ] = None,
         offset: Annotated[
             int,
             Field(
-                description="Proxy mode only. HTTP: skip this many items in a JSON array response. Default: 0.",
+                description="Proxy mode only. HTTP: skip this many items in a JSON array response.",
                 default=0,
             ),
         ] = 0,
@@ -3898,10 +3896,9 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         websocket: Annotated[
             bool,
             Field(
-                description="Proxy mode only. Use WebSocket instead of HTTP for an app "
-                "(add-on) WebSocket API. Sends 'body' as the initial message and collects "
-                "responses; command names and body schemas are app/version-specific. "
-                "Default: false.",
+                description="Proxy mode only. Use WebSocket instead of HTTP for an app (add-on) "
+                "WebSocket API. Sends 'body' as the initial message and collects "
+                "responses; command names and body schemas are app/version-specific.",
                 default=False,
             ),
         ] = False,
@@ -3909,9 +3906,9 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             bool,
             Field(
                 description="Proxy mode only. WebSocket: True waits for the server to close a "
-                "run-to-completion stream. False returns after the first response batch; use "
-                "for one-shot command/response or bounded capture on a channel that stays "
-                "open. Default: true.",
+                "run-to-completion stream. False returns after the first response "
+                "batch; use for one-shot command/response or bounded capture on a "
+                "channel that stays open.",
                 default=True,
             ),
         ] = True,
@@ -3919,37 +3916,37 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             int | None,
             Field(
                 description="Proxy mode only. WebSocket: cap on messages collected from the wire, "
-                "bounded by an internal safety ceiling. None = collect up to the ceiling. "
-                "Lower to save tokens on noisy streams (e.g., message_limit=50 for a quick health check).",
+                "bounded by an internal safety ceiling. None = collect up to the "
+                "ceiling.",
                 default=None,
             ),
         ] = None,
         message_offset: Annotated[
             int,
             Field(
-                description="Proxy mode only. WebSocket: drop this many messages from the start of the "
-                "collected list before returning. Useful for paginating past known-noisy headers. Default: 0.",
+                description="Proxy mode only. WebSocket: drop this many messages from the start of "
+                "the collected list before returning.",
                 default=0,
             ),
         ] = 0,
         summarize: Annotated[
             bool,
             Field(
-                description="Proxy mode only. WebSocket: when True (default), collapse runs of "
-                "non-signal messages (typically YAML config dumps) into short elision markers. "
-                "Set to False to return the raw stream.",
+                description="Proxy mode only. WebSocket: when True, collapse runs of non-signal "
+                "messages (typically YAML config dumps) into short elision markers. Set"
+                " to False to return the raw stream.",
                 default=True,
             ),
         ] = True,
         python_transform: Annotated[
             str | None,
             Field(
-                description="Proxy mode only. Sandboxed Python expression that post-processes the response. "
-                "Variable `response` is exposed — a list[dict | str] for WebSocket (parsed JSON or raw text), "
-                "or dict/list/str for HTTP (parsed body). Supports in-place mutation "
-                "(response.append(...)) or reassignment (response = [...]). "
-                "Example: response = [m for m in response if 'ERROR' in str(m)]. "
-                "Post-processing only — does not provide optimistic-locking write semantics.",
+                description="Proxy mode only. Sandboxed Python expression that post-processes the "
+                "response. Variable `response` is exposed — a list[dict | str] for "
+                "WebSocket (parsed JSON or raw text), or dict/list/str for HTTP (parsed"
+                " body). Supports in-place mutation (response.append(...)) or "
+                "reassignment (response = [...]). Example: response = [m for m in "
+                "response if 'ERROR' in str(m)].",
                 default=None,
             ),
         ] = None,
@@ -4030,24 +4027,17 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 description="Lifecycle mode: run a Supervisor app (add-on) action. One of "
                 "'install', 'uninstall', 'start', 'stop', 'restart', 'rebuild', "
                 "'update'. 'install'/'update' require the app's repository to be "
-                "registered (it appears in ha_get_app(source='available')). "
-                "Store-repository mode: 'add_repository' / 'remove_repository' "
-                "register or unregister a custom app store repository — these "
-                "use the 'repository' param instead of 'slug'. "
-                "Store-wide mode: 'check_updates' reloads the store so "
-                "Supervisor re-scans its repositories, mirroring the Apps UI "
-                "'Check for updates' item — it takes neither 'slug' nor "
-                "'repository', refreshes available metadata only, and installs "
-                "nothing. Use it to pick up an edited local app's config.yaml "
-                "on demand instead of waiting for Supervisor's own reload "
-                "(every 3h). Follow with action='update' to install a new "
-                "version, or action='rebuild' for a local app whose source "
-                "changed but whose version did not. Returns 'changed' and "
-                "'updates_available', each null (not empty) if the store "
-                "could not be read to measure it — check 'warnings'. "
-                "When ha-mcp runs as an app, it can update other apps but cannot "
-                "update its own running slug; update ha-mcp from the Home Assistant "
-                "Apps UI.",
+                "registered (it appears in ha_get_app(source='available')); 'rebuild' "
+                "is for a local app whose source changed but whose version did not. "
+                "Store-repository mode: 'add_repository' / 'remove_repository' register"
+                " or unregister a custom app store repository — these use the "
+                "'repository' param instead of 'slug'. Store-wide mode: 'check_updates'"
+                " reloads the store so Supervisor re-scans its repositories (e.g. after"
+                " editing a local app's config.yaml) — it takes neither 'slug' nor "
+                "'repository', refreshes available metadata only, and installs nothing;"
+                " follow with action='update'. Returns 'changed' and "
+                "'updates_available', null when the store could not be read (see "
+                "'warnings').",
                 default=None,
             ),
         ] = None,
@@ -4074,7 +4064,9 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         Use exactly one mode: lifecycle/store action, configuration fields,
         ``path`` proxy, or ``path`` with ``array_patch``.
 
-        Requires Home Assistant OS or Supervised. ``options`` merges top-level
+        Requires Home Assistant OS or Supervised. When ha-mcp itself runs as an
+        app it cannot update its own running slug; update ha-mcp from the Home
+        Assistant Apps UI. ``options`` merges top-level
         keys and one nested mapping level; supply complete values for deeper nested
         mappings because they are replaced. Prefer
         Ingress: direct-port access requires a shared container network and may

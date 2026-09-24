@@ -134,9 +134,7 @@ class RadioTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Action-specific parameters (e.g. code, pin, channel, "
-                    "property, value). An unknown action returns that radio's "
-                    "supported action list with one-line summaries."
+                    "Action-specific parameters (e.g. code, pin, channel, property, value)."
                 ),
                 default=None,
             ),

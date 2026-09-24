@@ -365,9 +365,8 @@ class ResourceTools:
         include_content: Annotated[
             bool,
             Field(
-                description="Include full decoded content for inline resources "
-                'in the "_content" field. '
-                "Default False to save tokens (shows 150-char preview instead)."
+                description='Include full decoded content for inline resources in the "_content" '
+                "field. When False, a 150-char preview is shown instead."
             ),
         ] = False,
         limit: Annotated[
@@ -376,7 +375,7 @@ class ResourceTools:
                 default=100,
                 ge=1,
                 le=500,
-                description="Max resources to return per page (default: 100)",
+                description="Max resources to return per page",
             ),
         ] = 100,
         offset: Annotated[
@@ -384,7 +383,7 @@ class ResourceTools:
             Field(
                 default=0,
                 ge=0,
-                description="Number of resources to skip for pagination (default: 0)",
+                description="Number of resources to skip for pagination",
             ),
         ] = 0,
     ) -> dict[str, Any]:
@@ -498,9 +497,9 @@ class ResourceTools:
         resource_type: Annotated[
             Literal["module", "js", "css"],
             Field(
-                description="Resource type: 'module' for ES6 modules (modern cards, default), "
-                "'js' for legacy JavaScript (older custom cards), "
-                "'css' for stylesheets (themes, global styles)"
+                description="Resource type: 'module' for ES6 modules (modern cards), 'js' for "
+                "legacy JavaScript (older custom cards), 'css' for stylesheets (themes,"
+                " global styles)"
             ),
         ] = "module",
         resource_id: Annotated[

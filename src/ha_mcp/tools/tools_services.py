@@ -83,7 +83,7 @@ class ServiceDiscoveryTools:
                 default=50,
                 ge=1,
                 le=200,
-                description="Max services to return per page (default: 50)",
+                description="Max services to return per page",
             ),
         ] = 50,
         offset: Annotated[
@@ -91,7 +91,7 @@ class ServiceDiscoveryTools:
             Field(
                 default=0,
                 ge=0,
-                description="Number of services to skip for pagination (default: 0)",
+                description="Number of services to skip for pagination",
             ),
         ] = 0,
         detail_level: Annotated[
@@ -99,8 +99,8 @@ class ServiceDiscoveryTools:
             Field(
                 default="summary",
                 description=(
-                    "'summary': service name + description only (default). "
-                    "'full': include parameter field schemas."
+                    "'summary': service name + description only. 'full': include parameter "
+                    "field schemas."
                 ),
             ),
         ] = "summary",
@@ -110,11 +110,10 @@ class ServiceDiscoveryTools:
             Field(
                 default=None,
                 description=(
-                    "Project each service record to only the specified keys. "
-                    'E.g. ["name", "description"] returns slim service records. '
-                    "None = full records (default). Unknown keys yield empty records. "
-                    "Available keys: name, description, domain, service, fields (full mode only), "
-                    "target (full mode only)."
+                    'Project each service record to only the specified keys. E.g. ["name", '
+                    '"description"] returns slim service records. None = full records. '
+                    "Unknown keys yield empty records. Available keys: name, description, "
+                    "domain, service, fields (full mode only), target (full mode only)."
                 ),
             ),
         ] = None,
@@ -124,11 +123,10 @@ class ServiceDiscoveryTools:
             Field(
                 default=None,
                 description=(
-                    "Return only the specified top-level response keys to reduce "
-                    'response size (e.g. ["services"]). '
-                    "None = full response (default). "
-                    "Available keys: success, domains, services, total_count, count, "
-                    "offset, limit, has_more, next_offset, detail_level, filters_applied."
+                    "Return only the specified top-level response keys to reduce response "
+                    'size (e.g. ["services"]). None = full response. Available keys: '
+                    "success, domains, services, total_count, count, offset, limit, "
+                    "has_more, next_offset, detail_level, filters_applied."
                 ),
             ),
         ] = None,

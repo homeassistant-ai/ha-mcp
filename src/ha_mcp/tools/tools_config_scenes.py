@@ -635,8 +635,8 @@ class ConfigSceneTools:
             bool,
             Field(
                 description=(
-                    "Wait for scene to be queryable before returning. Default: True. "
-                    "Set to False for bulk operations."
+                    "Wait for scene to be queryable before returning. Set to False for bulk"
+                    " operations."
                 ),
                 default=True,
             ),
@@ -1224,7 +1224,7 @@ class ConfigSceneTools:
         wait: Annotated[
             bool,
             Field(
-                description="Wait for scene to be fully removed before returning. Default: True.",
+                description="Wait for scene to be fully removed before returning.",
                 default=True,
             ),
         ] = True,

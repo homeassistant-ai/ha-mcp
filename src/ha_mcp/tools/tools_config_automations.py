@@ -722,7 +722,8 @@ class AutomationConfigTools:
         wait: Annotated[
             bool,
             Field(
-                description="Wait for automation to be queryable before returning. Default: True. Set to False for bulk operations.",
+                description="Wait for automation to be queryable before returning. Set to False for"
+                " bulk operations.",
                 default=True,
             ),
         ] = True,
@@ -1960,7 +1961,7 @@ class AutomationConfigTools:
         wait: Annotated[
             bool,
             Field(
-                description="Wait for automation to be fully removed before returning. Default: True.",
+                description="Wait for automation to be fully removed before returning.",
                 default=True,
             ),
         ] = True,

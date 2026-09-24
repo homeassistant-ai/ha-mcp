@@ -221,7 +221,7 @@ class VoiceAssistantTools:
             Field(
                 description=(
                     "Filter by assistant: 'conversation', 'cloud.alexa', or "
-                    "'cloud.google_assistant'. If not specified, returns all."
+                    "'cloud.google_assistant'."
                 ),
                 default=None,
             ),

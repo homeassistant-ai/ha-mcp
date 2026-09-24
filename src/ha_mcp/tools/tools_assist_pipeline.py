@@ -693,8 +693,8 @@ class AssistPipelineTools:
             bool,
             Field(
                 description=(
-                    "For create/update only, also set the resulting pipeline as "
-                    "preferred with an extra websocket call. Ignored for other actions."
+                    "For create/update only, also set the resulting pipeline as preferred. "
+                    "Ignored for other actions."
                 ),
                 default=False,
             ),

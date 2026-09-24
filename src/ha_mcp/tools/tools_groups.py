@@ -153,7 +153,7 @@ class GroupTools:
                 default=100,
                 ge=1,
                 le=500,
-                description="Max groups to return per page (default: 100)",
+                description="Max groups to return per page",
             ),
         ] = 100,
         offset: Annotated[
@@ -161,7 +161,7 @@ class GroupTools:
             Field(
                 default=0,
                 ge=0,
-                description="Number of groups to skip for pagination (default: 0)",
+                description="Number of groups to skip for pagination",
             ),
         ] = 0,
     ) -> dict[str, Any]:
@@ -285,7 +285,7 @@ class GroupTools:
         all_on: Annotated[
             bool | None,
             Field(
-                description="If True, all entities must be on for group to be on (default: False)",
+                description="If True, all entities must be on for group to be on",
                 default=None,
             ),
         ] = None,
@@ -308,7 +308,8 @@ class GroupTools:
         wait: Annotated[
             bool,
             Field(
-                description="Wait for group to be queryable before returning. Default: True. Set to False for bulk operations.",
+                description="Wait for group to be queryable before returning. Set to False for bulk"
+                " operations.",
                 default=True,
             ),
         ] = True,
@@ -447,7 +448,7 @@ class GroupTools:
         wait: Annotated[
             bool,
             Field(
-                description="Wait for group to be fully removed before returning. Default: True.",
+                description="Wait for group to be fully removed before returning.",
                 default=True,
             ),
         ] = True,
