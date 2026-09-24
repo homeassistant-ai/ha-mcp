@@ -84,10 +84,11 @@ Verify that safety annotations match actual tool behavior:
   `ha_manage_blueprints` and `ha_config_list_dashboard_resources` return
   externally authored content from otherwise local reads.
 
-FastMCP defaults are `readOnlyHint=False`, `destructiveHint=True`,
-`idempotentHint=False`, and `openWorldHint=True`.
+FastMCP omits a hint that is not set, and the MCP `ToolAnnotations` schema
+then defines the value clients assume: `readOnlyHint=false`,
+`destructiveHint=true`, `idempotentHint=false`, and `openWorldHint=true`.
 
-Set `openWorldHint` explicitly on every tool because FastMCP defaults it to
+Set `openWorldHint` explicitly on every tool because an omitted hint means
 `true`, which otherwise silently misclassifies local Home Assistant tools.
 Annotations describe behavior against current supported upstream versions. A
 side effect present only in an outdated external build does not demote a tool
@@ -240,19 +241,30 @@ These rules apply to new or modified tool docstrings in the PR diff only -- not 
 - Embeds a full parameter schema instead of deferring to `ha_get_skill_guide`
 - Is a workflow-entry tool but gives no hint about the next natural tool to call
 - Multi-line docstring does not follow this structure: (1) what the tool does, (2) when NOT to use it with preferred alternatives, (3) when to use it, and (4) caveats.
+- Restates a fact that one of the tool's `Field(description=...)` strings already carries, or the reverse.
+- Contains a parameter section (`Args:`, `Parameters`, `:param x:`). FastMCP parses it, publishes only the text before the first section it recognises as the tool description, and drops the rest; `tests/src/unit/test_tool_docstring_no_parameter_section.py` enforces this.
 
 Add a `RELATED TOOLS` hint when the tool starts a workflow and the natural
 next call is not obvious, such as `ha_search` leading to `ha_get_state`.
 Add `EXAMPLES` when a tool has multiple modes or non-obvious parameters;
 omit them when one required parameter makes the call self-evident. The
-four-part structure follows
-[Anthropic's tool-design guidance](https://www.anthropic.com/engineering/writing-tools-for-agents).
+structure follows
+[Anthropic's tool-definition best practices](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools#best-practices-for-tool-definitions),
+which put a tool description at generally 3–4 sentences, more when the tool
+is complex. A one-liner remains acceptable on a straightforward tool; do not
+pad a simple tool's description to reach a sentence count.
 
-Do not repeat full parameter documentation, types already present in the
-signature, Home Assistant domain facts the model already knows, or
-motivational prose. State consequences in plain prose, but route permission
-and retry safety through `readOnlyHint`, `destructiveHint`, and
-`idempotentHint` rather than magic docstring keywords.
+State each fact once in the tool definition. What one parameter means, its
+format, accepted values and effect belong in that parameter's
+`Field(description=...)`, which is where Anthropic's examples place them; the
+docstring carries what the tool does, when (not) to use it, how parameters
+combine into modes, caveats and whole-call `EXAMPLES`. Both texts reach the
+model in the same definition, so a copy in the other place adds tokens and
+no information. Do not repeat types already present in the signature, Home
+Assistant domain facts the model already knows, or motivational prose. State
+consequences in plain prose, but route permission and retry safety through
+`readOnlyHint`, `destructiveHint`, and `idempotentHint` rather than magic
+docstring keywords.
 
 **Do NOT flag:**
 - Concise one-liners on straightforward tools (progressive disclosure: brief by default)
