@@ -51,9 +51,7 @@ async def test_background_release_collects_outcome(
         return await real_send_command(command, _wait_timeout=0.01, **kwargs)
 
     monkeypatch.setattr(client, "send_command", send_command)
-    monkeypatch.setattr(
-        "ha_mcp.client.websocket_client.CLEANUP_TIMEOUT_SECONDS", 0.01
-    )
+    monkeypatch.setattr("ha_mcp.client.websocket_client.CLEANUP_TIMEOUT_SECONDS", 0.01)
     loop = asyncio.get_running_loop()
     previous_handler = loop.get_exception_handler()
     unhandled: list[dict[str, Any]] = []
