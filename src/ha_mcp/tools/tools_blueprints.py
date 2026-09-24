@@ -173,7 +173,8 @@ class BlueprintTools:
                     "'list' installed blueprints, 'get' one blueprint's "
                     "metadata/inputs/YAML, 'import' one from a URL, 'save' YAML "
                     "text to a blueprint path, 'delete' an installed one, or "
-                    "'substitute' to render a standalone config"
+                    "'substitute' to render a standalone config (the UI's "
+                    '"Take control")'
                 )
             ),
         ],
@@ -264,12 +265,7 @@ class BlueprintTools:
         that is ``ha_config_set_automation`` / ``ha_config_set_script`` with a
         ``use_blueprint`` config.
 
-        Use ``action="list"`` to discover installed blueprints, ``action="get"``
-        for one blueprint's metadata, inputs and YAML, ``action="import"`` to
-        install one from a URL, ``action="save"`` to write YAML text to a
-        blueprint path, ``action="delete"`` to remove an installed one, and
-        ``action="substitute"`` to render a blueprint plus inputs into a
-        standalone config (the UI's "Take control"). To duplicate a blueprint,
+        To duplicate a blueprint,
         ``get`` it and ``save`` its ``yaml`` under a new ``path``; to edit one in
         place, ``get`` it, change the text, and ``save`` it back to the same
         ``path`` with ``overwrite=True``.
@@ -287,9 +283,7 @@ class BlueprintTools:
         which one answered, and ``source_url`` text is a fresh download that can
         differ from the installed file. Core's blueprint API alone exposes
         metadata only, so a locally authored blueprint on a bare install has no
-        readable text. ``save`` needs ``overwrite=True`` to replace an existing
-        path and reloads every automation/script using it. ``delete`` requires
-        ``confirm=True``, and Home Assistant refuses it while any automation or
+        readable text. Home Assistant refuses ``delete`` while any automation or
         script still uses the blueprint — the error lists the consumers. Both
         writes are snapshotted first when a copy can be read, so
         ``ha_manage_backup(scope="edits")`` can restore the previous file.

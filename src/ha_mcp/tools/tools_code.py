@@ -1319,7 +1319,7 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = None,
         justification: Annotated[
             str | None,
-            Field(description="Why no existing tool works (required with code)."),
+            Field(description="Why no existing tool works."),
         ] = None,
         save_as: Annotated[
             str | None,
@@ -1343,9 +1343,9 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ⚠️  **LAST RESORT** — search for existing tools first.
 
         **Modes** (mutually exclusive):
-        - Provide ``code`` + ``justification`` to execute custom code
-        - Set ``run_saved`` to re-run a previously saved tool by name
-        - Set ``list_saved=True`` to list all saved tools
+        - ``code`` + ``justification``
+        - ``run_saved``
+        - ``list_saved=True``
 
         **Available functions in sandbox:**
         - ``api_get(endpoint)`` — GET request to HA REST API

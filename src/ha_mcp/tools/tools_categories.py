@@ -57,7 +57,7 @@ class CategoryTools:
         category_id: Annotated[
             str | None,
             Field(
-                description="ID of the category to retrieve. If omitted, lists all categories for the scope.",
+                description="ID of the category to retrieve.",
                 default=None,
             ),
         ] = None,
@@ -202,7 +202,7 @@ class CategoryTools:
         category_id: Annotated[
             str | None,
             Field(
-                description="Category ID for updates. If not provided, creates a new category.",
+                description="Category ID for updates.",
                 default=None,
             ),
         ] = None,
@@ -353,8 +353,7 @@ class CategoryTools:
         """
         Delete a Home Assistant category.
 
-        Removes the category from the category registry for the given scope
-        (e.g., 'automation', 'script', 'scene', 'helpers').
+        Removes the category from the category registry for the given scope.
         This will also remove the category assignment from all entities in that scope.
 
         EXAMPLES:

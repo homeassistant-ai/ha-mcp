@@ -3986,11 +3986,11 @@ class HelperConfigTools:
 
         Flow-based types (template / group / utility_meter / derivative / etc.)
         require the ha_mcp_tools custom component (>= 1.1.0) and are served only
-        through it; storage types are listed on all installs. Requesting a flow
+        through it. Requesting a flow
         type without the component returns a COMPONENT_NOT_INSTALLED error.
 
-        Pass helper_type="all" to enumerate every helper type in a single call.
-        Each record carries its own ``helper_type``. This mode is component-only
+        With helper_type="all", each record carries its own ``helper_type``.
+        This mode is component-only
         (there is no single built-in command that lists all types): without the
         ha_mcp_tools component it returns a COMPONENT_NOT_INSTALLED error rather
         than a partial or empty list.
@@ -4440,8 +4440,7 @@ class HelperConfigTools:
             str | None,
             Field(
                 description=(
-                    "Display name for simple/flow helper creation. Required when "
-                    "creating a helper without helper_id. Optional on helper update. "
+                    "Display name for simple/flow helper creation. Optional on helper update. "
                     "Ignored for helper_type='config_subentry', which uses "
                     "entry_id/subentry_type/subentry_id instead. For flow-based "
                     "helper updates (template, group, utility_meter, ...), this is "
@@ -4454,7 +4453,7 @@ class HelperConfigTools:
         helper_id: Annotated[
             str | None,
             Field(
-                description="REQUIRED when updating an existing helper. Bare ID ('my_button') or full entity ID ('input_button.my_button'). Omit to create a new helper.",
+                description="Bare ID ('my_button') or full entity ID ('input_button.my_button'). Omit to create a new helper.",
                 default=None,
             ),
         ] = None,
@@ -4483,7 +4482,7 @@ class HelperConfigTools:
             Field(
                 description=(
                     "Existing config subentry ID to reconfigure when "
-                    "helper_type='config_subentry'. Omit to create."
+                    "helper_type='config_subentry'."
                 ),
                 default=None,
             ),
@@ -4713,11 +4712,7 @@ class HelperConfigTools:
             Field(
                 description=(
                     "Config dict for flow-based helper types and "
-                    "helper_type='config_subentry' "
-                    "(template, group, utility_meter, derivative, min_max, threshold, "
-                    "integration, statistics, trend, random, filter, tod, "
-                    "generic_thermostat, switch_as_x, generic_hygrostat, "
-                    "history_stats, mold_indicator). "
+                    "helper_type='config_subentry'. "
                     "Ignored for simple helper types. "
                     "On update it is a patch: a field you omit keeps its "
                     "current value, and a field set to null is cleared where "
@@ -4726,8 +4721,7 @@ class HelperConfigTools:
                     "step_values={'<step_id>': {'<field>': <value>}} to give "
                     "a step its own value, or to leave it out of that step; a "
                     "LIST of those objects supplies one per encounter when the "
-                    "flow presents a step more than once. "
-                    "Field set is delivered as data_schema on the first validation error."
+                    "flow presents a step more than once."
                 ),
                 default=None,
             ),
@@ -4744,8 +4738,7 @@ class HelperConfigTools:
             Field(
                 description=(
                     "Explicit intent: 'create' a new helper or 'update' an existing one. "
-                    "When omitted, falls back to the implicit discriminator: presence of "
-                    "helper_id => update, absence => create. Pass 'create' or 'update' "
+                    "Pass 'create' or 'update' "
                     "to disambiguate (e.g. so a typo in helper_id surfaces as a clear "
                     "'helper not found' error instead of being mistaken for a create call)."
                 ),
@@ -4789,14 +4782,12 @@ class HelperConfigTools:
         reconfigure an existing subentry; omit it to create a new subentry.
 
         For flow-type updates, pass the existing entry_id as `helper_id`. Options flows
-        reject the `name` key on update — to rename a flow helper, delete and recreate.
+        reject the `name` key on update.
 
         Behavior notes:
         - UPDATE preserves type-specific fields not re-passed (rename never wipes
           initial/icon/etc. for any simple helper). Flow-helper and config
-          subentry updates behave the same way: a field omitted from `config`
-          keeps its current value, and a field set to null is cleared where
-          the schema allows that field to be empty.
+          subentry updates behave the same way (see `config`).
         - Pass `action="create"` or `action="update"` to disambiguate intent.
           For SIMPLE/FLOW helpers, omitted action falls back to the implicit
           `helper_id`-presence discriminator. For config subentries, omitted

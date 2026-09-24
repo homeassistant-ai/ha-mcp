@@ -3759,8 +3759,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         source: Annotated[
             Literal["installed", "available"] | None,
             Field(
-                description="App (add-on) source: 'installed' (default) for currently installed apps, "
-                "'available' for apps in the store that can be installed. "
+                description="App (add-on) source. "
                 "With source='available', 'version' is the version you would "
                 "get by installing (Supervisor's version_latest) and "
                 "'version_installed' is the running one, null when the app is "
@@ -3772,7 +3771,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         slug: Annotated[
             str | None,
             Field(
-                description="App (add-on) slug for detailed info (e.g., '<prefix>_nodered'). "
+                description="App (add-on) slug (e.g., '<prefix>_nodered'). "
                 "Slug prefixes vary by app repository — omit to list all apps "
                 "and discover the actual installed slug.",
                 default=None,
@@ -3806,8 +3805,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         ``ha_manage_app``. Use ``slug`` for details, ``source="installed"`` for an
         inventory, or ``source="available"`` for store discovery.
 
-        Requires Home Assistant OS or Supervised. ``include_stats`` applies only
-        to installed-app listings.
+        Requires Home Assistant OS or Supervised.
         """
         return await tools.get_addon(
             source=source,
@@ -3847,7 +3845,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             Field(
                 description="Proxy mode: API path relative to the app (add-on) root "
                 "(e.g., '/flows', '/api/events', '/api/stats'). "
-                "Required for proxy mode; mutually exclusive with config parameters.",
+                "Required for proxy mode.",
                 default=None,
             ),
         ] = None,
@@ -4049,9 +4047,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
                 "could not be read to measure it — check 'warnings'. "
                 "When ha-mcp runs as an app, it can update other apps but cannot "
                 "update its own running slug; update ha-mcp from the Home Assistant "
-                "Apps UI. "
-                "Mutually exclusive with path / config parameters / array_patch. "
-                "HA OS / Supervised only.",
+                "Apps UI.",
                 default=None,
             ),
         ] = None,
@@ -4080,8 +4076,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
 
         Requires Home Assistant OS or Supervised. ``options`` merges top-level
         keys and one nested mapping level; supply complete values for deeper nested
-        mappings because they are replaced. A non-empty ``network`` replaces the
-        full port override map. Prefer
+        mappings because they are replaced. Prefer
         Ingress: direct-port access requires a shared container network and may
         require weakening the target app authentication. If a Supervisor
         lifecycle, configuration, or repository write has an unknown outcome,

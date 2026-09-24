@@ -136,8 +136,6 @@ class ServiceDiscoveryTools:
         """List available Home Assistant services with optional pagination and detail control.
 
         Discovers services/actions that can be called via ha_call_service.
-        Use domain or query filters to narrow results. Defaults to summary mode
-        (name + description only) to keep responses compact.
 
         Examples:
             # Browse first page of all services (compact)

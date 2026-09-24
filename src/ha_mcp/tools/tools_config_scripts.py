@@ -130,7 +130,7 @@ class ConfigScriptTools:
 
         The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
 
-        The returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. A leading `script.` prefix on the input is stripped before lookup — behavioral parity with `ha_config_get_automation` (mechanism differs: automations resolve via state lookup; scripts strip the prefix).
+        The returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. Prefix handling matches `ha_config_get_automation` in behavior (mechanism differs: automations resolve via state lookup; scripts strip the prefix).
 
         EXAMPLES:
         - Get script (bare form): ha_config_get_script("morning_routine")
@@ -487,8 +487,7 @@ class ConfigScriptTools:
             dict[str, Any] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Script configuration dictionary. Must include EITHER 'sequence' (for regular scripts) OR 'use_blueprint' (for blueprint-based scripts). "
-                "Optional fields: 'alias', 'description', 'icon', 'mode', 'max', 'fields'. "
+                description="Script configuration dictionary. "
                 "Mutually exclusive with python_transform.",
                 default=None,
             ),
@@ -498,7 +497,6 @@ class ConfigScriptTools:
             Field(
                 description="Python expression to transform existing script config. "
                 "Mutually exclusive with config. "
-                "Requires config_hash for validation. "
                 "WARNING: Expressions with infinite loops will hang the server. "
                 "Examples: "
                 "Simple: python_transform=\"config['sequence'][0]['data']['message'] = 'Hello'\" "
@@ -511,7 +509,6 @@ class ConfigScriptTools:
             str | None,
             Field(
                 description="Config hash from ha_config_get_script for optimistic locking. "
-                "REQUIRED for python_transform (validates script unchanged). "
                 "Optional for config updates (validates before full replacement if provided).",
             ),
         ] = None,
@@ -521,14 +518,9 @@ class ConfigScriptTools:
                 description="Convert a blueprint-backed script into an editable "
                 'standalone one -- the UI\'s "Take control". Renders the blueprint '
                 "with its current inputs and saves the result over the same script, "
-                "which then has its own sequence and no 'use_blueprint'. Mutually "
-                "exclusive with config and python_transform. Irreversible: the link "
-                "to the blueprint is gone afterwards, so edit inputs instead if you "
-                "only want to change a value. Does NOT free the blueprint: Home "
-                "Assistant keeps counting the converted script as a user, so "
-                "deleting that blueprint stays refused until the script is removed. "
-                "To preview the rendering without writing anything, use "
-                'ha_manage_blueprints(action="substitute", domain="script").',
+                "which keeps its script_id, alias and description and then has its "
+                "own sequence and no 'use_blueprint'. Mutually exclusive with config "
+                "and python_transform.",
                 default=False,
             ),
         ] = False,
@@ -590,7 +582,6 @@ class ConfigScriptTools:
         IMPORTANT: python_transform requires 'config_hash' from ha_config_get_script().
 
         PYTHON TRANSFORM EXAMPLES:
-        - Update step: python_transform="config['sequence'][0]['data']['message'] = 'Hello'"
         - Add step: python_transform="config['sequence'].append({'delay': {'seconds': 5}})"
         - Remove last step: python_transform="config['sequence'].pop()"
 
@@ -690,12 +681,6 @@ class ConfigScriptTools:
         })
 
         TAKE CONTROL OF A BLUEPRINT SCRIPT:
-
-        take_control_of_blueprint=True converts a blueprint-backed script into
-        a standalone one — the UI's "Take control". The blueprint is rendered
-        with the script's CURRENT inputs and the result is saved over the same
-        script, which keeps its script_id, alias and description but gains its
-        own sequence and loses 'use_blueprint'.
 
         ha_config_set_script(
             script_id="notification_script",

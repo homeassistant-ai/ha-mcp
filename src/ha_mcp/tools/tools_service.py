@@ -1945,8 +1945,8 @@ class ServiceTools:
                     "Advanced escape hatch: send a raw one-shot Home Assistant "
                     "WebSocket command that is NOT a registered service (e.g. "
                     "'repairs/ignore_issue' to dismiss a Repairs issue). When set, "
-                    "omit domain/service and the other service params; put the "
-                    "command's parameters in data. Streaming/two-phase and "
+                    "omit domain/service and the other service params. "
+                    "Streaming/two-phase and "
                     "service-invoking commands (call_service, execute_script) are "
                     "rejected."
                 ),
@@ -1979,10 +1979,7 @@ class ServiceTools:
         - **Result compaction (default ON)**: ``result`` is trimmed
           to the targeted entity's record (drops parent-group propagation) and
           stripped of ``context`` / ``last_*`` metadata and heavy attribute
-          lists (``effect_list``, ``hue_scenes``). Escape hatches: ``verbose=True``
-          for the raw changed-state records, or ``result_fields`` /
-          ``result_attribute_keys`` for explicit per-record projection (mirrors
-          ``ha_get_state``).
+          lists (``effect_list``, ``hue_scenes``).
 
         **For detailed service documentation, use ha_get_skill_guide.**
 
@@ -2000,9 +1997,8 @@ class ServiceTools:
         ha_call_service(ws_command="repairs/ignore_issue",
                         data={"domain": "sun", "issue_id": "abc", "ignore": True})
         ```
-        Only one-shot request/response commands are supported; streaming/two-phase
-        and service-invoking commands are rejected, and the other service
-        parameters (entity_id, return_response, etc.) don't apply.
+        Only one-shot request/response commands are supported, and the other
+        service parameters (entity_id, return_response, etc.) don't apply.
 
         Unavailable in Read Only Mode, including read-like services and WebSocket
         commands. Use dedicated read tools while that mode is enabled.
@@ -2184,10 +2180,7 @@ class ServiceTools:
         """
         Get the status of one or more device operations with real-time WebSocket verification.
 
-        Pass a single operation_id string to check one operation, or a list of IDs
-        to check multiple operations at once (bulk status).
-
-        The timeout_seconds wait window bounds both modes. Bulk checks poll
+        The timeout_seconds wait window bounds single and bulk checks. Bulk checks poll
         all operations concurrently under one shared window and report
         per-item failures inside detailed_results instead of aborting the
         batch.
@@ -2238,7 +2231,7 @@ class ServiceTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Explicit entity operations. Use this or selector, never both. "
+                    "Explicit entity operations. "
                     "Each item requires exact entity_id and action. Use "
                     "action='off', not service='turn_off'."
                 )

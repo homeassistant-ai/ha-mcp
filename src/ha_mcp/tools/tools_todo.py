@@ -51,8 +51,7 @@ class TodoTools:
         entity_id: Annotated[
             str | None,
             Field(
-                description="Todo list entity ID (e.g., 'todo.shopping_list'). "
-                "If omitted, lists all todo list entities.",
+                description="Todo list entity ID (e.g., 'todo.shopping_list').",
                 default=None,
             ),
         ] = None,
@@ -83,10 +82,7 @@ class TodoTools:
         **GETTING TODO ITEMS (entity_id provided):**
         Retrieves items from the specified todo list.
 
-        Status filter values:
-        - needs_action: Items that still need to be done
-        - completed: Items that have been marked as done
-        - None (default): Returns all items regardless of status
+        Status filter: None (default) returns all items regardless of status.
 
         Item properties:
         - uid: Unique identifier for the item
@@ -237,7 +233,7 @@ class TodoTools:
         summary: Annotated[
             str | None,
             Field(
-                description="Item text/name. Required when creating a new item. "
+                description="Item text/name. "
                 "Ignored in update mode — use 'rename' to change the item name.",
                 default=None,
             ),
@@ -245,8 +241,7 @@ class TodoTools:
         item: Annotated[
             str | None,
             Field(
-                description="Existing item to update - can be the item UID or the exact item summary/name. "
-                "When provided, operates in update mode. When omitted, creates a new item.",
+                description="Existing item to update - can be the item UID or the exact item summary/name.",
                 default=None,
             ),
         ] = None,
@@ -294,7 +289,7 @@ class TodoTools:
         Creates a new item. summary is required.
 
         WITH item parameter (update mode):
-        Updates an existing item identified by UID or exact name.
+        Updates an existing item.
         At least one update field (rename, status, description, due_date, due_datetime) is required.
 
         EXAMPLES:
@@ -560,7 +555,7 @@ class TodoTools:
         item: Annotated[
             str,
             Field(
-                description="Item to remove - can be the item UID or the exact item summary/name"
+                description="Item to remove - can be the item UID (from ha_get_todo) or the exact item summary/name"
             ),
         ],
     ) -> dict[str, Any]:
@@ -568,10 +563,6 @@ class TodoTools:
         Remove an item from a Home Assistant todo list.
 
         Permanently deletes an item from the specified todo list.
-
-        IDENTIFYING ITEMS:
-        - Use the item's UID (from ha_get_todo)
-        - Or use the exact item summary/name text
 
         EXAMPLES:
         - Remove by name: ha_remove_todo_item("todo.shopping_list", "Buy milk")

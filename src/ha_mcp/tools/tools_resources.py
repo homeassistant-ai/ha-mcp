@@ -489,28 +489,18 @@ class ResourceTools:
         self,
         content: Annotated[
             str | None,
-            Field(
-                description="JavaScript or CSS code to host inline (max ~128KB). "
-                "The code is embedded directly in the resource URL as a data: URI - "
-                "no file storage or external hosting involved. "
-                "Mutually exclusive with url. Supports 'module' and 'css' types only."
-            ),
+            Field(description="JavaScript or CSS code to host inline."),
         ] = None,
         url: Annotated[
             str | None,
-            Field(
-                description="URL of the resource. Can be: "
-                "/local/file.js (www/ directory), "
-                "/hacsfiles/component/file.js (HACS), "
-                "https://cdn.example.com/card.js (external). "
-                "Mutually exclusive with content."
-            ),
+            Field(description="URL of the resource."),
         ] = None,
         resource_type: Annotated[
             Literal["module", "js", "css"],
             Field(
                 description="Resource type: 'module' for ES6 modules (modern cards, default), "
-                "'js' for legacy JavaScript (url mode only), 'css' for stylesheets"
+                "'js' for legacy JavaScript (older custom cards), "
+                "'css' for stylesheets (themes, global styles)"
             ),
         ] = "module",
         resource_id: Annotated[
@@ -549,11 +539,6 @@ class ResourceTools:
         - HACS-installed cards (/hacsfiles/...)
         - External CDN resources (https://...)
         - Supports all types: 'module', 'js', 'css'
-
-        RESOURCE TYPES:
-        - module: ES6 JavaScript modules (recommended for custom cards)
-        - js: Legacy JavaScript files (older custom cards, url mode only)
-        - css: CSS stylesheets (themes, global styles)
 
         EXAMPLES:
 
@@ -1000,9 +985,7 @@ class ResourceTools:
         self,
         resource_id: Annotated[
             str,
-            Field(
-                description="Resource ID to delete. Get from ha_config_list_dashboard_resources()"
-            ),
+            Field(description="Resource ID to delete."),
         ],
     ) -> dict[str, Any]:
         """

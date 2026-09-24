@@ -601,7 +601,7 @@ class LabelTools:
         label_id: Annotated[
             str | None,
             Field(
-                description="ID of the label to retrieve. If omitted, lists all labels.",
+                description="ID of the label to retrieve.",
                 default=None,
             ),
         ] = None,
@@ -707,7 +707,7 @@ class LabelTools:
         label_id: Annotated[
             str | None,
             Field(
-                description="Label ID for updates. If not provided, creates a new label.",
+                description="Label ID for updates.",
                 default=None,
             ),
         ] = None,
@@ -766,7 +766,6 @@ class LabelTools:
         After creating a label, use ha_set_entity(labels=["label_id"]) to assign it to entities,
         ha_set_device(labels=["label_id"]) for devices, or
         ha_set_area_or_floor(kind="area", labels=["label_id"]) for areas (replaces the area's set).
-        Pass areas=["kitchen"] here to add the label onto those areas without replacing others.
         """
         try:
             parsed_areas = await self._prepare_label_write(name, label_id, areas)

@@ -928,10 +928,8 @@ class DevTools:
         """Manage ha-mcp server settings and the Tools/Policies/Backups surfaces (developer mode).
 
         Drives everything the web settings UI can change: the Server
-        Settings matrix (list/set/reset), the Tools tab (enable/disable/pin,
-        LLM-API exposure, and the per-tool security gate), the Tool Security
-        Policies editor (get_policy/set_policy), and the auto-backup config
-        (get_backup_config/set_backup_config). Use ha_dev_manage_server for
+        Settings matrix, the Tools tab, the Tool Security Policies editor,
+        and the auto-backup config. Use ha_dev_manage_server for
         the live approval queue and to restart.
 
         When NOT to use: for HA entity/automation configuration use the
@@ -1824,8 +1822,7 @@ class DevTools:
                 description=(
                     "info: deployment/version report; update_source: point the "
                     "ha_mcp_tools component's separate in-process server at a "
-                    "channel or pip spec and reinstall it (never changes the "
-                    "server serving this connection, unless embedded); "
+                    "channel or pip spec and reinstall it; "
                     "restart: restart this server; list_pending: list tool calls "
                     "blocked on a security-policy approval; approve / deny: decide "
                     "one blocked call by token"

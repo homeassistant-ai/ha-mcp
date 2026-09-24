@@ -208,8 +208,7 @@ class ThemesTools:
                     "Theme operation: 'list' installed themes, 'set' the "
                     "backend default theme, or read/restore the screenshot "
                     "engine account's own per-user theme with "
-                    "'get_engine_theme' / 'set_engine_theme' (a different "
-                    "layer from the backend default)."
+                    "'get_engine_theme' / 'set_engine_theme'."
                 ),
             ),
         ],
@@ -236,8 +235,7 @@ class ThemesTools:
                     "enforced like any other value; the guard is always "
                     "applied unless force is set. Best-effort, not atomic -- Home Assistant exposes no "
                     "conditional write, so a change landing between that read "
-                    "and the write is not caught. Pass the expected_current "
-                    "value quoted in the screenshot tool's warning."
+                    "and the write is not caught."
                 ),
                 default=None,
             ),
@@ -261,8 +259,7 @@ class ThemesTools:
                     "Frontend user-data theme object when "
                     "action='set_engine_theme', e.g. {'theme': '', "
                     "'dark': False}. An empty dict restores default/auto "
-                    "behavior. Take this verbatim from the warning a "
-                    "screenshot tool emitted."
+                    "behavior."
                 ),
                 default=None,
             ),

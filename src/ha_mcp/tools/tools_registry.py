@@ -892,7 +892,7 @@ class RegistryTools:
         device_id: Annotated[
             str | None,
             Field(
-                description="Device ID to retrieve details for. If omitted, lists devices.",
+                description="Device ID to retrieve details for.",
                 default=None,
             ),
         ] = None,
@@ -947,8 +947,7 @@ class RegistryTools:
                 default="summary",
                 description=(
                     "'summary': basic device info and protocol identifiers (default for list mode). "
-                    "'full': include entities and all integration details. "
-                    "Single device lookups always return full detail."
+                    "'full': include entities and all integration details."
                 ),
             ),
         ] = "summary",
@@ -1073,12 +1072,6 @@ class RegistryTools:
         Common workflow for full rename:
         1. ha_set_device(device_id="abc", name="Living Room Sensor")  # Rename device
         2. ha_set_entity("sensor.old", new_entity_id="sensor.living_room")  # Rename entities separately
-
-        PARAMETERS:
-        - name: Sets the user-defined display name (name_by_user)
-        - area_id: Assigns device to an area/room. Use '' to remove from area.
-        - disabled_by: Set to 'user' to disable, or empty to enable
-        - labels: List of labels (replaces existing labels)
 
         EXAMPLES:
         - Rename device: ha_set_device("abc123", name="Living Room Hub")

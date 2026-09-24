@@ -663,8 +663,7 @@ class AutomationConfigTools:
             dict[str, Any] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Complete automation configuration with required fields: 'alias', 'triggers', 'actions'. "
-                "Optional: 'description', 'conditions', 'mode', 'max', 'initial_state', 'variables'. "
+                description="Complete automation configuration. "
                 "Purpose-specific triggers/conditions (HA 2026.7+ default: 'trigger': '<domain>.<name>' "
                 "with 'target'/'options') are valid config. "
                 "Mutually exclusive with python_transform.",
@@ -675,8 +674,7 @@ class AutomationConfigTools:
             str | None,
             Field(
                 description="Target automation entity_id or HA config 'id' (unique_id). "
-                "Omit for creation with a generated ID. Values such as 'new' are literal IDs, not placeholders. "
-                "Required for python_transform.",
+                "Omit for creation with a generated ID. Values such as 'new' are literal IDs, not placeholders.",
                 default=None,
             ),
         ] = None,
@@ -685,7 +683,6 @@ class AutomationConfigTools:
             Field(
                 description="Python expression to transform existing automation config. "
                 "Mutually exclusive with config. "
-                "Requires identifier and config_hash for validation. "
                 "WARNING: Expressions with infinite loops will hang the server. "
                 "Examples: "
                 "Simple: python_transform=\"config['actions'][0]['data']['brightness'] = 255\" "
@@ -698,7 +695,6 @@ class AutomationConfigTools:
             str | None,
             Field(
                 description="Config hash from ha_config_get_automation for optimistic locking. "
-                "REQUIRED for python_transform (validates automation unchanged). "
                 "Required when a config update changes an existing automation's alias. "
                 "Otherwise optional for config updates (validates before full replacement if provided).",
             ),
@@ -709,15 +705,10 @@ class AutomationConfigTools:
                 description="Convert a blueprint-backed automation into an editable "
                 'standalone one -- the UI\'s "Take control". Renders the blueprint '
                 "with its current inputs and saves the result over the same "
-                "automation, which then has its own triggers/conditions/actions and "
-                "no 'use_blueprint'. Requires identifier; mutually exclusive with "
-                "config and python_transform. Irreversible: the link to the "
-                "blueprint is gone afterwards, so edit inputs instead if you only "
-                "want to change a value. Does NOT free the blueprint: Home "
-                "Assistant keeps counting the converted automation as a user, so "
-                "deleting that blueprint stays refused until the automation is "
-                "removed. To preview the rendering without writing anything, use "
-                'ha_manage_blueprints(action="substitute").',
+                "automation, which keeps its entity_id, alias and description and "
+                "then has its own triggers/conditions/actions and no "
+                "'use_blueprint'. Requires identifier; mutually exclusive with "
+                "config and python_transform.",
                 default=False,
             ),
         ] = False,
@@ -740,8 +731,7 @@ class AutomationConfigTools:
             Field(
                 description=(
                     "Turn the automation on (True) or off (False) after an optional config "
-                    "update; None leaves it unchanged. Can be used standalone with identifier "
-                    "and no config. Not written into the stored config: Home Assistant keeps "
+                    "update; None leaves it unchanged. Not written into the stored config: Home Assistant keeps "
                     "the state across restarts, but a config 'initial_state' overrides it "
                     "whenever the automation is reloaded or HA starts."
                 ),
@@ -819,7 +809,6 @@ class AutomationConfigTools:
 
         PYTHON TRANSFORM EXAMPLES (operate on the fetched config, which uses HA's
         canonical plural root keys 'triggers'/'actions'/'conditions'):
-        - Update action: python_transform="config['actions'][0]['data']['brightness'] = 255"
         - Add trigger: python_transform="config['triggers'].append({'trigger': 'state', 'entity_id': 'binary_sensor.motion', 'to': 'on'})"
         - Remove last action: python_transform="config['actions'].pop()"
 
@@ -847,7 +836,7 @@ class AutomationConfigTools:
 
         OPTIONAL CONFIG FIELDS (Regular Automations):
         - description: Detailed description of the user's intent (RECOMMENDED: helps safely modify implementation later)
-        - category: Category ID for organization (use ha_config_get_category to list, ha_config_set_category to create)
+        - category: Category ID for organization
         - conditions: Additional conditions that must be met
         - mode: 'single' (default), 'restart', 'queued', 'parallel'
         - max: Maximum concurrent executions (for queued/parallel modes)
@@ -932,13 +921,6 @@ class AutomationConfigTools:
         )
 
         TAKE CONTROL OF A BLUEPRINT AUTOMATION:
-
-        take_control_of_blueprint=True converts a blueprint-backed automation
-        into a standalone one — the UI's "Take control". The blueprint is
-        rendered with the automation's CURRENT inputs and the result is saved
-        over the same automation, which keeps its entity_id, alias and
-        description but gains its own triggers/conditions/actions and loses
-        'use_blueprint'.
 
         ha_config_set_automation(
             identifier="automation.motion_light_kitchen",
