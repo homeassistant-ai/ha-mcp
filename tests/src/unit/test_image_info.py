@@ -67,6 +67,36 @@ class TestJpeg:
         jpeg = b"\xff\xd8" + b"\xff\xe1" + (6).to_bytes(2, "big") + b"Exif"
         assert read_image_dimensions(jpeg, "jpeg") is None
 
+    def test_sof_length_shorter_than_dimension_fields_returns_none(self) -> None:
+        """A corrupt Lf that does not cover the fields must not be trusted.
+
+        The buffer keeps holding bytes after the declared segment, so a
+        file-level bounds check alone would read height/width from bytes
+        outside the segment (and report them as the image size).
+        """
+        jpeg = (
+            b"\xff\xd8"
+            + b"\xff\xc0"
+            + (3).to_bytes(2, "big")  # declares 1 payload byte; fields need 5
+            + b"\x08"
+            + (600).to_bytes(2, "big")
+            + (800).to_bytes(2, "big")
+            + b"\xff\xd9"
+        )
+        assert read_image_dimensions(jpeg, "jpeg") is None
+
+    def test_sof_length_exceeding_buffer_returns_none(self) -> None:
+        """A declared segment that runs past the end of the buffer is corrupt."""
+        jpeg = (
+            b"\xff\xd8"
+            + b"\xff\xc0"
+            + (30).to_bytes(2, "big")
+            + b"\x08"
+            + (600).to_bytes(2, "big")
+            + (800).to_bytes(2, "big")
+        )
+        assert read_image_dimensions(jpeg, "jpeg") is None
+
     def test_truncated_sof_returns_none(self) -> None:
         # SOF marker + length present, payload cut off.
         jpeg = b"\xff\xd8" + b"\xff\xc0" + (9).to_bytes(2, "big") + b"\x08\x02"
