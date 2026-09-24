@@ -124,7 +124,7 @@ class ConfigScriptTools:
         ],
     ) -> dict[str, Any]:
         """
-        Retrieve Home Assistant script configuration.
+        Get Home Assistant script configuration.
 
         Returns the complete configuration for a script, including sequence, mode, fields, and other settings.
 

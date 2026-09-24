@@ -115,7 +115,7 @@ class TraceTools:
         ] = "newest",
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        """Retrieve execution traces for automations and scripts to debug issues.
+        """Get execution traces for automations and scripts to debug issues.
 
         Traces show what triggered a run, which conditions passed or failed,
         which actions executed (for 'choose', which branch was taken), any
@@ -135,7 +135,8 @@ class TraceTools:
         3. Add logbook entries and context metadata: detailed=True. Script-style
            action paths (sequence/, numeric) are always matched regardless of
            this flag.
-        4. Full variables at every step: deduplicate=False.
+        4. Variables at every step (trigger sets and null entries are still
+           omitted): deduplicate=False.
         """
         try:
             # Determine domain from entity_id

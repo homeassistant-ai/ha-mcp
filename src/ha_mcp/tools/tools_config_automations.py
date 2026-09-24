@@ -546,7 +546,7 @@ class AutomationConfigTools:
         ],
     ) -> dict[str, Any]:
         """
-        Retrieve Home Assistant automation configuration.
+        Get Home Assistant automation configuration.
 
         Returns the complete configuration including triggers, conditions, actions, and mode settings.
 

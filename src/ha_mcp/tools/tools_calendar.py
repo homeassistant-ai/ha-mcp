@@ -191,7 +191,7 @@ class CalendarTools:
             Field(description="Maximum number of events to return", default=20),
         ] = 20,
     ) -> dict[str, Any]:
-        """Retrieve calendar events from a calendar entity within a time range.
+        """Get calendar events from a calendar entity within a time range.
 
         Returns each event's summary, start, end, description and location. To
         find calendar entities, use ha_search(domain_filter='calendar').

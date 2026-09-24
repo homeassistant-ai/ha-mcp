@@ -267,8 +267,8 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             str | None,
             Field(
                 description=(
-                    "system / error_log only: minimum level (ERROR, WARNING, "
-                    "INFO, DEBUG, CRITICAL)."
+                    "system / error_log only: keep only entries at exactly this level "
+                    "(ERROR, WARNING, INFO, DEBUG, CRITICAL); it is not a threshold."
                 )
             ),
         ] = None,
