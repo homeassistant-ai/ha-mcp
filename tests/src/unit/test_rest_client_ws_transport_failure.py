@@ -222,7 +222,7 @@ class TestRenderTemplateBranch:
         self, client: HomeAssistantClient, exc: Exception
     ) -> dict[str, Any]:
         ws_client = MagicMock()
-        ws_client.send_command_with_event = AsyncMock(side_effect=exc)
+        ws_client.subscribe_command = AsyncMock(side_effect=exc)
         with patch(
             "ha_mcp.client.websocket_client.get_websocket_client",
             new=AsyncMock(return_value=ws_client),
@@ -258,3 +258,206 @@ class TestRenderTemplateBranch:
 
         assert result["success"] is False
         assert "bad template" in result["error"]
+        assert result["client_error"] is True
+
+
+def _event(sub_id: int, **event: Any) -> dict[str, Any]:
+    return {"id": sub_id, "type": "event", "event": event}
+
+
+class TestRenderTemplateVerdict:
+    """What ``render_template`` returns for the frame sequences HA really sends.
+
+    Each case replays the events captured from Home Assistant 2026.9.3 for that
+    template (#2522); the result frame itself is consumed by
+    ``subscribe_command``, so only the events reach the queue.
+    """
+
+    async def _render(
+        self,
+        client: HomeAssistantClient,
+        events: list[dict[str, Any]],
+        **message: Any,
+    ) -> tuple[dict[str, Any], MagicMock]:
+        import asyncio
+
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        for event in events:
+            queue.put_nowait(event)
+        ws_client = MagicMock()
+        ws_client.subscribe_command = AsyncMock(return_value=(7, queue))
+        ws_client.release_subscription = AsyncMock()
+        with patch(
+            "ha_mcp.client.websocket_client.get_websocket_client",
+            new=AsyncMock(return_value=ws_client),
+        ):
+            result = await client.send_websocket_message(
+                {"type": "render_template", "template": "t", "timeout": 1, **message}
+            )
+        return result, ws_client
+
+    @pytest.mark.asyncio
+    async def test_result_is_returned_and_the_subscription_released(
+        self, client: HomeAssistantClient
+    ) -> None:
+        result, ws = await self._render(
+            client, [_event(7, result=2, listeners={"all": False})]
+        )
+        assert result == {
+            "success": True,
+            "result": 2,
+            "template": "t",
+            "listeners": {"all": False},
+        }
+        ws.release_subscription.assert_awaited_once_with(7)
+
+    @pytest.mark.asyncio
+    async def test_error_event_before_the_result_frame_is_the_error(
+        self, client: HomeAssistantClient
+    ) -> None:
+        result, ws = await self._render(
+            client,
+            [
+                _event(7, error="ZeroDivisionError: division by zero", level="ERROR"),
+                _event(7, error="ZeroDivisionError: division by zero", level="ERROR"),
+            ],
+        )
+        assert result["success"] is False
+        assert result["error"] == "ZeroDivisionError: division by zero"
+        ws.release_subscription.assert_awaited_once_with(7)
+
+    @pytest.mark.asyncio
+    async def test_the_class_named_error_is_preferred(
+        self, client: HomeAssistantClient
+    ) -> None:
+        bare = "'dict object' has no attribute 'split'"
+        result, _ = await self._render(
+            client,
+            [
+                _event(7, error=bare, level="ERROR"),
+                _event(7, error=f"UndefinedError: {bare}", level="ERROR"),
+            ],
+        )
+        assert result["error"] == f"UndefinedError: {bare}"
+
+    @pytest.mark.asyncio
+    async def test_warnings_ride_along_with_the_result(
+        self, client: HomeAssistantClient
+    ) -> None:
+        warning = "'undefined_var' is undefined"
+        result, _ = await self._render(
+            client,
+            [
+                _event(7, error=warning, level="WARNING"),
+                _event(7, error=warning, level="WARNING"),
+                _event(7, result="x", listeners={}),
+            ],
+        )
+        assert result["success"] is True
+        assert result["result"] == "x"
+        assert result["warnings"] == [warning]
+
+    @pytest.mark.asyncio
+    async def test_warnings_before_an_error_are_kept(
+        self, client: HomeAssistantClient
+    ) -> None:
+        result, _ = await self._render(
+            client,
+            [
+                _event(7, error="'a' is undefined", level="WARNING"),
+                _event(7, error="ZeroDivisionError: division by zero", level="ERROR"),
+            ],
+        )
+        assert result["success"] is False
+        assert result["error"] == "ZeroDivisionError: division by zero"
+        assert result["warnings"] == ["'a' is undefined"]
+
+    @pytest.mark.asyncio
+    async def test_unrecognised_events_are_skipped(
+        self, client: HomeAssistantClient
+    ) -> None:
+        result, _ = await self._render(
+            client,
+            [_event(7, error={"not": "a string"}), _event(7, result=1, listeners={})],
+        )
+        assert result["success"] is True
+        assert result["result"] == 1
+
+    @pytest.mark.asyncio
+    async def test_strict_and_variables_reach_home_assistant(
+        self, client: HomeAssistantClient
+    ) -> None:
+        _, ws = await self._render(
+            client,
+            [_event(7, result=42, listeners={})],
+            strict=True,
+            variables={"foo": 21},
+        )
+        kwargs = ws.subscribe_command.await_args.kwargs
+        assert kwargs["strict"] is True
+        assert kwargs["variables"] == {"foo": 21}
+        assert kwargs["report_errors"] is True
+        # The template's own timeout travels as a command field; the wait for
+        # Home Assistant's acknowledgement is a separate budget.
+        assert kwargs["timeout"] == 1
+        assert kwargs["wait_timeout"] == 3
+
+    @pytest.mark.asyncio
+    async def test_no_verdict_without_report_errors_says_why(self) -> None:
+        import asyncio
+
+        from ha_mcp.client.rest_client import (
+            RENDER_NO_VERDICT_WITHOUT_REPORT_ERRORS,
+            _read_render_verdict,
+        )
+
+        result = await _read_render_verdict(asyncio.Queue(), "t", 0.01, False)
+        assert result == {
+            "success": False,
+            "error": RENDER_NO_VERDICT_WITHOUT_REPORT_ERRORS,
+            "no_verdict": True,
+            "template": "t",
+        }
+
+    @pytest.mark.asyncio
+    async def test_lost_verdict_with_report_errors_is_an_event_timeout(self) -> None:
+        import asyncio
+
+        from ha_mcp.client.rest_client import _read_render_verdict
+
+        result = await _read_render_verdict(asyncio.Queue(), "t", 0.01, True)
+        assert result["error"] == "Event timeout - template result not received"
+        assert result["no_verdict"] is True
+
+    @pytest.mark.asyncio
+    async def test_closed_socket_is_a_connection_error(self) -> None:
+        import asyncio
+
+        from ha_mcp.client.rest_client import _read_render_verdict
+
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        queue.shutdown(immediate=True)
+        with pytest.raises(HomeAssistantConnectionError):
+            await _read_render_verdict(queue, "t", 1.0, True)
+
+    @pytest.mark.asyncio
+    async def test_rejected_command_keeps_home_assistant_message(
+        self, client: HomeAssistantClient
+    ) -> None:
+        ws_client = MagicMock()
+        ws_client.subscribe_command = AsyncMock(
+            side_effect=HomeAssistantCommandError(
+                "subscribe_command('render_template') failed: "
+                "Exceeded maximum execution time of 1.0s",
+                "template_error",
+            )
+        )
+        with patch(
+            "ha_mcp.client.websocket_client.get_websocket_client",
+            new=AsyncMock(return_value=ws_client),
+        ):
+            result = await client.send_websocket_message(
+                {"type": "render_template", "template": "t", "timeout": 1}
+            )
+        assert result["error"] == "Exceeded maximum execution time of 1.0s"
+        assert result["error_code"] == "template_error"

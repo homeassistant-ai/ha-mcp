@@ -281,18 +281,23 @@ generated README table, `site/src/data/tools.json`, and the Home Assistant app
 documentation. `sync-tool-docs.yml` regenerates them after merge; use
 `python scripts/extract_tools.py` only when local generated output is needed.
 
-Successful tool responses use:
-
-```python
-{"success": True, "data": result}
-{"success": True, "data": result, "warnings": ["Actionable warning"]}
-```
+A tool returns a dict of its result fields. FastMCP sends a returned dict as
+the MCP result's `structuredContent` exactly as returned, with its JSON
+serialization as a text block for older clients, and the MCP specification
+places no requirement on that object's keys beyond a declared `outputSchema`.
+Success and failure are signalled at the protocol level instead: a failure
+raises `ToolError`, which sets `isError: true`. The dict itself therefore
+carries the result fields directly (`{"success": True, "entity_id": ...,
+"state": ...}`); nest them under a key such as `data` only where the payload is
+itself one record distinct from the response metadata, as `ha_config_set_helper`
+does. Whatever shape a tool chooses, it returns that one shape on every branch,
+so a caller never has to guess which key holds the result (issue #1293).
 
 `warnings` is always a top-level `list[str]`, omitted when empty. It is
-never nested in `data` and never represented by a singular `warning`
+never nested in a payload key and never represented by a singular `warning`
 string. Tool-level failure raises `ToolError`; only an item inside a batch
 result may use `{"success": False, "error": {...}}`.
-For the canonical shared response shape, see
+For a tool that builds its response on several branches, see
 `tools_config_helpers.py::HelperResponse` / `_helper_response` and
 `tests/src/unit/test_helper_response_shape.py`.
 

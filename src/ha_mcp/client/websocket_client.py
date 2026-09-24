@@ -155,6 +155,9 @@ class WebSocketConnectionState:
         # registered for a given id, every event with that id is pushed
         # into it instead of going to ``event_type``-keyed handlers.
         self._subscription_queues: dict[int, asyncio.Queue[dict[str, Any]]] = {}
+        # Ids of subscribe commands whose caller gave up before Home Assistant
+        # acknowledged them. See ``take_abandoned_subscription``.
+        self._abandoned_subscriptions: set[int] = set()
 
     def next_message_id(self) -> int:
         """Reserve the next available WebSocket message identifier."""
@@ -213,6 +216,24 @@ class WebSocketConnectionState:
             # Same GC guard as cancel_pending_request above.
             future.exception()
 
+    def mark_abandoned_subscription(self, message_id: int) -> None:
+        """Record a subscribe command whose acknowledgement nobody awaits."""
+        self._abandoned_subscriptions.add(message_id)
+
+    def take_abandoned_subscription(self, message_id: int) -> bool:
+        """Forget an abandoned subscribe command; True if it was one.
+
+        Home Assistant may register a subscription only after the caller has
+        given up and the immediate release answered ``not_found`` — a
+        ``render_template`` setup waits out the template's own timeout first.
+        Its late acknowledgement then arrives with no pending request, and
+        this is how the dispatch recognises that it still has to release it.
+        """
+        if message_id in self._abandoned_subscriptions:
+            self._abandoned_subscriptions.discard(message_id)
+            return True
+        return False
+
     def store_auth_message(self, message_type: str, data: dict[str, Any]) -> None:
         """Store an authentication handshake message."""
         self._auth_messages[message_type] = data
@@ -267,6 +288,8 @@ class WebSocketConnectionState:
         for queue in self._subscription_queues.values():
             queue.shutdown(immediate=True)
         self._subscription_queues.clear()
+        # Subscriptions die with the socket, and ids restart on the next one.
+        self._abandoned_subscriptions.clear()
 
         self._auth_messages.clear()
 
@@ -370,6 +393,9 @@ class HomeAssistantWebSocketClient:
         self._send_lock: asyncio.Lock | None = None
         self._lock_loop: asyncio.AbstractEventLoop | None = None
         self._state = WebSocketConnectionState()
+        # Releases of subscriptions acknowledged after their caller gave up,
+        # held here so the tasks are not garbage-collected mid-flight.
+        self._late_releases: set[asyncio.Task[None]] = set()
         # Reason the most recent connect() attempt failed (exception text),
         # or None. Surfaced by callers so the agent sees *why* a WebSocket
         # connection failed instead of an opaque "Failed to connect" string.
@@ -594,12 +620,23 @@ class HomeAssistantWebSocketClient:
             self._state.store_auth_message(message_type, data)
             return
 
-        # Handle command responses
-        if message_id is not None:
+        # Handle command responses. An event frame is never the reply to a
+        # command, even when it shares the command's id and arrives first:
+        # render_template reports template errors as events before its result
+        # frame (#2522).
+        if message_id is not None and message_type != "event":
             future = self._state.resolve_pending_request(message_id)
             if future:
                 if not future.cancelled():
                     future.set_result(data)
+                return
+            if self._state.take_abandoned_subscription(message_id):
+                if message_type == "result" and data.get("success"):
+                    task = asyncio.ensure_future(
+                        self._release_abandoned_subscription(message_id)
+                    )
+                    self._late_releases.add(task)
+                    task.add_done_callback(self._late_release_done)
                 return
 
         # Handle events
@@ -818,9 +855,9 @@ class HomeAssistantWebSocketClient:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Send a command that returns a result followed by an event response.
 
-        Some HA WebSocket commands (e.g. system_health/info, render_template)
-        reply with an immediate result message and then deliver the actual data
-        in a subsequent event message sharing the same message ID.
+        Some HA WebSocket commands (e.g. system_health/info) reply with an
+        immediate result message and then deliver the actual data in a
+        subsequent event message sharing the same message ID.
 
         Args:
             command_type: Type of command to send.
@@ -945,6 +982,7 @@ class HomeAssistantWebSocketClient:
             # something that was never registered answers not_found, which
             # the release treats as its ordinary outcome.
             self.cancel_pending_response(message_id)
+            self._state.mark_abandoned_subscription(message_id)
             await self._run_cleanup(
                 self._release_abandoned_subscription(message_id),
                 f"abandoned subscribe_events({message_id})",
@@ -964,6 +1002,7 @@ class HomeAssistantWebSocketClient:
             # it is this operation's job, not the caller's, because the id it
             # needs is the one the caller never receives.
             self.cancel_pending_response(message_id)
+            self._state.mark_abandoned_subscription(message_id)
             await self._run_cleanup(
                 self._release_abandoned_subscription(message_id),
                 f"abandoned subscribe_events({message_id})",
@@ -1019,8 +1058,10 @@ class HomeAssistantWebSocketClient:
                 e,
             )
 
-    async def _run_cleanup(self, coro: Coroutine[Any, Any, None], what: str) -> None:
+    async def _run_cleanup(self, coro: Coroutine[Any, Any, None], what: str) -> bool:
         """Run ``coro`` to completion or to a deadline, from a cancelled path.
+
+        Returns whether it finished; False means the deadline stopped it.
 
         Cleanup scheduled while a cancellation is propagating cannot simply
         be awaited: the await is cancelled in turn, and under a cancel scope
@@ -1083,9 +1124,11 @@ class HomeAssistantWebSocketClient:
                 # stop it, then collect the outcome so a late failure does
                 # not surface as an orphaned "exception was never
                 # retrieved".
-                if not task.done():
+                finished = task.done()
+                if not finished:
                     task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+        return finished
 
     async def _release_abandoned_subscription(self, message_id: int) -> None:
         """Ask Home Assistant to drop a subscription we can no longer name.
@@ -1145,7 +1188,7 @@ class HomeAssistantWebSocketClient:
         self,
         command_type: str,
         *,
-        timeout: float = 30.0,
+        wait_timeout: float = 30.0,
         **kwargs: Any,
     ) -> tuple[int, asyncio.Queue[dict[str, Any]]]:
         """Send a subscribe-style command and return (subscription_id, queue).
@@ -1158,10 +1201,15 @@ class HomeAssistantWebSocketClient:
         event-type handler registry; use this method for everything
         else.
 
+        ``wait_timeout`` is named apart from ``**kwargs`` because those become
+        fields of the command, and some commands (``render_template``) carry a
+        ``timeout`` field of their own.
+
         Returns:
             (subscription_id, queue) — ``await queue.get()`` yields each
             incoming ``{"id": N, "type": "event", "event": ...}`` payload.
-            Cancel the subscription via :meth:`unsubscribe_command`.
+            Cancel the subscription via :meth:`unsubscribe_command`, or
+            :meth:`release_subscription` from a ``finally``.
         """
         if not self._state.is_ready:
             raise HomeAssistantConnectionError("WebSocket not authenticated")
@@ -1183,20 +1231,34 @@ class HomeAssistantWebSocketClient:
         except BaseException:
             # Cancellation mid-send: skips the clause above and would leave BOTH
             # the queue and the pending future registered — the queue never
-            # drains and buffers every later event for this id forever.
+            # drains and buffers every later event for this id forever. The
+            # frame may already be on the wire, so release it on Home
+            # Assistant's side too, as subscribe_events does.
             self._state.unregister_subscription_queue(message_id)
             self.cancel_pending_response(message_id)
+            self._state.mark_abandoned_subscription(message_id)
+            await self._run_cleanup(
+                self._release_abandoned_subscription(message_id),
+                f"abandoned {command_type}({message_id})",
+            )
             raise
 
         try:
-            response = await asyncio.wait_for(result_future, timeout=timeout)
+            response = await asyncio.wait_for(result_future, timeout=wait_timeout)
         except BaseException:
             # A cancelled caller leaks the pending future AND the subscription
             # queue, which keeps accumulating events with no reader. The
-            # cleanup is exception-type-independent and the original exception
-            # re-raises unchanged.
+            # command is on the wire, so Home Assistant may have registered
+            # the subscription: the caller never receives its id, so releasing
+            # it is this method's job. The original exception re-raises
+            # unchanged.
             self._state.unregister_subscription_queue(message_id)
             self.cancel_pending_response(message_id)
+            self._state.mark_abandoned_subscription(message_id)
+            await self._run_cleanup(
+                self._release_abandoned_subscription(message_id),
+                f"abandoned {command_type}({message_id})",
+            )
             raise
 
         if response.get("type") == "result" and response.get("success"):
@@ -1207,6 +1269,65 @@ class HomeAssistantWebSocketClient:
         raise HomeAssistantCommandError(
             f"subscribe_command({command_type!r}) failed: {error_msg}", error_code
         )
+
+    async def release_subscription(self, subscription_id: int) -> None:
+        """Release a :meth:`subscribe_command` subscription from a ``finally``.
+
+        Unlike :meth:`unsubscribe_command` this never raises and survives the
+        caller's cancellation: a failed or timed-out release must not replace
+        the result the caller already has, and a cancelled caller must still
+        release, or Home Assistant keeps the subscription for the life of the
+        socket.
+        """
+        self._state.unregister_subscription_queue(subscription_id)
+        socket = self.websocket
+        if await self._run_cleanup(
+            self._release_abandoned_subscription(subscription_id),
+            f"subscription {subscription_id}",
+        ):
+            return
+        # The deadline stopped the release before ``unsubscribe_events`` went
+        # out (the send lock was held throughout), and the subscription's ack
+        # has already been consumed, so nothing else will release it.
+        task = asyncio.ensure_future(self._finish_release(subscription_id, socket))
+        self._late_releases.add(task)
+        task.add_done_callback(self._late_release_done)
+
+    def _late_release_done(self, task: asyncio.Task[None]) -> None:
+        """Collect cleanup outcomes while keeping unexpected failures visible."""
+        self._late_releases.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if isinstance(error, HomeAssistantCommandTimeout) and self._state.is_ready:
+            logger.warning(
+                "Background subscription release timed out; could not confirm "
+                "subscription cleanup in Home Assistant"
+            )
+        elif isinstance(
+            error,
+            (
+                HomeAssistantConnectionError,
+                HomeAssistantCommandTimeout,
+                websockets.exceptions.ConnectionClosed,
+            ),
+        ):
+            logger.debug("Background subscription release failed: %s", error)
+        elif error is not None:
+            logger.error(
+                "Unexpected background subscription release failure",
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    async def _finish_release(self, subscription_id: int, socket: Any) -> None:
+        """Complete a release the cleanup deadline cut short, on the same socket.
+
+        A reconnect drops the subscription with the old socket and restarts
+        message ids, so on a new socket the id could name an unrelated one.
+        """
+        if self.websocket is not socket:
+            return
+        await self._release_abandoned_subscription(subscription_id)
 
     async def unsubscribe_command(
         self,

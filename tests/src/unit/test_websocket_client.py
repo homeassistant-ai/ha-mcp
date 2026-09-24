@@ -6,6 +6,8 @@ for both standard Home Assistant installations and Supervisor proxy environments
 
 import asyncio
 import logging
+from typing import Any
+from unittest.mock import AsyncMock
 
 import anyio
 import pytest
@@ -286,6 +288,30 @@ class TestSendCommandErrorContract:
             await task
 
         assert client._state._event_responses == {}
+
+    @pytest.mark.asyncio
+    async def test_send_command_with_event_pairs_an_early_event_correctly(self):
+        """An event arriving before its result frame is the event, not the result.
+
+        Routed through the real ``_process_message`` dispatch, the early event
+        used to resolve the result future (#2522).
+        """
+        client = self._prepare_client()
+
+        async def _event_then_result(message: dict) -> None:
+            await client._process_message(
+                {"id": message["id"], "type": "event", "event": {"info": 1}}
+            )
+            await client._process_message(
+                {"id": message["id"], "type": "result", "success": True}
+            )
+
+        client.send_json_message = _event_then_result  # type: ignore[method-assign]
+
+        result, event = await client.send_command_with_event("system_health/info")
+
+        assert result["type"] == "result"
+        assert event["event"] == {"info": 1}
 
     @pytest.mark.asyncio
     async def test_send_command_raises_on_string_error(self):
@@ -1428,6 +1454,223 @@ class TestSubscribeCommand:
         event = await asyncio.wait_for(queue.get(), timeout=1.0)
         assert event["id"] == sub_id
         assert event["event"]["repository_id"] == 999
+
+    @pytest.mark.asyncio
+    async def test_event_before_ack_through_dispatch_does_not_resolve_the_ack(self):
+        """An early event on the wire must not be taken for the command's result.
+
+        ``render_template`` with ``report_errors`` sends the template error as
+        an event BEFORE its result frame (#2522). Routed through the real
+        ``_process_message`` dispatch, that event used to resolve the pending
+        result future, so the command read as failed with an empty error
+        (``Command failed: {}``) and the error text was lost.
+        """
+        client = self._prepare_client()
+
+        async def _event_then_result(message: dict) -> None:
+            sub_id = message["id"]
+            await client._process_message(
+                {
+                    "id": sub_id,
+                    "type": "event",
+                    "event": {"error": "ZeroDivisionError", "level": "ERROR"},
+                }
+            )
+            await client._process_message(
+                {"id": sub_id, "type": "result", "success": True, "result": None}
+            )
+
+        client.send_json_message = _event_then_result  # type: ignore[method-assign]
+
+        sub_id, queue = await client.subscribe_command("render_template")
+
+        event = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert event["id"] == sub_id
+        assert event["event"] == {"error": "ZeroDivisionError", "level": "ERROR"}
+        assert not client._state._pending_requests
+
+    @pytest.mark.asyncio
+    async def test_timeout_field_is_sent_and_wait_timeout_is_the_wait(
+        self, monkeypatch
+    ):
+        """A command's own ``timeout`` field reaches HA; the ack wait is separate.
+
+        ``render_template`` carries a ``timeout`` field, so the ack budget must
+        not share that keyword with the ``**kwargs`` that become the command.
+        """
+        client = self._prepare_client()
+        captured: dict[str, Any] = {}
+
+        async def _resolve(message: dict) -> None:
+            captured["msg"] = message
+            await client._process_message(
+                {"id": message["id"], "type": "result", "success": True}
+            )
+
+        client.send_json_message = _resolve  # type: ignore[method-assign]
+        real_wait_for = asyncio.wait_for
+
+        async def _spy(coro, timeout):
+            captured.setdefault("waits", []).append(timeout)
+            return await real_wait_for(coro, timeout)
+
+        monkeypatch.setattr("ha_mcp.client.websocket_client.asyncio.wait_for", _spy)
+
+        await client.subscribe_command("render_template", wait_timeout=7, timeout=3)
+
+        assert captured["msg"]["timeout"] == 3
+        assert captured["waits"] == [7]
+
+    @pytest.mark.asyncio
+    async def test_release_subscription_never_raises(self):
+        """A release that fails must not replace the caller's result."""
+        client = self._prepare_client()
+
+        async def _resolve(message: dict) -> None:
+            await client._process_message(
+                {"id": message["id"], "type": "result", "success": True}
+            )
+
+        client.send_json_message = _resolve  # type: ignore[method-assign]
+        sub_id, _queue = await client.subscribe_command("render_template")
+
+        from ha_mcp.client.websocket_client import HomeAssistantCommandTimeout
+
+        client.send_command = AsyncMock(  # type: ignore[method-assign]
+            side_effect=HomeAssistantCommandTimeout("no answer")
+        )
+        await client.release_subscription(sub_id)
+
+        client.send_command.assert_awaited_once_with(
+            "unsubscribe_events", subscription=sub_id
+        )
+        assert not client._state._subscription_queues
+
+    @pytest.mark.asyncio
+    async def test_ack_timeout_releases_the_subscription(self, monkeypatch):
+        """HA may have registered it; the caller never learns the id to release."""
+        client = self._prepare_client()
+
+        async def _drop(message: dict) -> None:
+            return None
+
+        client.send_json_message = _drop  # type: ignore[method-assign]
+        released: list[int] = []
+
+        async def _release(message_id: int) -> None:
+            released.append(message_id)
+
+        monkeypatch.setattr(client, "_release_abandoned_subscription", _release)
+
+        with pytest.raises(TimeoutError):
+            await client.subscribe_command("render_template", wait_timeout=0.01)
+
+        assert len(released) == 1
+        assert not client._state._subscription_queues
+
+    async def _abandon_one(self, client, monkeypatch) -> tuple[int, list[int]]:
+        """Abandon a subscribe before its ack; return (id, release calls)."""
+        sent: dict[str, int] = {}
+
+        async def _drop(message: dict) -> None:
+            sent["id"] = message["id"]
+
+        client.send_json_message = _drop  # type: ignore[method-assign]
+        released: list[int] = []
+
+        async def _release(message_id: int) -> None:
+            released.append(message_id)
+
+        monkeypatch.setattr(client, "_release_abandoned_subscription", _release)
+        with pytest.raises(TimeoutError):
+            await client.subscribe_command("render_template", wait_timeout=0.01)
+        return sent["id"], released
+
+    @pytest.mark.asyncio
+    async def test_late_ack_of_an_abandoned_subscription_is_released(self, monkeypatch):
+        """HA can register the subscription after the immediate release.
+
+        ``render_template`` registers only after its guarded render, so the
+        cancel-time ``unsubscribe_events`` can answer ``not_found`` and the
+        subscription appears afterwards. Its late ack must trigger a release.
+        """
+        client = self._prepare_client()
+        sub_id, released = await self._abandon_one(client, monkeypatch)
+        assert released == [sub_id]
+
+        await client._process_message(
+            {"id": sub_id, "type": "result", "success": True, "result": None}
+        )
+        await asyncio.gather(*client._late_releases)
+
+        assert released == [sub_id, sub_id]
+        assert not client._state._abandoned_subscriptions
+
+    @pytest.mark.asyncio
+    async def test_late_rejection_of_an_abandoned_subscription_is_dropped(
+        self, monkeypatch
+    ):
+        client = self._prepare_client()
+        sub_id, released = await self._abandon_one(client, monkeypatch)
+
+        await client._process_message(
+            {"id": sub_id, "type": "result", "success": False, "error": {}}
+        )
+
+        assert released == [sub_id]
+        assert not client._late_releases
+        assert not client._state._abandoned_subscriptions
+
+    async def _release_cut_short(self, client, monkeypatch, *, swap_socket: bool):
+        """Run release_subscription with a first attempt the deadline cuts off.
+
+        Stands in for a send lock held past the cleanup deadline: the first
+        release never gets to send; any later attempt returns at once.
+        """
+        monkeypatch.setattr(
+            "ha_mcp.client.websocket_client.CLEANUP_TIMEOUT_SECONDS", 0.01
+        )
+        attempts: list[int] = []
+
+        async def _release(message_id: int) -> None:
+            attempts.append(message_id)
+            if len(attempts) == 1:
+                await asyncio.Event().wait()
+
+        monkeypatch.setattr(client, "_release_abandoned_subscription", _release)
+        original_socket = object()
+        client.websocket = original_socket
+        await client.release_subscription(7)
+        if swap_socket:
+            client.websocket = object()
+        await asyncio.gather(*client._late_releases)
+        return attempts
+
+    @pytest.mark.asyncio
+    async def test_release_cut_short_by_the_deadline_is_finished(self, monkeypatch):
+        """The ack is already consumed, so nothing else would release it."""
+        client = self._prepare_client()
+        attempts = await self._release_cut_short(client, monkeypatch, swap_socket=False)
+        assert attempts == [7, 7]
+        assert not client._late_releases
+
+    @pytest.mark.asyncio
+    async def test_release_is_not_finished_on_a_new_socket(self, monkeypatch):
+        """A reconnect restarts ids, so the old id could name another subscription."""
+        client = self._prepare_client()
+        attempts = await self._release_cut_short(client, monkeypatch, swap_socket=True)
+        assert attempts == [7]
+
+    @pytest.mark.asyncio
+    async def test_reset_forgets_abandoned_subscriptions(self, monkeypatch):
+        """The socket that held them is gone, and ids restart on the next one."""
+        client = self._prepare_client()
+        await self._abandon_one(client, monkeypatch)
+        assert client._state._abandoned_subscriptions
+
+        client._state.reset_connection()
+
+        assert not client._state._abandoned_subscriptions
 
     @pytest.mark.asyncio
     async def test_unsubscribe_command_drops_queue_and_sends_unsubscribe(self):
