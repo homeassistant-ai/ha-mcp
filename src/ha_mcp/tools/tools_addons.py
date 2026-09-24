@@ -1302,7 +1302,7 @@ def _validate_addon_access(
                 ErrorCode.SERVICE_CALL_FAILED,
                 f"App (add-on) '{addon_name}' is not running (state: {addon.get('state')})",
                 suggestions=[
-                    f"Start the app (add-on) first with: ha_call_service('hassio', 'addon_start', {{'addon': '{slug}'}})",
+                    f"Start the app (add-on) first with: ha_manage_app(slug='{slug}', action='start')",
                 ],
                 context={"slug": slug, "state": addon.get("state")},
             )

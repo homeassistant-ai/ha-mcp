@@ -6,7 +6,7 @@ Home Assistant script configurations.
 """
 
 import logging
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
 from pydantic import Field
 
@@ -95,6 +95,11 @@ def _strip_empty_script_fields(config: dict[str, Any]) -> dict[str, Any]:
         del cleaned["sequence"]
 
     return cleaned
+
+
+def _skip_script_run_backup(kwargs: dict[str, Any]) -> bool:
+    """Skip config snapshots for a run start/stop (no config change)."""
+    return kwargs.get("run") is not None
 
 
 class ConfigScriptTools:
@@ -473,7 +478,9 @@ class ConfigScriptTools:
             "title": "Create or Update Script",
         },
     )
-    @with_auto_backup(domain="script", id_param="script_id")
+    @with_auto_backup(
+        domain="script", id_param="script_id", skip_fn=_skip_script_run_backup
+    )
     @log_tool_usage
     async def ha_config_set_script(
         self,
@@ -539,6 +546,31 @@ class ConfigScriptTools:
                 default=True,
             ),
         ] = True,
+        run: Annotated[
+            Literal["start", "stop"] | None,
+            Field(
+                description=(
+                    "Run control, used alone with script_id (no config, "
+                    "python_transform or take_control_of_blueprint): 'start' runs "
+                    "the script (script.turn_on; returns once it has started, "
+                    "without waiting for it to finish), 'stop' stops its running "
+                    "executions (script.turn_off). Stopping does not disable the "
+                    "script; Home Assistant has no script enable/disable."
+                ),
+                default=None,
+            ),
+        ] = None,
+        variables: Annotated[
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "With run='start': values for the script's fields, passed to "
+                    "the run as its variables."
+                ),
+                default=None,
+            ),
+        ] = None,
         MandatoryBPS: Annotated[
             bool,
             Field(default=True),
@@ -569,6 +601,10 @@ class ConfigScriptTools:
           'use_blueprint' {path, input} (blueprint-based).
         - take_control_of_blueprint: convert a blueprint-backed script into a
           standalone one. Takes no config of its own.
+        - run (alone with script_id): 'start' runs the script (optional
+          variables), 'stop' stops its running executions. Write config changes
+          in a separate call first: Home Assistant signals no completion of the
+          script reload a write triggers.
 
         EXAMPLES:
         - Create: ha_config_set_script(script_id="blink_light", config={"alias": "Light Blink", "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.living_room"}}, {"delay": {"seconds": 2}}, {"action": "light.turn_off", "target": {"entity_id": "light.living_room"}}]})
@@ -611,6 +647,17 @@ class ConfigScriptTools:
                 ],
                 context={"action": "set"},
             )
+            if run is not None or variables is not None:
+                return await self._run_script_control(
+                    script_id,
+                    run,
+                    variables,
+                    has_write=config is not None
+                    or python_transform is not None
+                    or take_control_of_blueprint,
+                    category=category,
+                    MandatoryBPS=MandatoryBPS,
+                )
             validate_write_modes(
                 "script",
                 "script_id",
@@ -746,6 +793,82 @@ class ConfigScriptTools:
             )
             augment_error_dict_with_skill_content(error, bp_warnings)
             raise_tool_error(error)
+
+    async def _run_script_control(
+        self,
+        script_id: str,
+        run: str | None,
+        variables: dict[str, Any] | None,
+        *,
+        has_write: bool,
+        category: str | None,
+        MandatoryBPS: bool,
+    ) -> dict[str, Any]:
+        """Start or stop a script without touching its config."""
+        problem = None
+        if run is None:
+            problem = "variables only apply with run='start'"
+        elif has_write:
+            problem = (
+                "run cannot be combined with config, python_transform or "
+                "take_control_of_blueprint"
+            )
+        elif category is not None:
+            problem = "category requires a config update"
+        elif variables is not None and run != "start":
+            problem = "variables only apply with run='start'"
+        if problem:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    problem,
+                    suggestions=[
+                        "Write the script config in one call, then start or stop "
+                        + "it in a second call with only script_id and run",
+                        "Pass variables together with run='start'",
+                    ],
+                    context={"action": "run", "script_id": script_id, "run": run},
+                )
+            )
+        # An existing script needs one registry lookup, not a registration poll.
+        entity_id = await resolve_entity_id_after_write(
+            self._client, script_id, "script", timeout=0
+        )
+        # HA's script services are a silent no-op on an unknown entity.
+        try:
+            await self._client.get_entity_state(entity_id)
+        except HomeAssistantAPIError as e:
+            if e.status_code == 404:
+                await self._raise_script_not_found(script_id)
+            raise
+        data: dict[str, Any] = {"entity_id": entity_id}
+        if variables:
+            data["variables"] = variables
+        service = "turn_on" if run == "start" else "turn_off"
+        try:
+            await self._client.call_service("script", service, data)
+        except (
+            HomeAssistantAPIError,
+            HomeAssistantAuthError,
+            HomeAssistantConnectionError,
+        ) as exc:
+            exception_to_structured_error(
+                exc,
+                context={"action": run, "script_id": script_id, "entity_id": entity_id},
+            )
+        response: dict[str, Any] = {
+            "success": True,
+            "action": run,
+            "script_id": script_id,
+            "entity_id": entity_id,
+        }
+        attach_skill_content(
+            response,
+            MandatoryBPS=MandatoryBPS,
+            canonical_files=_SCRIPT_SKILL_FILES,
+            referenced_files=None,
+        )
+        return response
 
     async def _prepare_script_transform(
         self, script_id: str, config_hash: str | None, python_transform: str

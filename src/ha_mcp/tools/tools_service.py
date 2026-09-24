@@ -1295,8 +1295,8 @@ class ServiceTools:
         if not command_type:
             raise_tool_error(
                 create_validation_error(
-                    "ws_command must be a non-empty WebSocket command type, "
-                    "e.g. 'repairs/ignore_issue'.",
+                    "ws_command must be a non-empty WebSocket command type "
+                    "(the message's 'type' field).",
                     parameter="ws_command",
                 )
             )
@@ -1370,10 +1370,8 @@ class ServiceTools:
                     str(error_msg),
                     context={"ws_command": command_type},
                     suggestions=[
-                        "Verify the command type and its parameters (e.g. "
-                        + "repairs/ignore_issue needs domain, issue_id, ignore)",
-                        "Confirm the target still exists (a repair must be "
-                        + "present to ignore it)",
+                        "Verify the command type and the parameters it requires",
+                        "Confirm the target still exists",
                     ],
                 )
             )
@@ -1933,8 +1931,8 @@ class ServiceTools:
                 default=None,
                 description=(
                     "Advanced escape hatch: send a raw one-shot Home Assistant "
-                    "WebSocket command that is NOT a registered service (e.g. "
-                    "'repairs/ignore_issue' to dismiss a Repairs issue). When set, "
+                    "WebSocket command that is NOT a registered service and that "
+                    "no dedicated tool covers. When set, "
                     "omit domain/service and the other service params. "
                     "Streaming/two-phase and "
                     "service-invoking commands (call_service, execute_script) are "
@@ -1943,15 +1941,24 @@ class ServiceTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Execute Home Assistant services to control entities and trigger automations.
+        """Call any Home Assistant service or one-shot WebSocket command: the catch-all escape hatch.
 
-        This is the universal tool for controlling all Home Assistant entities. Services follow
-        the pattern domain.service (e.g., light.turn_on, climate.set_temperature).
+        When NOT to use: a dedicated tool that covers the job. It validates the
+        request, reports the outcome in its own terms, and stays available where
+        a security policy gates this tool. For example: turn an automation on or
+        off or run it now with ha_config_set_automation (enabled / run_actions);
+        start or stop a script with ha_config_set_script (run); activate a scene
+        with ha_config_set_scene (activate); manage apps (add-ons) with
+        ha_manage_app; handle updates and Repairs issues with ha_manage_updates;
+        set an integration's log level with ha_set_integration (log_level).
+
+        When to use: a service no dedicated tool covers. Services follow the
+        pattern domain.service (e.g., light.turn_on, climate.set_temperature);
+        ha_list_services lists them with their fields.
 
         EXAMPLES:
         - ha_call_service("light", "turn_on", entity_id="light.living_room")
         - ha_call_service("climate", "set_temperature", entity_id="climate.thermostat", data={"temperature": 22})
-        - ha_call_service("automation", "trigger", entity_id="automation.morning_routine")
 
         Result compaction (default ON): ``result`` is trimmed to the targeted
         entity's record (drops parent-group propagation) and stripped of
@@ -1961,15 +1968,12 @@ class ServiceTools:
         For detailed service documentation, use ha_get_skill_guide.
 
         **WebSocket command escape hatch (advanced):**
-        A few Home Assistant operations are WebSocket-only commands, not
-        registered services — most notably dismissing a Repairs issue. Pass
-        ``ws_command`` (instead of domain/service) to send one, with its
-        parameters in ``data``:
-        ha_call_service(ws_command="repairs/ignore_issue", data={"domain": "sun", "issue_id": "abc", "ignore": True})
-        (get domain/issue_id from ha_get_overview repairs or ha_get_system_health
-        include="repairs"). Only one-shot request/response commands are
-        supported, and the other service parameters (entity_id,
-        return_response, etc.) don't apply.
+        Some Home Assistant operations are WebSocket-only commands, not
+        registered services. Pass ``ws_command`` (instead of domain/service) to
+        send one no dedicated tool covers, with its parameters in ``data``:
+        ha_call_service(ws_command="<command type>", data={...}). Only one-shot
+        request/response commands are supported, and the other service
+        parameters (entity_id, return_response, etc.) don't apply.
 
         Unavailable in Read Only Mode, including read-like services and WebSocket
         commands. Use dedicated read tools while that mode is enabled.

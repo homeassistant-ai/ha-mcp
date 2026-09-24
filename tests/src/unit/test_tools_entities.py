@@ -1711,7 +1711,11 @@ class TestHaSetEntityRegistryDisableGuardrail:
 
         error_text = str(exc_info.value)
         assert "script" in error_text.lower()
-        assert "turn_off" in error_text
+        assert (
+            "ha_config_set_script(script_id='script.my_script', run='stop')"
+            in error_text
+        )
+        assert "ha_call_service" not in error_text
         assert "only to stop a currently running execution" in error_text
         assert "does not disable the script" in error_text
         assert "no script runtime enable/disable service" in error_text.lower()

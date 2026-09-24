@@ -90,6 +90,33 @@ async def _resolve_config_entry_backup_domain(
     return "helper_template" if entry.get("domain") == "template" else domain
 
 
+def _reject_set_integration_mode_conflicts(
+    entry_id: str | None,
+    domain: str | None,
+    enabled: bool | None,
+    config: dict[str, Any] | None,
+) -> None:
+    """Reject ha_set_integration argument combinations that name two modes."""
+    if domain is not None and entry_id is not None:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "Pass either 'domain' (add a new integration) or "
+                "'entry_id' (modify an existing one), not both",
+                context={"entry_id": entry_id, "domain": domain},
+            )
+        )
+    if enabled is not None and (domain is not None or config is not None):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "'enabled' is mutually exclusive with 'domain' and "
+                "'config' — enable/disable is a separate call",
+                context={"entry_id": entry_id, "domain": domain},
+            )
+        )
+
+
 # The ``ha_mcp_tools`` component command that serves config entries (identity +
 # already-materialized ``options`` + ``subentries``) from HA's live registry in
 # one in-process frame, replacing the REST list-all + OptionsFlow start/abort
@@ -750,7 +777,8 @@ class IntegrationTools:
 
         Each entry carries ``log_level``: the canonical Python logger level name
         (``DEBUG``/``INFO``/``WARNING``/``ERROR``/``CRITICAL``) when the
-        integration has a ``logger.set_level`` override, or ``"DEFAULT"``
+        integration has a log-level override (set one with
+        ``ha_set_integration(log_level=...)``), or ``"DEFAULT"``
         (uppercase sentinel) when no override is set; and ``log_level_raw``: the
         original numeric level (e.g. ``10`` for DEBUG) when HA returned an int,
         ``None`` otherwise. This is distinct from the app side, where
@@ -1781,7 +1809,9 @@ class IntegrationTools:
         domain_resolver=_resolve_config_entry_backup_domain,
         # Every reconfigure request validates the entry and confirmation before
         # the inner apply helper captures the normal edit snapshot.
-        skip_fn=lambda kwargs: bool(kwargs.get("reconfigure")),
+        skip_fn=lambda kwargs: (
+            bool(kwargs.get("reconfigure")) or kwargs.get("log_level") is not None
+        ),
     )
     @log_tool_usage
     async def ha_set_integration(
@@ -1904,6 +1934,19 @@ class IntegrationTools:
                 ),
             ),
         ] = None,
+        log_level: Annotated[
+            Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "DEFAULT"] | None,
+            Field(
+                default=None,
+                description=(
+                    "Set the integration's log level, like the integration "
+                    "page's Enable/Disable debug logging: pass the integration "
+                    "with 'domain' (no config flow runs) or 'entry_id', and "
+                    "nothing else. Lasts through the next Home Assistant "
+                    "restart. DEFAULT returns to the configured level."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Manage an integration (config entry): enable/disable, add, update options, or reconfigure.
 
@@ -1916,6 +1959,8 @@ class IntegrationTools:
         - Reconfigure: entry_id + reconfigure=True + config — connection
           settings such as host, port, credentials. Repeat with the token the
           preflight returns as confirm_token to apply.
+        - Log level: log_level + domain (or entry_id) — sets how much the
+          integration logs; read it back with ha_get_integration's log_level.
 
         WHEN NOT TO USE:
         - Helpers (template, group, utility_meter, ...): use
@@ -1946,8 +1991,19 @@ class IntegrationTools:
         - Add: ha_set_integration(domain="workday", config={"name": "Workday"})
         - Update options: ha_set_integration(entry_id="abc123", config={"scan_interval": 30})
         - Reconfigure preflight: ha_set_integration(entry_id="abc123", reconfigure=True, config={"host": "10.0.0.5"}), then repeat adding confirm_token="sha256:..."
+        - Debug logging: ha_set_integration(domain="zha", log_level="DEBUG"), then log_level="DEFAULT" to stop
         """
         try:
+            if log_level is not None:
+                return await self._set_log_level(
+                    entry_id,
+                    domain,
+                    log_level,
+                    other_modes=config is not None
+                    or enabled is not None
+                    or reconfigure,
+                )
+
             if reconfigure:
                 return await ReconfigureRunner(self._client).handle_mode(
                     entry_id=entry_id,
@@ -1969,24 +2025,7 @@ class IntegrationTools:
                 expected_entity_ids=expected_entity_ids,
             )
 
-            if domain is not None and entry_id is not None:
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "Pass either 'domain' (add a new integration) or "
-                        "'entry_id' (modify an existing one), not both",
-                        context={"entry_id": entry_id, "domain": domain},
-                    )
-                )
-            if enabled is not None and (domain is not None or config is not None):
-                raise_tool_error(
-                    create_error_response(
-                        ErrorCode.VALIDATION_INVALID_PARAMETER,
-                        "'enabled' is mutually exclusive with 'domain' and "
-                        "'config' — enable/disable is a separate call",
-                        context={"entry_id": entry_id, "domain": domain},
-                    )
-                )
+            _reject_set_integration_mode_conflicts(entry_id, domain, enabled, config)
 
             if domain is not None:
                 # Add mode: drive the domain's config flow.
@@ -2071,6 +2110,58 @@ class IntegrationTools:
         if domain is not None:
             error_context["domain"] = domain
         return error_context
+
+    async def _set_log_level(
+        self,
+        entry_id: str | None,
+        domain: str | None,
+        log_level: str,
+        *,
+        other_modes: bool,
+    ) -> dict[str, Any]:
+        """Set an integration's log level through ``logger/integration_log_level``."""
+        if other_modes or (domain is None) == (entry_id is None):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "log_level takes exactly one of 'domain' or 'entry_id' and "
+                    "cannot be combined with config, enabled or reconfigure",
+                    suggestions=[
+                        "Example: ha_set_integration(domain='zha', log_level='DEBUG')",
+                    ],
+                    context={"entry_id": entry_id, "domain": domain},
+                )
+            )
+        if entry_id is not None:
+            entry = await self._client.get_config_entry(entry_id)
+            domain = entry.get("domain")
+        result = await self._client.send_websocket_message(
+            {
+                "type": "logger/integration_log_level",
+                "integration": domain,
+                # NOTSET is what the UI's Disable debug logging sends.
+                "level": "NOTSET" if log_level == "DEFAULT" else log_level,
+                "persistence": "once",
+            }
+        )
+        if not result.get("success"):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.RESOURCE_NOT_FOUND
+                    if result.get("error_code") == "not_found"
+                    else ErrorCode.SERVICE_CALL_FAILED,
+                    f"Failed to set the log level for '{domain}': "
+                    f"{result.get('error') or 'unknown error'}",
+                    context={"domain": domain, "entry_id": entry_id},
+                )
+            )
+        return {
+            "success": True,
+            "action": "set_log_level",
+            "domain": domain,
+            "log_level": log_level,
+            "note": "Applies now and through the next Home Assistant restart.",
+        }
 
     async def _set_entry_enabled(self, entry_id: str, enabled: bool) -> dict[str, Any]:
         """Enable or disable a config entry via ``config_entries/disable``."""
