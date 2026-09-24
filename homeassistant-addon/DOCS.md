@@ -655,7 +655,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_set_todo_item` — Create or update a todo item in Home Assistant.
 
 ### Utilities
-- `ha_eval_template` — Evaluate Jinja2 templates using Home Assistant's template engine.
+- `ha_eval_template` — Execute a Jinja2 template render, or an automation condition check, in Home Assistant.
 - `ha_report_issue` — Get diagnostic information and templates for filing issue reports or feedback.
 
 ### Zones
