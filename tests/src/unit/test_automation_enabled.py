@@ -480,6 +480,26 @@ async def test_standalone_runtime_toggle_skips_auto_backup(monkeypatch) -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({"identifier": "automation.morning", "enabled": True}, True),
+        (
+            {
+                "identifier": "automation.morning",
+                "enabled": True,
+                "take_control_of_blueprint": True,
+            },
+            False,
+        ),
+        ({"identifier": "automation.morning", "enabled": True, "config": {}}, False),
+    ],
+)
+def test_runtime_backup_skip_excludes_config_writes(kwargs, expected) -> None:
+    assert tools_config_automations._skip_automation_runtime_backup(kwargs) is expected
+
+
+@pytest.mark.unit
 @pytest.mark.anyio
 async def test_standalone_enabled_rejects_category_without_config_update() -> None:
     client = _FakeClient()

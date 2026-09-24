@@ -342,6 +342,7 @@ def _skip_automation_runtime_backup(kwargs: dict[str, Any]) -> bool:
         kwargs.get("enabled") is not None
         and kwargs.get("config") is None
         and kwargs.get("python_transform") is None
+        and not kwargs.get("take_control_of_blueprint")
     )
 
 
