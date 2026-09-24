@@ -152,6 +152,61 @@ async def test_config_update_waits_for_reregistration_when_wait_false(
 
     assert discovered == ["stored-id"]
     assert result["enabled_applied"] is True
+    assert result["entity_id"] == "automation.actual"
+    assert client.calls == [
+        ("automation", "turn_off", {"entity_id": "automation.actual"})
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_python_transform_reports_entity_resolved_for_enabled(
+    monkeypatch,
+) -> None:
+    client = _FakeClient()
+    tools = tools_config_automations.AutomationConfigTools(client)
+    config = {
+        "alias": "Morning",
+        "triggers": [{"trigger": "event", "event_type": "test_event"}],
+        "actions": [{"action": "logbook.log", "data": {"message": "x"}}],
+    }
+
+    async def fetch_and_verify_hash(identifier, config_hash, action):
+        return dict(config), "stored-id"
+
+    async def get_config(identifier):
+        return config, "new-hash"
+
+    async def validate_registry_ids(*_args, **_kwargs):
+        return None
+
+    async def wait_for_unique_id(client, identifier):
+        return "automation.actual"
+
+    monkeypatch.setattr(tools, "_fetch_and_verify_hash", fetch_and_verify_hash)
+    monkeypatch.setattr(tools, "_get_automation_config_internal", get_config)
+    monkeypatch.setattr(
+        tools_config_automations, "validate_registry_ids", validate_registry_ids
+    )
+    monkeypatch.setattr(
+        tools_config_automations,
+        "wait_for_automation_entity_by_unique_id",
+        wait_for_unique_id,
+    )
+
+    response, _ = await tools._run_python_transform(
+        "stored-id",
+        "old-hash",
+        "config['description'] = 'updated'",
+        None,
+        False,
+        False,
+        False,
+    )
+
+    assert response["automation_id"] == "automation.actual"
+    assert response["entity_id"] == "automation.actual"
+    assert response["enabled_applied"] is True
     assert client.calls == [
         ("automation", "turn_off", {"entity_id": "automation.actual"})
     ]

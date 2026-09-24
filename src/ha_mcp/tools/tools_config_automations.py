@@ -1449,6 +1449,7 @@ class AutomationConfigTools:
             wait,
             identifier=identifier or result.get("unique_id"),
         )
+        _sync_post_write_automation_result(result, entity_id)
 
         response: dict[str, Any] = {
             "success": True,
@@ -1552,6 +1553,7 @@ class AutomationConfigTools:
             wait,
             identifier=identifier or result.get("unique_id"),
         )
+        _sync_post_write_automation_result(result, entity_id)
 
         if bp_warnings:
             result["best_practice_warnings"] = list(bp_warnings)
