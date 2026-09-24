@@ -27,8 +27,12 @@ jobs:
         run: |
           uv sync --all-extras --dev
           cp ../harness/tests/src/unit/test_websocket_late_release.py tests/src/unit/
+          cp ../harness/src/ha_mcp/client/websocket_client.py src/ha_mcp/client/
       - name: Run regression against PR head
         working-directory: subject
         env:
           HA_MCP_CONFIG_DIR: /tmp/ha-mcp-pr2524
-        run: uv run pytest tests/src/unit/test_websocket_late_release.py -v --tb=short --maxfail=0
+        run: |
+          uv run ruff check src/ha_mcp/client/websocket_client.py tests/src/unit/test_websocket_late_release.py
+          uv run ruff format --check src/ha_mcp/client/websocket_client.py tests/src/unit/test_websocket_late_release.py
+          uv run pytest tests/src/unit/test_websocket_late_release.py tests/src/unit/test_websocket_client.py -v --tb=short --maxfail=0
