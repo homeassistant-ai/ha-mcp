@@ -15,7 +15,9 @@ from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("release_path", ["late_ack", "cleanup_deadline"])
-@pytest.mark.parametrize("failure", ["disconnect", "send_closed", "timeout", "cancel"])
+@pytest.mark.parametrize(
+    "failure", ["disconnect", "send_closed", "timeout", "cancel", "unexpected"]
+)
 async def test_background_release_collects_outcome(
     release_path: str,
     failure: str,
@@ -39,6 +41,8 @@ async def test_background_release_collects_outcome(
         sent.set()
         if failure == "send_closed":
             raise ConnectionClosed(None, None)
+        if failure == "unexpected":
+            raise RuntimeError("unexpected cleanup bug")
         if failure == "disconnect":
             client._state.mark_disconnected("test connection dropped")
         if failure == "cancel":
@@ -86,8 +90,15 @@ async def test_background_release_collects_outcome(
         assert not client._late_releases
         assert not client._state._pending_requests
         assert not unhandled, [context["message"] for context in unhandled]
-        assert not [
+        errors = [
             record for record in caplog.records if record.levelno >= logging.WARNING
         ]
+        if failure == "unexpected":
+            assert len(errors) == 1
+            assert errors[0].levelno == logging.ERROR
+            assert errors[0].exc_info is not None
+            assert isinstance(errors[0].exc_info[1], RuntimeError)
+        else:
+            assert not errors
     finally:
         loop.set_exception_handler(previous_handler)
