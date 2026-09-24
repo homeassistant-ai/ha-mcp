@@ -61,13 +61,23 @@ def _jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
     """Walk JPEG segments to the first SOF marker, which carries the size.
 
     Only the header is parsed; the compressed scan data is never decoded.
+Check the SOF segment length before reading dimensions    The declared segment length is validated before the dimension fields
+    are read, so a corrupt length can neither reach past the end of the
+    buffer nor report bytes outside the segment as the image size.
     """
     if len(data) < 4 or data[0] != 0xFF or data[1] != 0xD8:
         return None
     sof_pos = _find_sof_position(data, 2)
     if sof_pos is None:
         return None
-    if sof_pos + 9 > len(data):
+    # The SOF length field counts itself, so the segment spans
+    # ``2 + length`` bytes from the marker, and the dimension fields sit
+    # at offsets 5..8 — the segment must therefore declare at least 7
+    # bytes.
+    length = (data[sof_pos + 2] << 8) | data[sof_pos + 3]
+    if length < 7:
+        return None
+    if sof_pos + 2 + length > len(data):
         return None
     height = (data[sof_pos + 5] << 8) | data[sof_pos + 6]
     width = (data[sof_pos + 7] << 8) | data[sof_pos + 8]
