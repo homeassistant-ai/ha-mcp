@@ -1874,8 +1874,7 @@ class DashboardConfigTools:
             ),
         ] = None,
     ) -> "dict[str, Any] | ToolResult":
-        """
-        Get dashboard info - list all dashboards, get config, or search for cards.
+        """Get dashboard info - list all dashboards, get config, or search for cards.
 
         MODE 1 — List: list_only=True
           Lists every dashboard's metadata (url_path, title, icon), storage and
@@ -1927,14 +1926,10 @@ class DashboardConfigTools:
 
         EXAMPLES:
         - List all dashboards: ha_config_get_dashboard(list_only=True)
-        - Get default dashboard: ha_config_get_dashboard(url_path="default")
-        - Get custom dashboard: ha_config_get_dashboard(url_path="lovelace-mobile")
         - Get one view only: ha_config_get_dashboard(url_path="lovelace-mobile", view_path="office")
-        - Force reload: ha_config_get_dashboard(url_path="lovelace-home", force_reload=True)
-        - Find cards by entity: ha_config_get_dashboard(url_path="my-dash", entity_id="light.living_room")
-        - Find by wildcard: ha_config_get_dashboard(url_path="my-dash", entity_id="sensor.temperature_*")
-        - Find by type: ha_config_get_dashboard(url_path="my-dash", card_type="tile")
+        - Find cards by entity (wildcards allowed): ha_config_get_dashboard(url_path="my-dash", entity_id="sensor.temperature_*")
         - Find heading: ha_config_get_dashboard(url_path="my-dash", heading="Climate", card_type="heading")
+        - Which dashboards use an entity: ha_config_get_dashboard(mode="search", query="light.bedroom")
 
         SEARCH WORKFLOW EXAMPLE:
         1. find = ha_config_get_dashboard(url_path="my-dash", entity_id="light.bedroom")
@@ -2835,129 +2830,47 @@ class DashboardConfigTools:
             ),
         ] = None,
     ) -> "dict[str, Any] | ToolResult":
-        """
-        Create or update a Home Assistant dashboard.
+        """Create or update a Home Assistant dashboard.
 
         MUST call ha_get_skill_guide OR refer to your locally installed skills first.
+        `dashboard-guide.md` and `dashboard-cards.md` ship under `skill_content`
+        by default.
 
-        Creates a new dashboard or updates an existing one with the provided configuration.
-        Supports full config replacement, Python transformation, or structured patch edits.
-
-        WHEN TO USE WHICH MODE:
-        - patch: Edit known paths with literal values using add/remove/replace/test and config_hash.
-          Example: patch=[{"op": "replace", "path": "/views/0/title", "value": "Home"}].
-          move/copy are unsupported. See the full patch guide:
+        MODES (pick one):
+        - patch: edit known paths with literal values using JSON Patch
+          add/remove/replace/test and config_hash, e.g.
+          patch=[{"op": "replace", "path": "/views/0/title", "value": "Home"}].
+          move/copy are unsupported. Full guide:
           https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/dashboard-edits.md
-        - python_transform: Use loops or pattern-based changes across cards and views.
-        - config: New dashboards only, or full restructure. Replaces everything.
+        - python_transform: loops or pattern-based changes across cards and views,
+          e.g. 'config["views"][0]["cards"].append({"type": "button", "entity": "light.bedroom"})'.
+          After delete/add operations indices shift, so chain multiple ops in ONE
+          expression where possible; a later call needs a fresh config_hash from
+          ha_config_get_dashboard().
+        - config: new dashboards only, or a full restructure. Replaces everything.
+          Omit it to create a dashboard without initial config.
 
-        IMPORTANT: After delete/add operations, indices shift! Subsequent python_transform calls
-        must use fresh config_hash from ha_config_get_dashboard()
-        to get updated structure. Chain multiple ops in ONE expression when possible.
+        Use ha_config_get_dashboard(entity_id=...) to get the path of any card,
+        and ha_search / ha_get_overview to find entity IDs — never guess them.
+        For visual re-checks after the write use ha_get_dashboard_screenshot
+        instead of re-sending config.
 
-        TIP: Use ha_config_get_dashboard(entity_id=...) to get the path for any card.
+        title/icon/require_admin/show_in_sidebar can be updated in a
+        metadata-only call or alongside a full config replacement; with
+        python_transform or patch, update metadata in a separate call (combining
+        it with patch is rejected). Strategy dashboards (config
+        {"strategy": {...}}) cannot be converted to custom dashboards here; use
+        "Take Control" in the Home Assistant UI.
 
-        TIP: for visual re-checks after the write, use the dedicated
-        ha_get_dashboard_screenshot tool instead of re-sending config.
+        EXAMPLE:
+        ha_config_set_dashboard(url_path="home-dashboard", title="Home Overview",
+            config={"views": [{"title": "Home", "type": "sections", "sections": [{"title": "Climate", "cards": [{"type": "tile", "entity": "climate.living_room"}]}]}]})
 
-        PYTHON TRANSFORM EXAMPLES:
-        - Add card: 'config["views"][0]["cards"].append({"type": "button", "entity": "light.bedroom"})'
-
-        MODERN DASHBOARD BEST PRACTICES:
-        - Use "sections" view type (default) with grid-based layouts
-        - Use "tile" cards as primary card type (replaces legacy entity/light/climate cards)
-        - Use "grid" cards for multi-column layouts within sections
-        - Create multiple views with navigation paths (avoid single-view endless scrolling)
-        - Use "area" cards with navigation for hierarchical organization
-
-        DISCOVERING ENTITY IDs FOR DASHBOARDS:
-        Do NOT guess entity IDs - use these tools to find exact entity IDs:
-        1. ha_get_overview(include_entity_id=True) - Get all entities organized by domain/area
-        2. ha_search(query, domain_filter, area_filter, search_types) - Find entities and config-body references in one call
-
-        If unsure about entity IDs, ALWAYS use one of these tools first.
-
-        DASHBOARD DOCUMENTATION:
-        - dashboard-guide.md and dashboard-cards.md ship in this response
-          under ``skill_content`` by default — layout patterns,
-          card-type taxonomy, and worked examples.
-        - ha_get_skill_guide — deeper card-type and configuration guidance.
-
-        EXAMPLES:
-
-        Create empty dashboard:
-        ha_config_set_dashboard(
-            url_path="mobile-dashboard",
-            title="Mobile View",
-            icon="mdi:cellphone"
-        )
-
-        Create dashboard with modern sections view:
-        ha_config_set_dashboard(
-            url_path="home-dashboard",
-            title="Home Overview",
-            config={
-                "views": [{
-                    "title": "Home",
-                    "type": "sections",
-                    "sections": [{
-                        "title": "Climate",
-                        "cards": [{
-                            "type": "tile",
-                            "entity": "climate.living_room",
-                            "features": [{"type": "target-temperature"}]
-                        }]
-                    }]
-                }]
-            }
-        )
-
-        Create strategy-based dashboard (auto-generated):
-        ha_config_set_dashboard(
-            url_path="my-home",
-            title="My Home",
-            config={
-                "strategy": {
-                    "type": "home",
-                    "favorite_entities": ["light.bedroom"]
-                }
-            }
-        )
-
-        Note: Strategy dashboards cannot be converted to custom dashboards via this tool.
-        Use the "Take Control" feature in the Home Assistant interface to convert them.
-
-        Update existing dashboard config:
-        ha_config_set_dashboard(
-            url_path="existing-dashboard",
-            config={
-                "views": [{
-                    "title": "Updated View",
-                    "type": "sections",
-                    "sections": [{
-                        "cards": [{"type": "markdown", "content": "Updated!"}]
-                    }]
-                }]
-            }
-        )
-
-        Note: title/icon/require_admin/show_in_sidebar can be updated in metadata-only
-        calls or alongside a full config replacement. For python_transform or patch,
-        update metadata in a separate call; combining it with patch is rejected.
-
-        STORAGE-MODE vs YAML-MODE DASHBOARDS:
-        This tool only manages storage-mode dashboards (created via UI/API and stored in
-        Home Assistant's storage backend). It does NOT touch YAML-defined dashboards.
-        Two distinct YAML cases exist and this tool covers neither:
-        - "YAML-mode" dashboards: written in their own .yaml file referenced from
-          configuration.yaml under ``lovelace: dashboards:``. The dashboard itself lives
-          in a separate YAML file but its registration is in configuration.yaml.
-        - Dashboards inlined directly in ``configuration.yaml`` under the ``lovelace:``
-          key (legacy single-dashboard mode).
-        For either YAML case, edit the dashboard's .yaml file directly.
-        ``ha_config_set_yaml`` can update the ``lovelace:`` registration
-        entry in configuration.yaml but does NOT touch the dashboard
-        body in the referenced .yaml file.
+        This tool manages storage-mode dashboards only. YAML-mode dashboards (a
+        .yaml file registered under ``lovelace: dashboards:`` in
+        configuration.yaml) and dashboards inlined under ``lovelace:`` are
+        edited in their .yaml file; ``ha_config_set_yaml`` can update the
+        ``lovelace:`` registration but not the dashboard body.
         """
         action = (
             "patch"

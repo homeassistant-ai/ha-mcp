@@ -504,14 +504,9 @@ class EnergyTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Manage the Home Assistant Energy Dashboard preferences.
-
-        The Energy Dashboard configuration (grid/solar/battery/gas/water energy
-        sources, individual device consumption sensors for electricity and
-        water, cost tariffs) is stored in ``.storage/energy`` and not otherwise
-        reachable via REST, services, or helper flows — this tool is the only
-        way for agents to inspect or modify it.
+        """Manage the Home Assistant Energy Dashboard preferences: grid / solar /
+        battery / gas / water energy sources, device consumption sensors for
+        electricity and water, and cost tariffs.
 
         WHEN TO USE:
         - mode='get' / 'set': inspect or replace the full Energy Dashboard
@@ -534,39 +529,21 @@ class EnergyTools:
           the user had configured — silently, with no error. mode='set'
           requires a fresh ``config_hash`` for optimistic locking; convenience
           modes hide this entirely.
-        - The per-key ``config_hash`` form lets an agent submit only the top-
-          level key it wants to change — set-equality between ``config``
-          keys and dict keys is enforced, and any key outside the canonical
-          set (typo, etc.) on either side is rejected with
-          ``VALIDATION_FAILED`` rather than silently dropped (so an empty
-          submission cannot succeed as a no-op). A per-key submission
-          still fully replaces that key's value as the save endpoint
-          requires. Mismatch on any locked key returns ``RESOURCE_LOCKED``
-          with the offending keys in the response's top-level
-          ``mismatched_keys`` (``create_error_response`` flattens the
-          ``context`` dict onto the response root).
-        - ``dry_run=True`` skips the hash check entirely for both forms;
-          the per-key form is therefore silently accepted on dry runs even
-          if its keys would mismatch the current state.
-        - A local shape check runs before every write; malformed payloads
-          are rejected with a ``shape_errors`` list.
+        - The per-key ``config_hash`` form lets an agent submit only the
+          top-level key it wants to change: ``config`` keys must equal the dict
+          keys (any key outside the canonical set is rejected with
+          ``VALIDATION_FAILED``), and a per-key submission still fully replaces
+          that key's value. A mismatch on any locked key returns
+          ``RESOURCE_LOCKED`` with the offending keys in ``mismatched_keys``.
+        - ``dry_run=True`` skips the hash check entirely for both forms.
         - After a successful write, the tool calls ``energy/validate`` and
-          returns any residual issues as ``post_save_validation_errors`` in
-          the response. These reflect semantic problems (missing stats, unit
-          mismatches) that shape checks can't catch; the save persists
-          regardless — correct the config and write again if needed.
-        - The underlying save endpoint is admin-only. Non-admin tokens will
-          receive an authorization error from Home Assistant.
-        - Convenience modes are NOT idempotent: 'add_device' on an existing
-          ``stat_consumption`` returns RESOURCE_ALREADY_EXISTS; 'remove_device'
-          on a missing entry returns RESOURCE_NOT_FOUND. 'add_source' rejects
-          duplicates by ``(type, stat_energy_from)`` for solar/battery/gas/water
-          (RESOURCE_ALREADY_EXISTS); grid entries are appended without a
-          duplicate check (multiple grid variants are legitimate, and grid
-          has no single canonical uniqueness key) — the caller is responsible
-          for de-duplicating grid sources.
-        - For convenience modes, the mutator and shape check both run before
-          the dry-run short-circuit.
+          returns residual issues (missing stats, unit mismatches) as
+          ``post_save_validation_errors``; the save persists regardless —
+          correct the config and write again if needed.
+        - 'add_source' rejects duplicates by ``(type, stat_energy_from)`` for
+          solar/battery/gas/water; grid entries are appended without a duplicate
+          check (multiple grid variants are legitimate), so the caller
+          de-duplicates grid sources.
         """
         if mode == "get":
             return await self._get_prefs()

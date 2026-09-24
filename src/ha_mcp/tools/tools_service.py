@@ -1943,52 +1943,33 @@ class ServiceTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Execute Home Assistant services to control entities and trigger automations.
+        """Execute Home Assistant services to control entities and trigger automations.
 
         This is the universal tool for controlling all Home Assistant entities. Services follow
         the pattern domain.service (e.g., light.turn_on, climate.set_temperature).
 
-        **Basic Usage:**
-        ```python
-        # Turn on a light
-        ha_call_service("light", "turn_on", entity_id="light.living_room")
+        EXAMPLES:
+        - ha_call_service("light", "turn_on", entity_id="light.living_room")
+        - ha_call_service("climate", "set_temperature", entity_id="climate.thermostat", data={"temperature": 22})
+        - ha_call_service("automation", "trigger", entity_id="automation.morning_routine")
 
-        # Set temperature with parameters
-        ha_call_service("climate", "set_temperature",
-                      entity_id="climate.thermostat", data={"temperature": 22})
+        Result compaction (default ON): ``result`` is trimmed to the targeted
+        entity's record (drops parent-group propagation) and stripped of
+        ``context`` / ``last_*`` metadata and heavy attribute lists
+        (``effect_list``, ``hue_scenes``).
 
-        # Trigger automation
-        ha_call_service("automation", "trigger", entity_id="automation.morning_routine")
-
-        # Universal controls work with any entity
-        ha_call_service("homeassistant", "toggle", entity_id="switch.porch_light")
-        ```
-
-        **Key behavior:**
-        - **Result compaction (default ON)**: ``result`` is trimmed
-          to the targeted entity's record (drops parent-group propagation) and
-          stripped of ``context`` / ``last_*`` metadata and heavy attribute
-          lists (``effect_list``, ``hue_scenes``).
-
-        **For detailed service documentation, use ha_get_skill_guide.**
-
-        Common patterns: Use ha_get_state() to check current values before making changes.
-        Use ha_search() to find correct entity IDs.
+        For detailed service documentation, use ha_get_skill_guide.
 
         **WebSocket command escape hatch (advanced):**
         A few Home Assistant operations are WebSocket-only commands, not
         registered services — most notably dismissing a Repairs issue. Pass
         ``ws_command`` (instead of domain/service) to send one, with its
         parameters in ``data``:
-        ```python
-        # Dismiss a repair (get domain/issue_id from ha_get_overview repairs
-        # or ha_get_system_health include="repairs")
-        ha_call_service(ws_command="repairs/ignore_issue",
-                        data={"domain": "sun", "issue_id": "abc", "ignore": True})
-        ```
-        Only one-shot request/response commands are supported, and the other
-        service parameters (entity_id, return_response, etc.) don't apply.
+        ha_call_service(ws_command="repairs/ignore_issue", data={"domain": "sun", "issue_id": "abc", "ignore": True})
+        (get domain/issue_id from ha_get_overview repairs or ha_get_system_health
+        include="repairs"). Only one-shot request/response commands are
+        supported, and the other service parameters (entity_id,
+        return_response, etc.) don't apply.
 
         Unavailable in Read Only Mode, including read-like services and WebSocket
         commands. Use dedicated read tools while that mode is enabled.
@@ -2278,11 +2259,10 @@ class ServiceTools:
         when exclusions must be applied after recursively expanding generic
         aggregate membership. Resolves a frozen visible leaf set before dispatch;
         it is not transactional, so Home Assistant may still report per-leaf
-        failures. A selector resolving to more than 100 entities
-        (``MAX_SELECTOR_ENTITIES``) fails closed instead of dispatching a
-        partial/oversized batch — narrow it (a more specific area/floor, or add
-        ``exclude_entity_ids``) and retry. Set ``dry_run`` to preview the resolved
-        set without changing state.
+        failures. A selector resolving to more than 100 entities fails closed
+        instead of dispatching a partial/oversized batch — narrow it (a more
+        specific area/floor, or add ``exclude_entity_ids``) and retry. Set
+        ``dry_run`` to preview the resolved set without changing state.
         """
         if operations is None and selector is None:
             raise_tool_error(

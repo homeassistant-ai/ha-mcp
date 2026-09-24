@@ -1021,51 +1021,32 @@ class BugReportTools:
         ] = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        """
-        Get diagnostic information and templates for filing issue reports or feedback.
+        """Get diagnostic information and templates for filing issue reports or feedback.
 
-        This tool generates templates for TWO types of reports:
-        1. **Runtime Bug Report** - For ha-mcp errors, failures, unexpected behavior
-        2. **Agent Behavior Feedback** - For AI agent inefficiency, wrong tool usage
+        Generates templates for two report types, and you MUST pick from the
+        conversation context:
+        - RUNTIME BUG: the user reports an error, failure, or unexpected
+          behavior; a tool returned an error or incorrect result; something in
+          ha-mcp is broken.
+        - AGENT BEHAVIOR FEEDBACK: the user says you used the wrong tool,
+          suggests a more efficient workflow, or reports your inefficiency or
+          mistakes.
+        If unclear which, ask: "Are you reporting a bug in ha-mcp, or providing
+        feedback on how I used the tools?"
 
-        **IMPORTANT FOR AI AGENTS:**
-        You MUST analyze the conversation context to determine which template to present:
-
-        🐛 **Present RUNTIME BUG template if:**
-           - User reports an error, failure, or unexpected behavior
-           - A tool returned an error or incorrect result
-           - Something is broken or not working in ha-mcp
-
-        🤖 **Present AGENT BEHAVIOR template if:**
-           - User mentions YOU (the agent) used the wrong tool
-           - User suggests a more efficient workflow
-           - User reports YOUR inefficiency or mistakes
-           - User says you should have done something differently
-
-        **If unclear which type, ASK the user:**
-        "Are you reporting a bug in ha-mcp, or providing feedback on how I used the tools?"
-
-        **WHEN TO USE THIS TOOL:**
-        - "I want to file a bug/issue/report"
-        - "This isn't working"
-        - "You should have used [other tool]"
-        - "That was inefficient"
-
-        **OUTPUT:**
-        Returns both templates plus diagnostic data. The full response is
-        LARGE (the captured logs appear in the raw log keys AND inside each
-        template) — pass fields=... to fetch only the keys you need once you
-        know which template applies. Key fields:
-        - `runtime_bug_template`, `agent_behavior_template` — pick based on context
-        - `recent_logs`, `startup_logs` — captured ha-mcp tool/server log entries
-        - `addon_logs` — addon container stdout/stderr (HA add-on installs only;
-          empty string otherwise)
-        - `core_error_log` — Home Assistant error log (home-assistant.log) over
-          REST; carries auth / integration errors that don't show in addon_logs
-        - `missing_tool_hint` — check this FIRST when the report is about a
-          missing/unavailable tool; a stale client tool list (not a bug) is the
-          usual cause, and refreshing the MCP connection is the fix
-        - `suggested_title`, `duplicate_check_urls`, `anonymization_guide`
+        OUTPUT: both templates plus diagnostic data. The full response is LARGE
+        (the captured logs appear in the raw log keys AND inside each template)
+        — pass fields=... to fetch only the keys you need once you know which
+        template applies. Key fields: `runtime_bug_template` /
+        `agent_behavior_template`; `recent_logs`, `startup_logs` (captured
+        ha-mcp tool/server log entries); `addon_logs` (app container
+        stdout/stderr, HA app installs only, empty string otherwise);
+        `core_error_log` (Home Assistant error log over REST, carries auth /
+        integration errors that don't show in addon_logs); `missing_tool_hint`
+        — check this FIRST when the report is about a missing/unavailable tool:
+        a stale client tool list (not a bug) is the usual cause and refreshing
+        the MCP connection is the fix; `suggested_title`,
+        `duplicate_check_urls`, `anonymization_guide`.
         """
         # Validate fields= before anything is collected: the projection at the
         # end was the only parse, outside any ValueError handler, so a

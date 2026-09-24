@@ -606,15 +606,10 @@ class LabelTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Get label info - list all labels or get a specific one by ID.
+        """Get label info - list all labels or get a specific one by ID.
 
         Without a label_id: Lists all Home Assistant labels with their configurations.
         With a label_id: Returns configuration for that specific label.
-
-        LABEL PROPERTIES:
-        - ID (label_id), Name
-        - Color (optional), Icon (optional), Description (optional)
 
         EXAMPLES:
         - List all labels: ha_config_get_label()
@@ -747,20 +742,15 @@ class LabelTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Create or update a Home Assistant label.
+        """Create or update a Home Assistant label.
 
-        Creates a new label if label_id is not provided, or updates an existing label if label_id is provided.
-
-        Labels are a flexible tagging system that can be applied to entities,
-        devices, and areas for organization and automation purposes.
+        Creates a new label if label_id is not provided, or updates an existing
+        label if label_id is provided. Labels are a cross-domain tagging system
+        for entities, devices, and areas.
 
         EXAMPLES:
-        - Create simple label: ha_config_set_label("Critical")
-        - Create colored label: ha_config_set_label("Outdoor", color="green")
-        - Create label with icon: ha_config_set_label("Battery Powered", icon="mdi:battery")
-        - Create full label: ha_config_set_label("Security", color="red", icon="mdi:shield", description="Security-related devices")
-        - Update label: ha_config_set_label("Updated Name", label_id="my_label_id", color="blue")
+        - Create: ha_config_set_label("Security", color="red", icon="mdi:shield", description="Security-related devices")
+        - Update: ha_config_set_label("Updated Name", label_id="my_label_id", color="blue")
         - Create and apply to areas: ha_config_set_label("Site Home", areas=["kitchen", "living_room"])
 
         After creating a label, use ha_set_entity(labels=["label_id"]) to assign it to entities,

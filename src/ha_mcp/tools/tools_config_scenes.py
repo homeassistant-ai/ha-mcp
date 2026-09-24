@@ -296,12 +296,12 @@ class ConfigSceneTools:
         ] = 20,
         offset: Annotated[int, Field(description="Pagination offset", ge=0)] = 0,
     ) -> dict[str, Any]:
-        """
-        Get a scene's complete configuration, or list and search scenes without scene_id.
+        """Get a scene's complete configuration, or list and search scenes without scene_id.
 
         Use ha_search for cross-domain discovery and dependency searches. For ordinary
         scene discovery, use this tool and pass a returned scene_id back to retrieve
-        the complete entities dict and config_hash for editing.
+        the complete entities dict and config_hash for editing (pass that hash to
+        ha_config_set_scene for python_transform updates).
 
         Listing returns compact metadata. Integration-managed scenes have no editable
         storage config or scene_id. Partial content-search results explicitly
@@ -309,13 +309,8 @@ class ConfigSceneTools:
 
         EXAMPLES:
         - Get scene: ha_config_get_scene("movie_night")
-        - Get scene: ha_config_get_scene("bedroom_dim")
         - Find scenes: ha_config_get_scene(query="movie")
         - Find attribute values: ha_config_get_scene(query="rainbow", search_in_config=True)
-
-        RELATED TOOLS:
-        - ha_config_set_scene — pass the returned ``config_hash`` for
-          ``python_transform`` updates.
 
         For detailed scene configuration help, use ha_get_skill_guide.
         """
@@ -1229,21 +1224,16 @@ class ConfigSceneTools:
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """
-        Delete a Home Assistant scene.
+        """Delete a Home Assistant scene.
 
-        EXAMPLES:
-        - Delete scene: ha_config_remove_scene("old_scene")
-        - Delete scene: ha_config_remove_scene("temporary_scene")
+        EXAMPLE: ha_config_remove_scene("old_scene")
 
-        **IMPORTANT LIMITATION:**
-        This tool can only delete scenes created via the Home Assistant UI.
-        Scenes defined in YAML configuration files (scenes.yaml or configuration.yaml)
-        cannot be deleted through the API and will return a 405 Method Not Allowed error.
+        Only scenes created via the Home Assistant UI can be deleted. Scenes
+        defined in YAML configuration files (scenes.yaml or configuration.yaml)
+        cannot be deleted through the API and return a 405 Method Not Allowed
+        error; edit the configuration file directly instead.
 
-        To remove YAML-defined scenes, you must edit the configuration file directly.
-
-        **WARNING:** Deleting a scene that is referenced by automations or scripts
+        WARNING: Deleting a scene that is referenced by automations or scripts
         (via ``scene.turn_on``) may cause those to fail.
         """
         try:

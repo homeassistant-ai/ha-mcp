@@ -381,35 +381,26 @@ class YamlConfigTools:
         """Update raw YAML configuration in configuration.yaml, packages/*.yaml, or themes/*.yaml (LAST RESORT).
 
         MUST call ha_get_skill_guide OR refer to your locally installed skills first.
+        ``template-guidelines.md`` ships under ``skill_content`` by default.
 
-        **WARNING:** Destructive, disabled by default. Dedicated tools exist for
-        almost every use case and should be preferred:
-
-        - Template sensors (state-based or trigger-based) ->
-          ha_config_set_helper(helper_type='template')
-        - Automations (storage-mode) -> ha_config_set_automation
-        - Scripts (storage-mode) -> ha_config_set_script
-        - Scenes (storage-mode) -> ha_config_set_scene
-        - All 30 helper types (input_*, counter, timer, schedule, zone, person,
-          tag, group, min_max, threshold, derivative, statistics, utility_meter,
-          trend, filter, switch_as_x, etc.) -> ha_config_set_helper
+        Destructive, disabled by default. Prefer the dedicated tools:
+        ha_config_set_helper for template sensors and every other helper type,
+        ha_config_set_automation / ha_config_set_script / ha_config_set_scene
+        for storage-mode items.
 
         Intended for YAML-only integrations with no config-flow or API
         equivalent (command_line, rest, shell_command, notify platforms),
         for integrations with significant YAML-only configuration (knx
         entities in package files), for registering YAML-mode dashboards via
         ``lovelace.dashboards.<url_path>`` (no other ``lovelace.*`` keys),
-        and for editing theme files in ``themes/*.yaml``
-        (``frontend.reload_themes`` is triggered automatically so no restart is
-        needed). Themes only load when configuration.yaml carries the
-        ``frontend: themes:`` include (e.g. ``!include_dir_merge_named themes``);
-        this tool cannot add that include (``frontend`` is not an allowed key).
-        Also accepts ``automation``, ``script``, and ``scene`` keys when
-        ``file`` is a ``packages/*.yaml`` — for git-managed YAML configs
-        that track these alongside templates and other YAML items. Writes
-        to ``configuration.yaml`` for those three keys remain rejected so
-        storage-mode and YAML-mode collections don't collide; use the
-        dedicated storage-mode tools instead.
+        and for editing theme files in ``themes/*.yaml``. Themes only load when
+        configuration.yaml carries the ``frontend: themes:`` include (e.g.
+        ``!include_dir_merge_named themes``); this tool cannot add that include
+        (``frontend`` is not an allowed key). ``automation``, ``script`` and
+        ``scene`` keys are accepted only when ``file`` is a ``packages/*.yaml``;
+        writes of those keys to ``configuration.yaml`` are rejected — use the
+        storage-mode tools.
+
         Check ``post_action`` in the response: most keys need a full HA
         restart. For ``themes/*.yaml`` this tool *performs* the reload itself
         (``frontend.reload_themes``), so ``post_action`` is ``reload_performed``
@@ -423,18 +414,11 @@ class YamlConfigTools:
         Two-step confirmation (default ON, toggle ENABLE_YAML_EDIT_CONFIRM /
         Server Settings): the first call returns ``preview: true`` with a
         unified ``diff`` of exactly what would change on disk and a
-        ``confirm_token`` — nothing is written. Review the diff for
-        changes outside the requested edit, then repeat the identical
-        call adding ``confirm_token`` to apply. Every applied write also
-        returns the final ``diff``. A token mismatch means the file
-        changed since the preview (or the token was wrong); use the
-        freshly returned token.
-
-        ``template-guidelines.md`` ships in this response under ``skill_content``
-        by default — YAML packages frequently include
-        template sensors / command_line entities / mqtt templates, exactly where
-        template misuse causes the subtlest bugs. For deeper routing guidance
-        beyond what ships here, use ha_get_skill_guide.
+        ``confirm_token`` — nothing is written. Review the diff, then repeat
+        the identical call adding ``confirm_token`` to apply. Every applied
+        write also returns the final ``diff``. A token mismatch means the file
+        changed since the preview (or the token was wrong); use the freshly
+        returned token.
         """
         try:
             _validate_yaml_action_and_content(action, content)

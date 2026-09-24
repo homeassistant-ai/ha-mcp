@@ -64,44 +64,19 @@ class TodoTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Get todo lists or items - list all todo lists or get items from a specific list.
+        """Get todo lists or items - list all todo lists or get items from a specific list.
 
-        Without an entity_id: Lists all todo list entities in Home Assistant.
-        With an entity_id: Gets items from that specific todo list, optionally filtered by status.
+        Without an entity_id: lists every entity in the 'todo' domain (shopping
+        lists and other todo-type integrations) with entity_id, friendly_name
+        and state (number of incomplete items or current status).
 
-        **LISTING TODO LISTS (entity_id omitted):**
-        Returns all entities in the 'todo' domain, including shopping lists
-        and any other todo-type integrations.
-
-        Each todo list includes:
-        - entity_id: The unique identifier (e.g., 'todo.shopping_list')
-        - friendly_name: Human-readable name
-        - state: Number of incomplete items or current status
-
-        **GETTING TODO ITEMS (entity_id provided):**
-        Retrieves items from the specified todo list.
-
-        Status filter: None (default) returns all items regardless of status.
-
-        Item properties:
-        - uid: Unique identifier for the item
-        - summary: The item text/description
-        - status: Current status (needs_action or completed)
-        - description: Optional detailed description
-        - due: Optional due date (if supported)
+        With an entity_id: returns that list's items — uid, summary, status
+        (needs_action or completed), description, and due date where supported
+        — optionally filtered by status (None returns all).
 
         EXAMPLES:
         - List all todo lists: ha_get_todo()
-        - Get all items: ha_get_todo("todo.shopping_list")
         - Get incomplete items: ha_get_todo("todo.shopping_list", status="needs_action")
-        - Get completed items: ha_get_todo("todo.shopping_list", status="completed")
-
-        USE CASES:
-        - "What todo lists do I have?"
-        - "Show me my shopping list"
-        - "What's on my todo list?"
-        - "Show completed items"
         """
         try:
             # List mode - no entity_id provided
@@ -285,24 +260,17 @@ class TodoTools:
     ) -> dict[str, Any]:
         """Create or update a todo item in Home Assistant.
 
-        WITHOUT item parameter (create mode):
-        Creates a new item. summary is required.
-
-        WITH item parameter (update mode):
-        Updates an existing item.
-        At least one update field (rename, status, description, due_date, due_datetime) is required.
+        Without `item` (create mode): creates a new item; summary is required.
+        With `item` (update mode): updates that item; at least one of rename,
+        status, description, due_date or due_datetime is required.
 
         EXAMPLES:
-        - Add item: ha_set_todo_item("todo.shopping_list", summary="Buy milk")
-        - Add with description: ha_set_todo_item("todo.shopping_list", summary="Buy milk", description="2% organic")
-        - Add with due date: ha_set_todo_item("todo.tasks", summary="Pay bills", due_date="2024-12-31")
+        - Add item: ha_set_todo_item("todo.tasks", summary="Pay bills", due_date="2024-12-31")
         - Complete item: ha_set_todo_item("todo.shopping_list", item="Buy milk", status="completed")
         - Rename item: ha_set_todo_item("todo.tasks", item="Old task", rename="New task name")
-        - Update due date: ha_set_todo_item("todo.tasks", item="Pay bills", due_date="2024-12-31")
-        - Reopen item: ha_set_todo_item("todo.tasks", item="Task to redo", status="needs_action")
 
-        NOTE: Not all todo integrations support all features (description, due dates).
-        The Shopping List integration only supports summary.
+        Not all todo integrations support all features (description, due dates);
+        the Shopping List integration only supports summary.
         """
         # Validate entity_id format
         if not entity_id.startswith("todo."):
@@ -562,19 +530,10 @@ class TodoTools:
         """
         Remove an item from a Home Assistant todo list.
 
-        Permanently deletes an item from the specified todo list.
+        Permanently deletes an item from the specified todo list. To mark it
+        completed instead, use ha_set_todo_item() with status="completed".
 
-        EXAMPLES:
-        - Remove by name: ha_remove_todo_item("todo.shopping_list", "Buy milk")
-        - Remove by UID: ha_remove_todo_item("todo.shopping_list", "abc123-uid")
-
-        USE CASES:
-        - "Remove milk from my shopping list"
-        - "Delete the eggs item"
-        - "Clear 'call mom' from my todo"
-
-        WARNING: This permanently removes the item. To mark as completed instead,
-        use ha_set_todo_item() with status="completed".
+        EXAMPLE: ha_remove_todo_item("todo.shopping_list", "Buy milk")
         """
         # Validate entity_id format
         if not entity_id.startswith("todo."):

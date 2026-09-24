@@ -4057,25 +4057,24 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
         """Manage Home Assistant apps (add-ons) or proxy an app API.
 
         For app inventory, status, and Supervisor metadata, call ``ha_get_app``
-        first; use proxy mode here for documented app-specific read APIs.
-        Do not infer private app API schemas; consult version-matched app docs,
-        and use ``ha_get_skill_guide`` for complex Home Assistant workflows.
+        first; use proxy mode here for documented app-specific read APIs, and
+        do not infer private app API schemas.
 
         Use exactly one mode: lifecycle/store action, configuration fields,
         ``path`` proxy, or ``path`` with ``array_patch``.
 
         Requires Home Assistant OS or Supervised. When ha-mcp itself runs as an
         app it cannot update its own running slug; update ha-mcp from the Home
-        Assistant Apps UI. ``options`` merges top-level
-        keys and one nested mapping level; supply complete values for deeper nested
-        mappings because they are replaced. Prefer
-        Ingress: direct-port access requires a shared container network and may
-        require weakening the target app authentication. If a Supervisor
-        lifecycle, configuration, or repository write has an unknown outcome,
-        verify durable state with ``ha_get_app`` before retrying. That cannot
-        prove whether ``restart`` or ``rebuild`` ran; inspect Supervisor jobs
-        and logs and do not automatically replay them. For a proxy or array-patch
-        write, query the target app's own read API before retrying.
+        Assistant Apps UI. ``options`` merges top-level keys and one nested
+        mapping level; supply complete values for deeper nested mappings
+        because they are replaced. Prefer Ingress: direct-port access requires
+        a shared container network and may require weakening the target app
+        authentication. If a Supervisor lifecycle, configuration, or repository
+        write has an unknown outcome, verify durable state with ``ha_get_app``
+        before retrying. That cannot prove whether ``restart`` or ``rebuild``
+        ran; inspect Supervisor jobs and logs and do not automatically replay
+        them. For a proxy or array-patch write, query the target app's own read
+        API before retrying.
         """
         return await tools.manage_addon(
             slug=slug,

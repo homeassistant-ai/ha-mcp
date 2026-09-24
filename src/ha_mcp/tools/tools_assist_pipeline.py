@@ -723,43 +723,11 @@ class AssistPipelineTools:
         is what adds those for other agents.
 
         EXAMPLES:
-        - List pipelines: ha_manage_pipeline(action="list")
-        - Get one pipeline: ha_manage_pipeline(action="get", pipeline_id="preferred")
-        - Create by cloning preferred: ha_manage_pipeline(
-              action="create",
-              name="Local Assist",
-              conversation_engine="conversation.local_llm",
-          )
-        - Create by cloning a specific pipeline: ha_manage_pipeline(
-              action="create",
-              base_pipeline_id="preferred",
-              name="Local Assist",
-              conversation_engine="conversation.local_llm",
-          )
-        - Update conversation agent and clear TTS voice: ha_manage_pipeline(
-              action="update",
-              pipeline_id="preferred",
-              conversation_engine="conversation.local_llm",
-              tts_voice="",
-          )
-        - Set preferred: ha_manage_pipeline(
-              action="set_preferred",
-              pipeline_id="preferred",
-          )
-        - Run a sentence: ha_manage_pipeline(
-              action="process",
-              sentence="turn on the kitchen light",
-          )
-        - Run it through one pipeline's agent: ha_manage_pipeline(
-              action="process",
-              sentence="turn on the kitchen light",
-              pipeline_id="preferred",
-          )
-        - Continue a conversation: ha_manage_pipeline(
-              action="process",
-              sentence="and the hallway?",
-              conversation_id="<id from the previous response>",
-          )
+        - Get the preferred pipeline: ha_manage_pipeline(action="get", pipeline_id="preferred")
+        - Create by cloning a pipeline: ha_manage_pipeline(action="create", base_pipeline_id="preferred", name="Local Assist", conversation_engine="conversation.local_llm")
+        - Update the agent and clear the TTS voice: ha_manage_pipeline(action="update", pipeline_id="preferred", conversation_engine="conversation.local_llm", tts_voice="")
+        - Run a sentence through one pipeline's agent: ha_manage_pipeline(action="process", sentence="turn on the kitchen light", pipeline_id="preferred")
+        - Continue a conversation: ha_manage_pipeline(action="process", sentence="and the hallway?", conversation_id="<id from the previous response>")
 
         Non-nullable fields such as name, language, conversation_language, and
         conversation_engine must be omitted or non-empty.

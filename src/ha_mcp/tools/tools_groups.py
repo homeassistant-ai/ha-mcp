@@ -165,25 +165,15 @@ class GroupTools:
             ),
         ] = 0,
     ) -> dict[str, Any]:
-        """
-        List Home Assistant entity groups with their member entities.
+        """List Home Assistant entity groups with their member entities.
 
-        Returns one page of groups created via group.set service or YAML
-        configuration; `total_count` and `has_more` report the full set. Each
-        group includes:
-        - Entity ID (group.xxx)
-        - Friendly name
-        - State (on/off based on member states)
-        - Member entities
-        - Icon (if set)
-        - All mode (if all entities must be on)
+        Returns one page of old-style groups created via the group.set service
+        or YAML configuration (platform-specific groups such as light or cover
+        groups are separate entities); `total_count` and `has_more` report the
+        full set. Each group includes its entity_id, friendly name, state,
+        member entities, icon and all mode.
 
-        EXAMPLES:
-        - First page of groups: ha_config_list_groups()
-        - Next page: ha_config_list_groups(offset=100)
-
-        **NOTE:** This returns old-style groups (created via group.set or YAML).
-        Platform-specific groups (light groups, cover groups) are separate entities.
+        EXAMPLE: ha_config_list_groups(offset=100)
         """
         try:
             # Get all entity states and filter for groups
@@ -314,8 +304,7 @@ class GroupTools:
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """
-        Create or update a service-based Home Assistant entity group via the group.set service.
+        """Create or update a service-based Home Assistant entity group via the group.set service.
 
         **When NOT to use:** for typical "combine these entities into one controllable group"
         requests, prefer `ha_config_set_helper(helper_type="group", ...)`. Config-entry-backed
@@ -329,16 +318,11 @@ class GroupTools:
 
         **For NEW groups:** Provide object_id and entities (required).
         **For EXISTING groups:** Provide object_id and any fields to update.
+        entities, add_entities, and remove_entities are mutually exclusive.
 
         EXAMPLES:
-        - Create group: ha_config_set_group("bedroom_lights", entities=["light.lamp", "light.ceiling"])
-        - Create with name: ha_config_set_group("sensors", entities=["sensor.temp"], name="All Sensors")
-        - Update name: ha_config_set_group("lights", name="Living Room Lights")
+        - Create: ha_config_set_group("bedroom_lights", entities=["light.lamp", "light.ceiling"], name="Bedroom Lights")
         - Add entities: ha_config_set_group("lights", add_entities=["light.extra"])
-        - Remove entities: ha_config_set_group("lights", remove_entities=["light.old"])
-        - Replace all entities: ha_config_set_group("lights", entities=["light.new1", "light.new2"])
-
-        **NOTE:** entities, add_entities, and remove_entities are mutually exclusive.
         """
         try:
             # ``_validate_group_params`` only catches dots in object_id and

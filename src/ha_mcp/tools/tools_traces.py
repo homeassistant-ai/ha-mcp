@@ -114,58 +114,27 @@ class TraceTools:
         ] = "newest",
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        """
-        Retrieve execution traces for automations and scripts to debug issues.
+        """Retrieve execution traces for automations and scripts to debug issues.
 
-        Traces show what happened during automation/script runs:
-        - What triggered the automation
-        - Which conditions passed or failed
-        - What actions were executed
-        - Any errors that occurred
-        - Variable values during execution
+        Traces show what triggered a run, which conditions passed or failed,
+        which actions executed (for 'choose', which branch was taken), any
+        errors, and variable values during execution. Traces are stored for a
+        limited time by Home Assistant. The 'state' field shows 'stopped'
+        (completed), 'running', or an error state.
 
         USAGE MODES:
-
-        1. List recent traces (omit run_id):
+        1. List recent traces (omit run_id): returns a summary of recent runs
+           with timestamps, triggers, and status. Use `offset` to page deeper
+           when `has_more` is true.
            ha_get_automation_traces("automation.motion_light")
-           Returns a summary of recent execution runs with timestamps, triggers, and status.
-           Use `offset` to page deeper when `has_more` is true.
-
-        2. Get detailed trace (provide run_id):
+        2. Get a detailed trace (provide run_id): full execution details
+           including trigger info, condition results, action trace with timing,
+           and context variables.
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456")
-           Returns full execution details including trigger info, condition results,
-           action trace with timing, and context variables.
-
-        3. Get detailed trace with logbook (provide run_id and detailed=True):
-           ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456", detailed=True)
-           Note: script-style action paths (sequence/, numeric) are always matched
-           regardless of this flag.
-
-        4. Get full variables without deduplication (provide run_id and deduplicate=False):
-           ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456", deduplicate=False)
-
-        DEBUGGING EXAMPLES:
-
-        Automation not triggering:
-        - Check if traces exist (automation may not be triggered)
-        - Look at trigger info to see what event was received
-
-        Automation runs but conditions fail:
-        - Get detailed trace to see condition_results
-        - Each condition shows whether it passed (true) or failed (false)
-
-        Unexpected behavior in actions:
-        - Get detailed trace to see action_trace
-        - Shows each action step with result and any errors
-        - For 'choose' actions, shows which branch was taken
-
-        Template debugging:
-        - Detailed trace shows evaluated template values in context
-        - Trigger variables available under trigger_variables
-
-        NOTES:
-        - Traces are stored for a limited time by Home Assistant
-        - The 'state' field shows: 'stopped' (completed), 'running', or error state
+        3. Add logbook entries and context metadata: detailed=True. Script-style
+           action paths (sequence/, numeric) are always matched regardless of
+           this flag.
+        4. Full variables at every step: deduplicate=False.
         """
         try:
             # Determine domain from entity_id

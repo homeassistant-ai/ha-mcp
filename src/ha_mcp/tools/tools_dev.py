@@ -1865,12 +1865,6 @@ class DevTools:
         update Home Assistant Apps (add-ons) or HACS packages use
         ha_manage_app / ha_manage_hacs.
 
-        When to use: development/testing workflows — inspecting how this
-        server is deployed, switching the in-process (custom component)
-        server to another release channel or an arbitrary pip spec such
-        as a PR tarball, and restarting the server so config or code
-        changes take effect.
-
         Caveats: update_source changes ONLY the ha_mcp_tools custom
         component's separate in-process server entry — it never updates
         the app (add-on), Docker, standalone, or PyPI server that may be
@@ -1885,21 +1879,12 @@ class DevTools:
         connection in embedded and app deployments (the reply
         arrives just before the server goes down) and supports those
         two deployments only (standalone processes must be restarted
-        externally). list_pending/approve/deny are exempt from policy
-        gating (gating queue management would deadlock approvals), so
-        approve/deny instead require the separate
-        'dev_tools_security_policy_access' setting — off by default,
-        because gated-call errors carry the approval token and an agent
-        could otherwise self-approve its own gated calls. Dev mode is a
-        trusted-operator feature; leave it off otherwise.
+        externally). approve/deny require the separate
+        'dev_tools_security_policy_access' setting, off by default.
 
         EXAMPLES:
-        ha_dev_manage_server("info")
-        ha_dev_manage_server("update_source", channel="dev")
         ha_dev_manage_server("update_source", pip_spec="https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/1234/head.tar.gz")
         ha_dev_manage_server("update_source", pip_spec="clear", channel="stable")
-        ha_dev_manage_server("restart")
-        ha_dev_manage_server("list_pending")
         ha_dev_manage_server("approve", token="abc123")
         """
         try:

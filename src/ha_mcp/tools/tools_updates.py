@@ -960,20 +960,13 @@ class UpdateTools:
         Installs run asynchronously in Home Assistant and can take minutes:
         'install' returns once the service calls are accepted, with per-entity
         results. Poll action='list' to watch in_progress until installed_version
-        reaches latest_version.
+        reaches latest_version. action='list' also returns ha_mcp_update — this
+        MCP server's own update status {current, latest, update_available}, so
+        a newer ha-mcp release can be flagged.
 
         EXAMPLES:
-        - List all updates: ha_manage_updates()
         - Pre-update analysis: ha_manage_updates(action="get", entity_ids=["update.home_assistant_core_update"], include_release_notes=True)
         - Update everything pending in a category: ha_manage_updates(action="install", categories=["addons", "hacs"])
-
-        RETURNS (action='list'): updates_available, updates, categories, and
-        ha_mcp_update -- this MCP server's own update status {current, latest,
-        update_available}, so a newer ha-mcp release can be flagged.
-
-        RETURNS (action='get'): update details, release notes; with
-        include_release_notes=True on Core also breaking_changes.entries[],
-        multi_version_release_notes[], and installed_integrations.
         """
         try:
             if action == "list":

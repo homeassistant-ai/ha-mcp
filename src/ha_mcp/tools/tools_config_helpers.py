@@ -3937,17 +3937,14 @@ class HelperConfigTools:
             ),
         ] = 0,
     ) -> dict[str, Any]:
-        """
-        List Home Assistant helpers of a specific type with their configurations.
+        """List Home Assistant helpers of a specific type with their configurations.
 
         Returns one page of helpers; `total_count` and `has_more` report the full
-        set. Each record carries the complete configuration for its helper,
-        including:
-        - id (immutable storage key), entity_id (current — address the helper by
-          this, where available), name (current display name), original_name
-          (creation-time name), icon
-        - Type-specific settings (min/max for input_number, options for input_select, etc.)
-        - Area and label assignments
+        set. Each record carries the complete configuration for its helper:
+        id (immutable storage key), entity_id (current — address the helper by
+        this, where available), name (current display name), original_name
+        (creation-time name), icon, type-specific settings, and area and label
+        assignments.
 
         For a helper renamed in the UI, id/original_name keep the storage values while
         entity_id/name reflect the current entity registry (entity_id is the identifier
@@ -3956,44 +3953,25 @@ class HelperConfigTools:
         the entity registry — types with no backing entity (e.g. tag), and every record when
         the registry read degrades, carry only id/name (a warning flags the degraded case).
 
-        SUPPORTED HELPER TYPES:
-        - input_button: Virtual buttons for triggering automations
-        - input_boolean: Toggle switches/checkboxes
-        - input_select: Dropdown selection lists
-        - input_number: Numeric sliders/input boxes
-        - input_text: Text input fields
-        - input_datetime: Date/time pickers
-        - counter: Counters with increment/decrement/reset
-        - timer: Countdown timers with start/pause/cancel
-        - schedule: Weekly schedules with time ranges (on/off per day)
-        - zone: Geographical zones for presence detection
-        - person: Person entities linked to device trackers
-        - tag: NFC/QR tags for automation triggers
-
-        EXAMPLES:
-        - List all number helpers: ha_config_list_helpers("input_number")
-        - List all counters: ha_config_list_helpers("counter")
-        - List all zones: ha_config_list_helpers("zone")
-        - List all persons: ha_config_list_helpers("person")
-        - List all tags: ha_config_list_helpers("tag")
-        - List every helper type at once: ha_config_list_helpers("all")
-        - Next page: ha_config_list_helpers("input_boolean", offset=100)
-
-        **NOTE:** Storage types list what HA's ``{type}/list`` command returns:
-        the storage-backed helpers (created via UI/API), not the YAML-defined
-        ones. ``person`` is the exception — HA lists its YAML-configured persons
+        Storage types list what HA's ``{type}/list`` command returns: the
+        storage-backed helpers (created via UI/API), not the YAML-defined ones.
+        ``person`` is the exception — HA lists its YAML-configured persons
         alongside the storage ones, so both appear here.
 
         Flow-based types (template / group / utility_meter / derivative / etc.)
         require the ha_mcp_tools custom component (>= 1.1.0) and are served only
-        through it. Requesting a flow
-        type without the component returns a COMPONENT_NOT_INSTALLED error.
+        through it. Requesting a flow type without the component returns a
+        COMPONENT_NOT_INSTALLED error.
 
         With helper_type="all", each record carries its own ``helper_type``.
-        This mode is component-only
-        (there is no single built-in command that lists all types): without the
-        ha_mcp_tools component it returns a COMPONENT_NOT_INSTALLED error rather
-        than a partial or empty list.
+        This mode is component-only (there is no single built-in command that
+        lists all types): without the ha_mcp_tools component it returns a
+        COMPONENT_NOT_INSTALLED error rather than a partial or empty list.
+
+        EXAMPLES:
+        - List all counters: ha_config_list_helpers("counter")
+        - List every helper type at once: ha_config_list_helpers("all")
+        - Next page: ha_config_list_helpers("input_boolean", offset=100)
 
         For detailed helper documentation, use ha_get_skill_guide.
         """
@@ -4751,82 +4729,48 @@ class HelperConfigTools:
         # here — see strict_bps.py for the declaration contract.
         BestPracticeKey: BestPracticeKeyParam = None,
     ) -> dict[str, Any]:
-        """
-        Create or update Home Assistant helper entities and config subentries
+        """Create or update Home Assistant helper entities and config subentries
         (30 types, unified interface).
 
         MUST call ha_get_skill_guide OR refer to your locally installed skills first.
-
-        SIMPLE/FLOW helper create requires `name`; SIMPLE/FLOW helper update
-        requires `helper_id`. Config subentry create requires `entry_id` and
-        `subentry_type`; config subentry update also requires `subentry_id`.
+        ``helper-selection.md`` ships under ``skill_content`` by default.
 
         SIMPLE types (structured params, WebSocket API): input_boolean, input_button,
         input_select, input_number, input_text, input_datetime, counter, timer, schedule,
-        zone, person, tag.
+        zone, person, tag. Create requires `name`; update requires `helper_id`.
 
         FLOW types (pass `config` dict, Config Entry Flow API): template, group,
         utility_meter, derivative, min_max, threshold, integration, statistics, trend,
         random, filter, tod, generic_thermostat, switch_as_x, generic_hygrostat,
-        history_stats, mold_indicator.
-        Note: `tod` is the purpose-built "is-current-time-in-range" indicator
-        (supports cross-midnight ranges, unlike `schedule`).
-        Note: `otp` is a helper in the HA UI but is not offered here — its flow
-        requires a live TOTP code. Create it with ha_set_integration(domain="otp"),
-        as with any other helper-domain flow outside this list.
+        history_stats, mold_indicator. Create requires `name`; for updates pass the
+        existing entry_id as `helper_id` (options flows reject the `name` key).
+        `otp` is a helper in the HA UI but not offered here — its flow needs a live
+        TOTP code; create it with ha_set_integration(domain="otp").
 
-        CONFIG_SUBENTRY type (Config Subentry Flow API): config_subentry.
-        Pass `entry_id`, `subentry_type`, and `config`. Pass `subentry_id` to
-        reconfigure an existing subentry; omit it to create a new subentry.
+        CONFIG_SUBENTRY type (Config Subentry Flow API): pass `entry_id`,
+        `subentry_type` and `config`; pass `subentry_id` to reconfigure an existing
+        subentry, omit it to create one.
 
-        For flow-type updates, pass the existing entry_id as `helper_id`. Options flows
-        reject the `name` key on update.
+        Behavior:
+        - UPDATE preserves type-specific fields not re-passed (a rename never wipes
+          initial/icon/etc.); flow-helper and config subentry updates behave the same
+          way (see `config`).
+        - Omitted `action` falls back to the `helper_id`-presence discriminator
+          (SIMPLE/FLOW) or the `subentry_id`-presence discriminator (config
+          subentries).
+        - For flow-based helpers, config keys not declared by any step's data_schema
+          are silently ignored by HA. Validation errors carry the helper's
+          `data_schema` (and `menu_options` for menu-rooted helpers like
+          `template`/`group` when no sub-type is chosen yet), so a follow-up call
+          can self-correct without a separate schema-discovery round-trip.
+        - Flows that present more than one menu (e.g. an MQTT device subentry
+          reconfigure looping through its summary menu) take `next_step_id` as a
+          LIST of successive selections, consumed one per menu encounter.
 
-        Behavior notes:
-        - UPDATE preserves type-specific fields not re-passed (rename never wipes
-          initial/icon/etc. for any simple helper). Flow-helper and config
-          subentry updates behave the same way (see `config`).
-        - Pass `action="create"` or `action="update"` to disambiguate intent.
-          For SIMPLE/FLOW helpers, omitted action falls back to the implicit
-          `helper_id`-presence discriminator. For config subentries, omitted
-          action falls back to the `subentry_id`-presence discriminator.
-        - For flow-based helpers, config keys not declared by any step's
-          data_schema are silently ignored by HA; submit once and the
-          validation error returns the `data_schema` for that helper so
-          subsequent calls use the correct field names.
-        - Validation errors raised by this tool carry the helper's
-          `data_schema` in the response context (and `menu_options` for
-          menu-rooted helpers like `template`/`group` when no sub-type is
-          chosen yet) so a follow-up call can self-correct without a
-          separate schema-discovery round-trip.
-        - Flows that present more than one menu (e.g. an MQTT device
-          subentry reconfigure looping through its summary menu) take
-          `next_step_id` as a LIST of successive selections, consumed one
-          per menu encounter.
-
-        EXAMPLES (menu-based types + tod, where first-call payload is non-obvious):
-        - template sensor:
-            ha_config_set_helper(helper_type="template", name="Room Temp",
-                config={"next_step_id": "sensor",
-                        "state": "{{ states('sensor.x')|float }}",
-                        "unit_of_measurement": "°C"})
-        - group (light):
-            ha_config_set_helper(helper_type="group", name="Kitchen Lights",
-                config={"group_type": "light",
-                        "entities": ["light.a", "light.b"]})
-        - tod (time-of-day indicator, cross-midnight OK):
-            ha_config_set_helper(helper_type="tod", name="Quiet Hours",
-                config={"after_time": "22:00:00", "before_time": "07:00:00"})
-        - config subentry (create under an existing integration):
-            ha_config_set_helper(helper_type="config_subentry",
-                entry_id="01HXYZ...", subentry_type="conversation",
-                config={"name": "Local agent", "model": "gemma3:27b"})
-
-        ``helper-selection.md`` ships in this response under
-        ``skill_content`` by default — decision
-        matrix for picking the right helper type plus worked examples
-        and per-type field tables. For deeper helper-design guidance
-        beyond what ships here, call ha_get_skill_guide.
+        EXAMPLES (menu-based types, where the first-call payload is non-obvious):
+        - template sensor: ha_config_set_helper(helper_type="template", name="Room Temp", config={"next_step_id": "sensor", "state": "{{ states('sensor.x')|float }}", "unit_of_measurement": "°C"})
+        - group: ha_config_set_helper(helper_type="group", name="Kitchen Lights", config={"group_type": "light", "entities": ["light.a", "light.b"]})
+        - config subentry: ha_config_set_helper(helper_type="config_subentry", entry_id="01HXYZ...", subentry_type="conversation", config={"name": "Local agent", "model": "gemma3:27b"})
         """
         try:
             if helper_type == "config_subentry":

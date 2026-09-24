@@ -387,30 +387,21 @@ class ResourceTools:
             ),
         ] = 0,
     ) -> dict[str, Any]:
-        """
-        List Lovelace dashboard resources (custom cards, themes, CSS/JS).
+        """List Lovelace dashboard resources (custom cards, themes, CSS/JS).
 
         Returns one page of registered resources; `total_count` and `has_more`
-        report the full set. For inline resources (created with
-        ha_config_set_dashboard_resource(content=...)), shows a preview of the content
-        instead of the full encoded URL to save tokens.
-
-        `inline_count` and `by_type` summarise every resource, not just this page.
-
-        Resource types:
-        - module: ES6 JavaScript modules (modern custom cards)
-        - js: Legacy JavaScript files
-        - css: CSS stylesheets
-
-        Each resource has a unique ID for update/delete operations.
+        report the full set, and `inline_count` and `by_type` summarise every
+        resource, not just this page. Each resource has a unique ID for
+        update/delete operations. For inline resources (created with
+        ha_config_set_dashboard_resource(content=...)), shows a preview of the
+        content instead of the full encoded URL to save tokens.
 
         EXAMPLES:
-        - First page of resources: ha_config_list_dashboard_resources()
         - Next page: ha_config_list_dashboard_resources(offset=100)
         - List with full content: ha_config_list_dashboard_resources(include_content=True)
 
-        Note: Home Assistant 2026.6+ exposes resource management in the UI by
-        default, and API access works regardless of UI availability.
+        Home Assistant 2026.6+ exposes resource management in the UI by default;
+        API access works regardless of UI availability.
         """
         try:
             result = await self._client.send_websocket_message(
@@ -510,72 +501,32 @@ class ResourceTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Create or update a dashboard resource (inline code or external URL).
+        """Create or update a dashboard resource (inline code or external URL).
 
         Provide exactly one of:
         - content: Inline JavaScript or CSS code (embedded in the resource URL
-          as a data: URI — no file storage or external hosting involved)
-        - url: External resource URL (/local/, /hacsfiles/, or https://...)
-
-        INLINE MODE (content=):
-        - Custom card code written inline
-        - CSS styling for dashboards
-        - Self-contained files up to ~128KB
-        - URLs are deterministic (same content = same URL)
-        - Content must be self-contained: a data: URI has no base URL, so
-          relative imports inside a module and relative url() references
-          inside CSS cannot resolve (use fully-qualified URLs instead)
-        - If Home Assistant is behind a reverse proxy that injects a
-          Content-Security-Policy without 'data:' in script-src/style-src,
-          the browser blocks these resources: this call still succeeds and
-          the card simply never renders. Register the code as a file and
-          use url='/local/...' on such a deployment. (HA itself ships no CSP.)
-        - Supports 'module' and 'css' types only (not 'js')
-
-        URL MODE (url=):
-        - Files in /config/www/ directory (/local/...)
-        - HACS-installed cards (/hacsfiles/...)
-        - External CDN resources (https://...)
-        - Supports all types: 'module', 'js', 'css'
+          as a data: URI — no file storage or external hosting involved).
+          Supports 'module' and 'css' types only (not 'js'); URLs are
+          deterministic (same content = same URL); up to ~128KB. Content must be
+          self-contained: a data: URI has no base URL, so relative imports inside
+          a module and relative url() references inside CSS cannot resolve (use
+          fully-qualified URLs instead). If Home Assistant is behind a reverse
+          proxy that injects a Content-Security-Policy without 'data:' in
+          script-src/style-src, the browser blocks these resources: this call
+          still succeeds and the card simply never renders. Register the code as
+          a file and use url='/local/...' on such a deployment. (HA itself ships
+          no CSP.)
+        - url: External resource URL — /local/... (files in /config/www/),
+          /hacsfiles/... (HACS-installed cards) or https://... (CDN). Supports
+          all types: 'module', 'js', 'css'.
 
         EXAMPLES:
+        - Inline: ha_config_set_dashboard_resource(content="class MyCard extends HTMLElement { ... } customElements.define('my-card', MyCard);", resource_type="module")
+        - HACS card (after ha_manage_hacs(action='download')): ha_config_set_dashboard_resource(url="/hacsfiles/lovelace-mushroom/mushroom.js", resource_type="module")
+        - Update: ha_config_set_dashboard_resource(url="/local/my-card-v2.js", resource_type="module", resource_id="abc123")
 
-        Inline custom card:
-        ha_config_set_dashboard_resource(
-            content=\"\"\"
-            class MyCard extends HTMLElement {
-              setConfig(config) { this.config = config; }
-              set hass(hass) {
-                this.innerHTML = `<ha-card>Hello ${hass.states[this.config.entity]?.state}</ha-card>`;
-              }
-            }
-            customElements.define('my-card', MyCard);
-            \"\"\",
-            resource_type="module"
-        )
-
-        Add custom card from www/ directory:
-        ha_config_set_dashboard_resource(
-            url="/local/my-custom-card.js",
-            resource_type="module"
-        )
-
-        Add HACS card (after installing via ha_manage_hacs(action='download')):
-        ha_config_set_dashboard_resource(
-            url="/hacsfiles/lovelace-mushroom/mushroom.js",
-            resource_type="module"
-        )
-
-        Update existing resource:
-        ha_config_set_dashboard_resource(
-            url="/local/my-card-v2.js",
-            resource_type="module",
-            resource_id="abc123"
-        )
-
-        Note: After adding a resource, clear browser cache or hard refresh
-        (Ctrl+Shift+R) to load changes.
+        After adding a resource, a browser cache clear or hard refresh
+        (Ctrl+Shift+R) is needed to load it.
         """
         # Validate: exactly one of content or url must be provided
         if content is not None and url is not None:

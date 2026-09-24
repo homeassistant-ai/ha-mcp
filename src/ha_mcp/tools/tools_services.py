@@ -135,18 +135,10 @@ class ServiceDiscoveryTools:
 
         Discovers services/actions that can be called via ha_call_service.
 
-        Examples:
-            # Browse first page of all services (compact)
-            ha_list_services()
-
-            # List all light services with full parameter details
-            ha_list_services(domain="light", detail_level="full")
-
-            # Search for temperature-related services
-            ha_list_services(query="temperature")
-
-            # Paginate through all services
-            ha_list_services(offset=50)
+        EXAMPLES:
+        - Light services with full parameter details: ha_list_services(domain="light", detail_level="full")
+        - Search: ha_list_services(query="temperature")
+        - Next page: ha_list_services(offset=50)
         """
         parsed_fields: list[str] | None = None
         if fields is not None:

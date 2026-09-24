@@ -330,49 +330,31 @@ class HistoryTools:
         ] = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        """
-        Get historical data from Home Assistant's recorder.
+        """Get historical data from Home Assistant's recorder.
 
-        **Shared params:** entity_ids, start_time, end_time, limit, offset
-        **History params:** minimal_response, significant_changes_only
-        **Statistics params:** period, statistic_types
+        Use source="history" (default) to troubleshoot why a value changed, check
+        event sequences, or analyze recent patterns. Use source="statistics" for
+        long-term trends beyond the ~10-day recorder retention and period
+        averages; entities must have state_class (measurement, total,
+        total_increasing).
 
-        **Use ha_get_history (default) when:**
-        - Troubleshooting why a value changed ("Why was my bedroom cold last night?")
-        - Checking event sequences ("Did my garage door open while I was away?")
-        - Analyzing recent patterns ("What time does motion usually trigger?")
+        History-only params: minimal_response, significant_changes_only.
+        Statistics-only params: period, statistic_types.
 
-        **Use ha_get_history(source="statistics") when:**
-        - Tracking long-term trends beyond 10 days ("Energy use this month vs last month?")
-        - Computing period averages ("Average living room temperature over 6 months?")
-        - Entities must have state_class (measurement, total, total_increasing)
+        All data is fetched from HA before slicing; limit/offset are client-side.
+        With multiple entity_ids, offset must be 0 — use a single entity_id for
+        offset > 0. Use has_more and next_offset from the response to paginate.
+        Administrators can optionally enable recorder workload guardrails in
+        Advanced settings. When enabled, oversized entity/time workloads are
+        rejected before the recorder query is issued; narrow the time range or
+        entity list to stay within the budget. Calendar statistics may first
+        read HA's configured timezone so the estimate follows local calendar
+        boundaries.
 
-        **WARNING:** All data is fetched from HA before slicing; limit/offset are client-side.
-        With multiple entity_ids, offset must be 0 — use a single entity_id for offset > 0.
-        Use has_more and next_offset from the response to paginate.
-        Administrators can optionally enable recorder workload guardrails in Advanced
-        settings. When enabled, oversized entity/time workloads are rejected before the
-        recorder query is issued; narrow the time range or entity list to stay within
-        the budget. Calendar statistics may first read HA's configured timezone so the
-        estimate follows local calendar boundaries.
-
-        **Example -- history (default):**
-        ```python
-        ha_get_history(entity_ids="sensor.bedroom_temperature", start_time="24h")
-        ha_get_history(entity_ids=["sensor.temperature", "sensor.humidity"], start_time="3d", limit=500)
-        # Default order="desc" returns newest states first.
-        # To paginate oldest-first, use order="asc":
-        ha_get_history(entity_ids="sensor.temperature", start_time="7d", limit=100, offset=100, order="asc")
-        ```
-
-        **Example -- statistics:**
-        ```python
-        ha_get_history(source="statistics", entity_ids="sensor.total_energy_kwh", start_time="30d", period="day")
-        ha_get_history(source="statistics", entity_ids="sensor.living_room_temperature",
-                       start_time="6m", period="month", statistic_types=["mean", "min", "max"])
-        ha_get_history(source="statistics", entity_ids="sensor.energy_kwh",
-                       start_time="30d", period="5minute", limit=100, offset=200)
-        ```
+        EXAMPLES:
+        - ha_get_history(entity_ids="sensor.bedroom_temperature", start_time="24h")
+        - Paginate oldest-first: ha_get_history(entity_ids="sensor.temperature", start_time="7d", limit=100, offset=100, order="asc")
+        - ha_get_history(source="statistics", entity_ids="sensor.living_room_temperature", start_time="6m", period="month", statistic_types=["mean", "min", "max"])
         """
         parsed_fields: list[str] | None = None
         if fields is not None:

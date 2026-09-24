@@ -265,17 +265,16 @@ class BlueprintTools:
         that is ``ha_config_set_automation`` / ``ha_config_set_script`` with a
         ``use_blueprint`` config.
 
-        To duplicate a blueprint,
-        ``get`` it and ``save`` its ``yaml`` under a new ``path``; to edit one in
-        place, ``get`` it, change the text, and ``save`` it back to the same
-        ``path`` with ``overwrite=True``.
+        To duplicate a blueprint, ``get`` it and ``save`` its ``yaml`` under a
+        new ``path``; to edit one in place, ``get`` it, change the text, and
+        ``save`` it back to the same ``path`` with ``overwrite=True``.
 
         ``get`` also reports ``used_by``: the automations or scripts built on
         the blueprint, which is the UI's "Show automations using this
         blueprint". Check it before deleting — Home Assistant refuses to delete a
-        blueprint anything still uses, and it goes on counting a consumer that
-        has since taken control of its own config until that consumer is
-        removed.
+        blueprint anything still uses (the error lists the consumers), and it
+        goes on counting a consumer that has since taken control of its own
+        config until that consumer is removed.
 
         CAVEATS: ``get`` returns the on-disk YAML only when something can read
         it — an in-process server, the ha_mcp_tools component, the File & YAML
@@ -283,36 +282,24 @@ class BlueprintTools:
         which one answered, and ``source_url`` text is a fresh download that can
         differ from the installed file. Core's blueprint API alone exposes
         metadata only, so a locally authored blueprint on a bare install has no
-        readable text. Home Assistant refuses ``delete`` while any automation or
-        script still uses the blueprint — the error lists the consumers. Both
-        writes are snapshotted first when a copy can be read, so
-        ``ha_manage_backup(scope="edits")`` can restore the previous file.
-        ``substitute`` only renders — it writes nothing, so pass the returned
-        config to ``ha_config_set_automation`` / ``ha_config_set_script`` to
-        persist it. To convert an automation or script that ALREADY exists,
-        prefer ``ha_config_set_automation`` / ``ha_config_set_script`` with
-        ``take_control_of_blueprint=True``: it renders with that item's own
-        current inputs and saves the result over itself in one call, where
-        ``substitute`` would need those inputs restated and the config written
-        back by hand. Taking control does NOT free the blueprint — Home
-        Assistant goes on counting a converted automation or script as a user
-        of it, so ``delete`` stays refused until the consumers are removed.
+        readable text. Both writes are snapshotted first when a copy can be
+        read, so ``ha_manage_backup(scope="edits")`` can restore the previous
+        file. ``substitute`` only renders — it writes nothing, so pass the
+        returned config to ``ha_config_set_automation`` /
+        ``ha_config_set_script`` to persist it. To convert an automation or
+        script that ALREADY exists, prefer those tools' ``take_control_of_blueprint=True``:
+        it renders with that item's own current inputs and saves the result over
+        itself in one call.
 
         EXAMPLES:
-        - List: ha_manage_blueprints(action="list", domain="automation")
         - Get one (with its consumers in ``used_by``): ha_manage_blueprints(action="get", path="homeassistant/motion_light.yaml")
         - Import: ha_manage_blueprints(action="import", url="https://example.com/bp.yaml")
-        - Duplicate: ha_manage_blueprints(action="save", path="user/my_copy.yaml", yaml=<text from get>)
         - Edit in place: ha_manage_blueprints(action="save", path="user/motion.yaml", yaml=<edited text>, overwrite=True)
         - Delete: ha_manage_blueprints(action="delete", path="user/motion.yaml", confirm=True)
-        - Detach: ha_manage_blueprints(action="substitute", path="user/motion.yaml", input={"motion_sensor": "binary_sensor.hall"})
-        - Convert an existing consumer to a standalone config: ha_config_set_automation(identifier="automation.hall", take_control_of_blueprint=True)
+        - Render standalone: ha_manage_blueprints(action="substitute", path="user/motion.yaml", input={"motion_sensor": "binary_sensor.hall"})
 
-        RELATED TOOLS: ``ha_config_set_automation`` / ``ha_config_set_script``
-        to build on a blueprint or persist a substituted config,
-        ``ha_config_remove_automation`` / ``ha_config_remove_script`` to clear
-        consumers blocking a delete, ``ha_search`` to find them, and
-        ``ha_manage_backup(scope="edits")`` to restore a deleted blueprint.
+        RELATED TOOLS: ``ha_config_remove_automation`` / ``ha_config_remove_script``
+        to clear consumers blocking a delete, ``ha_search`` to find them.
         """
         try:
             # import takes its domain from the blueprint file, so a stray

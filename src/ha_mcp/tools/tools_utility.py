@@ -389,81 +389,36 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """
-        Execute a Jinja2 template render, or an automation condition check, in Home Assistant.
+        """Execute a Jinja2 template render, or an automation condition check, in Home Assistant.
 
         Renders templates with Home Assistant's template engine (all states,
         functions and filters available), or checks a condition block the way
         an automation would and returns true/false.
 
-        **When NOT to use this for automation/script logic:**
-        Templates have legitimate uses (notification bodies, dynamic `data.*` values,
-        debugging existing templates), but `condition:` / `trigger:` positions and
-        action service names are better expressed as native HA constructs:
-        native constructs are schema-validated at config load and surface
-        structural errors loudly, whereas equivalent template logic only errors
-        at runtime — and a template that renders a non-truthy value is silently
-        treated as false.
-        Prefer:
-        - `condition: numeric_state` over `{{ states('x') | float > N }}`
-        - `condition: state` over `{{ is_state(...) }}`
-        - `condition: time` / `condition: sun` over `now().hour` / `is_state('sun.sun', ...)`
-        - Native `for:` field on state/numeric_state triggers and state conditions over
-          `{{ now() - X.last_changed > timedelta(...) }}` duration math
-        - `choose` action over templated `service:` / `action:` strings
-        Test those native conditions here with `condition` before putting them in
-        an automation. See `ha_get_skill_guide` (best-practices skill) for the
-        full anti-pattern list.
+        When to use: any one-shot answer DERIVED from current HA state (an
+        average across sensors, a count of entities matching a condition, a
+        rendered message with live values), and testing a template or condition
+        before embedding it in an automation. One render beats fetching N states
+        and doing the math yourself.
 
-        **When to use (reach for this tool, don't compute it yourself):**
-        Any one-shot question whose answer is DERIVED from current HA state — an
-        average/sum/min/max across sensors, a count of entities matching a
-        condition, a boolean comparison, or a rendered message with live values.
-        One render call beats fetching N states and doing the math yourself, and
-        it is the canonical way to *test* a template or condition before embedding
-        it. This is for one-shot answers and testing only — NOT for putting
-        templates into automation logic; for `condition:` / `trigger:` positions
-        native constructs win.
-        - "average temperature across the bedroom sensors"
-          -> `{{ ([states('sensor.a'), states('sensor.b')] | map('float', 0) | sum) / 2 }}`
-        - "how many lights are on"
-          -> `{{ states.light | selectattr('state', 'eq', 'on') | list | count }}`
-        - "would this automation condition pass right now"
-          -> `condition={"condition": "state", "entity_id": "light.x", "state": "on"}`
-        NOT for a plain single-entity value ("what's the state of X") — that is
-        `ha_get_state` / `ha_search`; rendering `{{ states('X') }}` there is over-use.
+        When NOT to use: a plain single-entity value is ha_get_state /
+        ha_search. Templates in automation `condition:` / `trigger:` positions
+        or templated action names: prefer native constructs, which are validated
+        at config load, where a template only errors at runtime and a non-truthy
+        render is silently false — see ha_get_skill_guide for the anti-pattern
+        list. Test the native condition here with `condition`.
 
-        **Results and errors:**
-        - A render that works but hits something suspect (an undefined variable,
-          a missing attribute) still returns its result, with the messages in
-          `warnings`. Use `strict=true` to make those hard errors.
-        - A failed render returns Home Assistant's error text. With the
-          ha_mcp_tools component installed it also returns the template `line`
-          and `source_line` it failed on, when the error names one.
+        Results: a render that works but hits something suspect (an undefined
+        variable, a missing attribute) still returns its result with the
+        messages in `warnings`; strict=true makes those hard errors. A failed
+        render returns Home Assistant's error text and, with the ha_mcp_tools
+        component installed, the template `line` and `source_line` it failed on
+        when the error names one.
 
-        **Common Template Functions:**
-        ```jinja2
-        {{ states('sensor.temperature') }}              # Entity state value
-        {{ state_attr('light.bedroom', 'brightness') }} # Entity attribute
-        {{ is_state('light.living_room', 'on') }}       # State check
-        {{ states('sensor.humidity') | int(0) }}        # Convert with default
-        {{ now().strftime('%H:%M:%S') }}                # Format current time
-        {{ area_entities('living_room') }}              # Entities in an area
-        {{ device_id('light.bedroom') }}                # Device ID for an entity
-        ```
-
-        **Examples:**
-        ```python
-        ha_eval_template(template="{{ (states('sensor.temperature') | float(0) + 5) | round(1) }}")
-        ha_eval_template(template="Hello {{ name }}", variables={"name": "Alice"})
-        ha_eval_template(condition={"condition": "numeric_state",
-                                    "entity_id": "sensor.temperature", "above": 20})
-        ha_eval_template(condition={"condition": "and", "conditions": [
-            {"condition": "state", "entity_id": "sun.sun", "state": "above_horizon"},
-            {"condition": "time", "after": "06:00:00"}]})
-        ```
-
-        **For template documentation:** https://www.home-assistant.io/docs/configuration/templating/
+        EXAMPLES:
+        - ha_eval_template(template="{{ states.light | selectattr('state', 'eq', 'on') | list | count }}")
+        - ha_eval_template(template="Hello {{ name }}", variables={"name": "Alice"})
+        - ha_eval_template(condition={"condition": "numeric_state", "entity_id": "sensor.temperature", "above": 20})
         """
         return await tools.eval_template(
             template, condition, variables, strict, timeout, report_errors

@@ -1340,40 +1340,25 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     ) -> dict[str, Any]:
         """Create and run a custom tool in a sandbox, or manage saved custom tools.
 
-        ⚠️  **LAST RESORT** — search for existing tools first.
+        LAST RESORT — search for existing tools first.
 
-        **Modes** (mutually exclusive):
-        - ``code`` + ``justification``
-        - ``run_saved``
-        - ``list_saved=True``
+        **Modes** (mutually exclusive): ``code`` + ``justification``;
+        ``run_saved``; ``list_saved=True``.
 
         **Available functions in sandbox:**
-        - ``api_get(endpoint)`` — GET request to HA REST API
-        - ``api_post(endpoint, data)`` — POST request to HA REST API
-        - ``ws_send(message)`` — send a HA WebSocket command (e.g. registry
-          lookups, ``render_template``, dashboard ops). ``message`` must include
-          a ``"type"`` field; the MCP server adds ``id`` and handles auth.
+        - ``api_get(endpoint)`` / ``api_post(endpoint, data)`` — HA REST API,
+          for operations not covered by existing tools
+        - ``ws_send(message)`` — send a HA WebSocket command, for operations
+          only available over WebSocket (most registry CRUD, template rendering,
+          Lovelace operations). ``message`` must include a ``"type"`` field; the
+          MCP server adds ``id`` and handles auth.
         - ``call_tool(name, args)`` — call a registered MCP tool
-        - ``delete_saved_tool(name)`` — remove a previously saved custom
-          tool by name. Returns ``{"deleted": True, "name": name}`` or
-          ``{"error": ...}``.
-
-        Use ``api_get``/``api_post`` for REST operations not covered by existing
-        tools.  Use ``ws_send`` when the operation is only available over the
-        Home Assistant WebSocket API (most registry CRUD, template rendering,
-        and Lovelace operations).  Use ``call_tool`` when an existing tool
-        already does what you need. Use ``delete_saved_tool`` to clean up
-        saved tools you no longer need.
+        - ``delete_saved_tool(name)`` — remove a previously saved custom tool.
+          Returns ``{"deleted": True, "name": name}`` or ``{"error": ...}``.
 
         Saved tools persist across server restarts when
-        ``CODE_MODE_SAVED_TOOLS_PATH`` is set (the addon sets this by
-        default to ``/data/saved_tools.json``).
-
-        Example — check repairs (no built-in tool for this):
-        ```python
-        repairs = await api_get("/repairs/issues")
-        repairs
-        ```
+        ``CODE_MODE_SAVED_TOOLS_PATH`` is set (the app sets this by default to
+        ``/data/saved_tools.json``).
 
         Example — list areas via WebSocket:
         ```python
@@ -1384,18 +1369,10 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Example — chain existing tools:
         ```python
         result = await call_tool("ha_search", {"query": "light", "limit": 5})
-        data = result.get("data", result)
-        lights = data.get("results", [])
+        lights = result.get("data", result).get("results", [])
         for e in lights:
-            await call_tool("ha_call_service", {
-                "domain": "light", "service": "turn_off",
-                "entity_id": e["entity_id"]})
+            await call_tool("ha_call_service", {"domain": "light", "service": "turn_off", "entity_id": e["entity_id"]})
         {"turned_off": len(lights)}
-        ```
-
-        Example — delete an obsolete saved tool:
-        ```python
-        delete_saved_tool("old_movie_mode")
         ```
         """
         _validate_custom_tool_modes(code, run_saved, list_saved)

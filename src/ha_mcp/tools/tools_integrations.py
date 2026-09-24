@@ -729,20 +729,11 @@ class IntegrationTools:
         With an entry_id: Returns detailed information including full options/configuration.
 
         EXAMPLES:
-        - List all integrations: ha_get_integration()
-        - Paginate: ha_get_integration(offset=50)
-        - Search: ha_get_integration(query="zigbee")
-        - Get specific entry: ha_get_integration(entry_id="abc123")
-        - Get entry with editable fields: ha_get_integration(entry_id="abc123", include_schema=True)
-        - Get entry with diagnostics dump: ha_get_integration(entry_id="abc123", include_diagnostics=True)
-        - Get device-scoped diagnostics: ha_get_integration(entry_id="abc123", include_diagnostics=True, device_id="dev123")
-        - Get the parsed KNX ETS project (group-address table): ha_get_integration(entry_id="<knx entry>", include_knx_project=True)
-        - Walk a sub-tree: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<dotted-path>")
-        - Paginate a large list: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<list-valued path>", diagnostics_data_limit=10, diagnostics_data_offset=20)
-        - List config subentries: ha_get_integration(entry_id="abc123", include_subentries=True)
-        - Inspect subentry create schema: ha_get_integration(entry_id="abc123", include_subentry_schema=True, subentry_type="conversation")
-        - Inspect subentry reconfigure schema: ha_get_integration(entry_id="abc123", include_subentry_schema=True, subentry_type="conversation", subentry_id="sub123")
-        - List template entries: ha_get_integration(domain="template")
+        - List / search: ha_get_integration(query="zigbee")
+        - Get an entry with its editable fields: ha_get_integration(entry_id="abc123", include_schema=True)
+        - Diagnostics dump, paged along a list-valued path: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<list-valued path>", diagnostics_data_limit=10, diagnostics_data_offset=20)
+        - Inspect a subentry reconfigure schema: ha_get_integration(entry_id="abc123", include_subentry_schema=True, subentry_type="conversation", subentry_id="sub123")
+        - List template entries with their options: ha_get_integration(domain="template")
 
         STATES: 'loaded', 'setup_error', 'setup_retry', 'not_loaded',
         'failed_unload', 'migration_error'.
@@ -757,18 +748,14 @@ class IntegrationTools:
         the OptionsFlow-derived read) while the raw nested section is preserved
         for fidelity, and an existing top-level key is never overwritten.
 
-        Each entry carries:
-
-        - ``log_level``: the canonical Python logger level name
-          (``DEBUG``/``INFO``/``WARNING``/``ERROR``/``CRITICAL``) when the
-          integration has a ``logger.set_level`` override, or ``"DEFAULT"``
-          (uppercase sentinel) when no override is set.
-        - ``log_level_raw``: the original numeric level (e.g. ``10`` for DEBUG)
-          when HA returned an int, ``None`` otherwise (no override set, or HA
-          provided a level name as a string).
-
-        This is distinct from the add-on side, where ``ha_get_app`` returns
-        Supervisor's lowercase ``"default"`` literal — do not cross-compare.
+        Each entry carries ``log_level``: the canonical Python logger level name
+        (``DEBUG``/``INFO``/``WARNING``/``ERROR``/``CRITICAL``) when the
+        integration has a ``logger.set_level`` override, or ``"DEFAULT"``
+        (uppercase sentinel) when no override is set; and ``log_level_raw``: the
+        original numeric level (e.g. ``10`` for DEBUG) when HA returned an int,
+        ``None`` otherwise. This is distinct from the app side, where
+        ``ha_get_app`` returns Supervisor's lowercase ``"default"`` literal — do
+        not cross-compare.
         """
         try:
             include_opts = include_options
@@ -1942,26 +1929,23 @@ class IntegrationTools:
         Use ha_get_integration() to find entry IDs, and
         ha_get_integration(entry_id=..., include_schema=True) to inspect the
         options fields before an update. Its supports_reconfigure field tells
-        you whether an entry qualifies for reconfigure=True; only integrations
-        implementing async_step_reconfigure do.
+        you whether an entry qualifies for reconfigure=True.
 
         Caveats: adding an integration runs its config flow exactly as the HA
         UI would (may pair devices, scan the network, create entities). Flows
         requiring a browser step (OAuth) or an asynchronous provider step
-        error out at that step with a structured error instead of completing.
-        Reconfigure edits the settings a live integration connects with: a
-        wrong host or credential takes it offline, and there is no automatic
-        rollback — the returned rollback metadata describes repeating the
-        official flow by hand with the previous values, which this tool cannot
-        read back. The preflight does not validate config keys against the
-        integration's form; wrong field names surface on the confirm call.
+        error out at that step instead of completing. Reconfigure edits the
+        settings a live integration connects with: a wrong host or credential
+        takes it offline, and there is no automatic rollback — the returned
+        rollback metadata describes repeating the official flow by hand with
+        the previous values, which this tool cannot read back. The preflight
+        does not validate config keys against the integration's form; wrong
+        field names surface on the confirm call.
 
         EXAMPLES:
-        - Disable: ha_set_integration(entry_id="abc123", enabled=False)
         - Add: ha_set_integration(domain="workday", config={"name": "Workday"})
         - Update options: ha_set_integration(entry_id="abc123", config={"scan_interval": 30})
-        - Reconfigure preflight: ha_set_integration(entry_id="abc123", reconfigure=True, config={"host": "10.0.0.5"})
-        - Reconfigure apply: repeat that call adding confirm_token="sha256:..."
+        - Reconfigure preflight: ha_set_integration(entry_id="abc123", reconfigure=True, config={"host": "10.0.0.5"}), then repeat adding confirm_token="sha256:..."
         """
         try:
             if reconfigure:
@@ -2228,75 +2212,42 @@ class IntegrationTools:
         - YAML-configured helpers — they have no storage backend. Edit the
           YAML file and reload the relevant integration.
 
-        SUPPORTED HELPER TYPES:
-        - SIMPLE (12, websocket-delete): input_button, input_boolean,
-          input_select, input_number, input_text, input_datetime, counter,
-          timer, schedule, zone, person, tag.
-        - FLOW (17, config-entry-delete via entity lookup): template, group,
-          utility_meter, derivative, min_max, threshold, integration,
-          statistics, trend, random, filter, tod, generic_thermostat,
-          switch_as_x, generic_hygrostat, history_stats, mold_indicator.
-
         ROUTING:
-        - SIMPLE helper_type + bare helper_id or entity_id → websocket delete.
-        - FLOW helper_type + entity_id → resolve entity_id to config_entry_id
-          via entity_registry, then delete the config entry. All sub-entities
-          (e.g. utility_meter tariffs) are removed together.
+        - SIMPLE helper_type (input_button, input_boolean, input_select,
+          input_number, input_text, input_datetime, counter, timer, schedule,
+          zone, person, tag) + bare helper_id or entity_id → websocket delete.
+        - FLOW helper_type (template, group, utility_meter, derivative, min_max,
+          threshold, integration, statistics, trend, random, filter, tod,
+          generic_thermostat, switch_as_x, generic_hygrostat, history_stats,
+          mold_indicator) + full entity_id → resolve entity_id to
+          config_entry_id via entity_registry, then delete the config entry. All
+          sub-entities (e.g. utility_meter tariffs) are removed together.
         - helper_type=None + entry_id → direct config entry delete (any
           integration).
         - helper_type="config_subentry" + parent entry_id + subentry_id →
           delete one config subentry.
 
-        MISSING-TARGET CONTRACT:
-        A target that is *confirmed absent* raises a structured error
-        rather than returning silent success, so a typo'd or stale
-        identifier surfaces immediately at the caller layer (the
-        ``success`` boolean is what agent wrappers branch on). The
-        error code per-path follows the target shape:
-        - SIMPLE (bare helper_id or entity_id): state-machine empty AND
-          entity registry empty → raises ``ENTITY_NOT_FOUND``.
-        - FLOW (entity_id): not in entity registry → raises
-          ``ENTITY_NOT_FOUND``. YAML-configured helpers (no config entry
-          backing) raise ``RESOURCE_NOT_FOUND``. A bare helper_id (no
-          ``.``) on a FLOW target raises ``ENTITY_NOT_FOUND`` — FLOW
-          resolution needs a full entity_id. TOCTOU 404 on the
-          resolved entry_id raises ``RESOURCE_NOT_FOUND``.
-        - Direct config entry (helper_type=None): backend returns HTTP
-          404 → raises ``RESOURCE_NOT_FOUND``.
-        - Config subentry: backend returns a "not_found" error → raises
-          ``RESOURCE_NOT_FOUND``.
-
-        Idempotency at the contract level still holds (call N times =
-        same response). Transient connectivity failures (WebSocket
-        disconnected, network timeouts) raise their own codes
-        (``WEBSOCKET_DISCONNECTED``, ``CONNECTION_FAILED``) so retry
-        logic can branch separately.
+        A target that is confirmed absent raises a structured error rather than
+        returning silent success: ENTITY_NOT_FOUND for a SIMPLE target missing
+        from both the state machine and the entity registry, or a FLOW
+        entity_id missing from the registry (a bare helper_id on a FLOW target
+        also raises it — FLOW resolution needs a full entity_id);
+        RESOURCE_NOT_FOUND for a YAML-configured helper with no config entry, a
+        config entry the backend reports as 404, or a missing config subentry.
+        Calling N times gives the same response. Transient connectivity failures
+        raise their own codes (WEBSOCKET_DISCONNECTED, CONNECTION_FAILED) so
+        retry logic can branch separately.
 
         EXAMPLES:
-        - Remove SIMPLE button:
-          ha_remove_helpers_integrations(
-              target="my_button", helper_type="input_button", confirm=True
-          )
-        - Remove FLOW utility_meter (any sub-entity works):
-          ha_remove_helpers_integrations(
-              target="sensor.energy_peak",
-              helper_type="utility_meter",
-              confirm=True,
-          )
-        - Remove any integration by entry_id:
-          ha_remove_helpers_integrations(
-              target="01HXYZ...", confirm=True
-          )
-        - Remove a config subentry:
-          ha_remove_helpers_integrations(
-              target="01HXYZ...", helper_type="config_subentry",
-              subentry_id="subentry-123", confirm=True
-          )
+        - Remove SIMPLE button: ha_remove_helpers_integrations(target="my_button", helper_type="input_button", confirm=True)
+        - Remove FLOW utility_meter (any sub-entity works): ha_remove_helpers_integrations(target="sensor.energy_peak", helper_type="utility_meter", confirm=True)
+        - Remove any integration by entry_id: ha_remove_helpers_integrations(target="01HXYZ...", confirm=True)
+        - Remove a config subentry: ha_remove_helpers_integrations(target="01HXYZ...", helper_type="config_subentry", subentry_id="subentry-123", confirm=True)
 
-        **WARNING:** Removing a helper or integration that is referenced by
+        WARNING: Removing a helper or integration that is referenced by
         automations, scripts, or other integrations may cause those to fail.
-        Use ha_search() / ha_get_integration() to verify before
-        removal. Recovery requires a usable backup and supported restore path.
+        Use ha_search() / ha_get_integration() to verify before removal.
+        Recovery requires a usable backup and supported restore path.
         """
         # === Confirm gate (uniform for all four paths) ===
         if not confirm:

@@ -2383,18 +2383,14 @@ class SearchTools:
             page the next call (iterate `offset = next_offset`); per-surface
             `entity_*`/`config_*` variants show which surface still has results.
 
-        For parameters, schema, and worked examples, see ha_get_skill_guide.
-
         Examples:
-            - List sensors in an area: ha_search(domain_filter="sensor", area_filter="Living Room")
             - Find a light by name: ha_search("kitchen", domain_filter="light")
+            - List sensors in an area: ha_search(domain_filter="sensor", area_filter="Living Room")
             - Find lights safely before an "all except one" control request:
               ha_search("living room", domain_filter="light",
               result_fields=["entity_id", "friendly_name", "is_group",
               "member_entity_ids"])
             - Which automations use an entity: ha_search("light.bed_light")
-            - Scenes touching a light: ha_config_get_scene(query="light.kitchen", search_in_config=True)
-            - Narrow the response to the entity bucket: ha_search("kitchen", fields=["entities"])
             - All unavailable entities: ha_search(state_filter="unavailable")
         """
         try:
@@ -4114,25 +4110,19 @@ class SearchTools:
         system-wide state, service, and registry data and can be expensive on large
         Home Assistant installations.
 
-        When (and only when) the ha-mcp settings-UI sidecar is running
-        (stdio mode, e.g. Claude Desktop / Claude Code), the response
-        includes a ``settings_url`` field — the local URL to the
-        tool-configuration page. Hand this URL to the user when they
-        ask how to enable or disable tools or change server settings.
-        It is present only when the sidecar URL file actually exists.
+        When the ha-mcp settings-UI sidecar is running (stdio mode, e.g. Claude
+        Desktop / Claude Code) the response carries ``settings_url``, the local
+        URL of the tool-configuration page; in standalone HTTP / Docker modes
+        with an HTTP settings prefix it instead carries ``settings_url_hint``,
+        saying where the page is mounted and how to construct the full URL. Hand
+        whichever is present to the user when they ask how to enable or disable
+        tools or change server settings.
 
-        In standalone HTTP / Docker modes, when an HTTP settings prefix is
-        advertised, there is no sidecar URL file and the server can't know its
-        externally reachable host. The response instead carries a
-        ``settings_url_hint`` string telling the user where the page is mounted
-        and how to find or construct the full URL.
-        Hand whichever of the two fields is present to the user.
-
-        The response also carries an ``ha_mcp_update`` object
-        ``{current, latest, update_available}`` reporting whether a newer ha-mcp
-        release is available (PyPI for pip/Docker, the Supervisor add-on store
-        for the add-on) — proactively tell the user when ``update_available`` is
-        true. Omitted only for the ``unknown`` version and when ``HA_MCP_DISABLE_UPDATE_CHECK`` is set.
+        The response also carries ``ha_mcp_update`` ``{current, latest,
+        update_available}`` (PyPI for pip/Docker, the Supervisor store for the
+        app) — proactively tell the user when ``update_available`` is true.
+        Omitted only for the ``unknown`` version and when
+        ``HA_MCP_DISABLE_UPDATE_CHECK`` is set.
         """
         # Validate fields= early so a malformed value returns VALIDATION_FAILED
         # with parameter="fields".
@@ -4812,36 +4802,26 @@ class SearchTools:
     ) -> dict[str, Any]:
         """Get current status, state, and attributes of one or more entities (lights, switches, sensors, climate, covers, locks, fans, etc.).
 
-        SINGLE ENTITY:
-        Pass a string entity_id. Returns the entity's full state and attributes.
+        Pass a string entity_id for one entity, or a list (max 100, duplicates
+        deduplicated) for several, fetched in parallel. A bulk call returns
+        success=True if at least one state was retrieved; check 'error_count'
+        for failed lookups.
 
-        MULTIPLE ENTITIES:
-        Pass a list of entity IDs (max 100). Efficiently retrieves states using
-        parallel requests. Duplicates are automatically deduplicated.
-        Returns success=True if at least one entity state was retrieved.
-        Check 'error_count' for any failed lookups in partial-success scenarios.
-
-        FIELDS PROJECTION:
-        `fields=` projects the per-entity record keys (see the fields= parameter
-        description for the full key list), NOT the outer bulk response wrapper.
-        In single-entity mode it filters keys of the returned record directly. In bulk
-        mode it filters keys of each record inside `states[entity_id]`; outer keys
-        (`success`, `count`, `states`, `errors`, ...) are always preserved.
-        `attribute_keys=` further narrows the `attributes` sub-dict and is only applied
-        when `"attributes"` is in `fields=` (or `fields=None`); otherwise it is a no-op.
-
-        When `attribute_keys=` is set but has no effect (because `attributes` was
-        excluded by `fields=`), a `warnings` list is emitted outside the projected
-        entity record(s): in bulk mode at the response wrapper level (sibling of
-        `success`/`count`/`states`); in single-entity mode at the top-level result
-        (sibling of `data`/`metadata`, since the projected record IS `data`).
-        The warnings list is never a record key, so `fields=["state"]` returns a
-        record with only `state` regardless of whether the no-effect warning fires.
+        `fields=` projects the per-entity record keys, NOT the outer bulk
+        response wrapper: in single-entity mode it filters the returned record;
+        in bulk mode it filters each record inside `states[entity_id]` while
+        outer keys (`success`, `count`, `states`, `errors`, ...) are always
+        preserved. `attribute_keys=` further narrows the `attributes` sub-dict
+        and is only applied when `"attributes"` is in `fields=` (or
+        `fields=None`); otherwise it is a no-op and a `warnings` list is emitted
+        outside the projected record(s) — at the response wrapper level in bulk
+        mode, at the top-level result (sibling of `data`/`metadata`) in
+        single-entity mode — so `fields=["state"]` still returns a record with
+        only `state`.
 
         EXAMPLES:
         - Single: ha_get_state("light.kitchen")
         - Multiple: ha_get_state(["light.kitchen", "light.living_room", "sensor.temperature"])
-        - State only: ha_get_state("light.kitchen", fields=["state"])
         - Slim bulk: ha_get_state(["light.kitchen", "sensor.temperature"], fields=["state", "attributes"], attribute_keys=["brightness"])
         """
         # Parse projection params once up front so the bulk loop doesn't re-parse

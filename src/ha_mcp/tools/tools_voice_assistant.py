@@ -227,27 +227,18 @@ class VoiceAssistantTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Get entity exposure settings - list all or get settings for a specific entity.
+        """Get entity exposure settings - list all or get settings for a specific entity.
 
-        Without an entity_id: Lists all entities and their exposure status to
-        voice assistants (Alexa, Google Assistant, Assist).
+        Without an entity_id: lists all entities and their exposure status to
+        voice assistants (Alexa, Google Assistant, Assist) as `exposed_entities`
+        plus a per-assistant `summary` count.
 
-        With an entity_id: Returns which voice assistants the specific entity
-        is exposed to.
+        With an entity_id: returns `exposed_to` (assistant -> True/False) and
+        `is_exposed_anywhere`.
 
         EXAMPLES:
-        - List all exposures: ha_get_entity_exposure()
         - Filter by assistant: ha_get_entity_exposure(assistant="cloud.alexa")
         - Get specific entity: ha_get_entity_exposure(entity_id="light.living_room")
-
-        RETURNS (when listing):
-        - exposed_entities: Dict mapping entity_ids to their exposure status
-        - summary: Count of entities exposed to each assistant
-
-        RETURNS (when getting specific entity):
-        - exposed_to: Dict of assistant -> True/False for each assistant
-        - is_exposed_anywhere: True if exposed to at least one assistant
 
         When the ha_mcp_tools component advertises the exposure capability, each
         record is additively enriched with the entity's name/area so no second
