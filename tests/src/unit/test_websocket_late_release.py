@@ -10,13 +10,24 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ha_mcp._vendor.websockets.exceptions import ConnectionClosed
-from ha_mcp.client.websocket_client import HomeAssistantWebSocketClient
+from ha_mcp.client.websocket_client import (
+    HomeAssistantCommandTimeout,
+    HomeAssistantWebSocketClient,
+)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("release_path", ["late_ack", "cleanup_deadline"])
 @pytest.mark.parametrize(
-    "failure", ["disconnect", "send_closed", "timeout", "cancel", "unexpected"]
+    "failure",
+    [
+        "disconnect",
+        "send_closed",
+        "timeout",
+        "timeout_disconnected",
+        "cancel",
+        "unexpected",
+    ],
 )
 async def test_background_release_collects_outcome(
     release_path: str,
@@ -52,7 +63,13 @@ async def test_background_release_collects_outcome(
     real_send_command = client.send_command
 
     async def send_command(command: str, **kwargs: Any) -> dict[str, Any]:
-        return await real_send_command(command, _wait_timeout=0.01, **kwargs)
+        try:
+            return await real_send_command(command, _wait_timeout=0.01, **kwargs)
+        except HomeAssistantCommandTimeout:
+            if failure == "timeout_disconnected":
+                # The connection can close before the completion callback runs.
+                client._state.mark_disconnected("closed after command timeout")
+            raise
 
     monkeypatch.setattr(client, "send_command", send_command)
     monkeypatch.setattr("ha_mcp.client.websocket_client.CLEANUP_TIMEOUT_SECONDS", 0.01)
@@ -93,7 +110,10 @@ async def test_background_release_collects_outcome(
         errors = [
             record for record in caplog.records if record.levelno >= logging.WARNING
         ]
-        if failure == "unexpected":
+        if failure == "timeout":
+            assert len(errors) == 1
+            assert errors[0].levelno == logging.WARNING
+        elif failure == "unexpected":
             assert len(errors) == 1
             assert errors[0].levelno == logging.ERROR
             assert errors[0].exc_info is not None
