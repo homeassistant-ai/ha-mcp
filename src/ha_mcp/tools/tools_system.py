@@ -647,8 +647,9 @@ class SystemTools:
         update_available}``, reporting whether a newer ha-mcp release is
         available (PyPI for pip/Docker, the Supervisor store for the app) —
         proactively tell the user to upgrade. Present on every install type
-        including the HA app; omitted only for the ``unknown`` version and when
-        ``HA_MCP_DISABLE_UPDATE_CHECK`` is set.
+        including the HA app; omitted for the ``unknown`` version, when
+        ``HA_MCP_DISABLE_UPDATE_CHECK`` is set, or when the update check itself
+        failed.
 
         EXAMPLES:
         - ha_get_system_health(include="repairs,zha_network,zwave_network,config_check")

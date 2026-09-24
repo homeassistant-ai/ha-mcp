@@ -269,8 +269,8 @@ class TodoTools:
         - Complete item: ha_set_todo_item("todo.shopping_list", item="Buy milk", status="completed")
         - Rename item: ha_set_todo_item("todo.tasks", item="Old task", rename="New task name")
 
-        Not all todo integrations support all features (description, due dates);
-        the Shopping List integration only supports summary.
+        Not all todo integrations support all features: the Shopping List
+        integration supports summary and status but not descriptions or due dates.
         """
         # Validate entity_id format
         if not entity_id.startswith("todo."):

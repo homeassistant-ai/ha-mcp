@@ -232,11 +232,13 @@ class VoiceAssistantTools:
         Without an entity_id: lists the entities that have explicit exposure
         settings for voice assistants (Alexa, Google Assistant, Assist) as
         `exposed_entities`, plus a per-assistant `summary` count. An entity absent
-        from that list uses the default exposure settings; query it individually
-        to see them.
+        from that list uses the default exposure settings.
 
-        With an entity_id: returns `exposed_to` (assistant -> True/False) and
-        `is_exposed_anywhere`.
+        With an entity_id: returns `exposed_to` (assistant -> True/False from the
+        entity's explicit settings), `is_exposed_anywhere`, and
+        `has_custom_settings`. When has_custom_settings is False the defaults
+        apply and exposed_to is all False; the default values themselves are
+        not computed.
 
         EXAMPLES:
         - Filter by assistant: ha_get_entity_exposure(assistant="cloud.alexa")

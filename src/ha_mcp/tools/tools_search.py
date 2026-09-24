@@ -4121,8 +4121,8 @@ class SearchTools:
         The response also carries ``ha_mcp_update`` ``{current, latest,
         update_available}`` (PyPI for pip/Docker, the Supervisor store for the
         app) — proactively tell the user when ``update_available`` is true.
-        Omitted only for the ``unknown`` version and when
-        ``HA_MCP_DISABLE_UPDATE_CHECK`` is set.
+        Omitted for the ``unknown`` version, when ``HA_MCP_DISABLE_UPDATE_CHECK``
+        is set, or when the update check itself failed.
         """
         # Validate fields= early so a malformed value returns VALIDATION_FAILED
         # with parameter="fields".

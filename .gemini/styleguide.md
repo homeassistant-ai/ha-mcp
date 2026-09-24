@@ -262,9 +262,10 @@ combine into modes, caveats and whole-call `EXAMPLES`. Both texts reach the
 model in the same definition, so a copy in the other place adds tokens and
 no information. Do not repeat types already present in the signature, Home
 Assistant domain facts the model already knows, or motivational prose. State
-consequences in plain prose, but route permission and retry safety through
-`readOnlyHint`, `destructiveHint`, and `idempotentHint` rather than magic
-docstring keywords.
+consequences and permission prerequisites (admin token, developer mode) in
+plain prose; the `readOnlyHint`, `destructiveHint` and `idempotentHint`
+annotations carry side effects and retry safety, so do not restate those
+with magic docstring keywords.
 
 **Do NOT flag:**
 - Concise one-liners on straightforward tools (progressive disclosure: brief by default)
