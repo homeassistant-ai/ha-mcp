@@ -229,9 +229,11 @@ class VoiceAssistantTools:
     ) -> dict[str, Any]:
         """Get entity exposure settings - list all or get settings for a specific entity.
 
-        Without an entity_id: lists all entities and their exposure status to
-        voice assistants (Alexa, Google Assistant, Assist) as `exposed_entities`
-        plus a per-assistant `summary` count.
+        Without an entity_id: lists the entities that have explicit exposure
+        settings for voice assistants (Alexa, Google Assistant, Assist) as
+        `exposed_entities`, plus a per-assistant `summary` count. An entity absent
+        from that list uses the default exposure settings; query it individually
+        to see them.
 
         With an entity_id: returns `exposed_to` (assistant -> True/False) and
         `is_exposed_anywhere`.

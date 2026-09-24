@@ -946,8 +946,10 @@ class RegistryTools:
             Field(
                 default="summary",
                 description=(
-                    "'summary': basic device info and protocol identifiers. 'full': include"
-                    " entities and all integration details."
+                    "'summary': basic device info and protocol identifiers. 'full': in list"
+                    " mode also include each device's entities. Single-device lookups "
+                    "always return full detail, including radio metrics, node status and "
+                    "Matter diagnostics."
                 ),
             ),
         ] = "summary",

@@ -83,7 +83,7 @@ class CameraTools:
             int | None, Field(description="Height to resize the image to")
         ] = None,
     ) -> Image:
-        """Retrieve a snapshot image from a Home Assistant camera entity.
+        """Get a snapshot image from a Home Assistant camera entity.
 
         Fetches the current camera image and returns it directly for visual
         analysis (security checks, delivery verification, confirming a garage

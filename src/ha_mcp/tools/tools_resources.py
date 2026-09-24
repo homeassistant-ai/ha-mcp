@@ -366,7 +366,10 @@ class ResourceTools:
             bool,
             Field(
                 description='Include full decoded content for inline resources in the "_content" '
-                "field. When False, a 150-char preview is shown instead."
+                "field. When False, a 150-char preview is shown instead. Rows past the "
+                "per-response content budget carry '_content_truncated': True instead "
+                "of '_content'; request a smaller page before copying content into an "
+                "update."
             ),
         ] = False,
         limit: Annotated[

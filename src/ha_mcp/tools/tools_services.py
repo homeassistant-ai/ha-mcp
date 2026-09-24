@@ -99,8 +99,8 @@ class ServiceDiscoveryTools:
             Field(
                 default="summary",
                 description=(
-                    "'summary': service name + description only. 'full': include parameter "
-                    "field schemas."
+                    "'summary': name, description, domain, service, and target when the "
+                    "service has one. 'full': additionally include parameter field schemas."
                 ),
             ),
         ] = "summary",
@@ -113,7 +113,7 @@ class ServiceDiscoveryTools:
                     'Project each service record to only the specified keys. E.g. ["name", '
                     '"description"] returns slim service records. None = full records. '
                     "Unknown keys yield empty records. Available keys: name, description, "
-                    "domain, service, fields (full mode only), target (full mode only)."
+                    "domain, service, target (when present), fields (full mode only)."
                 ),
             ),
         ] = None,

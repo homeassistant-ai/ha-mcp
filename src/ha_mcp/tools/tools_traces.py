@@ -73,8 +73,9 @@ class TraceTools:
         deduplicate: Annotated[
             bool,
             Field(
-                description="Deduplicate variables across action steps. Set to False to include "
-                "full variables at every step.",
+                description="Deduplicate variables across action steps. Set to False to record the "
+                "variables at every step; steps whose variables carry 'trigger', and "
+                "null-valued entries, are omitted either way.",
                 default=True,
             ),
         ] = True,

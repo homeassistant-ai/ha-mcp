@@ -178,7 +178,7 @@ class SystemTools:
             bool, Field(description="Must be True to confirm the restart.")
         ] = False,
     ) -> dict[str, Any]:
-        """Restart Home Assistant.
+        """Execute a Home Assistant restart.
 
         WARNING: restarts the entire Home Assistant instance; all automations
         are unavailable during the restart, which typically takes 1-5 minutes.
@@ -308,7 +308,7 @@ class SystemTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Reload Home Assistant configuration without a full restart.
+        """Execute a Home Assistant configuration reload without a full restart.
 
         Reloads specific configuration components so changes take effect without
         restarting Home Assistant — much faster than a full restart. Use it after
