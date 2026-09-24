@@ -1224,12 +1224,14 @@ class ServiceTools:
     ) -> NoReturn:
         """Raise a structured ToolError for an unexpected ha_call_service failure."""
         suggestions = _build_service_suggestions(domain, service, entity_id)
-        if entity_id:
-            suggestions.extend(
-                [
-                    f"For automation: ha_call_service('automation', 'trigger', entity_id='{entity_id}')",
-                    f"For universal control: ha_call_service('homeassistant', 'toggle', entity_id='{entity_id}')",
-                ]
+        if entity_id and entity_id.startswith("automation."):
+            suggestions.append(
+                "To run an automation now: "
+                f"ha_config_set_automation(identifier='{entity_id}', run_actions=True)"
+            )
+        elif entity_id:
+            suggestions.append(
+                f"For universal control: ha_call_service('homeassistant', 'toggle', entity_id='{entity_id}')"
             )
         exception_to_structured_error(
             error,
@@ -2459,8 +2461,8 @@ class ServiceTools:
         """Execute a custom event on the Home Assistant event bus.
 
         When NOT to use: for controlling entities (lights, switches, climate) — use
-        ha_call_service instead. For triggering automations by name, use
-        ha_call_service("automation", "trigger").
+        ha_call_service instead. To run an automation now, use
+        ha_config_set_automation(identifier=..., run_actions=True).
 
         Use this to publish custom event types consumed by event-triggered automations,
         Node-RED flows, or custom integrations that subscribe to specific event types.

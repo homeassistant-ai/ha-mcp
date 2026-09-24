@@ -394,6 +394,29 @@ def _sync_post_write_automation_result(
         response.pop("entity_not_verified", None)
 
 
+def _run_actions_once_reloaded(
+    result: dict[str, Any],
+    reloaded: bool | None,
+    run_actions: bool,
+    identifier: str | None,
+) -> bool:
+    """Keep run_actions after a write only once the reload is confirmed.
+
+    Unlike ``enabled``, a run cannot be corrected afterwards: before the reload
+    it would run the previous actions, or hit no entity at all.
+    """
+    if not run_actions or reloaded:
+        return run_actions
+    result["actions_triggered"] = False
+    result.setdefault("warnings", []).append(
+        "Automation was written, but its actions were not run: the reload the "
+        "write scheduled could not be confirmed, so they could have run the "
+        "previous version. Run them with ha_config_set_automation("
+        f"identifier='{identifier or '<automation id>'}', run_actions=True)."
+    )
+    return False
+
+
 # Standalone runtime calls raise on a service failure; after a config write the
 # same failure is a partial-success warning because the write already landed.
 _STANDALONE_RUNTIME_ACTIONS = ("set_enabled", "run_actions")
@@ -1249,7 +1272,9 @@ class AutomationConfigTools:
             HomeAssistantAuthError,
             HomeAssistantConnectionError,
         ) as exc:
-            if response.get("action") in _STANDALONE_RUNTIME_ACTIONS:
+            # With enabled in the same standalone call, the state change has
+            # already landed, so a failed run is a partial success, not an error.
+            if response.get("action") == "run_actions":
                 exception_to_structured_error(
                     exc,
                     context={
@@ -1263,8 +1288,7 @@ class AutomationConfigTools:
             )
             response["actions_triggered"] = False
             response.setdefault("warnings", []).append(
-                "Automation config was written, but its actions could not be "
-                f"run: {exc}"
+                f"The requested change was applied, but the actions could not be run: {exc}"
             )
             return
         response["actions_triggered"] = True
@@ -1382,12 +1406,13 @@ class AutomationConfigTools:
             result = await self._upsert_automation(
                 transformed_config, identifier, resolved_id
             )
+            reloaded = await wait_for_reload()
             note_reload_outcome(
-                result,
-                await wait_for_reload(),
-                domain="automation",
-                requested=runtime_requested,
+                result, reloaded, domain="automation", requested=enabled is not None
             )
+        run_actions = _run_actions_once_reloaded(
+            result, reloaded, run_actions, identifier or result.get("unique_id")
+        )
         for warning in conflict_warnings:
             result.setdefault("warnings", []).append(warning)
         refetched = await self._get_automation_config_internal(identifier)
@@ -1468,12 +1493,13 @@ class AutomationConfigTools:
             self._client, "automation_reloaded", enabled=runtime_requested
         ) as wait_for_reload:
             result = await self._upsert_automation(config_dict, identifier, resolved_id)
+            reloaded = await wait_for_reload()
             note_reload_outcome(
-                result,
-                await wait_for_reload(),
-                domain="automation",
-                requested=runtime_requested,
+                result, reloaded, domain="automation", requested=enabled is not None
             )
+        run_actions = _run_actions_once_reloaded(
+            result, reloaded, run_actions, identifier or result.get("unique_id")
+        )
 
         for warning in conflict_warnings or []:
             result.setdefault("warnings", []).append(warning)

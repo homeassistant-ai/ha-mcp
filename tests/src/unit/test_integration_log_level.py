@@ -63,6 +63,8 @@ async def test_entry_id_resolves_to_its_domain() -> None:
         {"domain": "zha", "config": {"x": 1}},
         {"entry_id": "abc123", "enabled": False},
         {"entry_id": "abc123", "reconfigure": True},
+        {"domain": "zha", "confirm_token": "sha256:abc"},
+        {"domain": "zha", "expected_mac": "aa:bb:cc:dd:ee:ff"},
     ],
 )
 async def test_rejects_other_modes(kwargs: dict[str, Any]) -> None:

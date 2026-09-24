@@ -54,6 +54,22 @@ def mock_client() -> MagicMock:
     return client
 
 
+class _ConfirmedReload:
+    """Stand-in for config_reload_waiter whose reload is always confirmed."""
+
+    def __init__(self, _client: Any, _event_type: str, *, enabled: bool) -> None:
+        pass
+
+    async def __aenter__(self) -> Any:
+        async def wait_for_reload() -> bool:
+            return True
+
+        return wait_for_reload
+
+    async def __aexit__(self, *_exc: Any) -> None:
+        pass
+
+
 @pytest.fixture
 def tools(mock_client: MagicMock, monkeypatch: pytest.MonkeyPatch) -> ConfigSceneTools:
     monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
@@ -172,8 +188,9 @@ async def test_config_write_activates_after_scene_reload(
 
 @pytest.mark.unit
 async def test_config_write_activation_failure_is_partial_success(
-    tools: ConfigSceneTools, mock_client: MagicMock
+    tools: ConfigSceneTools, mock_client: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(tools_config_scenes, "config_reload_waiter", _ConfirmedReload)
     mock_client.call_service = AsyncMock(
         side_effect=HomeAssistantAPIError("scene failed")
     )
@@ -204,3 +221,23 @@ def test_scene_backup_skips_only_standalone_activation(
     kwargs: dict[str, Any], expected: bool
 ) -> None:
     assert tools_config_scenes._skip_scene_activation_backup(kwargs) is expected
+
+
+@pytest.mark.unit
+async def test_config_write_skips_activation_when_reload_unconfirmed(
+    tools: ConfigSceneTools, mock_client: MagicMock
+) -> None:
+    result = await tools.ha_config_set_scene(
+        scene_id="movie_night",
+        config={"name": "Movie Night", "entities": {"light.tv": {"state": "on"}}},
+        activate=True,
+        wait=False,
+        MandatoryBPS=False,
+    )
+
+    mock_client.call_service.assert_not_called()
+    assert result["activated"] is False
+    assert any(
+        "not activated" in w and "scene_id='movie_night', activate=True" in w
+        for w in result["warnings"]
+    )

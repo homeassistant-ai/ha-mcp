@@ -57,7 +57,6 @@ from .util_helpers import (
     config_reload_waiter,
     fetch_entity_category,
     merge_validation_meta,
-    note_reload_outcome,
     parse_json_param,
     wait_for_entity_registered,
     wait_for_entity_removed,
@@ -115,6 +114,26 @@ def _raise_scene_not_storage_error(scene_id: str, platform: str | None) -> NoRet
             context={"scene_id": scene_id, "platform": platform},
         )
     )
+
+
+def _activate_once_reloaded(
+    result: dict[str, Any], reloaded: bool | None, activate: bool, scene_id: str
+) -> bool:
+    """Keep activate after a write only once the scene reload is confirmed.
+
+    Activating before the reload would apply the previous snapshot or hit a
+    scene entity the reload is about to replace.
+    """
+    if not activate or reloaded:
+        return activate
+    result["activated"] = False
+    result.setdefault("warnings", []).append(
+        "Scene was written, but not activated: the scene reload the write "
+        "scheduled could not be confirmed, so the previous snapshot could have "
+        f"been applied. Activate it with ha_config_set_scene(scene_id='{scene_id}', "
+        "activate=True)."
+    )
+    return False
 
 
 def _skip_scene_activation_backup(kwargs: dict[str, Any]) -> bool:
@@ -959,9 +978,8 @@ class ConfigSceneTools:
             result = await self._client.upsert_scene_config(
                 transformed_config, scene_id, resolved_id=resolved_id
             )
-            note_reload_outcome(
-                result, await wait_for_reload(), domain="scene", requested=activate
-            )
+            reloaded = await wait_for_reload()
+        activate = _activate_once_reloaded(result, reloaded, activate, scene_id)
         # The upsert re-resolves when ``resolved_id`` was None (envelope
         # omitted the key); re-bind to the authoritative write target it
         # returned so the re-fetch, entity resolution, and response all
@@ -1260,9 +1278,8 @@ class ConfigSceneTools:
             result = await self._client.upsert_scene_config(
                 config_dict, scene_id, resolved_id=resolved_id
             )
-            note_reload_outcome(
-                result, await wait_for_reload(), domain="scene", requested=activate
-            )
+            reloaded = await wait_for_reload()
+        activate = _activate_once_reloaded(result, reloaded, activate, scene_id)
         # The upsert re-resolves when ``resolved_id`` was None (envelope
         # omitted the key); re-bind to the authoritative write target it
         # returned so entity resolution and the response use the resolved

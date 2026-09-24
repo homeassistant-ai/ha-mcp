@@ -1995,6 +1995,13 @@ class IntegrationTools:
         """
         try:
             if log_level is not None:
+                reject_reconfigure_only_parameters(
+                    confirm_token=confirm_token,
+                    expected_device_id=expected_device_id,
+                    expected_unique_id=expected_unique_id,
+                    expected_mac=expected_mac,
+                    expected_entity_ids=expected_entity_ids,
+                )
                 return await self._set_log_level(
                     entry_id,
                     domain,

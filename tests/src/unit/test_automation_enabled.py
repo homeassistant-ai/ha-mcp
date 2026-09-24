@@ -597,6 +597,22 @@ async def _no_entity(client, identifier):
     return None
 
 
+class _ConfirmedReload:
+    """Stand-in for config_reload_waiter whose reload is always confirmed."""
+
+    def __init__(self, _client: Any, _event_type: str, *, enabled: bool) -> None:
+        pass
+
+    async def __aenter__(self) -> Any:
+        async def wait_for_reload() -> bool:
+            return True
+
+        return wait_for_reload
+
+    async def __aexit__(self, *_exc: Any) -> None:
+        pass
+
+
 @pytest.mark.unit
 @pytest.mark.anyio
 async def test_config_update_unresolved_entity_reports_not_applied(
@@ -988,7 +1004,12 @@ async def test_standalone_run_actions_failure_raises_tool_error() -> None:
 
 @pytest.mark.unit
 @pytest.mark.anyio
-async def test_config_update_runs_actions_after_write() -> None:
+async def test_config_update_runs_actions_after_confirmed_reload(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        tools_config_automations, "config_reload_waiter", _ConfirmedReload
+    )
     client = _FakeClient()
     client.upsert_entity_id = "automation.morning"
     tools = tools_config_automations.AutomationConfigTools(client)
@@ -1009,15 +1030,44 @@ async def test_config_update_runs_actions_after_write() -> None:
     assert client.calls == [
         ("automation", "trigger", {"entity_id": "automation.morning"})
     ]
+    assert "warnings" not in result
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_config_update_skips_run_actions_when_reload_unconfirmed() -> None:
+    client = _FakeClient()
+    client.upsert_entity_id = "automation.morning"
+    tools = tools_config_automations.AutomationConfigTools(client)
+
+    result = await tools._run_config_update(
+        {"alias": "Morning", "triggers": [], "actions": []},
+        "automation.morning",
+        None,
+        False,
+        tools_config_automations.BestPracticeCheckResult(),
+        {},
+        False,
+        run_actions=True,
+    )
+
+    assert client.calls == []
+    assert result["actions_triggered"] is False
     assert any(
-        "could not be watched for the automation reload" in w
+        "actions were not run" in w
+        and "identifier='automation.morning', run_actions=True" in w
         for w in result["warnings"]
     )
 
 
 @pytest.mark.unit
 @pytest.mark.anyio
-async def test_config_update_run_actions_failure_is_partial_success() -> None:
+async def test_config_update_run_actions_failure_is_partial_success(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        tools_config_automations, "config_reload_waiter", _ConfirmedReload
+    )
     client = _FakeClient()
     client.upsert_entity_id = "automation.morning"
     client.service_error = HomeAssistantAPIError("service unavailable")
@@ -1051,6 +1101,9 @@ async def test_unresolved_entity_retry_names_every_requested_change(
         "wait_for_automation_entity_by_unique_id",
         _no_entity,
     )
+    monkeypatch.setattr(
+        tools_config_automations, "config_reload_waiter", _ConfirmedReload
+    )
 
     result = await tools._run_config_update(
         {"alias": "Morning", "triggers": [], "actions": []},
@@ -1070,3 +1123,35 @@ async def test_unresolved_entity_retry_names_every_requested_change(
         "identifier='stored-id', enabled=False, run_actions=True" in w
         for w in result["warnings"]
     )
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_standalone_enabled_kept_when_run_actions_then_fails() -> None:
+    """A failed run after a successful enabled change is a partial success."""
+
+    class _TriggerFails(_FakeClient):
+        async def call_service(
+            self, domain: str, service: str, data: dict[str, Any]
+        ) -> dict[str, Any]:
+            if service == "trigger":
+                raise HomeAssistantAPIError("trigger failed")
+            return await super().call_service(domain, service, data)
+
+    client = _TriggerFails()
+    client.states = [
+        {"entity_id": "automation.morning", "attributes": {"id": "morning-id"}}
+    ]
+    tools = tools_config_automations.AutomationConfigTools(client)
+
+    result = await tools.ha_config_set_automation(
+        identifier="automation.morning",
+        enabled=True,
+        run_actions=True,
+        MandatoryBPS=False,
+        wait=False,
+    )
+
+    assert result["enabled_applied"] is True
+    assert result["actions_triggered"] is False
+    assert any("actions could not be run" in w for w in result["warnings"])
