@@ -346,7 +346,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "Automation condition to test instead of a template, e.g. "
                     "{'condition': 'numeric_state', 'entity_id': 'sensor.temp', "
                     "'above': 20}. Test several at once with {'condition': 'and', "
-                    "'conditions': [...]}. Returns true/false."
+                    "'conditions': [...]}."
                 )
             ),
         ] = None,
@@ -440,8 +440,6 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         - A failed render returns Home Assistant's error text. With the
           ha_mcp_tools component installed it also returns the template `line`
           and `source_line` it failed on, when the error names one.
-        - Templates or conditions that read trigger data or script variables
-          need sample values in `variables`.
 
         **Common Template Functions:**
         ```jinja2

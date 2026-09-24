@@ -141,8 +141,7 @@ class ZoneTools:
         zone_id: Annotated[
             str | None,
             Field(
-                description="Zone ID to get details for (from ha_get_zone() list). "
-                "If omitted, lists all zones.",
+                description="Zone ID to get details for (from ha_get_zone() list).",
                 default=None,
             ),
         ] = None,
@@ -414,28 +413,28 @@ class ZoneTools:
         name: Annotated[
             str | None,
             Field(
-                description="Display name for the zone (required for create)",
+                description="Display name for the zone",
                 default=None,
             ),
         ] = None,
         latitude: Annotated[
             float | None,
             Field(
-                description="Latitude coordinate of the zone center (required for create)",
+                description="Latitude coordinate of the zone center",
                 default=None,
             ),
         ] = None,
         longitude: Annotated[
             float | None,
             Field(
-                description="Longitude coordinate of the zone center (required for create)",
+                description="Longitude coordinate of the zone center",
                 default=None,
             ),
         ] = None,
         zone_id: Annotated[
             str | None,
             Field(
-                description="Zone ID to update (omit to create new zone, use ha_get_zone to find IDs)",
+                description="Zone ID to update (use ha_get_zone to find IDs)",
                 default=None,
             ),
         ] = None,
@@ -565,7 +564,7 @@ class ZoneTools:
         self,
         zone_id: Annotated[
             str,
-            Field(description="Zone ID to remove (use ha_get_zone to find IDs)"),
+            Field(description="Zone ID to remove"),
         ],
     ) -> dict[str, Any]:
         """

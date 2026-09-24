@@ -144,7 +144,12 @@ class RadioTools:
         confirm: Annotated[
             bool,
             Field(
-                description="Required (True) to run destructive actions.", default=False
+                description=(
+                    "Required (True) to run destructive actions (e.g. "
+                    "remove_device, network restore, change_channel, "
+                    "hard_reset, remove_fabric)."
+                ),
+                default=False,
             ),
         ] = False,
     ) -> dict[str, Any]:
@@ -156,9 +161,7 @@ class RadioTools:
         actions perform inclusion/commissioning, removal, healing,
         reconfiguration, firmware updates and credential provisioning.
 
-        Caveats: destructive actions (e.g. remove_device, network restore,
-        change_channel, hard_reset, remove_fabric) require confirm=True.
-        Long-running actions (inclusion, rebuild routes, firmware) start the
+        Caveats: long-running actions (inclusion, rebuild routes, firmware) start the
         operation and return immediately with long_running=true; completion
         happens out-of-band. Interactive Z-Wave S2 secure inclusion (read-the-
         PIN pairing) is not scriptable — use SmartStart/QR provisioning here or

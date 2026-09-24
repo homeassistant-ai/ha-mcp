@@ -57,7 +57,7 @@ class TraceTools:
         run_id: Annotated[
             str | None,
             Field(
-                description="Specific trace run_id to retrieve detailed trace. Omit to list recent traces.",
+                description="Specific trace run_id to retrieve detailed trace.",
                 default=None,
             ),
         ] = None,
@@ -127,8 +127,7 @@ class TraceTools:
         1. List recent traces (omit run_id):
            ha_get_automation_traces("automation.motion_light")
            Returns a summary of recent execution runs with timestamps, triggers, and status.
-           Use `offset` to page deeper when `has_more` is true, or `order="oldest"` to
-           start from the earliest stored trace instead of the most recent.
+           Use `offset` to page deeper when `has_more` is true.
 
         2. Get detailed trace (provide run_id):
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456")
@@ -137,14 +136,11 @@ class TraceTools:
 
         3. Get detailed trace with logbook (provide run_id and detailed=True):
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456", detailed=True)
-           Returns the formatted trace plus logbook entries and context metadata.
-           Useful when the standard trace summary doesn't reveal enough for debugging.
            Note: script-style action paths (sequence/, numeric) are always matched
            regardless of this flag.
 
         4. Get full variables without deduplication (provide run_id and deduplicate=False):
            ha_get_automation_traces("automation.motion_light", run_id="1705312800.123456", deduplicate=False)
-           Returns the formatted trace with full variables at every action step.
 
         DEBUGGING EXAMPLES:
 
@@ -167,7 +163,6 @@ class TraceTools:
 
         NOTES:
         - Traces are stored for a limited time by Home Assistant
-        - Works for both automations and scripts (use full entity_id)
         - The 'state' field shows: 'stopped' (completed), 'running', or error state
         """
         try:

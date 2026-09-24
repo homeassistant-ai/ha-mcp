@@ -212,8 +212,7 @@ class VoiceAssistantTools:
         entity_id: Annotated[
             str | None,
             Field(
-                description="Entity ID to check exposure settings for. "
-                "If omitted, lists all entities with exposure settings.",
+                description="Entity ID to check exposure settings for.",
                 default=None,
             ),
         ] = None,

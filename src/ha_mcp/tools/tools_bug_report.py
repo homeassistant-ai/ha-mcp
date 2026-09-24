@@ -1000,10 +1000,7 @@ class BugReportTools:
             Field(
                 default=None,
                 description=(
-                    "Return only the specified top-level response keys — the "
-                    "full response (both templates + logs + diagnostics, with "
-                    "log content repeated across the raw keys and templates) "
-                    "is very large. "
+                    "Return only the specified top-level response keys. "
                     "None = full response. Typical for a runtime bug: "
                     "'runtime_bug_template,suggested_title,"
                     "runtime_bug_submit_url,duplicate_check_urls,"

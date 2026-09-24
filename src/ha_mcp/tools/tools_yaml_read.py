@@ -391,8 +391,7 @@ class YamlReadTools:
                 description=(
                     "Config-relative file to read. Accepts an fnmatch glob to "
                     "search several files at once — 'packages/*.yaml' matches one "
-                    "directory level, not a nested tree. Use the glob to find "
-                    "which file defines a key."
+                    "directory level, not a nested tree."
                 ),
             ),
         ] = "configuration.yaml",

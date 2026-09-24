@@ -264,7 +264,7 @@ class GroupTools:
             list[str] | None,
             JSON_STRING_COERCION,
             Field(
-                description="List of entity IDs for the group. Required when creating new group. When updating, replaces all entities (mutually exclusive with add_entities/remove_entities).",
+                description="List of entity IDs for the group. When updating, replaces all entities.",
                 default=None,
             ),
         ] = None,
@@ -293,7 +293,7 @@ class GroupTools:
             list[str] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Add these entities to an existing group (mutually exclusive with entities)",
+                description="Add these entities to an existing group",
                 default=None,
             ),
         ] = None,
@@ -301,7 +301,7 @@ class GroupTools:
             list[str] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Remove these entities from an existing group (mutually exclusive with entities)",
+                description="Remove these entities from an existing group",
                 default=None,
             ),
         ] = None,

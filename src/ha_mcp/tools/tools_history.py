@@ -231,7 +231,7 @@ class HistoryTools:
             Literal["history", "statistics"],
             Field(
                 description=(
-                    'Data source: "history" (default) for raw state changes (~10 day retention), '
+                    'Data source: "history" (default) for raw state changes at full resolution (~10 day retention), '
                     'or "statistics" for pre-aggregated long-term data (permanent, requires state_class).'
                 ),
                 default="history",
@@ -269,7 +269,7 @@ class HistoryTools:
         limit: Annotated[
             int | None,
             Field(
-                description='Max entries per entity. Default: 100, Max: 1000. For source="history": state changes. For source="statistics": aggregated rows. With multiple entity_ids, offset must be 0 and total rows returned can reach limit × len(entity_ids).',
+                description='Max entries per entity. Default: 100, Max: 1000. For source="history": state changes. For source="statistics": aggregated rows. With multiple entity_ids, total rows returned can reach limit × len(entity_ids).',
                 default=None,
                 ge=1,
                 le=1000,
@@ -278,7 +278,7 @@ class HistoryTools:
         offset: Annotated[
             int | None,
             Field(
-                description="Number of entries to skip per entity for pagination. Default: 0. Offset > 0 requires a single entity_id. Use with limit and has_more/next_offset in the response.",
+                description="Number of entries to skip per entity for pagination. Default: 0.",
                 default=None,
                 ge=0,
             ),
@@ -329,15 +329,9 @@ class HistoryTools:
         """
         Get historical data from Home Assistant's recorder.
 
-        **Sources:**
-        - "history" (default): Raw state changes, ~10 day retention, full resolution
-        - "statistics": Pre-aggregated data, permanent retention, requires state_class
-
         **Shared params:** entity_ids, start_time, end_time, limit, offset
         **History params:** minimal_response, significant_changes_only
         **Statistics params:** period, statistic_types
-
-        **Default time range:** 24h for history, 30 days for statistics
 
         **Use ha_get_history (default) when:**
         - Troubleshooting why a value changed ("Why was my bedroom cold last night?")
@@ -349,8 +343,7 @@ class HistoryTools:
         - Computing period averages ("Average living room temperature over 6 months?")
         - Entities must have state_class (measurement, total, total_increasing)
 
-        **WARNING:** limit and offset apply per entity (not globally across all entities).
-        All data is fetched from HA before slicing; limit/offset are client-side.
+        **WARNING:** All data is fetched from HA before slicing; limit/offset are client-side.
         With multiple entity_ids, offset must be 0 — use a single entity_id for offset > 0.
         Use has_more and next_offset from the response to paginate.
         Administrators can optionally enable recorder workload guardrails in Advanced

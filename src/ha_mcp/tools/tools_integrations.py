@@ -489,8 +489,7 @@ class IntegrationTools:
         entry_id: Annotated[
             str | None,
             Field(
-                description="Config entry ID to get details for. "
-                "If omitted, lists all integrations.",
+                description="Config entry ID to get details for.",
                 default=None,
             ),
         ] = None,
@@ -1827,10 +1826,7 @@ class IntegrationTools:
         entry_id: Annotated[
             str | None,
             Field(
-                description=(
-                    "Config entry ID of an existing integration (enable/disable "
-                    "and options-update modes). Omit when adding via 'domain'."
-                ),
+                description=("Config entry ID of an existing integration."),
                 default=None,
             ),
         ] = None,
@@ -1838,8 +1834,8 @@ class IntegrationTools:
             bool | None,
             Field(
                 description=(
-                    "True to enable, False to disable the entry. Requires "
-                    "entry_id; mutually exclusive with 'domain' and 'config'."
+                    "True to enable, False to disable the entry. Mutually "
+                    "exclusive with 'domain' and 'config'."
                 ),
                 default=None,
             ),
@@ -1848,9 +1844,7 @@ class IntegrationTools:
             str | None,
             Field(
                 description=(
-                    "Integration domain to add (e.g. 'workday', "
-                    "'local_calendar') — starts and drives that domain's "
-                    "config flow. Pass the flow's form fields in 'config'."
+                    "Integration domain to add (e.g. 'workday', 'local_calendar')."
                 ),
                 default=None,
             ),
@@ -1860,9 +1854,7 @@ class IntegrationTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Flow form data. With 'domain': input for the new "
-                    "integration's config flow. With 'entry_id' alone: input "
-                    "for the entry's options flow (updates its options). "
+                    "Flow form data. "
                     "Updating an existing entry — options or reconfigure — is "
                     "a patch: a field you omit keeps its current value, and a "
                     "field set to null is cleared where the integration's "
@@ -1943,8 +1935,7 @@ class IntegrationTools:
             Field(
                 default=None,
                 description=(
-                    "Requires reconfigure=True. A token from a reconfigure "
-                    "preflight; applies the change. Any token still matching "
+                    "Requires reconfigure=True. Any token still matching "
                     "the entry's current state and the same requested config "
                     "is accepted, so a token stays valid while nothing moves."
                 ),
@@ -1958,14 +1949,10 @@ class IntegrationTools:
         - Add integration: domain (+ config) — drives the domain's config
           flow, including menus and multi-step forms.
         - Update options: entry_id + config — drives the entry's options
-          flow (what the "Configure" button does in the HA UI). Like that
-          dialog it is a patch: omitted fields keep their current values, and
-          a field set to null is cleared where the integration's schema
-          allows that field to be empty.
-        - Reconfigure: entry_id + reconfigure=True + config — drives the
-          existing entry's official reconfigure flow (host, port, credentials).
-          Call it without confirm_token for a read-only preflight; repeat with
-          the token it returns to apply.
+          flow (what the "Configure" button does in the HA UI).
+        - Reconfigure: entry_id + reconfigure=True + config — connection
+          settings such as host, port, credentials. Repeat with the token the
+          preflight returns as confirm_token to apply.
 
         WHEN NOT TO USE:
         - Helpers (template, group, utility_meter, ...): use
@@ -2202,14 +2189,13 @@ class IntegrationTools:
             Field(
                 description=(
                     "What to remove. One of: "
-                    "(a) bare helper_id for SIMPLE helpers (requires helper_type), "
+                    "(a) bare helper_id for SIMPLE helpers, "
                     "e.g. 'my_button'; "
-                    "(b) full entity_id (requires helper_type), "
+                    "(b) full entity_id, "
                     "e.g. 'input_button.my_button' or 'sensor.my_meter'; "
-                    "(c) config entry_id for any integration (helper_type=None), "
+                    "(c) config entry_id for any integration, "
                     "e.g. value from ha_get_integration(); "
-                    "(d) parent config entry_id for config_subentry "
-                    "(requires helper_type='config_subentry' and subentry_id)."
+                    "(d) parent config entry_id for a config subentry."
                 )
             ),
         ],

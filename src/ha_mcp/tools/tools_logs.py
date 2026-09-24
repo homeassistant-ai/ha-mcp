@@ -276,10 +276,9 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         cap, or for the per-component rollup.
 
         **Shared params:** limit, search (keyword filter on entries/lines; matches integration domain for source='logger')
-        **Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service, fault_log); ignored for source='logger' and for error_log with structured=True. For raw-text sources (error_log, supervisor, system_service) it sets the read direction of the most-recent window; fault_log orders whole crash blocks instead of lines.
+        **Order:** For raw-text sources (error_log, supervisor, system_service) order sets the read direction of the most-recent window; fault_log orders whole crash blocks instead of lines.
         **Logbook params:** hours_back, entity_id, end_time, compact (default True — strips attribute dicts to save context)
-        **Pagination (logbook + error_log + fault_log):** offset pages deeper; ignored for the
-            other sources. fault_log always reads a fixed window from the end of
+        **Pagination (logbook + error_log + fault_log):** fault_log always reads a fixed window from the end of
             the file, orders its crash blocks, and pages the assembled text
             from the start with has_more/next_offset. Logbook responses carry has_more plus a
             pagination_hint. On error_log, offset counts raw log lines back from

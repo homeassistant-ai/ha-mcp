@@ -1804,14 +1804,13 @@ class DashboardConfigTools:
         list_only: Annotated[
             bool,
             Field(
-                description="If True, list all dashboards instead of getting config. "
-                "When True, url_path is ignored.",
+                description="When True, url_path is ignored.",
             ),
         ] = False,
         force_reload: Annotated[
             bool,
             Field(
-                description="Force reload from storage (bypass cache). Not applicable in search mode, which always reads fresh config."
+                description="Force reload from storage (bypass cache). Not applicable in search mode."
             ),
         ] = False,
         entity_id: Annotated[
@@ -1819,22 +1818,17 @@ class DashboardConfigTools:
             Field(
                 description="Find cards by entity ID. Supports wildcards, e.g. "
                 "'sensor.temperature_*'. Matches cards with this entity in "
-                "'entity' or 'entities' field, view-level badges, and header cards. "
-                "When provided, activates search mode (returns matches, not full config)."
+                "'entity' or 'entities' field, view-level badges, and header cards."
             ),
         ] = None,
         card_type: Annotated[
             str | None,
-            Field(
-                description="Find cards by type, e.g. 'tile', 'button', 'heading'. "
-                "When provided, activates search mode."
-            ),
+            Field(description="Find cards by type, e.g. 'tile', 'button', 'heading'."),
         ] = None,
         heading: Annotated[
             str | None,
             Field(
-                description="Find cards by heading/title text (case-insensitive partial match). "
-                "When provided, activates search mode."
+                description="Find cards by heading/title text (case-insensitive partial match)."
             ),
         ] = None,
         include_config: Annotated[
@@ -1862,10 +1856,7 @@ class DashboardConfigTools:
                 "feature is disabled the config is returned with a warning; if "
                 "the engine is configured but the render fails, the call errors "
                 "(the screenshot is the requested payload). Ignored in "
-                "list/search mode. When you already have the config and only "
-                "need the render, use the dedicated ha_get_dashboard_screenshot "
-                "tool (registered when the same beta feature is on) — it "
-                "returns images without echoing the config."
+                "list/search mode."
             ),
         ] = False,
         view_path: Annotated[
@@ -1883,8 +1874,7 @@ class DashboardConfigTools:
         mode: Annotated[
             Literal["search"] | None,
             Field(
-                description="Set to 'search' for a CROSS-dashboard search: which "
-                "dashboards contain a given entity_id or text (requires query). "
+                description="Set to 'search' (requires query). "
                 "Leave unset for the default list/get/single-dashboard-search "
                 "behavior selected by list_only / entity_id / card_type / heading."
             ),
@@ -1924,17 +1914,14 @@ class DashboardConfigTools:
         MODE 3 — Get: Active when list_only=False and no search parameters are provided.
           Returns the full Lovelace dashboard config, defaulting to the
           main dashboard if url_path is omitted.
-          Pass view_path=<views[].path> to return ONLY that view: the response
-          then carries `view` + `view_index` instead of `config`, keeping the
-          payload small on multi-view dashboards. `config_hash` still covers
-          the FULL config, so a follow-up
+          With view_path, `config_hash` still covers the FULL config, so a follow-up
           ha_config_set_dashboard(python_transform=...) addressing
           config['views'][view_index] validates unchanged. An unknown
           view_path errors and lists the available view paths.
-          include_screenshot=True also returns rendered image(s) of the
-          dashboard (beta feature); when you only need the render and not
-          the config, use the dedicated ha_get_dashboard_screenshot tool
-          instead.
+          When you only need the render and not the config, use the
+          dedicated ha_get_dashboard_screenshot tool (registered when the
+          dashboard screenshot beta feature is on) instead; it returns images
+          without echoing the config.
 
         MODE 4 — Search all: mode="search" with query=<entity_id or text>
           Answers "which dashboards contain this entity/card" by walking every
@@ -1969,8 +1956,6 @@ class DashboardConfigTools:
                config_hash=find["config_hash"],
                python_transform=f'config{find["matches"][0]["python_path"]}["icon"] = "mdi:lamp"'
            )
-
-        Note: YAML-mode dashboards (defined in configuration.yaml) are not included in list.
         """
         screenshot_options = _DashboardScreenshotOptions(view_path=view_path)
         search_mode = (
@@ -2842,9 +2827,7 @@ class DashboardConfigTools:
                 "dashboard so you can see what it looks like in a single call "
                 "(the dashboard creation/iteration loop). Requires the "
                 "'dashboard screenshot' beta feature + engine add-on/sidecar; "
-                "if unavailable, the write result is returned with a warning. "
-                "For visual re-checks after the write (no config round-trip), "
-                "use the dedicated ha_get_dashboard_screenshot tool instead."
+                "if unavailable, the write result is returned with a warning."
             ),
         ] = False,
         view_path: Annotated[
@@ -2861,9 +2844,8 @@ class DashboardConfigTools:
                 description="Structured dashboard edits: up to 100 JSON Patch "
                 "add, remove, replace or test operations using RFC 6901 paths. "
                 "Use /- to append to an array; escape ~ as ~0 and / as ~1 in keys. "
-                "Requires config_hash. Mutually exclusive with config and "
-                "python_transform. Update title/icon/require_admin/show_in_sidebar "
-                "in a separate call. Strings in value are preserved literally."
+                "Mutually exclusive with config and python_transform. "
+                "Strings in value are preserved literally."
             ),
         ] = None,
     ) -> "dict[str, Any] | ToolResult":
@@ -2875,13 +2857,9 @@ class DashboardConfigTools:
         Creates a new dashboard or updates an existing one with the provided configuration.
         Supports full config replacement, Python transformation, or structured patch edits.
 
-        Use 'default' or 'lovelace' to target the built-in default dashboard.
-        New dashboards require a hyphenated url_path (e.g., 'my-dashboard').
-
         WHEN TO USE WHICH MODE:
         - patch: Edit known paths with literal values using add/remove/replace/test and config_hash.
           Example: patch=[{"op": "replace", "path": "/views/0/title", "value": "Home"}].
-          Append with /views/0/cards/-; escape ~ as ~0 and / as ~1 in path keys.
           move/copy are unsupported. See the full patch guide:
           https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/dashboard-edits.md
         - python_transform: Use loops or pattern-based changes across cards and views.
@@ -2893,16 +2871,11 @@ class DashboardConfigTools:
 
         TIP: Use ha_config_get_dashboard(entity_id=...) to get the path for any card.
 
-        TIP: return_screenshot=True bundles rendered image(s) with the write result
-        (beta feature); for visual re-checks after the write, use the dedicated
+        TIP: for visual re-checks after the write, use the dedicated
         ha_get_dashboard_screenshot tool instead of re-sending config.
 
         PYTHON TRANSFORM EXAMPLES:
-        - Update card icon: 'config["views"][0]["cards"][0]["icon"] = "mdi:thermometer"'
         - Add card: 'config["views"][0]["cards"].append({"type": "button", "entity": "light.bedroom"})'
-        - Delete card: 'del config["views"][0]["cards"][2]'
-        - Pattern-based update: 'for card in config["views"][0]["cards"]: if "light" in card.get("entity", ""): card["icon"] = "mdi:lightbulb"'
-        - Multi-operation: 'config["views"][0]["cards"][0]["icon"] = "mdi:a"; config["views"][0]["cards"][1]["icon"] = "mdi:b"'
 
         MODERN DASHBOARD BEST PRACTICES:
         - Use "sections" view type (default) with grid-based layouts
@@ -4106,8 +4079,7 @@ class DashboardConfigTools:
         WARNING: This permanently deletes the dashboard and all its configuration.
         Cannot be undone. Does not work on YAML-mode dashboards.
 
-        Accepts either the URL path or the internal dashboard ID. HA internal IDs
-        may differ from url_path (e.g. hyphens → underscores); the tool resolves
+        HA internal IDs may differ from url_path (e.g. hyphens → underscores); the tool resolves
         either form to the actual registry ID before deletion.
 
         EXAMPLES:

@@ -82,9 +82,7 @@ class SecurityPolicyTools:
                 description=(
                     "set: the full policy object "
                     "{wait_seconds, approval_ttl_minutes, "
-                    "event_decisions_enabled, rules, version}. Replaces the "
-                    "WHOLE document, so an omitted field reverts to its "
-                    "default"
+                    "event_decisions_enabled, rules, version}"
                 ),
             ),
         ] = None,
@@ -116,8 +114,7 @@ class SecurityPolicyTools:
         left alone, it reverts to its default: dropping
         event_decisions_enabled switches off approving from Home Assistant
         events, and the response says so in a warning when it does. Writes are
-        version-guarded: pass the version from the last get (or leave it in
-        the policy body) and a concurrent edit is rejected instead of
+        version-guarded: a concurrent edit is rejected instead of
         silently overwritten. Rule edits apply to the running server
         immediately and can remove approval gates. Whether this tool itself
         is registered is a separate setting that takes effect on restart.

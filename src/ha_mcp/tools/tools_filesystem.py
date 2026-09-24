@@ -556,11 +556,8 @@ class FilesystemTools:
             Field(
                 description=(
                     "Directory path. Relative to the config dir for the built-in "
-                    "allowlist (www/, themes/, custom_templates/, dashboards/, "
-                    "blueprints/). "
-                    "Custom directories and HAOS sibling volumes "
-                    "(/share, /media, /ssl, /backup) configured in the ha-mcp "
-                    "settings UI are also allowed (pass the absolute path). "
+                    "allowlist; absolute for a configured custom directory or "
+                    "HAOS sibling volume. "
                     "Example: 'www/' or '/share/llm'"
                 ),
             ),
@@ -578,9 +575,8 @@ class FilesystemTools:
     ) -> dict[str, Any]:
         """List files in a directory within the Home Assistant config directory.
 
-        Lists files in allowed directories (www/, themes/, custom_templates/,
-        dashboards/, blueprints/) with optional glob pattern filtering. Returns
-        file names, sizes, and modification times.
+        Lists files in allowed directories. Returns file names, sizes, and
+        modification times.
 
         **Allowed Directories:**
         - `www/` - Web assets (CSS, JS, images for dashboards)
@@ -592,7 +588,6 @@ class FilesystemTools:
           set (the folder name you bound, default `packages/`)
         - Plus any custom directories OR HAOS sibling volumes (`/share`,
           `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI
-          (pass the absolute path for volumes)
 
         **Security:** Only directories in the allowed list can be accessed.
         Path traversal attempts (../) are blocked.
@@ -669,8 +664,8 @@ class FilesystemTools:
             Field(
                 description=(
                     "File path. Relative to the config dir for the built-in "
-                    "allowlist; absolute for a configured HAOS sibling volume "
-                    "(/share, /media, /ssl, /backup). Examples: "
+                    "allowlist; absolute for a configured HAOS sibling volume. "
+                    "Examples: "
                     "'configuration.yaml', 'www/custom.css', '/share/llm/notes.md'"
                 ),
             ),
@@ -713,8 +708,8 @@ class FilesystemTools:
         Reads files from allowed paths within the config directory. Some files
         have special handling:
         - `secrets.yaml`: Values are masked for security
-        - `home-assistant.log` / `home-assistant.log.fault`: Limited to tail
-          (last N lines) by default. Prefer ha_get_logs(source='error_log') and
+        - `home-assistant.log` / `home-assistant.log.fault`: Prefer
+          ha_get_logs(source='error_log') and
           ha_get_logs(source='fault_log') over reading these directly.
 
         **Allowed Read Paths:**
@@ -726,7 +721,6 @@ class FilesystemTools:
         - `custom_components/**/*.py` (read-only)
         - Plus any custom directories OR HAOS sibling volumes (`/share`,
           `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI
-          (pass the absolute path for volumes)
 
         **Security:**
         - Path traversal (../) is blocked
@@ -814,10 +808,8 @@ class FilesystemTools:
             str,
             Field(
                 description=(
-                    "File path. Must be in a writable built-in dir (www/, "
-                    "themes/, custom_templates/, dashboards/), a configured "
-                    "custom directory, or a configured HAOS sibling volume "
-                    "(/share, /media, /ssl, /backup — pass the absolute path). "
+                    "File path in an allowed write directory; pass the "
+                    "absolute path for a HAOS sibling volume. "
                     "Example: 'www/custom.css', '/share/llm/out.txt'"
                 ),
             ),
@@ -862,7 +854,6 @@ class FilesystemTools:
         - `dashboards/` - YAML-mode dashboard files
         - Plus any custom directories OR HAOS sibling volumes (`/share`,
           `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI
-          (pass the absolute path for volumes)
 
         **Security:**
         - Only the directories above allow writes
@@ -957,10 +948,8 @@ class FilesystemTools:
             str,
             Field(
                 description=(
-                    "File path. Must be in a writable built-in dir (www/, "
-                    "themes/, custom_templates/, dashboards/), a configured "
-                    "custom directory, or a configured HAOS sibling volume "
-                    "(/share, /media, /ssl, /backup — pass the absolute path). "
+                    "File path in an allowed delete directory; pass the "
+                    "absolute path for a HAOS sibling volume. "
                     "Example: 'www/old-file.css'"
                 ),
             ),
@@ -988,13 +977,11 @@ class FilesystemTools:
         - `dashboards/` - YAML-mode dashboard files
         - Plus any custom directories OR HAOS sibling volumes (`/share`,
           `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI
-          (pass the absolute path for volumes)
 
         **Security:**
         - Only the directories above allow deletions
         - Configuration files cannot be deleted
         - Path traversal (../) is blocked
-        - Requires confirm=True to prevent accidents
 
         **Returns:**
         - success: Whether the operation succeeded

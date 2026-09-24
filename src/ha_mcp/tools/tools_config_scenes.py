@@ -280,7 +280,7 @@ class ConfigSceneTools:
         self,
         scene_id: Annotated[
             str | None,
-            Field(description="Scene identifier; omit to list or search scenes"),
+            Field(description="Scene identifier"),
         ] = None,
         query: Annotated[
             str | None, Field(description="Filter scene names or IDs")
@@ -304,8 +304,8 @@ class ConfigSceneTools:
         the complete entities dict and config_hash for editing.
 
         Listing returns compact metadata. Integration-managed scenes have no editable
-        storage config or scene_id. Optional content search reads full storage bodies;
-        partial results explicitly report unread configs and are not exhaustive.
+        storage config or scene_id. Partial content-search results explicitly
+        report unread configs and are not exhaustive.
 
         EXAMPLES:
         - Get scene: ha_config_get_scene("movie_night")
@@ -602,7 +602,6 @@ class ConfigSceneTools:
                 description=(
                     "Python expression to transform existing scene config. "
                     "Mutually exclusive with config. "
-                    "Requires config_hash for validation. "
                     "WARNING: Expressions with infinite loops will hang the server. "
                     "Examples: "
                     "Add entity: python_transform=\"config['entities']['light.bed'] = {'state': 'on'}\" "
@@ -662,20 +661,16 @@ class ConfigSceneTools:
 
         WHEN TO USE:
         - ``python_transform``: surgical edits to an existing scene
-          (add/remove/update a single entity entry). Requires ``config_hash``
-          from ha_config_get_scene() for optimistic locking.
+          (add/remove/update a single entity entry).
         - ``config``: creating a new scene, or wholesale replacement.
 
         WHEN NOT TO USE:
         - To activate a scene at runtime, use ha_call_service(domain="scene",
           service="turn_on", target=...) — this tool only manages scene
           *configuration*, not the runtime turn-on/off side.
-        - To list or look up existing scenes, use
-          ha_search(domain_filter="scene").
+        - To list or look up existing scenes, use ha_config_get_scene.
 
-        SCENE SHAPE: ``entities`` is a dict keyed by entity_id (e.g.,
-        ``{'light.kitchen': {'state': 'on', 'brightness': 200}}``), NOT a
-        list. Automations use a list of actions; scenes capture a snapshot
+        SCENE SHAPE: Automations use a list of actions; scenes capture a snapshot
         of states as a dict.
 
         EXAMPLE:

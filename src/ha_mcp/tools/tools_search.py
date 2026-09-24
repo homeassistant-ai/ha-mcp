@@ -2142,13 +2142,7 @@ class SearchTools:
                 default=None,
                 description=(
                     "What to search for (entity name fragment, free-text "
-                    "config term, entity_id). Searches BOTH the entity "
-                    "registry (entity_ids, friendly names, areas) AND "
-                    "configuration bodies (automation triggers/actions, "
-                    "script sequences, scene contents, helper bodies, "
-                    "dashboard cards) in one call. Use dedicated get/list "
-                    "tools first for known resource types; use this for "
-                    "broader discovery or deep searches. "
+                    "config term, entity_id). "
                     "Pass the exact entity_id, not a name fragment, when "
                     "checking what a rename or delete would break: that form "
                     "reports automations, scripts and scenes referencing it "
@@ -2167,8 +2161,7 @@ class SearchTools:
                 default=None,
                 description=(
                     "Narrow entity-registry results to a single domain "
-                    "(e.g. 'light', 'sensor'). Does not affect configuration "
-                    "search."
+                    "(e.g. 'light', 'sensor')."
                 ),
             ),
         ] = None,
@@ -2180,7 +2173,7 @@ class SearchTools:
                     "Narrow entity-registry results to an area (id, name, or alias), "
                     "an exact floor (id, name, or alias), or an unambiguous "
                     "close-spelling floor match; a floor match expands to all areas "
-                    "on that floor. Does not affect configuration search."
+                    "on that floor."
                 ),
             ),
         ] = None,
@@ -2296,8 +2289,7 @@ class SearchTools:
                     "valid group_entities or legacy entity_id collection; "
                     "member IDs are sorted, direct (not recursively expanded), "
                     "and omitted if visibility/include_hidden excludes a member. "
-                    "is_group remains true when member IDs are withheld; requesting "
-                    "member_entity_ids also retains is_group. "
+                    "Requesting member_entity_ids also retains is_group. "
                     "An unknown key is rejected."
                 ),
             ),
@@ -2355,8 +2347,7 @@ class SearchTools:
 
         Two surfaces run in parallel and return tagged results:
           - **entities**: entity-registry matches (entity_id, friendly name,
-            area). Filter with `domain_filter`/`area_filter`/`state_filter`;
-            omit `query` to enumerate a domain, area, or state.
+            area). Filter with `domain_filter`/`area_filter`/`state_filter`.
           - **automations / scripts / scenes / helpers / dashboards**: matches
             *inside* config definitions — triggers, actions, sequences, scene
             entity-sets, helper bodies, dashboard cards. Driven by `query`;
@@ -2382,8 +2373,7 @@ class SearchTools:
         Config-body search is skipped when `domain_filter`/`area_filter`/
         `state_filter` signal entity-only intent (keeping name lookups off the
         expensive backend); a `warnings[]` entry names the skip. Repeat without
-        entity filters to search configuration contents too. Explicit legacy
-        `search_types=[...]` calls search configs only and skip entities.
+        entity filters to search configuration contents too.
 
         Caveats:
           - `partial: True` means results are NOT exhaustive — a surface raised,
@@ -4044,7 +4034,7 @@ class SearchTools:
                 ge=1,
                 description=(
                     "Max total entities across all domains (default: unlimited for minimal, "
-                    "200 for standard/full). Counts and states always complete. "
+                    "200 for standard/full). "
                     "Use with offset for pagination."
                 ),
             ),
@@ -4132,14 +4122,10 @@ class SearchTools:
         and active persistent notifications (if any).
         Use 'minimal' (default) for most queries. Domain counts and states_summary
         are always complete regardless of entity pagination.
-        Standard/full modes paginate entities (default 200 per page) — use offset
-        to fetch more. Use 'domains' filter to narrow scope.
 
-        Use fields= to project the response to only the keys you need — a
-        significantly smaller payload when fetching a single sub-section (e.g.
-        fields=["system_info"] returns just that section instead of the full overview).
-        Requests composed only of system_info, notification, repair, or server
-        metadata fields also skip the unrelated state, service, and registry reads.
+        Requests whose fields= are composed only of system_info, notification,
+        repair, or server metadata fields skip the unrelated state, service, and
+        registry reads.
 
         Do not use this tool to inspect a known entity or a narrow set of entities.
         Use ha_get_state for one entity, ha_get_entity for registry metadata, or
@@ -4152,10 +4138,7 @@ class SearchTools:
         includes a ``settings_url`` field — the local URL to the
         tool-configuration page. Hand this URL to the user when they
         ask how to enable or disable tools or change server settings.
-        ``settings_url`` is emitted regardless of ``fields=``
-        projection (so it stays discoverable even when callers
-        minimize the response) but only when the sidecar URL file
-        actually exists.
+        It is present only when the sidecar URL file actually exists.
 
         In standalone HTTP / Docker modes, when an HTTP settings prefix is
         advertised, there is no sidecar URL file and the server can't know its
@@ -4168,8 +4151,7 @@ class SearchTools:
         ``{current, latest, update_available}`` reporting whether a newer ha-mcp
         release is available (PyPI for pip/Docker, the Supervisor add-on store
         for the add-on) — proactively tell the user when ``update_available`` is
-        true. Emitted regardless of ``fields=``; omitted only for the
-        ``unknown`` version and when ``HA_MCP_DISABLE_UPDATE_CHECK`` is set.
+        true. Omitted only for the ``unknown`` version and when ``HA_MCP_DISABLE_UPDATE_CHECK`` is set.
         """
         # Validate fields= early so a malformed value returns VALIDATION_FAILED
         # with parameter="fields".
@@ -4844,8 +4826,7 @@ class SearchTools:
                     "Return only the specified keys from each entity's attributes dict "
                     '(e.g. ["brightness", "color_temp_kelvin"] for lights). '
                     "None = full attributes (default). "
-                    "Unknown keys are silently dropped. "
-                    'Requires "attributes" to be present in fields= (or fields=None).'
+                    "Unknown keys are silently dropped."
                 ),
             ),
         ] = None,

@@ -329,13 +329,7 @@ class YamlConfigTools:
                     "<url_path> is lowercase, hyphenated, and not a reserved HA "
                     "route. For themes in themes/*.yaml, use the theme name "
                     "(simple name without dots; content is the mapping of "
-                    "theme variables only, without the theme name). "
-                    "'automation', 'script', and 'scene' are accepted only when "
-                    "file is under packages/*.yaml; in configuration.yaml use "
-                    "the dedicated storage-mode tools "
-                    "(ha_config_set_automation, ha_config_set_script, "
-                    "ha_config_set_scene). Not for template sensors or "
-                    "input_* helpers — those have dedicated tools."
+                    "theme variables only, without the theme name)."
                 ),
             ),
         ],
@@ -366,8 +360,7 @@ class YamlConfigTools:
                 description=(
                     "Relative path to the YAML config file. Defaults to "
                     "'configuration.yaml'. Also supports 'packages/*.yaml' and "
-                    "'themes/*.yaml' (yaml_path is the theme name; "
-                    "frontend.reload_themes is triggered automatically)."
+                    "'themes/*.yaml'."
                 ),
             ),
         ] = "configuration.yaml",
@@ -375,13 +368,7 @@ class YamlConfigTools:
             str | None,
             Field(
                 default=None,
-                description=(
-                    "Confirmation token from a prior preview response. When "
-                    "the YAML edit confirmation flow is enabled (default), "
-                    "the first call writes nothing and returns a unified "
-                    "diff plus confirm_token; repeat the identical call "
-                    "with that token to apply the edit."
-                ),
+                description=("Confirmation token from a prior preview response."),
             ),
         ] = None,
         MandatoryBPS: Annotated[
@@ -413,8 +400,8 @@ class YamlConfigTools:
         for integrations with significant YAML-only configuration (knx
         entities in package files), for registering YAML-mode dashboards via
         ``lovelace.dashboards.<url_path>`` (no other ``lovelace.*`` keys),
-        and for editing theme files in ``themes/*.yaml`` (keyed by theme name;
-        ``frontend.reload_themes`` is triggered automatically so no restart is
+        and for editing theme files in ``themes/*.yaml``
+        (``frontend.reload_themes`` is triggered automatically so no restart is
         needed). Themes only load when configuration.yaml carries the
         ``frontend: themes:`` include (e.g. ``!include_dir_merge_named themes``);
         this tool cannot add that include (``frontend`` is not an allowed key).

@@ -196,12 +196,6 @@ class CalendarTools:
 
         Retrieves calendar events within a specified time range.
 
-        **Parameters:**
-        - entity_id: Calendar entity ID (e.g., 'calendar.family')
-        - start: Start datetime in ISO format (default: now)
-        - end: End datetime in ISO format (default: 7 days from start)
-        - max_results: Maximum number of events to return (default: 20)
-
         **Example Usage:**
         ```python
         # Get events for the next week
@@ -584,8 +578,7 @@ class CalendarTools:
             str | None,
             Field(
                 description=(
-                    "UID of an existing event to update. Omit to create a new "
-                    "event. Get UIDs from ha_config_get_calendar_events."
+                    "UID of an existing event to update. Omit to create a new event."
                 ),
                 default=None,
             ),
@@ -684,9 +677,7 @@ class CalendarTools:
         Passing date-only values (``YYYY-MM-DD``) for both ``start`` and
         ``end`` creates an all-day event; passing full ISO datetimes creates
         a timed event. The two forms cannot be mixed — a date-only ``start``
-        with a datetime ``end`` (or vice versa) is rejected. Because the
-        all-day ``end`` date is exclusive, a single-day all-day event must
-        set ``end`` to ``start + 1 day``.
+        with a datetime ``end`` (or vice versa) is rejected.
 
         An update replaces the whole event rather than patching it, so
         ``summary``, ``start`` and ``end`` stay required in update mode, and a
@@ -887,12 +878,6 @@ class CalendarTools:
         command. HA's calendar component only registers ``create_event`` and
         ``get_events`` as REST services — delete and update live on the
         WebSocket API only.
-
-        **Parameters:**
-        - entity_id: Calendar entity ID (e.g., 'calendar.family')
-        - uid: Unique identifier of the event to delete
-        - recurrence_id: Optional recurrence ID for recurring events
-        - recurrence_range: Optional recurrence range ('THISANDFUTURE' to delete this and future occurrences)
 
         **Example Usage:**
         ```python

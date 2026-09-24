@@ -565,9 +565,7 @@ class AssistPipelineTools:
             Field(
                 description=(
                     "Natural-language command to run through Assist. Required when "
-                    "action='process'. A matched intent executes, and with the "
-                    "built-in agent a sentence matching a conversation trigger "
-                    "runs that automation."
+                    "action='process'."
                 ),
                 default=None,
             ),
@@ -719,9 +717,8 @@ class AssistPipelineTools:
         this to test what Assist itself understands. When the built-in agent
         answers, a matching conversation trigger runs its automation: that
         agent checks its sentence triggers before it matches intents, so this
-        is not limited to intents. pipeline_id borrows a pipeline's
-        conversation agent and language, but the sentence still goes to the
-        agent directly. So with an agent other than the built-in one, neither
+        is not limited to intents. Even with pipeline_id, the sentence goes
+        to the agent directly. So with an agent other than the built-in one, neither
         sentence triggers nor prefer_local_intents apply — a full pipeline run
         is what adds those for other agents.
 
@@ -764,8 +761,7 @@ class AssistPipelineTools:
               conversation_id="<id from the previous response>",
           )
 
-        Empty string clears nullable STT/TTS/wake-word fields. Non-nullable
-        fields such as name, language, conversation_language, and
+        Non-nullable fields such as name, language, conversation_language, and
         conversation_engine must be omitted or non-empty.
         """
         try:

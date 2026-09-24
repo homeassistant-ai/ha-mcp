@@ -385,11 +385,7 @@ class EnergyTools:
             Field(
                 description=(
                     "Operation mode. Primitives: 'get' reads the current prefs; "
-                    "'set' writes a full prefs payload (per-top-level-key "
-                    "full-replace). Convenience modes: 'add_device' / "
-                    "'remove_device' / 'add_source' perform a single read-"
-                    "modify-write atomically — no config_hash from the caller, "
-                    "the tool fetches it fresh internally."
+                    "'set' writes a full prefs payload."
                 )
             ),
         ],
@@ -401,8 +397,7 @@ class EnergyTools:
                     "Full prefs payload for mode='set'. Must contain the "
                     "top-level keys you intend to replace: 'energy_sources', "
                     "'device_consumption', 'device_consumption_water'. Any "
-                    "top-level key present in this payload REPLACES the "
-                    "existing list entirely; any omitted key is preserved. "
+                    "omitted key is preserved. "
                     "Call with mode='get' first, mutate the returned config, "
                     "then pass the whole object back. Ignored by convenience "
                     "modes."
@@ -535,11 +530,9 @@ class EnergyTools:
           top-level keys at once.
         - mode='add_device' / 'remove_device': add or remove a single
           device-consumption entry. The tool performs a fresh read-modify-write
-          internally; the caller does NOT manage config_hash. Use ``water=True``
-          to target the water meter list instead of electricity.
-        - mode='add_source': append a single entry to ``energy_sources`` (grid,
-          solar, battery, gas, or water). Same atomic read-modify-write
-          semantics.
+          internally; the caller does NOT manage config_hash.
+        - mode='add_source': append a single entry to ``energy_sources``.
+          Same atomic read-modify-write semantics.
 
         WHEN NOT TO USE:
         - To create the underlying statistics themselves — they must already
@@ -552,10 +545,7 @@ class EnergyTools:
           the user had configured — silently, with no error. mode='set'
           requires a fresh ``config_hash`` for optimistic locking; convenience
           modes hide this entirely.
-        - ``config_hash`` accepts both a single ``str`` (full-blob lock) and
-          a ``dict[_PrefsKey, str]`` keyed by top-level keys (per-key lock,
-          taken from the ``config_hash_per_key`` field of the mode='get'
-          response). The per-key form lets an agent submit only the top-
+        - The per-key ``config_hash`` form lets an agent submit only the top-
           level key it wants to change — set-equality between ``config``
           keys and dict keys is enforced, and any key outside the canonical
           set (typo, etc.) on either side is rejected with
@@ -586,12 +576,8 @@ class EnergyTools:
           duplicate check (multiple grid variants are legitimate, and grid
           has no single canonical uniqueness key) — the caller is responsible
           for de-duplicating grid sources.
-        - Convenience modes do NOT bypass the local shape check on dry_run:
-          ``dry_run=True`` still raises ``RESOURCE_ALREADY_EXISTS``
-          (duplicate add_device / add_source), ``RESOURCE_NOT_FOUND``
-          (missing remove_device), or ``VALIDATION_FAILED`` (post-mutator
-          shape error) when the proposed mutation is not applicable. The
-          mutator and shape check both run before the dry-run short-circuit.
+        - For convenience modes, the mutator and shape check both run before
+          the dry-run short-circuit.
         """
         if mode == "get":
             return await self._get_prefs()
