@@ -6,7 +6,7 @@ Home Assistant automation configurations.
 """
 
 import logging
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, NoReturn, cast
 
 from pydantic import Field
 
@@ -60,6 +60,7 @@ from .util_helpers import (
     attach_skill_content,
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
+    automation_reload_waiter,
     coerce_to_list,
     fetch_entity_category,
     merge_validation_meta,
@@ -375,11 +376,21 @@ async def _resolve_enabled_target(
     """Resolve the entity to receive a runtime enabled-state change."""
     if identifier.startswith("automation."):
         return identifier
-    # HA re-registers the entity on every config write, so a single lookup
-    # can miss it even when the caller passed wait=False.
+    # A config write reloads the automation and replaces its entity when the
+    # config changed (or creates it), so poll even when the caller passed
+    # wait=False.
     return await _resolve_post_write_automation_entity(
         client, identifier, None, True, response
     )
+
+
+def _note_reload_outcome(result: dict[str, Any], reloaded: bool | None) -> None:
+    """Warn when an enabled change may be undone by an unconfirmed reload."""
+    if reloaded is False:
+        result.setdefault("warnings", []).append(
+            "Home Assistant did not confirm the automation reload; a requested "
+            "enabled state may be reverted when the reload completes."
+        )
 
 
 def _sync_post_write_automation_result(
@@ -720,10 +731,11 @@ class AutomationConfigTools:
             bool | None,
             Field(
                 description=(
-                    "Set the automation's runtime state after an optional config update. "
-                    "True turns it on, False turns it off, and None leaves the state unchanged. "
-                    "Can be used standalone with identifier and no config. This does not write "
-                    "enabled into the stored automation configuration."
+                    "Turn the automation on (True) or off (False) after an optional config "
+                    "update; None leaves it unchanged. Can be used standalone with identifier "
+                    "and no config. Not written into the stored config: Home Assistant keeps "
+                    "the state across restarts, but a config 'initial_state' overrides it "
+                    "whenever the automation is reloaded or HA starts."
                 ),
                 default=None,
             ),
@@ -783,13 +795,17 @@ class AutomationConfigTools:
           -> ha_config_set_helper(helper_type='counter' | 'timer' | ...)
 
         Supports three modes: full config replacement, Python transformation,
-        or take_control_of_blueprint (see below).
+        or take_control_of_blueprint (see below). Any of them can also take
+        `enabled`, which can be passed alone with `identifier` to turn an
+        automation on or off without touching its config.
 
         WHEN TO USE WHICH MODE:
         - python_transform: RECOMMENDED for edits to existing automations. Surgical updates.
         - config: Use for creating new automations or full restructures.
         - take_control_of_blueprint: converts a blueprint-backed automation
           into a standalone one. Takes no config of its own.
+        - enabled (with identifier, no config): turn an automation off or back
+          on, e.g. ha_config_set_automation(identifier="automation.x", enabled=False).
 
         IMPORTANT: python_transform requires 'identifier' and 'config_hash' from ha_config_get_automation().
 
@@ -1258,7 +1274,6 @@ class AutomationConfigTools:
         entity_id = await self._resolve_automation_entity_id_strict(identifier)
         if not entity_id:
             await self._raise_automation_not_found(identifier)
-        assert entity_id is not None
         response: dict[str, Any] = {
             "success": True,
             "action": "set_enabled",
@@ -1282,7 +1297,13 @@ class AutomationConfigTools:
         *,
         identifier: str | None = None,
     ) -> str | None:
-        """Apply an automation runtime state without changing its config body."""
+        """Turn the automation on or off without touching its stored config.
+
+        Resolves ``entity_id`` from ``identifier`` when it is None. On the
+        standalone ``set_enabled`` action a service failure raises a ToolError;
+        after a config write it is reported as a partial-success warning, since
+        the write itself already landed. Returns the resolved entity_id.
+        """
         if enabled is None:
             return entity_id
         if entity_id is None and identifier:
@@ -1290,14 +1311,23 @@ class AutomationConfigTools:
                 self._client, identifier, response
             )
         if entity_id is None:
+            response["enabled_requested"] = enabled
+            response["enabled_applied"] = False
+            retry_id = identifier or response.get("unique_id") or "<automation id>"
             response.setdefault("warnings", []).append(
                 "Automation was written, but its entity_id could not be resolved; "
-                "the requested enabled state was not applied."
+                "the requested enabled state was not applied. Retry with "
+                f"ha_config_set_automation(identifier='{retry_id}', "
+                f"enabled={enabled}) once the automation is loaded."
             )
             return None
         try:
             await _set_automation_enabled(self._client, entity_id, enabled)
-        except Exception as exc:
+        except (
+            HomeAssistantAPIError,
+            HomeAssistantAuthError,
+            HomeAssistantConnectionError,
+        ) as exc:
             if response.get("action") == "set_enabled":
                 exception_to_structured_error(
                     exc,
@@ -1308,37 +1338,46 @@ class AutomationConfigTools:
                         "enabled": enabled,
                     },
                 )
+            logger.warning(
+                "Enabled state not applied to %s after config write: %s",
+                entity_id,
+                exc,
+            )
             response["enabled_requested"] = enabled
             response["enabled_applied"] = False
-            if response.get("action") == "set_enabled":
-                response["success"] = False
-                message = "The requested enabled state could not be applied"
-            else:
-                message = "Automation config was written, but the requested enabled state could not be applied"
-            response.setdefault("warnings", []).append(f"{message}: {exc}")
+            response.setdefault("warnings", []).append(
+                "Automation config was written, but the requested enabled state "
+                f"could not be applied: {exc}"
+            )
             return entity_id
         response["enabled"] = enabled
         response["enabled_applied"] = True
         if wait:
-            expected_state = "on" if enabled else "off"
-            try:
-                verified = await wait_for_state_change(
-                    self._client,
-                    entity_id,
-                    expected_state=expected_state,
-                )
-            except (HomeAssistantConnectionError, HomeAssistantAuthError) as exc:
-                response.setdefault("warnings", []).append(
-                    f"Automation {entity_id} was sent {expected_state}, but state "
-                    f"verification failed: {exc}"
-                )
-                return entity_id
-            if verified is None:
-                response.setdefault("warnings", []).append(
-                    f"Automation {entity_id} was sent {expected_state} but its state "
-                    "could not be verified before the timeout."
-                )
+            await self._verify_enabled_state(response, entity_id, enabled)
         return entity_id
+
+    async def _verify_enabled_state(
+        self, response: dict[str, Any], entity_id: str, enabled: bool
+    ) -> None:
+        """Wait for the automation to report the requested state."""
+        expected_state = "on" if enabled else "off"
+        try:
+            verified = await wait_for_state_change(
+                self._client,
+                entity_id,
+                expected_state=expected_state,
+            )
+        except (HomeAssistantConnectionError, HomeAssistantAuthError) as exc:
+            response.setdefault("warnings", []).append(
+                f"Automation {entity_id} was sent {expected_state}, but state "
+                f"verification failed: {exc}"
+            )
+            return
+        if verified is None:
+            response.setdefault("warnings", []).append(
+                f"Automation {entity_id} was sent {expected_state} but its state "
+                "could not be verified before the timeout."
+            )
 
     async def _run_python_transform(
         self,
@@ -1421,9 +1460,13 @@ class AutomationConfigTools:
         # storage key; thread it so the upsert skips the redundant re-resolve
         # (issue #1813 Phase 0). Fall back to the raw identifier if the fetched
         # body carried no ``id`` (not expected for a real automation).
-        result = await self._upsert_automation(
-            transformed_config, identifier, resolved_id
-        )
+        async with automation_reload_waiter(
+            self._client, enabled=enabled is not None
+        ) as wait_for_reload:
+            result = await self._upsert_automation(
+                transformed_config, identifier, resolved_id
+            )
+            _note_reload_outcome(result, await wait_for_reload())
         for warning in conflict_warnings:
             result.setdefault("warnings", []).append(warning)
         refetched = await self._get_automation_config_internal(identifier)
@@ -1496,14 +1539,23 @@ class AutomationConfigTools:
         is threaded to the upsert so it skips the redundant
         re-resolve; None falls back to resolving inside the REST client.
         """
-        result = await self._upsert_automation(config_dict, identifier, resolved_id)
+        async with automation_reload_waiter(
+            self._client, enabled=enabled is not None
+        ) as wait_for_reload:
+            result = await self._upsert_automation(config_dict, identifier, resolved_id)
+            _note_reload_outcome(result, await wait_for_reload())
 
         for warning in conflict_warnings or []:
             result.setdefault("warnings", []).append(warning)
 
+        post_write_identifier = identifier or result.get("unique_id")
+        # A create already polled for the entity inside the upsert; with wait=True
+        # the resolver below polls again. Either way, _apply_enabled_state must
+        # not start a further poll of its own.
+        entity_already_polled = wait or bool(result.get("entity_not_verified"))
         entity_id = await _resolve_post_write_automation_entity(
             self._client,
-            identifier or result.get("unique_id"),
+            post_write_identifier,
             result.get("entity_id"),
             wait,
             result,
@@ -1551,7 +1603,7 @@ class AutomationConfigTools:
             entity_id,
             enabled,
             wait,
-            identifier=identifier or result.get("unique_id"),
+            identifier=None if entity_already_polled else post_write_identifier,
         )
         _sync_post_write_automation_result(result, entity_id)
 
@@ -1651,7 +1703,7 @@ class AutomationConfigTools:
         raw_id = current.get("id")
         return str(raw_id) if raw_id is not None else None
 
-    async def _raise_automation_not_found(self, identifier: str) -> None:
+    async def _raise_automation_not_found(self, identifier: str) -> NoReturn:
         """Raise a structured RESOURCE_NOT_FOUND ToolError for a missing automation.
 
         Single source of truth for the 404→RESOURCE_NOT_FOUND mapping used

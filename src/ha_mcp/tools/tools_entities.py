@@ -1893,7 +1893,7 @@ class EntityTools:
 
         For automations and scripts, enabled=False is blocked. For automations,
         use ha_config_set_automation(identifier="automation.xxx", enabled=False)
-        (or enabled=True to re-enable):
+        (or enabled=True to re-enable).
         For scripts, ha_call_service("script", "turn_off", entity_id="script.xxx")
         only stops a currently running execution; it does not disable the script.
         Home Assistant has no script runtime enable/disable service.
