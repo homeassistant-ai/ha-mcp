@@ -713,8 +713,9 @@ class TestSetEntityNegativeInputs:
         """Rejects registry-disabling a script entity.
 
         Introduced in #796: script entities cannot be registry-disabled via
-        ha_set_entity(enabled=False). script.turn_off only stops a currently running
-        execution; Home Assistant has no script runtime enable/disable service.
+        ha_set_entity(enabled=False). ha_config_set_script(run="stop") only stops a
+        currently running execution; Home Assistant has no script runtime
+        enable/disable service.
         """
         data = await safe_call_tool(
             mcp_client,

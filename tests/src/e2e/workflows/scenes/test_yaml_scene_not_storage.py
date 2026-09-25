@@ -85,7 +85,7 @@ class TestYamlPackageSceneNotStorage:
         assert err.get("code") != "ENTITY_NOT_FOUND", err
         # The entity exists, so the message must not read as a missing entity.
         assert "editable" in (err.get("message") or "").lower(), err
-        assert any("turn_on" in s for s in err.get("suggestions", [])), err
+        assert any("activate=True" in s for s in err.get("suggestions", [])), err
 
     @pytest.mark.parametrize("scene_id", _SCENE_ARMS)
     async def test_set_no_hash_yaml_package_scene_does_not_shadow_create(

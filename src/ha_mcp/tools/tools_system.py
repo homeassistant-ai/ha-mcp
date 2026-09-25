@@ -584,7 +584,11 @@ class SystemTools:
         include_dismissed_repairs: Annotated[
             bool | None,
             Field(
-                description="Include user-dismissed/ignored repairs. Only meaningful when 'repairs' is in include."
+                description=(
+                    "Include user-dismissed/ignored repairs. Only meaningful when "
+                    "'repairs' is in include. Dismiss or restore one with "
+                    "ha_manage_updates(action='ignore_repair' / 'unignore_repair')."
+                )
             ),
         ] = False,
         config_entry_id: Annotated[
