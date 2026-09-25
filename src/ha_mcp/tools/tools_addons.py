@@ -787,13 +787,14 @@ async def _supervisor_api_call(
             },
             raise_error=False,
         )
-        error_details = error_response.get("error")
-        if (
-            isinstance(error_details, dict)
-            and error_details.get("code") == ErrorCode.RESOURCE_NOT_FOUND.value
-        ):
+        error_details = error_response["error"]
+        if error_details.get("code") == ErrorCode.RESOURCE_NOT_FOUND.value:
             error_details["suggestion"] = _SUPERVISOR_AVAILABILITY_SUGGESTION
             error_details["suggestions"] = [_SUPERVISOR_AVAILABILITY_SUGGESTION]
+        error_details["suggestions"] = [
+            *error_details.get("suggestions", []),
+            "Check that this installation supports apps (add-ons).",
+        ]
         raise_tool_error(error_response)
         return None  # unreachable: raise_tool_error always raises
 
