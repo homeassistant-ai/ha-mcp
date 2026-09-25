@@ -383,7 +383,7 @@ class HacsTools:
         ctx: Context | None,
     ) -> dict[str, Any]:
         logger.debug(
-            f"ha_get_hacs_info search starting: query={query!r} "
+            "ha_get_hacs_info search starting: "
             f"category={category} installed_only={installed_only}",
         )
         await safe_progress(

@@ -41,7 +41,7 @@ def _make_ctx() -> MagicMock:
 def _assert_no_protocol_logging(ctx: MagicMock) -> None:
     """Fail if a tool sent a deprecated MCP log message through ``ctx``."""
     for name in ("debug", "info", "warning", "error", "log"):
-        getattr(ctx, name).assert_not_awaited()
+        getattr(ctx, name).assert_not_called()
 
 
 def _mock_ha_client() -> MagicMock:
