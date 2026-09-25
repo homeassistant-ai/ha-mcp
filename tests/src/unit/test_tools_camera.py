@@ -155,10 +155,12 @@ class TestHaGetCameraImage:
         mock_client.get_config.assert_awaited_once()
         # Kiritimati is UTC+14 year-round, so the offset is stable.
         assert text.endswith("+14:00")
+        # A successful lookup gets no fallback note.
+        assert "could not determine" not in text
 
     @pytest.mark.asyncio
     async def test_info_text_falls_back_to_utc_on_config_failure(self, mock_client):
-        """A timezone fetch failure degrades to UTC instead of failing the tool."""
+        """A timezone fetch failure degrades to UTC and says so in the text."""
         mock_client.get_config = AsyncMock(
             side_effect=HomeAssistantConnectionError("no HA")
         )
@@ -172,7 +174,28 @@ class TestHaGetCameraImage:
         text, image = await tools.ha_get_camera_image(entity_id="camera.front_door")
 
         assert image.data == mock_response.content
-        assert text.endswith("+00:00")
+        # The note keeps the fallback distinct from a genuine UTC install.
+        assert text.endswith(
+            "+00:00 (UTC — could not determine the Home Assistant timezone)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_info_text_falls_back_to_utc_on_unresolvable_zone(self, mock_client):
+        """A zone name tzdata cannot resolve also falls back to UTC, with a note."""
+        mock_client.get_config = AsyncMock(return_value={"time_zone": "Not/AZone"})
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = b"\xff\xd8\xff\xe0"
+        mock_response.headers = {"content-type": "image/jpeg"}
+        mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
+
+        tools = CameraTools(mock_client)
+        text, image = await tools.ha_get_camera_image(entity_id="camera.front_door")
+
+        assert image.data == mock_response.content
+        assert text.endswith(
+            "+00:00 (UTC — could not determine the Home Assistant timezone)"
+        )
 
     @pytest.mark.asyncio
     async def test_image_retrieval_with_size_params(self, mock_client):
