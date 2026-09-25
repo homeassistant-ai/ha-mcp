@@ -1034,7 +1034,7 @@ class IntegrationTools:
                 resp["warnings"] = probe_warnings
 
             # Surface the effective Python logger level for this integration
-            # so users can confirm logger.set_level changes took effect.
+            # so users can confirm log level changes took effect.
             # Emit unconditionally for symmetry with the list path (_format_entry).
             level_warnings: list[str] = []
             logger_levels = await get_logger_levels(self._client, level_warnings)

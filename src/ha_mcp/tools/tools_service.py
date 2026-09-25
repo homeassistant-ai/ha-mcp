@@ -1276,9 +1276,8 @@ class ServiceTools:
         """Send a one-shot WebSocket command via ha_call_service's escape hatch.
 
         Reaches Home Assistant WebSocket commands that are not registered
-        services (e.g. ``repairs/ignore_issue``). Only one-shot
-        request/response commands are supported — streaming / subscription
-        commands are rejected up front.
+        services. Only one-shot request/response commands are supported —
+        streaming / subscription commands are rejected up front.
         """
         command_type = ws_command.strip()
         if domain is not None or service is not None:
@@ -1980,7 +1979,7 @@ class ServiceTools:
         require_write_access("ha_call_service")
 
         # WebSocket-command escape hatch (issue #1839): reach one-shot WS
-        # commands that aren't registered services (e.g. repairs/ignore_issue).
+        # commands that aren't registered services.
         if ws_command is not None:
             self._reject_incompatible_ws_params(
                 entity_id,

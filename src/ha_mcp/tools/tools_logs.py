@@ -189,7 +189,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                     "container logs (needs slug). 'system_service': "
                     "Supervisor-managed system service logs (needs slug). "
                     "'logger': effective log level per integration (confirms "
-                    "logger.set_level changes took effect). 'fault_log': HA "
+                    "ha_set_integration(log_level=...) changes took effect). 'fault_log': HA "
                     "Core's faulthandler crash dump (home-assistant.log.fault), "
                     "written only when HA dies from a native fatal signal, which "
                     "never reaches journald or error_log; empty on a healthy "

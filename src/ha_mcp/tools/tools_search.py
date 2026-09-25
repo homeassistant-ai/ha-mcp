@@ -4067,7 +4067,11 @@ class SearchTools:
             bool | None,
             Field(
                 default=False,
-                description=("Include user-dismissed/ignored repairs."),
+                description=(
+                    "Include user-dismissed/ignored repairs. Dismiss or restore "
+                    "one with ha_manage_updates(action='ignore_repair' / "
+                    "'unignore_repair')."
+                ),
             ),
         ] = False,
         fields: Annotated[
