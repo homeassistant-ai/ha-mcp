@@ -700,7 +700,7 @@
     },
     "ha_eval_template": {
       "title": "Вычислить шаблон",
-      "description": "Вычислить Jinja2-шаблон с помощью движка Home Assistant."
+      "description": "Выполнить рендеринг шаблона Jinja2 или проверку условия автоматизации в Home Assistant."
     },
     "ha_get_app": {
       "title": "Получить приложения (аддоны)",

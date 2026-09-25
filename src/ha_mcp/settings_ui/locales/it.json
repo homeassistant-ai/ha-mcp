@@ -700,7 +700,7 @@
     },
     "ha_eval_template": {
       "title": "Valuta un template",
-      "description": "Valuta i template Jinja2 usando il motore dei template di Home Assistant."
+      "description": "Esegue il rendering di un template Jinja2 o un controllo delle condizioni di un'automazione in Home Assistant."
     },
     "ha_get_app": {
       "title": "Ottieni app (componenti aggiuntivi)",

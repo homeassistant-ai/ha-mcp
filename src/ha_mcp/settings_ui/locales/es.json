@@ -700,7 +700,7 @@
     },
     "ha_eval_template": {
       "title": "Evaluar plantilla",
-      "description": "Evalúa plantillas Jinja2 con el motor de plantillas de Home Assistant."
+      "description": "Ejecuta una renderización de plantilla Jinja2, o una comprobación de condición de automatización, en Home Assistant."
     },
     "ha_get_app": {
       "title": "Obtener Apps (add-ons)",

@@ -700,7 +700,7 @@
     },
     "ha_eval_template": {
       "title": "Template auswerten",
-      "description": "Wertet ein Jinja2-Template mit der Home-Assistant-Engine aus."
+      "description": "Führe ein Jinja2-Template-Rendering oder eine Automatisierungs-Bedingungsprüfung in Home Assistant aus."
     },
     "ha_get_app": {
       "title": "Apps (Add-ons) abrufen",

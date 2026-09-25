@@ -669,7 +669,7 @@
     },
     "ha_eval_template": {
       "title": "Utvärdera Mall",
-      "description": "Utvärdera Jinja2-mallar med Home Assistants mallmotor."
+      "description": "Kör en Jinja2-mallrendering eller en automationsvillkorskontroll i Home Assistant."
     },
     "ha_get_app": {
       "title": "Hämta appar (tillägg)",

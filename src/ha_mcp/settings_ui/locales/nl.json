@@ -669,7 +669,7 @@
     },
     "ha_eval_template": {
       "title": "Evalueer Sjabloon",
-      "description": "Evalueer Jinja2-sjablonen met behulp van de sjabloonengine van Home Assistant."
+      "description": "Voer een Jinja2-sjabloonweergave of een automatiseringsvoorwaardecontrole uit in Home Assistant."
     },
     "ha_get_app": {
       "title": "Apps ophalen (add-ons)",

@@ -700,7 +700,7 @@
     },
     "ha_eval_template": {
       "title": "템플릿 평가",
-      "description": "Home Assistant 템플릿 엔진으로 Jinja2 템플릿을 평가합니다."
+      "description": "Home Assistant에서 Jinja2 템플릿 렌더링 또는 자동화 조건 검사를 실행합니다."
     },
     "ha_get_app": {
       "title": "앱(애드온) 조회",

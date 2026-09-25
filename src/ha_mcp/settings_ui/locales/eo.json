@@ -669,7 +669,7 @@
     },
     "ha_eval_template": {
       "title": "Taksi Ŝablonon",
-      "description": "Taksi Jinja2-ŝablonojn uzante la ŝablonan motoron de Home Assistant."
+      "description": "Plenumi Jinja2-ŝablonan rendorigon, aŭ aŭtomatigan kondiĉan kontrolon, en Home Assistant."
     },
     "ha_get_app": {
       "title": "Akiri programojn (aldonaĵojn)",

@@ -669,7 +669,7 @@
     },
     "ha_eval_template": {
       "title": "Vyhodnotit šablonu",
-      "description": "Vyhodnotit šablony Jinja2 pomocí šablonovacího enginu Home Assistant."
+      "description": "Provede vykreslení šablony Jinja2 nebo kontrolu podmínki automatizace v Home Assistant."
     },
     "ha_get_app": {
       "title": "Získat aplikace (doplňky)",

@@ -700,7 +700,7 @@
     },
     "ha_eval_template": {
       "title": "评估模板",
-      "description": "使用 Home Assistant 的模板引擎评估 Jinja2 模板。"
+      "description": "在 Home Assistant 中执行 Jinja2 模板渲染或自动化条件检查。"
     },
     "ha_get_app": {
       "title": "获取应用（add-on）",

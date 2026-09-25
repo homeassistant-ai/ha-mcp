@@ -700,7 +700,7 @@
     },
     "ha_eval_template": {
       "title": "Évaluer le modèle",
-      "description": "Évalue un modèle Jinja2 avec le moteur Home Assistant."
+      "description": "Exécute le rendu d'un modèle Jinja2 ou une vérification de condition d'automatisation dans Home Assistant."
     },
     "ha_get_app": {
       "title": "Obtenir des applications (add-ons)",

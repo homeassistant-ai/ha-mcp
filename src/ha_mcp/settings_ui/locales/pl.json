@@ -669,7 +669,7 @@
     },
     "ha_eval_template": {
       "title": "Oceń szablon",
-      "description": "Oceń szablony Jinja2 za pomocą silnika szablonów Home Assistant."
+      "description": "Wykonaj renderowanie szablonu Jinja2 lub sprawdź warunek automatyzacji w Home Assistant."
     },
     "ha_get_app": {
       "title": "Pobierz aplikacje (dodatki)",

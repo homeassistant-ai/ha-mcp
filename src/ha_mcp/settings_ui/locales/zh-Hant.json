@@ -669,7 +669,7 @@
     },
     "ha_eval_template": {
       "title": "評估範本",
-      "description": "使用 Home Assistant 的範本引擎評估 Jinja2 範本。"
+      "description": "在 Home Assistant 中執行 Jinja2 範本渲染或自動化條件檢查。"
     },
     "ha_get_app": {
       "title": "取得應用程式 (add-ons)",

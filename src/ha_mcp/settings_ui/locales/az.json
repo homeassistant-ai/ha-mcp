@@ -700,7 +700,7 @@
     },
     "ha_eval_template": {
       "title": "Şablonu emal et",
-      "description": "Home Assistant-ın şablon mühərrikindən istifadə edərək Jinja2 şablonlarını emal edin."
+      "description": "Home Assistant-də Jinja2 şablonunun render edilməsini və ya avtomatlaşdırma şərtinin yoxlanılmasını icra edin."
     },
     "ha_get_app": {
       "title": "Tətbiqləri (əlavələri) al",
