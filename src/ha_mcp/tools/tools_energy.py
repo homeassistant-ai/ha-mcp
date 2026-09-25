@@ -536,6 +536,8 @@ class EnergyTools:
           that key's value. A mismatch on any locked key returns
           ``RESOURCE_LOCKED`` with the offending keys in ``mismatched_keys``.
         - ``dry_run=True`` skips the hash check entirely for both forms.
+        - Writes need an administrator token; Home Assistant rejects the save
+          otherwise.
         - After a successful write, the tool calls ``energy/validate`` and
           returns residual issues (missing stats, unit mismatches) as
           ``post_save_validation_errors``; the save persists regardless —

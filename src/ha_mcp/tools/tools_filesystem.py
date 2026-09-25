@@ -675,7 +675,9 @@ class FilesystemTools:
                 description=(
                     "Dotted YAML key path (e.g. 'alert2', 'mqtt.sensor'). When set, the "
                     "response also carries 'subtree': the round-trip text of just that "
-                    "key's value."
+                    "key's value (null when the key is absent); comments and HA tags "
+                    "('!secret', '!include') survive as written and a '!secret' is never "
+                    "resolved."
                 ),
             ),
         ] = None,
@@ -704,10 +706,6 @@ class FilesystemTools:
         - Plus any custom directories OR HAOS sibling volumes (`/share`,
           `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI
         Path traversal (../) is blocked.
-
-        With `yaml_path`, the response also carries `subtree`: the round-trip
-        text of that key (null when the key is absent). Comments and HA tags
-        (`!secret`, `!include`) survive as written — a `!secret` is never resolved.
 
         EXAMPLE: ha_read_file(path="packages/alert2.yaml", yaml_path="alert2")
         """

@@ -1848,9 +1848,9 @@ class DashboardConfigTools:
             Field(
                 description="Get mode only: also return rendered image(s) of the dashboard for "
                 "visual verification. Requires the 'dashboard screenshot' beta feature "
-                "+ engine add-on/sidecar. If the feature is disabled the config is "
-                "returned with a warning; if the engine is configured but the render "
-                "fails, the call errors. Ignored in list/search mode."
+                "+ engine app (add-on)/sidecar. If the feature is disabled the config "
+                "is returned with a warning; if the engine is configured but the render"
+                " fails, the call errors. Ignored in list/search mode."
             ),
         ] = False,
         view_path: Annotated[
@@ -2806,8 +2806,8 @@ class DashboardConfigTools:
             bool,
             Field(
                 description="After writing, also return rendered image(s) of the dashboard. "
-                "Requires the 'dashboard screenshot' beta feature + engine "
-                "add-on/sidecar; if unavailable, the write result is returned with a "
+                "Requires the 'dashboard screenshot' beta feature + engine app "
+                "(add-on)/sidecar; if unavailable, the write result is returned with a "
                 "warning."
             ),
         ] = False,

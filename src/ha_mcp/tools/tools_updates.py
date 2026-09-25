@@ -946,7 +946,7 @@ class UpdateTools:
             bool,
             Field(
                 description="For install: create a backup before installing where the update entity"
-                " supports it (apps/add-ons).",
+                " supports it (apps (add-ons)).",
                 default=False,
             ),
         ] = False,

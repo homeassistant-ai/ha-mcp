@@ -235,7 +235,7 @@ bypasses the shared structured-error helpers.
 These rules apply to new or modified tool docstrings in the PR diff only -- not to pre-existing docstrings in unchanged files.
 
 **Flag MEDIUM severity when a new or modified tool docstring:**
-- Does not start with an action verb (`Returns...` should be `Get...`; valid verbs: `Get`, `List`, `Search`, `Create`, `Update`, `Delete`, `Remove`, `Execute`, `Call`, `Manage`)
+- Does not start with an action verb (`Returns...` should be `Get...`; valid verbs: `Get`, `List`, `Search`, `Create`, `Update`, `Delete`, `Remove`, `Execute`, `Call`, `Manage`, or the tool's own verb when its name is an accepted natural-name exception, such as `Read` for `ha_read_file`)
 - Is missing entirely or is still a placeholder
 - References a non-existent tool (e.g., `ha_get_domain_docs` -- the correct name is `ha_get_skill_guide`)
 - Embeds a full parameter schema instead of deferring to `ha_get_skill_guide`
