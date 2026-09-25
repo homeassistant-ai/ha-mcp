@@ -695,8 +695,9 @@ class AutomationConfigTools:
             str | None,
             Field(
                 description="Config hash from ha_config_get_automation for optimistic locking. "
-                "Required when a config update changes an existing automation's alias. "
-                "Otherwise optional for config updates (validates before full replacement if provided).",
+                "Required for python_transform and when a config update changes an "
+                "existing automation's alias; otherwise optional for config updates "
+                "(validates before full replacement if provided).",
             ),
         ] = None,
         take_control_of_blueprint: Annotated[

@@ -508,8 +508,9 @@ class ConfigScriptTools:
         config_hash: Annotated[
             str | None,
             Field(
-                description="Config hash from ha_config_get_script for optimistic locking. "
-                "Optional for config updates (validates before full replacement if provided).",
+                description="Config hash from ha_config_get_script for optimistic locking. Required"
+                " for python_transform; optional for config updates (validates before "
+                "full replacement if provided).",
             ),
         ] = None,
         take_control_of_blueprint: Annotated[
