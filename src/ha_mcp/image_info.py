@@ -91,6 +91,19 @@ def _jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
     return width, height
 
 
+def _skip_fill_bytes(data: bytes, pos: int) -> int:
+    """Advance *pos* past any 0xFF fill bytes after it (T.81 B.1.1.2).
+
+    Encoders may emit any number of 0xFF bytes between markers to align
+    the stream; each is consumed so the next marker read is a real one.
+    Stops at the first non-0xFF byte, or at the buffer end.
+    """
+    size = len(data)
+    while data[pos + 1] == 0xFF and pos + 3 <= size:
+        pos += 1
+    return pos
+
+
 def _find_sof_position(data: bytes, pos: int) -> int | None:
     """Advance through JPEG segments from *pos* to the first SOF marker.
 
@@ -101,6 +114,7 @@ def _find_sof_position(data: bytes, pos: int) -> int | None:
     while pos + 2 <= size:
         if data[pos] != 0xFF:
             return None
+        pos = _skip_fill_bytes(data, pos)
         marker = data[pos + 1]
         if marker == 0x01 or 0xD0 <= marker <= 0xD7:  # no payload
             pos += 2
