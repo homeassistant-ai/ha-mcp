@@ -24,24 +24,20 @@ LOG_METHODS = frozenset({"debug", "info", "warning", "error", "log"})
 
 
 def _protocol_log_calls(source: str, filename: str) -> list[str]:
-    hits = []
-    for node in ast.walk(ast.parse(source, filename=filename)):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr in LOG_METHODS
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "ctx"
-        ):
-            hits.append(f"{filename}:{node.lineno}: ctx.{node.func.attr}(...)")
-    return hits
+    return [
+        f"{filename}:{node.lineno}: ctx.{node.func.attr}(...)"
+        for node in ast.walk(ast.parse(source, filename=filename))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in LOG_METHODS
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "ctx"
+    ]
 
 
 def test_scanner_detects_a_protocol_log_call() -> None:
     source = "async def f(ctx):\n    await ctx.info('x')\n    logger.info('y')\n"
-    assert _protocol_log_calls(source, "sample.py") == [
-        "sample.py:2: ctx.info(...)"
-    ]
+    assert _protocol_log_calls(source, "sample.py") == ["sample.py:2: ctx.info(...)"]
 
 
 def test_source_sends_no_protocol_log_messages() -> None:

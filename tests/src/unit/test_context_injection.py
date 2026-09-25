@@ -5,7 +5,7 @@ Each tool is verified twice:
 - progress path: called with a fake ``Context`` whose ``report_progress`` must be
   awaited at the expected boundaries, while its MCP logging methods must stay
   unused — protocol logging is deprecated as of MCP 2026-07-28 (SEP-2577) and
-  warns on every call (#2464)
+  each call emits ``MCPDeprecationWarning`` (#2464)
 
 A third group of tests exercises the safe-emit wrapper: when ``ctx.report_progress``
 raises a transport error, the tool must still return its success payload.
@@ -26,7 +26,8 @@ from ha_mcp.tools.tools_traces import TraceTools
 
 
 def _make_ctx() -> MagicMock:
-    """Build a fake FastMCP Context with the awaitable surface we use."""
+    """Build a fake FastMCP Context; its log methods exist so tests can assert
+    they stay unused."""
     ctx = MagicMock()
     ctx.report_progress = AsyncMock()
     ctx.info = AsyncMock()
@@ -686,3 +687,4 @@ async def test_safe_progress_swallows_transport_errors_in_bulk_device_control() 
     # Each raises and is swallowed by safe_progress; verifying the count catches
     # a regression that re-introduces a `if ctx is not None:` guard inside the loop.
     assert ctx.report_progress.await_count == 3
+    _assert_no_protocol_logging(ctx)

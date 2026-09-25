@@ -180,9 +180,7 @@ class DeepSearchMixin(SceneSearchMixin):
             query_lower = query.lower().strip()
 
             total_phases = len(search_types) + 1  # +1 for initial state fetch
-            logger.debug(
-                f"deep_search starting: query={query!r} types={search_types}"
-            )
+            logger.debug(f"deep_search starting: query={query!r} types={search_types}")
             await safe_progress(
                 ctx,
                 progress=0,
