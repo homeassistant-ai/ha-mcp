@@ -26,8 +26,10 @@ from ha_mcp.tools.tools_traces import TraceTools
 
 
 def _make_ctx() -> MagicMock:
-    """Build a fake FastMCP Context; its log methods exist so tests can assert
-    they stay unused."""
+    """Build a fake FastMCP Context.
+
+    The log methods are ``AsyncMock``s so an accidental ``await ctx.info(...)``
+    is recorded rather than raising ``TypeError``."""
     ctx = MagicMock()
     ctx.report_progress = AsyncMock()
     ctx.info = AsyncMock()
