@@ -69,15 +69,21 @@ class ServiceDiscoveryTools:
     @log_tool_usage
     async def ha_list_services(
         self,
-        domain: str | None = None,
-        query: str | None = None,
+        domain: Annotated[
+            str | None,
+            Field(description="Filter by domain (e.g., 'light', 'switch', 'climate')."),
+        ] = None,
+        query: Annotated[
+            str | None,
+            Field(description="Search in service names and descriptions."),
+        ] = None,
         limit: Annotated[
             int,
             Field(
                 default=50,
                 ge=1,
                 le=200,
-                description="Max services to return per page (default: 50)",
+                description="Max services to return per page",
             ),
         ] = 50,
         offset: Annotated[
@@ -85,7 +91,7 @@ class ServiceDiscoveryTools:
             Field(
                 default=0,
                 ge=0,
-                description="Number of services to skip for pagination (default: 0)",
+                description="Number of services to skip for pagination",
             ),
         ] = 0,
         detail_level: Annotated[
@@ -93,8 +99,8 @@ class ServiceDiscoveryTools:
             Field(
                 default="summary",
                 description=(
-                    "'summary': service name + description only (default). "
-                    "'full': include parameter field schemas."
+                    "'summary': name, description, domain, service, and target when the "
+                    "service has one. 'full': additionally include parameter field schemas."
                 ),
             ),
         ] = "summary",
@@ -104,11 +110,10 @@ class ServiceDiscoveryTools:
             Field(
                 default=None,
                 description=(
-                    "Project each service record to only the specified keys. "
-                    'E.g. ["name", "description"] returns slim service records. '
-                    "None = full records (default). Unknown keys yield empty records. "
-                    "Available keys: name, description, domain, service, fields (full mode only), "
-                    "target (full mode only)."
+                    'Project each service record to only the specified keys. E.g. ["name", '
+                    '"description"] returns slim service records. None = full records. '
+                    "Unknown keys yield empty records. Available keys: name, description, "
+                    "domain, service, target (when present), fields (full mode only)."
                 ),
             ),
         ] = None,
@@ -118,11 +123,10 @@ class ServiceDiscoveryTools:
             Field(
                 default=None,
                 description=(
-                    "Return only the specified top-level response keys to reduce "
-                    'response size (e.g. ["services"]). '
-                    "None = full response (default). "
-                    "Available keys: success, domains, services, total_count, count, "
-                    "offset, limit, has_more, next_offset, detail_level, filters_applied."
+                    "Return only the specified top-level response keys to reduce response "
+                    'size (e.g. ["services"]). None = full response. Available keys: '
+                    "success, domains, services, total_count, count, offset, limit, "
+                    "has_more, next_offset, detail_level, filters_applied."
                 ),
             ),
         ] = None,
@@ -130,29 +134,11 @@ class ServiceDiscoveryTools:
         """List available Home Assistant services with optional pagination and detail control.
 
         Discovers services/actions that can be called via ha_call_service.
-        Use domain or query filters to narrow results. Defaults to summary mode
-        (name + description only) to keep responses compact.
 
-        Args:
-            domain: Filter by domain (e.g., 'light', 'switch', 'climate').
-            query: Search in service names and descriptions.
-            limit: Max services per page (default: 50).
-            offset: Pagination offset (default: 0).
-            detail_level: 'summary' (default) returns name/description only;
-                         'full' includes parameter field schemas.
-
-        Examples:
-            # Browse first page of all services (compact)
-            ha_list_services()
-
-            # List all light services with full parameter details
-            ha_list_services(domain="light", detail_level="full")
-
-            # Search for temperature-related services
-            ha_list_services(query="temperature")
-
-            # Paginate through all services
-            ha_list_services(offset=50)
+        EXAMPLES:
+        - Light services with full parameter details: ha_list_services(domain="light", detail_level="full")
+        - Search: ha_list_services(query="temperature")
+        - Next page: ha_list_services(offset=50)
         """
         parsed_fields: list[str] | None = None
         if fields is not None:

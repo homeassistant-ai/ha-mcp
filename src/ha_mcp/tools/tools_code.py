@@ -28,7 +28,9 @@ import tempfile
 import urllib.parse
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.server.context import Context
@@ -1309,48 +1311,54 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     @log_tool_usage
     async def ha_manage_custom_tool(
         ctx: Context,
-        code: str | None = None,
-        justification: str | None = None,
-        save_as: str | None = None,
-        run_saved: str | None = None,
-        list_saved: bool = False,
+        code: Annotated[
+            str | None,
+            Field(
+                description="Python code to execute.  Last expression is the return value."
+            ),
+        ] = None,
+        justification: Annotated[
+            str | None,
+            Field(description="Why no existing tool works."),
+        ] = None,
+        save_as: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Save the tool under this name for reuse "
+                    "(alphanumeric/underscores, max 64 chars)."
+                )
+            ),
+        ] = None,
+        run_saved: Annotated[
+            str | None,
+            Field(description="Name of a previously saved tool to re-run."),
+        ] = None,
+        list_saved: Annotated[
+            bool, Field(description="Set True to list all saved tools.")
+        ] = False,
     ) -> dict[str, Any]:
         """Create and run a custom tool in a sandbox, or manage saved custom tools.
 
-        ⚠️  **LAST RESORT** — search for existing tools first.
+        LAST RESORT — search for existing tools first.
 
-        **Modes** (mutually exclusive):
-        - Provide ``code`` + ``justification`` to execute custom code
-        - Set ``run_saved`` to re-run a previously saved tool by name
-        - Set ``list_saved=True`` to list all saved tools
+        **Modes** (mutually exclusive): ``code`` + ``justification``;
+        ``run_saved``; ``list_saved=True``.
 
         **Available functions in sandbox:**
-        - ``api_get(endpoint)`` — GET request to HA REST API
-        - ``api_post(endpoint, data)`` — POST request to HA REST API
-        - ``ws_send(message)`` — send a HA WebSocket command (e.g. registry
-          lookups, ``render_template``, dashboard ops). ``message`` must include
-          a ``"type"`` field; the MCP server adds ``id`` and handles auth.
+        - ``api_get(endpoint)`` / ``api_post(endpoint, data)`` — HA REST API,
+          for operations not covered by existing tools
+        - ``ws_send(message)`` — send a HA WebSocket command, for operations
+          only available over WebSocket (most registry CRUD, template rendering,
+          Lovelace operations). ``message`` must include a ``"type"`` field; the
+          MCP server adds ``id`` and handles auth.
         - ``call_tool(name, args)`` — call a registered MCP tool
-        - ``delete_saved_tool(name)`` — remove a previously saved custom
-          tool by name. Returns ``{"deleted": True, "name": name}`` or
-          ``{"error": ...}``.
-
-        Use ``api_get``/``api_post`` for REST operations not covered by existing
-        tools.  Use ``ws_send`` when the operation is only available over the
-        Home Assistant WebSocket API (most registry CRUD, template rendering,
-        and Lovelace operations).  Use ``call_tool`` when an existing tool
-        already does what you need. Use ``delete_saved_tool`` to clean up
-        saved tools you no longer need.
+        - ``delete_saved_tool(name)`` — remove a previously saved custom tool.
+          Returns ``{"deleted": True, "name": name}`` or ``{"error": ...}``.
 
         Saved tools persist across server restarts when
-        ``CODE_MODE_SAVED_TOOLS_PATH`` is set (the addon sets this by
-        default to ``/data/saved_tools.json``).
-
-        Example — check repairs (no built-in tool for this):
-        ```python
-        repairs = await api_get("/repairs/issues")
-        repairs
-        ```
+        ``CODE_MODE_SAVED_TOOLS_PATH`` is set (the app sets this by default to
+        ``/data/saved_tools.json``).
 
         Example — list areas via WebSocket:
         ```python
@@ -1361,26 +1369,11 @@ def register_code_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         Example — chain existing tools:
         ```python
         result = await call_tool("ha_search", {"query": "light", "limit": 5})
-        data = result.get("data", result)
-        lights = data.get("results", [])
+        lights = result.get("entities", [])
         for e in lights:
-            await call_tool("ha_call_service", {
-                "domain": "light", "service": "turn_off",
-                "entity_id": e["entity_id"]})
+            await call_tool("ha_call_service", {"domain": "light", "service": "turn_off", "entity_id": e["entity_id"]})
         {"turned_off": len(lights)}
         ```
-
-        Example — delete an obsolete saved tool:
-        ```python
-        delete_saved_tool("old_movie_mode")
-        ```
-
-        Args:
-            code: Python code to execute.  Last expression is the return value.
-            justification: Why no existing tool works (required with code).
-            save_as: Save the tool under this name for reuse (alphanumeric/underscores, max 64 chars).
-            run_saved: Name of a previously saved tool to re-run.
-            list_saved: Set True to list all saved tools.
         """
         _validate_custom_tool_modes(code, run_saved, list_saved)
 

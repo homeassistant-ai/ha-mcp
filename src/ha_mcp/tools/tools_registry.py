@@ -892,7 +892,7 @@ class RegistryTools:
         device_id: Annotated[
             str | None,
             Field(
-                description="Device ID to retrieve details for. If omitted, lists devices.",
+                description="Device ID to retrieve details for.",
                 default=None,
             ),
         ] = None,
@@ -930,7 +930,7 @@ class RegistryTools:
                 default=50,
                 ge=1,
                 le=200,
-                description="Max devices to return per page in list mode (default: 50)",
+                description="Max devices to return per page in list mode",
             ),
         ] = 50,
         offset: Annotated[
@@ -938,7 +938,7 @@ class RegistryTools:
             Field(
                 default=0,
                 ge=0,
-                description="Number of devices to skip for pagination (default: 0)",
+                description="Number of devices to skip for pagination",
             ),
         ] = 0,
         detail_level: Annotated[
@@ -946,9 +946,10 @@ class RegistryTools:
             Field(
                 default="summary",
                 description=(
-                    "'summary': basic device info and protocol identifiers (default for list mode). "
-                    "'full': include entities and all integration details. "
-                    "Single device lookups always return full detail."
+                    "'summary': basic device info and protocol identifiers. 'full': in list"
+                    " mode also include each device's entities. Single-device lookups "
+                    "always return full detail, including radio metrics, node status and "
+                    "Matter diagnostics."
                 ),
             ),
         ] = "summary",
@@ -1073,12 +1074,6 @@ class RegistryTools:
         Common workflow for full rename:
         1. ha_set_device(device_id="abc", name="Living Room Sensor")  # Rename device
         2. ha_set_entity("sensor.old", new_entity_id="sensor.living_room")  # Rename entities separately
-
-        PARAMETERS:
-        - name: Sets the user-defined display name (name_by_user)
-        - area_id: Assigns device to an area/room. Use '' to remove from area.
-        - disabled_by: Set to 'user' to disable, or empty to enable
-        - labels: List of labels (replaces existing labels)
 
         EXAMPLES:
         - Rename device: ha_set_device("abc123", name="Living Room Hub")

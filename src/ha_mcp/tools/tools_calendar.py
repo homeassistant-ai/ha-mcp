@@ -191,34 +191,14 @@ class CalendarTools:
             Field(description="Maximum number of events to return", default=20),
         ] = 20,
     ) -> dict[str, Any]:
-        """
-        Retrieve calendar events from a calendar entity.
+        """Get calendar events from a calendar entity within a time range.
 
-        Retrieves calendar events within a specified time range.
+        Returns each event's summary, start, end, description and location. To
+        find calendar entities, use ha_search(domain_filter='calendar').
 
-        **Parameters:**
-        - entity_id: Calendar entity ID (e.g., 'calendar.family')
-        - start: Start datetime in ISO format (default: now)
-        - end: End datetime in ISO format (default: 7 days from start)
-        - max_results: Maximum number of events to return (default: 20)
-
-        **Example Usage:**
-        ```python
-        # Get events for the next week
-        events = ha_config_get_calendar_events("calendar.family")
-
-        # Get events for a specific date range
-        events = ha_config_get_calendar_events(
-            "calendar.work",
-            start="2024-01-01T00:00:00",
-            end="2024-01-31T23:59:59"
-        )
-        ```
-
-        **Note:** To find calendar entities, use ha_search(query='calendar', domain_filter='calendar')
-
-        **Returns:**
-        - List of calendar events with summary, start, end, description, location
+        EXAMPLES:
+        - Next week (defaults): ha_config_get_calendar_events("calendar.family")
+        - Date range: ha_config_get_calendar_events("calendar.work", start="2024-01-01T00:00:00", end="2024-01-31T23:59:59")
         """
         try:
             # Validate entity_id
@@ -564,18 +544,18 @@ class CalendarTools:
         ],
         description: Annotated[
             str | None,
-            Field(description="Optional event description", default=None),
+            Field(description="Event description", default=None),
         ] = None,
         location: Annotated[
-            str | None, Field(description="Optional event location", default=None)
+            str | None, Field(description="Event location", default=None)
         ] = None,
         rrule: Annotated[
             str | None,
             Field(
                 description=(
-                    "Optional RFC 5545 recurrence rule, without 'RRULE:' prefix "
-                    "(e.g., 'FREQ=WEEKLY;BYDAY=MO' or 'FREQ=MONTHLY;BYDAY=3SA'). "
-                    "Creates a recurring event series."
+                    "RFC 5545 recurrence rule, without 'RRULE:' prefix (e.g., "
+                    "'FREQ=WEEKLY;BYDAY=MO' or 'FREQ=MONTHLY;BYDAY=3SA'). Creates a "
+                    "recurring event series."
                 ),
                 default=None,
             ),
@@ -584,8 +564,7 @@ class CalendarTools:
             str | None,
             Field(
                 description=(
-                    "UID of an existing event to update. Omit to create a new "
-                    "event. Get UIDs from ha_config_get_calendar_events."
+                    "UID of an existing event to update. Omit to create a new event."
                 ),
                 default=None,
             ),
@@ -613,8 +592,7 @@ class CalendarTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Create a new event in a calendar, or update an existing one.
+        """Create a new event in a calendar, or update an existing one.
 
         Creates a one-off event via the calendar.create_event service, or a
         recurring series via the WebSocket ``calendar/event/create`` command
@@ -629,64 +607,10 @@ class CalendarTools:
         - To find the ``uid`` of an event to update, use
           ``ha_config_get_calendar_events``; this tool does not search.
 
-        **Example Usage:**
-        ```python
-        # Create a simple event
-        result = ha_config_set_calendar_event(
-            "calendar.family",
-            summary="Doctor appointment",
-            start="2024-01-15T14:00:00",
-            end="2024-01-15T15:00:00"
-        )
-
-        # Update an existing event (uid from ha_config_get_calendar_events).
-        # The event is REPLACED, so re-supply every field you want to keep.
-        result = ha_config_set_calendar_event(
-            "calendar.family",
-            summary="Doctor appointment (rescheduled)",
-            start="2024-01-15T16:00:00",
-            end="2024-01-15T17:00:00",
-            location="Clinic",
-            uid="event-12345"
-        )
-
-        # Update one occurrence of a recurring series and all later ones
-        result = ha_config_set_calendar_event(
-            "calendar.work",
-            summary="Team meeting (new time)",
-            start="2024-02-05T11:00:00",
-            end="2024-02-05T12:00:00",
-            uid="recurring-event-67890",
-            recurrence_id="20240205T100000",
-            recurrence_range="THISANDFUTURE"
-        )
-
-        # Create a recurring event (every Monday, 10 occurrences)
-        result = ha_config_set_calendar_event(
-            "calendar.work",
-            summary="Team meeting",
-            start="2024-01-15T10:00:00",
-            end="2024-01-15T11:00:00",
-            rrule="FREQ=WEEKLY;BYDAY=MO;COUNT=10"
-        )
-
-        # Create an all-day event (date-only, no time component). The end
-        # date is EXCLUSIVE, so this spans 2026-07-04 through 2026-07-10.
-        result = ha_config_set_calendar_event(
-            "calendar.family",
-            summary="Vacation",
-            start="2026-07-04",
-            end="2026-07-11"
-        )
-        ```
-
-        **Note:**
         Passing date-only values (``YYYY-MM-DD``) for both ``start`` and
         ``end`` creates an all-day event; passing full ISO datetimes creates
         a timed event. The two forms cannot be mixed — a date-only ``start``
-        with a datetime ``end`` (or vice versa) is rejected. Because the
-        all-day ``end`` date is exclusive, a single-day all-day event must
-        set ``end`` to ``start + 1 day``.
+        with a datetime ``end`` (or vice versa) is rejected.
 
         An update replaces the whole event rather than patching it, so
         ``summary``, ``start`` and ``end`` stay required in update mode, and a
@@ -702,8 +626,10 @@ class CalendarTools:
         Local Calendar implements it, while the core Google Calendar and CalDAV
         integrations do not.
 
-        **Returns:**
-        - Success status and event details
+        EXAMPLES:
+        - Create: ha_config_set_calendar_event("calendar.family", summary="Doctor appointment", start="2024-01-15T14:00:00", end="2024-01-15T15:00:00")
+        - Recurring (every Monday, 10 occurrences): ha_config_set_calendar_event("calendar.work", summary="Team meeting", start="2024-01-15T10:00:00", end="2024-01-15T11:00:00", rrule="FREQ=WEEKLY;BYDAY=MO;COUNT=10")
+        - Update this and all later occurrences: ha_config_set_calendar_event("calendar.work", summary="Team meeting (new time)", start="2024-02-05T11:00:00", end="2024-02-05T12:00:00", uid="recurring-event-67890", recurrence_id="20240205T100000", recurrence_range="THISANDFUTURE")
         """
         try:
             # Validate entity_id
@@ -863,60 +789,31 @@ class CalendarTools:
         ],
         recurrence_id: Annotated[
             str | None,
-            Field(
-                description="Optional recurrence ID for recurring events", default=None
-            ),
+            Field(description="Recurrence ID for recurring events", default=None),
         ] = None,
         recurrence_range: Annotated[
             Literal["THISANDFUTURE"] | None,
             Field(
                 description=(
-                    "Optional recurrence range ('THISANDFUTURE' to delete this "
-                    "and future occurrences). Home Assistant compares this "
-                    "value verbatim, so no other spelling (including "
-                    "'THIS_AND_FUTURE') selects the range."
+                    "Recurrence range: 'THISANDFUTURE' to delete this and future "
+                    "occurrences. Home Assistant compares this value verbatim, so no other "
+                    "spelling (including 'THIS_AND_FUTURE') selects the range."
                 ),
                 default=None,
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Delete an event from a calendar.
+        """Delete an event from a calendar.
 
         Deletes a calendar event via the WebSocket ``calendar/event/delete``
         command. HA's calendar component only registers ``create_event`` and
         ``get_events`` as REST services — delete and update live on the
-        WebSocket API only.
+        WebSocket API only. Get the event UID from
+        ha_config_get_calendar_events().
 
-        **Parameters:**
-        - entity_id: Calendar entity ID (e.g., 'calendar.family')
-        - uid: Unique identifier of the event to delete
-        - recurrence_id: Optional recurrence ID for recurring events
-        - recurrence_range: Optional recurrence range ('THISANDFUTURE' to delete this and future occurrences)
-
-        **Example Usage:**
-        ```python
-        # Delete a single event
-        result = ha_config_remove_calendar_event(
-            "calendar.family",
-            uid="event-12345"
-        )
-
-        # Delete a recurring event instance and future occurrences
-        result = ha_config_remove_calendar_event(
-            "calendar.work",
-            uid="recurring-event-67890",
-            recurrence_id="20240115T100000",
-            recurrence_range="THISANDFUTURE"
-        )
-        ```
-
-        **Note:**
-        To get the event UID, first use ha_config_get_calendar_events() to list events.
-        The UID is returned in each event's data.
-
-        **Returns:**
-        - Success status and deletion confirmation
+        EXAMPLES:
+        - Delete a single event: ha_config_remove_calendar_event("calendar.family", uid="event-12345")
+        - Delete one occurrence and all later ones: ha_config_remove_calendar_event("calendar.work", uid="recurring-event-67890", recurrence_id="20240115T100000", recurrence_range="THISANDFUTURE")
         """
         try:
             # Validate entity_id

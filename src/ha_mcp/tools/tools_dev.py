@@ -928,10 +928,8 @@ class DevTools:
         """Manage ha-mcp server settings and the Tools/Policies/Backups surfaces (developer mode).
 
         Drives everything the web settings UI can change: the Server
-        Settings matrix (list/set/reset), the Tools tab (enable/disable/pin,
-        LLM-API exposure, and the per-tool security gate), the Tool Security
-        Policies editor (get_policy/set_policy), and the auto-backup config
-        (get_backup_config/set_backup_config). Use ha_dev_manage_server for
+        Settings matrix, the Tools tab, the Tool Security Policies editor,
+        and the auto-backup config. Use ha_dev_manage_server for
         the live approval queue and to restart.
 
         When NOT to use: for HA entity/automation configuration use the
@@ -1824,8 +1822,7 @@ class DevTools:
                 description=(
                     "info: deployment/version report; update_source: point the "
                     "ha_mcp_tools component's separate in-process server at a "
-                    "channel or pip spec and reinstall it (never changes the "
-                    "server serving this connection, unless embedded); "
+                    "channel or pip spec and reinstall it; "
                     "restart: restart this server; list_pending: list tool calls "
                     "blocked on a security-policy approval; approve / deny: decide "
                     "one blocked call by token"
@@ -1846,13 +1843,10 @@ class DevTools:
                 description=(
                     "Explicit pip requirement for update_source — a version pin "
                     "(ha-mcp==7.9.0) or a GitHub tarball URL such as "
-                    "https://github.com/homeassistant-ai/ha-mcp/archive/refs/"
-                    "pull/<PR>/head.tar.gz. The bare name 'clear' "
-                    "(case-insensitive) is reserved: it clears the override "
-                    "and falls back to the release channel instead of being "
-                    "treated as a requirement (pin a specific version, e.g. "
-                    "'clear==2.0.0', if you genuinely need that PyPI "
-                    "package). An empty string also clears but some MCP "
+                    "https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/<PR>/head.tar.gz."
+                    " The bare name 'clear' (case-insensitive) is reserved: it clears the "
+                    "override and falls back to the release channel instead of being "
+                    "treated as a requirement. An empty string also clears but some MCP "
                     "clients mangle it in transit — prefer 'clear'."
                 ),
             ),
@@ -1871,12 +1865,6 @@ class DevTools:
         update Home Assistant Apps (add-ons) or HACS packages use
         ha_manage_app / ha_manage_hacs.
 
-        When to use: development/testing workflows — inspecting how this
-        server is deployed, switching the in-process (custom component)
-        server to another release channel or an arbitrary pip spec such
-        as a PR tarball, and restarting the server so config or code
-        changes take effect.
-
         Caveats: update_source changes ONLY the ha_mcp_tools custom
         component's separate in-process server entry — it never updates
         the app (add-on), Docker, standalone, or PyPI server that may be
@@ -1891,21 +1879,12 @@ class DevTools:
         connection in embedded and app deployments (the reply
         arrives just before the server goes down) and supports those
         two deployments only (standalone processes must be restarted
-        externally). list_pending/approve/deny are exempt from policy
-        gating (gating queue management would deadlock approvals), so
-        approve/deny instead require the separate
-        'dev_tools_security_policy_access' setting — off by default,
-        because gated-call errors carry the approval token and an agent
-        could otherwise self-approve its own gated calls. Dev mode is a
-        trusted-operator feature; leave it off otherwise.
+        externally). approve/deny require the separate
+        'dev_tools_security_policy_access' setting, off by default.
 
         EXAMPLES:
-        ha_dev_manage_server("info")
-        ha_dev_manage_server("update_source", channel="dev")
         ha_dev_manage_server("update_source", pip_spec="https://github.com/homeassistant-ai/ha-mcp/archive/refs/pull/1234/head.tar.gz")
         ha_dev_manage_server("update_source", pip_spec="clear", channel="stable")
-        ha_dev_manage_server("restart")
-        ha_dev_manage_server("list_pending")
         ha_dev_manage_server("approve", token="abc123")
         """
         try:

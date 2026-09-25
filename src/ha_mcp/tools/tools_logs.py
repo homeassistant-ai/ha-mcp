@@ -169,36 +169,81 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
     )
     @log_tool_usage
     async def ha_get_logs(
-        source: Literal[
-            "logbook",
-            "system",
-            "error_log",
-            "supervisor",
-            "system_service",
-            "logger",
-            "fault_log",
+        source: Annotated[
+            Literal[
+                "logbook",
+                "system",
+                "error_log",
+                "supervisor",
+                "system_service",
+                "logger",
+                "fault_log",
+            ],
+            Field(
+                description=(
+                    "'logbook': entity state-change history. 'system': HA's "
+                    "structured system_log entries (errors, warnings). "
+                    "'error_log': raw log text (home-assistant.log on "
+                    "container/pip installs; HA Core's journald stream on "
+                    "Supervisor-backed installs). 'supervisor': app (add-on) "
+                    "container logs (needs slug). 'system_service': "
+                    "Supervisor-managed system service logs (needs slug). "
+                    "'logger': effective log level per integration (confirms "
+                    "logger.set_level changes took effect). 'fault_log': HA "
+                    "Core's faulthandler crash dump (home-assistant.log.fault), "
+                    "written only when HA dies from a native fatal signal, which "
+                    "never reaches journald or error_log; empty on a healthy "
+                    "install (crash_recorded=False); whole crash blocks are "
+                    "ordered with each block's lines kept in place; reads "
+                    "through the 'HA-MCP File & YAML Tools' entry."
+                )
+            ),
         ] = "logbook",
         # Shared parameters
-        limit: int | None = None,
-        search: str | None = None,
+        limit: Annotated[
+            int | None,
+            Field(
+                description=(
+                    "Max entries/lines to return. Does not apply to "
+                    "source='error_log' with structured=True."
+                )
+            ),
+        ] = None,
+        search: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Keyword filter on entries/lines; matches the integration "
+                    "domain for source='logger'. In structured error_log mode it "
+                    "matches the message and logger name only; on the raw path "
+                    "the whole line."
+                )
+            ),
+        ] = None,
         order: Annotated[
             Literal["newest", "oldest"],
             Field(
                 description=(
-                    "Sort order for time-ordered sources (logbook, system, "
-                    "error_log, supervisor, system_service, fault_log): "
-                    "'newest' (default) "
-                    "returns most-recent first; 'oldest' returns chronological-"
-                    "first. Ignored for source='logger', and for "
-                    "source='error_log' with structured=True (that summary is "
-                    "ranked by occurrence count, not by time)."
+                    "Sort order for time-ordered sources (logbook, system, error_log, "
+                    "supervisor, system_service, fault_log): 'newest' returns "
+                    "most-recent first; 'oldest' returns chronological-first. For "
+                    "raw-text sources it sets the read direction of the most-recent "
+                    "window; fault_log orders whole crash blocks. Ignored for "
+                    "source='logger', and for source='error_log' with structured=True."
                 )
             ),
         ] = "newest",
         # Logbook-specific (ignored for other sources)
-        hours_back: Annotated[int, Field(ge=1)] = 1,
-        entity_id: str | None = None,
-        end_time: str | None = None,
+        hours_back: Annotated[
+            int, Field(ge=1, description="Logbook only: how many hours back to read.")
+        ] = 1,
+        entity_id: Annotated[
+            str | None, Field(description="Logbook only: restrict to this entity.")
+        ] = None,
+        end_time: Annotated[
+            str | None,
+            Field(description="Logbook only: end of the window (ISO datetime)."),
+        ] = None,
         offset: Annotated[
             int,
             Field(
@@ -213,19 +258,28 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ),
             ),
         ] = 0,
-        compact: bool = True,
+        compact: Annotated[
+            bool,
+            Field(description="Logbook only: strip attribute dicts to save context."),
+        ] = True,
         # System/error_log-specific
-        level: str | None = None,
+        level: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "system / error_log only: keep only entries at exactly this level "
+                    "(ERROR, WARNING, INFO, DEBUG, CRITICAL); it is not a threshold."
+                )
+            ),
+        ] = None,
         # error_log-specific: structured summary instead of raw text
         structured: Annotated[
             bool,
             Field(
                 description=(
                     "source='error_log' only. When True, return a deduplicated, "
-                    "component-grouped summary of the log (counted issues sorted "
-                    "by frequency) instead of raw text. Use this on busy "
-                    "instances where the raw log is large enough to exhaust "
-                    "context. Ignored for other sources."
+                    "component-grouped summary of the log (counted issues sorted by "
+                    "frequency) instead of raw text. Ignored for other sources."
                 )
             ),
         ] = False,
@@ -235,70 +289,42 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
                 ge=1,
                 description=(
                     f"Max distinct issues to return when structured=True "
-                    f"(default {_DEFAULT_TOP_N}, capped at {MAX_LIMIT}). Bounds "
-                    "the response regardless of log size."
+                    f"(default {_DEFAULT_TOP_N}, capped at {MAX_LIMIT})."
                 ),
             ),
         ] = None,
         # Supervisor + system_service-specific (different namespaces)
-        slug: str | None = None,
+        slug: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "source='supervisor': app slug, e.g. 'core_mosquitto' (use "
+                    "ha_get_app() to list installed slugs). "
+                    "source='system_service': service name, one of supervisor, "
+                    "host, core, dns, audio, cli, multicast, observer — here "
+                    "'supervisor' is the Supervisor service's own logs, not an "
+                    "app with that name."
+                )
+            ),
+        ] = None,
     ) -> dict[str, Any]:
-        """
-        Get Home Assistant logs from various sources.
+        """Get Home Assistant logs from various sources.
 
-        **Sources:**
-        - "logbook" (default): Entity state change history with pagination
-        - "system": Structured system log entries (errors, warnings) via system_log/list
-        - "error_log": Raw log text (home-assistant.log on container/pip installs; HA Core's journald stream on Supervisor-backed installs)
-        - "supervisor": App (add-on) container logs (requires slug = app slug)
-        - "system_service": HA-Supervisor-managed system service logs (requires
-          slug ∈ {supervisor, host, core, dns, audio, cli, multicast, observer})
-        - "logger": Effective log level per integration via logger/log_info (confirms logger.set_level changes took effect)
-        - "fault_log": HA Core's faulthandler crash dump (home-assistant.log.fault).
-          Written only when HA dies from a native fatal signal (segfault, abort,
-          Python fatal error), which never reaches journald or error_log. Empty
-          on a healthy install (crash_recorded=False). Whole crash blocks are
-          ordered (newest first by default) with each block's lines kept in
-          place so the traceback reads correctly; search keeps every block
-          that mentions the term; offset/limit page through the assembled
-          text. Reads through the "HA-MCP File & YAML Tools"
-          entry (component >= 2.2.0).
+        Prefer source='system' for triage: it returns HA's own deduplicated
+        system_log entries with counts, first_occurred and full tracebacks, and
+        its counts run since each error first occurred. error_log with
+        structured=True counts only what is inside the fetched window (reported
+        as window_start/window_end; every install reads a capped window) and
+        drops tracebacks, which structured=False gets back; use it for entries
+        below system_log's WARNING+ ~50-entry cap, or for the per-component
+        rollup. In structured mode limit/order do not apply: issues are ranked
+        by count, then severity, then recency, over a fixed deep window.
 
-        **Prefer source='system' for triage.** It returns HA's own deduplicated
-        system_log entries with counts, first_occurred and full tracebacks; of
-        those only the tracebacks are unrecoverable from the structured
-        error_log summary — they are present in the raw text, so structured=False
-        gets them back. Its counts also run
-        since each error first occurred, while structured error_log counts only
-        what is inside the fetched window (reported as window_start/window_end;
-        every install now reads a capped window). Use error_log
-        with structured=True for entries below system_log's WARNING+ ~50-entry
-        cap, or for the per-component rollup.
-
-        **Shared params:** limit, search (keyword filter on entries/lines; matches integration domain for source='logger')
-        **Order:** order='newest' (default) returns most-recent first; order='oldest' returns chronological-first. Applies to all time-ordered sources (logbook, system, error_log, supervisor, system_service, fault_log); ignored for source='logger' and for error_log with structured=True. For raw-text sources (error_log, supervisor, system_service) it sets the read direction of the most-recent window; fault_log orders whole crash blocks instead of lines.
-        **Logbook params:** hours_back, entity_id, end_time, compact (default True — strips attribute dicts to save context)
-        **Pagination (logbook + error_log + fault_log):** offset pages deeper; ignored for the
-            other sources. fault_log always reads a fixed window from the end of
-            the file, orders its crash blocks, and pages the assembled text
-            from the start with has_more/next_offset. Logbook responses carry has_more plus a
-            pagination_hint. On error_log, offset counts raw log lines back from
-            the newest entry (journald entries on Supervisor-backed installs),
-            both modes read a bounded window per call — so `level`/`search`
-            filter and `limit` slice within that window only, and window_lines
-            reports the size actually requested — and the response carries
-            has_more with a next_offset to pass back while it stays true.
-        **System/error_log params:** level (ERROR, WARNING, INFO, DEBUG, CRITICAL)
-        **error_log params:** structured, top_n. In structured mode `search`
-            matches the message and logger name only, whereas on the raw path it
-            matches the whole line; `limit`/`order` do not apply, issues are
-            ranked by count, then severity, then recency, and the summary covers
-            a fixed deep window rather than the caller's limit.
-        **Supervisor params:** slug = app slug, e.g. "core_mosquitto" (use
-            ha_get_app() to list installed slugs)
-        **System-service params:** slug = service name. The slug "supervisor"
-            here means the Supervisor service's own logs, NOT an app with
-            that name — the source param disambiguates.
+        Raw-text sources (error_log, supervisor, system_service) read a bounded
+        window per call, so level/search filter and limit slice within that
+        window only; window_lines reports the size requested. Logbook responses
+        carry has_more plus a pagination_hint; error_log and fault_log carry
+        has_more with a next_offset to pass back while it stays true.
         """
         return await tools.get_logs(
             source=source,

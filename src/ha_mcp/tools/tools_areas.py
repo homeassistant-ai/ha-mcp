@@ -285,12 +285,10 @@ class AreaTools:
             Field(
                 default=None,
                 description=(
-                    "Return only the specified top-level response keys to reduce "
-                    'response size (e.g. ["floors"]). '
-                    "None = full response (default). "
-                    "Available keys: success, floor_count, area_count, "
-                    "unassigned_count, orphaned_count, floors, unassigned_areas, "
-                    "orphaned_areas, message."
+                    "Return only the specified top-level response keys to reduce response "
+                    'size (e.g. ["floors"]). None = full response. Available keys: success,'
+                    " floor_count, area_count, unassigned_count, orphaned_count, floors, "
+                    "unassigned_areas, orphaned_areas, message."
                 ),
             ),
         ] = None,
@@ -300,11 +298,11 @@ class AreaTools:
             Field(
                 default=None,
                 description=(
-                    "Project each area record (in floors[].areas, unassigned_areas, "
-                    'and orphaned_areas) to only the specified keys. E.g. ["area_id", '
-                    '"name"] returns slim area records. None = full records (default). '
-                    "Unknown keys yield empty records. Available keys: area_id, name, "
-                    "icon, floor_id, aliases, picture, labels."
+                    "Project each area record (in floors[].areas, unassigned_areas, and "
+                    'orphaned_areas) to only the specified keys. E.g. ["area_id", "name"] '
+                    "returns slim area records. None = full records. Unknown keys yield "
+                    "empty records. Available keys: area_id, name, icon, floor_id, aliases,"
+                    " picture, labels."
                 ),
             ),
         ] = None,
@@ -312,7 +310,7 @@ class AreaTools:
         """
         List floors sorted by level ascending, each with their assigned areas nested, plus areas without a floor.
 
-        Use for location-based reasoning where floor-to-area relationships matter, such as "which rooms are on the ground floor" or operations scoped to a level. Optionally project the response with fields= (top-level keys) or area_fields= (per-area-record keys, applied uniformly across nested, unassigned, and orphaned buckets).
+        Use for location-based reasoning where floor-to-area relationships matter, such as "which rooms are on the ground floor" or operations scoped to a level.
 
         Floors with level=None sort alongside level 0 (ground floor). Areas without a floor assignment appear in unassigned_areas; areas whose floor_id points to a non-existent floor appear in orphaned_areas. When the ha_mcp_tools component's registries capability is available, both registries come from a single in-process snapshot, so this classification is always consistent. Without it (legacy path), the two registries are fetched via independent WebSocket calls and a registry change between reads may transiently misclassify an area.
         """
@@ -755,21 +753,21 @@ class AreaTools:
         id: Annotated[  # noqa: A002
             str | None,
             Field(
-                description="Existing area_id or floor_id to update (omit to create a new entry; use ha_list_floors_areas to find IDs)",
+                description="Existing area_id or floor_id to update (use ha_list_floors_areas to find IDs)",
                 default=None,
             ),
         ] = None,
         floor_id: Annotated[
             str | None,
             Field(
-                description="Floor assignment when kind='area' (use empty string to clear). Only valid when kind='area'.",
+                description="Floor assignment when kind='area' (use empty string to clear).",
                 default=None,
             ),
         ] = None,
         level: Annotated[
             int | None,
             Field(
-                description="Numeric level when kind='floor' (0=ground, 1=first, -1=basement). Only valid when kind='floor'.",
+                description="Numeric level when kind='floor' (0=ground, 1=first, -1=basement).",
                 default=None,
             ),
         ] = None,
@@ -791,7 +789,7 @@ class AreaTools:
         picture: Annotated[
             str | None,
             Field(
-                description="Picture URL when kind='area' (empty string to remove). Only valid when kind='area'.",
+                description="Picture URL when kind='area' (empty string to remove).",
                 default=None,
             ),
         ] = None,
@@ -802,7 +800,7 @@ class AreaTools:
                 description=(
                     "Label IDs when kind='area' (replaces the area's label set; "
                     "empty list to clear). Omit to leave labels unchanged. "
-                    "Only valid when kind='area' — floors have no labels."
+                    "Floors have no labels."
                 ),
                 default=None,
             ),

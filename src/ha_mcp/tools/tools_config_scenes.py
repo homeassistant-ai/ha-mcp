@@ -280,7 +280,7 @@ class ConfigSceneTools:
         self,
         scene_id: Annotated[
             str | None,
-            Field(description="Scene identifier; omit to list or search scenes"),
+            Field(description="Scene identifier"),
         ] = None,
         query: Annotated[
             str | None, Field(description="Filter scene names or IDs")
@@ -296,26 +296,21 @@ class ConfigSceneTools:
         ] = 20,
         offset: Annotated[int, Field(description="Pagination offset", ge=0)] = 0,
     ) -> dict[str, Any]:
-        """
-        Get a scene's complete configuration, or list and search scenes without scene_id.
+        """Get a scene's complete configuration, or list and search scenes without scene_id.
 
         Use ha_search for cross-domain discovery and dependency searches. For ordinary
         scene discovery, use this tool and pass a returned scene_id back to retrieve
-        the complete entities dict and config_hash for editing.
+        the complete entities dict and config_hash for editing (pass that hash to
+        ha_config_set_scene for python_transform updates).
 
         Listing returns compact metadata. Integration-managed scenes have no editable
-        storage config or scene_id. Optional content search reads full storage bodies;
-        partial results explicitly report unread configs and are not exhaustive.
+        storage config or scene_id. Partial content-search results explicitly
+        report unread configs and are not exhaustive.
 
         EXAMPLES:
         - Get scene: ha_config_get_scene("movie_night")
-        - Get scene: ha_config_get_scene("bedroom_dim")
         - Find scenes: ha_config_get_scene(query="movie")
         - Find attribute values: ha_config_get_scene(query="rainbow", search_in_config=True)
-
-        RELATED TOOLS:
-        - ha_config_set_scene — pass the returned ``config_hash`` for
-          ``python_transform`` updates.
 
         For detailed scene configuration help, use ha_get_skill_guide.
         """
@@ -602,7 +597,6 @@ class ConfigSceneTools:
                 description=(
                     "Python expression to transform existing scene config. "
                     "Mutually exclusive with config. "
-                    "Requires config_hash for validation. "
                     "WARNING: Expressions with infinite loops will hang the server. "
                     "Examples: "
                     "Add entity: python_transform=\"config['entities']['light.bed'] = {'state': 'on'}\" "
@@ -636,8 +630,8 @@ class ConfigSceneTools:
             bool,
             Field(
                 description=(
-                    "Wait for scene to be queryable before returning. Default: True. "
-                    "Set to False for bulk operations."
+                    "Wait for scene to be queryable before returning. Set to False for bulk"
+                    " operations."
                 ),
                 default=True,
             ),
@@ -662,20 +656,16 @@ class ConfigSceneTools:
 
         WHEN TO USE:
         - ``python_transform``: surgical edits to an existing scene
-          (add/remove/update a single entity entry). Requires ``config_hash``
-          from ha_config_get_scene() for optimistic locking.
+          (add/remove/update a single entity entry).
         - ``config``: creating a new scene, or wholesale replacement.
 
         WHEN NOT TO USE:
         - To activate a scene at runtime, use ha_call_service(domain="scene",
           service="turn_on", target=...) — this tool only manages scene
           *configuration*, not the runtime turn-on/off side.
-        - To list or look up existing scenes, use
-          ha_search(domain_filter="scene").
+        - To list or look up existing scenes, use ha_config_get_scene.
 
-        SCENE SHAPE: ``entities`` is a dict keyed by entity_id (e.g.,
-        ``{'light.kitchen': {'state': 'on', 'brightness': 200}}``), NOT a
-        list. Automations use a list of actions; scenes capture a snapshot
+        SCENE SHAPE: Automations use a list of actions; scenes capture a snapshot
         of states as a dict.
 
         EXAMPLE:
@@ -1229,26 +1219,21 @@ class ConfigSceneTools:
         wait: Annotated[
             bool,
             Field(
-                description="Wait for scene to be fully removed before returning. Default: True.",
+                description="Wait for scene to be fully removed before returning.",
                 default=True,
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """
-        Delete a Home Assistant scene.
+        """Delete a Home Assistant scene.
 
-        EXAMPLES:
-        - Delete scene: ha_config_remove_scene("old_scene")
-        - Delete scene: ha_config_remove_scene("temporary_scene")
+        EXAMPLE: ha_config_remove_scene("old_scene")
 
-        **IMPORTANT LIMITATION:**
-        This tool can only delete scenes created via the Home Assistant UI.
-        Scenes defined in YAML configuration files (scenes.yaml or configuration.yaml)
-        cannot be deleted through the API and will return a 405 Method Not Allowed error.
+        Only scenes created via the Home Assistant UI can be deleted. Scenes
+        defined in YAML configuration files (scenes.yaml or configuration.yaml)
+        cannot be deleted through the API and return a 405 Method Not Allowed
+        error; edit the configuration file directly instead.
 
-        To remove YAML-defined scenes, you must edit the configuration file directly.
-
-        **WARNING:** Deleting a scene that is referenced by automations or scripts
+        WARNING: Deleting a scene that is referenced by automations or scripts
         (via ``scene.turn_on``) may cause those to fail.
         """
         try:

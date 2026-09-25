@@ -196,22 +196,12 @@ class DashboardScreenshotTools:
         theme: Annotated[
             str | None,
             Field(
-                description="Installed Home Assistant frontend theme name, "
-                "applied to this render. The engine persists this on the "
-                "engine account's profile; this tool reports the change in "
-                "warnings but does not undo it (see ha_manage_theme "
-                "action='set_engine_theme')."
+                description="Installed Home Assistant frontend theme name, applied to this render."
             ),
         ] = None,
         dark_mode: Annotated[
             bool,
-            Field(
-                description="Render the requested theme in dark mode, applied "
-                "to this render. The engine persists this on the engine "
-                "account's profile; this tool reports the change in warnings "
-                "but does not undo it (see ha_manage_theme "
-                "action='set_engine_theme')."
-            ),
+            Field(description="Render the requested theme in dark mode."),
         ] = False,
         language: Annotated[
             str | None,
@@ -239,7 +229,10 @@ class DashboardScreenshotTools:
         Use it for repeatable visual checks, including ordered mobile, tablet,
         and desktop captures. Puppet reports image bytes but does not confirm
         that the frontend accepted a requested theme or language; structured
-        metadata therefore records the values sent to the engine.
+        metadata therefore records the values sent to the engine. A requested
+        theme or dark_mode persists on the engine account's profile; the change
+        is reported in warnings but not undone (see ha_manage_theme
+        action='set_engine_theme').
 
         To change the Puppet engine app (add-on) itself (keep_browser_open,
         restart), use ha_manage_app.

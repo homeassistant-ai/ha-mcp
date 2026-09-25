@@ -489,16 +489,14 @@ class IntegrationTools:
         entry_id: Annotated[
             str | None,
             Field(
-                description="Config entry ID to get details for. "
-                "If omitted, lists all integrations.",
+                description="Config entry ID to get details for.",
                 default=None,
             ),
         ] = None,
         query: Annotated[
             str | None,
             Field(
-                description="When listing, search by domain or title. "
-                "Uses exact substring matching by default; set exact_match=False for fuzzy.",
+                description="When listing, search by domain or title.",
                 default=None,
             ),
         ] = None,
@@ -528,9 +526,8 @@ class IntegrationTools:
         include_schema: Annotated[
             bool,
             Field(
-                description="When entry_id is set, also return the options flow schema "
-                "(available fields and their types). Use before ha_config_set_helper "
-                "to understand what can be updated. Only applies when supports_options=true.",
+                description="When entry_id is set, also return the options flow schema (available "
+                "fields and their types). Only applies when supports_options=true.",
                 default=False,
             ),
         ] = False,
@@ -538,10 +535,8 @@ class IntegrationTools:
             bool,
             Field(
                 description=(
-                    "When entry_id is set, include config subentries for the "
-                    "integration entry. Useful for integrations that expose "
-                    "conversation agents, devices, or other extension points "
-                    "as subentries."
+                    "When entry_id is set, include config subentries for the integration "
+                    "entry."
                 ),
                 default=False,
             ),
@@ -593,8 +588,8 @@ class IntegrationTools:
             bool,
             Field(
                 description=(
-                    "Use exact substring matching for query filter (default: True). "
-                    "Set to False for fuzzy matching when the query may contain typos."
+                    "Use exact substring matching for query filter. Set to False for fuzzy "
+                    "matching when the query may contain typos."
                 ),
                 default=True,
             ),
@@ -605,7 +600,7 @@ class IntegrationTools:
                 default=50,
                 ge=1,
                 le=200,
-                description="Max entries to return per page in list mode (default: 50)",
+                description="Max entries to return per page in list mode",
             ),
         ] = 50,
         offset: Annotated[
@@ -613,23 +608,19 @@ class IntegrationTools:
             Field(
                 default=0,
                 ge=0,
-                description="Number of entries to skip for pagination (default: 0)",
+                description="Number of entries to skip for pagination",
             ),
         ] = 0,
         include_diagnostics: Annotated[
             bool,
             Field(
                 description=(
-                    "When entry_id is set, also fetch the integration's diagnostics "
-                    "dump — integration-defined JSON (commonly includes redacted "
-                    "config, device list, state snapshots; exact top-level keys "
-                    "vary by integration). The canonical artifact users grab via "
-                    "Settings → Devices & Services → [integration] → ⋯ → Download "
-                    "diagnostics. Use when triaging integration bugs or filing "
-                    "ha_report_issue for a specific integration. Payloads can be "
+                    "When entry_id is set, also fetch the integration's diagnostics dump — "
+                    "integration-defined JSON (commonly includes redacted config, device "
+                    "list, state snapshots; exact top-level keys vary by integration), the "
+                    "same artifact as the UI's 'Download diagnostics'. Payloads can be "
                     "large (Hue ~290 KB, ZHA/MQTT/ESPHome several MB) — pair with "
-                    "diagnostics_fields or diagnostics_truncate_at_bytes to fit "
-                    "the LLM context budget."
+                    "diagnostics_fields or diagnostics_truncate_at_bytes."
                 ),
                 default=False,
             ),
@@ -638,17 +629,14 @@ class IntegrationTools:
             bool,
             Field(
                 description=(
-                    "When entry_id is a KNX config entry, also return the parsed "
-                    "ETS project: the full group-address table (address, name, "
-                    "DPT, description) under knx_project.group_addresses, plus the "
-                    "group-range hierarchy and project metadata. This is the "
-                    "parsed-project GA table that is NOT in the diagnostics dump; "
-                    "per-entity GA assignments are already covered by "
-                    "include_diagnostics (config_store / configuration_yaml). "
-                    "Ignored (with a warning) when the entry is not a KNX "
-                    "integration. The KNX integration exposes a single project, "
-                    "so the result is the same regardless of which KNX entry_id "
-                    "is used."
+                    "When entry_id is a KNX config entry, also return the parsed ETS "
+                    "project: the full group-address table (address, name, DPT, "
+                    "description) under knx_project.group_addresses, plus the group-range "
+                    "hierarchy and project metadata. This GA table is not in the "
+                    "diagnostics dump; per-entity GA assignments are (config_store / "
+                    "configuration_yaml). Ignored (with a warning) when the entry is not a "
+                    "KNX integration. KNX exposes a single project, so the result is the "
+                    "same for every KNX entry_id."
                 ),
                 default=False,
             ),
@@ -657,11 +645,9 @@ class IntegrationTools:
             str | None,
             Field(
                 description=(
-                    "Optional. When set with include_diagnostics=True, returns the "
-                    "device-scoped diagnostics dump for that specific device under "
-                    "the integration (rather than the full integration dump). Some "
-                    "integrations only expose config-entry-level dumps; others "
-                    "expose both."
+                    "With include_diagnostics=True, return the device-scoped diagnostics "
+                    "dump for this device instead of the full integration dump. Some "
+                    "integrations only expose config-entry-level dumps."
                 ),
                 default=None,
             ),
@@ -671,13 +657,11 @@ class IntegrationTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Optional list of top-level keys to keep from the diagnostics "
-                    "data payload (e.g. ['home_assistant', 'issues']). Trims the "
-                    "payload before it hits the LLM context budget. Accepts a JSON "
-                    "list or comma-separated string. Only applies when "
-                    "include_diagnostics=True and the data payload is a dict. "
-                    "Unknown keys are silently dropped and surfaced via the "
-                    "omitted_fields sub-key."
+                    "Top-level keys to keep from the diagnostics data payload (e.g. "
+                    "['home_assistant', 'issues']). Accepts a JSON list or comma-separated "
+                    "string. Only applies when include_diagnostics=True and the data "
+                    "payload is a dict. Unknown keys are dropped and listed under "
+                    "omitted_fields."
                 ),
                 default=None,
             ),
@@ -686,12 +670,12 @@ class IntegrationTools:
             int | None,
             Field(
                 description=(
-                    "Optional byte cap on the serialized diagnostics payload "
-                    "(after diagnostics_fields and diagnostics_data_path have "
-                    "been applied). On hit, drops data and emits truncated=true, "
-                    "bytes_total, byte_cap, plus available_fields (when the "
-                    "capped value is a dict). Recommended starting point: "
-                    "20000 bytes. Only applies when include_diagnostics=True."
+                    "Byte cap on the serialized diagnostics payload (after "
+                    "diagnostics_fields and diagnostics_data_path have been applied). On "
+                    "hit, drops data and emits truncated=true, bytes_total, byte_cap, plus "
+                    "available_fields (when the capped value is a dict). Recommended "
+                    "starting point: 20000 bytes. Only applies when "
+                    "include_diagnostics=True."
                 ),
                 default=None,
                 ge=1,
@@ -701,16 +685,12 @@ class IntegrationTools:
             str | None,
             Field(
                 description=(
-                    "Optional dotted path into the diagnostics data sub-tree "
-                    "(e.g. '<list-valued path>' for per-device records, "
-                    "'home_assistant.version' for HA core version; the exact "
-                    "key path varies by integration version). Walks into the "
-                    "post-fields payload. Resolution failures replace data "
-                    "with null and surface data_path_error. Use this when the "
-                    "interesting payload lives several levels deep — top-level "
-                    "diagnostics_fields can't address sub-trees on integrations "
-                    "where the bulk lives under one key (ZHA, MQTT, ESPHome). "
-                    "Only applies when include_diagnostics=True."
+                    "Dotted path into the diagnostics data sub-tree (e.g. '<list-valued "
+                    "path>' for per-device records, 'home_assistant.version' for HA core "
+                    "version; the exact key path varies by integration version). Walks into"
+                    " the post-fields payload. Resolution failures replace data with null "
+                    "and surface data_path_error. Only applies when "
+                    "include_diagnostics=True."
                 ),
                 default=None,
             ),
@@ -719,11 +699,10 @@ class IntegrationTools:
             int | None,
             Field(
                 description=(
-                    "Pagination start index (default 0) for list-valued "
-                    "diagnostics_data_path results. Ignored when "
-                    "diagnostics_data_path is unset, diagnostics_data_limit is "
-                    "unset, or the resolved value is not a list. Only applies "
-                    "when include_diagnostics=True."
+                    "Pagination start index for list-valued diagnostics_data_path results. "
+                    "Ignored when diagnostics_data_path is unset, diagnostics_data_limit is"
+                    " unset, or the resolved value is not a list. Only applies when "
+                    "include_diagnostics=True."
                 ),
                 default=0,
                 ge=0,
@@ -733,15 +712,11 @@ class IntegrationTools:
             int | None,
             Field(
                 description=(
-                    "Pagination window size for list-valued "
-                    "diagnostics_data_path results. When set with a "
-                    "list-resolved path, swaps data for a pagination envelope "
-                    "{path, items, offset, limit, total, has_more}. Default "
-                    "None returns the full resolved value. Workflow: probe "
-                    "with a list-valued diagnostics_data_path and "
-                    "diagnostics_data_limit=10 to walk a large list one page "
-                    "at a time (the exact path varies by integration version). "
-                    "Only applies when include_diagnostics=True."
+                    "Pagination window size for list-valued diagnostics_data_path results. "
+                    "When set with a list-resolved path, swaps data for a pagination "
+                    "envelope {path, items, offset, limit, total, has_more}. Default None "
+                    "returns the full resolved value. Only applies when "
+                    "include_diagnostics=True."
                 ),
                 default=None,
                 ge=1,
@@ -754,20 +729,11 @@ class IntegrationTools:
         With an entry_id: Returns detailed information including full options/configuration.
 
         EXAMPLES:
-        - List all integrations: ha_get_integration()
-        - Paginate: ha_get_integration(offset=50)
-        - Search: ha_get_integration(query="zigbee")
-        - Get specific entry: ha_get_integration(entry_id="abc123")
-        - Get entry with editable fields: ha_get_integration(entry_id="abc123", include_schema=True)
-        - Get entry with diagnostics dump: ha_get_integration(entry_id="abc123", include_diagnostics=True)
-        - Get device-scoped diagnostics: ha_get_integration(entry_id="abc123", include_diagnostics=True, device_id="dev123")
-        - Get the parsed KNX ETS project (group-address table): ha_get_integration(entry_id="<knx entry>", include_knx_project=True)
-        - Walk a sub-tree: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<dotted-path>")
-        - Paginate a large list: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<list-valued path>", diagnostics_data_limit=10, diagnostics_data_offset=20)
-        - List config subentries: ha_get_integration(entry_id="abc123", include_subentries=True)
-        - Inspect subentry create schema: ha_get_integration(entry_id="abc123", include_subentry_schema=True, subentry_type="conversation")
-        - Inspect subentry reconfigure schema: ha_get_integration(entry_id="abc123", include_subentry_schema=True, subentry_type="conversation", subentry_id="sub123")
-        - List template entries: ha_get_integration(domain="template")
+        - List / search: ha_get_integration(query="zigbee")
+        - Get an entry with its editable fields: ha_get_integration(entry_id="abc123", include_schema=True)
+        - Diagnostics dump, paged along a list-valued path: ha_get_integration(entry_id="abc123", include_diagnostics=True, diagnostics_data_path="<list-valued path>", diagnostics_data_limit=10, diagnostics_data_offset=20)
+        - Inspect a subentry reconfigure schema: ha_get_integration(entry_id="abc123", include_subentry_schema=True, subentry_type="conversation", subentry_id="sub123")
+        - List template entries with their options: ha_get_integration(domain="template")
 
         STATES: 'loaded', 'setup_error', 'setup_retry', 'not_loaded',
         'failed_unload', 'migration_error'.
@@ -782,18 +748,14 @@ class IntegrationTools:
         the OptionsFlow-derived read) while the raw nested section is preserved
         for fidelity, and an existing top-level key is never overwritten.
 
-        Each entry carries:
-
-        - ``log_level``: the canonical Python logger level name
-          (``DEBUG``/``INFO``/``WARNING``/``ERROR``/``CRITICAL``) when the
-          integration has a ``logger.set_level`` override, or ``"DEFAULT"``
-          (uppercase sentinel) when no override is set.
-        - ``log_level_raw``: the original numeric level (e.g. ``10`` for DEBUG)
-          when HA returned an int, ``None`` otherwise (no override set, or HA
-          provided a level name as a string).
-
-        This is distinct from the add-on side, where ``ha_get_app`` returns
-        Supervisor's lowercase ``"default"`` literal — do not cross-compare.
+        Each entry carries ``log_level``: the canonical Python logger level name
+        (``DEBUG``/``INFO``/``WARNING``/``ERROR``/``CRITICAL``) when the
+        integration has a ``logger.set_level`` override, or ``"DEFAULT"``
+        (uppercase sentinel) when no override is set; and ``log_level_raw``: the
+        original numeric level (e.g. ``10`` for DEBUG) when HA returned an int,
+        ``None`` otherwise. This is distinct from the app side, where
+        ``ha_get_app`` returns Supervisor's lowercase ``"default"`` literal — do
+        not cross-compare.
         """
         try:
             include_opts = include_options
@@ -1827,10 +1789,7 @@ class IntegrationTools:
         entry_id: Annotated[
             str | None,
             Field(
-                description=(
-                    "Config entry ID of an existing integration (enable/disable "
-                    "and options-update modes). Omit when adding via 'domain'."
-                ),
+                description=("Config entry ID of an existing integration."),
                 default=None,
             ),
         ] = None,
@@ -1838,8 +1797,8 @@ class IntegrationTools:
             bool | None,
             Field(
                 description=(
-                    "True to enable, False to disable the entry. Requires "
-                    "entry_id; mutually exclusive with 'domain' and 'config'."
+                    "True to enable, False to disable the entry. Mutually "
+                    "exclusive with 'domain' and 'config'."
                 ),
                 default=None,
             ),
@@ -1848,9 +1807,7 @@ class IntegrationTools:
             str | None,
             Field(
                 description=(
-                    "Integration domain to add (e.g. 'workday', "
-                    "'local_calendar') — starts and drives that domain's "
-                    "config flow. Pass the flow's form fields in 'config'."
+                    "Integration domain to add (e.g. 'workday', 'local_calendar')."
                 ),
                 default=None,
             ),
@@ -1860,9 +1817,7 @@ class IntegrationTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Flow form data. With 'domain': input for the new "
-                    "integration's config flow. With 'entry_id' alone: input "
-                    "for the entry's options flow (updates its options). "
+                    "Flow form data. "
                     "Updating an existing entry — options or reconfigure — is "
                     "a patch: a field you omit keeps its current value, and a "
                     "field set to null is cleared where the integration's "
@@ -1943,8 +1898,7 @@ class IntegrationTools:
             Field(
                 default=None,
                 description=(
-                    "Requires reconfigure=True. A token from a reconfigure "
-                    "preflight; applies the change. Any token still matching "
+                    "Requires reconfigure=True. Any token still matching "
                     "the entry's current state and the same requested config "
                     "is accepted, so a token stays valid while nothing moves."
                 ),
@@ -1958,14 +1912,10 @@ class IntegrationTools:
         - Add integration: domain (+ config) — drives the domain's config
           flow, including menus and multi-step forms.
         - Update options: entry_id + config — drives the entry's options
-          flow (what the "Configure" button does in the HA UI). Like that
-          dialog it is a patch: omitted fields keep their current values, and
-          a field set to null is cleared where the integration's schema
-          allows that field to be empty.
-        - Reconfigure: entry_id + reconfigure=True + config — drives the
-          existing entry's official reconfigure flow (host, port, credentials).
-          Call it without confirm_token for a read-only preflight; repeat with
-          the token it returns to apply.
+          flow (what the "Configure" button does in the HA UI).
+        - Reconfigure: entry_id + reconfigure=True + config — connection
+          settings such as host, port, credentials. Repeat with the token the
+          preflight returns as confirm_token to apply.
 
         WHEN NOT TO USE:
         - Helpers (template, group, utility_meter, ...): use
@@ -1979,26 +1929,23 @@ class IntegrationTools:
         Use ha_get_integration() to find entry IDs, and
         ha_get_integration(entry_id=..., include_schema=True) to inspect the
         options fields before an update. Its supports_reconfigure field tells
-        you whether an entry qualifies for reconfigure=True; only integrations
-        implementing async_step_reconfigure do.
+        you whether an entry qualifies for reconfigure=True.
 
         Caveats: adding an integration runs its config flow exactly as the HA
         UI would (may pair devices, scan the network, create entities). Flows
         requiring a browser step (OAuth) or an asynchronous provider step
-        error out at that step with a structured error instead of completing.
-        Reconfigure edits the settings a live integration connects with: a
-        wrong host or credential takes it offline, and there is no automatic
-        rollback — the returned rollback metadata describes repeating the
-        official flow by hand with the previous values, which this tool cannot
-        read back. The preflight does not validate config keys against the
-        integration's form; wrong field names surface on the confirm call.
+        error out at that step instead of completing. Reconfigure edits the
+        settings a live integration connects with: a wrong host or credential
+        takes it offline, and there is no automatic rollback — the returned
+        rollback metadata describes repeating the official flow by hand with
+        the previous values, which this tool cannot read back. The preflight
+        does not validate config keys against the integration's form; wrong
+        field names surface on the confirm call.
 
         EXAMPLES:
-        - Disable: ha_set_integration(entry_id="abc123", enabled=False)
         - Add: ha_set_integration(domain="workday", config={"name": "Workday"})
         - Update options: ha_set_integration(entry_id="abc123", config={"scan_interval": 30})
-        - Reconfigure preflight: ha_set_integration(entry_id="abc123", reconfigure=True, config={"host": "10.0.0.5"})
-        - Reconfigure apply: repeat that call adding confirm_token="sha256:..."
+        - Reconfigure preflight: ha_set_integration(entry_id="abc123", reconfigure=True, config={"host": "10.0.0.5"}), then repeat adding confirm_token="sha256:..."
         """
         try:
             if reconfigure:
@@ -2202,14 +2149,13 @@ class IntegrationTools:
             Field(
                 description=(
                     "What to remove. One of: "
-                    "(a) bare helper_id for SIMPLE helpers (requires helper_type), "
+                    "(a) bare helper_id for SIMPLE helpers, "
                     "e.g. 'my_button'; "
-                    "(b) full entity_id (requires helper_type), "
+                    "(b) full entity_id, "
                     "e.g. 'input_button.my_button' or 'sensor.my_meter'; "
-                    "(c) config entry_id for any integration (helper_type=None), "
+                    "(c) config entry_id for any integration, "
                     "e.g. value from ha_get_integration(); "
-                    "(d) parent config entry_id for config_subentry "
-                    "(requires helper_type='config_subentry' and subentry_id)."
+                    "(d) parent config entry_id for a config subentry."
                 )
             ),
         ],
@@ -2266,75 +2212,42 @@ class IntegrationTools:
         - YAML-configured helpers — they have no storage backend. Edit the
           YAML file and reload the relevant integration.
 
-        SUPPORTED HELPER TYPES:
-        - SIMPLE (12, websocket-delete): input_button, input_boolean,
-          input_select, input_number, input_text, input_datetime, counter,
-          timer, schedule, zone, person, tag.
-        - FLOW (17, config-entry-delete via entity lookup): template, group,
-          utility_meter, derivative, min_max, threshold, integration,
-          statistics, trend, random, filter, tod, generic_thermostat,
-          switch_as_x, generic_hygrostat, history_stats, mold_indicator.
-
         ROUTING:
-        - SIMPLE helper_type + bare helper_id or entity_id → websocket delete.
-        - FLOW helper_type + entity_id → resolve entity_id to config_entry_id
-          via entity_registry, then delete the config entry. All sub-entities
-          (e.g. utility_meter tariffs) are removed together.
+        - SIMPLE helper_type (input_button, input_boolean, input_select,
+          input_number, input_text, input_datetime, counter, timer, schedule,
+          zone, person, tag) + bare helper_id or entity_id → websocket delete.
+        - FLOW helper_type (template, group, utility_meter, derivative, min_max,
+          threshold, integration, statistics, trend, random, filter, tod,
+          generic_thermostat, switch_as_x, generic_hygrostat, history_stats,
+          mold_indicator) + full entity_id → resolve entity_id to
+          config_entry_id via entity_registry, then delete the config entry. All
+          sub-entities (e.g. utility_meter tariffs) are removed together.
         - helper_type=None + entry_id → direct config entry delete (any
           integration).
         - helper_type="config_subentry" + parent entry_id + subentry_id →
           delete one config subentry.
 
-        MISSING-TARGET CONTRACT:
-        A target that is *confirmed absent* raises a structured error
-        rather than returning silent success, so a typo'd or stale
-        identifier surfaces immediately at the caller layer (the
-        ``success`` boolean is what agent wrappers branch on). The
-        error code per-path follows the target shape:
-        - SIMPLE (bare helper_id or entity_id): state-machine empty AND
-          entity registry empty → raises ``ENTITY_NOT_FOUND``.
-        - FLOW (entity_id): not in entity registry → raises
-          ``ENTITY_NOT_FOUND``. YAML-configured helpers (no config entry
-          backing) raise ``RESOURCE_NOT_FOUND``. A bare helper_id (no
-          ``.``) on a FLOW target raises ``ENTITY_NOT_FOUND`` — FLOW
-          resolution needs a full entity_id. TOCTOU 404 on the
-          resolved entry_id raises ``RESOURCE_NOT_FOUND``.
-        - Direct config entry (helper_type=None): backend returns HTTP
-          404 → raises ``RESOURCE_NOT_FOUND``.
-        - Config subentry: backend returns a "not_found" error → raises
-          ``RESOURCE_NOT_FOUND``.
-
-        Idempotency at the contract level still holds (call N times =
-        same response). Transient connectivity failures (WebSocket
-        disconnected, network timeouts) raise their own codes
-        (``WEBSOCKET_DISCONNECTED``, ``CONNECTION_FAILED``) so retry
-        logic can branch separately.
+        A target that is confirmed absent raises a structured error rather than
+        returning silent success: ENTITY_NOT_FOUND for a SIMPLE target missing
+        from both the state machine and the entity registry, or a FLOW
+        entity_id missing from the registry (a bare helper_id on a FLOW target
+        also raises it — FLOW resolution needs a full entity_id);
+        RESOURCE_NOT_FOUND for a YAML-configured helper with no config entry, a
+        config entry the backend reports as 404, or a missing config subentry.
+        Calling N times gives the same response. Transient connectivity failures
+        raise their own codes (WEBSOCKET_DISCONNECTED, CONNECTION_FAILED) so
+        retry logic can branch separately.
 
         EXAMPLES:
-        - Remove SIMPLE button:
-          ha_remove_helpers_integrations(
-              target="my_button", helper_type="input_button", confirm=True
-          )
-        - Remove FLOW utility_meter (any sub-entity works):
-          ha_remove_helpers_integrations(
-              target="sensor.energy_peak",
-              helper_type="utility_meter",
-              confirm=True,
-          )
-        - Remove any integration by entry_id:
-          ha_remove_helpers_integrations(
-              target="01HXYZ...", confirm=True
-          )
-        - Remove a config subentry:
-          ha_remove_helpers_integrations(
-              target="01HXYZ...", helper_type="config_subentry",
-              subentry_id="subentry-123", confirm=True
-          )
+        - Remove SIMPLE button: ha_remove_helpers_integrations(target="my_button", helper_type="input_button", confirm=True)
+        - Remove FLOW utility_meter (any sub-entity works): ha_remove_helpers_integrations(target="sensor.energy_peak", helper_type="utility_meter", confirm=True)
+        - Remove any integration by entry_id: ha_remove_helpers_integrations(target="01HXYZ...", confirm=True)
+        - Remove a config subentry: ha_remove_helpers_integrations(target="01HXYZ...", helper_type="config_subentry", subentry_id="subentry-123", confirm=True)
 
-        **WARNING:** Removing a helper or integration that is referenced by
+        WARNING: Removing a helper or integration that is referenced by
         automations, scripts, or other integrations may cause those to fail.
-        Use ha_search() / ha_get_integration() to verify before
-        removal. Recovery requires a usable backup and supported restore path.
+        Use ha_search() / ha_get_integration() to verify before removal.
+        Recovery requires a usable backup and supported restore path.
         """
         # === Confirm gate (uniform for all four paths) ===
         if not confirm:

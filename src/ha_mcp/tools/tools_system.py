@@ -174,36 +174,20 @@ class SystemTools:
     @log_tool_usage
     async def ha_restart(
         self,
-        confirm: bool = False,
+        confirm: Annotated[
+            bool, Field(description="Must be True to confirm the restart.")
+        ] = False,
     ) -> dict[str, Any]:
-        """
-        Restart Home Assistant.
+        """Execute a Home Assistant restart.
 
-        **WARNING: This will restart the entire Home Assistant instance!**
-        All automations will be temporarily unavailable during restart.
-        The restart typically takes 1-5 minutes depending on your setup.
+        WARNING: restarts the entire Home Assistant instance; all automations
+        are unavailable during the restart, which typically takes 1-5 minutes.
+        Config is validated automatically before the restart proceeds (to
+        pre-check, call ha_get_system_health(include="config_check")). For
+        configuration changes, consider ha_reload_core() instead, which reloads
+        specific components without a full restart.
 
-        **Parameters:**
-        - confirm: Must be set to True to confirm the restart. This is a safety
-                   measure to prevent accidental restarts.
-
-        **Best Practices:**
-        1. Config is validated automatically before the restart proceeds; to
-           pre-check, call ha_get_system_health(include="config_check")
-        2. Notify users before restarting (if applicable)
-        3. Schedule restarts during low-activity periods
-
-        **Example Usage:**
-        ```python
-        # Optional pre-check (ha_restart also validates config automatically)
-        health = ha_get_system_health(include="config_check")
-        if health["config_check"]["is_valid"]:
-            # Restart with confirmation
-            result = ha_restart(confirm=True)
-        ```
-
-        **Alternative:** For configuration changes, consider using ha_reload_core()
-        instead, which reloads specific components without a full restart.
+        EXAMPLE: ha_restart(confirm=True)
         """
         if not confirm:
             raise_tool_error(
@@ -299,58 +283,41 @@ class SystemTools:
     @log_tool_usage
     async def ha_reload_core(
         self,
-        target: str = "all",
-        entry_id: str | None = None,
+        target: Annotated[
+            str,
+            Field(
+                description=(
+                    "What to reload: 'all', 'automations', 'scripts', 'scenes', "
+                    "'groups', 'input_booleans', 'input_numbers', 'input_texts', "
+                    "'input_selects', 'input_datetimes', 'input_buttons', "
+                    "'timers', 'templates', 'persons', 'zones', 'core' "
+                    "(customize, packages) or 'themes'."
+                )
+            ),
+        ] = "all",
+        entry_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Reload a SINGLE config entry (one integration instance) "
+                    "instead of sweeping subsystems — the fast path after editing "
+                    "a custom component on disk. Pass it alone (leave target at "
+                    "'all'); combining it with an explicit target is a validation "
+                    "error. Find the id via ha_get_integration."
+                )
+            ),
+        ] = None,
     ) -> dict[str, Any]:
-        """
-        Reload Home Assistant configuration without full restart.
+        """Execute a Home Assistant configuration reload without a full restart.
 
-        This tool reloads specific configuration components, allowing changes
-        to take effect without restarting the entire Home Assistant instance.
-        This is much faster than a full restart.
+        Reloads specific configuration components so changes take effect without
+        restarting Home Assistant — much faster than a full restart. Use it after
+        editing automation/script YAML, adding YAML helpers, or changing
+        customize.yaml or themes.
 
-        **Parameters:**
-        - target: What to reload. Options:
-          - "all": Reload all reloadable components
-          - "automations": Reload automation configurations
-          - "scripts": Reload script configurations
-          - "scenes": Reload scene configurations
-          - "groups": Reload group configurations
-          - "input_booleans": Reload input_boolean helpers
-          - "input_numbers": Reload input_number helpers
-          - "input_texts": Reload input_text helpers
-          - "input_selects": Reload input_select helpers
-          - "input_datetimes": Reload input_datetime helpers
-          - "input_buttons": Reload input_button helpers
-          - "timers": Reload timer helpers
-          - "templates": Reload template sensors/entities
-          - "persons": Reload person configurations
-          - "zones": Reload zone configurations
-          - "core": Reload core configuration (customize, packages)
-          - "themes": Reload frontend themes
-        - entry_id: Reload a SINGLE config entry (one integration instance)
-          instead of sweeping subsystems — the fast path after editing a custom
-          component on disk. Pass it alone (leave `target` at its "all" default);
-          combining it with an explicit `target` is a validation error. Find the
-          id via ha_get_integration.
-
-        **Example Usage:**
-        ```python
-        # Reload just automations after editing
-        ha_reload_core(target="automations")
-
-        # Reload all configurations
-        ha_reload_core(target="all")
-
-        # Reload input helpers after adding new ones
-        ha_reload_core(target="input_booleans")
-        ```
-
-        **When to Use:**
-        - After editing automation/script YAML files
-        - After adding new input helpers via YAML
-        - After modifying customize.yaml
-        - After theme changes
+        EXAMPLES:
+        - ha_reload_core(target="automations")
+        - ha_reload_core(entry_id="abc123")
         """
         target = target.lower().strip()
 
@@ -583,98 +550,107 @@ class SystemTools:
     @log_tool_usage
     async def ha_get_system_health(
         self,
-        include: str | None = None,
-        include_dismissed_repairs: bool | None = False,
-        config_entry_id: str | None = None,
-        device_id: str | None = None,
-        diagnostics_fields: Annotated[
-            list[str] | str | None, JSON_STRING_COERCION
+        include: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Comma-separated extra sections: 'repairs' (Repair items, "
+                    "active only unless include_dismissed_repairs=True); "
+                    "'zha_network' (ZHA devices with radio signal summary: name, "
+                    "LQI, RSSI); 'zha_network_full' (all ZHA device details; large "
+                    "on 100+ device networks); 'zwave_network' (Z-Wave JS status "
+                    "and node summary: status, security, routing); "
+                    "'thread_network' (per border-router channel, extended_pan_id "
+                    "and border_agent_id; not per-node Thread health); "
+                    "'matter_network' (Matter integration presence: "
+                    "config_entry_id, state, title; per-node health is in Matter "
+                    "node diagnostics); 'themes' (installed theme names, count, "
+                    "default_theme, default_dark_theme); 'diagnostics' "
+                    "(per-integration diagnostics dump, integration-defined JSON; "
+                    "REQUIRES config_entry_id; payloads can be large — pair with "
+                    "diagnostics_fields or diagnostics_truncate_at_bytes); "
+                    "'config_check' (validate the HA configuration, the "
+                    "pre-restart check ha_restart runs automatically; returns "
+                    "{result: valid|invalid, is_valid, errors}); 'dead_entities' "
+                    "(orphaned/stale entity-registry entries: config_entry_orphans "
+                    "whose owning integration instance is gone, and stale_restored "
+                    "entries HA restored on startup that the loaded integration no "
+                    "longer provides, each with entity_id + platform for cleanup "
+                    "via ha_remove_entity; unknown-state entities and "
+                    "merely-offline devices are excluded)."
+                )
+            ),
         ] = None,
-        diagnostics_truncate_at_bytes: Annotated[int, Field(ge=1)] | None = None,
-        diagnostics_data_path: str | None = None,
-        diagnostics_data_offset: Annotated[int, Field(ge=0)] | None = 0,
-        diagnostics_data_limit: Annotated[int, Field(ge=1)] | None = None,
+        include_dismissed_repairs: Annotated[
+            bool | None,
+            Field(
+                description="Include user-dismissed/ignored repairs. Only meaningful when 'repairs' is in include."
+            ),
+        ] = False,
+        config_entry_id: Annotated[
+            str | None,
+            Field(
+                description="Config entry ID of the integration (find via ha_get_integration). Required when include contains 'diagnostics'."
+            ),
+        ] = None,
+        device_id: Annotated[
+            str | None,
+            Field(
+                description="With include='diagnostics', return the device-scoped dump for this device instead of the full integration dump. Some integrations only expose config-entry-level dumps."
+            ),
+        ] = None,
+        diagnostics_fields: Annotated[
+            list[str] | str | None,
+            JSON_STRING_COERCION,
+            Field(
+                description="Top-level keys to keep from the diagnostics data payload (e.g. ['home_assistant', 'issues']). Accepts a JSON list or comma-separated string. Only applies with include='diagnostics'."
+            ),
+        ] = None,
+        diagnostics_truncate_at_bytes: Annotated[
+            int | None,
+            Field(
+                ge=1,
+                description="Byte cap on the serialized diagnostics payload (post-projection / post-data_path). On hit, drops data and emits truncated=true, bytes_total, byte_cap, plus available_fields (when the capped value is a dict). Recommended starting point: 20000. Only applies with include='diagnostics'.",
+            ),
+        ] = None,
+        diagnostics_data_path: Annotated[
+            str | None,
+            Field(
+                description="Dotted path into the diagnostics data sub-tree (e.g. 'data.devices' for ZHA per-device records). Walks into the post-fields payload. Resolution failures replace data with null and surface data_path_error. Only applies with include='diagnostics'."
+            ),
+        ] = None,
+        diagnostics_data_offset: Annotated[
+            int | None,
+            Field(
+                ge=0,
+                description="Pagination start index for list-valued diagnostics_data_path results. Only applies with include='diagnostics'.",
+            ),
+        ] = 0,
+        diagnostics_data_limit: Annotated[
+            int | None,
+            Field(
+                ge=1,
+                description="Pagination window for list-valued diagnostics_data_path results; data becomes {path, items, offset, limit, total, has_more}. Only applies with include='diagnostics'.",
+            ),
+        ] = None,
     ) -> dict[str, Any]:
-        """
-        Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.
+        """Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.
 
-        Returns health check results from integrations, system resources, and connectivity.
-        Available information varies by installation type and loaded integrations.
+        Returns health check results from integrations, system resources, and
+        connectivity; available information varies by installation type and
+        loaded integrations. Optional sections are selected with `include`.
 
-        The result also carries an ``ha_mcp_update`` object —
-        ``{current, latest, update_available}`` — reporting whether a newer
-        ha-mcp release is available (from PyPI for pip/Docker, or the Supervisor
-        add-on store for the add-on), so you can proactively tell the user to
-        upgrade. Present on every install type including the HA add-on (so a user
-        who missed the Supervisor's update prompt still hears about it); omitted
-        only for the ``unknown`` version and when ``HA_MCP_DISABLE_UPDATE_CHECK``
-        is set.
+        The result also carries ``ha_mcp_update`` ``{current, latest,
+        update_available}``, reporting whether a newer ha-mcp release is
+        available (PyPI for pip/Docker, the Supervisor store for the app) —
+        proactively tell the user to upgrade. Present on every install type
+        including the HA app; omitted for the ``unknown`` version, when
+        ``HA_MCP_DISABLE_UPDATE_CHECK`` is set, or when the update check itself
+        failed.
 
-        **Parameters:**
-        - include: Optional comma-separated list of additional data to include.
-          - "repairs": Repair items from Settings > System > Repairs (active only by default; pass `include_dismissed_repairs=True` for all). To dismiss/ignore a repair, call `ha_call_service(ws_command="repairs/ignore_issue", data={"domain": <domain>, "issue_id": <issue_id>, "ignore": true})`.
-          - "zha_network": ZHA Zigbee devices with radio signal summary (name, LQI, RSSI)
-          - "zha_network_full": ZHA Zigbee devices with all device details (can be large on 100+ device networks; prefer "zha_network" for summary)
-          - "zwave_network": Z-Wave JS network status and node summary (status, security, routing)
-          - "thread_network": Thread/OpenThread Border Router (OTBR) summary — per border-router channel, extended_pan_id, and border_agent_id (integration-presence + radio-network view, not per-node Thread health)
-          - "matter_network": Matter integration presence summary — config_entry_id, state, and title (per-node health is exposed separately via Matter node diagnostics, not here)
-          - "themes": Installed theme names and defaults (sorted list of theme names, count, default_theme, default_dark_theme)
-          - "diagnostics": Per-integration diagnostics dump — integration-defined JSON
-            (commonly includes redacted config, device list, state snapshots; exact
-            top-level keys vary by integration). REQUIRES ``config_entry_id``. The
-            canonical artifact users grab via Settings → Devices & Services →
-            [integration] → ⋯ → Download diagnostics. Use this when triaging integration
-            bugs or filing ``ha_report_issue`` for a specific integration. Payloads can
-            be large (Hue ~290 KB, ZHA/MQTT/ESPHome several MB) — pair with
-            ``diagnostics_fields`` or ``diagnostics_truncate_at_bytes`` to fit the LLM
-            context budget.
-          - "config_check": Validate HA configuration via POST /config/core/check_config
-            (the pre-restart safety check; ha_restart runs it automatically). Returns
-            {result: valid|invalid, is_valid, errors}; read-only/idempotent, takes no args.
-          - "dead_entities": Surface orphaned/stale entity-registry entries by diffing
-            the registry against the state machine and the live config-entries set.
-            Returns confidence-tiered buckets — ``config_entry_orphans`` (owning
-            integration instance gone; definitively dead) and ``stale_restored`` (HA
-            restored the entity from the registry on startup but the loaded integration
-            no longer provides it). Each item carries entity_id + platform so a client
-            can propose cleanup with ha_remove_entity. Deliberately excludes
-            ``unknown``-state entities and merely-offline devices to keep false positives
-            low. Read-only; takes no args.
-          - Example: include="repairs,zha_network,zwave_network,config_check"
-          - Example: include="diagnostics", config_entry_id="abc123..."
-        - include_dismissed_repairs: Include user-dismissed/ignored repairs (default: False). Only meaningful when "repairs" is in `include`.
-        - config_entry_id: Required when ``include`` contains ``diagnostics``. The config
-          entry ID of the integration (find via ``ha_get_integration``).
-        - device_id: Optional. When set with ``include=diagnostics``, returns the
-          device-scoped diagnostics dump for that specific device under the integration
-          (rather than the full integration dump). Some integrations only expose
-          config-entry-level dumps; others expose both.
-        - diagnostics_fields: Optional list of top-level keys to keep from the
-          diagnostics ``data`` payload (e.g. ``["home_assistant", "issues"]``). Accepts
-          a JSON list or comma-separated string. Only applies with ``include=diagnostics``.
-        - diagnostics_truncate_at_bytes: Optional byte cap on the serialized
-          diagnostics payload (post-projection / post-data_path). On hit,
-          drops ``data`` and emits ``truncated=true``, ``bytes_total``,
-          ``byte_cap``, plus ``available_fields`` (when the capped value
-          is a dict). Only applies when ``include`` contains ``diagnostics``.
-          Recommended starting point: 20000 bytes.
-        - diagnostics_data_path: Optional dotted path into the diagnostics
-          ``data`` sub-tree (e.g. ``"data.devices"`` for ZHA per-device records).
-          Walks into the post-fields payload. Resolution failures replace
-          ``data`` with ``null`` and surface ``data_path_error``. Only applies
-          when ``include`` contains ``diagnostics``.
-        - diagnostics_data_offset / diagnostics_data_limit: Pagination on
-          list-valued ``diagnostics_data_path`` results. When ``data_limit``
-          is set and the resolved path is a list, ``data`` becomes
-          ``{"path", "items", "offset", "limit", "total", "has_more"}``. Only
-          applies when ``include`` contains ``diagnostics``.
-
-          Example workflow (walk a list-valued sub-tree one page at a time;
-          the exact ``data_path`` varies by integration version):
-          ``ha_get_system_health(include="diagnostics", config_entry_id="abc",
-          diagnostics_data_path="<list-valued path>", diagnostics_data_limit=10)``
-          → inspect the page envelope's ``total`` / ``has_more`` → repeat
-          with ``diagnostics_data_offset=10`` for the next slice.
+        EXAMPLES:
+        - ha_get_system_health(include="repairs,zha_network,zwave_network,config_check")
+        - Page a list-valued diagnostics sub-tree: ha_get_system_health(include="diagnostics", config_entry_id="abc", diagnostics_data_path="<list-valued path>", diagnostics_data_limit=10), then repeat with diagnostics_data_offset=10 while has_more is true.
         """
         includes = self._parse_includes(include)
         include_dismissed_repairs_bool = bool(include_dismissed_repairs)

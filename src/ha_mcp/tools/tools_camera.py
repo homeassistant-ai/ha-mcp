@@ -6,7 +6,9 @@ that returns images directly to the LLM for visual analysis.
 """
 
 import logging
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from ha_mcp._vendor.fastmcp.tools import tool
 from ha_mcp._vendor.fastmcp.utilities.types import Image
@@ -71,48 +73,25 @@ class CameraTools:
     @log_tool_usage
     async def ha_get_camera_image(
         self,
-        entity_id: str,
-        width: int | None = None,
-        height: int | None = None,
+        entity_id: Annotated[
+            str, Field(description="Camera entity ID (e.g., 'camera.front_door')")
+        ],
+        width: Annotated[
+            int | None, Field(description="Width to resize the image to")
+        ] = None,
+        height: Annotated[
+            int | None, Field(description="Height to resize the image to")
+        ] = None,
     ) -> Image:
-        """
-        Retrieve a snapshot image from a Home Assistant camera entity.
+        """Get a snapshot image from a Home Assistant camera entity.
 
-        This tool fetches the current camera image and returns it directly for visual
-        analysis. Use this when you need to see what a camera is currently viewing.
+        Fetches the current camera image and returns it directly for visual
+        analysis (security checks, delivery verification, confirming a garage
+        door actually closed). Only cameras exposed to Home Assistant are
+        accessible; images come back in their native format (JPEG, PNG, or GIF).
+        Use width/height on high-resolution cameras to reduce token usage.
 
-        **Parameters:**
-        - entity_id: Camera entity ID (e.g., 'camera.front_door', 'camera.living_room')
-        - width: Optional width to resize the image (reduces token usage for large images)
-        - height: Optional height to resize the image
-
-        **Use Cases:**
-        - Security checks: "Is someone at the front door?"
-        - Pet monitoring: "Is my dog still on the couch?"
-        - Delivery verification: "Did my package get delivered?"
-        - Visual confirmation: "Did the garage door actually close?"
-        - Incident investigation: "What triggered the motion sensor?"
-
-        **Example Usage:**
-        ```python
-        # Get current snapshot from front door camera
-        ha_get_camera_image(entity_id="camera.front_door")
-
-        # Get resized image to reduce token usage
-        ha_get_camera_image(entity_id="camera.backyard", width=640, height=480)
-        ```
-
-        **Notes:**
-        - Only cameras exposed to Home Assistant are accessible
-        - The existing HA authentication/authorization applies
-        - Images are returned in their native format (JPEG, PNG, or GIF)
-        - Use width/height parameters for large high-resolution cameras to reduce
-          token usage when full resolution is not needed
-
-        **Related Services:**
-        - camera.snapshot: Save snapshot to file on HA server
-        - camera.turn_on/turn_off: Control camera power
-        - camera.enable_motion_detection: Enable motion detection
+        EXAMPLE: ha_get_camera_image(entity_id="camera.backyard", width=640, height=480)
         """
         if not entity_id or "." not in entity_id:
             raise ValueError(

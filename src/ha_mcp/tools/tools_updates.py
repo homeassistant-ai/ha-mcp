@@ -918,38 +918,35 @@ class UpdateTools:
             list[str] | str | None,
             JSON_STRING_COERCION,
             Field(
-                description="For install: apply every pending update in these "
-                "categories ('addons', 'hacs', 'devices', 'other'). Mirrors the "
-                "HA 2026.7 'Update all' button: core/os/supervisor are excluded "
-                "by design (target those individually via entity_ids) and "
-                "skipped updates are never included.",
+                description="For install: apply every pending update in these categories ('addons',"
+                " 'hacs', 'devices', 'other'). As with the HA 'Update all' button, "
+                "core/os/supervisor are excluded (target those individually via "
+                "entity_ids) and skipped updates are never included.",
                 default=None,
             ),
         ] = None,
         include_skipped: Annotated[
             bool,
             Field(
-                description="For list: include updates that have been skipped "
-                "(default: False).",
+                description="For list: include updates that have been skipped.",
                 default=False,
             ),
         ] = False,
         include_release_notes: Annotated[
             bool,
             Field(
-                description="For get on a Core update entity: fetch multi-version "
-                "release notes and breaking changes for all versions between "
-                "installed and latest (default: False). Adds breaking_changes, "
-                "multi_version_release_notes, and installed_integrations to the "
-                "response.",
+                description="For get on a Core update entity: fetch multi-version release notes and"
+                " breaking changes for all versions between installed and latest. Adds "
+                "breaking_changes, multi_version_release_notes, and "
+                "installed_integrations to the response.",
                 default=False,
             ),
         ] = False,
         backup: Annotated[
             bool,
             Field(
-                description="For install: create a backup before installing where "
-                "the update entity supports it (apps/add-ons). Default: False.",
+                description="For install: create a backup before installing where the update entity"
+                " supports it (apps (add-ons)).",
                 default=False,
             ),
         ] = False,
@@ -963,20 +960,13 @@ class UpdateTools:
         Installs run asynchronously in Home Assistant and can take minutes:
         'install' returns once the service calls are accepted, with per-entity
         results. Poll action='list' to watch in_progress until installed_version
-        reaches latest_version.
+        reaches latest_version. action='list' also returns ha_mcp_update — this
+        MCP server's own update status {current, latest, update_available}, so
+        a newer ha-mcp release can be flagged.
 
         EXAMPLES:
-        - List all updates: ha_manage_updates()
         - Pre-update analysis: ha_manage_updates(action="get", entity_ids=["update.home_assistant_core_update"], include_release_notes=True)
         - Update everything pending in a category: ha_manage_updates(action="install", categories=["addons", "hacs"])
-
-        RETURNS (action='list'): updates_available, updates, categories, and
-        ha_mcp_update -- this MCP server's own update status {current, latest,
-        update_available}, so a newer ha-mcp release can be flagged.
-
-        RETURNS (action='get'): update details, release notes; with
-        include_release_notes=True on Core also breaking_changes.entries[],
-        multi_version_release_notes[], and installed_integrations.
         """
         try:
             if action == "list":

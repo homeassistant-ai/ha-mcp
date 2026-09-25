@@ -565,9 +565,7 @@ class AssistPipelineTools:
             Field(
                 description=(
                     "Natural-language command to run through Assist. Required when "
-                    "action='process'. A matched intent executes, and with the "
-                    "built-in agent a sentence matching a conversation trigger "
-                    "runs that automation."
+                    "action='process'."
                 ),
                 default=None,
             ),
@@ -695,8 +693,8 @@ class AssistPipelineTools:
             bool,
             Field(
                 description=(
-                    "For create/update only, also set the resulting pipeline as "
-                    "preferred with an extra websocket call. Ignored for other actions."
+                    "For create/update only, also set the resulting pipeline as preferred. "
+                    "Ignored for other actions."
                 ),
                 default=False,
             ),
@@ -719,53 +717,19 @@ class AssistPipelineTools:
         this to test what Assist itself understands. When the built-in agent
         answers, a matching conversation trigger runs its automation: that
         agent checks its sentence triggers before it matches intents, so this
-        is not limited to intents. pipeline_id borrows a pipeline's
-        conversation agent and language, but the sentence still goes to the
-        agent directly. So with an agent other than the built-in one, neither
+        is not limited to intents. Even with pipeline_id, the sentence goes
+        to the agent directly. So with an agent other than the built-in one, neither
         sentence triggers nor prefer_local_intents apply — a full pipeline run
         is what adds those for other agents.
 
         EXAMPLES:
-        - List pipelines: ha_manage_pipeline(action="list")
-        - Get one pipeline: ha_manage_pipeline(action="get", pipeline_id="preferred")
-        - Create by cloning preferred: ha_manage_pipeline(
-              action="create",
-              name="Local Assist",
-              conversation_engine="conversation.local_llm",
-          )
-        - Create by cloning a specific pipeline: ha_manage_pipeline(
-              action="create",
-              base_pipeline_id="preferred",
-              name="Local Assist",
-              conversation_engine="conversation.local_llm",
-          )
-        - Update conversation agent and clear TTS voice: ha_manage_pipeline(
-              action="update",
-              pipeline_id="preferred",
-              conversation_engine="conversation.local_llm",
-              tts_voice="",
-          )
-        - Set preferred: ha_manage_pipeline(
-              action="set_preferred",
-              pipeline_id="preferred",
-          )
-        - Run a sentence: ha_manage_pipeline(
-              action="process",
-              sentence="turn on the kitchen light",
-          )
-        - Run it through one pipeline's agent: ha_manage_pipeline(
-              action="process",
-              sentence="turn on the kitchen light",
-              pipeline_id="preferred",
-          )
-        - Continue a conversation: ha_manage_pipeline(
-              action="process",
-              sentence="and the hallway?",
-              conversation_id="<id from the previous response>",
-          )
+        - Get the preferred pipeline: ha_manage_pipeline(action="get", pipeline_id="preferred")
+        - Create by cloning a pipeline: ha_manage_pipeline(action="create", base_pipeline_id="preferred", name="Local Assist", conversation_engine="conversation.local_llm")
+        - Update the agent and clear the TTS voice: ha_manage_pipeline(action="update", pipeline_id="preferred", conversation_engine="conversation.local_llm", tts_voice="")
+        - Run a sentence through one pipeline's agent: ha_manage_pipeline(action="process", sentence="turn on the kitchen light", pipeline_id="preferred")
+        - Continue a conversation: ha_manage_pipeline(action="process", sentence="and the hallway?", conversation_id="<id from the previous response>")
 
-        Empty string clears nullable STT/TTS/wake-word fields. Non-nullable
-        fields such as name, language, conversation_language, and
+        Non-nullable fields such as name, language, conversation_language, and
         conversation_engine must be omitted or non-empty.
         """
         try:

@@ -1649,28 +1649,26 @@ class EntityTools:
         entity_id: Annotated[
             str | list[str],
             JSON_STRING_COERCION,
-            Field(
-                description="Entity ID or list of entity IDs to update. Bulk operations (list) only support labels, expose_to, and categories parameters."
-            ),
+            Field(description="Entity ID or list of entity IDs to update."),
         ],
         area_id: Annotated[
             str | None,
             Field(
-                description="Area/room ID to assign the entity to. Use empty string '' to unassign from current area. Single entity only.",
+                description="Area/room ID to assign the entity to. Use empty string '' to unassign from current area.",
                 default=None,
             ),
         ] = None,
         name: Annotated[
             str | None,
             Field(
-                description="Display name for the entity. Use empty string '' to remove custom name and revert to default. Single entity only.",
+                description="Display name for the entity. Use empty string '' to remove custom name and revert to default.",
                 default=None,
             ),
         ] = None,
         icon: Annotated[
             str | None,
             Field(
-                description="Icon for the entity (e.g., 'mdi:thermometer'). Use empty string '' to remove custom icon. Single entity only.",
+                description="Icon for the entity (e.g., 'mdi:thermometer'). Use empty string '' to remove custom icon.",
                 default=None,
             ),
         ] = None,
@@ -1678,12 +1676,10 @@ class EntityTools:
             str | None,
             Field(
                 description=(
-                    "Override the entity's display device class — what the HA UI's "
-                    "'Show As' dropdown writes. Use empty string '' to clear the "
-                    "override and fall back to the integration default. None (the "
-                    "default) means 'no change' — pass an explicit '' to clear. "
-                    "Single entity only. Examples: 'window', 'door', 'motion' for "
-                    "binary_sensor; 'temperature', 'humidity' for sensor."
+                    "Override the entity's display device class — what the HA UI's 'Show "
+                    "As' dropdown writes. Use empty string '' to clear the override and "
+                    "fall back to the integration default. Examples: 'window', 'door', "
+                    "'motion' for binary_sensor; 'temperature', 'humidity' for sensor."
                 ),
                 default=None,
             ),
@@ -1695,13 +1691,10 @@ class EntityTools:
                 description=(
                     "Per-domain entity registry options (e.g. sensor 'display_precision', "
                     "weather 'forecast_type'). Pass a dict mapping domain to a sub-dict, "
-                    'e.g. {"sensor": {"display_precision": 2}}. '
-                    "Multiple domains are sent as separate registry updates. "
-                    "For 'Show As' use the dedicated `device_class` parameter — that is "
-                    "what the HA UI Show As dropdown writes. Voice-assistant exposure is "
-                    "stored under `options.<assistant>.should_expose` but must be managed "
-                    "via the dedicated `expose_to` parameter, not this options dict. "
-                    "Single entity only."
+                    'e.g. {"sensor": {"display_precision": 2}}. Multiple domains are sent '
+                    "as separate registry updates. For 'Show As' use device_class; for "
+                    "voice-assistant exposure use expose_to, not "
+                    "options.<assistant>.should_expose."
                 ),
                 default=None,
             ),
@@ -1710,15 +1703,10 @@ class EntityTools:
             bool | None,
             Field(
                 description=(
-                    "True to enable the entity, False to disable it. Single entity only. "
+                    "True to enable the entity, False to disable it. "
                     "WARNING: Setting enabled=False is a registry-level disable — it completely "
                     "removes the entity from the state machine and hides it from the UI. "
-                    "A reload or restart is required to restore it after re-enabling. "
-                    "NOT allowed for automation or script entities. For automations use "
-                    "ha_config_set_automation(identifier=..., enabled=...)"
-                    "; script.turn_off only stops "
-                    "a currently running execution and does not disable the script. "
-                    "Home Assistant has no script runtime enable/disable service."
+                    "A reload or restart is required to restore it after re-enabling."
                 ),
                 default=None,
             ),
@@ -1726,7 +1714,7 @@ class EntityTools:
         hidden: Annotated[
             bool | None,
             Field(
-                description="True to hide the entity from UI, False to show it. Single entity only.",
+                description="True to hide the entity from UI, False to show it.",
                 default=None,
             ),
         ] = None,
@@ -1739,7 +1727,7 @@ class EntityTools:
                     "aliases). A null entry is the entity's own name (HA's 'use entity "
                     "name' switch); it is kept automatically unless your list already "
                     "contains null. To turn that switch off or on, use "
-                    "use_entity_name_alias. Single entity only."
+                    "use_entity_name_alias."
                 ),
                 default=None,
             ),
@@ -1751,7 +1739,7 @@ class EntityTools:
                     "HA's 'use entity name' voice-alias switch. True keeps the entity's "
                     "own name answering in Assist, False turns it off so only the "
                     "aliases match. Omit to leave it as is. Works with or without "
-                    "aliases. Single entity only."
+                    "aliases."
                 ),
                 default=None,
             ),
@@ -1763,8 +1751,7 @@ class EntityTools:
                 description=(
                     "Category assignment as a dict mapping scope to category_id. "
                     'Example: {"automation": "category_id_here"}. '
-                    'Use null value to clear: {"automation": null}. '
-                    "Single entity only."
+                    'Use null value to clear: {"automation": null}.'
                 ),
                 default=None,
             ),
@@ -1773,7 +1760,7 @@ class EntityTools:
             str | list[str] | None,
             JSON_STRING_COERCION,
             Field(
-                description="List of label IDs for the entity. Behavior depends on label_operation parameter. Supports bulk operations.",
+                description="List of label IDs for the entity. Behavior depends on label_operation parameter. Use [] with label_operation='set' to clear.",
                 default=None,
             ),
         ] = None,
@@ -1791,7 +1778,7 @@ class EntityTools:
                 description=(
                     "Control voice assistant exposure. Pass a dict mapping assistant IDs to booleans. "
                     "Valid assistants: 'conversation' (Assist), 'cloud.alexa', 'cloud.google_assistant'. "
-                    'Example: {"conversation": true, "cloud.alexa": false}. Supports bulk operations.'
+                    'Example: {"conversation": true, "cloud.alexa": false}.'
                 ),
                 default=None,
             ),
@@ -1801,7 +1788,7 @@ class EntityTools:
             Field(
                 description=(
                     "New entity ID to rename to (e.g., 'light.new_name'). "
-                    "Domain must match the original. Single entity only."
+                    "Domain must match the original."
                 ),
                 default=None,
             ),
@@ -1811,7 +1798,7 @@ class EntityTools:
             Field(
                 description=(
                     "New display name for the associated device. "
-                    "If provided, both entity and device are updated in one operation. Single entity only."
+                    "If provided, both entity and device are updated in one operation."
                 ),
                 default=None,
             ),
@@ -1828,25 +1815,14 @@ class EntityTools:
         When entity_id is a list, only labels, expose_to, and categories parameters are supported.
         Other parameters (area_id, name, icon, device_class, options, enabled, hidden, aliases, use_entity_name_alias, new_entity_id, new_device_name) require single entity.
 
-        LABEL OPERATIONS:
-        - label_operation="set" (default): Replace all labels with the provided list. Use [] to clear.
-        - label_operation="add": Add labels to existing ones without removing any.
-        - label_operation="remove": Remove specified labels from the entity.
+        SHOW AS / DEVICE CLASS: a device_class change applies instantly, no reload
+        needed.
 
-        SHOW AS / DEVICE CLASS:
-        device_class overrides the entity's display device class — equivalent to the
-        HA UI's "Show As" dropdown. Use empty string '' to clear. Applies instantly,
-        no reload needed.
+        REGISTRY OPTIONS: multi-domain options are sent as separate registry
+        updates because HA's WS schema requires options_domain + options to be
+        paired one domain at a time.
 
-        REGISTRY OPTIONS:
-        options carries per-domain registry options (sensor display_precision,
-        weather forecast_type, etc). Pass {domain: {key: value}}; multi-domain
-        dicts are sent as separate registry updates because HA's WS schema
-        requires options_domain + options to be paired one domain at a time.
-
-        ENTITY ID RENAME:
-        Use new_entity_id to change an entity's ID (e.g., sensor.old -> sensor.new).
-        Domain must match. Voice exposure settings are preserved automatically.
+        ENTITY ID RENAME: Voice exposure settings are preserved automatically.
 
         WARNING: Renaming an entity_id does NOT update references in automations,
         scripts, templates, or dashboards. All consumers of the old entity_id must
@@ -1858,38 +1834,24 @@ class EntityTools:
         - Entities disabled by their integration cannot be renamed
 
         DEVICE RENAME:
-        Use new_device_name to rename the associated device. Can be combined with
-        new_entity_id to rename both in one call. The device is looked up automatically.
+        new_device_name can be combined with new_entity_id to rename both in one
+        call. The device is looked up automatically.
 
         Use ha_search() or ha_get_device() to find entity IDs.
         Use ha_config_get_label() to find available label IDs.
 
         EXAMPLES:
-        Single entity:
         - Assign to area: ha_set_entity("sensor.temp", area_id="living_room")
-        - Rename display name: ha_set_entity("sensor.temp", name="Living Room Temperature")
         - Set Show As: ha_set_entity("binary_sensor.zone_10", device_class="window")
-        - Clear Show As: ha_set_entity("binary_sensor.zone_10", device_class="")
         - Set sensor precision: ha_set_entity("sensor.power", options={"sensor": {"display_precision": 2}})
-        - Rename entity_id: ha_set_entity("light.old_name", new_entity_id="light.new_name")
         - Rename entity and device: ha_set_entity("light.old", new_entity_id="light.new", new_device_name="New Lamp")
-        - Rename entity_id with friendly name: ha_set_entity("sensor.old", new_entity_id="sensor.new", name="New Name")
-        - Set labels: ha_set_entity("light.lamp", labels=["outdoor", "smart"])
-        - Add labels: ha_set_entity("light.lamp", labels=["new_label"], label_operation="add")
-        - Remove labels: ha_set_entity("light.lamp", labels=["old_label"], label_operation="remove")
-        - Clear labels: ha_set_entity("light.lamp", labels=[])
+        - Add labels to multiple: ha_set_entity(["light.a", "light.b"], labels=["new"], label_operation="add")
         - Expose to Alexa: ha_set_entity("light.lamp", expose_to={"cloud.alexa": True})
 
-        Bulk operations:
-        - Set labels on multiple: ha_set_entity(["light.a", "light.b"], labels=["outdoor"])
-        - Add labels to multiple: ha_set_entity(["light.a", "light.b"], labels=["new"], label_operation="add")
-        - Expose multiple to Alexa: ha_set_entity(["light.a", "light.b"], expose_to={"cloud.alexa": True})
-
         ENABLED/DISABLED WARNING:
-        Setting enabled=False performs a **registry-level disable** — the entity is completely
-        removed from the Home Assistant state machine and hidden from the UI. It will NOT appear
-        in state queries, dashboards, or automations until re-enabled AND the integration is
-        reloaded. This is NOT the same as "turning off" an entity.
+        A disabled entity will NOT appear in state queries, dashboards, or
+        automations until re-enabled AND the integration is reloaded. This is
+        NOT the same as "turning off" an entity.
 
         For automations and scripts, enabled=False is blocked. For automations,
         use ha_config_set_automation(identifier="automation.xxx", enabled=False)
@@ -2012,7 +1974,7 @@ class EntityTools:
             str | list[str] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Entity ID or list of entity IDs to retrieve (e.g., 'sensor.temperature' or ['light.living_room', 'switch.porch']). Mutually exclusive with unique_id.",
+                description="Entity ID or list of entity IDs to retrieve (e.g., 'sensor.temperature' or ['light.living_room', 'switch.porch']).",
                 default=None,
             ),
         ] = None,
@@ -2020,9 +1982,8 @@ class EntityTools:
             str | None,
             Field(
                 description=(
-                    "Resolve a stable integration unique_id to its entity_id(s) "
-                    "(entity_id is mutable, unique_id is not). Mutually exclusive "
-                    "with entity_id. Optionally narrow with domain/platform."
+                    "Stable integration unique_id (entity_id is mutable, "
+                    "unique_id is not). Mutually exclusive with entity_id."
                 ),
                 default=None,
             ),
@@ -2044,8 +2005,11 @@ class EntityTools:
     ) -> dict[str, Any]:
         """Get entity registry information for one or more entities.
 
-        Returns detailed entity registry metadata including area assignment,
-        custom name/icon, enabled/hidden state, aliases, labels, and more.
+        Returns detailed entity registry metadata: area, custom name/icon,
+        original name, disabled_by/hidden_by (with enabled/hidden shorthands),
+        aliases (a null entry = the entity's own name), labels, categories,
+        device_class override, per-domain options, platform, device_id,
+        config_entry_id and unique_id.
 
         RESOLVER MODE:
         Pass unique_id (instead of entity_id) to resolve a stable integration
@@ -2055,52 +2019,27 @@ class EntityTools:
         count. Narrow with domain/platform. Resolver reads as_partial_dict, so
         aliases and the device_class override come back as defaults ([]/null).
 
-        RELATED TOOLS:
-        - ha_set_entity(): Modify entity properties (area, name, icon, enabled, hidden, aliases)
-        - ha_get_state(): Get current state/attributes (on/off, temperature, etc.)
-        - ha_search(): Find entities by name, domain, or area
+        When config_entry_id is non-null — e.g. for UI-created template / group /
+        utility_meter / derivative helpers — pass it to
+        ``ha_get_integration(entry_id=..., include_options=True)`` to read the
+        helper's current config (template body, group members, etc.) without
+        scanning a domain list. Voice-assistant exposure is stored under options
+        but is set via ha_set_entity(expose_to=...).
+
+        Resolved-name enrichment (present only when the ha_mcp_tools component
+        advertises it; otherwise these keys are absent): `area` (assigned area
+        NAME, device-inherited when the entity has none), `floor`, and
+        `label_names`. This tool's base `labels` carries the label ids;
+        ha_search result_fields and ha_get_entity_exposure instead emit the
+        resolved names under `labels`.
+
+        RELATED TOOLS: ha_set_entity() to modify these properties; ha_get_state()
+        for current state/attributes; ha_search() to find entities.
 
         EXAMPLES:
         - Single entity: ha_get_entity("sensor.temperature")
         - Multiple entities: ha_get_entity(["light.living_room", "switch.porch"])
-
-        RESPONSE FIELDS:
-        - entity_id: Full entity identifier
-        - name: Custom display name (null if using original_name)
-        - original_name: Default name from integration
-        - icon: Custom icon (null if using default)
-        - area_id: Assigned area/room ID (null if unassigned)
-        - disabled_by: Why disabled (null=enabled, "user"/"integration"/etc)
-        - hidden_by: Why hidden (null=visible, "user"/"integration"/etc)
-        - enabled: Boolean shorthand (True if disabled_by is null)
-        - hidden: Boolean shorthand (True if hidden_by is not null)
-        - aliases: Voice assistant aliases (a null entry = the entity's own name)
-        - labels: Assigned label IDs
-        - categories: Category assignments (dict mapping scope to category_id)
-        - device_class: User "Show As" override (null = use original_device_class)
-        - original_device_class: Default device class from the integration
-        - options: Per-domain registry options (e.g. sensor display_precision).
-          Voice-assistant exposure is also stored here but should be set/cleared
-          via the ha_set_entity(expose_to=...) parameter, not the options dict.
-        - platform: Integration platform (e.g., "hue", "zwave_js")
-        - device_id: Associated device ID (null if standalone)
-        - config_entry_id: Parent config entry's ID (null for YAML-only
-          entities). When non-null — e.g. for UI-created template/group/
-          utility_meter/derivative/... helpers — pass it to
-          ``ha_get_integration(entry_id=..., include_options=True)`` to read the
-          helper's current config (template body, group members, etc.) without
-          scanning a domain list.
-        - unique_id: Integration's unique identifier
-
-        Resolved-name enrichment (present only when the ha_mcp_tools component
-        advertises it; otherwise these keys are absent):
-        - area: Assigned area NAME (device-inherited when the entity has none;
-          resolves area_id above)
-        - floor: Floor NAME of the assigned area
-        - label_names: Assigned label NAMES (resolves the label ids in labels)
-        Resolved label names live under label_names HERE (this tool's base
-        `labels` already carries the label ids); ha_search result_fields and
-        ha_get_entity_exposure instead emit the resolved names under `labels`.
+        - Resolve a unique_id: ha_get_entity(unique_id="00:11:22:33", domain="sensor")
         """
         try:
             # Resolver mode (unique_id) is mutually exclusive with entity_id.
@@ -2343,22 +2282,20 @@ class EntityTools:
             Field(
                 description=(
                     "Entity ID, or a list of entity IDs, to remove from the "
-                    "entity registry (e.g., 'sensor.old_temperature'). "
-                    "Permanently removes the registration(s)."
+                    "entity registry (e.g., 'sensor.old_temperature')."
                 )
             ),
         ],
     ) -> dict[str, Any]:
         """Remove one or more entities from the Home Assistant entity registry.
 
-        Permanently removes the entity registration from Home Assistant.
-        The entity will no longer appear in the UI or be available to automations.
-
-        WARNING: This permanently removes the entity registration.
-        - Use only for orphaned or stale entity entries
-        - If the underlying device or integration is still active, the entity
-          may be re-added automatically on the next HA restart or reload
-        - This action cannot be undone without restoring from backup
+        Permanently removes the entity registration; the entity will no longer
+        appear in the UI or be available to automations. Use only for orphaned
+        or stale entity entries: if the underlying device or integration is
+        still active, the entity may be re-added automatically on the next HA
+        restart or reload. This cannot be undone without restoring from backup.
+        For most use cases, consider disabling instead:
+        ha_set_entity(entity_id="sensor.old", enabled=False).
 
         BULK MODE:
         Pass a list of entity IDs to remove up to 100 at once — handy for
@@ -2371,15 +2308,9 @@ class EntityTools:
 
         EXAMPLES:
         - Remove orphaned sensor: ha_remove_entity("sensor.old_temperature")
-        - Remove stale helper entry: ha_remove_entity("input_boolean.deleted_helper")
         - Bulk cleanup: ha_remove_entity(["sensor.orphan_1", "sensor.orphan_2"])
 
-        NOTE: For most use cases, consider disabling instead:
-        ha_set_entity(entity_id="sensor.old", enabled=False)
-
-        RELATED TOOLS:
-        - ha_search: Find entities to verify the entity_id before removing
-        - ha_get_entity: Check entity details before removal
+        Use ha_search / ha_get_entity to verify an entity before removing it.
         """
         try:
             # List mode: bulk removal with a per-id classification envelope.

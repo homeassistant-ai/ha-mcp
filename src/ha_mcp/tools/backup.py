@@ -1718,17 +1718,15 @@ survives an agent's own mistakes.
             bool,
             Field(
                 default=False,
-                description="(snapshot.restore) Include database in the restore. Default false (config-only).",
+                description="(snapshot.restore) Include the database in the restore; otherwise "
+                "config only.",
             ),
         ] = False,
         confirm: Annotated[
             bool,
             Field(
                 default=False,
-                description=(
-                    "(snapshot.delete) Must be True to confirm deletion — a "
-                    "safety measure against accidental calls."
-                ),
+                description=("(snapshot.delete) Must be True to confirm deletion."),
             ),
         ] = False,
         # edits scope params

@@ -124,13 +124,13 @@ class ConfigScriptTools:
         ],
     ) -> dict[str, Any]:
         """
-        Retrieve Home Assistant script configuration.
+        Get Home Assistant script configuration.
 
         Returns the complete configuration for a script, including sequence, mode, fields, and other settings.
 
         The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
 
-        The returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. A leading `script.` prefix on the input is stripped before lookup — behavioral parity with `ha_config_get_automation` (mechanism differs: automations resolve via state lookup; scripts strip the prefix).
+        The returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. Prefix handling matches `ha_config_get_automation` in behavior (mechanism differs: automations resolve via state lookup; scripts strip the prefix).
 
         EXAMPLES:
         - Get script (bare form): ha_config_get_script("morning_routine")
@@ -487,8 +487,7 @@ class ConfigScriptTools:
             dict[str, Any] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Script configuration dictionary. Must include EITHER 'sequence' (for regular scripts) OR 'use_blueprint' (for blueprint-based scripts). "
-                "Optional fields: 'alias', 'description', 'icon', 'mode', 'max', 'fields'. "
+                description="Script configuration dictionary. "
                 "Mutually exclusive with python_transform.",
                 default=None,
             ),
@@ -498,7 +497,6 @@ class ConfigScriptTools:
             Field(
                 description="Python expression to transform existing script config. "
                 "Mutually exclusive with config. "
-                "Requires config_hash for validation. "
                 "WARNING: Expressions with infinite loops will hang the server. "
                 "Examples: "
                 "Simple: python_transform=\"config['sequence'][0]['data']['message'] = 'Hello'\" "
@@ -510,9 +508,9 @@ class ConfigScriptTools:
         config_hash: Annotated[
             str | None,
             Field(
-                description="Config hash from ha_config_get_script for optimistic locking. "
-                "REQUIRED for python_transform (validates script unchanged). "
-                "Optional for config updates (validates before full replacement if provided).",
+                description="Config hash from ha_config_get_script for optimistic locking. Required"
+                " for python_transform; optional for config updates (validates before "
+                "full replacement if provided).",
             ),
         ] = None,
         take_control_of_blueprint: Annotated[
@@ -521,14 +519,9 @@ class ConfigScriptTools:
                 description="Convert a blueprint-backed script into an editable "
                 'standalone one -- the UI\'s "Take control". Renders the blueprint '
                 "with its current inputs and saves the result over the same script, "
-                "which then has its own sequence and no 'use_blueprint'. Mutually "
-                "exclusive with config and python_transform. Irreversible: the link "
-                "to the blueprint is gone afterwards, so edit inputs instead if you "
-                "only want to change a value. Does NOT free the blueprint: Home "
-                "Assistant keeps counting the converted script as a user, so "
-                "deleting that blueprint stays refused until the script is removed. "
-                "To preview the rendering without writing anything, use "
-                'ha_manage_blueprints(action="substitute", domain="script").',
+                "which keeps its script_id, alias and description and then has its "
+                "own sequence and no 'use_blueprint'. Mutually exclusive with config "
+                "and python_transform.",
                 default=False,
             ),
         ] = False,
@@ -542,7 +535,8 @@ class ConfigScriptTools:
         wait: Annotated[
             bool,
             Field(
-                description="Wait for script to be queryable before returning. Default: True. Set to False for bulk operations.",
+                description="Wait for script to be queryable before returning. Set to False for "
+                "bulk operations.",
                 default=True,
             ),
         ] = True,
@@ -554,168 +548,40 @@ class ConfigScriptTools:
         # here — see strict_bps.py for the declaration contract.
         BestPracticeKey: BestPracticeKeyParam = None,
     ) -> dict[str, Any]:
-        """
-        Create or update a Home Assistant script.
+        """Create or update a Home Assistant script.
 
         MUST call ha_get_skill_guide OR refer to your locally installed skills first.
 
-        PREFER NATIVE ACTIONS OVER TEMPLATES (read this before writing any `{{ ... }}`):
-        Native actions are validated at config load, fail loudly, and do not bypass HA's
-        schema. Templates in logic positions fail silently and obscure intent.
-        - `choose` / `if/then/else` instead of template-based service names
-        - `wait_for_trigger` instead of `wait_template`
-        - Native `for:` field on `state` conditions inside `choose`/`if`, and on
-          `state`/`numeric_state` triggers in `wait_for_trigger`, instead of
-          `{{ now() - X.last_changed > timedelta(...) }}` duration math.
-        - `repeat` with `for_each` instead of template loops
-        - Hardcode `target.entity_id` literals — never `{{ this.entity_id }}`.
-        Templates are appropriate ONLY in `data.*` fields, notification message/title,
-        `event_data`, and `variables`. The reactive best-practice checker on this tool
-        will surface anything in a logic position that should be native; consult the
-        `best_practice_warnings` field on the response and fix before re-submitting.
-        The relevant skill section is auto-embedded under `skill_content` on warnings,
-        and the full `automation-patterns.md` + `template-guidelines.md` references
-        ship under `skill_content` proactively by default. For comprehensive
-        guidance beyond that, call `ha_get_skill_guide`.
+        Prefer native actions (`choose` / `if`, `wait_for_trigger`, `repeat`,
+        `for:`) over templates in logic positions; templates belong only in
+        `data.*`, notification text, `event_data` and `variables`. The
+        best-practice checker reports violations under `best_practice_warnings`.
+        `automation-patterns.md` and `template-guidelines.md` ship under
+        `skill_content` by default.
 
-        Supports three modes: full config replacement, Python transformation,
-        or take_control_of_blueprint (see below).
+        Scripts use 'sequence', NOT 'trigger' or 'action'; for trigger-based
+        execution use ha_config_set_automation.
 
-        WHEN TO USE WHICH MODE:
-        - python_transform: RECOMMENDED for edits to existing scripts. Surgical updates.
-        - config: Use for creating new scripts or full restructures.
-        - take_control_of_blueprint: converts a blueprint-backed script
-          into a standalone one. Takes no config of its own.
-
-        IMPORTANT: python_transform requires 'config_hash' from ha_config_get_script().
-
-        PYTHON TRANSFORM EXAMPLES:
-        - Update step: python_transform="config['sequence'][0]['data']['message'] = 'Hello'"
-        - Add step: python_transform="config['sequence'].append({'delay': {'seconds': 5}})"
-        - Remove last step: python_transform="config['sequence'].pop()"
-
-        Creates a new script or updates an existing one with the provided configuration.
-        Supports both regular scripts (with sequence) and blueprint-based scripts.
-
-        Required config fields (choose one):
-            - sequence: List of actions to execute (for regular scripts)
-            - use_blueprint: Blueprint configuration (for blueprint-based scripts)
-
-        Optional config fields:
-            - alias: Display name (defaults to script_id)
-            - description: Script description
-            - icon: Icon to display
-            - mode: Execution mode ('single', 'restart', 'queued', 'parallel')
-            - max: Maximum concurrent executions (for queued/parallel modes)
-            - fields: Input parameters for the script
-
-        SCRIPTS vs AUTOMATIONS: Scripts use 'sequence', NOT 'trigger' or 'action'.
-        If you need trigger-based execution, use ha_config_set_automation instead.
+        MODES (pick one):
+        - python_transform: surgical edits to an existing script. Requires
+          config_hash from ha_config_get_script(), e.g.
+          python_transform="config['sequence'].append({'delay': {'seconds': 5}})"
+        - config: new scripts or full restructures. Needs 'sequence' (regular) or
+          'use_blueprint' {path, input} (blueprint-based).
+        - take_control_of_blueprint: convert a blueprint-backed script into a
+          standalone one. Takes no config of its own.
 
         EXAMPLES:
+        - Create: ha_config_set_script(script_id="blink_light", config={"alias": "Light Blink", "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.living_room"}}, {"delay": {"seconds": 2}}, {"action": "light.turn_off", "target": {"entity_id": "light.living_room"}}]})
+        - From a blueprint: ha_config_set_script(script_id="notification_script", config={"alias": "My Notification Script", "use_blueprint": {"path": "notification_script.yaml", "input": {"message": "Hello World"}}})
+        - Take control: ha_config_set_script(script_id="notification_script", take_control_of_blueprint=True)
 
-        Create basic delay script:
-        ha_config_set_script(script_id="wait_script", config={
-            "sequence": [{"delay": {"seconds": 5}}],
-            "alias": "Wait 5 Seconds",
-            "description": "Simple delay script"
-        })
-
-        Create service call script:
-        ha_config_set_script(script_id="blink_light", config={
-            "sequence": [
-                {"action": "light.turn_on", "target": {"entity_id": "light.living_room"}},
-                {"delay": {"seconds": 2}},
-                {"action": "light.turn_off", "target": {"entity_id": "light.living_room"}}
-            ],
-            "alias": "Light Blink",
-            "mode": "single"
-        })
-
-        Create script with parameters:
-        ha_config_set_script(script_id="backup_script", config={
-            "alias": "Backup with Reference",
-            "description": "Create backup with optional reference parameter",
-            "fields": {
-                "reference": {
-                    "name": "Reference",
-                    "description": "Optional reference for backup identification",
-                    "selector": {"text": None}
-                }
-            },
-            "sequence": [
-                {
-                    "action": "hassio.backup_partial",
-                    "data": {
-                        "compressed": False,
-                        "homeassistant": True,
-                        "homeassistant_exclude_database": True,
-                        "name": "Backup_{{ reference | default('auto') }}_{{ now().strftime('%Y%m%d_%H%M%S') }}"
-                    }
-                }
-            ]
-        })
-
-        Update script:
-        ha_config_set_script(script_id="morning_routine", config={
-            "sequence": [
-                {"action": "light.turn_on", "target": {"area_id": "bedroom"}},
-                {"action": "climate.set_temperature", "target": {"entity_id": "climate.bedroom"}, "data": {"temperature": 22}}
-            ],
-            "alias": "Updated Morning Routine"
-        })
-
-        Create blueprint-based script:
-        ha_config_set_script(script_id="notification_script", config={
-            "alias": "My Notification Script",
-            "use_blueprint": {
-                "path": "notification_script.yaml",
-                "input": {
-                    "message": "Hello World",
-                    "title": "Test Notification"
-                }
-            }
-        })
-
-        Update blueprint script inputs:
-        ha_config_set_script(script_id="notification_script", config={
-            "alias": "My Notification Script",
-            "use_blueprint": {
-                "path": "notification_script.yaml",
-                "input": {
-                    "message": "Updated message",
-                    "title": "Updated Title"
-                }
-            }
-        })
-
-        TAKE CONTROL OF A BLUEPRINT SCRIPT:
-
-        take_control_of_blueprint=True converts a blueprint-backed script into
-        a standalone one — the UI's "Take control". The blueprint is rendered
-        with the script's CURRENT inputs and the result is saved over the same
-        script, which keeps its script_id, alias and description but gains its
-        own sequence and loses 'use_blueprint'.
-
-        ha_config_set_script(
-            script_id="notification_script",
-            take_control_of_blueprint=True,
-        )
-
-        This is one-way: the script is no longer linked to the blueprint, so
-        later blueprint edits stop reaching it. To change an input value,
-        update 'use_blueprint.input' instead (see the example above) — that
-        keeps the link. Taking control does NOT free the blueprint: Home
-        Assistant goes on counting a converted script as a user of it, so
-        deleting that blueprint stays refused until the script itself is
-        removed. To see the rendering WITHOUT writing
-        anything, call ha_manage_blueprints(action="substitute",
-        domain="script", path=..., input=...). ha_manage_blueprints also lists,
-        imports, saves and deletes blueprints, and action="get" reports which
-        scripts use one.
-
-        Note: Scripts use Home Assistant's action syntax. Check the documentation for advanced
-        features like conditions, variables, parallel execution, and service call options.
+        TAKE CONTROL is one-way: later blueprint edits stop reaching the script;
+        to change an input value, update 'use_blueprint.input' instead. It does
+        NOT free the blueprint — Home Assistant keeps counting the converted
+        script as a user, so deleting that blueprint stays refused until the
+        script is removed. To preview the rendering without writing anything,
+        use ha_manage_blueprints(action="substitute", domain="script", path=..., input=...).
         """
         bp_warnings: BestPracticeCheckResult = BestPracticeCheckResult()
         try:
@@ -1126,26 +992,21 @@ class ConfigScriptTools:
         wait: Annotated[
             bool,
             Field(
-                description="Wait for script to be fully removed before returning. Default: True.",
+                description="Wait for script to be fully removed before returning.",
                 default=True,
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """
-        Delete a Home Assistant script.
+        """Delete a Home Assistant script.
 
-        EXAMPLES:
-        - Delete script: ha_config_remove_script("old_script")
-        - Delete script: ha_config_remove_script("temporary_script")
+        EXAMPLE: ha_config_remove_script("old_script")
 
-        **IMPORTANT LIMITATION:**
-        This tool can only delete scripts created via the Home Assistant UI.
-        Scripts defined in YAML configuration files (scripts.yaml or configuration.yaml)
-        cannot be deleted through the API and will return a 405 Method Not Allowed error.
+        Only scripts created via the Home Assistant UI can be deleted. Scripts
+        defined in YAML configuration files (scripts.yaml or configuration.yaml)
+        cannot be deleted through the API and return a 405 Method Not Allowed
+        error; edit the configuration file directly instead.
 
-        To remove YAML-defined scripts, you must edit the configuration file directly.
-
-        **WARNING:** Deleting a script that is used by automations may cause those automations to fail.
+        WARNING: Deleting a script that is used by automations may cause those automations to fail.
         """
         try:
             # Strip BEFORE validate so a bare ``"script."`` (empty after

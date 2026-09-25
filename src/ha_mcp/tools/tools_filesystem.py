@@ -556,11 +556,8 @@ class FilesystemTools:
             Field(
                 description=(
                     "Directory path. Relative to the config dir for the built-in "
-                    "allowlist (www/, themes/, custom_templates/, dashboards/, "
-                    "blueprints/). "
-                    "Custom directories and HAOS sibling volumes "
-                    "(/share, /media, /ssl, /backup) configured in the ha-mcp "
-                    "settings UI are also allowed (pass the absolute path). "
+                    "allowlist; absolute for a configured custom directory or "
+                    "HAOS sibling volume. "
                     "Example: 'www/' or '/share/llm'"
                 ),
             ),
@@ -578,11 +575,8 @@ class FilesystemTools:
     ) -> dict[str, Any]:
         """List files in a directory within the Home Assistant config directory.
 
-        Lists files in allowed directories (www/, themes/, custom_templates/,
-        dashboards/, blueprints/) with optional glob pattern filtering. Returns
-        file names, sizes, and modification times.
-
-        **Allowed Directories:**
+        Returns file names, sizes, and modification times for one of the allowed
+        directories:
         - `www/` - Web assets (CSS, JS, images for dashboards)
         - `themes/` - Theme files
         - `custom_templates/` - Jinja2 template files
@@ -592,22 +586,9 @@ class FilesystemTools:
           set (the folder name you bound, default `packages/`)
         - Plus any custom directories OR HAOS sibling volumes (`/share`,
           `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI
-          (pass the absolute path for volumes)
+        Path traversal (../) is blocked.
 
-        **Security:** Only directories in the allowed list can be accessed.
-        Path traversal attempts (../) are blocked.
-
-        **Returns:**
-        - success: Whether the operation succeeded
-        - path: The directory path that was listed
-        - files: List of file info objects with name, size, is_dir, modified
-        - count: Number of files found
-
-        **Example:**
-        ```python
-        # List all CSS files in www/
-        result = ha_list_files(path="www/", pattern="*.css")
-        ```
+        EXAMPLE: ha_list_files(path="www/", pattern="*.css")
         """
         try:
             # Check if custom component is available
@@ -669,8 +650,8 @@ class FilesystemTools:
             Field(
                 description=(
                     "File path. Relative to the config dir for the built-in "
-                    "allowlist; absolute for a configured HAOS sibling volume "
-                    "(/share, /media, /ssl, /backup). Examples: "
+                    "allowlist; absolute for a configured HAOS sibling volume. "
+                    "Examples: "
                     "'configuration.yaml', 'www/custom.css', '/share/llm/notes.md'"
                 ),
             ),
@@ -682,9 +663,8 @@ class FilesystemTools:
                 ge=1,
                 le=10000,
                 description=(
-                    "For log files, return only the last N lines. "
-                    "Recommended for home-assistant.log to avoid large responses. "
-                    "Default: None (return full file, or last 1000 lines for logs)"
+                    "For log files, return only the last N lines. Default: None (return "
+                    "full file, or last 1000 lines for logs)"
                 ),
             ),
         ] = None,
@@ -693,11 +673,11 @@ class FilesystemTools:
             Field(
                 default=None,
                 description=(
-                    "Dotted YAML key path (e.g. 'alert2', 'mqtt.sensor'). When "
-                    "set, the response also carries 'subtree': the round-trip "
-                    "text of just that key's value. To look a key up across "
-                    "packages/*.yaml, or to get it as structured data, use "
-                    "ha_config_get_yaml instead."
+                    "Dotted YAML key path (e.g. 'alert2', 'mqtt.sensor'). When set, the "
+                    "response also carries 'subtree': the round-trip text of just that "
+                    "key's value (null when the key is absent); comments and HA tags "
+                    "('!secret', '!include') survive as written and a '!secret' is never "
+                    "resolved."
                 ),
             ),
         ] = None,
@@ -710,11 +690,10 @@ class FilesystemTools:
         for storage-mode items. Reach for ha_read_file only for raw on-disk text
         those tools don't expose.
 
-        Reads files from allowed paths within the config directory. Some files
-        have special handling:
+        Some files have special handling:
         - `secrets.yaml`: Values are masked for security
-        - `home-assistant.log` / `home-assistant.log.fault`: Limited to tail
-          (last N lines) by default. Prefer ha_get_logs(source='error_log') and
+        - `home-assistant.log` / `home-assistant.log.fault`: Prefer
+          ha_get_logs(source='error_log') and
           ha_get_logs(source='fault_log') over reading these directly.
 
         **Allowed Read Paths:**
@@ -726,34 +705,9 @@ class FilesystemTools:
         - `custom_components/**/*.py` (read-only)
         - Plus any custom directories OR HAOS sibling volumes (`/share`,
           `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI
-          (pass the absolute path for volumes)
+        Path traversal (../) is blocked.
 
-        **Security:**
-        - Path traversal (../) is blocked
-        - Only allowed paths can be read
-        - Sensitive data in secrets.yaml is masked
-
-        **Returns:**
-        - success: Whether the operation succeeded
-        - content: The file content (may be truncated for logs)
-        - size: File size in bytes
-        - modified: Last modification timestamp
-        - path: The file path that was read
-        - subtree: Round-trip text of the `yaml_path` key, when that arg is set
-          (null when the key is absent). Comments and HA tags (`!secret`,
-          `!include`) survive as written — a `!secret` is never resolved.
-
-        **Example:**
-        ```python
-        # Read configuration
-        result = ha_read_file(path="configuration.yaml")
-
-        # Read last 100 lines of log
-        result = ha_read_file(path="home-assistant.log", tail_lines=100)
-
-        # Read just the alert2 block out of a package file
-        result = ha_read_file(path="packages/alert2.yaml", yaml_path="alert2")
-        ```
+        EXAMPLE: ha_read_file(path="packages/alert2.yaml", yaml_path="alert2")
         """
         try:
             # Check if custom component is available
@@ -814,10 +768,8 @@ class FilesystemTools:
             str,
             Field(
                 description=(
-                    "File path. Must be in a writable built-in dir (www/, "
-                    "themes/, custom_templates/, dashboards/), a configured "
-                    "custom directory, or a configured HAOS sibling volume "
-                    "(/share, /media, /ssl, /backup — pass the absolute path). "
+                    "File path in an allowed write directory; pass the "
+                    "absolute path for a HAOS sibling volume. "
                     "Example: 'www/custom.css', '/share/llm/out.txt'"
                 ),
             ),
@@ -832,10 +784,7 @@ class FilesystemTools:
             bool,
             Field(
                 default=False,
-                description=(
-                    "Whether to overwrite if file exists. "
-                    "Default is False to prevent accidental overwrites."
-                ),
+                description=("Whether to overwrite if the file exists."),
             ),
         ] = False,
         create_dirs: Annotated[
@@ -843,17 +792,15 @@ class FilesystemTools:
             Field(
                 default=True,
                 description=(
-                    "Whether to create parent directories if they don't exist. "
-                    "Default is True."
+                    "Whether to create parent directories if they don't exist."
                 ),
             ),
         ] = True,
     ) -> dict[str, Any]:
         """Write a file to allowed directories in the Home Assistant config.
 
-        Creates or updates files in restricted directories only. This is useful for:
-        - Creating custom CSS/JS for dashboards
-        - Creating Jinja2 templates
+        Creates or updates files (custom CSS/JS for dashboards, Jinja2 macro
+        templates, theme YAML) in restricted directories only.
 
         **Allowed Write Directories:**
         - `www/` - Web assets for dashboards
@@ -862,40 +809,15 @@ class FilesystemTools:
         - `dashboards/` - YAML-mode dashboard files
         - Plus any custom directories OR HAOS sibling volumes (`/share`,
           `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI
-          (pass the absolute path for volumes)
-
-        **Security:**
-        - Only the directories above allow writes
-        - Configuration files (configuration.yaml, etc.) cannot be written
-        - Path traversal (../) is blocked
+        Configuration files (configuration.yaml, etc.) cannot be written; path
+        traversal (../) is blocked.
 
         Text content only. Overwriting a file that currently holds binary
         content still succeeds, but its prior bytes cannot be captured by
         auto-backup (only modifications/deletions of text files are
         snapshotted); the skip is logged, the write is not blocked.
 
-        **Returns:**
-        - success: Whether the operation succeeded
-        - path: The file path that was written
-        - size: Size of the written file in bytes
-        - created: Whether this was a new file (vs overwrite)
-
-        **Example:**
-        ```python
-        # Create a custom CSS file
-        result = ha_write_file(
-            path="www/custom-dashboard.css",
-            content=".card { background: #333; }",
-            overwrite=True
-        )
-
-        # Create a custom Jinja template file
-        result = ha_write_file(
-            path="custom_templates/formatters.jinja",
-            content="{% macro shout(text) %}{{ text | upper }}{% endmacro %}",
-            overwrite=False
-        )
-        ```
+        EXAMPLE: ha_write_file(path="custom_templates/formatters.jinja", content="{% macro shout(text) %}{{ text | upper }}{% endmacro %}")
         """
         try:
             # Check if custom component is available
@@ -957,10 +879,8 @@ class FilesystemTools:
             str,
             Field(
                 description=(
-                    "File path. Must be in a writable built-in dir (www/, "
-                    "themes/, custom_templates/, dashboards/), a configured "
-                    "custom directory, or a configured HAOS sibling volume "
-                    "(/share, /media, /ssl, /backup — pass the absolute path). "
+                    "File path in an allowed delete directory; pass the "
+                    "absolute path for a HAOS sibling volume. "
                     "Example: 'www/old-file.css'"
                 ),
             ),
@@ -969,46 +889,19 @@ class FilesystemTools:
             bool,
             Field(
                 default=False,
-                description=(
-                    "Must be True to confirm deletion. "
-                    "This is a safety measure to prevent accidental deletions."
-                ),
+                description=("Must be True to confirm deletion."),
             ),
         ] = False,
     ) -> dict[str, Any]:
         """Delete a file from allowed directories in the Home Assistant config.
 
-        Permanently removes a file from the allowed directories. This action
-        cannot be undone.
+        Permanently removes a file; this cannot be undone. Allowed directories:
+        `www/`, `themes/`, `custom_templates/`, `dashboards/`, plus any custom
+        directories OR HAOS sibling volumes (`/share`, `/media`, `/ssl`,
+        `/backup`) configured in the ha-mcp settings UI. Configuration files
+        cannot be deleted; path traversal (../) is blocked.
 
-        **Allowed Delete Directories:**
-        - `www/` - Web assets
-        - `themes/` - Theme files
-        - `custom_templates/` - Template files
-        - `dashboards/` - YAML-mode dashboard files
-        - Plus any custom directories OR HAOS sibling volumes (`/share`,
-          `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI
-          (pass the absolute path for volumes)
-
-        **Security:**
-        - Only the directories above allow deletions
-        - Configuration files cannot be deleted
-        - Path traversal (../) is blocked
-        - Requires confirm=True to prevent accidents
-
-        **Returns:**
-        - success: Whether the operation succeeded
-        - path: The file path that was deleted
-        - message: Confirmation message
-
-        **Example:**
-        ```python
-        # Delete an old CSS file
-        result = ha_delete_file(
-            path="www/deprecated-style.css",
-            confirm=True
-        )
-        ```
+        EXAMPLE: ha_delete_file(path="www/deprecated-style.css", confirm=True)
         """
         try:
             if not confirm:
