@@ -58,7 +58,7 @@ The filename prefix determines whether a story runs in automated discovery:
   mode-discrimination probes (`c*`) for one-off architectural comparisons.
   **Excluded** from `--all`
   and pytest discovery (the `s*.yaml` glob does not match them); run them by
-  explicit path, e.g. `run_story.py catalog/t01_eval_template_average_calc.yaml`.
+  explicit path, e.g. `run_story.py tests/uat/stories/catalog/t01_eval_template_average_calc.yaml`.
 
 ## Running Stories
 
@@ -79,7 +79,7 @@ uv run pytest tests/uat/stories/ -v -m "critical"
 
 ```bash
 # Run a single story (each agent gets a fresh HA container)
-uv run python tests/uat/stories/run_story.py catalog/s01_automation_sunset_lights.yaml --agents gemini
+uv run python tests/uat/stories/run_story.py tests/uat/stories/catalog/s01_automation_sunset_lights.yaml --agents gemini
 
 # Run all stories
 uv run python tests/uat/stories/run_story.py --all --agents gemini
@@ -88,7 +88,7 @@ uv run python tests/uat/stories/run_story.py --all --agents gemini
 uv run python tests/uat/stories/run_story.py --all --agents gemini --branch v6.6.1
 
 # Keep container alive after run (for verification)
-uv run python tests/uat/stories/run_story.py catalog/s01_automation_sunset_lights.yaml --agents gemini --keep-container
+uv run python tests/uat/stories/run_story.py tests/uat/stories/catalog/s01_automation_sunset_lights.yaml --agents gemini --keep-container
 ```
 
 ## Story Design Principles
