@@ -1,10 +1,25 @@
 """Unit tests for camera tools module."""
 
+import re
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from ha_mcp.client.rest_client import HomeAssistantConnectionError
 from ha_mcp.tools.tools_camera import CameraTools
+
+
+def _png(width: int, height: int) -> bytes:
+    """Minimal structurally-valid PNG header with the given dimensions."""
+    ihdr_payload = (
+        width.to_bytes(4, "big") + height.to_bytes(4, "big") + b"\x08\x06\x00\x00\x00"
+    )
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + len(ihdr_payload).to_bytes(4, "big")
+        + b"IHDR"
+        + ihdr_payload
+    )
 
 
 class TestHaGetCameraImage:
@@ -12,8 +27,16 @@ class TestHaGetCameraImage:
 
     @pytest.fixture
     def mock_client(self):
-        """Create a mock Home Assistant client."""
+        """Create a mock Home Assistant client.
+
+        ``base_url``/``token`` stay ``None`` so the component capability
+        probe short-circuits (no WebSocket attempt), and ``get_config``
+        serves the timezone for the retrieval-time label.
+        """
         client = MagicMock()
+        client.base_url = None
+        client.token = None
+        client.get_config = AsyncMock(return_value={"time_zone": "UTC"})
         client.httpx_client = AsyncMock()
         return client
 
@@ -48,7 +71,7 @@ class TestHaGetCameraImage:
 
     @pytest.mark.asyncio
     async def test_successful_image_retrieval(self, mock_client):
-        """Test successful camera image retrieval."""
+        """Test successful camera image retrieval returns info text plus image."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.content = b"\xff\xd8\xff\xe0"  # JPEG magic bytes
@@ -56,13 +79,123 @@ class TestHaGetCameraImage:
         mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
 
         tools = CameraTools(mock_client)
-        result = await tools.ha_get_camera_image(entity_id="camera.front_door")
+        text, image = await tools.ha_get_camera_image(entity_id="camera.front_door")
 
         mock_client.httpx_client.get.assert_called_once_with(
             "/camera_proxy/camera.front_door", params=None
         )
-        assert result.data == b"\xff\xd8\xff\xe0"
-        assert result._format == "jpeg"
+        assert image.data == b"\xff\xd8\xff\xe0"
+        assert image._format == "jpeg"
+        # The 4-byte magic prefix has no parseable header, so no size.
+        assert text.startswith("Camera snapshot (JPEG).")
+        assert re.fullmatch(
+            r"Camera snapshot \(JPEG\)\. Retrieved: \d{4}-\d{2}-\d{2} "
+            r"\d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}",
+            text,
+        )
+
+    @pytest.mark.asyncio
+    async def test_info_text_includes_served_size(self, mock_client):
+        """A parseable JPEG header puts the served size in the text block."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        sof0 = (
+            b"\xff\xc0"
+            + (11).to_bytes(2, "big")
+            + b"\x08"
+            + (600).to_bytes(2, "big")
+            + (800).to_bytes(2, "big")
+            + b"\x01\x01"
+        )
+        mock_response.content = b"\xff\xd8" + sof0 + b"\xff\xd9"
+        mock_response.headers = {"content-type": "image/jpeg"}
+        mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
+
+        tools = CameraTools(mock_client)
+        text, image = await tools.ha_get_camera_image(entity_id="camera.front_door")
+
+        assert image.data == mock_response.content
+        assert text.startswith("Camera snapshot (JPEG, 800x600).")
+        assert "Retrieved: " in text
+
+    @pytest.mark.asyncio
+    async def test_mislabeled_content_type_follows_payload(self, mock_client):
+        """A mislabeled Content-Type must not mix formats in the response.
+
+        PNG bytes served under a JPEG header: the text label, the reported
+        size, and the Image block must all describe the PNG payload.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = _png(640, 480)
+        mock_response.headers = {"content-type": "image/jpeg"}
+        mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
+
+        tools = CameraTools(mock_client)
+        text, image = await tools.ha_get_camera_image(entity_id="camera.front_door")
+
+        assert image._format == "png"
+        assert text.startswith("Camera snapshot (PNG, 640x480).")
+
+    @pytest.mark.asyncio
+    async def test_info_text_uses_ha_timezone(self, mock_client):
+        """The retrieval time is labeled in Home Assistant's timezone."""
+        mock_client.get_config = AsyncMock(
+            return_value={"time_zone": "Pacific/Kiritimati"}
+        )
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = b"\xff\xd8\xff\xe0"
+        mock_response.headers = {"content-type": "image/jpeg"}
+        mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
+
+        tools = CameraTools(mock_client)
+        text, _ = await tools.ha_get_camera_image(entity_id="camera.front_door")
+
+        mock_client.get_config.assert_awaited_once()
+        # Kiritimati is UTC+14 year-round, so the offset is stable.
+        assert text.endswith("+14:00")
+        # A successful lookup gets no fallback note.
+        assert "could not determine" not in text
+
+    @pytest.mark.asyncio
+    async def test_info_text_falls_back_to_utc_on_config_failure(self, mock_client):
+        """A timezone fetch failure degrades to UTC and says so in the text."""
+        mock_client.get_config = AsyncMock(
+            side_effect=HomeAssistantConnectionError("no HA")
+        )
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = b"\xff\xd8\xff\xe0"
+        mock_response.headers = {"content-type": "image/jpeg"}
+        mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
+
+        tools = CameraTools(mock_client)
+        text, image = await tools.ha_get_camera_image(entity_id="camera.front_door")
+
+        assert image.data == mock_response.content
+        # The note keeps the fallback distinct from a genuine UTC install.
+        assert text.endswith(
+            "+00:00 (UTC — could not determine the Home Assistant timezone)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_info_text_falls_back_to_utc_on_unresolvable_zone(self, mock_client):
+        """A zone name tzdata cannot resolve also falls back to UTC, with a note."""
+        mock_client.get_config = AsyncMock(return_value={"time_zone": "Not/AZone"})
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = b"\xff\xd8\xff\xe0"
+        mock_response.headers = {"content-type": "image/jpeg"}
+        mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
+
+        tools = CameraTools(mock_client)
+        text, image = await tools.ha_get_camera_image(entity_id="camera.front_door")
+
+        assert image.data == mock_response.content
+        assert text.endswith(
+            "+00:00 (UTC — could not determine the Home Assistant timezone)"
+        )
 
     @pytest.mark.asyncio
     async def test_image_retrieval_with_size_params(self, mock_client):
@@ -140,8 +273,9 @@ class TestHaGetCameraImage:
         mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
 
         tools = CameraTools(mock_client)
-        result = await tools.ha_get_camera_image(entity_id="camera.front_door")
-        assert result._format == "png"
+        text, image = await tools.ha_get_camera_image(entity_id="camera.front_door")
+        assert image._format == "png"
+        assert text.startswith("Camera snapshot (PNG).")
 
     @pytest.mark.asyncio
     async def test_gif_content_type(self, mock_client):
@@ -153,8 +287,9 @@ class TestHaGetCameraImage:
         mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
 
         tools = CameraTools(mock_client)
-        result = await tools.ha_get_camera_image(entity_id="camera.front_door")
-        assert result._format == "gif"
+        text, image = await tools.ha_get_camera_image(entity_id="camera.front_door")
+        assert image._format == "gif"
+        assert text.startswith("Camera snapshot (GIF).")
 
     @pytest.mark.asyncio
     async def test_default_to_jpeg_for_unknown_content_type(self, mock_client):
@@ -166,8 +301,10 @@ class TestHaGetCameraImage:
         mock_client.httpx_client.get = AsyncMock(return_value=mock_response)
 
         tools = CameraTools(mock_client)
-        result = await tools.ha_get_camera_image(entity_id="camera.front_door")
-        assert result._format == "jpeg"
+        text, image = await tools.ha_get_camera_image(entity_id="camera.front_door")
+        assert image._format == "jpeg"
+        # No recognized magic bytes — the text reports the format only.
+        assert text.startswith("Camera snapshot (JPEG).")
 
     @pytest.mark.asyncio
     async def test_width_only_param(self, mock_client):
