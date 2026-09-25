@@ -43,7 +43,6 @@ from .component_api import (
 from .helpers import (
     exception_to_structured_error,
     raise_tool_error,
-    safe_info,
     safe_progress,
 )
 from .tools_service import BulkControlOperation
@@ -861,8 +860,7 @@ class DeviceControlTools:
                 operations, skipped_operations
             )
 
-            await safe_info(
-                ctx,
+            logger.debug(
                 f"bulk_device_control: {len(valid_operations)} valid op(s), "
                 f"{len(skipped_operations)} skipped, "
                 f"mode={'parallel' if parallel else 'sequential'}",

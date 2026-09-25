@@ -21,7 +21,6 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
-    safe_info,
     safe_progress,
 )
 from .util_helpers import is_connection_error_message
@@ -157,8 +156,7 @@ class TraceTools:
             # Extract the object_id (part after the domain) as fallback
             object_id = automation_id.split(".", 1)[1]
 
-            await safe_info(
-                ctx,
+            logger.debug(
                 f"ha_get_automation_traces starting: id={automation_id} "
                 f"run_id={run_id or '<list>'}",
             )

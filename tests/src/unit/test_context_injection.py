@@ -2,8 +2,10 @@
 
 Each tool is verified twice:
 - legacy path: called with ``ctx=None`` (or omitted) — must work unchanged
-- progress path: called with a fake ``Context`` whose ``report_progress`` and
-  ``info`` are AsyncMock — those must be awaited at the expected boundaries
+- progress path: called with a fake ``Context`` whose ``report_progress`` must be
+  awaited at the expected boundaries, while its MCP logging methods must stay
+  unused — protocol logging is deprecated as of MCP 2026-07-28 (SEP-2577) and
+  each call emits ``MCPDeprecationWarning`` (#2464)
 
 A third group of tests exercises the safe-emit wrapper: when ``ctx.report_progress``
 raises a transport error, the tool must still return its success payload.
@@ -24,14 +26,24 @@ from ha_mcp.tools.tools_traces import TraceTools
 
 
 def _make_ctx() -> MagicMock:
-    """Build a fake FastMCP Context with the awaitable surface we use."""
+    """Build a fake FastMCP Context.
+
+    The log methods are ``AsyncMock``s so an accidental ``await ctx.info(...)``
+    is recorded rather than raising ``TypeError``."""
     ctx = MagicMock()
     ctx.report_progress = AsyncMock()
     ctx.info = AsyncMock()
     ctx.debug = AsyncMock()
     ctx.warning = AsyncMock()
     ctx.error = AsyncMock()
+    ctx.log = AsyncMock()
     return ctx
+
+
+def _assert_no_protocol_logging(ctx: MagicMock) -> None:
+    """Fail if a tool sent a deprecated MCP log message through ``ctx``."""
+    for name in ("debug", "info", "warning", "error", "log"):
+        getattr(ctx, name).assert_not_called()
 
 
 def _mock_ha_client() -> MagicMock:
@@ -103,7 +115,7 @@ async def test_deep_search_emits_progress_with_ctx(
         "anything", search_types=["helper"], limit=5, ctx=ctx
     )
     assert result["success"] is True
-    ctx.info.assert_awaited()
+    _assert_no_protocol_logging(ctx)
     # Initial progress + post-fetch + post-helper-phase
     assert ctx.report_progress.await_count >= 3
     calls = ctx.report_progress.await_args_list
@@ -163,7 +175,7 @@ async def test_ha_get_history_emits_progress_with_ctx() -> None:
 
     assert result["data"] == fake_result
     assert "metadata" in result
-    ctx.info.assert_awaited()
+    _assert_no_protocol_logging(ctx)
     # Three events: connect, query dispatch, completion (progress jumps 1 -> 3).
     assert ctx.report_progress.await_count == 3
     calls = ctx.report_progress.await_args_list
@@ -238,7 +250,7 @@ async def test_ha_get_automation_traces_emits_progress_with_ctx() -> None:
         result = await trace_tool(automation_id="automation.demo", ctx=ctx)
 
     assert result["success"] is True
-    ctx.info.assert_awaited()
+    _assert_no_protocol_logging(ctx)
     # Three events: resolve target (0), fetch list (1), final listed-N (3).
     assert ctx.report_progress.await_count == 3
     calls = ctx.report_progress.await_args_list
@@ -317,7 +329,7 @@ async def test_ha_get_hacs_info_search_emits_progress_with_ctx() -> None:
         result = await hacs_tool(action="search", query="anything", ctx=ctx)
 
     assert result["success"] is True
-    ctx.info.assert_awaited()
+    _assert_no_protocol_logging(ctx)
     # Four contiguous events: availability check (0), fetch list (1), filter (2), matched (3).
     assert ctx.report_progress.await_count == 4
     calls = ctx.report_progress.await_args_list
@@ -391,7 +403,7 @@ async def test_bulk_device_control_emits_progress_with_ctx_sequential() -> None:
     )
 
     assert result["successful_commands"] == 2
-    ctx.info.assert_awaited()
+    _assert_no_protocol_logging(ctx)
     # Initial dispatch + 2 per-op events + final completion = 4.
     assert ctx.report_progress.await_count == 4
     messages = _progress_messages(ctx)
@@ -427,7 +439,7 @@ async def test_bulk_device_control_parallel_emits_dispatch_only() -> None:
         ctx=ctx,
     )
 
-    ctx.info.assert_awaited()
+    _assert_no_protocol_logging(ctx)
     # Parallel: dispatching (0) + completion event = 2 framing events.
     assert ctx.report_progress.await_count == 2
     calls = ctx.report_progress.await_args_list
@@ -621,7 +633,7 @@ async def test_ha_manage_backup_ctx_is_injected_not_exposed() -> None:
 
 
 # ---------------------------------------------------------------------------
-# safe_progress / safe_info: transport errors must not mask successful tool results
+# safe_progress: transport errors must not mask successful tool results
 # ---------------------------------------------------------------------------
 
 
@@ -648,12 +660,11 @@ async def test_safe_progress_swallows_transport_errors_in_deep_search(
 
 
 @pytest.mark.asyncio
-async def test_safe_info_swallows_transport_errors_in_bulk_device_control() -> None:
-    """ctx.info raising must not break bulk_device_control's return path."""
+async def test_safe_progress_swallows_transport_errors_in_bulk_device_control() -> None:
+    """ctx.report_progress raising must not break bulk_device_control's return path."""
     client = _mock_ha_client()
     tools = DeviceControlTools(client=client)
     ctx = _make_ctx()
-    ctx.info = AsyncMock(side_effect=ConnectionError("transport gone"))
     ctx.report_progress = AsyncMock(side_effect=ConnectionError("transport gone"))
 
     async def fake_control(**kwargs: Any) -> dict[str, Any]:
@@ -678,3 +689,4 @@ async def test_safe_info_swallows_transport_errors_in_bulk_device_control() -> N
     # Each raises and is swallowed by safe_progress; verifying the count catches
     # a regression that re-introduces a `if ctx is not None:` guard inside the loop.
     assert ctx.report_progress.await_count == 3
+    _assert_no_protocol_logging(ctx)
