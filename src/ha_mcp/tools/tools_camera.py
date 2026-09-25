@@ -41,20 +41,27 @@ def _snapshot_info_text(
     image_format: str,
     image_size: tuple[int, int] | None,
     retrieved: datetime,
+    timezone_fallback: bool = False,
 ) -> str:
     """Build the text half of the camera image response.
 
     Reports the size of the image actually served (which may differ from
     the camera's native resolution when Home Assistant rescaled it) and
     when the snapshot was retrieved, in Home Assistant local time with
-    UTC offset.
+    UTC offset. When the timezone lookup fell back to UTC, the text says
+    so, so the label cannot be mistaken for a genuine UTC install.
     """
     if image_size is None:
         detail = f"Camera snapshot ({image_format.upper()})"
     else:
         width, height = image_size
         detail = f"Camera snapshot ({image_format.upper()}, {width}x{height})"
-    return f"{detail}. Retrieved: {retrieved:%Y-%m-%d %H:%M:%S %:z}"
+    note = (
+        " (UTC — could not determine the Home Assistant timezone)"
+        if timezone_fallback
+        else ""
+    )
+    return f"{detail}. Retrieved: {retrieved:%Y-%m-%d %H:%M:%S %:z}{note}"
 
 
 class CameraTools:
@@ -186,8 +193,12 @@ class CameraTools:
             # is resolved separately so a slow timezone lookup only delays
             # the label, never the timestamp.
             retrieved_at = datetime.now(UTC)
-            ha_timezone, _ = await fetch_ha_timezone(self._client)
-            local_tz, _ = resolve_local_timezone(ha_timezone)
+            ha_timezone, fetch_failed = await fetch_ha_timezone(self._client)
+            local_tz, resolved_timezone = resolve_local_timezone(ha_timezone)
+            # A failed fetch, or a zone name tzdata cannot resolve, both
+            # fall back to UTC — the note keeps that distinct from a
+            # genuine UTC install.
+            timezone_fallback = fetch_failed or resolved_timezone != ha_timezone
 
             logger.info(
                 f"Retrieved camera image from {entity_id} "
@@ -198,7 +209,10 @@ class CameraTools:
             # to MCP TextContent and ImageContent, in this order)
             return (
                 _snapshot_info_text(
-                    image_format, image_size, retrieved_at.astimezone(local_tz)
+                    image_format,
+                    image_size,
+                    retrieved_at.astimezone(local_tz),
+                    timezone_fallback,
                 ),
                 Image(data=response.content, format=image_format),
             )
