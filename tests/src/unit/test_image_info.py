@@ -67,6 +67,20 @@ class TestJpeg:
         jpeg = _jpeg(100, 200, extra_segments=b"\xff\xd0" + b"\xff\xd1")
         assert resolve_image_info(jpeg, "jpeg") == ("jpeg", (200, 100))
 
+    def test_fill_bytes_before_sof_are_skipped(self) -> None:
+        """T.81 B.1.1.2 allows any run of 0xFF fill bytes before a marker."""
+        sof0 = (
+            b"\xff\xc0"
+            + (11).to_bytes(2, "big")
+            + b"\x08"  # bit depth
+            + (600).to_bytes(2, "big")
+            + (800).to_bytes(2, "big")
+            + b"\x01"  # one component
+            + b"\x01\x11\x00"  # component: id 1, 1x1 sampling, table 0
+        )
+        jpeg = b"\xff\xd8" + b"\xff" * 3 + sof0
+        assert resolve_image_info(jpeg, "jpeg") == ("jpeg", (800, 600))
+
     def test_no_sof_marker_returns_no_dimensions(self) -> None:
         jpeg = b"\xff\xd8" + b"\xff\xe1" + (6).to_bytes(2, "big") + b"Exif"
         assert resolve_image_info(jpeg, "jpeg") == ("jpeg", None)
