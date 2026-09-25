@@ -70,6 +70,45 @@ class _ConfirmedReload:
         pass
 
 
+_SCENE = {"name": "Movie Night", "entities": {"light.tv": {"state": "on"}}}
+_WRITE_MODES = ("config", "python_transform")
+
+
+async def _write_and_activate(
+    tools: ConfigSceneTools, mode: str, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, Any]:
+    """Write ``movie_night`` through ``mode`` with ``activate=True``."""
+    if mode == "config":
+        return await tools.ha_config_set_scene(
+            scene_id="movie_night",
+            config=dict(_SCENE),
+            activate=True,
+            wait=False,
+            MandatoryBPS=False,
+        )
+
+    async def fetch_and_verify_hash(
+        scene_id: str, config_hash: str, action: str
+    ) -> tuple[dict[str, Any], str]:
+        return {"id": "movie_night", **_SCENE}, "movie_night"
+
+    async def get_config(
+        scene_id: str, *, _resolved: bool = False
+    ) -> tuple[dict[str, Any], str, str]:
+        return {"id": "movie_night", **_SCENE}, "new-hash", "movie_night"
+
+    monkeypatch.setattr(tools, "_fetch_and_verify_hash", fetch_and_verify_hash)
+    monkeypatch.setattr(tools, "_get_scene_config_internal", get_config)
+    return await tools.ha_config_set_scene(
+        scene_id="movie_night",
+        python_transform="config['name'] = 'Film Night'",
+        config_hash="old-hash",
+        activate=True,
+        wait=False,
+        MandatoryBPS=False,
+    )
+
+
 @pytest.fixture
 def tools(mock_client: MagicMock, monkeypatch: pytest.MonkeyPatch) -> ConfigSceneTools:
     monkeypatch.setattr(ConfigSceneTools, "_RESOLVE_RETRY_DELAY", 0)
@@ -138,8 +177,12 @@ async def test_standalone_activate_service_failure_raises(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("mode", _WRITE_MODES)
 async def test_config_write_activates_after_scene_reload(
-    tools: ConfigSceneTools, mock_client: MagicMock, monkeypatch: pytest.MonkeyPatch
+    tools: ConfigSceneTools,
+    mock_client: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
 ) -> None:
     order: list[str] = []
 
@@ -173,13 +216,7 @@ async def test_config_write_activates_after_scene_reload(
 
     monkeypatch.setattr(tools_config_scenes, "config_reload_waiter", _Waiter)
 
-    result = await tools.ha_config_set_scene(
-        scene_id="movie_night",
-        config={"name": "Movie Night", "entities": {"light.tv": {"state": "on"}}},
-        activate=True,
-        wait=False,
-        MandatoryBPS=False,
-    )
+    result = await _write_and_activate(tools, mode, monkeypatch)
 
     assert order == ["subscribe", "write", "reloaded", "unsubscribe", "activate"]
     assert result["activated"] is True
@@ -187,21 +224,19 @@ async def test_config_write_activates_after_scene_reload(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("mode", _WRITE_MODES)
 async def test_config_write_activation_failure_is_partial_success(
-    tools: ConfigSceneTools, mock_client: MagicMock, monkeypatch: pytest.MonkeyPatch
+    tools: ConfigSceneTools,
+    mock_client: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
 ) -> None:
     monkeypatch.setattr(tools_config_scenes, "config_reload_waiter", _ConfirmedReload)
     mock_client.call_service = AsyncMock(
         side_effect=HomeAssistantAPIError("scene failed")
     )
 
-    result = await tools.ha_config_set_scene(
-        scene_id="movie_night",
-        config={"name": "Movie Night", "entities": {"light.tv": {"state": "on"}}},
-        activate=True,
-        wait=False,
-        MandatoryBPS=False,
-    )
+    result = await _write_and_activate(tools, mode, monkeypatch)
 
     assert result["success"] is True
     assert result["activated"] is False
@@ -224,16 +259,14 @@ def test_scene_backup_skips_only_standalone_activation(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("mode", _WRITE_MODES)
 async def test_config_write_skips_activation_when_reload_unconfirmed(
-    tools: ConfigSceneTools, mock_client: MagicMock
+    tools: ConfigSceneTools,
+    mock_client: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
 ) -> None:
-    result = await tools.ha_config_set_scene(
-        scene_id="movie_night",
-        config={"name": "Movie Night", "entities": {"light.tv": {"state": "on"}}},
-        activate=True,
-        wait=False,
-        MandatoryBPS=False,
-    )
+    result = await _write_and_activate(tools, mode, monkeypatch)
 
     mock_client.call_service.assert_not_called()
     assert result["activated"] is False
