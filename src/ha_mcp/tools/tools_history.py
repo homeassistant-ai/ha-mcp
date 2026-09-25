@@ -28,7 +28,6 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
-    safe_info,
     safe_progress,
 )
 from .util_helpers import (
@@ -432,8 +431,7 @@ class HistoryTools:
                 statistics_timezone=statistics_timezone,
             )
 
-            await safe_info(
-                ctx,
+            logger.debug(
                 f"ha_get_history starting: source={source} "
                 f"entities={len(entity_id_list)} "
                 f"window={start_dt.isoformat()}..{end_dt.isoformat()}",

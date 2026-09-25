@@ -33,7 +33,6 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
-    safe_info,
     safe_progress,
     validate_identifier_not_empty,
 )
@@ -383,8 +382,7 @@ class HacsTools:
         offset: int,
         ctx: Context | None,
     ) -> dict[str, Any]:
-        await safe_info(
-            ctx,
+        logger.debug(
             f"ha_get_hacs_info search starting: query={query!r} "
             f"category={category} installed_only={installed_only}",
         )
