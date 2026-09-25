@@ -607,13 +607,12 @@ class SystemTools:
             ),
         ] = None,
         diagnostics_truncate_at_bytes: Annotated[
-            int,
+            int | None,
             Field(
                 ge=1,
                 description="Byte cap on the serialized diagnostics payload (post-projection / post-data_path). On hit, drops data and emits truncated=true, bytes_total, byte_cap, plus available_fields (when the capped value is a dict). Recommended starting point: 20000. Only applies with include='diagnostics'.",
             ),
-        ]
-        | None = None,
+        ] = None,
         diagnostics_data_path: Annotated[
             str | None,
             Field(
@@ -621,21 +620,19 @@ class SystemTools:
             ),
         ] = None,
         diagnostics_data_offset: Annotated[
-            int,
+            int | None,
             Field(
                 ge=0,
                 description="Pagination start index for list-valued diagnostics_data_path results. Only applies with include='diagnostics'.",
             ),
-        ]
-        | None = 0,
+        ] = 0,
         diagnostics_data_limit: Annotated[
-            int,
+            int | None,
             Field(
                 ge=1,
                 description="Pagination window for list-valued diagnostics_data_path results; data becomes {path, items, offset, limit, total, has_more}. Only applies with include='diagnostics'.",
             ),
-        ]
-        | None = None,
+        ] = None,
     ) -> dict[str, Any]:
         """Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.
 
