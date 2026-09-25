@@ -33,9 +33,8 @@ before adding a gate:
 Pick the marker by what the test *needs*, not by where it happens to pass:
 `external_only` is about needing an in-process server you can reconfigure,
 `inaddon_only` about needing the addon's supervisor context. Read the skip
-expressions, not the summary docstring — `external_only`'s name has misled
-before (#1375 found 14 supervisor-mock tests silently skipping on every
-testcontainer run).
+expressions, not the summary docstring: `external_only` does not mean
+"HAOS external only".
 
 A marker-gated test changes the per-lane skip counts that
 `tests/src/e2e/basic/test_backend_dispatch_smoke.py` caps. Record the
@@ -56,12 +55,12 @@ the baseline only from a CI observation, deleting the fragments it absorbs.
   `unique_id`, which Home Assistant's own API never exposes on any endpoint.
   Consequence for `ha_search`: a query-driven call is served by the component's
   in-process scan, not the legacy REST path, so a test written for legacy-only
-  behaviour passes *vacuously*. Naming `"dashboard"` in `search_types` no
-  longer changes that — the component serves the surfaces its search command
+  behaviour passes *vacuously*. This holds when `search_types` names
+  `"dashboard"`: the component serves the surfaces its search command
   has while the dashboards leg serves that bucket, merged server-side
   (#2289). Components advertising `search_unified` also serve queryless
-  listings, location filters, and result windows above 500. Do not force a
-  legacy route with an oversized limit: it no longer selects that route.
+  listings, location filters, and result windows above 500, so an oversized
+  limit does not select the legacy route.
   Test legacy internals directly with the live `ha_client` when the contract
   under test is specific to that implementation (the reference-graph E2E
   does this). A dashboard-only old-schema request still uses its own
@@ -76,9 +75,9 @@ rather than assume the e2e's always-present case.
 
 ## No-tools lanes (`E2E_NO_TOOLS_ENTRY=1`, #2292)
 
-The rest of the suite always has the "HA-MCP File & YAML Tools" config entry,
-so the state real users hit most — integration installed, second entry never
-added — was untested. `E2E_NO_TOOLS_ENTRY=1` runs a lane without that entry.
+The rest of the suite always has the "HA-MCP File & YAML Tools" config entry.
+`E2E_NO_TOOLS_ENTRY=1` runs a lane without that entry, which is the state most
+real users are in: integration installed, second entry never added.
 It is orthogonal to the backend selectors, so each backend has its own shape:
 
 | Lane | Topology |
@@ -103,8 +102,8 @@ Two markers gate on it, both dispatched from `pytest_collection_modifyitems`:
   everywhere else. `src/e2e/workflows/filesystem/test_tools_entry_absent.py`
   is the module that carries it.
 
-Since component 2.1.0 the server entry registers the `ha_mcp_tools/*`
-WebSocket surface too (#2291), so on the two `embedded` shapes the shared
+The server entry also registers the `ha_mcp_tools/*` WebSocket surface
+(#2291), so on the two `embedded` shapes the shared
 component capabilities answer while the privileged *services* stay gone —
 that split is the whole point of the lanes, and `test_tools_entry_absent.py`
 asserts both halves.
@@ -187,7 +186,7 @@ CI installs Node + jsdom in the `unit-tests` job. Local devs without `tests/js/n
 
 **Transient UI + the fake clock:** timed UI (e.g. the save toast, ~4s auto-dismiss) is gone from `result.dom` by capture time because the virtual clock fast-forwards. Stamp state into a `data-` attribute *inside* `invoke` to read it live. Avoid substring false-positives too — `"ha-toast" in result.dom` matches the always-present `#ha-toast-region`; assert the specific variant class.
 
-**Config-dir isolation:** settings / feature-flag unit tests read the real data dir via `get_global_settings()`. A dev `ha-mcp-web` server that wrote to `~/.ha-mcp` pollutes them (e.g. a beta toggle flips `enable_beta_features`, breaking the beta-gate test). Run with `HA_MCP_CONFIG_DIR=$(mktemp -d)` to isolate — how CI stays clean.
+**Config-dir isolation:** settings / feature-flag unit tests read the real data dir via `get_global_settings()`. A dev `ha-mcp-web` server that wrote to `~/.ha-mcp` pollutes them (e.g. a beta toggle flips `enable_beta_features`, breaking the beta-gate test). Run with `HA_MCP_CONFIG_DIR=$(mktemp -d)` to isolate.
 
 When adding a new UI surface:
 - Python-rendered HTML: register the renderer in `_js_harness.py::_PY_RENDERERS`.

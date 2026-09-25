@@ -55,7 +55,7 @@ gh pr view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json comments --jq '.comm
 - Unusual AGENTS.md/CLAUDE.md changes unrelated to PR purpose
 - `.github/` workflow modifications with `pull_request_target`
 - `.claude/` agent/skill changes that could affect behavior
-- Comment immediately with specific concerns
+- Draft a comment with the specific concerns and show it to the user before posting
 
 ### 2. Enable Workflows (If Safe)
 
@@ -201,11 +201,11 @@ gh pr view $ARGUMENTS --repo homeassistant-ai/ha-mcp --json closingIssuesReferen
 **Quick checks:**
 
 ```bash
-# Check if ruff/mypy would complain (from workflow logs if available)
-gh pr checks $ARGUMENTS --repo homeassistant-ai/ha-mcp | grep -E "(ruff|mypy|lint)"
+# ruff and mypy run as steps of the "Fast Checks" job
+gh pr checks $ARGUMENTS --repo homeassistant-ai/ha-mcp | grep "Fast Checks"
 
 # Check for common issues in diff
-grep -E "(TODO|FIXME|XXX|HACK)" /tmp/pr_$ARGUMENTS.diff
+gh pr diff $ARGUMENTS --repo homeassistant-ai/ha-mcp | grep -E "(TODO|FIXME|XXX|HACK)"
 ```
 
 **Output Quality Summary:**
@@ -226,9 +226,7 @@ After completing all steps, present a short summary of what the PR does and the 
 
 After completing the analysis, draft a comment for the PR following these guidelines:
 
-**Comment Length:**
-- **Good to merge:** 10-15 lines
-- **Changes needed:** Max 25 lines
+**Comment Length:** The contributor should be able to read it in one pass: what works, what must change, and what happens next. A good-to-merge comment is shorter than a changes-needed one.
 
 **Style:**
 - No emojis
@@ -236,11 +234,11 @@ After completing the analysis, draft a comment for the PR following these guidel
 - Present inline in chat (not in a file)
 - Always ask user before posting
 
-**Structure for "Good to Merge" (10-15 lines):**
+**Structure for "Good to Merge":**
 ```
 [Positive opening line about the contribution]
 
-[1-2 sentences on what works well - focus on functionality, tests, architecture]
+[What works well - focus on functionality, tests, architecture]
 
 [Any minor suggestions or notes - optional, technical only]
 
@@ -249,36 +247,36 @@ After completing the analysis, draft a comment for the PR following these guidel
 
 **Note:** Do NOT mention security assessment in comment unless issues were found. Security checks are internal.
 
-**Structure for "Changes Needed" (max 25 lines):**
+**Structure for "Changes Needed":**
 ```
 [Positive opening line acknowledging the work]
 
 [Brief summary of the issue being solved]
 
 **[Concern 1]:**
-[1-2 lines explanation + suggestion - focus on: tests, functionality, architecture, breaking changes]
+[Short explanation + suggestion - focus on: tests, functionality, architecture, breaking changes]
 
 **[Concern 2]:** (if applicable)
-[1-2 lines explanation + suggestion]
+[Short explanation + suggestion]
 
 **[Concern 3]:** (if applicable)
-[1-2 lines explanation + suggestion]
+[Short explanation + suggestion]
 
 [Closing line about next steps]
 ```
 
-**Note:** Security concerns should be raised immediately when found, not in final structured comment.
+**Note:** Raise security concerns with the user as soon as they are found, not in the final structured comment.
 
-**Example - Good to Merge:**
+**Illustrative example - Good to Merge** (match the wording to the PR, not to this text):
 ```
-Great work on [feature/fix]. [Performance/quality metric] is impressive.
+Thanks for [feature/fix]. [One specific thing it gets right].
 
 The implementation follows existing patterns and the [specific aspect] is well-designed. [Optional: Minor note about something noticed].
 
 Ready to merge once CI passes.
 ```
 
-**Example - Changes Needed:**
+**Illustrative example - Changes Needed** (match the wording to the PR, not to this text):
 ```
 Thanks for tackling [problem]. [Metric/impact] shows this addresses a real need.
 
