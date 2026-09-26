@@ -182,15 +182,14 @@ class TestUsageLoggerDefaults:
         yield
         get_data_dir.cache_clear()
 
-    def test_default_log_path(self, monkeypatch):
+    def test_default_log_path(self, monkeypatch, tmp_path):
         """Default log path lives under ``~/.ha-mcp/logs/`` when no
         overrides are in play."""
         monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
         monkeypatch.delenv("HA_MCP_CONFIG_DIR", raising=False)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
         logger = UsageLogger()
-        assert (
-            logger.log_file_path == Path.home() / ".ha-mcp" / "logs" / "mcp_usage.jsonl"
-        )
+        assert logger.log_file_path == tmp_path / ".ha-mcp" / "logs" / "mcp_usage.jsonl"
         logger.shutdown()
 
     def test_honors_ha_mcp_config_dir(self, monkeypatch, tmp_path):
