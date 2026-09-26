@@ -11,7 +11,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_slash_agent_behavior():
+def test_slash_agent_behavior() -> None:
     node = shutil.which("node")
     assert node, "Node is required for slash-agent regression tests"
     result = subprocess.run(
@@ -25,14 +25,10 @@ def test_slash_agent_behavior():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_slash_workflow_keeps_publication_and_auth_outside_generated_code():
+def test_slash_workflow_keeps_publication_and_auth_outside_generated_code() -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/slash-agent.yml").read_text())
     assert all(value == "read" for value in workflow["permissions"].values())
-    assert workflow["concurrency"] == {
-        "group": "slash-agent-${{ github.repository }}",
-        "cancel-in-progress": False,
-        "queue": "max",
-    }
+    assert "concurrency" not in workflow
     jobs = workflow["jobs"]
     admission = jobs["admit"]
     assert "homeassistant-ai/ha-mcp" in admission["if"]
@@ -60,6 +56,11 @@ def test_slash_workflow_keeps_publication_and_auth_outside_generated_code():
         sum(step["timeout-minutes"] for step in code["steps"]) < code["timeout-minutes"]
     )
     publisher = jobs["publish"]
+    assert publisher["concurrency"] == {
+        "group": "slash-agent-publish-${{ github.repository }}",
+        "cancel-in-progress": False,
+        "queue": "max",
+    }
     publisher_text = str(publisher)
     assert "HA_MCP_AGENT_CLIENT_ID" in publisher_text
     assert "HA_MCP_AGENT_APP_ID" not in publisher_text
@@ -76,7 +77,7 @@ def test_slash_workflow_keeps_publication_and_auth_outside_generated_code():
         assert all("timeout-minutes" in step for step in job["steps"])
 
 
-def test_wakeup_names_and_artifacts_match_the_controller_contract():
+def test_wakeup_names_and_artifacts_match_the_controller_contract() -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/slash-agent.yml").read_text())
     triggers = workflow.get("on", workflow.get(True))["workflow_run"]["workflows"]
     source = (ROOT / ".github/slash-agent/github.mjs").read_text()
@@ -118,7 +119,7 @@ def test_wakeup_names_and_artifacts_match_the_controller_contract():
     )
 
 
-def test_worker_failure_metadata_does_not_print_model_log(tmp_path):
+def test_worker_failure_metadata_does_not_print_model_log(tmp_path: Path) -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/slash-agent.yml").read_text())
     step = next(
         step
@@ -147,7 +148,7 @@ def test_worker_failure_metadata_does_not_print_model_log(tmp_path):
     assert "secret-token-DO-NOT-PUBLISH" not in result.stdout
 
 
-def test_review_wakeup_has_no_credentials_checkout_or_generated_scripts():
+def test_review_wakeup_has_no_credentials_checkout_or_generated_scripts() -> None:
     workflow = yaml.safe_load(
         (ROOT / ".github/workflows/slash-agent-review-event.yml").read_text()
     )

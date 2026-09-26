@@ -312,7 +312,7 @@ def test_explicit_environment_and_network_preserve_credential_boundary(tmp_path)
     assert token.encode() not in result.stdout + result.stderr
 
 
-def test_read_only_paths_protect_controller_and_git_metadata(tmp_path):
+def test_read_only_paths_protect_controller_and_git_metadata(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     (workspace / "control").mkdir(parents=True)
     (workspace / "source" / ".git").mkdir(parents=True)
@@ -331,7 +331,7 @@ def test_read_only_paths_protect_controller_and_git_metadata(tmp_path):
 
     # Native Windows jq receives MSYS-converted --arg paths; the Ubuntu runner
     # keeps POSIX paths. Both designate the same explicitly protected locations.
-    def expected(path):
+    def expected(path: Path) -> str:
         return path.as_posix() if os.name == "nt" else posix(path)
 
     assert entries[expected(workspace / "control")] == "read"
@@ -350,8 +350,8 @@ def test_read_only_paths_protect_controller_and_git_metadata(tmp_path):
     ],
 )
 def test_read_only_probe_cannot_succeed_without_valid_paths(
-    tmp_path, paths, input_paths, valid
-):
+    tmp_path: Path, paths: str, input_paths: str, valid: bool
+) -> None:
     if valid and shutil.which("jq") is None:
         pytest.skip(
             "Native jq is unavailable; the GitHub Linux runner exercises this case"
@@ -380,7 +380,7 @@ def test_read_only_probe_cannot_succeed_without_valid_paths(
 
 
 @pytest.mark.parametrize("path", ["../outside", "missing"])
-def test_read_only_paths_must_exist_inside_workspace(tmp_path, path):
+def test_read_only_paths_must_exist_inside_workspace(tmp_path: Path, path: str) -> None:
     (tmp_path / "outside").mkdir()
     result = prepare(tmp_path, READ_ONLY_PATHS_INPUT=path)
     assert result.returncode != 0

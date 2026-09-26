@@ -33,12 +33,6 @@ permissions:
   checks: read
   statuses: read
 
-# Serialize publication across sessions as well as duplicate event deliveries.
-concurrency:
-  group: slash-agent-${{ github.repository }}
-  cancel-in-progress: false
-  queue: max
-
 jobs:
   admit:
     if: >-
@@ -198,6 +192,10 @@ jobs:
     if: ${{ always() && needs.admit.outputs.run == 'true' && !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    concurrency:
+      group: slash-agent-publish-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
     steps:
       - name: Checkout trusted publisher on a fresh runner
         timeout-minutes: 2
