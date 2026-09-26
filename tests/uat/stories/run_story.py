@@ -13,6 +13,9 @@ Usage:
     # Run a single story
     uv run python tests/uat/stories/run_story.py tests/uat/stories/catalog/s01_automation_sunset_lights.yaml --agents gemini
 
+    # Run several stories on one HA container per agent
+    uv run python tests/uat/stories/run_story.py tests/uat/stories/catalog/t0*.yaml --agents gemini
+
     # Run all stories
     uv run python tests/uat/stories/run_story.py --all --agents gemini
 
@@ -1580,7 +1583,7 @@ def main() -> None:
         description="Run user acceptance stories via BAT",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("story_file", nargs="?", help="Path to story YAML file")
+    parser.add_argument("story_file", nargs="*", help="Path(s) to story YAML files")
     parser.add_argument(
         "--all", action="store_true", help="Run all s*.yaml stories in catalog/"
     )
@@ -1662,8 +1665,7 @@ def main() -> None:
     if args.all:
         stories = sorted(CATALOG_DIR.glob("s*.yaml"))
     elif args.story_file:
-        story_path = Path(args.story_file).resolve()
-        stories = [story_path]
+        stories = [Path(path).resolve() for path in args.story_file]
     else:
         parser.print_help()
         sys.exit(1)
