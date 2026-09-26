@@ -285,20 +285,28 @@ async def test_options_shape_caveat_raw_persisted(tmp_path) -> None:
     assert flow_shape != component_options
 
 
+# Stored options with nested dicts (issue #2538).
+_NESTED_OPTIONS = {
+    # DurationSelector values; both carry the same inner keys.
+    "no_data_grace": {"hours": 0, "minutes": 10, "seconds": 0},
+    "retry_timeout": {"hours": 0, "minutes": 5, "seconds": 0},
+    # An options-flow section holding DurationSelector values.
+    "event_durations": {
+        "emergency": {"hours": 1, "minutes": 0, "seconds": 0},
+        "warning": {"hours": 0, "minutes": 15, "seconds": 0},
+    },
+    # A per-platform sub-dict (System Monitor stores its processes this way).
+    "binary_sensor": {"process": ["python3"]},
+    # A stored None, which the options-flow read skips.
+    "fallback_group": None,
+}
+
+
 @pytest.mark.asyncio
-async def test_single_entry_flattens_option_sections(tmp_path) -> None:
-    """A nested option *section* (a template helper's ``advanced_options``) is
-    additively surfaced at the top level so a consumer can read
-    ``options["availability"]`` directly — while the raw nested section is kept
-    for fidelity. Mirrors the OptionsFlow-derived read's section flattening; the
-    e2e ``test_update_template_sensor_availability`` depends on this top-level
-    key."""
-    availability = "{{ has_value('sensor.demo_temperature') }}"
-    hass = FakeHass(
-        config_entries=[
-            _entry("cfg1", options={"advanced_options": {"availability": availability}})
-        ]
-    )
+async def test_single_entry_returns_stored_options_unchanged(tmp_path) -> None:
+    """Nested option values stay where they are stored; none is copied up to
+    the top level (issue #2538)."""
+    hass = FakeHass(config_entries=[_entry("cfg1", options=_NESTED_OPTIONS)])
     hass.config = FakeConfig(tmp_path)
     ws = _real_component_ws(hass)
     client = RoutingClient()
@@ -307,57 +315,15 @@ async def test_single_entry_flattens_option_sections(tmp_path) -> None:
     with patch_ws(ws, tools_integrations):
         resp = await get_integration(entry_id="cfg1")
 
-    options = resp["entry"]["options"]
-    # Flattened leaf surfaced at the top level ...
-    assert options["availability"] == availability
-    # ... and the raw nested section preserved.
-    assert options["advanced_options"] == {"availability": availability}
+    assert resp["entry"]["options"] == _NESTED_OPTIONS
     _no_dance(client)
 
 
 @pytest.mark.asyncio
-async def test_option_section_flatten_no_clobber(tmp_path) -> None:
-    """The section flatten never overwrites an existing top-level option: a
-    nested leaf key colliding with a top-level key keeps the top-level value,
-    and the nested original is still present."""
+async def test_list_returns_stored_options_unchanged(tmp_path) -> None:
+    """The list path returns each row's stored options unchanged too."""
     hass = FakeHass(
-        config_entries=[
-            _entry(
-                "cfg1",
-                options={
-                    "availability": "top-level-wins",
-                    "advanced_options": {"availability": "nested-loses"},
-                },
-            )
-        ]
-    )
-    hass.config = FakeConfig(tmp_path)
-    ws = _real_component_ws(hass)
-    client = RoutingClient()
-    get_integration = _build_get_integration(client)
-
-    with patch_ws(ws, tools_integrations):
-        resp = await get_integration(entry_id="cfg1")
-
-    options = resp["entry"]["options"]
-    assert options["availability"] == "top-level-wins"
-    assert options["advanced_options"] == {"availability": "nested-loses"}
-    _no_dance(client)
-
-
-@pytest.mark.asyncio
-async def test_list_flattens_option_sections(tmp_path) -> None:
-    """The list path applies the same additive one-level section flatten per row
-    (raw nested section preserved)."""
-    availability = "{{ has_value('sensor.demo_temperature') }}"
-    hass = FakeHass(
-        config_entries=[
-            _entry(
-                "c1",
-                domain="template",
-                options={"advanced_options": {"availability": availability}},
-            )
-        ]
+        config_entries=[_entry("c1", domain="demo", options=_NESTED_OPTIONS)]
     )
     hass.config = FakeConfig(tmp_path)
     ws = _real_component_ws(hass)
@@ -367,7 +333,5 @@ async def test_list_flattens_option_sections(tmp_path) -> None:
     with patch_ws(ws, tools_integrations):
         resp = await get_integration(include_options=True)
 
-    options = resp["entries"][0]["options"]
-    assert options["availability"] == availability
-    assert options["advanced_options"] == {"availability": availability}
+    assert resp["entries"][0]["options"] == _NESTED_OPTIONS
     _no_dance(client)
