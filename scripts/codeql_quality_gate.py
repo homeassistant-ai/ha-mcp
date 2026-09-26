@@ -264,6 +264,15 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
         "codec at startup. Rewriting it risks the binary build.",
     ),
     (
+        "py/unused-import",
+        "tests/src/e2e/conftest.py",
+        "_collection_data_dir",
+        "",
+        "Intentional side-effect import: sets HA_MCP_CONFIG_DIR to a temp dir "
+        "before the conftest imports ha_mcp, which reads settings at import. "
+        "Code in the conftest itself would break the import-order lint.",
+    ),
+    (
         "py/import-and-import-from",
         "tests/src/unit/test_translate_locales.py",
         "Module 'translate_locales' is imported with both",
