@@ -73,7 +73,8 @@ export function main(
     try {
       return JSON.parse(readFileSync(path, "utf8"));
     } catch (error) {
-      throw Error(`Cannot read valid ${label} for ${operation}: ${error.message}`);
+      const code = typeof error.code === "string" ? ` (${error.code})` : "";
+      throw Error(`Cannot read valid ${label} for ${operation}${code}`);
     }
   };
   const json = (name) => readJson(resolve(directory, name), name);

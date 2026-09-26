@@ -1193,6 +1193,8 @@ test("malformed and oversized checkpoints fail with bounded errors", () => {
   assert.throws(() => stateFrom([{ id: 100, user: bot, body: malformed, editingVerified: true }], APP), /Invalid slash checkpoint JSON/);
   state.summary = "漢".repeat(20000);
   assert.throws(() => renderState(state, api.repository), /encoded size limit/);
+  state.summary = "&".repeat(12000);
+  assert.throws(() => renderState(state, api.repository), /comment size limit/);
 });
 
 test("superseded review wakeups do not look like failing product checks", () => {
@@ -1449,6 +1451,11 @@ test("workflow entrypoint wires admit, prompt, package and publish artifacts", (
     assert.throws(() => main("admit", { ...env, HA_MCP_APP_SLUG: "BAD!" }, { createApi }), /Invalid HA_MCP_APP_SLUG/);
     main("admit", { ...env, HA_MCP_APP_SLUG: "" }, { createApi });
     assert.match(readFileSync(outputPath, "utf8"), /run=false/);
+    writeFileSync(resultPath, "private-token-DO-NOT-PRINT invalid JSON");
+    assert.throws(
+      () => main("package", env, { createApi }),
+      (error) => error.message === "Cannot read valid model result for package",
+    );
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
