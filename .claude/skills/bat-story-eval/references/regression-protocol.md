@@ -33,7 +33,7 @@ Re-run the failed story up to 3 times. Agent behavior is non-deterministic, so a
 ```bash
 # Re-run specific story
 uv run python tests/uat/stories/run_story.py \
-  catalog/s01_automation_sunset_lights.yaml \
+  tests/uat/stories/catalog/s01_automation_sunset_lights.yaml \
   --agents gemini \
   --keep-container
 ```
@@ -49,7 +49,7 @@ Run the same story against the baseline version to confirm the regression is rea
 ```bash
 # Run against baseline version
 uv run python tests/uat/stories/run_story.py \
-  catalog/s01_automation_sunset_lights.yaml \
+  tests/uat/stories/catalog/s01_automation_sunset_lights.yaml \
   --agents gemini \
   --branch v6.6.1 \
   --keep-container
@@ -66,7 +66,7 @@ Run the same story with a different agent to determine if the regression is code
 ```bash
 # Run with different agent
 uv run python tests/uat/stories/run_story.py \
-  catalog/s01_automation_sunset_lights.yaml \
+  tests/uat/stories/catalog/s01_automation_sunset_lights.yaml \
   --agents claude \
   --keep-container
 ```

@@ -11,7 +11,7 @@ Results are appended to a JSONL file for historical tracking.
 
 Usage:
     # Run a single story
-    uv run python tests/uat/stories/run_story.py catalog/s01_automation_sunset_lights.yaml --agents gemini
+    uv run python tests/uat/stories/run_story.py tests/uat/stories/catalog/s01_automation_sunset_lights.yaml --agents gemini
 
     # Run all stories
     uv run python tests/uat/stories/run_story.py --all --agents gemini
@@ -29,7 +29,7 @@ Usage:
     uv run python tests/uat/stories/run_story.py --all --agents gemini --keep-container
 
     # Just print the BAT scenario JSON
-    uv run python tests/uat/stories/run_story.py catalog/s01_automation_sunset_lights.yaml --dry-run
+    uv run python tests/uat/stories/run_story.py tests/uat/stories/catalog/s01_automation_sunset_lights.yaml --dry-run
 """
 
 from __future__ import annotations
@@ -1582,7 +1582,7 @@ def main() -> None:
     )
     parser.add_argument("story_file", nargs="?", help="Path to story YAML file")
     parser.add_argument(
-        "--all", action="store_true", help="Run all stories in catalog/"
+        "--all", action="store_true", help="Run all s*.yaml stories in catalog/"
     )
     parser.add_argument("--agents", default="gemini", help="Comma-separated agent list")
     parser.add_argument("--branch", help="Git branch/tag to install ha-mcp from")

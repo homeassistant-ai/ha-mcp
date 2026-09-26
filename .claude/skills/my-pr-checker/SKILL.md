@@ -109,7 +109,7 @@ gh pr comment "$ARGUMENTS" --repo homeassistant-ai/ha-mcp --body "## PR Assessme
 
 ## Special Operations
 
-When needed:
+Use these when needed. Re-creating the PR (which closes it) and deleting a comment each need the user's approval for that exact action first:
 - **Rebase**: `gh pr checkout "$ARGUMENTS" && git rebase master && git push --force-with-lease`
 - **Re-create PR**: `gh pr close "$ARGUMENTS" --repo homeassistant-ai/ha-mcp` then `gh pr create --draft …` with the same branch
 - **Delete comment**: `gh api -X DELETE repos/homeassistant-ai/ha-mcp/issues/comments/<id>`

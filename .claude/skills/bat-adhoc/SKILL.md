@@ -20,7 +20,7 @@ Bot acceptance testing validates that MCP tools work correctly from a real AI ag
 
 1. **Analyze the change**: Read the diff, identify which tools are affected
 2. **Design scenario**: Generate a scenario JSON with setup/test/teardown prompts
-3. **Run the script**: Pipe the scenario to `python tests/uat/run_uat.py`
+3. **Run the script**: Pipe the scenario to `uv run python tests/uat/run_uat.py`
 4. **Evaluate summary**: Check `all_passed` per agent. If true, you're done.
 5. **Dig deeper on failure**: Read `results_file` for full output, stderr, raw JSON
 6. **Regression check**: If test fails, re-run with `--branch master` to compare
@@ -56,7 +56,7 @@ The runner returns a **concise summary** to stdout (saves context when all passe
 
 - **Phase stats**: `num_turns`, `tool_stats` (per phase) for fine-grained comparison
 - **Aggregate stats**: Total counts across all phases for overall efficiency comparison
-- **On failure**: also includes `output` and `stderr` for diagnosis
+- **Output**: every phase includes `output` (plus `tool_trace` when tool calls were logged); a failed phase also includes `stderr` when it is not empty
 - **Full results**: raw JSON, complete output always available at `results_file`
 
 ## Scenario Design Guidelines
@@ -70,7 +70,7 @@ The runner returns a **concise summary** to stdout (saves context when all passe
 ## Example: Testing Error Signaling
 
 ```bash
-cat <<'EOF' | python tests/uat/run_uat.py --agents gemini
+cat <<'EOF' | uv run python tests/uat/run_uat.py --agents gemini
 {
   "setup_prompt": "Create a test automation called 'bat_error_test' with a time trigger at 23:59 and action to turn on light.bed_light.",
   "test_prompt": "Try to get automation 'automation.nonexistent_xyz'. Report if the tool signaled an error or returned a normal response. Then get automation 'automation.bat_error_test' and report its structure.",
@@ -81,12 +81,17 @@ EOF
 
 ## Regression Comparison Workflow
 
-**Full BAT comparison** (recommended):
+Run the same scenario twice from the branch checkout and compare stats. `--branch master` installs ha-mcp from `master` on GitHub; omitting `--branch` runs the local code, which also covers unpushed commits:
 
-1. **Pull latest master**: `git fetch origin master && git checkout master && git pull`
-2. **Run on master**: Save scenario to file, run and save results
-3. **Switch to branch**: `git checkout feat/my-branch`
-4. **Run on branch**: Run same scenario, compare stats
+```bash
+# Baseline: master
+uv run python tests/uat/run_uat.py --scenario-file <scenario.json> --branch master --agents gemini
+
+# Target: local code
+uv run python tests/uat/run_uat.py --scenario-file <scenario.json> --agents gemini
+```
+
+To compare a pushed branch that is not checked out, pass `--branch <branch>` for the target run too.
 
 **Compare these metrics:**
 
@@ -100,16 +105,6 @@ EOF
 - **Duration**: Compare `aggregate.total_duration_ms` — noisy due to network, cache misses, server load. Only flag large (>2x) regressions.
 
 **Robustness tip:** Ask the same task in different ways (variation testing) to check if results are consistent across phrasings.
-
-**Quick comparison** (single command):
-
-```bash
-# Test the PR branch
-echo '{"test_prompt":"..."}' | python tests/uat/run_uat.py --branch feat/tool-errors --agents gemini
-
-# Compare against master
-echo '{"test_prompt":"..."}' | python tests/uat/run_uat.py --branch master --agents gemini
-```
 
 ## Cost Awareness
 
