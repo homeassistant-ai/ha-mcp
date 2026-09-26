@@ -38,7 +38,7 @@ If a non-obvious choice has significant consequences, present the available opti
 
 ## Phase 3: Create PR
 
-Write the PR body to `local/pr-body-$ARGUMENTS.md` first. `local/` is git-ignored, so a new worktree does not have it; create it with `mkdir -p local` if it does not exist. Build it from `.github/pull_request_template.md`: keep its headings, put `Closes #$ARGUMENTS` and the description under `## What does this PR do?`, and delete `## Future improvements` unless the user has confirmed work to defer. Then push and create the PR:
+Write the PR body to `local/pr-body-$ARGUMENTS.md` first. `local/` is git-ignored, so a new worktree does not have it; create it with `mkdir -p local` if it does not exist. Build the body from `.github/pull_request_template.md`: keep its headings, put `Closes #$ARGUMENTS` and the description under `## What does this PR do?`, and delete `## Future improvements` unless the user has confirmed work to defer. Then push and create the PR:
 
 ```bash
 git push -u origin "feature/issue-$ARGUMENTS"
