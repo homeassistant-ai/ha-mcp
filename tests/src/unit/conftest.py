@@ -1,20 +1,7 @@
-"""Unit-test fixtures: default ``enable_auto_backup`` off process-wide.
+"""Unit-test environment: no developer state, no side processes.
 
-Unit tests for tool code (label, category, helper, discriminator, etc.)
-use ``MagicMock`` HA clients. The production default for
-``enable_auto_backup`` is ``True``, which means the
-``@with_auto_backup`` decorator's pre-write hook fires on every wrapped
-call — and the hook eventually calls ``urlparse(client.base_url)``,
-which raises ``TypeError`` against a ``MagicMock`` attribute.
-
-To keep tool unit tests free of that coupling, this conftest sets
-``ENABLE_AUTO_BACKUP=false`` once at session start and clears the
-cached ``Settings`` singleton so subsequent ``get_global_settings()``
-calls observe the off value. Tests that want to exercise the
-auto-backup path (e.g. ``test_backup_manager.py``,
-``test_settings_ui.py``) opt in via ``monkeypatch.setenv``, which
-pytest reverts on teardown — those overrides take precedence and
-remain self-contained.
+See ``pytest_configure`` for collection and ``_unit_test_env`` for the
+variables every unit test starts with.
 """
 
 from __future__ import annotations
@@ -25,22 +12,34 @@ import tempfile
 
 import pytest
 
+_ISOLATION_VARS = ("HA_MCP_CONFIG_DIR", "HA_MCP_DISABLE_SETTINGS_UI")
 _SESSION_DATA_DIR = ""
+_PREVIOUS_ENV: dict[str, str | None] = {}
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Keep the unit-test process away from ``~/.ha-mcp`` and the sidecar.
+    """Keep collection away from ``~/.ha-mcp`` and the settings sidecar.
 
     This runs before test modules are imported. Some ``ha_mcp`` modules read
     settings at import time, so a fixture would be too late: collection would
-    already have read the developer's ``~/.ha-mcp``. A test that needs the
-    sidecar or the default data-dir resolution unsets the variable with
-    ``monkeypatch``.
+    already have read the developer's ``~/.ha-mcp``. The variables are restored
+    once collection finishes, so tests from other trees in the same session run
+    with the environment they expect; ``_unit_test_env`` sets them again
+    for each unit test.
     """
     global _SESSION_DATA_DIR
     _SESSION_DATA_DIR = tempfile.mkdtemp(prefix="ha-mcp-unit-")
+    _PREVIOUS_ENV.update({name: os.environ.get(name) for name in _ISOLATION_VARS})
     os.environ["HA_MCP_CONFIG_DIR"] = _SESSION_DATA_DIR
     os.environ["HA_MCP_DISABLE_SETTINGS_UI"] = "1"
+
+
+def pytest_collection_finish(session: pytest.Session) -> None:
+    for name, value in _PREVIOUS_ENV.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
@@ -48,68 +47,31 @@ def pytest_unconfigure(config: pytest.Config) -> None:
         shutil.rmtree(_SESSION_DATA_DIR, ignore_errors=True)
 
 
-@pytest.fixture(autouse=True, scope="session")
-def _unit_test_default_auto_backup_off():
-    """Force ``enable_auto_backup=false`` for the unit-test process.
-
-    Scoped ``session`` so the env var is set once at collection; tests
-    that need to flip it on do so via ``monkeypatch.setenv`` inside the
-    test, which automatically reverts on teardown.
-    """
-    previous = os.environ.get("ENABLE_AUTO_BACKUP")
-    os.environ["ENABLE_AUTO_BACKUP"] = "false"
-    # Clear the cached Settings singleton so the next call picks up the
-    # env var. Import inside the fixture to avoid forcing ha_mcp import
-    # at conftest load time (a test that doesn't import ha_mcp would
-    # otherwise pull it in transitively here).
-    try:
-        from ha_mcp.config import _reset_global_settings
-
-        _reset_global_settings()
-    except ImportError:
-        # ha_mcp not importable in this test run; nothing to reset.
-        pass
-    yield
-    if previous is None:
-        os.environ.pop("ENABLE_AUTO_BACKUP", None)
-    else:
-        os.environ["ENABLE_AUTO_BACKUP"] = previous
-
-
-@pytest.fixture(autouse=True, scope="session")
-def _unit_test_disable_update_check():
-    """Disable the PyPI self-update check for the unit-test process.
-
-    The status tools and ``_log_startup_version`` call
-    ``update_check.get_update_info``, which would otherwise reach out to
-    pypi.org during unrelated unit tests (flaky, slow, and network-coupled).
-    Set ``HA_MCP_DISABLE_UPDATE_CHECK`` once at session start; the dedicated
-    ``test_update_check.py`` / banner tests opt back in via ``monkeypatch``
-    (``delenv`` or by patching ``get_update_info``/``get_update_field``
-    directly), which reverts on teardown.
-    """
-    previous = os.environ.get("HA_MCP_DISABLE_UPDATE_CHECK")
-    os.environ["HA_MCP_DISABLE_UPDATE_CHECK"] = "1"
-    yield
-    if previous is None:
-        os.environ.pop("HA_MCP_DISABLE_UPDATE_CHECK", None)
-    else:
-        os.environ["HA_MCP_DISABLE_UPDATE_CHECK"] = previous
-
-
 @pytest.fixture(autouse=True)
-def _isolated_data_dir(tmp_path_factory, monkeypatch):
-    """Give every unit test its own empty ``HA_MCP_CONFIG_DIR``.
+def _unit_test_env(tmp_path_factory, monkeypatch):
+    """Set the environment every unit test starts from.
 
-    Without it, tests share the session data dir, so tool config, usage logs
-    or OAuth clients one test writes are visible to the next. The cached
-    ``Settings`` is reset too, since it holds the feature flags read from the
-    previous test's directory. Tests that need a specific directory still set
-    ``HA_MCP_CONFIG_DIR`` themselves.
+    - An empty ``HA_MCP_CONFIG_DIR`` per test. Without it, tests write tool
+      config, usage logs or OAuth clients to the developer's ``~/.ha-mcp`` and
+      see each other's files.
+    - ``HA_MCP_DISABLE_SETTINGS_UI=1``: a test that runs ``main()`` for real
+      would otherwise spawn a sidecar that outlives the run.
+    - ``ENABLE_AUTO_BACKUP=false``: tool tests use ``MagicMock`` clients, and
+      the ``@with_auto_backup`` pre-write hook fails on their ``base_url``.
+    - ``HA_MCP_DISABLE_UPDATE_CHECK=1``: the status tools would otherwise call
+      pypi.org.
+
+    The cached ``Settings`` is reset too, since it holds the values read for
+    the previous test. ``monkeypatch`` restores all of it after each test, so
+    tests from other trees in the same session keep their own environment.
+    A test that needs another value sets it with ``monkeypatch``.
     """
     monkeypatch.setenv(
         "HA_MCP_CONFIG_DIR", str(tmp_path_factory.mktemp("ha-mcp-config"))
     )
+    monkeypatch.setenv("HA_MCP_DISABLE_SETTINGS_UI", "1")
+    monkeypatch.setenv("ENABLE_AUTO_BACKUP", "false")
+    monkeypatch.setenv("HA_MCP_DISABLE_UPDATE_CHECK", "1")
     try:
         from ha_mcp.config import _reset_global_settings
         from ha_mcp.utils.data_paths import get_data_dir
