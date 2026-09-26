@@ -20,8 +20,32 @@ remain self-contained.
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
 
 import pytest
+
+_SESSION_DATA_DIR = ""
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Keep the unit-test process away from ``~/.ha-mcp`` and the sidecar.
+
+    This runs before test modules are imported. Some ``ha_mcp`` modules read
+    settings at import time, so a fixture would be too late: collection would
+    already have read the developer's ``~/.ha-mcp``. A test that needs the
+    sidecar or the default data-dir resolution unsets the variable with
+    ``monkeypatch``.
+    """
+    global _SESSION_DATA_DIR
+    _SESSION_DATA_DIR = tempfile.mkdtemp(prefix="ha-mcp-unit-")
+    os.environ["HA_MCP_CONFIG_DIR"] = _SESSION_DATA_DIR
+    os.environ["HA_MCP_DISABLE_SETTINGS_UI"] = "1"
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    if _SESSION_DATA_DIR:
+        shutil.rmtree(_SESSION_DATA_DIR, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -71,6 +95,28 @@ def _unit_test_disable_update_check():
         os.environ.pop("HA_MCP_DISABLE_UPDATE_CHECK", None)
     else:
         os.environ["HA_MCP_DISABLE_UPDATE_CHECK"] = previous
+
+
+@pytest.fixture(autouse=True)
+def _isolated_data_dir(tmp_path_factory, monkeypatch):
+    """Give every unit test its own empty ``HA_MCP_CONFIG_DIR``.
+
+    Without it, tests share the session data dir, so tool config, usage logs
+    or OAuth clients one test writes are visible to the next. Tests that need
+    a specific directory still set ``HA_MCP_CONFIG_DIR`` themselves.
+    """
+    monkeypatch.setenv(
+        "HA_MCP_CONFIG_DIR", str(tmp_path_factory.mktemp("ha-mcp-config"))
+    )
+    try:
+        from ha_mcp.utils.data_paths import get_data_dir
+    except ImportError:
+        # ha_mcp not importable in this test run; nothing to clear.
+        yield
+        return
+    get_data_dir.cache_clear()
+    yield
+    get_data_dir.cache_clear()
 
 
 @pytest.fixture(autouse=True)

@@ -187,7 +187,7 @@ CI installs Node + jsdom in the `unit-tests` job. Local devs without `tests/js/n
 
 **Transient UI + the fake clock:** timed UI (e.g. the save toast, ~4s auto-dismiss) is gone from `result.dom` by capture time because the virtual clock fast-forwards. Stamp state into a `data-` attribute *inside* `invoke` to read it live. Avoid substring false-positives too — `"ha-toast" in result.dom` matches the always-present `#ha-toast-region`; assert the specific variant class.
 
-**Config-dir isolation:** settings / feature-flag unit tests read the real data dir via `get_global_settings()`. A dev `ha-mcp-web` server that wrote to `~/.ha-mcp` pollutes them (e.g. a beta toggle flips `enable_beta_features`, breaking the beta-gate test). Run with `HA_MCP_CONFIG_DIR=$(mktemp -d)` to isolate.
+**Config-dir isolation:** `tests/src/unit/conftest.py` gives every unit test its own empty `HA_MCP_CONFIG_DIR` and sets `HA_MCP_DISABLE_SETTINGS_UI`, so no unit test reads or writes `~/.ha-mcp` or starts a settings sidecar. A test that needs the sidecar path or the default data-dir resolution unsets the variable with `monkeypatch`.
 
 When adding a new UI surface:
 - Python-rendered HTML: register the renderer in `_js_harness.py::_PY_RENDERERS`.

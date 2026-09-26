@@ -1,0 +1,61 @@
+"""Tests for the environment BAT gives the MCP server it starts."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+from uat.run_uat import build_stdio_mcp_config, parse_mcp_env
+
+_PROBE = """
+import json
+from ha_mcp.stdio_settings_sidecar import _is_disabled
+from ha_mcp.utils.data_paths import get_data_dir
+print(json.dumps({"data_dir": str(get_data_dir()), "sidecar_off": _is_disabled()}))
+"""
+
+
+def _server_view(mcp_env: dict[str, str] | None, home: Path) -> dict:
+    """Resolve the data dir and sidecar switch the server would see."""
+    config = build_stdio_mcp_config("http://127.0.0.1:9", "unused", None, mcp_env)
+    server_env = config["mcpServers"]["home-assistant"]["env"]
+    base = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in {"HA_MCP_CONFIG_DIR", "HA_MCP_DISABLE_SETTINGS_UI"}
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", _PROBE],
+        env={**base, "HOME": str(home), **server_env},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout.splitlines()[-1])
+
+
+def test_bat_server_ignores_developer_config_dir(tmp_path):
+    """BAT results must not depend on the developer's ~/.ha-mcp tool pins
+    and settings, and a run must not start a settings sidecar there."""
+    home = tmp_path / "home"
+    (home / ".ha-mcp").mkdir(parents=True)
+
+    view = _server_view(None, home)
+
+    assert Path(view["data_dir"]) != home / ".ha-mcp"
+    assert not Path(view["data_dir"]).is_relative_to(home)
+    assert view["sidecar_off"] is True
+
+
+def test_mcp_env_config_dir_overrides_isolation(tmp_path):
+    """``--mcp-env HA_MCP_CONFIG_DIR=...`` still runs BAT with chosen settings."""
+    chosen = tmp_path / "chosen"
+    chosen.mkdir()
+    mcp_env = parse_mcp_env([f"HA_MCP_CONFIG_DIR={chosen}"])
+
+    view = _server_view(mcp_env, tmp_path / "home")
+
+    assert Path(view["data_dir"]) == chosen
