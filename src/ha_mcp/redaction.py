@@ -295,7 +295,7 @@ def redact_options_by_flow_schema(options: Any, data_schema: Any) -> Any:
     from .tools.config_entry_flow_form import iter_schema_fields
 
     out = dict(options)
-    _redact_nested_section_copies(out, data_schema)
+    _redact_nested_sections(out, data_schema)
     for field in iter_schema_fields(data_schema):
         if not is_password_flow_field(field):
             continue
@@ -310,13 +310,13 @@ def redact_options_by_flow_schema(options: Any, data_schema: Any) -> Any:
     return out
 
 
-def _redact_nested_section_copies(out: dict[str, Any], data_schema: list[Any]) -> None:
-    """Redact the RAW nested dict a named section keeps alongside its leaves.
+def _redact_nested_sections(out: dict[str, Any], data_schema: list[Any]) -> None:
+    """Redact the password fields inside each named section's nested dict.
 
-    Sections are additively flattened — the flattened copies are handled by
-    the ``iter_schema_fields`` pass in :func:`redact_options_by_flow_schema`,
-    but the preserved nested dict must be redacted too or it would carry the
-    secret verbatim.
+    Stored options keep a section's fields nested under the section name. The
+    ``iter_schema_fields`` pass in :func:`redact_options_by_flow_schema` yields
+    section fields too, but matches their names only against top-level keys, so
+    it never reaches the nested dict.
     """
     for field in data_schema:
         if not isinstance(field, dict):
