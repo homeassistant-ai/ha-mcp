@@ -1,0 +1,208 @@
+name: Maintainer slash agent
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_run:
+    workflows:
+      [
+        Slash agent review event,
+        PR Validation Pipeline,
+        HAOS E2E Tests,
+        CodeQL Code Quality,
+      ]
+    types: [completed]
+  status:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue or same-repository PR containing the maintainer command.
+        required: true
+        type: number
+      comment_id:
+        description: Existing maintainer slash comment to process.
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  actions: read
+  checks: read
+  statuses: read
+
+# Serialize publication across sessions as well as duplicate event deliveries.
+concurrency:
+  group: slash-agent-${{ github.repository }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  admit:
+    if: >-
+      github.repository == 'homeassistant-ai/ha-mcp' &&
+      (github.event_name != 'issue_comment' ||
+      github.event.comment.user.type == 'User' ||
+      contains(fromJSON('["coderabbitai[bot]","chatgpt-codex-connector[bot]"]'), github.event.comment.user.login))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      mode: ${{ steps.plan.outputs.mode }}
+      head: ${{ steps.plan.outputs.head }}
+      model: ${{ steps.plan.outputs.model }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        timeout-minutes: 2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: .github
+      - name: Revalidate the event and collect the session
+        id: plan
+        timeout-minutes: 6
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HA_MCP_APP_SLUG: ${{ vars.HA_MCP_AGENT_APP_SLUG }}
+        run: node .github/slash-agent/main.mjs admit
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: steps.plan.outputs.run == 'true'
+        timeout-minutes: 1
+        with:
+          name: slash-plan
+          path: slash-state/plan.json
+          retention-days: 1
+          if-no-files-found: error
+
+  code:
+    needs: admit
+    if: needs.admit.outputs.mode == 'code'
+    runs-on: ubuntu-latest
+    timeout-minutes: 58
+    concurrency:
+      group: codex-auth-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - name: Checkout trusted controller
+        timeout-minutes: 2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: control
+          persist-credentials: false
+          sparse-checkout: .github
+      - name: Checkout admitted source commit
+        timeout-minutes: 3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.admit.outputs.head }}
+          path: source
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        timeout-minutes: 1
+        with:
+          name: slash-plan
+          path: control/slash-state
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        timeout-minutes: 2
+        with:
+          # renovate: datasource=github-releases depName=astral-sh/uv
+          version: "0.12.9"
+      - name: Prepare instructions
+        timeout-minutes: 1
+        env:
+          SLASH_STATE_DIR: control/slash-state
+        run: node control/.github/slash-agent/main.mjs prompt
+      - name: Implement and test the authorized task
+        id: codex
+        timeout-minutes: 40
+        uses: ./control/.github/actions/codex-run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          codex-auth: ${{ secrets.CODEX_AUTH }}
+          model: ${{ needs.admit.outputs.model }}
+          reasoning-effort: medium
+          working-directory: source
+          sandbox: workspace-write
+          read-only-paths: |
+            control
+            source/.git
+          allow-shell: "true"
+          network-access: "true"
+          passthrough-env: GH_TOKEN
+          web-search: disabled
+          instructions-file: control/slash-state/prompt.txt
+          output-schema: control/slash-state/schema.json
+          timeout-minutes: "32"
+      - name: Package data without executing generated code
+        timeout-minutes: 2
+        env:
+          SLASH_STATE_DIR: control/slash-state
+          OUTPUT_PATH: ${{ steps.codex.outputs.output-path }}
+          CODEX_LOG_PATH: ${{ steps.codex.outputs.log-path }}
+        run: node control/.github/slash-agent/main.mjs package
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        timeout-minutes: 1
+        with:
+          name: slash-result
+          path: control/slash-state/result.json
+          retention-days: 1
+          if-no-files-found: error
+      - name: Persist refreshed Codex auth
+        if: ${{ always() && steps.codex.outputs.auth-path != '' }}
+        timeout-minutes: 3
+        uses: ./control/.github/actions/codex-update-auth
+        with:
+          codex-auth-path: ${{ steps.codex.outputs.auth-path }}
+          original-codex-auth: ${{ steps.codex.outputs.original-auth-path }}
+          gh-token: ${{ secrets.CODEX_AUTH_PAT }}
+          repository: ${{ github.repository }}
+
+  publish:
+    needs: [admit, code]
+    if: ${{ always() && needs.admit.outputs.run == 'true' && !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout trusted publisher on a fresh runner
+        timeout-minutes: 2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: .github
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        timeout-minutes: 1
+        with:
+          name: slash-plan
+          path: slash-state
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        if: needs.code.result == 'success'
+        timeout-minutes: 1
+        with:
+          name: slash-result
+          path: slash-state
+      - name: Mint publication credential after the worker has exited
+        id: app-token
+        timeout-minutes: 1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ vars.HA_MCP_AGENT_CLIENT_ID }}
+          private-key: ${{ secrets.HA_MCP_AGENT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+          permission-actions: read
+          permission-checks: read
+          permission-statuses: read
+      - name: Revalidate, append commits and reconcile the PR
+        timeout-minutes: 6
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TOKEN_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          HA_MCP_APP_SLUG: ${{ vars.HA_MCP_AGENT_APP_SLUG }}
+          WORKER_RESULT: ${{ needs.code.result }}
+        run: node .github/slash-agent/main.mjs publish

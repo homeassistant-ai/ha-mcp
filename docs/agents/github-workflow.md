@@ -100,6 +100,12 @@ issue enrichment, labeling, and planning are disabled to avoid competing respons
 The model does not diagnose, propose fixes, classify cause, or create PRs.
 See [issue intake](issue-intake.md) for controls, permissions, tests, and recovery.
 
+Maintainer `/astra`, `/sol` and `/terra` commands start the separate
+[slash agent workflow](slash-agent.md). Its durable checkpoint can answer on an
+issue without repository changes or carry implementation into a draft PR and
+through review and CI corrections to readiness. It never merges or requests
+reviewers.
+
 To find open issues without deep analysis:
 
 ```bash
@@ -186,6 +192,7 @@ summary only when the pull request actually reaches that state.
 | `locale-sync.yml` | Daily or manual | Post-merge translations pushed directly to `master`. |
 | `test.yml` | Manual | Smoke-test the generic Codex action and secret refresh. |
 | `issue-intake.yml` | Human issue activity or manual | Factual issue documentation with maintainer overrides. |
+| `slash-agent.yml` | Maintainer slash command or trusted continuation event | Issue response and issue-to-PR implementation through readiness. |
 | `codex-review-issues.yml` | Manual | Write a read-only open-issue report to Actions logs. |
 | `codex-review-prs.yml` | Manual | Write a read-only open-PR report to Actions logs. |
 

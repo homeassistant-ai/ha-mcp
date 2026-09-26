@@ -312,6 +312,40 @@ def test_explicit_environment_and_network_preserve_credential_boundary(tmp_path)
     assert token.encode() not in result.stdout + result.stderr
 
 
+def test_read_only_paths_protect_controller_and_git_metadata(tmp_path):
+    workspace = tmp_path / "workspace"
+    (workspace / "control").mkdir(parents=True)
+    (workspace / "source" / ".git").mkdir(parents=True)
+    result = prepare(
+        tmp_path,
+        SANDBOX_INPUT="workspace-write",
+        WORKING_DIRECTORY_INPUT="source",
+        READ_ONLY_PATHS_INPUT="control\n./control\nsource/.git",
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    profile = next(tmp_path.glob("codex-action-state/home.*/*.config.toml"))
+    config = tomllib.loads(profile.read_text())
+    permissions = config["permissions"]["ci-action"]
+    assert permissions["extends"] == ":workspace"
+    entries = permissions["filesystem"]
+
+    # Native Windows jq receives MSYS-converted --arg paths; the Ubuntu runner
+    # keeps POSIX paths. Both designate the same explicitly protected locations.
+    def expected(path):
+        return path.as_posix() if os.name == "nt" else posix(path)
+
+    assert entries[expected(workspace / "control")] == "read"
+    assert entries[expected(workspace / "source" / ".git")] == "read"
+    assert "deny" in entries.values()
+
+
+@pytest.mark.parametrize("path", ["../outside", "missing"])
+def test_read_only_paths_must_exist_inside_workspace(tmp_path, path):
+    (tmp_path / "outside").mkdir()
+    result = prepare(tmp_path, READ_ONLY_PATHS_INPUT=path)
+    assert result.returncode != 0
+
+
 @pytest.mark.parametrize(
     "name", ["CODEX_AUTH_INPUT", "CODEX_AUTH_PAT", "BAD*NAME", "UNSET_TEST_VARIABLE"]
 )
