@@ -529,7 +529,7 @@
     },
     "ha_call_service": {
       "title": "Anropa Tjänst",
-      "description": "Utför Home Assistant-tjänster för att kontrollera entiteter och utlösa automatiseringar."
+      "description": "Anropa valfri Home Assistant-tjänst eller ett engångs-WebSocket-kommando: den ultimata utvägen."
     },
     "ha_config_delete_dashboard": {
       "title": "Ta bort Dashboard",
@@ -541,11 +541,11 @@
     },
     "ha_config_get_automation": {
       "title": "Hämta Automatiseringskonfiguration",
-      "description": "Hämta Home Assistant-automatiseringskonfiguration."
+      "description": "Hämta konfiguration för Home Assistant-automatisering."
     },
     "ha_config_get_calendar_events": {
       "title": "Hämta Kalenderhändelser",
-      "description": "Hämta kalenderhändelser från en kalenderentitet."
+      "description": "Hämta kalenderhändelser från en kalenderentitet inom ett tidsintervall."
     },
     "ha_config_get_category": {
       "title": "Hämta Kategori",
@@ -565,7 +565,7 @@
     },
     "ha_config_get_script": {
       "title": "Hämta Skriptkonfiguration",
-      "description": "Hämta Home Assistant-skriptkonfiguration."
+      "description": "Hämta konfiguration för Home Assistant-skript."
     },
     "ha_config_get_yaml": {
       "title": "Läs YAML-konfigurationsfragment",
@@ -585,7 +585,7 @@
     },
     "ha_config_remove_automation": {
       "title": "Ta bort Automatisering",
-      "description": "Ta bort en Home Assistant-automatisering."
+      "description": "Ta bort en Home Assistant-automatisering permanent."
     },
     "ha_config_remove_calendar_event": {
       "title": "Ta bort Kalenderhändelse",
@@ -677,7 +677,7 @@
     },
     "ha_get_automation_traces": {
       "title": "Hämta Automatiseringsspårningar",
-      "description": "Hämta exekveringsspårningar för automatiseringar och skript för att felsöka problem."
+      "description": "Hämta exekveringsspår för automatiseringar och skript för att felsöka problem."
     },
     "ha_get_camera_image": {
       "title": "Hämta Kamerabild",
@@ -769,7 +769,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Hantera inställningar för energipanelen",
-      "description": "Hantera inställningarna för Home Assistant energipanel."
+      "description": "Hantera inställningar för Home Assistant Energy Dashboard: elnät / solenergi /"
     },
     "ha_manage_hacs": {
       "title": "Hantera HACS",
@@ -793,7 +793,7 @@
     },
     "ha_manage_updates": {
       "title": "Hantera uppdateringar",
-      "description": "Hantera Home Assistant-uppdateringar — lista, läsa detaljer, massinstallera, hoppa över eller ångra överhoppning."
+      "description": "Hantera Home Assistant-uppdateringar (lista, detaljer, installera, hoppa över) och reparationsärenden (ignorera)."
     },
     "ha_read_file": {
       "title": "Läs fil",
@@ -801,7 +801,7 @@
     },
     "ha_reload_core": {
       "title": "Ladda om kärnkomponenter",
-      "description": "Ladda om Home Assistant-konfigurationen utan fullständig omstart."
+      "description": "Utför en omladdning av Home Assistant-konfigurationen utan en fullständig omstart."
     },
     "ha_remove_area_or_floor": {
       "title": "Ta bort område eller våning",
@@ -833,7 +833,7 @@
     },
     "ha_restart": {
       "title": "Starta om Home Assistant",
-      "description": "Starta om Home Assistant."
+      "description": "Utför en omstart av Home Assistant."
     },
     "ha_search": {
       "title": "Sök",

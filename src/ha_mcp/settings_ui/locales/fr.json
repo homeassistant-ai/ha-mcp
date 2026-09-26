@@ -560,7 +560,7 @@
     },
     "ha_call_service": {
       "title": "Appeler un service",
-      "description": "Appelle un service Home Assistant pour contrôler des entités et des automatisations."
+      "description": "Appelez n'importe quel service Home Assistant ou commande WebSocket unique : la porte de sortie universelle."
     },
     "ha_config_delete_dashboard": {
       "title": "Supprimer le tableau de bord",
@@ -572,11 +572,11 @@
     },
     "ha_config_get_automation": {
       "title": "Obtenir l'automatisation",
-      "description": "Récupère la configuration complète d'une automatisation Home Assistant."
+      "description": "Récupère la configuration d'une automatisation Home Assistant."
     },
     "ha_config_get_calendar_events": {
       "title": "Obtenir les événements du calendrier",
-      "description": "Récupère les événements d'une entité de calendrier."
+      "description": "Récupère les événements d'une entité de calendrier dans une plage horaire."
     },
     "ha_config_get_category": {
       "title": "Obtenir la catégorie",
@@ -616,7 +616,7 @@
     },
     "ha_config_remove_automation": {
       "title": "Supprimer l'automatisation",
-      "description": "Supprime une automatisation Home Assistant."
+      "description": "Supprime définitivement une automatisation Home Assistant."
     },
     "ha_config_remove_calendar_event": {
       "title": "Supprimer un événement du calendrier",
@@ -708,11 +708,11 @@
     },
     "ha_get_automation_traces": {
       "title": "Obtenir les traces",
-      "description": "Récupère les traces d'exécution des automatisations et scripts pour le diagnostic."
+      "description": "Récupère les traces d'exécution des automatisations et des scripts pour déboguer les problèmes."
     },
     "ha_get_camera_image": {
       "title": "Obtenir l'image de la caméra",
-      "description": "Récupère l'image fixe actuelle d'une caméra Home Assistant."
+      "description": "Récupère une image instantanée d'une entité caméra Home Assistant."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Obtenir une capture d'écran du tableau de bord",
@@ -800,7 +800,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Configurer le tableau de bord énergétique",
-      "description": "Gère les paramètres du tableau de bord énergétique de Home Assistant."
+      "description": "Gère les préférences du tableau de bord Énergie de Home Assistant : réseau / solaire /"
     },
     "ha_manage_hacs": {
       "title": "Gérer HACS",
@@ -824,7 +824,7 @@
     },
     "ha_manage_updates": {
       "title": "Gérer les mises à jour",
-      "description": "Affiche, installe, ignore et annule les mises à jour Home Assistant."
+      "description": "Gère les mises à jour de Home Assistant (liste, détails, installation, ignorer) et les problèmes de Réparations (ignorer)."
     },
     "ha_read_file": {
       "title": "Lire le fichier",
@@ -832,7 +832,7 @@
     },
     "ha_reload_core": {
       "title": "Recharger les composants",
-      "description": "Recharge la configuration Home Assistant sans redémarrage complet."
+      "description": "Exécute un rechargement de la configuration de Home Assistant sans redémarrage complet."
     },
     "ha_remove_area_or_floor": {
       "title": "Supprimer une zone ou un étage",
@@ -864,7 +864,7 @@
     },
     "ha_restart": {
       "title": "Redémarrer Home Assistant",
-      "description": "Redémarre complètement Home Assistant."
+      "description": "Exécute un redémarrage de Home Assistant."
     },
     "ha_search": {
       "title": "Rechercher",

@@ -560,7 +560,7 @@
     },
     "ha_call_service": {
       "title": "Dienst aufrufen",
-      "description": "Ruft einen Home-Assistant-Dienst zur Steuerung von Entitäten und Automatisierungen auf."
+      "description": "Rufe einen beliebigen Home-Assistant-Dienst oder einen einmaligen WebSocket-Befehl auf: der universelle Ausweg."
     },
     "ha_config_delete_dashboard": {
       "title": "Dashboard löschen",
@@ -572,11 +572,11 @@
     },
     "ha_config_get_automation": {
       "title": "Automatisierung abrufen",
-      "description": "Ruft die vollständige Konfiguration einer Home-Assistant-Automatisierung ab."
+      "description": "Rufe die Home-Assistant-Automatisierungskonfiguration ab."
     },
     "ha_config_get_calendar_events": {
       "title": "Kalenderereignisse abrufen",
-      "description": "Ruft Ereignisse aus einer Kalender-Entität ab."
+      "description": "Rufe Kalenderereignisse von einer Kalender-Entität innerhalb eines Zeitbereichs ab."
     },
     "ha_config_get_category": {
       "title": "Kategorie abrufen",
@@ -596,7 +596,7 @@
     },
     "ha_config_get_script": {
       "title": "Skript abrufen",
-      "description": "Ruft die Konfiguration eines Home-Assistant-Skripts ab."
+      "description": "Rufe die Home-Assistant-Skriptkonfiguration ab."
     },
     "ha_config_get_yaml": {
       "title": "YAML-Fragment lesen",
@@ -616,7 +616,7 @@
     },
     "ha_config_remove_automation": {
       "title": "Automatisierung entfernen",
-      "description": "Löscht eine Home-Assistant-Automatisierung."
+      "description": "Lösche eine Home-Assistant-Automatisierung dauerhaft."
     },
     "ha_config_remove_calendar_event": {
       "title": "Kalenderereignis entfernen",
@@ -708,11 +708,11 @@
     },
     "ha_get_automation_traces": {
       "title": "Traces abrufen",
-      "description": "Ruft Ausführungstraces von Automatisierungen und Skripten zur Diagnose ab."
+      "description": "Rufe Ausführungstraces für Automatisierungen und Skripte ab, um Probleme zu debuggen."
     },
     "ha_get_camera_image": {
       "title": "Kamerabild abrufen",
-      "description": "Ruft das aktuelle Standbild von einer Home-Assistant-Kamera ab."
+      "description": "Rufe ein Schnappschussbild von einer Home-Assistant-Kamera-Entität ab."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Dashboard-Screenshot abrufen",
@@ -800,7 +800,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Energie-Dashboard konfigurieren",
-      "description": "Verwaltet die Einstellungen des Home-Assistant-Energie-Dashboards."
+      "description": "Verwalte die Einstellungen des Home-Assistant-Energie-Dashboards: Stromnetz / Solar /"
     },
     "ha_manage_hacs": {
       "title": "HACS verwalten",
@@ -824,7 +824,7 @@
     },
     "ha_manage_updates": {
       "title": "Updates verwalten",
-      "description": "Zeigt an, installiert, überspringt und rollt Home-Assistant-Updates zurück."
+      "description": "Verwalte Home-Assistant-Updates (Liste, Details, Installieren, Überspringen) und Reparaturprobleme (Ignorieren)."
     },
     "ha_read_file": {
       "title": "Datei lesen",
@@ -832,7 +832,7 @@
     },
     "ha_reload_core": {
       "title": "Komponenten neu laden",
-      "description": "Lädt die Home-Assistant-Konfiguration ohne vollständigen Neustart neu."
+      "description": "Führe ein Neu Laden der Home-Assistant-Konfiguration ohne vollständigen Neustart aus."
     },
     "ha_remove_area_or_floor": {
       "title": "Bereich oder Etage entfernen",
@@ -864,7 +864,7 @@
     },
     "ha_restart": {
       "title": "Home Assistant neu starten",
-      "description": "Startet Home Assistant vollständig neu."
+      "description": "Führe einen Neustart von Home Assistant aus."
     },
     "ha_search": {
       "title": "Suchen",

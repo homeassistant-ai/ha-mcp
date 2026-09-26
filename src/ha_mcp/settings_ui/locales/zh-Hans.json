@@ -560,7 +560,7 @@
     },
     "ha_call_service": {
       "title": "调用服务",
-      "description": "执行 Home Assistant 服务以控制实体并触发自动化。"
+      "description": "调用任何 Home Assistant 服务或一次性 WebSocket 命令：万能兜底操作。"
     },
     "ha_config_delete_dashboard": {
       "title": "删除仪表盘",
@@ -576,7 +576,7 @@
     },
     "ha_config_get_calendar_events": {
       "title": "获取日历事件",
-      "description": "从日历实体获取日历事件。"
+      "description": "获取指定时间范围内日历实体中的日历事件。"
     },
     "ha_config_get_category": {
       "title": "获取类别",
@@ -616,7 +616,7 @@
     },
     "ha_config_remove_automation": {
       "title": "删除自动化",
-      "description": "删除 Home Assistant 自动化。"
+      "description": "永久删除 Home Assistant 自动化。"
     },
     "ha_config_remove_calendar_event": {
       "title": "删除日历事件",
@@ -708,11 +708,11 @@
     },
     "ha_get_automation_traces": {
       "title": "获取自动化追踪",
-      "description": "获取自动化与脚本的执行追踪以排查问题。"
+      "description": "获取自动化和脚本的执行追踪以调试问题。"
     },
     "ha_get_camera_image": {
       "title": "获取摄像头画面",
-      "description": "从 Home Assistant 摄像头实体获取快照画面。"
+      "description": "从 Home Assistant 摄像头实体获取快照图像。"
     },
     "ha_get_dashboard_screenshot": {
       "title": "获取仪表盘截图",
@@ -800,7 +800,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "管理能源仪表盘偏好",
-      "description": "管理 Home Assistant 能源仪表盘的偏好设置。"
+      "description": "管理 Home Assistant 能源面板首选项：电网 / 太阳能 /"
     },
     "ha_manage_hacs": {
       "title": "管理 HACS",
@@ -824,7 +824,7 @@
     },
     "ha_manage_updates": {
       "title": "管理更新",
-      "description": "管理 Home Assistant 更新——列出、查看详情、批量安装、跳过或取消跳过。"
+      "description": "管理 Home Assistant 更新（列表、详情、安装、跳过）和修复问题（忽略）。"
     },
     "ha_read_file": {
       "title": "读取文件",
@@ -832,7 +832,7 @@
     },
     "ha_reload_core": {
       "title": "重载核心组件",
-      "description": "在不完全重启的情况下重载 Home Assistant 配置。"
+      "description": "在不完全重启的情况下重新加载 Home Assistant 配置。"
     },
     "ha_remove_area_or_floor": {
       "title": "删除区域或楼层",
@@ -864,7 +864,7 @@
     },
     "ha_restart": {
       "title": "重启 Home Assistant",
-      "description": "重启 Home Assistant。"
+      "description": "执行 Home Assistant 重启。"
     },
     "ha_search": {
       "title": "搜索",

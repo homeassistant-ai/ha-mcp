@@ -560,7 +560,7 @@
     },
     "ha_call_service": {
       "title": "Вызвать сервис",
-      "description": "Вызвать сервис Home Assistant для управления сущностями и автоматизациями."
+      "description": "Вызовите любой сервис Home Assistant или одноразовую WebSocket-команду: универсальный инструмент на все случаи жизни."
     },
     "ha_config_delete_dashboard": {
       "title": "Удалить панель",
@@ -572,11 +572,11 @@
     },
     "ha_config_get_automation": {
       "title": "Получить автоматизацию",
-      "description": "Получить полную конфигурацию автоматизации Home Assistant."
+      "description": "Получить конфигурацию автоматизации Home Assistant."
     },
     "ha_config_get_calendar_events": {
       "title": "Получить события календаря",
-      "description": "Получить события из сущности календаря."
+      "description": "Получить события календаря из объекта календаря в заданном временном диапазоне."
     },
     "ha_config_get_category": {
       "title": "Получить категорию",
@@ -616,7 +616,7 @@
     },
     "ha_config_remove_automation": {
       "title": "Удалить автоматизацию",
-      "description": "Удалить автоматизацию Home Assistant."
+      "description": "Безвозвратно удалить автоматизацию Home Assistant."
     },
     "ha_config_remove_calendar_event": {
       "title": "Удалить событие календаря",
@@ -708,11 +708,11 @@
     },
     "ha_get_automation_traces": {
       "title": "Получить трассировки",
-      "description": "Получить трассировки выполнения автоматизаций и скриптов для диагностики."
+      "description": "Получить трассировки выполнения автоматизаций и скриптов для отладки проблем."
     },
     "ha_get_camera_image": {
       "title": "Получить снимок камеры",
-      "description": "Получить текущий кадр с камеры Home Assistant."
+      "description": "Получить снимок (snapshot) с объекта камеры Home Assistant."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Получить снимок панели",
@@ -800,7 +800,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Настроить панель энергии",
-      "description": "Управлять параметрами панели «Энергия» Home Assistant."
+      "description": "Управление настройками панели управления энергией Home Assistant: сеть / солнечные панели /"
     },
     "ha_manage_hacs": {
       "title": "Управлять HACS",
@@ -824,7 +824,7 @@
     },
     "ha_manage_updates": {
       "title": "Управлять обновлениями",
-      "description": "Показывать, устанавливать, пропускать и возвращать обновления Home Assistant."
+      "description": "Управление обновлениями Home Assistant (список, детали, установка, пропуск) и проблемами в «Ремонте» (игнорирование)."
     },
     "ha_read_file": {
       "title": "Прочитать файл",
@@ -832,7 +832,7 @@
     },
     "ha_reload_core": {
       "title": "Перезагрузить компоненты",
-      "description": "Перезагрузить конфигурацию Home Assistant без полного перезапуска."
+      "description": "Выполнить перезагрузку конфигурации Home Assistant без полного перезапуска."
     },
     "ha_remove_area_or_floor": {
       "title": "Удалить зону или этаж",
@@ -864,7 +864,7 @@
     },
     "ha_restart": {
       "title": "Перезапустить Home Assistant",
-      "description": "Полностью перезапустить Home Assistant."
+      "description": "Выполнить перезапуск Home Assistant."
     },
     "ha_search": {
       "title": "Поиск",

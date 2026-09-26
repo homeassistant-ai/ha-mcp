@@ -560,7 +560,7 @@
     },
     "ha_call_service": {
       "title": "Xidməti çağır",
-      "description": "Obyektləri idarə etmək və avtomatlaşdırmaları işə salmaq üçün Home Assistant xidmətlərini icra edin."
+      "description": "İstənilən Home Assistant xidmətini və ya birdəfəlik WebSocket əmrini çağırın: hər şeyi əhatə edən çıxış yolu."
     },
     "ha_config_delete_dashboard": {
       "title": "İdarə panelini sil",
@@ -572,11 +572,11 @@
     },
     "ha_config_get_automation": {
       "title": "Avtomatlaşdırmanın konfiqurasiyasını al",
-      "description": "Home Assistant avtomatlaşdırmasının konfiqurasiyasını alın."
+      "description": "Home Assistant avtomatlaşdırma konfiqurasiyasını əldə edin."
     },
     "ha_config_get_calendar_events": {
       "title": "Təqvim hadisələrini al",
-      "description": "Təqvim obyektindən təqvim hadisələrini alın."
+      "description": "Vaxt diapazonunda təqvim obyektindən təqvim hadisələrini əldə edin."
     },
     "ha_config_get_category": {
       "title": "Kateqoriyanı al",
@@ -596,7 +596,7 @@
     },
     "ha_config_get_script": {
       "title": "Skriptin konfiqurasiyasını al",
-      "description": "Home Assistant skriptinin konfiqurasiyasını alın."
+      "description": "Home Assistant skript konfiqurasiyasını əldə edin."
     },
     "ha_config_get_yaml": {
       "title": "YAML konfiqurasiyasının hissəsini oxu",
@@ -616,7 +616,7 @@
     },
     "ha_config_remove_automation": {
       "title": "Avtomatlaşdırmanı çıxar",
-      "description": "Home Assistant avtomatlaşdırmasını silin."
+      "description": "Home Assistant avtomatlaşdırmasını həmişəlik silin."
     },
     "ha_config_remove_calendar_event": {
       "title": "Təqvim hadisəsini çıxar",
@@ -708,11 +708,11 @@
     },
     "ha_get_automation_traces": {
       "title": "Avtomatlaşdırmanın icra izlərini al",
-      "description": "Problemləri araşdırmaq üçün avtomatlaşdırma və skriptlərin icra izlərini alın."
+      "description": "Problemləri aradan qaldırmaq üçün avtomatlaşdırmalar və skriptlər üzrə icra izlərini əldə edin."
     },
     "ha_get_camera_image": {
       "title": "Kamera görüntüsünü al",
-      "description": "Home Assistant kamera obyektindən görüntünün anlıq nüsxəsini alın."
+      "description": "Home Assistant kamera obyektindən skrinşot şəkli əldə edin."
     },
     "ha_get_dashboard_screenshot": {
       "title": "İdarə panelinin ekran şəklini al",
@@ -800,7 +800,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Enerji idarə panelinin tərcihlərini idarə et",
-      "description": "Home Assistant enerji idarə panelinin tərcihlərini idarə edin."
+      "description": "Home Assistant Enerji Paneli seçimlərini idarə edin: şəbəkə / günəş /"
     },
     "ha_manage_hacs": {
       "title": "HACS-ı idarə et",
@@ -824,7 +824,7 @@
     },
     "ha_manage_updates": {
       "title": "Yeniləmələri idarə et",
-      "description": "Home Assistant yeniləmələrini idarə edin -- siyahı şəklində göstərin, ətraflı məlumatları oxuyun, toplu quraşdırın, ötürün və ya ötürməni ləğv edin."
+      "description": "Home Assistant yeniləmələrini (siyahı, təfərrüatlar, quraşdırma, ötürmə) və Təmir problemlərini (ignore) idarə edin."
     },
     "ha_read_file": {
       "title": "Faylı oxu",
@@ -832,7 +832,7 @@
     },
     "ha_reload_core": {
       "title": "Əsas komponentləri yenidən yüklə",
-      "description": "Home Assistant-ı tam yenidən başlatmadan konfiqurasiyasını yenidən yükləyin."
+      "description": "Tam yenidən başlatma etmədən Home Assistant konfiqurasiyasının yenidən yüklənməsini icra edin."
     },
     "ha_remove_area_or_floor": {
       "title": "Sahəni və ya mərtəbəni çıxar",
@@ -864,7 +864,7 @@
     },
     "ha_restart": {
       "title": "Home Assistant-ı yenidən başlat",
-      "description": "Home Assistant-ı yenidən başladın."
+      "description": "Home Assistant-ın yenidən başladılmasını icra edin."
     },
     "ha_search": {
       "title": "Axtarış",

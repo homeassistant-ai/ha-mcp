@@ -529,7 +529,7 @@
     },
     "ha_call_service": {
       "title": "Voki Servon",
-      "description": "Ekzekutu servojn de Home Assistant por kontroli entojn kaj ekigi aŭtomatigojn."
+      "description": "Voki ajnan servon de Home Assistant aŭ unuopulan WebSocket-komandon: la ĉiovora savvento."
     },
     "ha_config_delete_dashboard": {
       "title": "Forigi Panelon",
@@ -541,11 +541,11 @@
     },
     "ha_config_get_automation": {
       "title": "Akiri Aŭtomatigan Agordon",
-      "description": "Reakiru agordon de aŭtomatigo de Home Assistant."
+      "description": "Akiri la agordon de aŭtomatigo de Home Assistant."
     },
     "ha_config_get_calendar_events": {
       "title": "Akiri Kalendarajn Eventojn",
-      "description": "Reakiru kalendarajn eventojn de kalendara ento."
+      "description": "Akiri kalendarajn eventojn el kalendara ento en difinita tem intervalo."
     },
     "ha_config_get_category": {
       "title": "Akiri Kategorion",
@@ -565,7 +565,7 @@
     },
     "ha_config_get_script": {
       "title": "Akiri Skriptan Agordon",
-      "description": "Reakiru agordon de skripto de Home Assistant."
+      "description": "Akiri la agordon de skripto de Home Assistant."
     },
     "ha_config_get_yaml": {
       "title": "Legi YAML-Agordan Fragmenton",
@@ -585,7 +585,7 @@
     },
     "ha_config_remove_automation": {
       "title": "Forigi Aŭtomatigon",
-      "description": "Forigu aŭtomatigon de Home Assistant."
+      "description": "Forigi aŭtomatigon de Home Assistant por ĉiam."
     },
     "ha_config_remove_calendar_event": {
       "title": "Forigi Kalendaran Eventon",
@@ -677,11 +677,11 @@
     },
     "ha_get_automation_traces": {
       "title": "Akiri Aŭtomatigajn Spurojn",
-      "description": "Reakiru ekzekutajn spurojn por aŭtomatigoj kaj skriptoj por sencimigi problemojn."
+      "description": "Akiri plenumspurojn por aŭtomatigoj kaj skriptoj por sencimigi problemojn."
     },
     "ha_get_camera_image": {
       "title": "Akiri Kameran Bildon",
-      "description": "Reakiru momentfoton de bildo de kameraa ento de Home Assistant."
+      "description": "Akiri momentfotan bildon de kameraa ento en Home Assistant."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Akiri Panelan Ekrankopion",
@@ -769,7 +769,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Administri Preferojn de Energia Panelo",
-      "description": "Administri la preferojn de la Energia Panelo de Home Assistant."
+      "description": "Administri la preferojn de la Energio-Panelo de Home Assistant: reto / sunenergio /"
     },
     "ha_manage_hacs": {
       "title": "Administri HACS",
@@ -793,7 +793,7 @@
     },
     "ha_manage_updates": {
       "title": "Administri Ĝisdatigojn",
-      "description": "Administri ĝisdatigojn de Home Assistant -- listigi, legi detalojn, amase instali, preterlasi, aŭ mal-preterlasi."
+      "description": "Administri ĝisdatigojn de Home Assistant (listo, detaloj, instalo, preterlaso) kaj riparajn problemojn (ignori)."
     },
     "ha_read_file": {
       "title": "Legi Dosieron",
@@ -801,7 +801,7 @@
     },
     "ha_reload_core": {
       "title": "Reŝargi Kernajn Komponantojn",
-      "description": "Reŝargi agordon de Home Assistant sen plena restartigo."
+      "description": "Plenumi reŝargon de la agordo de Home Assistant sen plena restartigo."
     },
     "ha_remove_area_or_floor": {
       "title": "Forigi Areon aŭ Etaĝon",
@@ -833,7 +833,7 @@
     },
     "ha_restart": {
       "title": "Restartigi Home Assistant",
-      "description": "Restartigi Home Assistant."
+      "description": "Plenumi restartigon de Home Assistant."
     },
     "ha_search": {
       "title": "Serĉi",

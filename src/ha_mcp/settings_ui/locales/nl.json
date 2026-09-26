@@ -529,7 +529,7 @@
     },
     "ha_call_service": {
       "title": "Roep Service aan",
-      "description": "Voer Home Assistant-services uit om entiteiten te bedienen en automatiseringen te activeren."
+      "description": "Roep een willekeurige Home Assistant-service of eenmalige WebSocket-opdracht aan: de alles-in-één ontsnappingsroute."
     },
     "ha_config_delete_dashboard": {
       "title": "Verwijder Dashboard",
@@ -545,7 +545,7 @@
     },
     "ha_config_get_calendar_events": {
       "title": "Haal Kalendergebeurtenissen op",
-      "description": "Haal kalendergebeurtenissen op van een kalenderentiteit."
+      "description": "Haal agenda-evenementen op van een agenda-entiteit binnen een tijdsbereik."
     },
     "ha_config_get_category": {
       "title": "Haal Categorie op",
@@ -585,7 +585,7 @@
     },
     "ha_config_remove_automation": {
       "title": "Verwijder Automatisering",
-      "description": "Verwijder een Home Assistant-automatisering."
+      "description": "Verwijder permanent een Home Assistant-automatisering."
     },
     "ha_config_remove_calendar_event": {
       "title": "Verwijder Kalendergebeurtenis",
@@ -677,11 +677,11 @@
     },
     "ha_get_automation_traces": {
       "title": "Haal Automatiseringstraceringen op",
-      "description": "Haal uitvoeringstraceringen op voor automatiseringen en scripts om problemen op te sporen."
+      "description": "Haal uitvoeringstraceringen op voor automatiseringen en scripts om problemen te ontrafelen."
     },
     "ha_get_camera_image": {
       "title": "Haal Camerabeeld op",
-      "description": "Haal een momentopname van een afbeelding op van een Home Assistant-camera-entiteit."
+      "description": "Haal een snapshot-afbeelding op van een Home Assistant-camera-entiteit."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Haal Dashboard Screenshot op",
@@ -769,7 +769,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Voorkeuren Energie Dashboard Beheren",
-      "description": "Beheer de voorkeuren van het Home Assistant Energie Dashboard."
+      "description": "Beheer de voorkeuren van het Home Assistant Energy Dashboard: elektriciteitsnet / zonne-energie /"
     },
     "ha_manage_hacs": {
       "title": "HACS Beheren",
@@ -793,7 +793,7 @@
     },
     "ha_manage_updates": {
       "title": "Updates Beheren",
-      "description": "Beheer Home Assistant updates — lijst, lees details, installeer in batch, sla over, of herstel overgeslagen."
+      "description": "Beheer Home Assistant-updates (lijst, details, installeren, overslaan) en Reparaties-problemen (negeren)."
     },
     "ha_read_file": {
       "title": "Bestand Lezen",
@@ -801,7 +801,7 @@
     },
     "ha_reload_core": {
       "title": "Kerncomponenten Herladen",
-      "description": "Herlaad de Home Assistant configuratie zonder volledige herstart."
+      "description": "Voer een herlading van de Home Assistant-configuratie uit zonder volledige herstart."
     },
     "ha_remove_area_or_floor": {
       "title": "Gebied of Verdieping Verwijderen",
@@ -833,7 +833,7 @@
     },
     "ha_restart": {
       "title": "Home Assistant Herstarten",
-      "description": "Herstart Home Assistant."
+      "description": "Voer een herstart van Home Assistant uit."
     },
     "ha_search": {
       "title": "Zoeken",

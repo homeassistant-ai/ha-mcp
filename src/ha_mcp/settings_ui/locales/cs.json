@@ -529,7 +529,7 @@
     },
     "ha_call_service": {
       "title": "Vyvolat službu",
-      "description": "Spouštět služby Home Assistant pro ovládání entit a spouštění automatizací."
+      "description": "Zavolá libovolnou službu Home Assistant nebo jednorázový příkaz WebSocket: univerzální záchranná možnost."
     },
     "ha_config_delete_dashboard": {
       "title": "Smazat panel",
@@ -541,11 +541,11 @@
     },
     "ha_config_get_automation": {
       "title": "Získat konfiguraci automatizace",
-      "description": "Načíst konfiguraci automatizace Home Assistant."
+      "description": "Získá konfiguraci automatizace v Home Assistant."
     },
     "ha_config_get_calendar_events": {
       "title": "Získat události kalendáře",
-      "description": "Načíst události kalendáře z entity kalendáře."
+      "description": "Získá události kalendáře z entity kalendáře v zadaném časovém rozsahu."
     },
     "ha_config_get_category": {
       "title": "Získat kategorii",
@@ -565,7 +565,7 @@
     },
     "ha_config_get_script": {
       "title": "Získat konfiguraci skriptu",
-      "description": "Načíst konfiguraci skriptu Home Assistant."
+      "description": "Získá konfiguraci skriptu v Home Assistant."
     },
     "ha_config_get_yaml": {
       "title": "Přečíst fragment konfigurace YAML",
@@ -585,7 +585,7 @@
     },
     "ha_config_remove_automation": {
       "title": "Odebrat automatizaci",
-      "description": "Smazat automatizaci Home Assistant."
+      "description": "Trvale odstraní automatizaci v Home Assistant."
     },
     "ha_config_remove_calendar_event": {
       "title": "Odebrat událost kalendáře",
@@ -677,11 +677,11 @@
     },
     "ha_get_automation_traces": {
       "title": "Získat trasování automatizací",
-      "description": "Načíst trasování spuštění pro automatizace a skripty k ladění problémů."
+      "description": "Získá záznamy provádění automatizací a skriptů pro ladění problémů."
     },
     "ha_get_camera_image": {
       "title": "Získat obraz z kamery",
-      "description": "Načíst snímek obrazu z entity kamery Home Assistant."
+      "description": "Získá snímek z entity kamery v Home Assistant."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Získat snímek panelu",
@@ -769,7 +769,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Spravovat předvolby energetického panelu",
-      "description": "Spravovat předvolby energetického panelu Home Assistant."
+      "description": "Spravuje předvolby panelu Energy v Home Assistant: síť / solární /"
     },
     "ha_manage_hacs": {
       "title": "Spravovat HACS",
@@ -793,7 +793,7 @@
     },
     "ha_manage_updates": {
       "title": "Spravovat aktualizace",
-      "description": "Spravovat aktualizace Home Assistant — seznam, číst detaily, hromadná instalace, přeskočit nebo zrušit přeskočení."
+      "description": "Spravuje aktualizace Home Assistant (seznam, podrobnosti, instalace, přeskočení) a problémy v Opravách (ignorování)."
     },
     "ha_read_file": {
       "title": "Číst soubor",
@@ -801,7 +801,7 @@
     },
     "ha_reload_core": {
       "title": "Znovu načíst základní komponenty",
-      "description": "Znovu načíst konfiguraci Home Assistant bez úplného restartu."
+      "description": "Provede znovu načtení konfigurace Home Assistant bez úplného restartu."
     },
     "ha_remove_area_or_floor": {
       "title": "Odebrat oblast nebo patro",
@@ -833,7 +833,7 @@
     },
     "ha_restart": {
       "title": "Restartovat Home Assistant",
-      "description": "Restartovat Home Assistant."
+      "description": "Provede restart Home Assistant."
     },
     "ha_search": {
       "title": "Hledat",

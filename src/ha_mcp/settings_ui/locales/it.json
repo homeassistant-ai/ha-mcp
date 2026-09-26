@@ -560,7 +560,7 @@
     },
     "ha_call_service": {
       "title": "Chiama un servizio",
-      "description": "Esegue i servizi di Home Assistant per controllare le entità e attivare le automazioni."
+      "description": "Chiama qualsiasi servizio di Home Assistant o un comando WebSocket al volo: la via di fuga universale."
     },
     "ha_config_delete_dashboard": {
       "title": "Elimina una dashboard",
@@ -572,11 +572,11 @@
     },
     "ha_config_get_automation": {
       "title": "Ottieni la configurazione di un'automazione",
-      "description": "Recupera la configurazione di un'automazione di Home Assistant."
+      "description": "Ottieni la configurazione di un'automazione di Home Assistant."
     },
     "ha_config_get_calendar_events": {
       "title": "Ottieni gli eventi del calendario",
-      "description": "Recupera gli eventi di un'entità calendario."
+      "description": "Ottieni eventi del calendario da un'entità calendario entro un intervallo di tempo."
     },
     "ha_config_get_category": {
       "title": "Ottieni una categoria",
@@ -596,7 +596,7 @@
     },
     "ha_config_get_script": {
       "title": "Ottieni la configurazione di uno script",
-      "description": "Recupera la configurazione di uno script di Home Assistant."
+      "description": "Ottieni la configurazione di uno script di Home Assistant."
     },
     "ha_config_get_yaml": {
       "title": "Leggi un frammento di configurazione YAML",
@@ -616,7 +616,7 @@
     },
     "ha_config_remove_automation": {
       "title": "Rimuovi un'automazione",
-      "description": "Elimina un'automazione di Home Assistant."
+      "description": "Elimina definitivamente un'automazione di Home Assistant."
     },
     "ha_config_remove_calendar_event": {
       "title": "Rimuovi un evento del calendario",
@@ -708,11 +708,11 @@
     },
     "ha_get_automation_traces": {
       "title": "Ottieni le tracce delle automazioni",
-      "description": "Recupera le tracce di esecuzione di automazioni e script per analizzare i problemi."
+      "description": "Ottieni tracce di esecuzione per automazioni e script per eseguire il debug dei problemi."
     },
     "ha_get_camera_image": {
       "title": "Ottieni l'immagine di una telecamera",
-      "description": "Recupera un'istantanea da un'entità telecamera di Home Assistant."
+      "description": "Ottieni un'immagine istantanea da un'entità telecamera di Home Assistant."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Ottieni lo screenshot di una dashboard",
@@ -800,7 +800,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Gestisci le preferenze della dashboard Energia",
-      "description": "Gestisce le preferenze della dashboard Energia di Home Assistant."
+      "description": "Gestisci le preferenze del cruscotto energetico di Home Assistant: rete / solare /"
     },
     "ha_manage_hacs": {
       "title": "Gestisci HACS",
@@ -824,7 +824,7 @@
     },
     "ha_manage_updates": {
       "title": "Gestisci gli aggiornamenti",
-      "description": "Gestisce gli aggiornamenti di Home Assistant: elenca, mostra i dettagli, installa in blocco, ignora o ripristina gli aggiornamenti ignorati."
+      "description": "Gestisci gli aggiornamenti di Home Assistant (elenco, dettagli, installazione, salta) e i problemi di Riparazione (ignora)."
     },
     "ha_read_file": {
       "title": "Leggi un file",
@@ -832,7 +832,7 @@
     },
     "ha_reload_core": {
       "title": "Ricarica i componenti principali",
-      "description": "Ricarica la configurazione di Home Assistant senza un riavvio completo."
+      "description": "Esegui un ricaricamento della configurazione di Home Assistant senza un riavvio completo."
     },
     "ha_remove_area_or_floor": {
       "title": "Rimuovi un'area o un piano",
@@ -864,7 +864,7 @@
     },
     "ha_restart": {
       "title": "Riavvia Home Assistant",
-      "description": "Riavvia Home Assistant."
+      "description": "Esegui un riavvio di Home Assistant."
     },
     "ha_search": {
       "title": "Cerca",

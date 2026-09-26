@@ -560,7 +560,7 @@
     },
     "ha_call_service": {
       "title": "서비스 호출",
-      "description": "Home Assistant 서비스를 실행해 엔티티를 제어하고 자동화를 실행합니다."
+      "description": "모든 Home Assistant 서비스 또는 일회성 WebSocket 명령을 호출합니다: 모든 상황을 처리하는 예외 처리 수단입니다."
     },
     "ha_config_delete_dashboard": {
       "title": "대시보드 삭제",
@@ -572,11 +572,11 @@
     },
     "ha_config_get_automation": {
       "title": "자동화 설정 조회",
-      "description": "Home Assistant 자동화 설정을 가져옵니다."
+      "description": "Home Assistant 자동화 구성을 가져옵니다."
     },
     "ha_config_get_calendar_events": {
       "title": "캘린더 일정 조회",
-      "description": "캘린더 엔티티에서 일정을 가져옵니다."
+      "description": "지정된 시간 범위 내의 캘린더 엔티티에서 캘린더 이벤트를 가져옵니다."
     },
     "ha_config_get_category": {
       "title": "카테고리 조회",
@@ -596,7 +596,7 @@
     },
     "ha_config_get_script": {
       "title": "스크립트 설정 조회",
-      "description": "Home Assistant 스크립트 설정을 가져옵니다."
+      "description": "Home Assistant 스크립트 구성을 가져옵니다."
     },
     "ha_config_get_yaml": {
       "title": "YAML 설정 조각 읽기",
@@ -616,7 +616,7 @@
     },
     "ha_config_remove_automation": {
       "title": "자동화 제거",
-      "description": "Home Assistant 자동화를 삭제합니다."
+      "description": "Home Assistant 자동화를 영구적으로 삭제합니다."
     },
     "ha_config_remove_calendar_event": {
       "title": "캘린더 일정 제거",
@@ -708,11 +708,11 @@
     },
     "ha_get_automation_traces": {
       "title": "자동화 추적 기록 조회",
-      "description": "문제를 진단할 수 있도록 자동화와 스크립트의 실행 추적 기록을 가져옵니다."
+      "description": "문제 디버깅을 위해 자동화 및 스크립트의 실행 추적(trace)을 가져옵니다."
     },
     "ha_get_camera_image": {
       "title": "카메라 이미지 조회",
-      "description": "Home Assistant 카메라 엔티티에서 스냅숏 이미지를 가져옵니다."
+      "description": "Home Assistant 카메라 엔티티에서 스냅샷 이미지를 가져옵니다."
     },
     "ha_get_dashboard_screenshot": {
       "title": "대시보드 스크린샷 조회",
@@ -800,7 +800,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "에너지 대시보드 환경설정 관리",
-      "description": "Home Assistant 에너지 대시보드 환경설정을 관리합니다."
+      "description": "Home Assistant 에너지 대시보드 기본 설정(그리드 / 태양광 /)을 관리합니다."
     },
     "ha_manage_hacs": {
       "title": "HACS 관리",
@@ -824,7 +824,7 @@
     },
     "ha_manage_updates": {
       "title": "업데이트 관리",
-      "description": "Home Assistant 업데이트를 관리합니다. 목록 조회, 상세 확인, 일괄 설치, 건너뛰기, 건너뛰기 해제를 할 수 있습니다."
+      "description": "Home Assistant 업데이트(목록, 세부 정보, 설치, 건너뛰기) 및 수리(Repairs) 문제(무시)를 관리합니다."
     },
     "ha_read_file": {
       "title": "파일 읽기",
@@ -832,7 +832,7 @@
     },
     "ha_reload_core": {
       "title": "코어 구성요소 다시 불러오기",
-      "description": "전체 재시작 없이 Home Assistant 설정을 다시 불러옵니다."
+      "description": "전체 재시작 없이 Home Assistant 구성을 다시 로드합니다."
     },
     "ha_remove_area_or_floor": {
       "title": "영역 또는 층 제거",
@@ -864,7 +864,7 @@
     },
     "ha_restart": {
       "title": "Home Assistant 다시 시작",
-      "description": "Home Assistant를 다시 시작합니다."
+      "description": "Home Assistant를 재시작합니다."
     },
     "ha_search": {
       "title": "검색",

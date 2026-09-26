@@ -529,7 +529,7 @@
     },
     "ha_call_service": {
       "title": "呼叫服務",
-      "description": "執行 Home Assistant 服務以控制實體並觸發自動化。"
+      "description": "呼叫任何 Home Assistant 服務或單次 WebSocket 指令：萬能的逃生口。"
     },
     "ha_config_delete_dashboard": {
       "title": "刪除儀表板",
@@ -541,11 +541,11 @@
     },
     "ha_config_get_automation": {
       "title": "取得自動化設定",
-      "description": "擷取 Home Assistant 自動化設定。"
+      "description": "取得 Home Assistant 自動化設定。"
     },
     "ha_config_get_calendar_events": {
       "title": "取得行事曆活動",
-      "description": "從行事曆實體擷取行事曆活動。"
+      "description": "從指定時間範圍內的行事曆實體取得行事曆事件。"
     },
     "ha_config_get_category": {
       "title": "取得類別",
@@ -565,7 +565,7 @@
     },
     "ha_config_get_script": {
       "title": "取得腳本設定",
-      "description": "擷取 Home Assistant 腳本設定。"
+      "description": "取得 Home Assistant 腳本設定。"
     },
     "ha_config_get_yaml": {
       "title": "讀取 YAML 設定片段",
@@ -585,7 +585,7 @@
     },
     "ha_config_remove_automation": {
       "title": "移除自動化",
-      "description": "刪除 Home Assistant 自動化。"
+      "description": "永久刪除 Home Assistant 自動化。"
     },
     "ha_config_remove_calendar_event": {
       "title": "移除行事曆事件",
@@ -677,11 +677,11 @@
     },
     "ha_get_automation_traces": {
       "title": "取得自動化追蹤",
-      "description": "擷取自動化與手稿的執行追蹤以偵錯問題。"
+      "description": "取得自動化和腳本的執行追蹤以進行問題偵錯。"
     },
     "ha_get_camera_image": {
       "title": "取得相機影像",
-      "description": "從 Home Assistant 相機實體擷取快照影像。"
+      "description": "從 Home Assistant 相機實體取得快照影像。"
     },
     "ha_get_dashboard_screenshot": {
       "title": "取得儀表板螢幕截圖",
@@ -769,7 +769,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "管理能源儀表板偏好設定",
-      "description": "管理 Home Assistant 能源儀表板偏好設定。"
+      "description": "管理 Home Assistant 能源儀表板偏好設定：電網 / 太陽能 /"
     },
     "ha_manage_hacs": {
       "title": "管理 HACS",
@@ -793,7 +793,7 @@
     },
     "ha_manage_updates": {
       "title": "管理更新",
-      "description": "管理 Home Assistant 更新 -- 列出、讀取詳細資訊、批次安裝、略過或取消略過。"
+      "description": "管理 Home Assistant 更新（列出、詳細資訊、安裝、略過）與修復問題（忽略）。"
     },
     "ha_read_file": {
       "title": "讀取檔案",
@@ -801,7 +801,7 @@
     },
     "ha_reload_core": {
       "title": "重新載入核心元件",
-      "description": "重新載入 Home Assistant 設定而不需完全重新啟動。"
+      "description": "執行 Home Assistant 設定重新載入，無需完整重新啟動。"
     },
     "ha_remove_area_or_floor": {
       "title": "移除區域或樓層",
@@ -833,7 +833,7 @@
     },
     "ha_restart": {
       "title": "重新啟動 Home Assistant",
-      "description": "重新啟動 Home Assistant。"
+      "description": "執行 Home Assistant 重新啟動。"
     },
     "ha_search": {
       "title": "搜尋",

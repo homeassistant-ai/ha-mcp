@@ -529,7 +529,7 @@
     },
     "ha_call_service": {
       "title": "Wywołaj usługę",
-      "description": "Wykonaj usługi Home Assistant, aby sterować encjami i wyzwalać automatyzacje."
+      "description": "Wywołaj dowolną usługę Home Assistant lub jednorazowe polecenie WebSocket: uniwersalne narzędzie ratunkowe."
     },
     "ha_config_delete_dashboard": {
       "title": "Usuń pulpit nawigacyjny",
@@ -545,7 +545,7 @@
     },
     "ha_config_get_calendar_events": {
       "title": "Pobierz wydarzenia z kalendarza",
-      "description": "Pobierz wydarzenia z kalendarza z encji kalendarza."
+      "description": "Pobierz wydarzenia z kalendarza z encji kalendarza w określonym przedziale czasowym."
     },
     "ha_config_get_category": {
       "title": "Pobierz kategorię",
@@ -585,7 +585,7 @@
     },
     "ha_config_remove_automation": {
       "title": "Usuń automatyzację",
-      "description": "Usuń automatyzację Home Assistant."
+      "description": "Trwale usuń automatyzację Home Assistant."
     },
     "ha_config_remove_calendar_event": {
       "title": "Usuń wydarzenie z kalendarza",
@@ -677,11 +677,11 @@
     },
     "ha_get_automation_traces": {
       "title": "Pobierz ślady automatyzacji",
-      "description": "Pobierz ślady wykonania dla automatyzacji i skryptów w celu debugowania problemów."
+      "description": "Pobierz ślady wykonania automatyzacji i skryptów w celu debugowania problemów."
     },
     "ha_get_camera_image": {
       "title": "Pobierz obraz z kamery",
-      "description": "Pobierz obraz migawki z encji kamery Home Assistant."
+      "description": "Pobierz zrzut obrazu z encji kamery Home Assistant."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Pobierz zrzut ekranu pulpitu nawigacyjnego",
@@ -769,7 +769,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Zarządzaj preferencjami panelu energii",
-      "description": "Zarządzaj preferencjami panelu energii Home Assistant."
+      "description": "Zarządzaj preferencjami panelu energii Home Assistant: sieć / fotowoltaika /"
     },
     "ha_manage_hacs": {
       "title": "Zarządzaj HACS",
@@ -793,7 +793,7 @@
     },
     "ha_manage_updates": {
       "title": "Zarządzaj aktualizacjami",
-      "description": "Zarządzaj aktualizacjami Home Assistant -- wyświetlaj, czytaj szczegóły, instaluj zbiorczo, pomijaj lub cofaj pominięcie."
+      "description": "Zarządzaj aktualizacjami Home Assistant (lista, szczegóły, instalacja, pominięcie) oraz problemami z naprawami (ignorowanie)."
     },
     "ha_read_file": {
       "title": "Czytaj plik",
@@ -801,7 +801,7 @@
     },
     "ha_reload_core": {
       "title": "Przeładuj komponenty rdzenia",
-      "description": "Przeładuj konfigurację Home Assistant bez pełnego restartu."
+      "description": "Wykonaj ponowne ładowanie konfiguracji Home Assistant bez pełnego restartu."
     },
     "ha_remove_area_or_floor": {
       "title": "Usuń obszar lub piętro",
@@ -833,7 +833,7 @@
     },
     "ha_restart": {
       "title": "Uruchom ponownie Home Assistant",
-      "description": "Uruchom ponownie Home Assistant."
+      "description": "Wykonaj restart Home Assistant."
     },
     "ha_search": {
       "title": "Szukaj",

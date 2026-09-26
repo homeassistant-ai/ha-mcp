@@ -560,7 +560,7 @@
     },
     "ha_call_service": {
       "title": "Llamar a un servicio",
-      "description": "Ejecuta servicios de Home Assistant para controlar entidades y disparar automatizaciones."
+      "description": "Llama a cualquier servicio de Home Assistant o comando de WebSocket único: la vía de escape universal."
     },
     "ha_config_delete_dashboard": {
       "title": "Eliminar panel",
@@ -572,11 +572,11 @@
     },
     "ha_config_get_automation": {
       "title": "Obtener configuración de automatización",
-      "description": "Consulta la configuración de una automatización de Home Assistant."
+      "description": "Obtiene la configuración de una automatización de Home Assistant."
     },
     "ha_config_get_calendar_events": {
       "title": "Obtener eventos de calendario",
-      "description": "Consulta los eventos de una entidad de calendario."
+      "description": "Obtiene eventos de calendario de una entidad de calendario dentro de un intervalo de tiempo."
     },
     "ha_config_get_category": {
       "title": "Obtener categoría",
@@ -596,7 +596,7 @@
     },
     "ha_config_get_script": {
       "title": "Obtener configuración de script",
-      "description": "Consulta la configuración de un script de Home Assistant."
+      "description": "Obtiene la configuración de un script de Home Assistant."
     },
     "ha_config_get_yaml": {
       "title": "Leer fragmento de configuración YAML",
@@ -616,7 +616,7 @@
     },
     "ha_config_remove_automation": {
       "title": "Eliminar automatización",
-      "description": "Elimina una automatización de Home Assistant."
+      "description": "Elimina permanentemente una automatización de Home Assistant."
     },
     "ha_config_remove_calendar_event": {
       "title": "Eliminar evento de calendario",
@@ -708,11 +708,11 @@
     },
     "ha_get_automation_traces": {
       "title": "Obtener trazas de automatización",
-      "description": "Consulta las trazas de ejecución de automatizaciones y scripts para depurar problemas."
+      "description": "Obtiene trazas de ejecución de automatizaciones y scripts para depurar problemas."
     },
     "ha_get_camera_image": {
       "title": "Obtener imagen de cámara",
-      "description": "Captura una imagen de una entidad de cámara de Home Assistant."
+      "description": "Obtiene una imagen de captura de una entidad de cámara de Home Assistant."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Obtener captura de panel",
@@ -800,7 +800,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Gestionar preferencias del panel de energía",
-      "description": "Gestiona las preferencias del panel de energía de Home Assistant."
+      "description": "Gestiona las preferencias del panel de energía de Home Assistant: red / solar /"
     },
     "ha_manage_hacs": {
       "title": "Gestionar HACS",
@@ -824,7 +824,7 @@
     },
     "ha_manage_updates": {
       "title": "Gestionar actualizaciones",
-      "description": "Gestiona las actualizaciones de Home Assistant: listarlas, ver detalles, instalarlas en bloque, omitirlas o dejar de omitirlas."
+      "description": "Gestiona las actualizaciones de Home Assistant (listar, detalles, instalar, omitir) y problemas de reparaciones (ignorar)."
     },
     "ha_read_file": {
       "title": "Leer archivo",
@@ -832,7 +832,7 @@
     },
     "ha_reload_core": {
       "title": "Recargar componentes del núcleo",
-      "description": "Recarga la configuración de Home Assistant sin reiniciar por completo."
+      "description": "Ejecuta una recarga de la configuración de Home Assistant sin un reinicio completo."
     },
     "ha_remove_area_or_floor": {
       "title": "Eliminar área o planta",
@@ -864,7 +864,7 @@
     },
     "ha_restart": {
       "title": "Reiniciar Home Assistant",
-      "description": "Reinicia Home Assistant."
+      "description": "Ejecuta un reinicio de Home Assistant."
     },
     "ha_search": {
       "title": "Buscar",
