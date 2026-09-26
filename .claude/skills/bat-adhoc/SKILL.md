@@ -56,7 +56,7 @@ The runner returns a **concise summary** to stdout (saves context when all passe
 
 - **Phase stats**: `num_turns`, `tool_stats` (per phase) for fine-grained comparison
 - **Aggregate stats**: Total counts across all phases for overall efficiency comparison
-- **Output**: every phase includes `output` (plus `tool_trace` when tool calls were logged); a failed phase also includes `stderr`
+- **Output**: every phase includes `output` (plus `tool_trace` when tool calls were logged); a failed phase also includes `stderr` when it is not empty
 - **Full results**: raw JSON, complete output always available at `results_file`
 
 ## Scenario Design Guidelines

@@ -160,10 +160,10 @@ Verify each via ha_query.py using the custom story's `verify.questions`.
 
 ### 1d. Stop container
 
+Stop only the container kept in step 1a. `PORT` is the host port in its `Container kept alive: http://localhost:PORT` line:
+
 ```bash
-# run_story.py uses HA_TEST_IMAGE, else the pin in tests/test_constants.py
-HA_IMAGE="${HA_TEST_IMAGE:-$(sed -n 's/^_DEFAULT_HA_TEST_IMAGE = "\(.*\)"$/\1/p' tests/test_constants.py)}"
-docker stop $(docker ps -q --filter "ancestor=$HA_IMAGE") 2>/dev/null
+docker stop $(docker ps -q --filter "publish=PORT")
 ```
 
 ## Step 2: Run Target Version

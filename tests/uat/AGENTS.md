@@ -12,11 +12,11 @@ Stories live in `tests/uat/stories/catalog/`. `--all` runs only the `s*.yaml` st
 # Single story (path must be relative to repo root)
 uv run python tests/uat/stories/run_story.py \
   tests/uat/stories/catalog/s01_automation_sunset_lights.yaml \
-  --agents openai --base-url <openai-compatible-base-url> --model <model-id>
+  --agents openai --base-url "<openai-compatible-base-url>" --model "<model-id>"
 
 # All stories, local OpenAI-compatible model
 uv run python tests/uat/stories/run_story.py --all --agents openai \
-  --base-url <openai-compatible-base-url> --model <model-id> --no-think
+  --base-url "<openai-compatible-base-url>" --model "<model-id>" --no-think
 
 # With a feature flag
 ... --mcp-env ENABLE_LITE_DOCSTRINGS=true

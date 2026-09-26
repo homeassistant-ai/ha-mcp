@@ -76,8 +76,9 @@ rather than assume the e2e's always-present case.
 ## No-tools lanes (`E2E_NO_TOOLS_ENTRY=1`, #2292)
 
 The rest of the suite always has the "HA-MCP File & YAML Tools" config entry.
-`E2E_NO_TOOLS_ENTRY=1` runs a lane without that entry, which is the state most
-real users are in: integration installed, second entry never added.
+`E2E_NO_TOOLS_ENTRY=1` runs a lane without that entry. The lanes that keep the
+component match the state most real users are in: integration installed,
+second entry never added.
 It is orthogonal to the backend selectors, so each backend has its own shape:
 
 | Lane | Topology |

@@ -38,15 +38,15 @@ If a non-obvious choice has significant consequences, present the available opti
 
 ## Phase 3: Create PR
 
+Write the PR body to `local/pr-body-$ARGUMENTS.md` first (`local/` is git-ignored). Build it from `.github/pull_request_template.md`: keep its headings, put `Closes #$ARGUMENTS` and the description under `## What does this PR do?`, and delete `## Future improvements` unless the user has confirmed work to defer. Then push and create the PR:
+
 ```bash
 git push -u origin "feature/issue-$ARGUMENTS"
 PR_NUMBER=$(gh pr create --draft \
   --repo homeassistant-ai/ha-mcp \
   --title "<descriptive title>" \
-  --body-file <body-file> | grep -oE '[0-9]+$')
+  --body-file "local/pr-body-$ARGUMENTS.md" | grep -oE '[0-9]+$')
 ```
-
-Build `<body-file>` from `.github/pull_request_template.md` and keep its headings. Put `Closes #$ARGUMENTS` and the description under `## What does this PR do?`.
 
 Wait for CI:
 ```bash
