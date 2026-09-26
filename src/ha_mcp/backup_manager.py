@@ -3061,8 +3061,10 @@ async def _fetch_file(client: Any, entity_id: str) -> Any:
 
     ``entity_id`` is the file path. Returns the content string, or None
     when the file does not exist — a brand-new write has no prior content
-    to snapshot, so capture skips (same as creating a new entity). Other
-    read failures raise so the capture pipeline logs them at WARNING.
+    to snapshot, so capture skips (same as creating a new entity). A
+    binary file also returns None: snapshots store text only, so capture
+    skips it instead of blocking the write or delete. Other read failures
+    raise so the capture pipeline logs them at WARNING.
     """
     from .tools.tools_filesystem import call_mcp_tools_service
     from .tools.util_helpers import unwrap_service_response
@@ -3075,7 +3077,11 @@ async def _fetch_file(client: Any, entity_id: str) -> Any:
         content = result.get("content")
         return content if isinstance(content, str) else None
     error = str(result.get("error", ""))
-    if "does not exist" in error or "not a file" in error:
+    if (
+        "does not exist" in error
+        or "not a file" in error
+        or "Cannot read binary file" in error
+    ):
         return None
     raise HomeAssistantError(f"read_file failed for {entity_id!r}: {error}")
 
