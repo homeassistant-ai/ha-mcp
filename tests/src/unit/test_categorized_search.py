@@ -1417,3 +1417,24 @@ class TestApplySearchKeywordEnrichment:
             "ha_import_blueprint",
         ):
             assert term in enriched.description.lower(), f"{term!r} missing"
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "terms"),
+    [
+        ("ha_config_set_automation", ("enable", "disable", "run", "trigger")),
+        ("ha_config_set_script", ("run", "start", "stop")),
+        ("ha_config_set_scene", ("activate",)),
+        ("ha_manage_updates", ("repair", "ignore", "dismiss")),
+        ("ha_set_integration", ("log", "debug")),
+    ],
+)
+def test_runtime_control_keywords_reach_the_dedicated_tools(
+    tool_name: str, terms: tuple[str, ...]
+) -> None:
+    """Runtime actions moved off ha_call_service must be findable where they live."""
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    words = HomeAssistantSmartMCPServer._SEARCH_KEYWORDS[tool_name].split()
+    for term in terms:
+        assert term in words, f"{term!r} missing for {tool_name}"

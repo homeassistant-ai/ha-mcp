@@ -1467,6 +1467,24 @@ def _build_app(
             handlers["policy_post_deny"],
             methods=["POST"],
         ),
+        # The PIN lives in the data dir, not in the queue, so these are
+        # fully functional here — and they have to be: the config PUT above
+        # refuses to switch event-bus decisions on while no PIN is stored.
+        Route(
+            f"{secret_prefix}/api/policy/decision-pin",
+            handlers["policy_get_decision_pin"],
+            methods=["GET"],
+        ),
+        Route(
+            f"{secret_prefix}/api/policy/decision-pin",
+            handlers["policy_post_decision_pin"],
+            methods=["POST"],
+        ),
+        Route(
+            f"{secret_prefix}/api/policy/decision-pin",
+            handlers["policy_delete_decision_pin"],
+            methods=["DELETE"],
+        ),
         Route(
             f"{secret_prefix}/api/policy/tool-schema",
             handlers["policy_get_tool_schema"],

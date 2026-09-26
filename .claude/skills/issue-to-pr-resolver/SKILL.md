@@ -30,7 +30,6 @@ cd "worktree/issue-$ARGUMENTS"
 - Analyze codebase structure and patterns before writing code
 - Follow project conventions (see `AGENTS.md` for patterns, naming, error handling)
 - Write tests — all new MCP tools in `src/ha_mcp/tools/` need E2E tests
-- Run tests locally: `cd tests && uv run pytest src/e2e/ -n2 --dist loadscope -v --tb=short`
 - Make atomic, well-described commits using conventional commit prefixes
 
 **Philosophy:** Work autonomously. Don't ask about every small decision. Fix unrelated test failures encountered. Document all choices for the final summary.
@@ -39,16 +38,14 @@ If a non-obvious choice has significant consequences, present the available opti
 
 ## Phase 3: Create PR
 
+Write the PR body to `local/pr-body-$ARGUMENTS.md` first. `local/` is git-ignored, so a new worktree does not have it; create it with `mkdir -p local` if it does not exist. Build the body from `.github/pull_request_template.md`: keep its headings, put `Closes #$ARGUMENTS` and the description under `## What does this PR do?`, and delete `## Future improvements` unless the user has confirmed work to defer. Then push and create the PR:
+
 ```bash
 git push -u origin "feature/issue-$ARGUMENTS"
 PR_NUMBER=$(gh pr create --draft \
   --repo homeassistant-ai/ha-mcp \
   --title "<descriptive title>" \
-  --body "Closes #$ARGUMENTS
-
-## What does this PR do?
-[description]
-" | grep -oE '[0-9]+$')
+  --body-file "local/pr-body-$ARGUMENTS.md" | grep -oE '[0-9]+$')
 ```
 
 Wait for CI:

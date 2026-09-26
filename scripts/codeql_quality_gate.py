@@ -124,6 +124,27 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/ineffectual-statement",
+        "tests/src/unit/test_websocket_client.py",
+        "This statement has no effect",
+        "await first",
+        "False positive on the bare 'await first' inside pytest.raises in "
+        "test_a_second_connect_is_not_torn_down_by_the_first: awaiting the "
+        "cancelled first connect attempt IS the effect (it drives the "
+        "attempt through its cleanup and raises the CancelledError the "
+        "context manager asserts).",
+    ),
+    (
+        "py/ineffectual-statement",
+        "tests/src/unit/test_websocket_client.py",
+        "This statement has no effect",
+        "await second",
+        "False positive on the bare 'await second' inside pytest.raises in "
+        "test_a_second_connect_is_not_torn_down_by_the_first: the second "
+        "attempt is cancelled to end the test, and awaiting it is what "
+        "drives that cancellation to completion.",
+    ),
+    (
+        "py/ineffectual-statement",
         "tests/src/unit/test_ha_search_dashboard_split.py",
         "This statement has no effect",
         "await call",

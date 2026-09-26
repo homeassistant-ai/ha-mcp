@@ -28,7 +28,6 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
-    safe_info,
     safe_progress,
 )
 from .util_helpers import (
@@ -231,8 +230,9 @@ class HistoryTools:
             Literal["history", "statistics"],
             Field(
                 description=(
-                    'Data source: "history" (default) for raw state changes (~10 day retention), '
-                    'or "statistics" for pre-aggregated long-term data (permanent, requires state_class).'
+                    'Data source: "history" for raw state changes at full resolution (~10 '
+                    'day retention), or "statistics" for pre-aggregated long-term data '
+                    "(permanent, requires state_class)."
                 ),
                 default="history",
             ),
@@ -255,21 +255,25 @@ class HistoryTools:
         minimal_response: Annotated[
             bool,
             Field(
-                description='Return only states/timestamps without attributes. Default: true. Ignored when source="statistics"',
+                description="Return only states/timestamps without attributes. Ignored when "
+                'source="statistics"',
                 default=True,
             ),
         ] = True,
         significant_changes_only: Annotated[
             bool,
             Field(
-                description='Filter to significant state changes only. Default: true. Ignored when source="statistics"',
+                description="Filter to significant state changes only. Ignored when "
+                'source="statistics"',
                 default=True,
             ),
         ] = True,
         limit: Annotated[
             int | None,
             Field(
-                description='Max entries per entity. Default: 100, Max: 1000. For source="history": state changes. For source="statistics": aggregated rows. With multiple entity_ids, offset must be 0 and total rows returned can reach limit × len(entity_ids).',
+                description='Max entries per entity. Default: 100. For source="history": state '
+                'changes. For source="statistics": aggregated rows. With multiple '
+                "entity_ids, total rows returned can reach limit × len(entity_ids).",
                 default=None,
                 ge=1,
                 le=1000,
@@ -278,7 +282,7 @@ class HistoryTools:
         offset: Annotated[
             int | None,
             Field(
-                description="Number of entries to skip per entity for pagination. Default: 0. Offset > 0 requires a single entity_id. Use with limit and has_more/next_offset in the response.",
+                description="Number of entries to skip per entity for pagination.",
                 default=None,
                 ge=0,
             ),
@@ -287,7 +291,8 @@ class HistoryTools:
         period: Annotated[
             str,
             Field(
-                description='Aggregation period: "5minute", "hour", "day", "week", "month", "year". Default: "day". Ignored when source="history"',
+                description='Aggregation period: "5minute", "hour", "day", "week", "month", "year".'
+                ' Ignored when source="history"',
                 default="day",
             ),
         ] = "day",
@@ -304,9 +309,8 @@ class HistoryTools:
             Field(
                 default="desc",
                 description=(
-                    'Sort order for history entries. "desc" (default): newest first. '
-                    '"asc": oldest first (chronological, as returned by HA API). '
-                    'Ignored when source="statistics".'
+                    'Sort order for history entries. "desc": newest first. "asc": oldest '
+                    'first. Ignored when source="statistics".'
                 ),
             ),
         ] = "desc",
@@ -316,66 +320,40 @@ class HistoryTools:
             Field(
                 default=None,
                 description=(
-                    "Return only the specified top-level response keys to reduce "
-                    "response size. None = full response (default). "
-                    "History keys: success, source, entities, period, query_params. "
-                    "Statistics keys: success, source, entities, period_type, time_range, "
-                    "statistic_types, query_params, warnings."
+                    "Return only the specified top-level response keys to reduce response "
+                    "size. None = full response. History keys: success, source, entities, "
+                    "period, query_params. Statistics keys: success, source, entities, "
+                    "period_type, time_range, statistic_types, query_params, warnings."
                 ),
             ),
         ] = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        """
-        Get historical data from Home Assistant's recorder.
+        """Get historical data from Home Assistant's recorder.
 
-        **Sources:**
-        - "history" (default): Raw state changes, ~10 day retention, full resolution
-        - "statistics": Pre-aggregated data, permanent retention, requires state_class
+        Use source="history" (default) to troubleshoot why a value changed, check
+        event sequences, or analyze recent patterns. Use source="statistics" for
+        long-term trends beyond the ~10-day recorder retention and period
+        averages; entities must have state_class (measurement, total,
+        total_increasing).
 
-        **Shared params:** entity_ids, start_time, end_time, limit, offset
-        **History params:** minimal_response, significant_changes_only
-        **Statistics params:** period, statistic_types
+        History-only params: minimal_response, significant_changes_only.
+        Statistics-only params: period, statistic_types.
 
-        **Default time range:** 24h for history, 30 days for statistics
-
-        **Use ha_get_history (default) when:**
-        - Troubleshooting why a value changed ("Why was my bedroom cold last night?")
-        - Checking event sequences ("Did my garage door open while I was away?")
-        - Analyzing recent patterns ("What time does motion usually trigger?")
-
-        **Use ha_get_history(source="statistics") when:**
-        - Tracking long-term trends beyond 10 days ("Energy use this month vs last month?")
-        - Computing period averages ("Average living room temperature over 6 months?")
-        - Entities must have state_class (measurement, total, total_increasing)
-
-        **WARNING:** limit and offset apply per entity (not globally across all entities).
         All data is fetched from HA before slicing; limit/offset are client-side.
-        With multiple entity_ids, offset must be 0 — use a single entity_id for offset > 0.
-        Use has_more and next_offset from the response to paginate.
-        Administrators can optionally enable recorder workload guardrails in Advanced
-        settings. When enabled, oversized entity/time workloads are rejected before the
-        recorder query is issued; narrow the time range or entity list to stay within
-        the budget. Calendar statistics may first read HA's configured timezone so the
-        estimate follows local calendar boundaries.
+        With multiple entity_ids, offset must be 0 — use a single entity_id for
+        offset > 0. Use has_more and next_offset from the response to paginate.
+        Administrators can optionally enable recorder workload guardrails in
+        Advanced settings. When enabled, oversized entity/time workloads are
+        rejected before the recorder query is issued; narrow the time range or
+        entity list to stay within the budget. Calendar statistics may first
+        read HA's configured timezone so the estimate follows local calendar
+        boundaries.
 
-        **Example -- history (default):**
-        ```python
-        ha_get_history(entity_ids="sensor.bedroom_temperature", start_time="24h")
-        ha_get_history(entity_ids=["sensor.temperature", "sensor.humidity"], start_time="3d", limit=500)
-        # Default order="desc" returns newest states first.
-        # To paginate oldest-first, use order="asc":
-        ha_get_history(entity_ids="sensor.temperature", start_time="7d", limit=100, offset=100, order="asc")
-        ```
-
-        **Example -- statistics:**
-        ```python
-        ha_get_history(source="statistics", entity_ids="sensor.total_energy_kwh", start_time="30d", period="day")
-        ha_get_history(source="statistics", entity_ids="sensor.living_room_temperature",
-                       start_time="6m", period="month", statistic_types=["mean", "min", "max"])
-        ha_get_history(source="statistics", entity_ids="sensor.energy_kwh",
-                       start_time="30d", period="5minute", limit=100, offset=200)
-        ```
+        EXAMPLES:
+        - ha_get_history(entity_ids="sensor.bedroom_temperature", start_time="24h")
+        - Paginate oldest-first: ha_get_history(entity_ids="sensor.temperature", start_time="7d", limit=100, offset=100, order="asc")
+        - ha_get_history(source="statistics", entity_ids="sensor.living_room_temperature", start_time="6m", period="month", statistic_types=["mean", "min", "max"])
         """
         parsed_fields: list[str] | None = None
         if fields is not None:
@@ -432,8 +410,7 @@ class HistoryTools:
                 statistics_timezone=statistics_timezone,
             )
 
-            await safe_info(
-                ctx,
+            logger.debug(
                 f"ha_get_history starting: source={source} "
                 f"entities={len(entity_id_list)} "
                 f"window={start_dt.isoformat()}..{end_dt.isoformat()}",

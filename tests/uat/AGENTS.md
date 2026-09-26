@@ -6,25 +6,23 @@ When testcontainers fails with an image error, diagnose Docker first (`docker im
 
 ## Running stories
 
-Stories live in `tests/uat/stories/catalog/` (s01–s14 yaml files). Run from the repo root.
+Stories live in `tests/uat/stories/catalog/`. `--all` runs only the `s*.yaml` stories; run the `c*` and `t*` stories by path. Run from the repo root.
 
 ```bash
 # Single story (path must be relative to repo root)
-UV_CACHE_DIR=/tmp/claude-1000/uv-cache TMPDIR=/tmp/claude-1000 \
-  uv run python tests/uat/stories/run_story.py \
+uv run python tests/uat/stories/run_story.py \
   tests/uat/stories/catalog/s01_automation_sunset_lights.yaml \
-  --agents openai --base-url http://172.19.0.1:1234/v1 --model <model-id>
+  --agents openai --base-url "<openai-compatible-base-url>" --model "<model-id>"
 
-# All stories, local model (LM Studio)
-UV_CACHE_DIR=/tmp/claude-1000/uv-cache TMPDIR=/tmp/claude-1000 \
-  uv run python tests/uat/stories/run_story.py --all --agents openai \
-  --base-url http://172.19.0.1:1234/v1 --model <model-id> --no-think
+# All stories, local OpenAI-compatible model
+uv run python tests/uat/stories/run_story.py --all --agents openai \
+  --base-url "<openai-compatible-base-url>" --model "<model-id>" --no-think
 
 # With a feature flag
 ... --mcp-env ENABLE_LITE_DOCSTRINGS=true
 ```
 
 Key flags:
-- `--mcp-env KEY=VALUE` — pass env vars to the MCP server (repeatable)
+- `--mcp-env KEY=VALUE` — pass env vars to the MCP server (repeatable). The server gets a fresh, empty `HA_MCP_CONFIG_DIR`, so tool pins and settings in your `~/.ha-mcp` do not apply; pass `--mcp-env HA_MCP_CONFIG_DIR=<dir>` to run with a specific config.
 - `--no-think` disables reasoning: prepends /no_think (original Qwen3) and sends the enable_thinking=false chat-template kwarg (Qwen3.5/3.6)
 - `--results-file` — JSONL file to append results to (default: `local/uat-results.jsonl`)

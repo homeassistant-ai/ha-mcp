@@ -181,6 +181,13 @@ the info handshake carries no capability entry:
   All awaiting work lives in :func:`_bulk_call_service_prep`;
   :func:`_do_bulk_call_service` is a pure formatter that reuses the single
   ``call_service`` guard / transition / diff helpers.
+* ``ha_mcp_tools/template_diagnose`` — renders a template in-process and reports
+  the stage (``compile`` / ``render`` / ``timeout`` / ``none``) and, for a
+  failure, the error with the template ``line`` and ``source_line`` it points
+  at, which Core's ``render_template`` drops (#2522). The render is guarded by
+  Core's own ``async_render_will_timeout`` before the template is rendered on
+  the loop; see
+  :mod:`.template_diagnose`.
 
 * ``ha_mcp_tools/config_entries`` — config entries as the ``config_entries/get``
   WS shape (``created_at`` / ``modified_at`` / ``entry_id`` / ``domain`` /
@@ -304,6 +311,7 @@ from homeassistant.helpers import (
     label_registry as lr,
 )
 
+from . import template_diagnose
 from .const import (
     CHANNEL_DEV,
     CHANNEL_STABLE,
@@ -349,6 +357,7 @@ WS_SERVER_ENTRY = f"{WS_API_PREFIX}/server_entry"
 WS_SERVER_ENTRY_UPDATE = f"{WS_API_PREFIX}/server_entry_update"
 WS_CALL_SERVICE = f"{WS_API_PREFIX}/call_service"
 WS_BULK_CALL_SERVICE = f"{WS_API_PREFIX}/bulk_call_service"
+WS_TEMPLATE_DIAGNOSE = f"{WS_API_PREFIX}/template_diagnose"
 
 # Wire-format generation of the request/response envelopes. Bumped only on an
 # *incompatible* shape change to an existing command; additive fields do not
@@ -426,6 +435,9 @@ CAPABILITIES: list[str] = [
     # component route on this; a component that lacks it is never sent a batch
     # write and stays on the legacy per-entity path.
     "bulk_call_service",
+    # The server's ha_eval_template asks for a failed template's line only when
+    # this is advertised; without it the error is returned as Core reported it.
+    "template_diagnose",
 ]
 
 # The registry kinds ``ha_mcp_tools/registries`` can serve. The WS schema gates
@@ -657,6 +669,7 @@ def _command_specs() -> list[tuple[dict[Any, Any], Any, Any]]:
             _do_bulk_call_service,
             _bulk_call_service_prep,
         ),
+        (_template_diagnose_schema(), _do_template_diagnose, _template_diagnose_prep),
     ]
 
 
@@ -681,6 +694,45 @@ def _build_handler(schema: dict[Any, Any], do_fn: Any, prep: Any = None) -> Any:
 
 def _info_schema() -> dict[Any, Any]:
     return {vol.Required("type"): WS_INFO}
+
+
+# The same bound as ha_eval_template's timeout parameter; it keeps one diagnosis
+# from holding a render thread longer than a caller could usefully wait.
+TEMPLATE_DIAGNOSE_MAX_TIMEOUT = 60.0
+
+
+def _template_diagnose_schema() -> dict[Any, Any]:
+    return {
+        vol.Required("type"): WS_TEMPLATE_DIAGNOSE,
+        vol.Required("template"): str,
+        vol.Optional("variables"): dict,
+        vol.Optional("strict", default=False): bool,
+        vol.Optional("timeout", default=3.0): vol.All(
+            vol.Coerce(float), vol.Range(min=0.1, max=TEMPLATE_DIAGNOSE_MAX_TIMEOUT)
+        ),
+    }
+
+
+async def _template_diagnose_prep(
+    hass: HomeAssistant, msg: dict[str, Any]
+) -> dict[str, Any]:
+    """Async pre-step for ``template_diagnose``: the guarded in-process render."""
+    return {
+        "diagnosis": await template_diagnose.async_diagnose(
+            hass,
+            msg["template"],
+            msg.get("variables"),
+            msg["strict"],
+            msg["timeout"],
+        )
+    }
+
+
+def _do_template_diagnose(
+    hass: HomeAssistant, params: dict[str, Any], *, diagnosis: dict[str, Any]
+) -> dict[str, Any]:
+    """Return the diagnosis :func:`_template_diagnose_prep` produced."""
+    return diagnosis
 
 
 # The nine hide dimensions ``VisibilityConfig.to_wire`` emits, split by wire type

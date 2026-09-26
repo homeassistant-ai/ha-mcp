@@ -668,17 +668,22 @@ def _violates_deny_floor(config_dir: Path, normalized: str) -> bool:
         return True
     if any(seg.lower() in DENY_PATH_SEGMENTS for seg in rel_parts):
         return True
-    # secrets.yaml — by basename of BOTH the requested path AND the resolved
+    # Denied basenames — matched on BOTH the requested path AND the resolved
     # target, so a renamed symlink (``www/notes.txt`` → ``secrets.yaml``) can't
     # dodge it and then escape masking (the read handler masks only the literal
-    # ``secrets.yaml``). The canonical config-root file is the one exception,
-    # matched EXACTLY (not lowercased) because that is the only path the handler
-    # masks — a mixed-case ``SECRETS.YAML`` at the root is NOT masked, so it
-    # must be denied.
+    # ``secrets.yaml``). The canonical config-root ``secrets.yaml`` is the one
+    # exception, matched EXACTLY (not lowercased) because that is the only path
+    # the handler masks — a mixed-case ``SECRETS.YAML`` at the root is NOT
+    # masked, so it must be denied. The exception also requires the resolved
+    # target to still be a ``secrets.yaml``, so the one permitted path cannot
+    # be pointed at another denied file. No other denied basename has an
+    # exception: ``approval_pin.json`` is out of reach wherever it appears.
+    if normalized == "secrets.yaml" and resolved.name.lower() == "secrets.yaml":
+        return False
     return (
         os.path.basename(normalized).lower() in DENY_READ_BASENAMES
         or resolved.name.lower() in DENY_READ_BASENAMES
-    ) and normalized != "secrets.yaml"
+    )
 
 
 def _volume_root_for(abs_path: str) -> str | None:
@@ -724,11 +729,11 @@ def _violates_volume_deny_floor(abs_path: str) -> bool:
     (issue #1586).
 
     The same floor as the config dir — a ``.storage`` segment anywhere, or a
-    ``secrets.yaml`` basename — applied to both the requested path and its
-    symlink-resolved target, case-insensitively. Unlike the config dir there is
-    NO canonical ``secrets.yaml`` exception: volume reads are never masked, so a
-    ``secrets.yaml`` on any volume is always denied. Fails closed on any
-    resolution error.
+    denied basename (``const.DENY_READ_BASENAMES``) — applied to both the
+    requested path and its symlink-resolved target, case-insensitively. Unlike
+    the config dir there is NO canonical ``secrets.yaml`` exception: volume
+    reads are never masked, so a ``secrets.yaml`` on any volume is always
+    denied. Fails closed on any resolution error.
     """
     req = PurePosixPath(abs_path)
     if any(seg.lower() in DENY_PATH_SEGMENTS for seg in req.parts):
@@ -1319,6 +1324,16 @@ def _list_files_sync(
     files: list[dict[str, Any]] = []
     for item in target_dir.iterdir():
         if pattern and not fnmatch.fnmatch(item.name, pattern):
+            continue
+        # The deny floor gates the directory being listed, not the entries
+        # coming back from it, so a name it protects would otherwise be
+        # enumerable inside an allowed directory -- reporting its size and
+        # mtime for a file no handler will open. Matched on the entry's own
+        # name, which is what the floor denies; nothing here resolves a
+        # symlink, because a link's own name is not the protected one and
+        # reading through it is refused anyway.
+        lowered = item.name.lower()
+        if lowered in DENY_READ_BASENAMES or lowered in DENY_PATH_SEGMENTS:
             continue
         stat = item.stat()
         # Config-relative paths report relative to the config dir; absolute

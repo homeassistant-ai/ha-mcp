@@ -389,6 +389,62 @@
         <input type="number" id="policy-ttl-minutes" min="1" max="60" aria-label="Approval TTL minutes (1-60)" data-i18n-aria-label="policies.global.ttl.label">
       </div>
     </div>
+    <!-- Deciding a pending request from the event bus (issue #2502).
+         Sits under the timing rows because it changes WHO may decide, not
+         how long a request waits. -->
+    <div class="feature-row">
+      <div class="feature-info">
+        <div class="feature-name" id="policy-event-decisions-label" data-i18n="policies.global.event_decisions.label">Allow approve/deny from Home Assistant events</div>
+        <div class="feature-help" data-i18n-html="policies.global.event_decisions.help">
+          Off by default. While on, an <code>ha_mcp_approval_response</code>
+          event carrying a pending request's token, a decision and the PIN
+          below decides that request — so your own notification automation
+          can approve it from a phone. Needs a PIN before it can be switched
+          on.
+        </div>
+      </div>
+      <div class="feature-control">
+        <label class="switch">
+          <input type="checkbox" id="policy-event-decisions-toggle" aria-labelledby="policy-event-decisions-label">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+    <div class="ha-alert ha-alert-warning" role="note">
+      <svg class="ha-alert-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M12,2L1,21H23M12,6L19.53,19H4.47M11,10V14H13V10M11,16V18H13V16"/>
+      </svg>
+      <div class="ha-alert-body" data-i18n="policies.global.event_decisions.warning">
+        An AI agent with enough access can guess or obtain this PIN — by asking
+        you for it, or by writing an automation that reads it out of a response
+        event — and then approve its own requests. Home Assistant cannot tell an
+        event fired by your automation from one fired by an agent, so the PIN is
+        the only thing between them. Switching this on accepts that limitation.
+        Deciding in the Pending list is unaffected — on the settings UI the
+        server itself serves. The stdio sidecar's settings page sets the PIN
+        and the policy, but cannot list or decide pending approvals: those
+        live in the server process it cannot reach.
+      </div>
+    </div>
+    <div class="feature-row">
+      <div class="feature-info">
+        <div class="feature-name" data-i18n="policies.global.pin.label">Approval PIN</div>
+        <div class="feature-help" data-i18n="policies.global.pin.help">
+          At least 4 characters. Stored as a salted hash and never shown
+          again, and kept out of the policy document so nothing that reads
+          or writes policy carries it. Five wrong PINs within five minutes
+          close the channel for the rest of that window — the Pending list
+          on the server's own settings UI keeps working (the stdio sidecar
+          page cannot show it).
+        </div>
+        <div class="feature-locked-note" id="policy-pin-status" role="status" aria-live="polite"></div>
+      </div>
+      <div class="feature-control" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+        <input type="password" id="policy-decision-pin" autocomplete="new-password" aria-label="Approval PIN" data-i18n-aria-label="policies.global.pin.label">
+        <button id="policy-set-pin-btn" class="restart-btn" data-i18n="policies.global.pin.set">Set PIN</button>
+        <button id="policy-clear-pin-btn" class="restart-btn" data-i18n="policies.global.pin.clear">Remove PIN</button>
+      </div>
+    </div>
     <div style="margin-top:10px; display:flex; align-items:center; gap:12px">
       <button id="policy-save-global-btn" class="restart-btn" data-i18n="policies.global.save">Save global settings</button>
       <span id="policy-global-save-status" class="status" role="status" aria-live="polite"></span>
@@ -402,6 +458,19 @@
 
   <section id="policy-rules">
     <h3 style="font-size:1rem;margin-bottom:8px" data-i18n="policies.rules.title">Gated tools</h3>
+    <!-- Issue #2515: a rule is keyed on the tool name, so a second tool that
+         reaches the same capability is not covered by it. Stated where the
+         rules are written rather than only in the FAQ. -->
+    <div class="ha-alert ha-alert-info" role="note">
+      <svg class="ha-alert-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,17H13V11H11V17Z"/>
+      </svg>
+      <div class="ha-alert-body" data-i18n-html="policies.rules.scope_notice">
+        Policies apply to individual tools. Other tools may perform the same
+        action. For example, requiring approval for <code>ha_call_event</code>
+        does not restrict event firing through <code>ha_call_service</code>.
+      </div>
+    </div>
     <div id="policy-load-error" style="display:none;background:var(--danger);color:white;padding:8px 12px;border-radius:6px;margin-bottom:8px;font-size:0.85rem;"></div>
     <div id="policy-rules-empty" class="backup-empty" style="display:none;" data-i18n-html="policies.rules.empty">
       No tools currently security-gated. Enable per-tool gating from the

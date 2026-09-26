@@ -535,13 +535,4 @@ PYTHON TRANSFORM SECURITY:
 - Function definitions: def, class
 - Exception handling: try/except (validate with isinstance/in/.get() instead)
 - While loops: use bounded for loops or comprehensions instead
-
-🎯 PATTERNS:
-- Filter cards: cards = [c for c in cards if keep(c)]
-- Skip in a loop: prefer `continue` over an empty `pass` branch (clearer)
-- Conditionally include: build a new list and `.append(x)` only the
-  cards you want, instead of iterating the original and using if/pass
-  branches to drop entries
-- Modify in place when possible (single pass, fewer surprises) over
-  reconstructing the entire list
 """.strip()

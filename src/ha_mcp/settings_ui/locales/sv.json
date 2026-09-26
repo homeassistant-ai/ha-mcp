@@ -498,7 +498,25 @@
     "addon.verify_ssl.description": "Verifiera Home Assistant-serverns TLS-certifikat. Appen (tillägget) ansluter via Supervisor-proxyn, så detta har normalt ingen effekt och bör förbli aktiverat. Inaktivera endast om du har konfigurerat om appen (tillägget) för att kommunicera med HA över ett offentligt HTTPS-värdnamn med ett självsignerat certifikat eller matchningsfel för värdnamn. Inaktivering försvagar transportsäkerheten – lämna på om du inte vet att du behöver det. Kräver omstart för att träda i kraft.",
     "addon.ha_tool_concurrency.name": "Samtidighet för Home Assistant-verktyg",
     "addon.ha_tool_concurrency.description": "Valfri gräns för yttre anrop av Home Assistant-verktyg över alla sessioner. Intern samtidighet för REST, WebSocket och per-verktyg-grenar är oförändrad. 0 behåller obegränsat beteende. Ett anrop som väntar på kapacitet misslyckas efter 60 sekunder.",
-    "addon_stable.enable_tool_search.description": "Ersätt hela verktygskatalogen med sökbaserad upptäckt. Minskar inaktiv kontext med ungefär 90 %, till cirka 5K tokens. ⚠️ Aktivera INTE detta i klienter med inbyggd verktygssökning / uppskjutna verktyg (claude.ai, Claude Desktop, Claude Code) – de två söklagren krockar, och klientens inbyggda verktygssökning är det bättre valet där; lämna denna avstängd. Huruvida verktyg skjuts upp beror på din klient- och modellkombination: använd detta när din konfiguration läser in hela katalogen i förväg – modeller utan inbyggda uppskjutna verktyg (t.ex. Gemini, OpenAI-kompatibla lokala modeller, Claude Haiku), klienter som infogar alla verktygsscheman oavsett modell (t.ex. GitHub Copilot CLI), eller mindre kontextfönster. Vissa Codex-modeller och ChatGPT inkluderar också uppskjutna verktyg – kontrollera din klient/modell direkt för att bekräfta dess funktioner så att du inte lämnar detta aktiverat i onödan. Verktyg hittas via ha_search_tools och exekveras via kategoriserade proxyservrar (läs/skriv/ta bort). Kräver omstart av appen (tillägget) för att träda i kraft – återanslut eller uppdatera sedan MCP-servern i din AI-klient så att den läser om verktygslistan. Enbart omstart av appen (tillägget) uppdaterar INTE en klients cachade verktygslista; detta gäller efter att du har ändrat någon inställning här."
+    "addon_stable.enable_tool_search.description": "Ersätt hela verktygskatalogen med sökbaserad upptäckt. Minskar inaktiv kontext med ungefär 90 %, till cirka 5K tokens. ⚠️ Aktivera INTE detta i klienter med inbyggd verktygssökning / uppskjutna verktyg (claude.ai, Claude Desktop, Claude Code) – de två söklagren krockar, och klientens inbyggda verktygssökning är det bättre valet där; lämna denna avstängd. Huruvida verktyg skjuts upp beror på din klient- och modellkombination: använd detta när din konfiguration läser in hela katalogen i förväg – modeller utan inbyggda uppskjutna verktyg (t.ex. Gemini, OpenAI-kompatibla lokala modeller, Claude Haiku), klienter som infogar alla verktygsscheman oavsett modell (t.ex. GitHub Copilot CLI), eller mindre kontextfönster. Vissa Codex-modeller och ChatGPT inkluderar också uppskjutna verktyg – kontrollera din klient/modell direkt för att bekräfta dess funktioner så att du inte lämnar detta aktiverat i onödan. Verktyg hittas via ha_search_tools och exekveras via kategoriserade proxyservrar (läs/skriv/ta bort). Kräver omstart av appen (tillägget) för att träda i kraft – återanslut eller uppdatera sedan MCP-servern i din AI-klient så att den läser om verktygslistan. Enbart omstart av appen (tillägget) uppdaterar INTE en klients cachade verktygslista; detta gäller efter att du har ändrat någon inställning här.",
+    "policies.global.event_decisions.label": "Tillåt godkännande/nekande från Home Assistant-händelser",
+    "policies.global.event_decisions.help": "Av som standard. När funktionen är aktiverad avgör en <code>ha_mcp_approval_response</code>-händelse som innehåller en väntande begärans token, ett beslut och PIN-koden nedan den begäran – så att din egen notifieringsautomatisering kan godkänna den från en telefon. Kräver en PIN-kod innan den kan slås på.",
+    "policies.global.event_decisions.warning": "En AI-agent med tillräcklig behörighet kan gissa eller få tag på denna PIN-kod – genom att fråga dig efter den, eller genom att skriva en automatisering som läser av den från en svarsstöt – och sedan godkänna sina egna begäranden. Home Assistant kan inte skilja på en händelse som utlösts av din automatisering och en som utlösts av en agent, så PIN-koden är det enda som skiljer dem åt. Att slå på detta innebär ett accepterande av den begränsningen. Beslut i listan Väntande påverkas inte – på inställnings-UI som servern själv tillhandahåller. Stdio-sidovagnens inställningssida ställer in PIN-koden och policyn, men kan inte lista eller fatta beslut om väntande godkännanden: de finns i serverprocessen som den inte når.",
+    "policies.global.pin.label": "Godkännande-PIN",
+    "policies.global.pin.help": "Minst 4 tecken. Lagras som en saltad hash och visas aldrig igen, och hålls utanför policydokumentet så att inget som läser eller skriver policy bär med sig den. Fem felaktiga PIN-koder inom fem minuter stänger kanalen under resten av det tidsfönstret – listan Väntande på serverns egna inställnings-UI fortsätter att fungera (stdio-sidovagnens sida kan inte visa den).",
+    "policies.global.pin.set": "Ställ in PIN",
+    "policies.global.pin.clear": "Ta bort PIN",
+    "policies.global.pin.is_set": "En PIN-kod är inställd.",
+    "policies.global.pin.invalid": "Den lagrade PIN-koden kan inte läsas och matchar ingenting. Ställ in en ny.",
+    "policies.global.pin.not_set": "Ingen PIN-kod inställd. Ställ in en för att tillåta beslut över händelsebussen.",
+    "policies.global.pin.unknown": "Kunde inte läsa av om en PIN-kod är inställd.",
+    "policies.global.pin.saved": "PIN-kod sparad.",
+    "policies.global.pin.cleared": "PIN-kod borttagen.",
+    "policies.global.pin.cleared_and_disabled": "PIN-koden har tagits bort och beslut via händelsebussen har stängts av i samband med det.",
+    "policies.global.pin.confirm_clear": "Vill du ta bort godkännande-PIN-koden? Beslut via händelsebussen stängs av i samband med det; listan med väntande i den här fliken påverkas inte.",
+    "policies.operations.set_pin": "Ställ in PIN",
+    "policies.rules.scope_notice": "Policyer tillämpas på enskilda verktyg. Andra verktyg kan utföra samma åtgärd. Att till exempel kräva godkännande för <code>ha_call_event</code> begränsar inte händelseutlösning via <code>ha_call_service</code>.",
+    "policies.operations.clear_pin": "Ta bort PIN"
   },
   "tools": {
     "ha_bulk_control": {
@@ -511,7 +529,7 @@
     },
     "ha_call_service": {
       "title": "Anropa Tjänst",
-      "description": "Utför Home Assistant-tjänster för att kontrollera entiteter och utlösa automatiseringar."
+      "description": "Anropa valfri Home Assistant-tjänst eller ett engångs-WebSocket-kommando: den ultimata utvägen."
     },
     "ha_config_delete_dashboard": {
       "title": "Ta bort Dashboard",
@@ -523,11 +541,11 @@
     },
     "ha_config_get_automation": {
       "title": "Hämta Automatiseringskonfiguration",
-      "description": "Hämta Home Assistant-automatiseringskonfiguration."
+      "description": "Hämta konfiguration för Home Assistant-automatisering."
     },
     "ha_config_get_calendar_events": {
       "title": "Hämta Kalenderhändelser",
-      "description": "Hämta kalenderhändelser från en kalenderentitet."
+      "description": "Hämta kalenderhändelser från en kalenderentitet inom ett tidsintervall."
     },
     "ha_config_get_category": {
       "title": "Hämta Kategori",
@@ -547,7 +565,7 @@
     },
     "ha_config_get_script": {
       "title": "Hämta Skriptkonfiguration",
-      "description": "Hämta Home Assistant-skriptkonfiguration."
+      "description": "Hämta konfiguration för Home Assistant-skript."
     },
     "ha_config_get_yaml": {
       "title": "Läs YAML-konfigurationsfragment",
@@ -567,7 +585,7 @@
     },
     "ha_config_remove_automation": {
       "title": "Ta bort Automatisering",
-      "description": "Ta bort en Home Assistant-automatisering."
+      "description": "Ta bort en Home Assistant-automatisering permanent."
     },
     "ha_config_remove_calendar_event": {
       "title": "Ta bort Kalenderhändelse",
@@ -651,7 +669,7 @@
     },
     "ha_eval_template": {
       "title": "Utvärdera Mall",
-      "description": "Utvärdera Jinja2-mallar med Home Assistants mallmotor."
+      "description": "Kör en Jinja2-mallrendering eller en automationsvillkorskontroll i Home Assistant."
     },
     "ha_get_app": {
       "title": "Hämta appar (tillägg)",
@@ -659,7 +677,7 @@
     },
     "ha_get_automation_traces": {
       "title": "Hämta Automatiseringsspårningar",
-      "description": "Hämta exekveringsspårningar för automatiseringar och skript för att felsöka problem."
+      "description": "Hämta exekveringsspår för automatiseringar och skript för att felsöka problem."
     },
     "ha_get_camera_image": {
       "title": "Hämta Kamerabild",
@@ -751,7 +769,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Hantera inställningar för energipanelen",
-      "description": "Hantera inställningarna för Home Assistant energipanel."
+      "description": "Hantera inställningar för Home Assistant Energy Dashboard: elnät / solenergi /"
     },
     "ha_manage_hacs": {
       "title": "Hantera HACS",
@@ -775,7 +793,7 @@
     },
     "ha_manage_updates": {
       "title": "Hantera uppdateringar",
-      "description": "Hantera Home Assistant-uppdateringar — lista, läsa detaljer, massinstallera, hoppa över eller ångra överhoppning."
+      "description": "Hantera Home Assistant-uppdateringar (lista, detaljer, installera, hoppa över) och reparationsärenden (ignorera)."
     },
     "ha_read_file": {
       "title": "Läs fil",
@@ -783,7 +801,7 @@
     },
     "ha_reload_core": {
       "title": "Ladda om kärnkomponenter",
-      "description": "Ladda om Home Assistant-konfigurationen utan fullständig omstart."
+      "description": "Utför en omladdning av Home Assistant-konfigurationen utan en fullständig omstart."
     },
     "ha_remove_area_or_floor": {
       "title": "Ta bort område eller våning",
@@ -815,7 +833,7 @@
     },
     "ha_restart": {
       "title": "Starta om Home Assistant",
-      "description": "Starta om Home Assistant."
+      "description": "Utför en omstart av Home Assistant."
     },
     "ha_search": {
       "title": "Sök",

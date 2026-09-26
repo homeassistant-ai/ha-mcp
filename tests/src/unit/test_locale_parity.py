@@ -2074,42 +2074,26 @@ def test_a_reversed_ordered_pair_is_reported(
 
 
 @pytest.mark.parametrize(
-    ("english", "translated", "narrowed"),
+    ("english", "translated", "expected"),
     [
-        # Each row is a fault the merge gate reports and the engine does not,
-        # one per narrowed arm. The engine's own case -- a swapped number --
-        # is covered by test_the_comparison_runs_every_arm above.
-        ("keeps 30 entries", "behaelt Eintraege", "numbers"),
+        # Two English words, two digits: nothing added.
         (
-            "call ha_get_skill_guide, then ha_get_skill_guide again",
-            "rufe ha_get_skill_guide, dann wrong_tool erneut",
-            "literal occurrences",
+            "Five wrong PINs within five minutes",
+            "5분 동안 5회 잘못된 PIN",
+            "",
         ),
-        ("limit is 1-256 MB", "Grenze ist 1-256", "dropped unit"),
+        # The word only covers as many digits as the English states.
+        ("Five wrong PINs", "5분 동안 5회 잘못된 PIN", "numbers added ['5']"),
+        # A word covers its own value, not any digit.
+        ("within five minutes", "6분 이내", "numbers added ['6']"),
+        # An English digit spelled out in the translation is still a loss.
+        ("keeps 5 entries", "behaelt fuenf Eintraege", "numbers lost ['5']"),
     ],
 )
-def test_the_engine_gate_narrows_exactly_three_arms(
-    english: str, translated: str, narrowed: str
+def test_an_english_number_word_may_come_back_as_digits(
+    english: str, translated: str, expected: str
 ) -> None:
-    """The engine's setting is narrower than the merge gate's, on purpose.
-
-    Each of these is a real fault the merge gate names and the engine waves
-    through, and the asymmetry is deliberate in all three: a merge failure is
-    read by a human on a key that can carry a tolerance, while an engine
-    refusal holds a whole partial run back over a rendering that may well be
-    correct. What keeps the waved-through value from landing unchecked is the
-    partial-run pre-push step, which runs this file's merge-gate check over
-    exactly the keys the run wrote.
-    """
-    assert _parity_fault(english, translated), (
-        f"the merge gate no longer reports {narrowed}, so this row compares "
-        "two settings that agree and pins nothing"
-    )
-    assert not _parity_fault(english, translated, gate="engine"), (
-        f"the engine gate now reports {narrowed} as well — either the narrowing "
-        "was dropped or the corpus argument for it changed; re-read "
-        "_parity_fault before deleting this row"
-    )
+    assert _parity_fault(english, translated) == expected
 
 
 def _exception_still_fits(

@@ -59,8 +59,8 @@ is `started`. `start.py:_sibling_is_running` matches the sibling by exact slug o
   `webhook-proxy-dev-version-guard` workflow fails any PR that touches the dev add-on
   without an increase. Use the `Webhook Proxy Dev — Bump Version` workflow
   (`workflow_dispatch`, never scheduled) to do the bump and open a draft PR, or edit the
-  two files by hand. (Dev entries below `v2.0.3.dev1` in the dev CHANGELOG predate this
-  rule — the line originally counted independently from the 1.2.2 fork point.)
+  two files by hand. Dev CHANGELOG entries below `v2.0.3.dev1` follow an
+  older, independent numbering.
 - Stable keeps its own version line and never inherits a `.devN` label; the promote
   workflow assigns the stable number.
 

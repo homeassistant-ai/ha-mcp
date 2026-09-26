@@ -141,32 +141,25 @@ class ZoneTools:
         zone_id: Annotated[
             str | None,
             Field(
-                description="Zone ID to get details for (from ha_get_zone() list). "
-                "If omitted, lists all zones.",
+                description="Zone ID to get details for (from ha_get_zone() list).",
                 default=None,
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Get zone information - list all zones or get details for a specific one.
+        """Get zone information - list all zones or get details for a specific one.
 
         Without a zone_id: Lists all Home Assistant zones with their coordinates and radius.
         With a zone_id: Returns detailed configuration for a specific zone.
-
-        ZONE PROPERTIES:
-        - ID, name, icon
-        - Latitude, longitude, radius
-        - Passive mode setting
 
         EXAMPLES:
         - List all zones: ha_get_zone()
         - Get specific zone: ha_get_zone(zone_id="abc123")
 
-        **NOTE:** With the ha_mcp_tools custom component installed, YAML-defined
-        zones — including the auto-synthesized 'home' zone — are included and
-        marked ``editable=false`` / ``source="yaml"`` (storage zones created via
-        UI/API are ``source="storage"``). Without the component, only storage
-        zones are listed and YAML-defined zones such as 'home' will not appear.
+        With the ha_mcp_tools custom component installed, YAML-defined zones —
+        including the auto-synthesized 'home' zone — are included and marked
+        ``editable=false`` / ``source="yaml"`` (storage zones created via UI/API
+        are ``source="storage"``). Without the component, only storage zones are
+        listed and YAML-defined zones such as 'home' will not appear.
         """
         try:
             # Prefer the ha_mcp_tools component's helpers_list: core's zone/list
@@ -414,28 +407,28 @@ class ZoneTools:
         name: Annotated[
             str | None,
             Field(
-                description="Display name for the zone (required for create)",
+                description="Display name for the zone",
                 default=None,
             ),
         ] = None,
         latitude: Annotated[
             float | None,
             Field(
-                description="Latitude coordinate of the zone center (required for create)",
+                description="Latitude coordinate of the zone center",
                 default=None,
             ),
         ] = None,
         longitude: Annotated[
             float | None,
             Field(
-                description="Longitude coordinate of the zone center (required for create)",
+                description="Longitude coordinate of the zone center",
                 default=None,
             ),
         ] = None,
         zone_id: Annotated[
             str | None,
             Field(
-                description="Zone ID to update (omit to create new zone, use ha_get_zone to find IDs)",
+                description="Zone ID to update (use ha_get_zone to find IDs)",
                 default=None,
             ),
         ] = None,
@@ -461,19 +454,15 @@ class ZoneTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Create or update a Home Assistant zone.
+        """Create or update a Home Assistant zone.
 
         Omit zone_id to create a new zone (name, latitude, longitude required).
         Provide zone_id to update an existing zone (only specified fields change).
+        The 'home' zone is typically defined in YAML and cannot be modified here.
 
         EXAMPLES:
         - Create: ha_set_zone(name="Office", latitude=40.7128, longitude=-74.0060, radius=150, icon="mdi:briefcase")
-        - Update name: ha_set_zone(zone_id="abc123", name="New Office")
-        - Update radius: ha_set_zone(zone_id="abc123", radius=200)
-        - Update location: ha_set_zone(zone_id="abc123", latitude=40.7128, longitude=-74.0060)
-
-        Note: The 'home' zone is typically defined in YAML and cannot be modified via this API.
+        - Update: ha_set_zone(zone_id="abc123", radius=200)
         """
         operation = "create"
         try:
@@ -565,7 +554,7 @@ class ZoneTools:
         self,
         zone_id: Annotated[
             str,
-            Field(description="Zone ID to remove (use ha_get_zone to find IDs)"),
+            Field(description="Zone ID to remove"),
         ],
     ) -> dict[str, Any]:
         """

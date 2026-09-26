@@ -106,7 +106,7 @@ echo '{"test_prompt":"..."}' | uv run python tests/uat/run_uat.py --agents opena
 
 ### Stdout: Concise Summary
 
-The calling agent receives a compact summary. On success, phase outputs are omitted to save context:
+The calling agent receives a compact summary. It leaves out the raw JSON to save context:
 
 ```json
 {
@@ -121,6 +121,7 @@ The calling agent receives a compact summary. On success, phase outputs are omit
         "completed": true,
         "duration_ms": 5200,
         "exit_code": 0,
+        "output": "...",
         "num_turns": 3,
         "tool_stats": { "totalCalls": 2, "totalSuccess": 2, "totalFail": 0 }
       },
@@ -128,6 +129,7 @@ The calling agent receives a compact summary. On success, phase outputs are omit
         "completed": true,
         "duration_ms": 8100,
         "exit_code": 0,
+        "output": "...",
         "num_turns": 5,
         "tool_stats": { "totalCalls": 4, "totalSuccess": 4, "totalFail": 0 }
       },
@@ -135,6 +137,7 @@ The calling agent receives a compact summary. On success, phase outputs are omit
         "completed": true,
         "duration_ms": 2100,
         "exit_code": 0,
+        "output": "...",
         "num_turns": 2,
         "tool_stats": { "totalCalls": 1, "totalSuccess": 1, "totalFail": 0 }
       },
@@ -156,7 +159,7 @@ The calling agent receives a compact summary. On success, phase outputs are omit
 - `total_tool_calls` - Total MCP tool invocations
 - `total_tool_success` / `total_tool_fail` - Success/failure counts
 
-On failure, `output` and `stderr` are included in the summary for the failed phase:
+Every phase summary includes `output`, plus `tool_trace` when tool calls were logged. A failed phase also includes `stderr` when it is not empty:
 
 ```json
 {

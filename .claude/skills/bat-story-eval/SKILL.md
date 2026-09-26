@@ -8,7 +8,7 @@ allowed-tools: Bash, Read, Write, Glob, Grep, Task
 
 # BAT Story Evaluation
 
-You are the evaluator. Follow these steps IN ORDER. Do not skip steps.
+You are the evaluator. Run the steps in order; each one uses the output of the step before it.
 
 ## Parse Arguments
 
@@ -114,7 +114,7 @@ For EACH agent, run all stories against the **baseline** version. One container 
 ```bash
 cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/worktree/uat-stories"
 uv run python tests/uat/stories/run_story.py \
-  catalog/<first_story>.yaml \
+  tests/uat/stories/catalog/<first_story>.yaml \
   --agents <agent> --keep-container \
   --branch <baseline> \
   --results-file local/uat-results.jsonl
@@ -140,7 +140,7 @@ outcomes; re-run it, and if it keeps failing record the story as `unverified`
 Run remaining pre-built stories on the same container:
 ```bash
 uv run python tests/uat/stories/run_story.py \
-  catalog/<next_story>.yaml \
+  tests/uat/stories/catalog/<next_story>.yaml \
   --agents <agent> --ha-url http://localhost:PORT --ha-token TOKEN \
   --branch <baseline> \
   --results-file local/uat-results.jsonl
@@ -160,8 +160,10 @@ Verify each via ha_query.py using the custom story's `verify.questions`.
 
 ### 1d. Stop container
 
+Stop only the container kept in step 1a. `PORT` is the host port in its `Container kept alive: http://localhost:PORT` line:
+
 ```bash
-docker stop $(docker ps -q --filter "ancestor=ghcr.io/home-assistant/home-assistant:2026.1.3") 2>/dev/null
+docker stop $(docker ps -q --filter "publish=PORT")
 ```
 
 ## Step 2: Run Target Version
@@ -172,7 +174,7 @@ The only difference: omit `--branch` so run_story.py uses local code.
 
 ```bash
 uv run python tests/uat/stories/run_story.py \
-  catalog/<first_story>.yaml \
+  tests/uat/stories/catalog/<first_story>.yaml \
   --agents <agent> --keep-container \
   --results-file local/uat-results.jsonl
 ```

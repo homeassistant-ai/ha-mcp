@@ -343,7 +343,7 @@ async def wait_for_repo_registration(
     try:
         sub_id, queue = await ws_client.subscribe_command(
             "hacs/subscribe",
-            timeout=HACS_SUBSCRIBE_TIMEOUT,
+            wait_timeout=HACS_SUBSCRIBE_TIMEOUT,
             signal=HACS_REPOSITORY_SIGNAL,
         )
     except (

@@ -110,6 +110,13 @@ class Policy(BaseModel):
     wait_seconds: int = Field(default=60, ge=5, le=600)
     approval_ttl_minutes: int = Field(default=5, ge=1, le=60)
     rules: list[Rule] = Field(default_factory=list)
+    # Whether a PIN-carrying ha_mcp_approval_response event may decide a
+    # pending approval (``policy.decisions``). Off by default, and off is
+    # also what an older policy file means. The PIN itself is NOT part of
+    # this document -- see ``policy.decision_pin`` for where it lives and
+    # why. Enabling without a stored PIN decides nothing: every write path
+    # refuses the combination and the listener re-checks it per event.
+    event_decisions_enabled: bool = False
     version: int = Field(default=0, ge=0)
     # ANY-match schema marker (see POLICY_SCHEMA_VERSION). Detection of
     # unmigrated files reads the RAW json (this default would mask it).

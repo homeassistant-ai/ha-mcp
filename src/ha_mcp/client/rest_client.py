@@ -239,6 +239,91 @@ _NO_ANSWER_ERRORS = (
     WebSocketException,
 )
 
+RENDER_NO_VERDICT_WITHOUT_REPORT_ERRORS = (
+    "No template result from Home Assistant. With report_errors=false Home "
+    "Assistant does not report a failed render (it only writes the error to "
+    "its own log), so the template most likely failed. Retry with "
+    "report_errors=true to get the error."
+)
+
+
+def _is_typed_template_error(error: str) -> bool:
+    """True for ``"UndefinedError: ..."``-style messages that name the class."""
+    name = error.partition(": ")[0]
+    return name.isidentifier() and name.endswith(("Error", "Exception"))
+
+
+def _pick_render_error(first: str, queue: asyncio.Queue[dict[str, Any]]) -> str:
+    """Choose the clearest of the ERROR events already queued after ``first``.
+
+    One failure can arrive as several events: an undefined attribute is
+    reported once bare (``'dict object' has no attribute 'split'``) and once
+    with its class (``UndefinedError: ...``). The class-named one is kept.
+    """
+    candidates = [first]
+    while True:
+        try:
+            event = queue.get_nowait().get("event") or {}
+        except (asyncio.QueueEmpty, asyncio.QueueShutDown):
+            break
+        error = event.get("error")
+        if event.get("level") == "ERROR" and isinstance(error, str):
+            candidates.append(error)
+    return next((e for e in candidates if _is_typed_template_error(e)), first)
+
+
+async def _read_render_verdict(
+    queue: asyncio.Queue[dict[str, Any]],
+    template: Any,
+    wait: float,
+    report_errors: bool,
+) -> dict[str, Any]:
+    """Read ``render_template`` events up to the render's verdict."""
+    warnings: list[str] = []
+    try:
+        async with asyncio.timeout(wait):
+            while True:
+                event = (await queue.get()).get("event") or {}
+                if "result" in event:
+                    response: dict[str, Any] = {
+                        "success": True,
+                        "result": event["result"],
+                        "template": template,
+                        "listeners": event.get("listeners", {}),
+                    }
+                    break
+                error = event.get("error")
+                if not isinstance(error, str):
+                    logger.debug("render_template: unrecognised event %r", event)
+                    continue
+                if event.get("level") == "ERROR":
+                    response = {
+                        "success": False,
+                        "error": _pick_render_error(error, queue),
+                        "template": template,
+                    }
+                    break
+                if error not in warnings:
+                    warnings.append(error)
+    except TimeoutError:
+        response = {
+            "success": False,
+            "error": (
+                "Event timeout - template result not received"
+                if report_errors
+                else RENDER_NO_VERDICT_WITHOUT_REPORT_ERRORS
+            ),
+            "no_verdict": True,
+            "template": template,
+        }
+    except asyncio.QueueShutDown as e:
+        raise HomeAssistantConnectionError(
+            "WebSocket connection to Home Assistant closed while rendering the template"
+        ) from e
+    if warnings:
+        response["warnings"] = warnings
+    return response
+
 
 class HomeAssistantClient:
     """Authenticated HTTP client for Home Assistant API."""
@@ -1768,7 +1853,7 @@ class HomeAssistantClient:
                 )
                 acquiring = False
 
-                # Special handling for render_template which returns an event with the actual result
+                # render_template is a subscription; see _handle_render_template.
                 if message.get("type") == "render_template":
                     return await self._handle_render_template(ws_client, message)
 
@@ -1868,37 +1953,46 @@ class HomeAssistantClient:
     async def _handle_render_template(
         self, ws_client: Any, message: dict[str, Any]
     ) -> dict[str, Any]:
-        """Handle render_template WebSocket command with event-based response."""
+        """Render a template, keeping the errors and warnings HA reports.
+
+        ``render_template`` opens a subscription. With ``report_errors`` HA sends
+        each template error or warning as an ``{"error", "level"}`` event,
+        possibly before the result frame (#2522). The first ERROR event or
+        ``{"result", "listeners"}`` event is the render's verdict; WARNING
+        events seen before it are returned in ``warnings`` whatever the
+        outcome. Without ``report_errors`` HA only logs a failed render and
+        never sends a verdict, so the wait runs out (``no_verdict``). The
+        subscription is released in every case, or HA keeps re-rendering the
+        template on every relevant state change for the life of the socket.
+        """
+        template = message.get("template")
         template_timeout = message.get("timeout", 3)
+        report_errors = message.get("report_errors", True)
+        params: dict[str, Any] = {
+            "template": template,
+            "timeout": template_timeout,
+            "report_errors": report_errors,
+        }
+        if message.get("strict"):
+            params["strict"] = True
+        if message.get("variables") is not None:
+            params["variables"] = message["variables"]
 
         try:
-            _, event_response = await ws_client.send_command_with_event(
-                "render_template",
-                wait_timeout=template_timeout + 2,
-                template=message.get("template"),
-                timeout=template_timeout,
-                report_errors=message.get("report_errors", True),
+            sub_id, queue = await ws_client.subscribe_command(
+                "render_template", wait_timeout=template_timeout + 2, **params
             )
-            logger.debug(f"WebSocket render_template event: {event_response}")
-
-            # Extract template result from event
-            if "event" in event_response and "result" in event_response["event"]:
-                template_result = event_response["event"]["result"]
-                listeners_info = event_response["event"].get("listeners", {})
-
-                return {
-                    "success": True,
-                    "result": template_result,
-                    "template": message.get("template"),
-                    "listeners": listeners_info,
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": "Invalid event response format",
-                    "template": message.get("template"),
-                }
-
+        except HomeAssistantCommandError as e:
+            # A rejection of the command itself: the render exceeded its
+            # timeout, or the template/variables failed HA's schema.
+            return {
+                "success": False,
+                "error": str(e).removeprefix(
+                    "subscribe_command('render_template') failed: "
+                ),
+                "error_code": e.code,
+                "template": template,
+            }
         except TimeoutError:
             # Template-level, not transport-level: the wait budget here is the
             # caller's own ``timeout`` (default 3s) plus two seconds, and a
@@ -1908,7 +2002,8 @@ class HomeAssistantClient:
             return {
                 "success": False,
                 "error": "Event timeout - template result not received",
-                "template": message.get("template"),
+                "no_verdict": True,
+                "template": template,
             }
         except Exception as e:
             if isinstance(e, _NO_ANSWER_ERRORS):
@@ -1917,11 +2012,23 @@ class HomeAssistantClient:
                 # in ``send_websocket_message`` — the very swallow this branch
                 # used to hide (#1947).
                 raise
+            # Neither Home Assistant's answer nor a dead transport: a fault on
+            # this side. Flagged so the tool does not present it as an error
+            # in the caller's template.
+            logger.exception("render_template failed on the client side")
             return {
                 "success": False,
                 "error": str(e),
-                "template": message.get("template"),
+                "client_error": True,
+                "template": template,
             }
+
+        try:
+            return await _read_render_verdict(
+                queue, template, template_timeout + 2, report_errors
+            )
+        finally:
+            await ws_client.release_subscription(sub_id)
 
     async def _resolve_script_id(self, identifier: str) -> str:
         """

@@ -33,7 +33,6 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
-    safe_info,
     safe_progress,
     validate_identifier_not_empty,
 )
@@ -156,23 +155,21 @@ class HacsTools:
         ] = None,
         installed_only: Annotated[
             bool,
-            Field(
-                description="Only return installed repositories (action='search', default: False)"
-            ),
+            Field(description="Only return installed repositories (action='search')"),
         ] = False,
         max_results: Annotated[
             int,
             Field(
                 ge=1,
                 le=100,
-                description="Maximum number of results (action='search', default: 10, max: 100)",
+                description="Maximum number of results (action='search')",
             ),
         ] = 10,
         offset: Annotated[
             int,
             Field(
                 ge=0,
-                description="Results to skip for pagination (action='search', default: 0)",
+                description="Results to skip for pagination (action='search')",
             ),
         ] = 0,
         repository_id: Annotated[
@@ -198,8 +195,7 @@ class HacsTools:
 
         **Caveats:** ``info`` fetches full repository detail from GitHub, so it can hit GitHub
         rate limits / needs HACS's configured GitHub token; ``search`` reads HACS's locally
-        cached repository index. ``repository_id`` accepts a numeric HACS ID or an
-        ``owner/repo`` path.
+        cached repository index.
         """
         try:
             if action == "search":
@@ -283,10 +279,7 @@ class HacsTools:
     ) -> dict[str, Any]:
         """Manage HACS (Home Assistant Community Store) — install/update, remove, add custom repositories, or refresh repository information.
 
-        Use ``action="download"`` to install or update a repository,
-        ``action="remove"`` to uninstall a downloaded repository, or
-        ``action="add_repository"`` to register a custom GitHub repository with HACS. This
-        tool performs writes; to search the store or read repository details use
+        This tool performs writes; to search the store or read repository details use
         ``ha_get_hacs_info``. Use ``action="update_information"`` to run the HACS UI's
         "Update information" action — a forced re-fetch of one repository's release data
         from GitHub, so a pending update becomes visible to HACS and its update entity
@@ -300,8 +293,7 @@ class HacsTools:
         - Refresh release data: ha_manage_hacs(action="update_information", repository_id="owner/repo")
 
         **Caveats:** Installing an integration usually needs a Home Assistant restart to
-        activate; new Lovelace cards need a browser cache clear. ``repository_id`` accepts a
-        numeric HACS ID or an ``owner/repo`` path; ``add_repository`` requires ``owner/repo``
+        activate; new Lovelace cards need a browser cache clear. ``add_repository`` requires ``owner/repo``
         format plus a matching ``category``. Removing an integration deletes its files but
         the loaded module persists until the next Home Assistant restart — delete its config
         entries first (``ha_remove_helpers_integrations``). HACS refreshes custom
@@ -383,9 +375,8 @@ class HacsTools:
         offset: int,
         ctx: Context | None,
     ) -> dict[str, Any]:
-        await safe_info(
-            ctx,
-            f"ha_get_hacs_info search starting: query={query!r} "
+        logger.debug(
+            "ha_get_hacs_info search starting: "
             f"category={category} installed_only={installed_only}",
         )
         await safe_progress(

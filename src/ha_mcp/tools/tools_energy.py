@@ -385,11 +385,7 @@ class EnergyTools:
             Field(
                 description=(
                     "Operation mode. Primitives: 'get' reads the current prefs; "
-                    "'set' writes a full prefs payload (per-top-level-key "
-                    "full-replace). Convenience modes: 'add_device' / "
-                    "'remove_device' / 'add_source' perform a single read-"
-                    "modify-write atomically — no config_hash from the caller, "
-                    "the tool fetches it fresh internally."
+                    "'set' writes a full prefs payload."
                 )
             ),
         ],
@@ -401,8 +397,7 @@ class EnergyTools:
                     "Full prefs payload for mode='set'. Must contain the "
                     "top-level keys you intend to replace: 'energy_sources', "
                     "'device_consumption', 'device_consumption_water'. Any "
-                    "top-level key present in this payload REPLACES the "
-                    "existing list entirely; any omitted key is preserved. "
+                    "omitted key is preserved. "
                     "Call with mode='get' first, mutate the returned config, "
                     "then pass the whole object back. Ignored by convenience "
                     "modes."
@@ -414,15 +409,13 @@ class EnergyTools:
             str | dict[_PrefsKey, str] | None,
             Field(
                 description=(
-                    "Hash from a previous mode='get' call. REQUIRED for "
-                    "mode='set' unless dry_run=True. Two forms: str (full-"
-                    "blob lock) or dict (per-key lock, taken from the "
-                    "config_hash_per_key field of mode='get'). Pass the dict "
-                    "form as a native object, NOT a JSON-encoded string — a "
-                    "stringified dict is treated as a full-blob token and will "
-                    "report RESOURCE_LOCKED; clients that can only send strings "
-                    "should use the str full-blob form. See the tool docstring "
-                    "for fail-closed semantics. Ignored by convenience modes."
+                    "Hash from a previous mode='get' call. REQUIRED for mode='set' unless "
+                    "dry_run=True. Two forms: str (full-blob lock) or dict (per-key lock, "
+                    "taken from the config_hash_per_key field of mode='get'). Pass the dict"
+                    " form as a native object, NOT a JSON-encoded string — a stringified "
+                    "dict is treated as a full-blob token and will report RESOURCE_LOCKED; "
+                    "clients that can only send strings should use the str full-blob form. "
+                    "Ignored by convenience modes."
                 ),
                 default=None,
             ),
@@ -431,18 +424,15 @@ class EnergyTools:
             bool,
             Field(
                 description=(
-                    "If True, no write is performed. For mode='set': runs a "
-                    "local shape check on the proposed config AND calls the "
-                    "server's energy/validate against the CURRENT persisted "
-                    "state (Home Assistant's validate endpoint cannot validate "
-                    "an unsubmitted payload). For convenience modes: simulates "
-                    "the mutation against a fresh read and reports what would "
-                    "change without writing — but still raises "
-                    "RESOURCE_ALREADY_EXISTS (duplicate add_device, or duplicate "
-                    "add_source for solar/battery/gas/water), RESOURCE_NOT_FOUND "
-                    "(missing remove_device), or VALIDATION_FAILED (post-mutator "
-                    "shape error) when the proposed mutation is not applicable. "
-                    "Default False."
+                    "If True, no write is performed. For mode='set': runs a local shape "
+                    "check on the proposed config AND calls the server's energy/validate "
+                    "against the CURRENT persisted state. For convenience modes: simulates "
+                    "the mutation against a fresh read and reports what would change "
+                    "without writing — but still raises RESOURCE_ALREADY_EXISTS (duplicate "
+                    "add_device, or duplicate add_source for solar/battery/gas/water), "
+                    "RESOURCE_NOT_FOUND (missing remove_device), or VALIDATION_FAILED "
+                    "(post-mutator shape error) when the proposed mutation is not "
+                    "applicable."
                 ),
                 default=False,
             ),
@@ -461,10 +451,7 @@ class EnergyTools:
         name: Annotated[
             str | None,
             Field(
-                description=(
-                    "Optional display name for mode='add_device'. Only used "
-                    "when adding a new device entry; ignored otherwise."
-                ),
+                description=("Display name for mode='add_device'; ignored otherwise."),
                 default=None,
             ),
         ] = None,
@@ -472,13 +459,11 @@ class EnergyTools:
             str | None,
             Field(
                 description=(
-                    "Optional 'parent' statistic for mode='add_device'. Set "
-                    "this to a statistic that already INCLUDES this device's "
-                    "consumption (e.g., a whole-home or circuit-level meter "
-                    "that this device feeds into). The Energy Dashboard will "
-                    "subtract this device's reading from the parent so the "
-                    "parent's contribution is not double-counted. Ignored "
-                    "otherwise."
+                    "'Parent' statistic for mode='add_device'. Set this to a statistic that"
+                    " already INCLUDES this device's consumption (e.g., a whole-home or "
+                    "circuit-level meter that this device feeds into). The Energy Dashboard"
+                    " will subtract this device's reading from the parent so the parent's "
+                    "contribution is not double-counted. Ignored otherwise."
                 ),
                 default=None,
             ),
@@ -488,8 +473,7 @@ class EnergyTools:
             Field(
                 description=(
                     "If True, mode='add_device' / 'remove_device' targets "
-                    "'device_consumption_water' instead of 'device_consumption'. "
-                    "Default False."
+                    "'device_consumption_water' instead of 'device_consumption'."
                 ),
                 default=False,
             ),
@@ -520,14 +504,9 @@ class EnergyTools:
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Manage the Home Assistant Energy Dashboard preferences.
-
-        The Energy Dashboard configuration (grid/solar/battery/gas/water energy
-        sources, individual device consumption sensors for electricity and
-        water, cost tariffs) is stored in ``.storage/energy`` and not otherwise
-        reachable via REST, services, or helper flows — this tool is the only
-        way for agents to inspect or modify it.
+        """Manage the Home Assistant Energy Dashboard preferences: grid / solar /
+        battery / gas / water energy sources, device consumption sensors for
+        electricity and water, and cost tariffs.
 
         WHEN TO USE:
         - mode='get' / 'set': inspect or replace the full Energy Dashboard
@@ -535,11 +514,9 @@ class EnergyTools:
           top-level keys at once.
         - mode='add_device' / 'remove_device': add or remove a single
           device-consumption entry. The tool performs a fresh read-modify-write
-          internally; the caller does NOT manage config_hash. Use ``water=True``
-          to target the water meter list instead of electricity.
-        - mode='add_source': append a single entry to ``energy_sources`` (grid,
-          solar, battery, gas, or water). Same atomic read-modify-write
-          semantics.
+          internally; the caller does NOT manage config_hash.
+        - mode='add_source': append a single entry to ``energy_sources``.
+          Same atomic read-modify-write semantics.
 
         WHEN NOT TO USE:
         - To create the underlying statistics themselves — they must already
@@ -552,46 +529,23 @@ class EnergyTools:
           the user had configured — silently, with no error. mode='set'
           requires a fresh ``config_hash`` for optimistic locking; convenience
           modes hide this entirely.
-        - ``config_hash`` accepts both a single ``str`` (full-blob lock) and
-          a ``dict[_PrefsKey, str]`` keyed by top-level keys (per-key lock,
-          taken from the ``config_hash_per_key`` field of the mode='get'
-          response). The per-key form lets an agent submit only the top-
-          level key it wants to change — set-equality between ``config``
-          keys and dict keys is enforced, and any key outside the canonical
-          set (typo, etc.) on either side is rejected with
-          ``VALIDATION_FAILED`` rather than silently dropped (so an empty
-          submission cannot succeed as a no-op). A per-key submission
-          still fully replaces that key's value as the save endpoint
-          requires. Mismatch on any locked key returns ``RESOURCE_LOCKED``
-          with the offending keys in the response's top-level
-          ``mismatched_keys`` (``create_error_response`` flattens the
-          ``context`` dict onto the response root).
-        - ``dry_run=True`` skips the hash check entirely for both forms;
-          the per-key form is therefore silently accepted on dry runs even
-          if its keys would mismatch the current state.
-        - A local shape check runs before every write; malformed payloads
-          are rejected with a ``shape_errors`` list.
+        - The per-key ``config_hash`` form lets an agent submit only the
+          top-level key it wants to change: ``config`` keys must equal the dict
+          keys (any key outside the canonical set is rejected with
+          ``VALIDATION_FAILED``), and a per-key submission still fully replaces
+          that key's value. A mismatch on any locked key returns
+          ``RESOURCE_LOCKED`` with the offending keys in ``mismatched_keys``.
+        - ``dry_run=True`` skips the hash check entirely for both forms.
+        - Writes need an administrator token; Home Assistant rejects the save
+          otherwise.
         - After a successful write, the tool calls ``energy/validate`` and
-          returns any residual issues as ``post_save_validation_errors`` in
-          the response. These reflect semantic problems (missing stats, unit
-          mismatches) that shape checks can't catch; the save persists
-          regardless — correct the config and write again if needed.
-        - The underlying save endpoint is admin-only. Non-admin tokens will
-          receive an authorization error from Home Assistant.
-        - Convenience modes are NOT idempotent: 'add_device' on an existing
-          ``stat_consumption`` returns RESOURCE_ALREADY_EXISTS; 'remove_device'
-          on a missing entry returns RESOURCE_NOT_FOUND. 'add_source' rejects
-          duplicates by ``(type, stat_energy_from)`` for solar/battery/gas/water
-          (RESOURCE_ALREADY_EXISTS); grid entries are appended without a
-          duplicate check (multiple grid variants are legitimate, and grid
-          has no single canonical uniqueness key) — the caller is responsible
-          for de-duplicating grid sources.
-        - Convenience modes do NOT bypass the local shape check on dry_run:
-          ``dry_run=True`` still raises ``RESOURCE_ALREADY_EXISTS``
-          (duplicate add_device / add_source), ``RESOURCE_NOT_FOUND``
-          (missing remove_device), or ``VALIDATION_FAILED`` (post-mutator
-          shape error) when the proposed mutation is not applicable. The
-          mutator and shape check both run before the dry-run short-circuit.
+          returns residual issues (missing stats, unit mismatches) as
+          ``post_save_validation_errors``; the save persists regardless —
+          correct the config and write again if needed.
+        - 'add_source' rejects duplicates by ``(type, stat_energy_from)`` for
+          solar/battery/gas/water; grid entries are appended without a duplicate
+          check (multiple grid variants are legitimate), so the caller
+          de-duplicates grid sources.
         """
         if mode == "get":
             return await self._get_prefs()

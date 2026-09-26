@@ -49,8 +49,8 @@ shared libraries already loaded by the HA process are not reloaded.
 | `reset` | Removes one setting's override-file entry, returning it to its default. Refused for env-pinned and add-on-managed settings, like `set`. |
 | `list_tools` | Returns the Tools tab payload: every tool with its state (enabled / disabled / pinned), effective LLM-API exposure, per-tool security gate, and the env-pinned / mandatory / best-practice locks that make a row read-only. |
 | `set_tool` | Changes one tool's `state`, `llm_api` exposure, and/or its security `gate` (`gated=`). All requested changes are validated before anything is written. `tool='*'` is refused — author wildcard rules through `set_policy`. `gated=` requires [security policy access](#security-policy-access). |
-| `get_policy` | Returns the full tool-security policy (`wait_seconds`, `approval_ttl_minutes`, `rules`, `version`, `schema_version`) plus whether the policy engine is enabled and live. |
-| `set_policy` | Writes the full policy, schema-validated and guarded by the `version` from your last `get_policy` (optimistic concurrency). Requires [security policy access](#security-policy-access). |
+| `get_policy` | Returns the full tool-security policy (`wait_seconds`, `approval_ttl_minutes`, `event_decisions_enabled`, `rules`, `version`, `schema_version`) plus whether the policy engine is enabled and live. |
+| `set_policy` | Writes the full policy, schema-validated and guarded by the `version` from your last `get_policy` (optimistic concurrency). The whole document is replaced, so a field you leave out reverts to its default — omitting `event_decisions_enabled` switches off approving from Home Assistant events, and the response warns when a write does that. Requires [security policy access](#security-policy-access). |
 | `get_backup_config` | Returns the auto-backup config fields (the Backups tab's settings), with each value's origin. |
 | `set_backup_config` | Changes auto-backup settings, routed through the Supervisor in app (add-on) mode and the override file elsewhere. |
 

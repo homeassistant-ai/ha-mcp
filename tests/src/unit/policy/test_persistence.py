@@ -85,4 +85,9 @@ def test_serialized_shape_is_stable(tmp_path: Path):
         "version",
         # ANY-match schema marker (PR #1993) — see migrate_policy_any_semantics.
         "schema_version",
+        # Deciding a held request from the event bus (issue #2502). The
+        # switch is part of the document; the PIN it depends on is not --
+        # that lives in approval_pin.json, out of reach of every reader of
+        # this file.
+        "event_decisions_enabled",
     }

@@ -848,6 +848,98 @@ class UpdateTools:
             )
         return response
 
+    async def _known_repair_keys(self) -> set[tuple[str, str]] | None:
+        """(domain, issue_id) of every listed Repairs issue, ignored ones included.
+
+        None when the list cannot be read; the caller then lets Home Assistant
+        judge each issue itself.
+        """
+        result = await self._client.send_websocket_message(
+            {"type": "repairs/list_issues"}
+        )
+        if not result.get("success"):
+            return None
+        issues = (result.get("result") or {}).get("issues") or []
+        return {
+            (issue["domain"], issue["issue_id"])
+            for issue in issues
+            if isinstance(issue, dict)
+            and isinstance(issue.get("domain"), str)
+            and isinstance(issue.get("issue_id"), str)
+        }
+
+    async def _set_repairs_ignored(
+        self, action: str, repairs: list[dict[str, Any]] | None
+    ) -> dict[str, Any]:
+        """Ignore or un-ignore Repairs issues, collecting per-item results."""
+        items = repairs or []
+        if not items or not all(
+            isinstance(r, dict)
+            and isinstance(r.get("domain"), str)
+            and isinstance(r.get("issue_id"), str)
+            for r in items
+        ):
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    f"'{action}' requires repairs: a list of "
+                    "{'domain': ..., 'issue_id': ...} objects.",
+                    suggestions=[
+                        "Read domain and issue_id from ha_get_overview's repairs "
+                        "(include_dismissed_repairs=True lists ignored ones too)",
+                    ],
+                    context={"action": action},
+                )
+            )
+        ignore = action == "ignore_repair"
+        # list_issues omits inactive issues, which the registry keeps (ignored
+        # ones included) across a restart; un-ignoring those must still reach
+        # Home Assistant, so only ignore is checked against the active list.
+        known = await self._known_repair_keys() if ignore else None
+        results: list[dict[str, Any]] = []
+        succeeded = 0
+        for item in items:
+            domain, issue_id = item["domain"], item["issue_id"]
+            context = {"domain": domain, "issue_id": issue_id}
+            if known is not None and (domain, issue_id) not in known:
+                results.append(
+                    create_error_response(
+                        ErrorCode.RESOURCE_NOT_FOUND,
+                        f"Repairs issue not found: {domain}/{issue_id}",
+                        context=context,
+                        suggestions=["Use ha_get_overview() to list Repairs issues"],
+                    )
+                )
+                continue
+            reply = await self._client.send_websocket_message(
+                {
+                    "type": "repairs/ignore_issue",
+                    "domain": domain,
+                    "issue_id": issue_id,
+                    "ignore": ignore,
+                }
+            )
+            if reply.get("success"):
+                results.append({"success": True, **context, "ignored": ignore})
+                succeeded += 1
+                continue
+            results.append(
+                create_error_response(
+                    ErrorCode.SERVICE_CALL_FAILED,
+                    str(reply.get("error") or "Home Assistant rejected the request"),
+                    context=context,
+                )
+            )
+        failed = len(items) - succeeded
+        return {
+            "success": failed == 0,
+            "action": action,
+            "requested": len(items),
+            "succeeded": succeeded,
+            "failed": failed,
+            "results": results,
+        }
+
     def _handle_update_error(
         self,
         e: Exception,
@@ -899,8 +991,10 @@ class UpdateTools:
             Field(
                 description="'list' (all pending updates, default), 'get' "
                 "(details/release notes for one update), 'install' (apply "
-                "pending updates), 'skip' (hide the offered version), or "
-                "'clear_skipped' (re-offer a skipped version).",
+                "pending updates), 'skip' (hide the offered version), "
+                "'clear_skipped' (re-offer a skipped version), 'ignore_repair' "
+                "(dismiss Repairs issues, as the Repairs UI's Ignore does), or "
+                "'unignore_repair' (show them again).",
                 default="list",
             ),
         ] = "list",
@@ -918,65 +1012,68 @@ class UpdateTools:
             list[str] | str | None,
             JSON_STRING_COERCION,
             Field(
-                description="For install: apply every pending update in these "
-                "categories ('addons', 'hacs', 'devices', 'other'). Mirrors the "
-                "HA 2026.7 'Update all' button: core/os/supervisor are excluded "
-                "by design (target those individually via entity_ids) and "
-                "skipped updates are never included.",
+                description="For install: apply every pending update in these categories ('addons',"
+                " 'hacs', 'devices', 'other'). As with the HA 'Update all' button, "
+                "core/os/supervisor are excluded (target those individually via "
+                "entity_ids) and skipped updates are never included.",
                 default=None,
             ),
         ] = None,
         include_skipped: Annotated[
             bool,
             Field(
-                description="For list: include updates that have been skipped "
-                "(default: False).",
+                description="For list: include updates that have been skipped.",
                 default=False,
             ),
         ] = False,
         include_release_notes: Annotated[
             bool,
             Field(
-                description="For get on a Core update entity: fetch multi-version "
-                "release notes and breaking changes for all versions between "
-                "installed and latest (default: False). Adds breaking_changes, "
-                "multi_version_release_notes, and installed_integrations to the "
-                "response.",
+                description="For get on a Core update entity: fetch multi-version release notes and"
+                " breaking changes for all versions between installed and latest. Adds "
+                "breaking_changes, multi_version_release_notes, and "
+                "installed_integrations to the response.",
                 default=False,
             ),
         ] = False,
         backup: Annotated[
             bool,
             Field(
-                description="For install: create a backup before installing where "
-                "the update entity supports it (apps/add-ons). Default: False.",
+                description="For install: create a backup before installing where the update entity"
+                " supports it (apps (add-ons)).",
                 default=False,
             ),
         ] = False,
+        repairs: Annotated[
+            list[dict[str, Any]] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description="For ignore_repair / unignore_repair: the Repairs "
+                "issues to act on, as [{'domain': ..., 'issue_id': ...}] taken "
+                "from ha_get_overview's repairs.",
+                default=None,
+            ),
+        ] = None,
     ) -> dict[str, Any]:
-        """Manage Home Assistant updates -- list, read details, batch install, skip, or un-skip.
+        """Manage Home Assistant updates (list, details, install, skip) and Repairs issues (ignore).
 
         Covers Core, OS, supervisor, apps (add-ons), device firmware, and HACS
-        update entities. In Read Only Mode the read actions ('list', 'get') stay
-        available; write actions are blocked.
+        update entities, plus the Repairs issues in Settings > System > Repairs.
+        Repairs are listed by ha_get_overview (not here); pass their domain and
+        issue_id to 'ignore_repair' / 'unignore_repair'. In Read Only Mode the
+        read actions ('list', 'get') stay available; write actions are blocked.
 
         Installs run asynchronously in Home Assistant and can take minutes:
         'install' returns once the service calls are accepted, with per-entity
         results. Poll action='list' to watch in_progress until installed_version
-        reaches latest_version.
+        reaches latest_version. action='list' also returns ha_mcp_update — this
+        MCP server's own update status {current, latest, update_available}, so
+        a newer ha-mcp release can be flagged.
 
         EXAMPLES:
-        - List all updates: ha_manage_updates()
         - Pre-update analysis: ha_manage_updates(action="get", entity_ids=["update.home_assistant_core_update"], include_release_notes=True)
         - Update everything pending in a category: ha_manage_updates(action="install", categories=["addons", "hacs"])
-
-        RETURNS (action='list'): updates_available, updates, categories, and
-        ha_mcp_update -- this MCP server's own update status {current, latest,
-        update_available}, so a newer ha-mcp release can be flagged.
-
-        RETURNS (action='get'): update details, release notes; with
-        include_release_notes=True on Core also breaking_changes.entries[],
-        multi_version_release_notes[], and installed_integrations.
+        - Dismiss a repair: ha_manage_updates(action="ignore_repair", repairs=[{"domain": "sun", "issue_id": "abc"}])
         """
         try:
             if action == "list":
@@ -987,12 +1084,16 @@ class UpdateTools:
                     entity_ids, bool(include_release_notes)
                 )
 
+            if action in ("ignore_repair", "unignore_repair"):
+                return await self._set_repairs_ignored(action, repairs)
+
             if action not in ("install", "skip", "clear_skipped"):
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
                         f"Invalid action '{action}'. Must be 'list', 'get', "
-                        "'install', 'skip', or 'clear_skipped'.",
+                        "'install', 'skip', 'clear_skipped', 'ignore_repair', or "
+                        "'unignore_repair'.",
                         context={"action": action},
                     )
                 )

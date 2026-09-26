@@ -498,7 +498,25 @@
     "addon.verify_ssl.description": "Kontrolu la TLS-atestilon de la servilo Home Assistant. La programo (aldonaĵo) konektiĝas per la provkuratora prokurservilo (Supervisor proxy), do ĉi tio kutime havas neniun efikon kaj devas resti ebligita. Malŝaltu nur se vi reagordis la programon (aldonaĵo) por komuniki kun HA per publika HTTPS-gastnomo kun memsubskribita atestilo aŭ malkongruo de gastnomo. Malŝalto malfortigas transportan sekurecon — lasu ebligita krom se vi scias, ke vi bezonas tion. Postulas restartigon por ekvalidi.",
     "addon.ha_tool_concurrency.name": "Konkureco de hejmaŭtomatigaj iloj de Home Assistant",
     "addon.ha_tool_concurrency.description": "Laŭvola limo pri eksteraj vokoj al Home Assistant-iloj tra ĉiuj sesioj. Interna REST-, WebSocket-, kaj perila disbranĉiĝa konkureco restas neŝanĝita. 0 tenas la senliman konduton. Voko atendanta je kapablo malsukcesas post 60 sekundoj.",
-    "addon_stable.enable_tool_search.description": "Anstataŭigu la plenan il-katalogon per serĉ-bazita malkovro. Reduktas senchovan kuntekston je ĉirkaŭ 90%, ĝis proksimume 5K tokenoj. ⚠️ NE ebligu ĉi tion en klientoj kun propra enkonstruita il-serĉo / prokrastitaj iloj (claude.ai, Claude Desktop, Claude Code) — la du serĉ-tavoloj konfliktas, kaj la enkonstruita il-serĉo de la kliento estas la pli bona elekto tie; lasu ĉi tion malŝaltita. Ĉu iloj estas prokrastitaj dependas de via kliento kaj modelo-kombinaĵo: uzu ĉi tion kiam via agordo ŝarĝas la plenan katalogon frue — modeloj sen denaskaj prokrastitaj iloj (ekz. Gemini, OpenAI-kongruaj lokaj modeloj, Claude Haiku), klientoj kiuj enlinias ĉiujn il-skemojn sendepende de modelo (ekz. GitHub Copilot CLI), aŭ pli malgrandaj kuntekstaj fenestroj. Kelkaj Codex-modeloj kaj ChatGPT ankaŭ inkluzivas prokrastitajn ilojn — kontrolu rekte vian klienton/modelon por konfirmi ties funkciojn, por ke vi ne lasu ĉi tion ebligita senbezone. Iloj estas trovitaj per ha_search_tools kaj ekzekutitaj per kategoriigitaj prokurserviloj (legado/skribado/forigo). Postulas restartigon de la programo (aldonaĵo) por ekvalidi — tiam reKonekti aŭ aktualigi la MCP-servilon en via AI-kliento por ke ĝi reŝarĝu la il-liston. Restartigi la programon (aldonaĵo) sole NE aktualigas la kaŝmemoritan il-liston de kliento; ĉi tio aplikiĝas post ŝanĝo de iu ajn agordo ĉi tie."
+    "addon_stable.enable_tool_search.description": "Anstataŭigu la plenan il-katalogon per serĉ-bazita malkovro. Reduktas senchovan kuntekston je ĉirkaŭ 90%, ĝis proksimume 5K tokenoj. ⚠️ NE ebligu ĉi tion en klientoj kun propra enkonstruita il-serĉo / prokrastitaj iloj (claude.ai, Claude Desktop, Claude Code) — la du serĉ-tavoloj konfliktas, kaj la enkonstruita il-serĉo de la kliento estas la pli bona elekto tie; lasu ĉi tion malŝaltita. Ĉu iloj estas prokrastitaj dependas de via kliento kaj modelo-kombinaĵo: uzu ĉi tion kiam via agordo ŝarĝas la plenan katalogon frue — modeloj sen denaskaj prokrastitaj iloj (ekz. Gemini, OpenAI-kongruaj lokaj modeloj, Claude Haiku), klientoj kiuj enlinias ĉiujn il-skemojn sendepende de modelo (ekz. GitHub Copilot CLI), aŭ pli malgrandaj kuntekstaj fenestroj. Kelkaj Codex-modeloj kaj ChatGPT ankaŭ inkluzivas prokrastitajn ilojn — kontrolu rekte vian klienton/modelon por konfirmi ties funkciojn, por ke vi ne lasu ĉi tion ebligita senbezone. Iloj estas trovitaj per ha_search_tools kaj ekzekutitaj per kategoriigitaj prokurserviloj (legado/skribado/forigo). Postulas restartigon de la programo (aldonaĵo) por ekvalidi — tiam reKonekti aŭ aktualigi la MCP-servilon en via AI-kliento por ke ĝi reŝarĝu la il-liston. Restartigi la programon (aldonaĵo) sole NE aktualigas la kaŝmemoritan il-liston de kliento; ĉi tio aplikiĝas post ŝanĝo de iu ajn agordo ĉi tie.",
+    "policies.global.event_decisions.label": "Permesi aprobon/malaprobon per Home Assistant eventoj",
+    "policies.global.event_decisions.help": "Malŝaltite defaŭlte. Dum ĝi estas ŝaltita, evento <code>ha_mcp_approval_response</code> enhavanta la signon de pritraktata peto, decidon kaj la suban PIN-kodon decidas pri tiu peto — do via propra sciiga aŭtomatigo povas aprobi ĝin de telefono. Postulas PIN-kodon antaŭ ol ĝi povas esti ŝaltita.",
+    "policies.global.event_decisions.warning": "AI-agento kun sufiĉa aliro povas diveni aŭ havigi ĉi tiun PIN-kodon — petante ĝin de vi, aŭ verkante aŭtomatigon kiu legas ĝin el responda evento — kaj poste aprobi siajn proprajn petojn. Home Assistant ne povas distingi eventon ekigitan de via aŭtomatigo disde unu ekigita de agentejo, do la PIN-kodo estas la sola afero inter ili. Ŝalti ĉi tion akceptas tiun limigon. Decidi en la pritraktata listo ne tuŝiĝas — sur la agorda fasado kiun la servilo mem servas. La agorda paĝo de la stdio-flankilo agordas la PIN-kodon kaj la politikon, sed ne povas listigi aŭ decidi pri pritraktataj aproboj: tiuj troviĝas en la servila procezo kiun ĝi ne povas atingi.",
+    "policies.global.pin.label": "Aproba PIN-kodo",
+    "policies.global.pin.help": "Almenau 4 signoj. Konservita kiel salita haknumero kaj neniam denove montrata, kaj tenita ekster la politikodokumento tiel ke nenio kiu legas aŭ skribas politikon portas ĝin. Kvin malĝustaj PIN-kodoj ene de kvin minutoj fermas la kanalon por la resto de tiu fenestro — la pritraktata listo sur la propra agorda fasado de la servilo daŭre funkcias (la paĝo de la stdio-flankilo ne povas montri ĝin).",
+    "policies.global.pin.set": "Agordi PIN-kodon",
+    "policies.global.pin.clear": "Forigi PIN-kodon",
+    "policies.global.pin.is_set": "PIN-kodo estas agordita.",
+    "policies.global.pin.invalid": "La konservita PIN-kodo ne povas esti legita kaj kongruas kun nenio. Agordu novan.",
+    "policies.global.pin.not_set": "Neniu PIN-kodo agordita. Agordu unu por permesi decidojn tra la eventobuso.",
+    "policies.global.pin.unknown": "Ne eblis legi ĉu PIN-kodo estas agordita.",
+    "policies.global.pin.saved": "PIN-kodo konservita.",
+    "policies.global.pin.cleared": "PIN-kodo forigita.",
+    "policies.global.pin.cleared_and_disabled": "PIN-kodo forigita, kaj decidi per la eventobuso malŝaltita kune kun ĝi.",
+    "policies.global.pin.confirm_clear": "Ĉu forigi la aproban PIN-kodon? Decidi per la eventobuso malŝaltas kun ĝi; la pritraktata listo en ĉi tiu langeto ne tuŝiĝas.",
+    "policies.operations.set_pin": "Agordi PIN-kodon",
+    "policies.rules.scope_notice": "Politikoj aplikiĝas al individuaj iloj. Aliaj iloj povas fari la saman agon. Ekzemple, postuli aprobon por <code>ha_call_event</code> ne limigas eventan ekigon per <code>ha_call_service</code>.",
+    "policies.operations.clear_pin": "Forigi PIN-kodon"
   },
   "tools": {
     "ha_bulk_control": {
@@ -511,7 +529,7 @@
     },
     "ha_call_service": {
       "title": "Voki Servon",
-      "description": "Ekzekutu servojn de Home Assistant por kontroli entojn kaj ekigi aŭtomatigojn."
+      "description": "Voki ajnan servon de Home Assistant aŭ unuopulan WebSocket-komandon: la ĉiovora savvento."
     },
     "ha_config_delete_dashboard": {
       "title": "Forigi Panelon",
@@ -523,11 +541,11 @@
     },
     "ha_config_get_automation": {
       "title": "Akiri Aŭtomatigan Agordon",
-      "description": "Reakiru agordon de aŭtomatigo de Home Assistant."
+      "description": "Akiri la agordon de aŭtomatigo de Home Assistant."
     },
     "ha_config_get_calendar_events": {
       "title": "Akiri Kalendarajn Eventojn",
-      "description": "Reakiru kalendarajn eventojn de kalendara ento."
+      "description": "Akiri kalendarajn eventojn el kalendara ento en difinita tem intervalo."
     },
     "ha_config_get_category": {
       "title": "Akiri Kategorion",
@@ -547,7 +565,7 @@
     },
     "ha_config_get_script": {
       "title": "Akiri Skriptan Agordon",
-      "description": "Reakiru agordon de skripto de Home Assistant."
+      "description": "Akiri la agordon de skripto de Home Assistant."
     },
     "ha_config_get_yaml": {
       "title": "Legi YAML-Agordan Fragmenton",
@@ -567,7 +585,7 @@
     },
     "ha_config_remove_automation": {
       "title": "Forigi Aŭtomatigon",
-      "description": "Forigu aŭtomatigon de Home Assistant."
+      "description": "Forigi aŭtomatigon de Home Assistant por ĉiam."
     },
     "ha_config_remove_calendar_event": {
       "title": "Forigi Kalendaran Eventon",
@@ -651,7 +669,7 @@
     },
     "ha_eval_template": {
       "title": "Taksi Ŝablonon",
-      "description": "Taksi Jinja2-ŝablonojn uzante la ŝablonan motoron de Home Assistant."
+      "description": "Plenumi Jinja2-ŝablonan rendorigon, aŭ aŭtomatigan kondiĉan kontrolon, en Home Assistant."
     },
     "ha_get_app": {
       "title": "Akiri programojn (aldonaĵojn)",
@@ -659,11 +677,11 @@
     },
     "ha_get_automation_traces": {
       "title": "Akiri Aŭtomatigajn Spurojn",
-      "description": "Reakiru ekzekutajn spurojn por aŭtomatigoj kaj skriptoj por sencimigi problemojn."
+      "description": "Akiri plenumspurojn por aŭtomatigoj kaj skriptoj por sencimigi problemojn."
     },
     "ha_get_camera_image": {
       "title": "Akiri Kameran Bildon",
-      "description": "Reakiru momentfoton de bildo de kameraa ento de Home Assistant."
+      "description": "Akiri momentfotan bildon de kameraa ento en Home Assistant."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Akiri Panelan Ekrankopion",
@@ -751,7 +769,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Administri Preferojn de Energia Panelo",
-      "description": "Administri la preferojn de la Energia Panelo de Home Assistant."
+      "description": "Administri la preferojn de la Energio-Panelo de Home Assistant: reto / sunenergio /"
     },
     "ha_manage_hacs": {
       "title": "Administri HACS",
@@ -775,7 +793,7 @@
     },
     "ha_manage_updates": {
       "title": "Administri Ĝisdatigojn",
-      "description": "Administri ĝisdatigojn de Home Assistant -- listigi, legi detalojn, amase instali, preterlasi, aŭ mal-preterlasi."
+      "description": "Administri ĝisdatigojn de Home Assistant (listo, detaloj, instalo, preterlaso) kaj riparajn problemojn (ignori)."
     },
     "ha_read_file": {
       "title": "Legi Dosieron",
@@ -783,7 +801,7 @@
     },
     "ha_reload_core": {
       "title": "Reŝargi Kernajn Komponantojn",
-      "description": "Reŝargi agordon de Home Assistant sen plena restartigo."
+      "description": "Plenumi reŝargon de la agordo de Home Assistant sen plena restartigo."
     },
     "ha_remove_area_or_floor": {
       "title": "Forigi Areon aŭ Etaĝon",
@@ -815,7 +833,7 @@
     },
     "ha_restart": {
       "title": "Restartigi Home Assistant",
-      "description": "Restartigi Home Assistant."
+      "description": "Plenumi restartigon de Home Assistant."
     },
     "ha_search": {
       "title": "Serĉi",

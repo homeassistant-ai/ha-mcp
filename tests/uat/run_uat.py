@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import atexit
 import difflib
 import json
 import logging
@@ -192,10 +193,19 @@ def _build_mcp_env(
     ha_url: str, ha_token: str, extra_env: dict[str, str] | None
 ) -> dict[str, str]:
     # Override with --mcp-env LOG_LEVEL=INFO when debugging the server.
+    # A fresh config dir keeps the developer's ~/.ha-mcp tool pins and
+    # settings out of the results; --mcp-env HA_MCP_CONFIG_DIR=... opts in.
+    # The backup dir is pinned too: the server otherwise keeps using a
+    # populated ~/.local/share/ha_mcp/backups.
+    config_dir = tempfile.mkdtemp(prefix="ha-mcp-bat-")
+    atexit.register(shutil.rmtree, config_dir, ignore_errors=True)
     env = {
         "HOMEASSISTANT_URL": ha_url,
         "HOMEASSISTANT_TOKEN": ha_token,
         "LOG_LEVEL": "WARNING",
+        "HA_MCP_CONFIG_DIR": config_dir,
+        "HAMCP_BACKUP_DIR": str(Path(config_dir) / "backups"),
+        "HA_MCP_DISABLE_SETTINGS_UI": "1",
     }
     if extra_env:
         env.update(extra_env)

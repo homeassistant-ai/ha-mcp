@@ -1225,11 +1225,8 @@ class ServiceTools:
         """Raise a structured ToolError for an unexpected ha_call_service failure."""
         suggestions = _build_service_suggestions(domain, service, entity_id)
         if entity_id:
-            suggestions.extend(
-                [
-                    f"For automation: ha_call_service('automation', 'trigger', entity_id='{entity_id}')",
-                    f"For universal control: ha_call_service('homeassistant', 'toggle', entity_id='{entity_id}')",
-                ]
+            suggestions.append(
+                f"For universal control: ha_call_service('homeassistant', 'toggle', entity_id='{entity_id}')"
             )
         exception_to_structured_error(
             error,
@@ -1279,9 +1276,8 @@ class ServiceTools:
         """Send a one-shot WebSocket command via ha_call_service's escape hatch.
 
         Reaches Home Assistant WebSocket commands that are not registered
-        services (e.g. ``repairs/ignore_issue``). Only one-shot
-        request/response commands are supported — streaming / subscription
-        commands are rejected up front.
+        services. Only one-shot request/response commands are supported —
+        streaming / subscription commands are rejected up front.
         """
         command_type = ws_command.strip()
         if domain is not None or service is not None:
@@ -1295,8 +1291,8 @@ class ServiceTools:
         if not command_type:
             raise_tool_error(
                 create_validation_error(
-                    "ws_command must be a non-empty WebSocket command type, "
-                    "e.g. 'repairs/ignore_issue'.",
+                    "ws_command must be a non-empty WebSocket command type "
+                    "(the message's 'type' field).",
                     parameter="ws_command",
                 )
             )
@@ -1370,10 +1366,8 @@ class ServiceTools:
                     str(error_msg),
                     context={"ws_command": command_type},
                     suggestions=[
-                        "Verify the command type and its parameters (e.g. "
-                        + "repairs/ignore_issue needs domain, issue_id, ignore)",
-                        "Confirm the target still exists (a repair must be "
-                        + "present to ignore it)",
+                        "Verify the command type and the parameters it requires",
+                        "Confirm the target still exists",
                     ],
                 )
             )
@@ -1831,9 +1825,8 @@ class ServiceTools:
             str | None,
             Field(
                 description=(
-                    "Service domain (e.g. 'light', 'climate', 'automation'). "
-                    "Required for a service call; must be omitted when ws_command "
-                    "is set."
+                    "Service domain (e.g. 'light', 'climate', 'automation'). Required for a"
+                    " service call."
                 ),
             ),
         ] = None,
@@ -1842,8 +1835,7 @@ class ServiceTools:
             Field(
                 description=(
                     "Service name within domain (e.g. 'turn_on', 'set_temperature', "
-                    "'trigger'). Required for a service call; must be omitted when "
-                    "ws_command is set."
+                    "'trigger'). Required for a service call."
                 ),
             ),
         ] = None,
@@ -1851,10 +1843,9 @@ class ServiceTools:
             str | None,
             Field(
                 description=(
-                    "Entity ID(s) the service call targets — one ID "
-                    "('light.living_room') or several comma-separated "
-                    "('light.a,light.b'). Optional for services that don't target "
-                    "a specific entity. Must be omitted when ws_command is set."
+                    "Entity ID(s) the service call targets — one ID ('light.living_room') "
+                    "or several comma-separated ('light.a,light.b'). Optional for services "
+                    "that don't target a specific entity."
                 ),
             ),
         ] = None,
@@ -1874,10 +1865,8 @@ class ServiceTools:
             bool,
             Field(
                 description=(
-                    "If True, the service's response data is returned once, as "
-                    "the top-level 'service_response' key — never nested inside "
-                    "'result' (default: False). Must stay False when ws_command "
-                    "is set."
+                    "If True, the service's response data is returned once, as the "
+                    "top-level 'service_response' key — never nested inside 'result'."
                 ),
             ),
         ] = False,
@@ -1899,14 +1888,10 @@ class ServiceTools:
             bool,
             Field(
                 description=(
-                    "Return HA's raw changed-state records unchanged (default: "
-                    "False). Use as an escape hatch when you need the full "
-                    "propagation chain or raw attribute payload (debug / "
-                    "inspection). With return_response=True the response data "
-                    "still surfaces once as the top-level service_response key, "
-                    "never nested in result. "
-                    "WARNING: brings back token-bloat for nested-group targets — "
-                    "prefer result_fields / result_attribute_keys for targeted control."
+                    "Return HA's raw changed-state records unchanged. With "
+                    "return_response=True the response data still surfaces once as the "
+                    "top-level service_response key, never nested in result. Large for "
+                    "nested-group targets — prefer result_fields / result_attribute_keys."
                 ),
             ),
         ] = False,
@@ -1916,10 +1901,10 @@ class ServiceTools:
             Field(
                 default=None,
                 description=(
-                    "Project each record in 'result' to only these top-level keys "
-                    "(e.g. ['entity_id', 'state']). Mirrors ha_get_state's fields=. "
-                    "Setting this DISABLES default compaction — no entity-id filter, "
-                    "no metadata strip — and applies the explicit projection instead."
+                    "Project each record in 'result' to only these top-level keys (e.g. "
+                    "['entity_id', 'state']). Setting this DISABLES default compaction — no"
+                    " entity-id filter, no metadata strip — and applies the explicit "
+                    "projection instead."
                 ),
             ),
         ] = None,
@@ -1929,10 +1914,9 @@ class ServiceTools:
             Field(
                 default=None,
                 description=(
-                    "Project each record's 'attributes' dict to only these keys "
-                    "(e.g. ['brightness', 'rgb_color']). Mirrors ha_get_state's "
-                    "attribute_keys=. Setting this DISABLES default compaction. "
-                    "Requires 'attributes' to be present in result_fields (or "
+                    "Project each record's 'attributes' dict to only these keys (e.g. "
+                    "['brightness', 'rgb_color']). Setting this DISABLES default "
+                    "compaction. Requires 'attributes' to be present in result_fields (or "
                     "result_fields=None)."
                 ),
             ),
@@ -1943,65 +1927,48 @@ class ServiceTools:
                 default=None,
                 description=(
                     "Advanced escape hatch: send a raw one-shot Home Assistant "
-                    "WebSocket command that is NOT a registered service (e.g. "
-                    "'repairs/ignore_issue' to dismiss a Repairs issue). When set, "
-                    "omit domain/service and the other service params; put the "
-                    "command's parameters in data. Streaming/two-phase and "
+                    "WebSocket command that is NOT a registered service and that "
+                    "no dedicated tool covers. When set, "
+                    "omit domain/service and the other service params. "
+                    "Streaming/two-phase and "
                     "service-invoking commands (call_service, execute_script) are "
                     "rejected."
                 ),
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Execute Home Assistant services to control entities and trigger automations.
+        """Call any Home Assistant service or one-shot WebSocket command: the catch-all escape hatch.
 
-        This is the universal tool for controlling all Home Assistant entities. Services follow
-        the pattern domain.service (e.g., light.turn_on, climate.set_temperature).
+        When NOT to use: a dedicated tool that covers the job. It validates the
+        request, reports the outcome in its own terms, and stays available where
+        a security policy gates this tool. For example: turn an automation on or
+        off or run it now with ha_config_set_automation (enabled / run_actions);
+        start or stop a script with ha_config_set_script (run); activate a scene
+        with ha_config_set_scene (activate); manage apps (add-ons) with
+        ha_manage_app; handle updates and Repairs issues with ha_manage_updates;
+        set an integration's log level with ha_set_integration (log_level).
 
-        **Basic Usage:**
-        ```python
-        # Turn on a light
-        ha_call_service("light", "turn_on", entity_id="light.living_room")
+        When to use: a service no dedicated tool covers. Services follow the
+        pattern domain.service (e.g., light.turn_on, climate.set_temperature);
+        ha_list_services lists them with their fields.
 
-        # Set temperature with parameters
-        ha_call_service("climate", "set_temperature",
-                      entity_id="climate.thermostat", data={"temperature": 22})
+        EXAMPLES:
+        - ha_call_service("light", "turn_on", entity_id="light.living_room")
+        - ha_call_service("climate", "set_temperature", entity_id="climate.thermostat", data={"temperature": 22})
 
-        # Trigger automation
-        ha_call_service("automation", "trigger", entity_id="automation.morning_routine")
+        Result compaction (default ON): ``result`` is trimmed to the targeted
+        entity's record (drops parent-group propagation) and stripped of
+        ``context`` / ``last_*`` metadata and heavy attribute lists
+        (``effect_list``, ``hue_scenes``).
 
-        # Universal controls work with any entity
-        ha_call_service("homeassistant", "toggle", entity_id="switch.porch_light")
-        ```
-
-        **Key behavior:**
-        - **Result compaction (default ON)**: ``result`` is trimmed
-          to the targeted entity's record (drops parent-group propagation) and
-          stripped of ``context`` / ``last_*`` metadata and heavy attribute
-          lists (``effect_list``, ``hue_scenes``). Escape hatches: ``verbose=True``
-          for the raw changed-state records, or ``result_fields`` /
-          ``result_attribute_keys`` for explicit per-record projection (mirrors
-          ``ha_get_state``).
-
-        **For detailed service documentation, use ha_get_skill_guide.**
-
-        Common patterns: Use ha_get_state() to check current values before making changes.
-        Use ha_search() to find correct entity IDs.
+        For detailed service documentation, use ha_get_skill_guide.
 
         **WebSocket command escape hatch (advanced):**
-        A few Home Assistant operations are WebSocket-only commands, not
-        registered services — most notably dismissing a Repairs issue. Pass
-        ``ws_command`` (instead of domain/service) to send one, with its
-        parameters in ``data``:
-        ```python
-        # Dismiss a repair (get domain/issue_id from ha_get_overview repairs
-        # or ha_get_system_health include="repairs")
-        ha_call_service(ws_command="repairs/ignore_issue",
-                        data={"domain": "sun", "issue_id": "abc", "ignore": True})
-        ```
-        Only one-shot request/response commands are supported; streaming/two-phase
-        and service-invoking commands are rejected, and the other service
+        Some Home Assistant operations are WebSocket-only commands, not
+        registered services. Pass ``ws_command`` (instead of domain/service) to
+        send one no dedicated tool covers, with its parameters in ``data``:
+        ha_call_service(ws_command="<command type>", data={...}). Only one-shot
+        request/response commands are supported, and the other service
         parameters (entity_id, return_response, etc.) don't apply.
 
         Unavailable in Read Only Mode, including read-like services and WebSocket
@@ -2012,7 +1979,7 @@ class ServiceTools:
         require_write_access("ha_call_service")
 
         # WebSocket-command escape hatch (issue #1839): reach one-shot WS
-        # commands that aren't registered services (e.g. repairs/ignore_issue).
+        # commands that aren't registered services.
         if ws_command is not None:
             self._reject_incompatible_ws_params(
                 entity_id,
@@ -2174,25 +2141,30 @@ class ServiceTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Single operation ID or list of operation IDs to check. "
-                    "Use a single string for one operation, or a list for bulk status checks."
+                    "Single operation ID, or a list of IDs for a bulk status check."
                 ),
             ),
         ],
-        timeout_seconds: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 10,
+        timeout_seconds: Annotated[
+            float,
+            Field(
+                ge=0,
+                allow_inf_nan=False,
+                description=(
+                    "Seconds to wait for a pending operation to finish before "
+                    "returning its status. 0 returns the current status at once."
+                ),
+            ),
+        ] = 10,
     ) -> dict[str, Any]:
         """
         Get the status of one or more device operations with real-time WebSocket verification.
 
-        Pass a single operation_id string to check one operation, or a list of IDs
-        to check multiple operations at once (bulk status).
+        Bulk checks poll all operations concurrently under one shared
+        timeout_seconds window and report per-item failures inside
+        detailed_results instead of aborting the batch.
 
-        The timeout_seconds wait window bounds both modes. Bulk checks poll
-        all operations concurrently under one shared window and report
-        per-item failures inside detailed_results instead of aborting the
-        batch.
-
-        Use this to track operations initiated by ha_bulk_control or ha_call_service.
+        Use this to track the operation_ids that ha_bulk_control returns.
         For current entity states, use ha_get_state instead.
         """
         try:
@@ -2238,7 +2210,7 @@ class ServiceTools:
             JSON_STRING_COERCION,
             Field(
                 description=(
-                    "Explicit entity operations. Use this or selector, never both. "
+                    "Explicit entity operations. "
                     "Each item requires exact entity_id and action. Use "
                     "action='off', not service='turn_off'."
                 )
@@ -2248,7 +2220,15 @@ class ServiceTools:
             # supplies the runtime default without a `| None` mypy would then
             # require type-narrowing for at every use below `selector is None`.
         ] = cast(Any, None),
-        parallel: bool = True,
+        parallel: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Dispatch operations concurrently (default) or one at a "
+                    "time when False."
+                ),
+            ),
+        ] = True,
         ctx: Context | None = None,
         selector: Annotated[
             SkipValidation[BulkControlSelector] | None,
@@ -2271,10 +2251,38 @@ class ServiceTools:
         ] = None,
         timeout_seconds: Annotated[
             float | None,
-            Field(ge=0, le=60, allow_inf_nan=False, strict=True),
+            Field(
+                ge=0,
+                le=60,
+                allow_inf_nan=False,
+                strict=True,
+                description=(
+                    "Selector mode only: confirmation wait in seconds for every "
+                    "resolved entity. In operations mode set timeout_seconds on "
+                    "each operation instead; a top-level value is rejected in "
+                    "operations mode."
+                ),
+            ),
         ] = None,
-        validate_first: Annotated[bool, Field(strict=True)] = True,
-        dry_run: Annotated[bool, Field(strict=True)] = False,
+        validate_first: Annotated[
+            bool,
+            Field(
+                strict=True,
+                description=(
+                    "Selector mode only: report ENTITY_NOT_FOUND for a target "
+                    "that does not exist. In operations mode set "
+                    "validate_first on each operation instead; a top-level "
+                    "False is rejected in operations mode."
+                ),
+            ),
+        ] = True,
+        dry_run: Annotated[
+            bool,
+            Field(
+                strict=True,
+                description="Selector mode only; True is rejected in operations mode.",
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """Manage explicit operations or one deterministic structural bulk action.
 
@@ -2296,11 +2304,10 @@ class ServiceTools:
         when exclusions must be applied after recursively expanding generic
         aggregate membership. Resolves a frozen visible leaf set before dispatch;
         it is not transactional, so Home Assistant may still report per-leaf
-        failures. A selector resolving to more than 100 entities
-        (``MAX_SELECTOR_ENTITIES``) fails closed instead of dispatching a
-        partial/oversized batch — narrow it (a more specific area/floor, or add
-        ``exclude_entity_ids``) and retry. Set ``dry_run`` to preview the resolved
-        set without changing state.
+        failures. A selector resolving to more than 100 entities fails closed
+        instead of dispatching a partial/oversized batch — narrow it (a more
+        specific area/floor, or add ``exclude_entity_ids``) and retry. Set
+        ``dry_run`` to preview the resolved set without changing state.
         """
         if operations is None and selector is None:
             raise_tool_error(
@@ -2487,14 +2494,28 @@ class ServiceTools:
     @log_tool_usage
     async def ha_call_event(
         self,
-        event_type: str,
-        data: Annotated[dict[str, Any] | None, JSON_STRING_COERCION] = None,
+        event_type: Annotated[
+            str,
+            Field(
+                description="Event type to fire, e.g. 'my_custom_event'.",
+            ),
+        ],
+        data: Annotated[
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Optional event payload, delivered to subscribers as the "
+                    "event's data (trigger.event.data in an automation)."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Execute a custom event on the Home Assistant event bus.
 
         When NOT to use: for controlling entities (lights, switches, climate) — use
-        ha_call_service instead. For triggering automations by name, use
-        ha_call_service("automation", "trigger").
+        ha_call_service instead. To run an automation now, use
+        ha_config_set_automation(identifier=..., run_actions=True).
 
         Use this to publish custom event types consumed by event-triggered automations,
         Node-RED flows, or custom integrations that subscribe to specific event types.

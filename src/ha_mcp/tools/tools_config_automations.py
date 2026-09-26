@@ -6,7 +6,7 @@ Home Assistant automation configurations.
 """
 
 import logging
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, NoReturn, cast
 
 from pydantic import Field
 
@@ -61,11 +61,15 @@ from .util_helpers import (
     augment_error_dict_with_skill_content,
     augment_tool_error_with_skill_content,
     coerce_to_list,
+    config_reload_waiter,
     fetch_entity_category,
     merge_validation_meta,
+    note_reload_outcome,
     parse_json_param,
+    wait_for_automation_entity_by_unique_id,
     wait_for_entity_registered,
     wait_for_entity_removed,
+    wait_for_state_change,
 )
 
 logger = logging.getLogger(__name__)
@@ -320,6 +324,128 @@ def _detect_conflicting_root_keys(config: Any) -> list[str]:
     return warnings
 
 
+def _validate_automation_identifier(identifier: str | None) -> None:
+    """Validate an optional automation identifier before dispatch."""
+    if identifier is not None:
+        validate_identifier_not_empty(
+            identifier,
+            "identifier",
+            suggestions=[
+                "Omit identifier to create a new automation",
+                "Or pass a valid automation entity_id / unique_id to update",
+            ],
+            context={"action": "set"},
+        )
+
+
+def _skip_automation_runtime_backup(kwargs: dict[str, Any]) -> bool:
+    """Skip config snapshots for runtime-only calls (enabled / run_actions)."""
+    return (
+        (kwargs.get("enabled") is not None or bool(kwargs.get("run_actions")))
+        and kwargs.get("config") is None
+        and kwargs.get("python_transform") is None
+        and not kwargs.get("take_control_of_blueprint")
+    )
+
+
+async def _resolve_post_write_automation_entity(
+    client: Any,
+    identifier: str | None,
+    entity_id: str | None,
+    wait: bool,
+    response: dict[str, Any],
+) -> str | None:
+    """Resolve a raw unique ID after a write when registration may lag."""
+    if (
+        wait
+        and not entity_id
+        and identifier
+        and not identifier.startswith("automation.")
+    ):
+        try:
+            return await wait_for_automation_entity_by_unique_id(client, identifier)
+        except (HomeAssistantConnectionError, HomeAssistantAuthError) as e:
+            response.setdefault("warnings", []).append(
+                f"Automation registration verification failed: {e}"
+            )
+    return entity_id
+
+
+async def _resolve_runtime_target(
+    client: Any, identifier: str, response: dict[str, Any]
+) -> str | None:
+    """Resolve the entity to receive a runtime change (enabled / run_actions)."""
+    if identifier.startswith("automation."):
+        return identifier
+    # A config write reloads the automation and replaces its entity when the
+    # config changed (or creates it), so poll even when the caller passed
+    # wait=False.
+    return await _resolve_post_write_automation_entity(
+        client, identifier, None, True, response
+    )
+
+
+def _sync_post_write_automation_result(
+    response: dict[str, Any], entity_id: str | None
+) -> None:
+    """Record a successfully resolved entity and clear stale poll state."""
+    if entity_id:
+        response["entity_id"] = entity_id
+        response.pop("entity_not_verified", None)
+
+
+def _run_actions_once_reloaded(
+    result: dict[str, Any],
+    reloaded: bool | None,
+    run_actions: bool,
+    identifier: str | None,
+) -> bool:
+    """Keep run_actions after a write only once the reload is confirmed.
+
+    Unlike ``enabled``, a run cannot be corrected afterwards: before the reload
+    it would run the previous actions, or hit no entity at all.
+    """
+    if not run_actions or reloaded:
+        return run_actions
+    result["actions_triggered"] = False
+    result.setdefault("warnings", []).append(
+        "Automation was written, but its actions were not run: the reload the "
+        "write scheduled could not be confirmed, so they could have run the "
+        "previous version. Run them with ha_config_set_automation("
+        f"identifier='{identifier or '<automation id>'}', run_actions=True)."
+    )
+    return False
+
+
+# Standalone runtime calls raise on a service failure; after a config write the
+# same failure is a partial-success warning because the write already landed.
+_STANDALONE_RUNTIME_ACTIONS = ("set_enabled", "run_actions")
+
+
+def _reject_enabled_in_config(config: Any) -> None:
+    """Reject the runtime-only ``enabled`` key in a stored config body."""
+    if isinstance(config, dict) and "enabled" in config:
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                "'enabled' is a runtime-only tool parameter, not a valid "
+                "automation config key",
+                suggestions=[
+                    "Remove 'enabled' from config and pass enabled=True or False "
+                    + "to ha_config_set_automation",
+                    "Use enabled=None to leave the current runtime state unchanged",
+                ],
+                context={"action": "set", "invalid_key": "enabled"},
+            )
+        )
+
+
+async def _set_automation_enabled(client: Any, entity_id: str, enabled: bool) -> Any:
+    """Set an automation's runtime enabled state through Home Assistant."""
+    service = "turn_on" if enabled else "turn_off"
+    return await client.call_service("automation", service, {"entity_id": entity_id})
+
+
 def _strip_redundant_identifier_echo(
     result: dict[str, Any],
     *,
@@ -399,6 +525,18 @@ class AutomationConfigTools:
             )
         return None
 
+    async def _resolve_automation_entity_id_strict(self, identifier: str) -> str | None:
+        """Resolve an identifier without hiding transport/authentication errors."""
+        states = await self._client.get_states()
+        for state in states:
+            state_entity_id = state.get("entity_id", "")
+            if state_entity_id.startswith("automation.") and (
+                state_entity_id == identifier
+                or state.get("attributes", {}).get("id") == identifier
+            ):
+                return str(state_entity_id)
+        return None
+
     @tool(
         name="ha_config_get_automation",
         tags={"Automations"},
@@ -420,11 +558,11 @@ class AutomationConfigTools:
         ],
     ) -> dict[str, Any]:
         """
-        Retrieve Home Assistant automation configuration.
+        Get Home Assistant automation configuration.
 
         Returns the complete configuration including triggers, conditions, actions, and mode settings.
 
-        The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
+        The returned `config_hash` stays the same across consecutive reads of an unchanged config.
 
         The returned `automation_id` is the resolved entity_id (canonical
         form, e.g. `automation.morning_routine`) when the registry lookup
@@ -525,7 +663,11 @@ class AutomationConfigTools:
             "title": "Create or Update Automation",
         },
     )
-    @with_auto_backup(domain="automation", id_fn=automation_backup_target)
+    @with_auto_backup(
+        domain="automation",
+        id_fn=automation_backup_target,
+        skip_fn=_skip_automation_runtime_backup,
+    )
     @log_tool_usage
     async def ha_config_set_automation(
         self,
@@ -533,8 +675,7 @@ class AutomationConfigTools:
             dict[str, Any] | None,
             JSON_STRING_COERCION,
             Field(
-                description="Complete automation configuration with required fields: 'alias', 'triggers', 'actions'. "
-                "Optional: 'description', 'conditions', 'mode', 'max', 'initial_state', 'variables'. "
+                description="Complete automation configuration. "
                 "Purpose-specific triggers/conditions (HA 2026.7+ default: 'trigger': '<domain>.<name>' "
                 "with 'target'/'options') are valid config. "
                 "Mutually exclusive with python_transform.",
@@ -545,8 +686,7 @@ class AutomationConfigTools:
             str | None,
             Field(
                 description="Target automation entity_id or HA config 'id' (unique_id). "
-                "Omit for creation with a generated ID. Values such as 'new' are literal IDs, not placeholders. "
-                "Required for python_transform.",
+                "Omit for creation with a generated ID. Values such as 'new' are literal IDs, not placeholders.",
                 default=None,
             ),
         ] = None,
@@ -555,7 +695,6 @@ class AutomationConfigTools:
             Field(
                 description="Python expression to transform existing automation config. "
                 "Mutually exclusive with config. "
-                "Requires identifier and config_hash for validation. "
                 "WARNING: Expressions with infinite loops will hang the server. "
                 "Examples: "
                 "Simple: python_transform=\"config['actions'][0]['data']['brightness'] = 255\" "
@@ -568,9 +707,9 @@ class AutomationConfigTools:
             str | None,
             Field(
                 description="Config hash from ha_config_get_automation for optimistic locking. "
-                "REQUIRED for python_transform (validates automation unchanged). "
-                "Required when a config update changes an existing automation's alias. "
-                "Otherwise optional for config updates (validates before full replacement if provided).",
+                "Required for python_transform and when a config update changes an "
+                "existing automation's alias; otherwise optional for config updates "
+                "(validates before full replacement if provided).",
             ),
         ] = None,
         take_control_of_blueprint: Annotated[
@@ -579,15 +718,10 @@ class AutomationConfigTools:
                 description="Convert a blueprint-backed automation into an editable "
                 'standalone one -- the UI\'s "Take control". Renders the blueprint '
                 "with its current inputs and saves the result over the same "
-                "automation, which then has its own triggers/conditions/actions and "
-                "no 'use_blueprint'. Requires identifier; mutually exclusive with "
-                "config and python_transform. Irreversible: the link to the "
-                "blueprint is gone afterwards, so edit inputs instead if you only "
-                "want to change a value. Does NOT free the blueprint: Home "
-                "Assistant keeps counting the converted automation as a user, so "
-                "deleting that blueprint stays refused until the automation is "
-                "removed. To preview the rendering without writing anything, use "
-                'ha_manage_blueprints(action="substitute").',
+                "automation, which keeps its entity_id, alias and description and "
+                "then has its own triggers/conditions/actions and no "
+                "'use_blueprint'. Requires identifier; mutually exclusive with "
+                "config and python_transform.",
                 default=False,
             ),
         ] = False,
@@ -601,10 +735,35 @@ class AutomationConfigTools:
         wait: Annotated[
             bool,
             Field(
-                description="Wait for automation to be queryable before returning. Default: True. Set to False for bulk operations.",
+                description="Wait for automation to be queryable before returning. Set to False for"
+                " bulk operations.",
                 default=True,
             ),
         ] = True,
+        enabled: Annotated[
+            bool | None,
+            Field(
+                description=(
+                    "Turn the automation on (True) or off (False) after an optional config "
+                    "update; None leaves it unchanged. Not written into the stored config: Home Assistant keeps "
+                    "the state across restarts, but a config 'initial_state' overrides it "
+                    "whenever the automation is reloaded or HA starts."
+                ),
+                default=None,
+            ),
+        ] = None,
+        run_actions: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Run the automation's actions now, skipping its triggers and "
+                    "conditions (automation.trigger, the UI's Run actions). Applied "
+                    "after `enabled` and after any config write. Can be used "
+                    "standalone with identifier and no config."
+                ),
+                default=False,
+            ),
+        ] = False,
         MandatoryBPS: Annotated[
             bool,
             Field(default=True),
@@ -613,223 +772,60 @@ class AutomationConfigTools:
         # here — see strict_bps.py for the declaration contract.
         BestPracticeKey: BestPracticeKeyParam = None,
     ) -> dict[str, Any]:
-        """
-        Create or update a Home Assistant automation.
+        """Create or update a Home Assistant automation.
 
         MUST call ha_get_skill_guide OR refer to your locally installed skills first.
 
-        PREFER NATIVE SOLUTIONS OVER TEMPLATES (read this before writing any `{{ ... }}`):
-        Native triggers/conditions/actions are validated at config load, fail loudly, and
-        do not bypass HA's schema. Templates fail silently at runtime and obscure intent.
-        - `condition: numeric_state` instead of `{{ states('x') | float > N }}`
-        - `condition: state` (with `state:` list) instead of `{{ is_state(...) }}` /
-          `{{ states(x) in [...] }}`
-        - `condition: time` instead of `{{ now().hour ... }}` or `{{ now().weekday() ... }}`
-        - `condition: sun` instead of `{{ is_state('sun.sun', ...) }}`
-        - Native `for:` field on `state`/`numeric_state` triggers and `state`
-          conditions over `{{ now() - X.last_changed > timedelta(...) }}` duration math.
-        - `wait_for_trigger` instead of `wait_template`
-        - `choose` action instead of template-based service names
-        - For one-shot date firing, use a `time` trigger plus `automation.turn_off` on a
-          hardcoded entity_id — not `{{ now().date() ... }}`.
-        - Hardcode `target.entity_id` literals — never `{{ this.entity_id }}`.
-        Templates are appropriate ONLY in `data.*` fields, notification message/title,
-        `event_data`, and `variables`. The reactive best-practice checker on this tool
-        will surface anything in a logic position that should be native; consult the
-        `best_practice_warnings` field on the response and fix before re-submitting.
-        The relevant skill section is auto-embedded under `skill_content` on warnings,
-        and the full `automation-patterns.md` + `template-guidelines.md` references
-        ship under `skill_content` proactively by default. For comprehensive
-        guidance beyond that, call `ha_get_skill_guide`.
+        Prefer native triggers/conditions/actions over templates in logic
+        positions; templates belong only in `data.*`, notification text,
+        `event_data` and `variables`. The best-practice checker reports
+        violations under `best_practice_warnings` — fix them before
+        re-submitting. `automation-patterns.md` and `template-guidelines.md`
+        ship under `skill_content` by default. Test any unavoidable template
+        with ha_eval_template first.
 
-        The returned `automation_id` is the resolved entity_id (canonical
-        form, e.g. `automation.morning_routine`) when entity registration
-        succeeds, falling back to the input `identifier` (update path) or
-        the generated `unique_id` from the upsert response (fresh create
-        when no identifier was passed).
+        Consider a dedicated tool first: a state snapshot with no trigger ->
+        ha_config_set_scene; a value derived from other entities ->
+        ha_config_set_helper(helper_type='template'); a counter / timer /
+        schedule / boolean -> ha_config_set_helper.
 
-        Before reaching for ``ha_config_set_automation``, consider whether a
-        dedicated tool fits the use case better:
+        MODES (pick one; each can also take `enabled`, which alone with
+        `identifier` turns the automation on or off without touching config):
+        - python_transform: surgical edits to an existing automation. Requires
+          identifier and config_hash from ha_config_get_automation(). Operates on
+          the fetched config, which uses HA's plural root keys
+          'triggers'/'actions'/'conditions', e.g.
+          python_transform="config['triggers'].append({'trigger': 'state', 'entity_id': 'binary_sensor.motion', 'to': 'on'})"
+        - config: new automations or full restructures. Regular automations need
+          alias, triggers and actions; blueprint automations need alias and
+          use_blueprint {path, input}.
+        - take_control_of_blueprint: convert a blueprint-backed automation into a
+          standalone one. Takes no config of its own.
 
-        - State snapshot of one or more entities (capture-then-replay,
-          no trigger needed) -> ha_config_set_scene
-        - State-derived value that recomputes when its inputs change
-          (template sensor / binary sensor / number / select)
-          -> ha_config_set_helper(helper_type='template')
-        - Stateful counter / timer / schedule / boolean / etc.
-          -> ha_config_set_helper(helper_type='counter' | 'timer' | ...)
+        IDENTITY: omit identifier and config['id'] to create with a generated ID;
+        an unused raw ID creates that specific ID. Reusing an identifier targets
+        the same automation even if the alias changes; to rename or replace it,
+        read it first and pass its config_hash — a changed alias without that
+        hash is rejected before writing. The returned `automation_id` is the
+        resolved entity_id, falling back to the input identifier or the
+        generated unique_id.
 
-        Supports three modes: full config replacement, Python transformation,
-        or take_control_of_blueprint (see below).
+        EXAMPLES:
+        - Create: ha_config_set_automation(config={"alias": "Morning Lights", "triggers": [{"trigger": "time", "at": "07:00:00"}], "actions": [{"action": "light.turn_on", "target": {"area_id": "bedroom"}}]})
+        - From a blueprint: ha_config_set_automation(config={"alias": "Motion Light Kitchen", "use_blueprint": {"path": "homeassistant/motion_light.yaml", "input": {"motion_entity": "binary_sensor.kitchen_motion", "light_target": {"entity_id": "light.kitchen"}}}})
+        - Update: current = ha_config_get_automation(identifier="automation.x"); ha_config_set_automation(identifier="automation.x", config_hash=current["config_hash"], config={...})
+        - Disable: ha_config_set_automation(identifier="automation.x", enabled=False)
+        - Run now: ha_config_set_automation(identifier="automation.x", run_actions=True)
+        - Take control: ha_config_set_automation(identifier="automation.x", take_control_of_blueprint=True)
 
-        WHEN TO USE WHICH MODE:
-        - python_transform: RECOMMENDED for edits to existing automations. Surgical updates.
-        - config: Use for creating new automations or full restructures.
-        - take_control_of_blueprint: converts a blueprint-backed automation
-          into a standalone one. Takes no config of its own.
-
-        IMPORTANT: python_transform requires 'identifier' and 'config_hash' from ha_config_get_automation().
-
-        PYTHON TRANSFORM EXAMPLES (operate on the fetched config, which uses HA's
-        canonical plural root keys 'triggers'/'actions'/'conditions'):
-        - Update action: python_transform="config['actions'][0]['data']['brightness'] = 255"
-        - Add trigger: python_transform="config['triggers'].append({'trigger': 'state', 'entity_id': 'binary_sensor.motion', 'to': 'on'})"
-        - Remove last action: python_transform="config['actions'].pop()"
-
-        Omit identifier and config['id'] to create a new automation with a generated ID.
-        A previously unused raw ID can also create an automation with that specific ID.
-        Reusing an identifier targets the same automation, even if the alias changes.
-        To intentionally rename or replace it, first read it with ha_config_get_automation
-        and pass its config_hash. A changed alias without that hash is rejected before writing.
-
-        AUTOMATION TYPES:
-
-        1. Regular Automations - Define triggers and actions directly
-        2. Blueprint Automations - Use pre-built templates with customizable inputs
-
-        REQUIRED FIELDS (Regular Automations):
-        - alias: Human-readable automation name
-        - triggers: List of triggers (time, state, event, etc.)
-        - actions: List of actions to execute
-
-        REQUIRED FIELDS (Blueprint Automations):
-        - alias: Human-readable automation name
-        - use_blueprint: Blueprint configuration
-          - path: Blueprint file path (e.g., "motion_light.yaml")
-          - input: Dictionary of input values for the blueprint
-
-        OPTIONAL CONFIG FIELDS (Regular Automations):
-        - description: Detailed description of the user's intent (RECOMMENDED: helps safely modify implementation later)
-        - category: Category ID for organization (use ha_config_get_category to list, ha_config_set_category to create)
-        - conditions: Additional conditions that must be met
-        - mode: 'single' (default), 'restart', 'queued', 'parallel'
-        - max: Maximum concurrent executions (for queued/parallel modes)
-        - initial_state: Whether automation starts enabled (true/false)
-        - variables: Variables for use in automation
-
-        BASIC EXAMPLES:
-
-        Simple time-based automation:
-        ha_config_set_automation(config={
-            "alias": "Morning Lights",
-            "description": "Turn on bedroom lights at 7 AM to help wake up",
-            "triggers": [{"trigger": "time", "at": "07:00:00"}],
-            "actions": [{"action": "light.turn_on", "target": {"area_id": "bedroom"}}]
-        })
-
-        Motion-activated lighting — `for:` on the off-transition replaces action-delay:
-        ha_config_set_automation(config={
-            "alias": "Motion Light",
-            "triggers": [
-                {"trigger": "state", "entity_id": "binary_sensor.motion", "to": "on", "id": "motion_on"},
-                {"trigger": "state", "entity_id": "binary_sensor.motion", "to": "off",
-                 "for": {"minutes": 5}, "id": "motion_off"}
-            ],
-            "actions": [
-                {"choose": [
-                    {"conditions": [
-                        {"condition": "trigger", "id": "motion_on"},
-                        {"condition": "sun", "after": "sunset"}
-                    ],
-                     "sequence": [{"action": "light.turn_on", "target": {"entity_id": "light.hallway"}}]},
-                    {"conditions": [{"condition": "trigger", "id": "motion_off"}],
-                     "sequence": [{"action": "light.turn_off", "target": {"entity_id": "light.hallway"}}]}
-                ]}
-            ]
-        })
-
-        Update existing automation:
-        current = ha_config_get_automation(identifier="automation.morning_routine")
-        ha_config_set_automation(
-            identifier="automation.morning_routine",
-            config_hash=current["config_hash"],
-            config={
-                "alias": "Updated Morning Routine",
-                "triggers": [{"trigger": "time", "at": "06:30:00"}],
-                "actions": [
-                    {"action": "light.turn_on", "target": {"area_id": "bedroom"}},
-                    {"action": "climate.set_temperature", "target": {"entity_id": "climate.bedroom"}, "data": {"temperature": 22}}
-                ]
-            }
-        )
-
-        BLUEPRINT AUTOMATION EXAMPLES:
-
-        Create automation from blueprint:
-        ha_config_set_automation(config={
-            "alias": "Motion Light Kitchen",
-            "use_blueprint": {
-                "path": "homeassistant/motion_light.yaml",
-                "input": {
-                    "motion_entity": "binary_sensor.kitchen_motion",
-                    "light_target": {"entity_id": "light.kitchen"},
-                    "no_motion_wait": 120
-                }
-            }
-        })
-
-        Update blueprint automation inputs:
-        ha_config_set_automation(
-            identifier="automation.motion_light_kitchen",
-            config={
-                "alias": "Motion Light Kitchen",
-                "use_blueprint": {
-                    "path": "homeassistant/motion_light.yaml",
-                    "input": {
-                        "motion_entity": "binary_sensor.kitchen_motion",
-                        "light_target": {"entity_id": "light.kitchen"},
-                        "no_motion_wait": 300
-                    }
-                }
-            }
-        )
-
-        TAKE CONTROL OF A BLUEPRINT AUTOMATION:
-
-        take_control_of_blueprint=True converts a blueprint-backed automation
-        into a standalone one — the UI's "Take control". The blueprint is
-        rendered with the automation's CURRENT inputs and the result is saved
-        over the same automation, which keeps its entity_id, alias and
-        description but gains its own triggers/conditions/actions and loses
-        'use_blueprint'.
-
-        ha_config_set_automation(
-            identifier="automation.motion_light_kitchen",
-            take_control_of_blueprint=True,
-        )
-
-        This is one-way: the automation is no longer linked to the blueprint,
-        so later blueprint edits stop reaching it. To change an input value,
-        update 'use_blueprint.input' instead (see the example above) — that
-        keeps the link.
-
-        Taking control does NOT free the blueprint. Home Assistant goes on
-        counting a converted automation as a user of it, so deleting that
-        blueprint stays refused until the automation itself is removed
-        (verified against Home Assistant 2026.9; an automation reload does not
-        clear it either).
-
-        The response names the blueprint in `took_control_of_blueprint`. To see what the rendering looks like WITHOUT writing
-        anything, call ha_manage_blueprints(action="substitute", path=...,
-        input=...), which returns the config and leaves the automation alone.
-        ha_manage_blueprints also lists, imports, saves and deletes blueprints,
-        and action="get" reports which automations use one.
-
-        TRIGGER TYPES: time, time_pattern, sun, state, numeric_state, event, device, zone, template, and more
-        CONDITION TYPES: state, numeric_state, time, sun, template, device, zone, and more
-        ACTION TYPES: action calls, delays, wait_for_trigger, wait_template, if/then/else, choose, repeat, parallel
-
-        For comprehensive automation documentation with all trigger/condition/action types and advanced examples:
-        - Use: ha_get_skill_guide
-        - Or visit: https://www.home-assistant.io/docs/automation/
-
-        TROUBLESHOOTING:
-        - Use ha_get_state() to verify entity_ids exist
-        - Use ha_search() to find correct entity_ids
-        - IF you must use Jinja2 and have no native alternative, test it first with
-          ha_eval_template() before embedding it in the automation config — catches
-          syntax errors and unresolved entity_ids before they fail silently at runtime
-        - Use ha_search(domain_filter='automation') to find existing automations
+        TAKE CONTROL is one-way: later blueprint edits stop reaching the
+        automation; to change an input value, update 'use_blueprint.input'
+        instead. It does NOT free the blueprint — Home Assistant keeps counting
+        the converted automation as a user, so deleting that blueprint stays
+        refused until the automation is removed (an automation reload does not
+        clear it). The response names the blueprint in
+        `took_control_of_blueprint`. To preview the rendering without writing
+        anything, use ha_manage_blueprints(action="substitute", path=..., input=...).
         """
         bp_warnings: BestPracticeCheckResult = BestPracticeCheckResult()
         try:
@@ -840,16 +836,7 @@ class AutomationConfigTools:
             # from the downstream lookup. The ``not identifier`` check
             # further down the python_transform branch still handles the
             # explicit ``identifier is None`` case for that mode.
-            if identifier is not None:
-                validate_identifier_not_empty(
-                    identifier,
-                    "identifier",
-                    suggestions=[
-                        "Omit identifier to create a new automation",
-                        "Or pass a valid automation entity_id / unique_id to update",
-                    ],
-                    context={"action": "set"},
-                )
+            _validate_automation_identifier(identifier)
             validate_write_modes(
                 "automation",
                 "identifier",
@@ -871,6 +858,24 @@ class AutomationConfigTools:
                 # wins, so it can still lock against a config it read itself.
                 config_hash = config_hash or taken.config_hash
 
+            runtime_only_response = await self._maybe_set_runtime_only(
+                identifier,
+                config,
+                python_transform,
+                category,
+                enabled,
+                run_actions,
+                wait,
+            )
+            if runtime_only_response is not None:
+                attach_skill_content(
+                    runtime_only_response,
+                    MandatoryBPS=MandatoryBPS,
+                    canonical_files=_AUTOMATION_SKILL_FILES,
+                    referenced_files=bp_warnings.referenced_files,
+                )
+                return runtime_only_response
+
             if python_transform is not None:
                 response, bp_warnings = await self._run_python_transform(
                     identifier,
@@ -878,6 +883,9 @@ class AutomationConfigTools:
                     python_transform,
                     category,
                     MandatoryBPS,
+                    enabled,
+                    wait,
+                    run_actions=run_actions,
                 )
                 return response
 
@@ -895,6 +903,7 @@ class AutomationConfigTools:
                 )
 
             config_dict = self._parse_and_validate_config(config)
+            _reject_enabled_in_config(config_dict)
 
             # Extract category before sending to HA REST API (which rejects unknown keys).
             # Parameter takes precedence over config dict value.
@@ -950,6 +959,8 @@ class AutomationConfigTools:
                 conflict_warnings,
                 resolved_id,
                 detached_blueprint,
+                enabled,
+                run_actions=run_actions,
             )
 
         except ToolError as te:
@@ -1078,6 +1089,233 @@ class AutomationConfigTools:
         )
         return TakenControl(taken, blueprint_path, fetched_hash)
 
+    async def _maybe_set_runtime_only(
+        self,
+        identifier: str | None,
+        config: Any,
+        python_transform: str | None,
+        category: str | None,
+        enabled: bool | None,
+        run_actions: bool,
+        wait: bool,
+    ) -> dict[str, Any] | None:
+        """Handle a standalone runtime request (enabled / run_actions), if any."""
+        if (enabled is None and not run_actions) or (
+            config is not None or python_transform is not None
+        ):
+            return None
+        if category is not None:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "category requires a config update",
+                    suggestions=[
+                        "Pass config or python_transform when assigning a category",
+                        "Omit category for a standalone enabled or run_actions call",
+                    ],
+                    context={"action": "set_runtime", "category": category},
+                )
+            )
+        return await self._set_runtime_only(
+            identifier, enabled, wait, run_actions=run_actions
+        )
+
+    async def _set_runtime_only(
+        self,
+        identifier: str | None,
+        enabled: bool | None,
+        wait: bool,
+        *,
+        run_actions: bool = False,
+    ) -> dict[str, Any]:
+        """Apply enabled and/or run_actions to an existing automation, no config."""
+        action = "set_enabled" if enabled is not None else "run_actions"
+        if not identifier:
+            raise_tool_error(
+                create_error_response(
+                    ErrorCode.VALIDATION_INVALID_PARAMETER,
+                    "identifier is required when setting enabled or run_actions "
+                    "without config",
+                    suggestions=[
+                        "Pass an automation entity_id or unique_id",
+                        "Use ha_search(domain_filter='automation') to find automations",
+                    ],
+                    context={"action": action, "enabled": enabled},
+                )
+            )
+        entity_id = await self._resolve_automation_entity_id_strict(identifier)
+        if not entity_id:
+            await self._raise_automation_not_found(identifier)
+        response: dict[str, Any] = {
+            "success": True,
+            "action": action,
+            "automation_id": entity_id,
+        }
+        await self._apply_runtime_state(
+            response,
+            entity_id,
+            enabled,
+            wait,
+            identifier=identifier,
+            run_actions=run_actions,
+        )
+        return response
+
+    async def _apply_runtime_state(
+        self,
+        response: dict[str, Any],
+        entity_id: str | None,
+        enabled: bool | None,
+        wait: bool,
+        *,
+        identifier: str | None = None,
+        run_actions: bool = False,
+    ) -> str | None:
+        """Apply enabled and then run_actions without touching the stored config.
+
+        Resolves ``entity_id`` from ``identifier`` when it is None. On a
+        standalone call a service failure raises a ToolError; after a config
+        write it is reported as a partial-success warning, since the write
+        itself already landed. Returns the resolved entity_id.
+        """
+        if enabled is None and not run_actions:
+            return entity_id
+        if entity_id is None and identifier:
+            entity_id = await _resolve_runtime_target(
+                self._client, identifier, response
+            )
+        if entity_id is None:
+            retry_args: list[str] = []
+            if enabled is not None:
+                response["enabled_requested"] = enabled
+                response["enabled_applied"] = False
+                retry_args.append(f"enabled={enabled}")
+            if run_actions:
+                response["actions_triggered"] = False
+                retry_args.append("run_actions=True")
+            retry_id = identifier or response.get("unique_id") or "<automation id>"
+            response.setdefault("warnings", []).append(
+                "Automation was written, but its entity_id could not be resolved; "
+                "the requested runtime change was not applied. Retry with "
+                f"ha_config_set_automation(identifier='{retry_id}', "
+                f"{', '.join(retry_args)}) once the automation is loaded."
+            )
+            return None
+        if enabled is not None:
+            await self._apply_enabled_state(
+                response, entity_id, enabled, wait, identifier=identifier
+            )
+        if run_actions:
+            await self._run_automation_actions(
+                response, entity_id, identifier=identifier
+            )
+        return entity_id
+
+    async def _apply_enabled_state(
+        self,
+        response: dict[str, Any],
+        entity_id: str,
+        enabled: bool,
+        wait: bool,
+        *,
+        identifier: str | None = None,
+    ) -> None:
+        """Turn the resolved automation on or off, then optionally verify it."""
+        try:
+            await _set_automation_enabled(self._client, entity_id, enabled)
+        except (
+            HomeAssistantAPIError,
+            HomeAssistantAuthError,
+            HomeAssistantConnectionError,
+        ) as exc:
+            if response.get("action") in _STANDALONE_RUNTIME_ACTIONS:
+                exception_to_structured_error(
+                    exc,
+                    context={
+                        "action": "set_enabled",
+                        "identifier": identifier,
+                        "entity_id": entity_id,
+                        "enabled": enabled,
+                    },
+                )
+            logger.warning(
+                "Enabled state not applied to %s after config write: %s",
+                entity_id,
+                exc,
+            )
+            response["enabled_requested"] = enabled
+            response["enabled_applied"] = False
+            response.setdefault("warnings", []).append(
+                "Automation config was written, but the requested enabled state "
+                f"could not be applied: {exc}"
+            )
+            return
+        response["enabled"] = enabled
+        response["enabled_applied"] = True
+        if wait:
+            await self._verify_enabled_state(response, entity_id, enabled)
+
+    async def _run_automation_actions(
+        self,
+        response: dict[str, Any],
+        entity_id: str,
+        *,
+        identifier: str | None = None,
+    ) -> None:
+        """Run the automation's actions now via automation.trigger."""
+        try:
+            await self._client.call_service(
+                "automation", "trigger", {"entity_id": entity_id}
+            )
+        except (
+            HomeAssistantAPIError,
+            HomeAssistantAuthError,
+            HomeAssistantConnectionError,
+        ) as exc:
+            # With enabled in the same standalone call, the state change has
+            # already landed, so a failed run is a partial success, not an error.
+            if response.get("action") == "run_actions":
+                exception_to_structured_error(
+                    exc,
+                    context={
+                        "action": "run_actions",
+                        "identifier": identifier,
+                        "entity_id": entity_id,
+                    },
+                )
+            logger.warning(
+                "Actions not run for %s after config write: %s", entity_id, exc
+            )
+            response["actions_triggered"] = False
+            response.setdefault("warnings", []).append(
+                f"The requested change was applied, but the actions could not be run: {exc}"
+            )
+            return
+        response["actions_triggered"] = True
+
+    async def _verify_enabled_state(
+        self, response: dict[str, Any], entity_id: str, enabled: bool
+    ) -> None:
+        """Wait for the automation to report the requested state."""
+        expected_state = "on" if enabled else "off"
+        try:
+            verified = await wait_for_state_change(
+                self._client,
+                entity_id,
+                expected_state=expected_state,
+            )
+        except (HomeAssistantConnectionError, HomeAssistantAuthError) as exc:
+            response.setdefault("warnings", []).append(
+                f"Automation {entity_id} was sent {expected_state}, but state "
+                f"verification failed: {exc}"
+            )
+            return
+        if verified is None:
+            response.setdefault("warnings", []).append(
+                f"Automation {entity_id} was sent {expected_state} but its state "
+                "could not be verified before the timeout."
+            )
+
     async def _run_python_transform(
         self,
         identifier: str | None,
@@ -1085,6 +1323,10 @@ class AutomationConfigTools:
         python_transform: str,
         category: str | None,
         MandatoryBPS: bool,
+        enabled: bool | None,
+        wait: bool,
+        *,
+        run_actions: bool = False,
     ) -> tuple[dict[str, Any], BestPracticeCheckResult]:
         """Execute python_transform mode and return (response, bp_warnings)."""
         if not identifier:
@@ -1130,6 +1372,7 @@ class AutomationConfigTools:
             )
 
         # Pop category before sending to HA REST API (rejects unknown keys)
+        _reject_enabled_in_config(transformed_config)
         transform_category = transformed_config.pop("category", None)
         effective_category = category if category is not None else transform_category
 
@@ -1156,8 +1399,19 @@ class AutomationConfigTools:
         # storage key; thread it so the upsert skips the redundant re-resolve
         # (issue #1813 Phase 0). Fall back to the raw identifier if the fetched
         # body carried no ``id`` (not expected for a real automation).
-        result = await self._upsert_automation(
-            transformed_config, identifier, resolved_id
+        runtime_requested = enabled is not None or run_actions
+        async with config_reload_waiter(
+            self._client, "automation_reloaded", enabled=runtime_requested
+        ) as wait_for_reload:
+            result = await self._upsert_automation(
+                transformed_config, identifier, resolved_id
+            )
+            reloaded = await wait_for_reload()
+            note_reload_outcome(
+                result, reloaded, domain="automation", requested=enabled is not None
+            )
+        run_actions = _run_actions_once_reloaded(
+            result, reloaded, run_actions, identifier or result.get("unique_id")
         )
         for warning in conflict_warnings:
             result.setdefault("warnings", []).append(warning)
@@ -1176,6 +1430,16 @@ class AutomationConfigTools:
                 result,
                 "automation",
             )
+
+        entity_id = await self._apply_runtime_state(
+            result,
+            entity_id,
+            enabled,
+            wait,
+            identifier=identifier or result.get("unique_id"),
+            run_actions=run_actions,
+        )
+        _sync_post_write_automation_result(result, entity_id)
 
         response: dict[str, Any] = {
             "success": True,
@@ -1208,6 +1472,9 @@ class AutomationConfigTools:
         conflict_warnings: list[str] | None = None,
         resolved_id: str | None = None,
         detached_blueprint: str | None = None,
+        enabled: bool | None = None,
+        *,
+        run_actions: bool = False,
     ) -> dict[str, Any]:
         """Execute config-replacement mode and return the tool response.
 
@@ -1221,10 +1488,35 @@ class AutomationConfigTools:
         is threaded to the upsert so it skips the redundant
         re-resolve; None falls back to resolving inside the REST client.
         """
-        result = await self._upsert_automation(config_dict, identifier, resolved_id)
+        runtime_requested = enabled is not None or run_actions
+        async with config_reload_waiter(
+            self._client, "automation_reloaded", enabled=runtime_requested
+        ) as wait_for_reload:
+            result = await self._upsert_automation(config_dict, identifier, resolved_id)
+            reloaded = await wait_for_reload()
+            note_reload_outcome(
+                result, reloaded, domain="automation", requested=enabled is not None
+            )
+        run_actions = _run_actions_once_reloaded(
+            result, reloaded, run_actions, identifier or result.get("unique_id")
+        )
 
         for warning in conflict_warnings or []:
             result.setdefault("warnings", []).append(warning)
+
+        post_write_identifier = identifier or result.get("unique_id")
+        # A create already polled for the entity inside the upsert; with wait=True
+        # the resolver below polls again. Either way, _apply_runtime_state must
+        # not start a further poll of its own.
+        entity_already_polled = wait or bool(result.get("entity_not_verified"))
+        entity_id = await _resolve_post_write_automation_entity(
+            self._client,
+            post_write_identifier,
+            result.get("entity_id"),
+            wait,
+            result,
+        )
+        _sync_post_write_automation_result(result, entity_id)
 
         if result.get("entity_not_verified"):
             result.setdefault("warnings", []).append(
@@ -1236,7 +1528,6 @@ class AutomationConfigTools:
             )
             result.pop("entity_not_verified", None)
 
-        entity_id = result.get("entity_id")
         if not entity_id and identifier and identifier.startswith("automation."):
             entity_id = identifier
         if wait and entity_id:
@@ -1262,6 +1553,16 @@ class AutomationConfigTools:
                 result,
                 "automation",
             )
+
+        entity_id = await self._apply_runtime_state(
+            result,
+            entity_id,
+            enabled,
+            wait,
+            identifier=None if entity_already_polled else post_write_identifier,
+            run_actions=run_actions,
+        )
+        _sync_post_write_automation_result(result, entity_id)
 
         if bp_warnings:
             result["best_practice_warnings"] = list(bp_warnings)
@@ -1359,7 +1660,7 @@ class AutomationConfigTools:
         raw_id = current.get("id")
         return str(raw_id) if raw_id is not None else None
 
-    async def _raise_automation_not_found(self, identifier: str) -> None:
+    async def _raise_automation_not_found(self, identifier: str) -> NoReturn:
         """Raise a structured RESOURCE_NOT_FOUND ToolError for a missing automation.
 
         Single source of truth for the 404→RESOURCE_NOT_FOUND mapping used
@@ -1626,13 +1927,12 @@ class AutomationConfigTools:
         wait: Annotated[
             bool,
             Field(
-                description="Wait for automation to be fully removed before returning. Default: True.",
+                description="Wait for automation to be fully removed before returning.",
                 default=True,
             ),
         ] = True,
     ) -> dict[str, Any]:
-        """
-        Delete a Home Assistant automation.
+        """Delete a Home Assistant automation permanently.
 
         The returned `automation_id` is the resolved entity_id (canonical
         form, e.g. `automation.morning_routine`) when the registry lookup
@@ -1642,8 +1942,6 @@ class AutomationConfigTools:
         EXAMPLES:
         - Delete automation: ha_config_remove_automation("automation.old_automation")
         - Delete by unique_id: ha_config_remove_automation("my_unique_id")
-
-        **WARNING:** Deleting an automation removes it permanently from your Home Assistant configuration.
         """
         try:
             # Empty/whitespace would surface as a misleading HA delete-failure.

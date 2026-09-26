@@ -28,9 +28,7 @@ _DESCRIPTION = (
     "and ha_config_get_automation, "
     "ha_config_get_script, and ha_config_list_helpers handle their own types.\n\n"
     "Use ha_search for broader discovery and deep searches across entities, "
-    "automations, scripts, scenes, and helpers. Pass an exact "
-    "entity_id to discover references before a rename or deletion. Omit query "
-    "to enumerate entities using domain, area, or state filters. "
+    "automations, scripts, scenes, and helpers. "
     "To search full stored scene attribute values, use "
     "ha_config_get_scene(query=..., search_in_config=True).\n\n"
     "Results are paginated; partial results are incomplete, not proof that "
@@ -41,9 +39,8 @@ _DESCRIPTION = (
     "cannot be verified."
 )
 _QUERY_DESCRIPTION = (
-    "Entity name fragment, free-text configuration term, or exact entity_id "
-    "for broader discovery and deep search. Use dedicated get/list tools "
-    "first for a known resource type. Use an exact entity_id for reference "
+    "Entity name fragment, free-text configuration term, or exact entity_id. "
+    "Use an exact entity_id for reference "
     "checks before a rename or deletion. Omit to enumerate entities by "
     "domain_filter, area_filter, and/or state_filter."
 )

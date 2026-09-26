@@ -531,20 +531,20 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_manage_pipeline` — Manage Home Assistant Assist pipelines.
 
 ### Automations
-- `ha_config_get_automation` — Retrieve Home Assistant automation configuration.
-- `ha_config_remove_automation` — Delete a Home Assistant automation.
+- `ha_config_get_automation` — Get Home Assistant automation configuration.
+- `ha_config_remove_automation` — Delete a Home Assistant automation permanently.
 - `ha_config_set_automation` — Create or update a Home Assistant automation.
 
 ### Blueprints
 - `ha_manage_blueprints` — Manage Home Assistant blueprints — list, read, import, save, delete, or render a standalone config.
 
 ### Calendar
-- `ha_config_get_calendar_events` — Retrieve calendar events from a calendar entity.
+- `ha_config_get_calendar_events` — Get calendar events from a calendar entity within a time range.
 - `ha_config_remove_calendar_event` — Delete an event from a calendar.
 - `ha_config_set_calendar_event` — Create a new event in a calendar, or update an existing one.
 
 ### Camera
-- `ha_get_camera_image` — Retrieve a snapshot image from a Home Assistant camera entity.
+- `ha_get_camera_image` — Get a snapshot image from a Home Assistant camera entity.
 
 ### Dashboard
 - `ha_get_dashboard_screenshot` **(beta — dev channel only)** — Get rendered images of a Home Assistant Lovelace dashboard view.
@@ -567,7 +567,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_set_device` — Update device properties such as name, area, disabled state, or labels.
 
 ### Energy
-- `ha_manage_energy_prefs` — Manage the Home Assistant Energy Dashboard preferences.
+- `ha_manage_energy_prefs` — Manage the Home Assistant Energy Dashboard preferences: grid / solar /
 
 ### Entity Registry
 - `ha_get_entity` — Get entity registry information for one or more entities.
@@ -596,7 +596,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_remove_helpers_integrations` — Remove a Home Assistant helper or integration config entry.
 
 ### History & Statistics
-- `ha_get_automation_traces` — Retrieve execution traces for automations and scripts to debug issues.
+- `ha_get_automation_traces` — Get execution traces for automations and scripts to debug issues.
 - `ha_get_history` — Get historical data from Home Assistant's recorder.
 - `ha_get_logs` — Get Home Assistant logs from various sources.
 
@@ -622,7 +622,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_config_set_scene` — Create or update a Home Assistant scene.
 
 ### Scripts
-- `ha_config_get_script` — Retrieve Home Assistant script configuration.
+- `ha_config_get_script` — Get Home Assistant script configuration.
 - `ha_config_remove_script` — Delete a Home Assistant script.
 - `ha_config_set_script` — Create or update a Home Assistant script.
 
@@ -634,7 +634,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 ### Service & Device Control
 - `ha_bulk_control` — Manage explicit operations or one deterministic structural bulk action.
 - `ha_call_event` — Execute a custom event on the Home Assistant event bus.
-- `ha_call_service` — Execute Home Assistant services to control entities and trigger automations.
+- `ha_call_service` — Call any Home Assistant service or one-shot WebSocket command: the catch-all escape hatch.
 - `ha_get_operation_status` — Get the status of one or more device operations with real-time WebSocket verification.
 - `ha_list_services` — List available Home Assistant services with optional pagination and detail control.
 
@@ -645,9 +645,9 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_manage_custom_tool` **(beta — dev channel only)** — Create and run a custom tool in a sandbox, or manage saved custom tools.
 - `ha_manage_security_policy` — Manage the tool security policy that gates high-stakes tool calls behind user approval.
 - `ha_manage_theme` — Manage Home Assistant frontend themes.
-- `ha_manage_updates` — Manage Home Assistant updates -- list, read details, batch install, skip, or un-skip.
-- `ha_reload_core` — Reload Home Assistant configuration without full restart.
-- `ha_restart` — Restart Home Assistant.
+- `ha_manage_updates` — Manage Home Assistant updates (list, details, install, skip) and Repairs issues (ignore).
+- `ha_reload_core` — Execute a Home Assistant configuration reload without a full restart.
+- `ha_restart` — Execute a Home Assistant restart.
 
 ### Todo Lists
 - `ha_get_todo` — Get todo lists or items - list all todo lists or get items from a specific list.
@@ -655,7 +655,7 @@ The add-on provides 87+ MCP tools for controlling Home Assistant:
 - `ha_set_todo_item` — Create or update a todo item in Home Assistant.
 
 ### Utilities
-- `ha_eval_template` — Evaluate Jinja2 templates using Home Assistant's template engine.
+- `ha_eval_template` — Execute a Jinja2 template render, or an automation condition check, in Home Assistant.
 - `ha_report_issue` — Get diagnostic information and templates for filing issue reports or feedback.
 
 ### Zones

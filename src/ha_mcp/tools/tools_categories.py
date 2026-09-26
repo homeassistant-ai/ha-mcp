@@ -57,26 +57,19 @@ class CategoryTools:
         category_id: Annotated[
             str | None,
             Field(
-                description="ID of the category to retrieve. If omitted, lists all categories for the scope.",
+                description="ID of the category to retrieve.",
                 default=None,
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """
-        Get category info - list all categories for a scope or get a specific one by ID.
+        """Get category info - list all categories for a scope or get a specific one by ID.
 
         Without a category_id: Lists all Home Assistant categories for the given scope.
         With a category_id: Returns configuration for that specific category.
 
         Categories are domain-scoped organizational groups for automations, scripts, scenes, and helpers.
 
-        CATEGORY PROPERTIES:
-        - ID (category_id), Name
-        - Icon (optional)
-
         EXAMPLES:
-        - List automation categories: ha_config_get_category("automation")
-        - List script categories: ha_config_get_category("script")
         - List helper categories: ha_config_get_category("helpers")
         - Get specific category: ha_config_get_category("automation", category_id="my_category_id")
 
@@ -202,7 +195,7 @@ class CategoryTools:
         category_id: Annotated[
             str | None,
             Field(
-                description="Category ID for updates. If not provided, creates a new category.",
+                description="Category ID for updates.",
                 default=None,
             ),
         ] = None,
@@ -353,8 +346,7 @@ class CategoryTools:
         """
         Delete a Home Assistant category.
 
-        Removes the category from the category registry for the given scope
-        (e.g., 'automation', 'script', 'scene', 'helpers').
+        Removes the category from the category registry for the given scope.
         This will also remove the category assignment from all entities in that scope.
 
         EXAMPLES:

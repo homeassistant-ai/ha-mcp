@@ -9,7 +9,11 @@ import logging
 
 import pytest
 
-from ...utilities.assertions import assert_mcp_success, parse_mcp_result, safe_call_tool
+from ...utilities.assertions import (
+    MCPAssertions,
+    assert_mcp_success,
+    parse_mcp_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -187,27 +191,64 @@ class TestEvalTemplate:
         logger.info(f"Float result: {data['result']}")
 
     async def test_eval_invalid_template_syntax(self, mcp_client):
-        """Test evaluating template with invalid syntax."""
-        logger.info("Testing ha_eval_template with invalid syntax")
+        """A syntax error returns Home Assistant's Jinja message (#2522)."""
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_eval_template",
+                {"template": "{% if %}"},
+                expected_error="TemplateSyntaxError",
+            )
 
-        # Use safe_call_tool since we expect this to fail (invalid template)
-        data = await safe_call_tool(
-            mcp_client,
-            "ha_eval_template",
-            {
-                "template": "{{ invalid_function_xyz() }}",
-            },
-        )
+    async def test_eval_runtime_error_keeps_jinja_message(self, mcp_client):
+        """A runtime error returns the Jinja error, not ``Command failed: {}``.
 
-        # Should return error for invalid template
-        assert data.get("success") is False or "error" in data, (
-            f"Expected error for invalid template: {data}"
-        )
+        The template is the one from #2522: a dict treated as a string.
+        """
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_eval_template",
+                {
+                    "template": (
+                        "{% set tv_items = [{'summary': '18:32-18:38 (6 min) - A'}] %}"
+                        "{{ tv_items[0].split('-')[0] }}"
+                    )
+                },
+                expected_error="has no attribute 'split'",
+            )
 
-        if "suggestions" in data:
-            logger.info(f"Error suggestions provided: {data['suggestions']}")
+    async def test_eval_undefined_function_is_an_error(self, mcp_client):
+        """Calling an undefined function fails with the name in the message."""
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_eval_template",
+                {"template": "{{ invalid_function_xyz() }}"},
+                expected_error="invalid_function_xyz",
+            )
 
-        logger.info("Invalid template syntax properly handled")
+    async def test_eval_warning_keeps_the_result(self, mcp_client):
+        """An undefined variable renders empty and is reported in ``warnings``."""
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_eval_template", {"template": "{{ undefined_var_xyz }}x"}
+            )
+        assert data["result"] == "x"
+        assert any("undefined_var_xyz" in w for w in data.get("warnings", [])), data
+
+    async def test_eval_strict_turns_the_warning_into_an_error(self, mcp_client):
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_eval_template",
+                {"template": "{{ undefined_var_xyz }}x", "strict": True},
+                expected_error="undefined_var_xyz",
+            )
+
+    async def test_eval_variables(self, mcp_client):
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_eval_template",
+                {"template": "{{ foo * 2 }}", "variables": {"foo": 21}},
+            )
+        assert data["result"] == 42
 
     async def test_eval_nonexistent_entity_template(self, mcp_client):
         """Test evaluating template with non-existent entity."""
@@ -403,3 +444,195 @@ async def test_eval_template_brightness_calculation(mcp_client, test_light_entit
     )
 
     logger.info(f"Brightness percentage: {result_value}%")
+
+
+@pytest.mark.asyncio
+@pytest.mark.core
+class TestEvalCondition:
+    """ha_eval_template(condition=...) tests a condition through test_condition."""
+
+    async def test_state_condition(self, mcp_client):
+        async with MCPAssertions(mcp_client) as mcp:
+            matching = await mcp.call_tool_success(
+                "ha_eval_template",
+                {
+                    "condition": {
+                        "condition": "state",
+                        "entity_id": "sun.sun",
+                        "state": ["above_horizon", "below_horizon"],
+                    }
+                },
+            )
+            other = await mcp.call_tool_success(
+                "ha_eval_template",
+                {
+                    "condition": {
+                        "condition": "state",
+                        "entity_id": "sun.sun",
+                        "state": "not_a_sun_state",
+                    }
+                },
+            )
+        assert matching["result"] is True
+        assert other["result"] is False
+
+    async def test_and_condition(self, mcp_client):
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_eval_template",
+                {
+                    "condition": {
+                        "condition": "and",
+                        "conditions": [
+                            {"condition": "template", "value_template": "{{ true }}"},
+                            {"condition": "template", "value_template": "{{ false }}"},
+                        ],
+                    }
+                },
+            )
+        assert data["result"] is False
+
+    async def test_condition_variables(self, mcp_client):
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_eval_template",
+                {
+                    "condition": {
+                        "condition": "template",
+                        "value_template": "{{ trigger.to_state.state == 'on' }}",
+                    },
+                    "variables": {"trigger": {"to_state": {"state": "on"}}},
+                },
+            )
+        assert data["result"] is True
+
+    async def test_condition_template_warning(self, mcp_client):
+        """Template errors hit while the condition still evaluated are returned."""
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_success(
+                "ha_eval_template",
+                {
+                    "condition": {
+                        "condition": "template",
+                        "value_template": "{{ undefined_var_xyz }}",
+                    }
+                },
+            )
+        assert data["result"] is False
+        assert any("undefined_var_xyz" in w for w in data.get("warnings", [])), data
+
+    async def test_invalid_condition_is_rejected(self, mcp_client):
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_eval_template",
+                {"condition": {"condition": "not_a_condition_type"}},
+                expected_error="not_a_condition_type",
+            )
+
+    async def test_template_and_condition_together_are_rejected(self, mcp_client):
+        async with MCPAssertions(mcp_client) as mcp:
+            await mcp.call_tool_failure(
+                "ha_eval_template",
+                {
+                    "template": "{{ 1 }}",
+                    "condition": {"condition": "template", "value_template": "{{ 1 }}"},
+                },
+                expected_error="exactly one",
+            )
+
+
+async def _component_diagnoses(ha_client) -> bool:
+    """Whether this lane's ha_mcp_tools component can name a template line.
+
+    The component is absent on the no-component lanes and present, with the
+    same WebSocket surface, on every other one, including the embedded
+    server-entry-only lane.
+    """
+    info = await ha_client.send_websocket_message({"type": "ha_mcp_tools/info"})
+    if info.get("success") is not True:
+        return False
+    return "template_diagnose" in info["result"]["capabilities"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.core
+class TestEvalTemplateErrorLocation:
+    """With the ha_mcp_tools component a failure names its template line;
+    without it the error still comes back, with no line."""
+
+    async def _failure(self, mcp_client, args, expected_error):
+        async with MCPAssertions(mcp_client) as mcp:
+            return await mcp.call_tool_failure(
+                "ha_eval_template", args, expected_error=expected_error
+            )
+
+    async def test_runtime_error_line(self, mcp_client, ha_client):
+        template = "line one\n{% set d = {'a': 1} %}\n{{ d.split('-') }}\nline four"
+        data = await self._failure(
+            mcp_client, {"template": template}, "has no attribute 'split'"
+        )
+        if await _component_diagnoses(ha_client):
+            assert data.get("line") == 3, data
+            assert data.get("source_line") == "{{ d.split('-') }}", data
+        else:
+            assert "line" not in data, data
+
+    async def test_leading_blank_lines_keep_the_callers_numbering(
+        self, mcp_client, ha_client
+    ):
+        """Core strips the template; the line still points at the caller's text."""
+        template = "\n\nline three\n{{ 1/0 }}\n"
+        data = await self._failure(
+            mcp_client, {"template": template}, "division by zero"
+        )
+        if await _component_diagnoses(ha_client):
+            assert data.get("line") == 4, data
+            assert data.get("source_line") == "{{ 1/0 }}", data
+        else:
+            assert "line" not in data, data
+
+    async def test_syntax_error_line(self, mcp_client, ha_client):
+        data = await self._failure(
+            mcp_client,
+            {"template": "line one\n{% set x = 1 %}\n{% if x == %}\nline four"},
+            "TemplateSyntaxError",
+        )
+        if await _component_diagnoses(ha_client):
+            assert data.get("line") == 3, data
+        else:
+            assert "line" not in data, data
+
+    async def test_report_errors_false(self, mcp_client, ha_client):
+        """HA only logs this failure; the component render recovers it."""
+        if await _component_diagnoses(ha_client):
+            data = await self._failure(
+                mcp_client,
+                {"template": "{{ 1/0 }}", "report_errors": False},
+                "division by zero",
+            )
+            assert data.get("line") == 1, data
+        else:
+            await self._failure(
+                mcp_client,
+                {"template": "{{ 1/0 }}", "report_errors": False},
+                "report_errors=true",
+            )
+
+    async def test_runaway_template_times_out_and_home_assistant_stays_responsive(
+        self, mcp_client
+    ):
+        runaway = (
+            "{% for i in range(100000) %}{% for j in range(100000) %}"
+            "{% endfor %}{% endfor %}"
+        )
+        async with MCPAssertions(mcp_client) as mcp:
+            data = await mcp.call_tool_failure(
+                "ha_eval_template",
+                {"template": runaway, "timeout": 1},
+                expected_error="Exceeded maximum execution time",
+            )
+            assert data["error"]["code"] == "TIMEOUT_OPERATION", data
+            after = await mcp.call_tool_success(
+                "ha_eval_template", {"template": "{{ 1 + 1 }}"}
+            )
+        assert after["result"] == 2

@@ -20,7 +20,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp.tools import tools_config_automations as automations_module
 from ha_mcp.tools.tools_config_automations import (
+    NOT_VERIFIED_WARNING_PREFIX,
     AutomationConfigTools,
     _strip_redundant_identifier_echo,
 )
@@ -288,6 +290,42 @@ class TestFullConfigSetAutomationIdKey:
 
         assert result["success"] is True
         assert result["automation_id"] == "generated_unique_id_xyz"
+
+    async def test_create_uses_successful_unique_id_fallback_without_stale_warning(
+        self, tools, mock_client, canonical_config, monkeypatch
+    ):
+        """A recovered entity must clear the creation poll's soft-failure state."""
+        mock_client.upsert_automation_config = AsyncMock(
+            return_value={
+                "unique_id": "generated_unique_id_xyz",
+                "entity_id": None,
+                "entity_not_verified": True,
+                "result": "ok",
+                "operation": "created",
+            }
+        )
+        monkeypatch.setattr(
+            automations_module,
+            "wait_for_automation_entity_by_unique_id",
+            AsyncMock(return_value="automation.generated"),
+        )
+        monkeypatch.setattr(
+            automations_module,
+            "wait_for_entity_registered",
+            AsyncMock(return_value=True),
+        )
+
+        result = await tools.ha_config_set_automation(
+            config=canonical_config, wait=True
+        )
+
+        assert result["success"] is True
+        assert result["automation_id"] == "automation.generated"
+        assert result["entity_id"] == "automation.generated"
+        assert all(
+            NOT_VERIFIED_WARNING_PREFIX not in warning
+            for warning in result.get("warnings", [])
+        )
 
     async def test_create_omits_automation_id_when_all_fallbacks_falsy(
         self, tools, mock_client, canonical_config

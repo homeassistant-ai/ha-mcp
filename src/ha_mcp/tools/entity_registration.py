@@ -82,9 +82,11 @@ async def resolve_entity_id_after_write(
     An empty registry read can precede asynchronous registration even inside
     the component. Retry against one deadline, checking component availability
     on every attempt. A positive budget includes in-flight lookups and sleeps;
-    zero requests one lookup without a time limit, for test fixtures. Known
-    API failures retain the best-effort fallback. Errors escaping the component
-    adapter propagate unless listed below; cancellation always propagates.
+    zero requests one lookup without a time limit, for test fixtures and for
+    callers that need an existing entity without waiting (a standalone script
+    run). Known API failures retain the best-effort fallback. Errors escaping
+    the component adapter propagate unless listed below; cancellation always
+    propagates.
     ``fallback_entity_id`` overrides the constructed ID on failure; registry
     matching always uses the storage key.
 

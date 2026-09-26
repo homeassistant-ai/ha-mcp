@@ -84,7 +84,7 @@ async def _subscribe_entry_changes(client: Any) -> tuple[Any, Any] | None:
             verify_ssl=getattr(client, "verify_ssl", None),
         )
         sub_id, queue = await ws.subscribe_command(
-            WS_CONFIG_ENTRIES_SUBSCRIBE, timeout=_ENTRY_SUBSCRIBE_TIMEOUT
+            WS_CONFIG_ENTRIES_SUBSCRIBE, wait_timeout=_ENTRY_SUBSCRIBE_TIMEOUT
         )
     except Exception as exc:
         # Degrade to polling rather than failing the reconfigure; the caller

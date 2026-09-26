@@ -498,7 +498,25 @@
     "addon.verify_ssl.description": "Verifica il certificato TLS del server Home Assistant. L'app (componente aggiuntivo) si connette tramite il proxy Supervisor, quindi questo normalmente non ha effetto e dovrebbe rimanere abilitato. Disabilita solo se hai riconfigurato l'app (componente aggiuntivo) per comunicare con HA su un nome host HTTPS pubblico con un certificato autofirmato o una discrepanza del nome host. La disabilitazione indebolisce la sicurezza del trasporto: lasciala attiva a meno che tu non sappia di averne bisogno. Richiede il riavvio per avere effetto.",
     "addon.ha_tool_concurrency.name": "Concorrenza degli strumenti di Home Assistant",
     "addon.ha_tool_concurrency.description": "Limite opzionale sulle chiamate esterne agli strumenti di Home Assistant in tutte le sessioni. La concorrenza interna di REST, WebSocket e fan-out per strumento rimane invariata. 0 mantiene il comportamento illimitato. Una chiamata in attesa di capacità fallisce dopo 60 secondi.",
-    "addon_stable.enable_tool_search.description": "Sostituisci il catalogo completo degli strumenti con la scoperta basata sulla ricerca. Riduce il contesto inattivo di circa il 90%, a circa 5K token. ⚠️ NON abilitare questa opzione nei client con ricerca di strumenti integrata / strumenti differiti (claude.ai, Claude Desktop, Claude Code) — i due livelli di ricerca entrano in conflitto e la ricerca di strumenti integrata del client è la scelta migliore in quel caso; lasciala disattivata. Se gli strumenti siano differiti dipende dalla combinazione di client e modello: usalo quando la tua configurazione carica l'intero catalogo in anticipo — modelli senza strumenti differiti nativi (es. Gemini, modelli locali compatibili con OpenAI, Claude Haiku), client che inseriscono tutti gli schemi di strumenti indipendentemente dal modello (es. GitHub Copilot CLI), o finestre di contesto più piccole. Alcuni modelli Codex e ChatGPT includono anch'essi strumenti differiti — verifica direttamente il tuo client/modello per confermare le sue funzionalità in modo da non lasciare questa opzione abilitata inutilmente. Gli strumenti vengono trovati tramite ha_search_tools ed eseguiti tramite proxy categorizzati (lettura/scrittura/eliminazione). Richiede il riavvio dell'app (componente aggiuntivo) per avere effetto — quindi riconnettiti o aggiorna il server MCP nel tuo client di IA in modo che ricarichi l'elenco degli strumenti. Il solo riavvio dell'app (componente aggiuntivo) NON aggiorna l'elenco degli strumenti memorizzato nella cache di un client; questo si applica dopo aver modificato qualsiasi impostazione qui."
+    "addon_stable.enable_tool_search.description": "Sostituisci il catalogo completo degli strumenti con la scoperta basata sulla ricerca. Riduce il contesto inattivo di circa il 90%, a circa 5K token. ⚠️ NON abilitare questa opzione nei client con ricerca di strumenti integrata / strumenti differiti (claude.ai, Claude Desktop, Claude Code) — i due livelli di ricerca entrano in conflitto e la ricerca di strumenti integrata del client è la scelta migliore in quel caso; lasciala disattivata. Se gli strumenti siano differiti dipende dalla combinazione di client e modello: usalo quando la tua configurazione carica l'intero catalogo in anticipo — modelli senza strumenti differiti nativi (es. Gemini, modelli locali compatibili con OpenAI, Claude Haiku), client che inseriscono tutti gli schemi di strumenti indipendentemente dal modello (es. GitHub Copilot CLI), o finestre di contesto più piccole. Alcuni modelli Codex e ChatGPT includono anch'essi strumenti differiti — verifica direttamente il tuo client/modello per confermare le sue funzionalità in modo da non lasciare questa opzione abilitata inutilmente. Gli strumenti vengono trovati tramite ha_search_tools ed eseguiti tramite proxy categorizzati (lettura/scrittura/eliminazione). Richiede il riavvio dell'app (componente aggiuntivo) per avere effetto — quindi riconnettiti o aggiorna il server MCP nel tuo client di IA in modo che ricarichi l'elenco degli strumenti. Il solo riavvio dell'app (componente aggiuntivo) NON aggiorna l'elenco degli strumenti memorizzato nella cache di un client; questo si applica dopo aver modificato qualsiasi impostazione qui.",
+    "policies.global.event_decisions.label": "Consenti approvazione/rifiuto dagli eventi di Home Assistant",
+    "policies.global.event_decisions.help": "Disattivato per impostazione predefinita. Quando è attivo, un evento <code>ha_mcp_approval_response</code> contenente il token di una richiesta in sospeso, una decisione e il PIN sottostante decide quella richiesta, in modo che la tua automazione di notifica possa approvarla da un telefono. Richiede un PIN prima di poter essere attivato.",
+    "policies.global.event_decisions.warning": "Un agente di IA con sufficiente accesso può indovinare o ottenere questo PIN — chiedendotelo o scrivendo un'automazione che lo legge da un evento di risposta — e quindi approvare le proprie richieste. Home Assistant non può distinguere un evento attivato dalla tua automazione da uno attivato da un agente, quindi il PIN è l'unica cosa tra di essi. Attivare questa opzione significa accettare tale limitazione. Le decisioni nell'elenco in sospeso non subiscono variazioni — sull'interfaccia di configurazione servita dal server stesso. La pagina delle impostazioni del sidecar stdio imposta il PIN e la regola, ma non può elencare o decidere le approvazioni in sospeso: quelle risiedono nel processo del server che esso non può raggiungere.",
+    "policies.global.pin.label": "PIN di approvazione",
+    "policies.global.pin.help": "Almeno 4 caratteri. Salvato come hash con salt e mai più mostrato, e tenuto fuori dal documento delle regole in modo che nulla che legga o scriva regole lo trasporti. Cinque PIN errati in cinque minuti chiudono il canale per il resto di quella finestra — l'elenco in sospeso sull'interfaccia di configurazione del server continua a funzionare (la pagina del sidecar stdio non può mostrarlo).",
+    "policies.global.pin.set": "Imposta PIN",
+    "policies.global.pin.clear": "Rimuovi PIN",
+    "policies.global.pin.is_set": "È impostato un PIN.",
+    "policies.global.pin.invalid": "Il PIN memorizzato non può essere letto e non corrisponde ad alcuno. Impostane uno nuovo.",
+    "policies.global.pin.not_set": "Nessun PIN impostato. Impostane uno per consentire le decisioni tramite il bus degli eventi.",
+    "policies.global.pin.unknown": "Impossibile leggere se è impostato un PIN.",
+    "policies.global.pin.saved": "PIN salvato.",
+    "policies.global.pin.cleared": "PIN rimosso.",
+    "policies.global.pin.cleared_and_disabled": "PIN rimosso e decisioni tramite il bus degli eventi disattivate insieme ad esso.",
+    "policies.global.pin.confirm_clear": "Rimuovere il PIN di approvazione? Le decisioni tramite il bus degli eventi verranno disattivate; l'elenco in sospeso in questa scheda non subisce variazioni.",
+    "policies.operations.set_pin": "Imposta PIN",
+    "policies.rules.scope_notice": "Le regole si applicano ai singoli strumenti. Altri strumenti potrebbero eseguire la stessa azione. Ad esempio, richiedere l'approvazione per <code>ha_call_event</code> non limita l'invio di eventi tramite <code>ha_call_service</code>.",
+    "policies.operations.clear_pin": "Rimuovi PIN"
   },
   "tool_groups": {
     "Apps (add-ons)": "App (componenti aggiuntivi)",
@@ -542,7 +560,7 @@
     },
     "ha_call_service": {
       "title": "Chiama un servizio",
-      "description": "Esegue i servizi di Home Assistant per controllare le entità e attivare le automazioni."
+      "description": "Chiama qualsiasi servizio di Home Assistant o un comando WebSocket al volo: la via di fuga universale."
     },
     "ha_config_delete_dashboard": {
       "title": "Elimina una dashboard",
@@ -554,11 +572,11 @@
     },
     "ha_config_get_automation": {
       "title": "Ottieni la configurazione di un'automazione",
-      "description": "Recupera la configurazione di un'automazione di Home Assistant."
+      "description": "Ottieni la configurazione di un'automazione di Home Assistant."
     },
     "ha_config_get_calendar_events": {
       "title": "Ottieni gli eventi del calendario",
-      "description": "Recupera gli eventi di un'entità calendario."
+      "description": "Ottieni eventi del calendario da un'entità calendario entro un intervallo di tempo."
     },
     "ha_config_get_category": {
       "title": "Ottieni una categoria",
@@ -578,7 +596,7 @@
     },
     "ha_config_get_script": {
       "title": "Ottieni la configurazione di uno script",
-      "description": "Recupera la configurazione di uno script di Home Assistant."
+      "description": "Ottieni la configurazione di uno script di Home Assistant."
     },
     "ha_config_get_yaml": {
       "title": "Leggi un frammento di configurazione YAML",
@@ -598,7 +616,7 @@
     },
     "ha_config_remove_automation": {
       "title": "Rimuovi un'automazione",
-      "description": "Elimina un'automazione di Home Assistant."
+      "description": "Elimina definitivamente un'automazione di Home Assistant."
     },
     "ha_config_remove_calendar_event": {
       "title": "Rimuovi un evento del calendario",
@@ -682,7 +700,7 @@
     },
     "ha_eval_template": {
       "title": "Valuta un template",
-      "description": "Valuta i template Jinja2 usando il motore dei template di Home Assistant."
+      "description": "Esegue il rendering di un template Jinja2 o un controllo delle condizioni di un'automazione in Home Assistant."
     },
     "ha_get_app": {
       "title": "Ottieni app (componenti aggiuntivi)",
@@ -690,11 +708,11 @@
     },
     "ha_get_automation_traces": {
       "title": "Ottieni le tracce delle automazioni",
-      "description": "Recupera le tracce di esecuzione di automazioni e script per analizzare i problemi."
+      "description": "Ottieni tracce di esecuzione per automazioni e script per eseguire il debug dei problemi."
     },
     "ha_get_camera_image": {
       "title": "Ottieni l'immagine di una telecamera",
-      "description": "Recupera un'istantanea da un'entità telecamera di Home Assistant."
+      "description": "Ottieni un'immagine istantanea da un'entità telecamera di Home Assistant."
     },
     "ha_get_dashboard_screenshot": {
       "title": "Ottieni lo screenshot di una dashboard",
@@ -782,7 +800,7 @@
     },
     "ha_manage_energy_prefs": {
       "title": "Gestisci le preferenze della dashboard Energia",
-      "description": "Gestisce le preferenze della dashboard Energia di Home Assistant."
+      "description": "Gestisci le preferenze del cruscotto energetico di Home Assistant: rete / solare /"
     },
     "ha_manage_hacs": {
       "title": "Gestisci HACS",
@@ -806,7 +824,7 @@
     },
     "ha_manage_updates": {
       "title": "Gestisci gli aggiornamenti",
-      "description": "Gestisce gli aggiornamenti di Home Assistant: elenca, mostra i dettagli, installa in blocco, ignora o ripristina gli aggiornamenti ignorati."
+      "description": "Gestisci gli aggiornamenti di Home Assistant (elenco, dettagli, installazione, salta) e i problemi di Riparazione (ignora)."
     },
     "ha_read_file": {
       "title": "Leggi un file",
@@ -814,7 +832,7 @@
     },
     "ha_reload_core": {
       "title": "Ricarica i componenti principali",
-      "description": "Ricarica la configurazione di Home Assistant senza un riavvio completo."
+      "description": "Esegui un ricaricamento della configurazione di Home Assistant senza un riavvio completo."
     },
     "ha_remove_area_or_floor": {
       "title": "Rimuovi un'area o un piano",
@@ -846,7 +864,7 @@
     },
     "ha_restart": {
       "title": "Riavvia Home Assistant",
-      "description": "Riavvia Home Assistant."
+      "description": "Esegui un riavvio di Home Assistant."
     },
     "ha_search": {
       "title": "Cerca",

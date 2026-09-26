@@ -323,10 +323,10 @@ jobs:
       # job's container image tag (group "uv"), so both move in one Renovate
       # PR and cannot drift apart.
       if: success() || failure()
-      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.12.11"
+        version: "0.12.15"
 
     - name: Set up Python
       if: success() || failure()
@@ -471,7 +471,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-      image: ghcr.io/astral-sh/uv:0.12.15-python3.13-trixie-slim
+      image: ghcr.io/astral-sh/uv:0.12.17-python3.13-trixie-slim
     # Bumped 5 → 8 for the issue #2027 regression tests, which spawn real
     # subprocesses — including a full stdio server session — costing tens
     # of seconds on a slow runner. 8 → 10 after #2360: pytest alone is ~3.6
@@ -521,6 +521,22 @@ jobs:
 
     - name: Run unit tests
       run: uv run pytest tests/src/unit/ -n auto --tb=short -v
+
+    - name: Check unit tests left no local state
+      # The runner's home starts without ~/.ha-mcp. A unit test that writes
+      # there or leaves a settings sidecar running bypassed the isolation in
+      # tests/src/unit/conftest.py and would do the same on a developer machine.
+      run: |
+        if [ -e ~/.ha-mcp ]; then
+          find ~/.ha-mcp
+          echo "::error::Unit tests wrote to ~/.ha-mcp"
+          exit 1
+        fi
+        # procps (pgrep) is not in the slim image; read /proc directly.
+        if grep -ls '[s]tdio_settings_sidecar' /proc/[0-9]*/cmdline; then
+          echo "::error::Unit tests left a settings sidecar running"
+          exit 1
+        fi
 
     - name: Run add-on structure tests
       # tests/addon/ validates add-on packaging / config.yaml structure (e.g.
@@ -572,10 +588,10 @@ jobs:
         cache-binary: true
 
     - name: Install uv
-      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.12.11"
+        version: "0.12.15"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -663,10 +679,10 @@ jobs:
         cache-binary: true
 
     - name: Install uv
-      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.12.11"
+        version: "0.12.15"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -771,10 +787,10 @@ jobs:
         cache-binary: true
 
     - name: Install uv
-      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.12.11"
+        version: "0.12.15"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -863,10 +879,10 @@ jobs:
         cache-binary: true
 
     - name: Install uv
-      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.12.11"
+        version: "0.12.15"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -978,10 +994,10 @@ jobs:
         cache-binary: true
 
     - name: Install uv
-      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.12.11"
+        version: "0.12.15"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}
@@ -1058,10 +1074,10 @@ jobs:
         cache-binary: true
 
     - name: Install uv
-      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       with:
         # renovate: datasource=github-releases depName=astral-sh/uv
-        version: "0.12.11"
+        version: "0.12.15"
 
     - name: Set up Python
       run: uv python install ${{ env.PYTHON_VERSION }}

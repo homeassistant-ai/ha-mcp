@@ -2142,13 +2142,7 @@ class SearchTools:
                 default=None,
                 description=(
                     "What to search for (entity name fragment, free-text "
-                    "config term, entity_id). Searches BOTH the entity "
-                    "registry (entity_ids, friendly names, areas) AND "
-                    "configuration bodies (automation triggers/actions, "
-                    "script sequences, scene contents, helper bodies, "
-                    "dashboard cards) in one call. Use dedicated get/list "
-                    "tools first for known resource types; use this for "
-                    "broader discovery or deep searches. "
+                    "config term, entity_id). "
                     "Pass the exact entity_id, not a name fragment, when "
                     "checking what a rename or delete would break: that form "
                     "reports automations, scripts and scenes referencing it "
@@ -2167,8 +2161,7 @@ class SearchTools:
                 default=None,
                 description=(
                     "Narrow entity-registry results to a single domain "
-                    "(e.g. 'light', 'sensor'). Does not affect configuration "
-                    "search."
+                    "(e.g. 'light', 'sensor')."
                 ),
             ),
         ] = None,
@@ -2180,7 +2173,7 @@ class SearchTools:
                     "Narrow entity-registry results to an area (id, name, or alias), "
                     "an exact floor (id, name, or alias), or an unambiguous "
                     "close-spelling floor match; a floor match expands to all areas "
-                    "on that floor. Does not affect configuration search."
+                    "on that floor."
                 ),
             ),
         ] = None,
@@ -2190,12 +2183,10 @@ class SearchTools:
             Field(
                 default=None,
                 description=(
-                    "Configuration types to include in body search: "
-                    "'automation', 'script', 'scene', 'helper', 'dashboard'. "
-                    "Explicitly providing this selects configuration-only "
-                    "search and skips entities. Omit it for entity discovery. "
-                    "Default = automation+script+scene+helper. Pass as list "
-                    "or JSON-array string."
+                    "Configuration types to include in body search: 'automation', 'script',"
+                    " 'scene', 'helper', 'dashboard'. Explicitly providing this selects "
+                    "configuration-only search and skips entities. Omit it for entity "
+                    "discovery. Default = automation+script+scene+helper."
                 ),
             ),
         ] = None,
@@ -2204,9 +2195,7 @@ class SearchTools:
             Field(
                 default=10,
                 ge=1,
-                description=(
-                    "Maximum results per surface (entities, configs). Default: 10."
-                ),
+                description=("Maximum results per surface (entities, configs)."),
             ),
         ] = 10,
         offset: Annotated[
@@ -2222,8 +2211,8 @@ class SearchTools:
             Field(
                 default=True,
                 description=(
-                    "Exact substring matching (default). Set False for "
-                    "fuzzy matching when the query may have typos."
+                    "Exact substring matching. Set False for fuzzy matching when the query "
+                    "may have typos."
                 ),
             ),
         ] = True,
@@ -2243,8 +2232,8 @@ class SearchTools:
             Field(
                 default=False,
                 description=(
-                    "Include full configuration bodies in body-search "
-                    "results. Default: False (summary only)."
+                    "Include full configuration bodies in body-search results. Otherwise "
+                    "summaries only."
                 ),
             ),
         ] = False,
@@ -2296,8 +2285,7 @@ class SearchTools:
                     "valid group_entities or legacy entity_id collection; "
                     "member IDs are sorted, direct (not recursively expanded), "
                     "and omitted if visibility/include_hidden excludes a member. "
-                    "is_group remains true when member IDs are withheld; requesting "
-                    "member_entity_ids also retains is_group. "
+                    "Requesting member_entity_ids also retains is_group. "
                     "An unknown key is rejected."
                 ),
             ),
@@ -2339,13 +2327,11 @@ class SearchTools:
                 ge=0.001,
                 le=300,
                 description=(
-                    "Per-call override for the per-id config-fetch wall-clock "
-                    "budget (seconds). Replaces the per-type "
-                    "HAMCP_*_CONFIG_TIME_BUDGET defaults for the automation, "
-                    "script, AND scene branches. Use when a `partial: True` "
-                    "response names time-budget skipping. Stateless per-call: "
-                    "one caller raising the budget doesn't affect others. "
-                    "None = use the per-type env defaults."
+                    "Per-call override for the per-id config-fetch wall-clock budget "
+                    "(seconds). Replaces the per-type HAMCP_*_CONFIG_TIME_BUDGET defaults "
+                    "for the automation, script, AND scene branches. Use when a `partial: "
+                    "True` response names time-budget skipping. None = use the per-type env"
+                    " defaults."
                 ),
             ),
         ] = None,
@@ -2355,8 +2341,7 @@ class SearchTools:
 
         Two surfaces run in parallel and return tagged results:
           - **entities**: entity-registry matches (entity_id, friendly name,
-            area). Filter with `domain_filter`/`area_filter`/`state_filter`;
-            omit `query` to enumerate a domain, area, or state.
+            area). Filter with `domain_filter`/`area_filter`/`state_filter`.
           - **automations / scripts / scenes / helpers / dashboards**: matches
             *inside* config definitions — triggers, actions, sequences, scene
             entity-sets, helper bodies, dashboard cards. Driven by `query`;
@@ -2382,8 +2367,7 @@ class SearchTools:
         Config-body search is skipped when `domain_filter`/`area_filter`/
         `state_filter` signal entity-only intent (keeping name lookups off the
         expensive backend); a `warnings[]` entry names the skip. Repeat without
-        entity filters to search configuration contents too. Explicit legacy
-        `search_types=[...]` calls search configs only and skip entities.
+        entity filters to search configuration contents too.
 
         Caveats:
           - `partial: True` means results are NOT exhaustive — a surface raised,
@@ -2399,18 +2383,14 @@ class SearchTools:
             page the next call (iterate `offset = next_offset`); per-surface
             `entity_*`/`config_*` variants show which surface still has results.
 
-        For parameters, schema, and worked examples, see ha_get_skill_guide.
-
         Examples:
-            - List sensors in an area: ha_search(domain_filter="sensor", area_filter="Living Room")
             - Find a light by name: ha_search("kitchen", domain_filter="light")
+            - List sensors in an area: ha_search(domain_filter="sensor", area_filter="Living Room")
             - Find lights safely before an "all except one" control request:
               ha_search("living room", domain_filter="light",
               result_fields=["entity_id", "friendly_name", "is_group",
               "member_entity_ids"])
             - Which automations use an entity: ha_search("light.bed_light")
-            - Scenes touching a light: ha_config_get_scene(query="light.kitchen", search_in_config=True)
-            - Narrow the response to the entity bucket: ha_search("kitchen", fields=["entities"])
             - All unavailable entities: ha_search(state_filter="unavailable")
         """
         try:
@@ -4019,10 +3999,9 @@ class SearchTools:
             Field(
                 default="minimal",
                 description=(
-                    "'minimal': 10 entities/domain, top-5 states (default); "
-                    "'standard': 200 entities/page, top-10 states (use offset for more); "
-                    "'full': 200 entities/page + entity_id + state + full states. "
-                    "Use 'domains', 'limit', or max_entities_per_domain to control size"
+                    "'minimal': 10 entities/domain, top-5 states; 'standard': 200 "
+                    "entities/page, top-10 states (use offset for more); 'full': 200 "
+                    "entities/page + entity_id + state + full states."
                 ),
             ),
         ] = "minimal",
@@ -4032,8 +4011,8 @@ class SearchTools:
             Field(
                 default=None,
                 description=(
-                    "Filter to specific domains (e.g. 'light,sensor' or ['light','sensor']). "
-                    "None = all domains. Useful to avoid context window overload."
+                    "Filter to specific domains (e.g. 'light,sensor' or "
+                    "['light','sensor']). None = all domains."
                 ),
             ),
         ] = None,
@@ -4043,9 +4022,8 @@ class SearchTools:
                 default=None,
                 ge=1,
                 description=(
-                    "Max total entities across all domains (default: unlimited for minimal, "
-                    "200 for standard/full). Counts and states always complete. "
-                    "Use with offset for pagination."
+                    "Max total entities across all domains (default: unlimited for minimal,"
+                    " 200 for standard/full)."
                 ),
             ),
         ] = None,
@@ -4054,7 +4032,7 @@ class SearchTools:
             Field(
                 default=0,
                 ge=0,
-                description="Number of entities to skip for pagination (default: 0)",
+                description="Number of entities to skip for pagination",
             ),
         ] = 0,
         max_entities_per_domain: Annotated[
@@ -4082,7 +4060,7 @@ class SearchTools:
             bool | None,
             Field(
                 default=True,
-                description="Include active persistent notifications (default: True). Set False to skip.",
+                description="Include active persistent notifications.",
             ),
         ] = True,
         include_dismissed_repairs: Annotated[
@@ -4090,11 +4068,9 @@ class SearchTools:
             Field(
                 default=False,
                 description=(
-                    "Include user-dismissed/ignored repairs (default: False). "
-                    "Matches the HA Repairs UI which hides dismissed items by default. "
-                    "To dismiss/ignore a repair, call ha_call_service with "
-                    'ws_command="repairs/ignore_issue" and data={"domain": ..., '
-                    '"issue_id": ..., "ignore": true}.'
+                    "Include user-dismissed/ignored repairs. Dismiss or restore "
+                    "one with ha_manage_updates(action='ignore_repair' / "
+                    "'unignore_repair')."
                 ),
             ),
         ] = False,
@@ -4104,23 +4080,18 @@ class SearchTools:
             Field(
                 default=None,
                 description=(
-                    "Return only the specified top-level response keys to reduce "
-                    'response size (e.g. ["system_info", "domain_stats"]). '
-                    "None = full response (default). "
-                    "Available keys: success, system_summary, domain_stats, "
-                    "area_analysis, ai_insights, pagination, partial, warnings, "
-                    "device_types, service_availability, system_info, "
-                    "notification_count, notifications, repair_count, "
-                    "dismissed_repair_count, repairs, repairs_error, "
-                    "tool_discovery, settings_url, settings_url_hint, "
-                    "read_only_mode, read_only_mode_hint, ha_mcp_update. Note: "
-                    "``settings_url`` (stdio mode), ``settings_url_hint`` "
-                    "(standalone HTTP/Docker mode), the ``read_only_mode`` / "
-                    "``read_only_mode_hint`` pair (only while Read Only Mode "
-                    "is on), and ``ha_mcp_update`` (when an update check applies) "
-                    "are emitted regardless of ``fields=`` projection so the "
-                    "settings page, the active mode, and a newer ha-mcp release "
-                    "stay discoverable; see the tool description."
+                    "Return only the specified top-level response keys to reduce response "
+                    'size (e.g. ["system_info", "domain_stats"]). None = full response. '
+                    "Available keys: success, system_summary, domain_stats, area_analysis, "
+                    "ai_insights, pagination, partial, warnings, device_types, "
+                    "service_availability, system_info, notification_count, notifications, "
+                    "repair_count, dismissed_repair_count, repairs, repairs_error, "
+                    "tool_discovery, settings_url, settings_url_hint, read_only_mode, "
+                    "read_only_mode_hint, ha_mcp_update. Note: ``settings_url`` (stdio "
+                    "mode), ``settings_url_hint`` (standalone HTTP/Docker mode), the "
+                    "``read_only_mode`` / ``read_only_mode_hint`` pair (only while Read "
+                    "Only Mode is on), and ``ha_mcp_update`` (when an update check applies)"
+                    " are emitted regardless of ``fields=`` projection."
                 ),
             ),
         ] = None,
@@ -4132,14 +4103,10 @@ class SearchTools:
         and active persistent notifications (if any).
         Use 'minimal' (default) for most queries. Domain counts and states_summary
         are always complete regardless of entity pagination.
-        Standard/full modes paginate entities (default 200 per page) — use offset
-        to fetch more. Use 'domains' filter to narrow scope.
 
-        Use fields= to project the response to only the keys you need — a
-        significantly smaller payload when fetching a single sub-section (e.g.
-        fields=["system_info"] returns just that section instead of the full overview).
-        Requests composed only of system_info, notification, repair, or server
-        metadata fields also skip the unrelated state, service, and registry reads.
+        Requests whose fields= are composed only of system_info, notification,
+        repair, or server metadata fields skip the unrelated state, service, and
+        registry reads.
 
         Do not use this tool to inspect a known entity or a narrow set of entities.
         Use ha_get_state for one entity, ha_get_entity for registry metadata, or
@@ -4147,29 +4114,19 @@ class SearchTools:
         system-wide state, service, and registry data and can be expensive on large
         Home Assistant installations.
 
-        When (and only when) the ha-mcp settings-UI sidecar is running
-        (stdio mode, e.g. Claude Desktop / Claude Code), the response
-        includes a ``settings_url`` field — the local URL to the
-        tool-configuration page. Hand this URL to the user when they
-        ask how to enable or disable tools or change server settings.
-        ``settings_url`` is emitted regardless of ``fields=``
-        projection (so it stays discoverable even when callers
-        minimize the response) but only when the sidecar URL file
-        actually exists.
+        When the ha-mcp settings-UI sidecar is running (stdio mode, e.g. Claude
+        Desktop / Claude Code) the response carries ``settings_url``, the local
+        URL of the tool-configuration page; in standalone HTTP / Docker modes
+        with an HTTP settings prefix it instead carries ``settings_url_hint``,
+        saying where the page is mounted and how to construct the full URL. Hand
+        whichever is present to the user when they ask how to enable or disable
+        tools or change server settings.
 
-        In standalone HTTP / Docker modes, when an HTTP settings prefix is
-        advertised, there is no sidecar URL file and the server can't know its
-        externally reachable host. The response instead carries a
-        ``settings_url_hint`` string telling the user where the page is mounted
-        and how to find or construct the full URL.
-        Hand whichever of the two fields is present to the user.
-
-        The response also carries an ``ha_mcp_update`` object
-        ``{current, latest, update_available}`` reporting whether a newer ha-mcp
-        release is available (PyPI for pip/Docker, the Supervisor add-on store
-        for the add-on) — proactively tell the user when ``update_available`` is
-        true. Emitted regardless of ``fields=``; omitted only for the
-        ``unknown`` version and when ``HA_MCP_DISABLE_UPDATE_CHECK`` is set.
+        The response also carries ``ha_mcp_update`` ``{current, latest,
+        update_available}`` (PyPI for pip/Docker, the Supervisor store for the
+        app) — proactively tell the user when ``update_available`` is true.
+        Omitted for the ``unknown`` version, when ``HA_MCP_DISABLE_UPDATE_CHECK``
+        is set, or when the update check itself failed.
         """
         # Validate fields= early so a malformed value returns VALIDATION_FAILED
         # with parameter="fields".
@@ -4828,9 +4785,8 @@ class SearchTools:
                 default=None,
                 description=(
                     "Return only the specified top-level entity record keys to reduce "
-                    'response size (e.g. ["state", "attributes"]). '
-                    "None = full entity record (default). "
-                    "Available keys: entity_id, state, attributes, last_changed, "
+                    'response size (e.g. ["state", "attributes"]). None = full entity '
+                    "record. Available keys: entity_id, state, attributes, last_changed, "
                     "last_reported, last_updated, context."
                 ),
             ),
@@ -4842,46 +4798,34 @@ class SearchTools:
                 default=None,
                 description=(
                     "Return only the specified keys from each entity's attributes dict "
-                    '(e.g. ["brightness", "color_temp_kelvin"] for lights). '
-                    "None = full attributes (default). "
-                    "Unknown keys are silently dropped. "
-                    'Requires "attributes" to be present in fields= (or fields=None).'
+                    '(e.g. ["brightness", "color_temp_kelvin"] for lights). None = full '
+                    "attributes. Unknown keys are silently dropped."
                 ),
             ),
         ] = None,
     ) -> dict[str, Any]:
         """Get current status, state, and attributes of one or more entities (lights, switches, sensors, climate, covers, locks, fans, etc.).
 
-        SINGLE ENTITY:
-        Pass a string entity_id. Returns the entity's full state and attributes.
+        Pass a string entity_id for one entity, or a list (max 100, duplicates
+        deduplicated) for several, fetched in parallel. A bulk call returns
+        success=True if at least one state was retrieved; check 'error_count'
+        for failed lookups.
 
-        MULTIPLE ENTITIES:
-        Pass a list of entity IDs (max 100). Efficiently retrieves states using
-        parallel requests. Duplicates are automatically deduplicated.
-        Returns success=True if at least one entity state was retrieved.
-        Check 'error_count' for any failed lookups in partial-success scenarios.
-
-        FIELDS PROJECTION:
-        `fields=` projects the per-entity record keys (see the fields= parameter
-        description for the full key list), NOT the outer bulk response wrapper.
-        In single-entity mode it filters keys of the returned record directly. In bulk
-        mode it filters keys of each record inside `states[entity_id]`; outer keys
-        (`success`, `count`, `states`, `errors`, ...) are always preserved.
-        `attribute_keys=` further narrows the `attributes` sub-dict and is only applied
-        when `"attributes"` is in `fields=` (or `fields=None`); otherwise it is a no-op.
-
-        When `attribute_keys=` is set but has no effect (because `attributes` was
-        excluded by `fields=`), a `warnings` list is emitted outside the projected
-        entity record(s): in bulk mode at the response wrapper level (sibling of
-        `success`/`count`/`states`); in single-entity mode at the top-level result
-        (sibling of `data`/`metadata`, since the projected record IS `data`).
-        The warnings list is never a record key, so `fields=["state"]` returns a
-        record with only `state` regardless of whether the no-effect warning fires.
+        `fields=` projects the per-entity record keys, NOT the outer bulk
+        response wrapper: in single-entity mode it filters the returned record;
+        in bulk mode it filters each record inside `states[entity_id]` while
+        outer keys (`success`, `count`, `states`, `errors`, ...) are always
+        preserved. `attribute_keys=` further narrows the `attributes` sub-dict
+        and is only applied when `"attributes"` is in `fields=` (or
+        `fields=None`); otherwise it is a no-op and a `warnings` list is emitted
+        outside the projected record(s) — at the response wrapper level in bulk
+        mode, at the top-level result (sibling of `data`/`metadata`) in
+        single-entity mode — so `fields=["state"]` still returns a record with
+        only `state`.
 
         EXAMPLES:
         - Single: ha_get_state("light.kitchen")
         - Multiple: ha_get_state(["light.kitchen", "light.living_room", "sensor.temperature"])
-        - State only: ha_get_state("light.kitchen", fields=["state"])
         - Slim bulk: ha_get_state(["light.kitchen", "sensor.temperature"], fields=["state", "attributes"], attribute_keys=["brightness"])
         """
         # Parse projection params once up front so the bulk loop doesn't re-parse

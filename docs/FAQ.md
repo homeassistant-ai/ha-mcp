@@ -941,6 +941,220 @@ registry read degrades, registry-derived dimensions (categories, hidden-state,
 areas, labels, Assist) are skipped with a `warnings` note; `deny_entity_ids` and
 `allow_entity_ids`, which need no registry data, still apply.
 
+### A rule gates one tool, not one capability
+
+Policies apply to individual tools. Other tools may perform the same action,
+and a rule does not follow the capability across them: requiring approval for
+`ha_call_event` does not restrict event firing through `ha_call_service`,
+whose raw `ws_command` escape hatch reaches the same WebSocket command.
+
+That is deliberate — gating one tool must not silently withdraw another — so
+write the rules for every tool that reaches what you want held. One partial
+safety net exists: an unmatched `ws_command` call is held whenever the policy
+has any rule targeting `ha_call_service` or `*`, so the escape hatch cannot
+slip past a policy that already watches that tool.
+
+### Getting notified when a tool call is waiting for approval
+
+A rule in **Tool Security Policies** holds the call and shows it in the
+settings UI, which only helps while that tab is open. Every held request is
+also announced on the Home Assistant event bus as
+`ha_mcp_approval_requested`, so you can build your own notification around
+it:
+
+```yaml
+automation:
+  - alias: Notify me about pending ha-mcp approvals
+    triggers:
+      - trigger: event
+        event_type: ha_mcp_approval_requested
+    actions:
+      - action: notify.mobile_app_my_phone
+        data:
+          title: "Approval needed: {{ trigger.event.data.tool_name }}"
+          message: "{{ trigger.event.data.args }}"
+```
+
+The event data carries `token`, `tool_name`, `args`, `created_at` and
+`expires_at`, plus `matched_rule` whenever a rule matched the call. A policy
+can also gate a call no rule matched — through one of the fail-safes for raw
+WebSocket commands and for selector-based bulk calls — and then there is no
+rule to name and the key is absent.
+
+Two things to know about `args`: each value is capped, so a long one is
+shortened with an `omitted` marker and the settings UI stays the place to
+read it in full; and the event bus reaches every listener, so treat those
+arguments as you would any other bus traffic. The cap is a size limit, not
+a redaction — a short argument is broadcast exactly as it is.
+
+The announcement is one best-effort attempt per held request, not a
+delivery guarantee. If firing the event fails or times out it is logged as
+a warning and the request still waits in the settings UI; nothing re-sends
+it. A retry of the same call joins the same held request and is not
+announced a second time — one request, one notification. Only a request
+that is replaced by a new one is announced again, with the new token; the
+token from the previous event is dead by then.
+
+A selector-based `ha_bulk_control` request is announced with `single_use:
+true` and **no** `expires_at`. It is bound to the one call that created it
+and is gone once that call stops waiting, which is well before the policy's
+TTL — approving it later does nothing, and the agent has to call the tool
+again.
+
+Every other request stays approvable for the policy's `approval_ttl_minutes`
+even after the blocked call gave up waiting after `wait_seconds`: approve it
+in the tab and the agent's next identical call goes through, which is what
+the error tells the agent to do.
+
+If no event arrives at all, check the token the server authenticates with:
+Home Assistant only accepts `POST /api/events/<type>` from an admin user, so
+a standalone install running on a non-admin long-lived token gets a 403 that
+goes to the server log and nowhere else. The embedded component provisions
+its own admin token, so it is not affected.
+
+Approving happens in the Tool Security Policies tab by default. Answering
+from an automation is possible too, behind a switch and a PIN — see the next
+question. (`ha_dev_manage_server` can also decide a pending request, but only
+where two separate settings are both on: developer mode, and
+`dev_tools_security_policy_access`. That is a testing tool and it says so.)
+
+### Approving or denying from a notification instead of the settings tab
+
+Off by default. On the **Tool Security Policies** tab, set an approval PIN
+and switch on *Allow approve/deny from Home Assistant events*. A pending
+request is then decided by firing `ha_mcp_approval_response` with the token
+from the request event, a decision and the PIN:
+
+```yaml
+script:
+  approve_ha_mcp_request:
+    fields:
+      token:
+        description: The token from the ha_mcp_approval_requested event
+    sequence:
+      - event: ha_mcp_approval_response
+        event_data:
+          token: "{{ token }}"
+          decision: approve        # or: deny
+          pin: !secret ha_mcp_approval_pin
+```
+
+Call that script from whatever answers for you — a notification action, a
+dashboard button, Developer Tools — passing the token the request event
+carried. Keep the PIN in `secrets.yaml` rather than inline. The server does
+not care how the event was fired, which is exactly the limitation below.
+
+**What the PIN does and does not protect.** Home Assistant cannot tell an
+event fired by your automation from one fired by an AI agent: the agent can
+author an automation of its own, and an automation-fired event carries
+neither a distinguishing origin nor a user. The PIN is therefore the only
+thing separating them, and an agent with enough access can obtain it — by
+asking you, or by writing an automation that reads it out of a response
+event you fire. Switching this on accepts that; leaving it off means no
+event can decide a request — an agent then has no way to approve its own
+requests over the bus. (It says nothing about the developer tool above,
+which stays available wherever developer mode and
+`dev_tools_security_policy_access` are both on.) The PIN is stored as a
+salted hash and is set only through the settings UI — no MCP tool takes it,
+returns it, or can write the file it lives in. Five wrong PINs within five
+minutes close the channel for the rest of that window; the Pending list in the
+settings UI, which the server itself serves, keeps working throughout. (The
+stdio sidecar's settings page sets the PIN and edits the policy, but cannot
+list or decide pending approvals: those live in the server process it cannot
+reach.) The PIN is kept out of the policy document on purpose, so no surface
+that reads or writes policy — the settings UI, `ha_manage_security_policy`, a
+version-conflict error body — carries it. The file itself is mode 0600 and
+holds only the digest; on an embedded install it lives under the `.ha_mcp`
+folder of your configuration directory, where the component's non-overridable
+deny floor blocks its filename on read, write and deletion, and keeps it out
+of directory listings. Adding that folder to the component's **Extra file
+paths** setting therefore cannot hand a tool the digest — but it does grant
+read *and* write over everything else in there, which is its own decision to
+make.
+
+Removing the PIN switches the feature off with it. Events that arrive
+without a matching PIN are refused and logged at WARNING. An event that
+arrives while the feature is off is refused too, but logged at INFO — and
+while the switch has been off for every request announced so far, nothing
+has subscribed to the response event at all, so such an event is never even
+received. Either way the request
+stays pending and decidable in the tab.
+
+### Finding out what became of a response
+
+Every response event the server can make sense of is answered on the bus with
+`ha_mcp_approval_result`, best effort — on the same terms as the announcement,
+so a result that cannot be delivered is logged rather than raised and the
+decision itself stands either way:
+
+```yaml
+automation:
+  - alias: Tell me whether my approval landed
+    triggers:
+      - trigger: event
+        event_type: ha_mcp_approval_result
+    actions:
+      - action: notify.mobile_app_my_phone
+        data:
+          message: >-
+            {{ trigger.event.data.decision }} →
+            {{ 'applied' if trigger.event.data.applied else
+               trigger.event.data.reason }}
+```
+
+The payload carries `token`, the `decision` that was asked for, whether it was
+`applied`, and a `reason`. `tool_name` appears only once the response has been
+accepted and the token looked up. A refused response never names a tool, not
+even for a token that exists: whoever fired it has not authenticated, and
+answering would tell them which tokens are live and what they gate. Past that
+point the field is still absent for an expired or invented token, because
+there is then nothing to name. The reason is one of `applied`, `expired`,
+`unknown_token`, `already_decided`, `wrong_pin`, `no_pin`, `pin_not_set`,
+`pin_unusable`, `rate_limited`, `feature_off` or `policy_unreadable`: short
+tokens, so an automation can branch on them without matching prose.
+
+Four things it deliberately does not do.
+
+It never carries the PIN or its digest, in any form — not even a hint about
+how close a wrong one was.
+
+It makes no claim about **who** responded. The bus cannot tell a response
+your automation fired from one an agent wrote itself, so nothing in the
+payload pretends it can. That limitation is the same one the PIN exists to
+bound, and it does not change here.
+
+`applied: true` means the decision that was asked for was applied — an approval
+let the held call run, a denial rejected it. It is **not** a report that the
+tool then succeeded — that is the tool's own business and has its own result.
+
+And silence is **not** a refusal. A result is produced only for a well-formed
+response the server actually received. Fire a response before anything has
+subscribed — which is the case while the feature has never been switched on —
+and there is no result event, because nothing was listening. An event whose
+data is not an object, or whose `token` or `decision` is missing or invalid, is
+dropped with a log line and no result: there is nothing in it to answer. A
+well-formed response that does arrive is answered where it can be, including
+when the feature was switched off after the subscription opened: that one comes
+back with the reason `feature_off`. Where the credentials the result would be
+fired with cannot be resolved at all, the decision still stands and the result
+event does not go out. An automation that treats a missing result as a denial
+will be wrong in exactly the case where you most need to open the settings tab
+— so use the reason when one arrives, and the tab when none does.
+
+**If you run more than one ha-mcp server against the same Home Assistant**, and
+more than one of them has this channel open, every response event reaches all
+of them. Only the server that announced the request holds the token, so it is
+the one that decides; the others answer the same event on their own terms —
+`unknown_token` for a token they never issued, or a refusal if the PIN was
+wrong, which they check before they look the token up. Two consequences worth
+knowing before you wire an automation to this: one response can produce several
+result events, only one of which is the deciding server's, and each server
+counts the wrong PIN against its own budget, so a run of bad guesses closes the
+channel on all of them at once rather than on one at a time. Matching on the
+tool name picks out the deciding server's result, since only it can name the
+tool; a refusal names none, by design. Several clients sharing one server do
+not run into any of this — it takes two servers on one Home Assistant.
+
 ---
 
 ## Feedback & Help

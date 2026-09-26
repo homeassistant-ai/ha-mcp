@@ -597,21 +597,6 @@ async def safe_progress(
         logger.debug("ctx.report_progress failed (%s): %s", type(e).__name__, e)
 
 
-async def safe_info(ctx: Context | None, message: str) -> None:
-    """Emit an info message via ``ctx.info`` with best-effort error handling.
-
-    Shares the rationale and exception-handling contract of ``safe_progress``.
-    """
-    if ctx is None:
-        return
-    try:
-        await ctx.info(message)
-    except (TypeError, AttributeError) as e:
-        logger.warning("ctx.info signature error (%s): %s", type(e).__name__, e)
-    except Exception as e:
-        logger.debug("ctx.info failed (%s): %s", type(e).__name__, e)
-
-
 def register_tool_methods(mcp: Any, instance: Any) -> None:
     """Register all @tool-decorated methods from a class instance with the MCP server.
 
