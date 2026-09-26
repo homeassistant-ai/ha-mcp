@@ -16,17 +16,17 @@ export const MAX_ROUNDS = 4;
 export const digest = (value) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const maintainer = (role) => ["maintain", "admin"].includes(role);
+// This maintainer service account is a User, but its own automation output
+// must never authorize another paid agent turn.
 export const trustedReview = (user, roles) =>
   (user?.type === "User" &&
     user.login !== "ghhamcp" &&
     maintainer(roles[user.login])) ||
   (user?.type === "Bot" && REVIEW_BOTS.includes(user.login));
-export const principal = (comment) =>
-  comment?.editingVerified === true
-    ? comment.edited_at || comment.editor
-      ? comment.editor
-      : comment.user
-    : null;
+export function principal(comment) {
+  if (comment?.editingVerified !== true) return null;
+  return comment.edited_at || comment.editor ? comment.editor : comment.user;
+}
 export const trustedComment = (comment, roles) =>
   trustedReview(principal(comment), roles);
 
@@ -34,7 +34,7 @@ export function command(body) {
   const match = /^\/(astra|sol|terra)[ \t]+(\S[\s\S]*)$/.exec(
     (body ?? "").trim(),
   );
-  if (!match || match[2].length > 12000) return null;
+  if (!match || Buffer.byteLength(match[2], "utf8") > 12000) return null;
   const text = match[2].trim();
   return {
     model: MODELS[match[1]],
@@ -65,8 +65,15 @@ export function stateFrom(comments, app) {
   const encoded = owned[0].body.split(STATE_MARKER)[1].split(" -->")[0];
   if (!/^[A-Za-z0-9_-]{1,50000}$/.test(encoded))
     throw Error("Invalid slash checkpoint");
-  const state = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+  let state;
+  try {
+    state = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+  } catch {
+    throw Error("Invalid slash checkpoint JSON");
+  }
   if (
+    !state ||
+    typeof state !== "object" ||
     state.version !== 1 ||
     !Number.isSafeInteger(state.root) ||
     state.root < 1 ||
@@ -77,7 +84,7 @@ export function stateFrom(comments, app) {
     typeof state.summary !== "string" ||
     state.summary.length > 12000 ||
     typeof state.task !== "string" ||
-    state.task.length > 12000 ||
+    Buffer.byteLength(state.task, "utf8") > 12000 ||
     typeof state.branch !== "string" ||
     typeof state.status !== "string"
   )
@@ -97,16 +104,16 @@ export function renderState(state, repository) {
     `Slash agent: **${state.status}**${link}\n\n${prose(state.summary || "Preparing the requested work.")}\n\n` +
     `Round ${state.rounds}/${MAX_ROUNDS}. Maintainers can pause, resume, or send a new \`/astra\`, \`/sol\`, or \`/terra\` request.\n\n` +
     `${STATE_MARKER}${encoded} -->`;
-  if (body.length > 65000)
+  if (Buffer.byteLength(body, "utf8") > 65000)
     throw Error("Slash checkpoint exceeds GitHub's comment size limit");
   return body;
 }
 
 export function feedbackHash(snapshot) {
   return digest({
+    feedback: snapshot.feedback,
     // Reporter material stays in context and the stale-publication guard, but
     // cannot authorize a paid turn through an unrelated CI/status event.
-    feedback: snapshot.feedback,
     threads: snapshot.threads
       .filter((t) => !t.isResolved)
       .map((t) => ({
@@ -147,13 +154,12 @@ export function decide(snapshot, trigger) {
     snapshot.pr?.state === "closed"
   )
     return { mode: "idle" };
-  const commands = snapshot.comments.filter(
-    (c) =>
-      c.user?.type === "User" &&
-      c.user.login !== "ghhamcp" &&
-      principal(c)?.type === "User" &&
-      trustedComment(c, snapshot.roles) &&
-      command(c.body),
+  const commands = snapshot.comments.filter((c) =>
+    c.user?.type === "User" &&
+    c.user.login !== "ghhamcp" &&
+    principal(c)?.type === "User" &&
+    trustedComment(c, snapshot.roles) &&
+    command(c.body),
   );
   commands.sort(
     (a, b) => a.updated_at.localeCompare(b.updated_at) || a.id - b.id,
@@ -168,9 +174,9 @@ export function decide(snapshot, trigger) {
     trigger.commandId !== latest.id
   )
     return { mode: "idle" };
-  if (!latest || (!previous && command(latest.body).action !== "work"))
-    return { mode: "idle" };
+  if (!latest) return { mode: "idle" };
   const parsed = command(latest.body);
+  if (!previous && parsed.action !== "work") return { mode: "idle" };
   const changed =
     !previous ||
     previous.commandId !== latest.id ||
@@ -230,9 +236,11 @@ const obj = (properties) => ({
 });
 export const resultSchema = obj({
   title: str(120),
-  summary: str(3000),
-  tests: str(2000),
-  memory: str(6000),
+  // Together with the 12 KiB UTF-8 command cap, these limits keep even CJK
+  // output inside the base64 checkpoint's 50 KiB budget.
+  summary: str(2000),
+  tests: str(1000),
+  memory: str(2000),
   outcome: { type: "string", enum: ["changed", "unchanged", "blocked"] },
   responses: {
     type: "array",

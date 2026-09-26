@@ -43,15 +43,14 @@ export function packageWork(directory, plan, result, log = "") {
     const parts = name.split("/");
     for (let i = 1; i <= parts.length; i++) {
       const path = resolve(root, ...parts.slice(0, i));
+      let entry;
       try {
-        if (
-          lstatSync(path).isSymbolicLink() ||
-          !realpathSync(path).startsWith(root + sep)
-        )
-          throw Error("Symlink in patch path");
+        entry = lstatSync(path);
       } catch (error) {
         if (error.code !== "ENOENT") throw error;
       }
+      if (entry?.isSymbolicLink() || (entry && !realpathSync(path).startsWith(root + sep)))
+        throw Error("Symlink in patch path");
     }
     const path = resolve(root, name);
     let stat;

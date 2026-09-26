@@ -71,14 +71,18 @@ An edited checkpoint must still have the App as its last editor. Manual edits
 to checkpoint contents are rejected; use slash commands for changes instead.
 Each new worker reconstructs context from GitHub and the checkpoint. This is
 durable task persistence, not a restored Codex CLI transcript; credentials and
-raw transcripts are never uploaded. Plan/result artifacts expire after one day,
-and later work does not depend on them.
+raw transcripts are never uploaded. A failed coding job records only the private
+log's byte count and recognized event counts in Actions; the log disappears with
+the runner. Plan/result artifacts expire after one day, and later work does not
+depend on them.
 
 Maintainer comments/reviews and the existing CodeRabbit/Codex review bots can
 resume an authorized session. A secretless review-event workflow wakes the trusted
 controller; its completion is only a signal, not trusted instructions or an
 artifact to execute. CI workflow completions and status changes are also signals.
-The controller fetches current checks and feedback itself. Old issue-bot guesses
+Unrelated PRs without an App checkpoint exit before editor, review, role and
+check collection. The controller fetches current checks and feedback itself for
+owned sessions, and limits the resulting worker prompt to 512 KiB. Old issue-bot guesses
 are excluded; review suggestions are hypotheses to validate, including collapsed
 review bodies. The model can propose evidence-backed replies and resolution only
 for supplied, unresolved threads containing maintainer or supported review-bot
@@ -112,7 +116,9 @@ feedback; retries reuse their App-owned reply. The pending review-summary key
 survives a failure during resolution, summary creation or final checkpoint save,
 so recovery does not duplicate replies or summaries. A partial publication stays
 resumable within the iteration budget; inspect a failure and send a new command
-when intervention is needed. Do not delete an ownership checkpoint
+when intervention is needed. Stale work writes nothing and fails its Actions run
+with the changed snapshot fields. App-owned PR descriptions update their marked
+section while preserving generated review sections. Do not delete an ownership checkpoint
 while its branch is in use. Pause or disable the workflow to stop new work;
 avoid cancelling an active OAuth consumer before its auth-persistence step.
 

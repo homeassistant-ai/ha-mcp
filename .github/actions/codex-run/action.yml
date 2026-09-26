@@ -381,6 +381,8 @@ runs:
 
     - name: Verify credential isolation
       shell: bash
+      env:
+        READ_ONLY_PATHS_INPUT: ${{ inputs.read-only-paths }}
       run: |
         set -euo pipefail
         codex sandbox \
@@ -394,14 +396,32 @@ runs:
           "${{ steps.prepare.outputs.original-auth-path }}"
 
         # Test the selected profile itself, not file mode bits or a prompt promise.
-        while IFS= read -r protected_path; do
-          codex sandbox \
-            --profile "$CODEX_ACTION_PROFILE" \
-            --permission-profile "$CODEX_ACTION_PROFILE" \
-            --cd "$CODEX_ACTION_WORKDIR" -- \
-            bash -c 'if [[ -d "$1" ]]; then ! touch "$1/.codex-write-probe-$$" 2>/dev/null; else ! { : >> "$1"; } 2>/dev/null; fi' \
-            _ "$protected_path"
-        done < <(jq -r '.[]' <<< "${CODEX_ACTION_READONLY_PATHS:-[]}")
+        readonly_json="${CODEX_ACTION_READONLY_PATHS-}"
+        if ! jq -e 'type == "array" and all(.[]; type == "string" and length > 0)' <<< "$readonly_json" >/dev/null; then
+          echo '::error::read-only-paths verification received no valid paths.'
+          exit 1
+        fi
+        expected_probes="$(jq -r 'length' <<< "$readonly_json")"
+        if [[ -n "$READ_ONLY_PATHS_INPUT" ]] && (( expected_probes == 0 )); then
+          echo '::error::read-only-paths input was lost before verification.'
+          exit 1
+        fi
+        verified_probes=0
+        if (( expected_probes > 0 )); then
+          while IFS= read -r protected_path; do
+            codex sandbox \
+              --profile "$CODEX_ACTION_PROFILE" \
+              --permission-profile "$CODEX_ACTION_PROFILE" \
+              --cd "$CODEX_ACTION_WORKDIR" -- \
+              bash -c 'if [[ -d "$1" ]]; then ! touch "$1/.codex-write-probe-$$" 2>/dev/null; else ! { : >> "$1"; } 2>/dev/null; fi' \
+              _ "$protected_path"
+            verified_probes=$((verified_probes + 1))
+          done <<< "$(jq -r '.[]' <<< "$readonly_json")"
+        fi
+        if (( verified_probes != expected_probes )); then
+          echo '::error::read-only-paths verification count mismatch.'
+          exit 1
+        fi
 
     - id: agent
       name: Run Codex
@@ -448,8 +468,8 @@ runs:
         set -e
         case "$codex_status" in
           0) ;;
-          124) echo "::error::Codex exceeded the ${CODEX_ACTION_TIMEOUT_MINUTES}-minute invocation timeout; diagnostics are in log-path." ;;
-          137) echo "::error::Codex was killed by SIGKILL (timeout escalation or another kill); diagnostics are in log-path." ;;
-          *) echo "::error::Codex exited with status $codex_status; diagnostics are in log-path." ;;
+          124) echo "::error::Codex exceeded the ${CODEX_ACTION_TIMEOUT_MINUTES}-minute invocation timeout; the caller controls the private log-path." ;;
+          137) echo "::error::Codex was killed by SIGKILL (timeout escalation or another kill); the caller controls the private log-path." ;;
+          *) echo "::error::Codex exited with status $codex_status; the caller controls the private log-path." ;;
         esac
         exit "$codex_status"

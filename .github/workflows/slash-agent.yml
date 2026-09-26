@@ -10,6 +10,7 @@ on:
         PR Validation Pipeline,
         HAOS E2E Tests,
         CodeQL Code Quality,
+        Send Codex PR Review,
       ]
     types: [completed]
   status:
@@ -42,6 +43,8 @@ jobs:
   admit:
     if: >-
       github.repository == 'homeassistant-ai/ha-mcp' &&
+      vars.HA_MCP_AGENT_APP_SLUG != '' &&
+      vars.HA_MCP_AGENT_CLIENT_ID != '' &&
       (github.event_name != 'issue_comment' ||
       github.event.comment.user.type == 'User' ||
       contains(fromJSON('["coderabbitai[bot]","chatgpt-codex-connector[bot]"]'), github.event.comment.user.login))
@@ -151,6 +154,35 @@ jobs:
           path: control/slash-state/result.json
           retention-days: 1
           if-no-files-found: error
+      - name: Report safe worker failure metadata
+        if: ${{ failure() && steps.codex.outputs.log-path != '' }}
+        timeout-minutes: 1
+        env:
+          CODEX_LOG_PATH: ${{ steps.codex.outputs.log-path }}
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const path = process.env.CODEX_LOG_PATH;
+            if (!fs.existsSync(path)) {
+              console.log("The private Codex log was not produced before failure.");
+              process.exit(0);
+            }
+            const bytes = fs.statSync(path).size;
+            const file = fs.openSync(path, "r");
+            const tail = Buffer.alloc(Math.min(bytes, 262144));
+            fs.readSync(file, tail, 0, tail.length, bytes - tail.length);
+            fs.closeSync(file);
+            const counts = {};
+            for (const line of tail.toString("utf8").split(/\r?\n/)) {
+              try {
+                const type = JSON.parse(line).type;
+                if (["thread.started", "turn.started", "turn.completed", "turn.failed", "error"].includes(type))
+                  counts[type] = (counts[type] || 0) + 1;
+              } catch { /* Ignore prose and partial lines. */ }
+            }
+            console.log(`Codex failure metadata: ${bytes} private log bytes; recognized events ${JSON.stringify(counts)}`);
+            console.log("The raw transcript is intentionally not published.");
+          '
       - name: Persist refreshed Codex auth
         if: ${{ always() && steps.codex.outputs.auth-path != '' }}
         timeout-minutes: 3

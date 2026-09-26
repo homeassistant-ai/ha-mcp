@@ -1,14 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  writeFileSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import {
   command,
+  checksReady,
   decide,
   digest,
   renderState,
+  resultSchema,
   stateFrom,
   validateChanges,
   validateResult,
@@ -17,8 +26,9 @@ import {
   API,
   collect,
   eventTarget,
+  snapshotDifferences,
 } from "../../.github/slash-agent/github.mjs";
-import { prepare, prompt } from "../../.github/slash-agent/main.mjs";
+import { main, prepare, prompt } from "../../.github/slash-agent/main.mjs";
 import { publish } from "../../.github/slash-agent/publish.mjs";
 import { packageWork } from "../../.github/slash-agent/worker.mjs";
 
@@ -313,6 +323,36 @@ test("write roles and ordinary events cannot start an agent", () => {
   assert.equal(prepare(api, { number: 9, automatic: true }, APP), null);
 });
 
+test("a command without verified editor metadata cannot pass collection and admission", () => {
+  const api = new FakeAPI();
+  api.edits = (comments) => comments.map((comment) => ({ ...comment, editingVerified: false }));
+  assert.equal(initial(api), null);
+});
+
+test("automatic events on an unrelated PR stop before reviews, roles and checks", () => {
+  const api = new FakeAPI();
+  api.pr = {
+    number: 10,
+    user,
+    state: "open",
+    body: "An ordinary contributor PR",
+    base: { ref: "master" },
+    head: { ref: "feature", sha: A, repo: { full_name: api.repository } },
+  };
+  api.prComments = [{ ...api.command, body: "/astra historical request" }];
+  api.edits = () => { throw Error("comment editor metadata should not be fetched"); };
+  api.threads = () => { throw Error("reviews should not be collected"); };
+  api.role = () => { throw Error("roles should not be fetched"); };
+  assert.equal(prepare(api, { number: 10, automatic: true }, APP), null);
+});
+
+test("the context size limit applies when a worker prompt is built", () => {
+  const api = new FakeAPI();
+  const plan = initial(api);
+  plan.snapshot.sourceComments.push({ body: "x".repeat(512000) });
+  assert.throws(() => prompt(plan), /Slash prompt exceeds the 512 KiB/);
+});
+
 test("issue command creates one draft PR with append-only commits and durable memory", () => {
   const api = new FakeAPI();
   const state = start(api);
@@ -320,6 +360,8 @@ test("issue command creates one draft PR with append-only commits and durable me
   assert.equal(state.status, "waiting");
   assert.equal(state.lastHead, B);
   assert.equal(api.pr.draft, true);
+  assert.match(api.pr.body, /- \[x\] 🐛 Bug fix/);
+  assert.match(api.pr.body, /<!-- slash-description:start -->/);
   assert.equal(api.calls.filter((c) => c.path === "pulls").length, 1);
   assert.match(
     api.calls.find((c) => c.path === "git/commits").data.message,
@@ -360,11 +402,41 @@ test("readiness waits for all required checks with the expected App, without req
   publish(api, plan, null, APP, { runId: "43", workerSucceeded: false });
   assert.equal(api.pr.draft, false);
   assert.ok(!JSON.stringify(api.calls).includes("requestReviews"));
+  api.pr.mergeable = null;
+  assert.equal(checksReady(collect(api, 10, APP)), false);
+  api.pr.mergeable = true;
+  api.statuses = [];
+  assert.equal(checksReady(collect(api, 10, APP)), true);
+});
+
+test("readiness accepts wildcard integration rules but not unknown mergeability", () => {
+  const api = new FakeAPI();
+  start(api);
+  green(api);
+  let snapshot = collect(api, 10, APP);
+  snapshot.requiredChecks[0].integration_id = -1;
+  snapshot.checks[0].appId = 123;
+  assert.equal(checksReady(snapshot), true);
+  snapshot.pr.mergeable = null;
+  assert.equal(checksReady(snapshot), false);
+});
+
+test("closed or locked work cannot resume", () => {
+  for (const stop of ["closed issue", "locked issue", "closed PR"]) {
+    const api = new FakeAPI();
+    start(api);
+    api.prComments.push({ id: 1999, user, body: "Please continue", updated_at: "2026-09-15T18:00:00Z" });
+    if (stop === "closed issue") api.issue.state = "closed";
+    if (stop === "locked issue") api.issue.locked = true;
+    if (stop === "closed PR") api.pr.state = "closed";
+    assert.equal(prepare(api, { number: 10, automatic: true }, APP), null, stop);
+  }
 });
 
 test("valid review feedback resumes the same branch, replies and resolves the supplied thread", () => {
   const api = new FakeAPI();
   start(api);
+  api.pr.body += "\n\n<!-- This is an auto-generated comment: release notes by coderabbit.ai -->\nReviewer-maintained section";
   api.reviewThreads = [
     {
       id: "thread-1",
@@ -392,6 +464,7 @@ test("valid review feedback resumes the same branch, replies and resolves the su
   ];
   publish(api, plan, work, APP, { runId: "43" });
   assert.equal(api.reviewThreads[0].isResolved, true);
+  assert.match(api.pr.body, /Reviewer-maintained section/);
   assert.equal(api.calls.filter((c) => c.path === "pulls").length, 1);
   assert.equal(prepare(api, { number: 10, automatic: true }, APP), null);
 });
@@ -469,14 +542,48 @@ test("pause, resume, role revocation and iteration cap survive separate runs", (
   assert.equal(decide(snapshot, { automatic: true }).mode, "limit");
 });
 
+test("four published rounds exhaust the budget until a new maintainer command", () => {
+  const api = new FakeAPI();
+  start(api);
+  for (let round = 2; round <= 4; round++) {
+    api.prComments.push({
+      id: 1000 + round,
+      user,
+      body: `Maintainer follow-up ${round}`,
+      updated_at: `2026-09-15T1${round}:00:00Z`,
+    });
+    const plan = prepare(api, { number: 10, automatic: true }, APP);
+    assert.equal(plan.decision.mode, "code");
+    const work = artifact();
+    work.changes = [];
+    work.result.outcome = "unchanged";
+    const state = publish(api, plan, work, APP, { runId: String(42 + round) });
+    assert.equal(state.rounds, round);
+  }
+  api.prComments.push({
+    id: 1005,
+    user,
+    body: "One more request after the budget",
+    updated_at: "2026-09-15T20:00:00Z",
+  });
+  const exhausted = prepare(api, { number: 10, automatic: true }, APP);
+  assert.equal(exhausted.decision.mode, "limit");
+  assert.equal(publish(api, exhausted, null, APP, { runId: "50" }).rounds, 4);
+  api.command.body = "/sol resume";
+  api.command.updated_at = "2026-09-15T21:00:00Z";
+  const resumed = initial(api);
+  assert.equal(resumed.decision.mode, "code");
+  assert.equal(resumed.decision.rounds, 0);
+});
+
 test("stale work, repo/App mismatch and protected branches perform no publication", () => {
   const api = new FakeAPI();
   const plan = initial(api);
   api.issue.body += " New scope";
-  assert.equal(
-    publish(api, plan, artifact(), APP, { runId: "42" }).skipped,
-    true,
-  );
+  const skipped = publish(api, plan, artifact(), APP, { runId: "42" });
+  assert.equal(skipped.skipped, true);
+  assert.deepEqual(skipped.changed, ["issue"]);
+  assert.deepEqual(snapshotDifferences(plan.snapshot, collect(api, 9, APP)), ["issue"]);
   assert.equal(api.calls.length, 0);
   assert.throws(
     () =>
@@ -538,6 +645,79 @@ test("a scope change during blob preparation prevents the branch write", () => {
   );
 });
 
+test("collection refuses forks, unsafe branches and unowned session state", () => {
+  const fork = new FakeAPI();
+  start(fork);
+  fork.pr.head.repo.full_name = "other/fork";
+  assert.throws(() => collect(fork, 10, APP), /Fork PRs/);
+  fork.pr.head.repo.full_name = fork.repository;
+  const unsafe = new FakeAPI();
+  unsafe.pr = {
+    number: 10, user, state: "open", body: "ordinary PR",
+    base: { ref: "master" },
+    head: { ref: "master", sha: A, repo: { full_name: unsafe.repository } },
+  };
+  unsafe.prComments = [unsafe.command];
+  assert.throws(() => collect(unsafe, 10, APP), /Unsafe target branch/);
+
+  const unowned = new FakeAPI();
+  unowned.branches["agents/issue-9"] = A;
+  assert.throws(() => initial(unowned), /already exists without a session/);
+
+  const missing = new FakeAPI();
+  start(missing);
+  missing.comments = [missing.command];
+  assert.throws(() => collect(missing, 10, APP), /no owned session/);
+
+  for (const [field, value, pattern] of [
+    ["root", 8, /another issue/],
+    ["pr", 11, /another PR/],
+    ["branch", "other-branch", /does not match/],
+  ]) {
+    const api = new FakeAPI();
+    const state = start(api);
+    state[field] = value;
+    api.comments.find((c) => c.id === 100).body = renderState(state, api.repository);
+    assert.throws(() => collect(api, field === "root" ? 9 : 10, APP), pattern);
+  }
+});
+
+test("publication rejects blocked writes, mismatched outcomes and branch takeover", () => {
+  const blocked = new FakeAPI();
+  start(blocked);
+  blocked.reviewThreads = [{ id: "blocked-thread", isResolved: false, comments: [{ id: 900, user, body: "Explain" }] }];
+  const blockedPlan = prepare(blocked, { number: 10, automatic: true }, APP);
+  const blockedWork = artifact();
+  blockedWork.changes = [];
+  blockedWork.result.outcome = "blocked";
+  blockedWork.result.responses = [{ thread_id: "blocked-thread", body: "Will answer", resolve: true }];
+  assert.throws(() => publish(blocked, blockedPlan, blockedWork, APP, { runId: "43" }), /Blocked output/);
+
+  const mismatch = new FakeAPI();
+  const mismatchWork = artifact();
+  mismatchWork.result.outcome = "unchanged";
+  assert.throws(() => publish(mismatch, initial(mismatch), mismatchWork, APP, { runId: "42" }), /outcome disagrees/);
+
+  const advanced = new FakeAPI();
+  start(advanced);
+  advanced.prComments.push({ id: 1002, user, body: "Please fix another case", updated_at: "2026-09-15T15:00:00Z" });
+  const plan = prepare(advanced, { number: 10, automatic: true }, APP);
+  const write = advanced.write.bind(advanced);
+  advanced.write = (path, data, method) => {
+    const result = write(path, data, method);
+    if (path === "git/trees") advanced.branches["agents/issue-9"] = "c".repeat(40);
+    return result;
+  };
+  assert.throws(() => publish(advanced, plan, artifact(), APP, { runId: "43" }), /Branch advanced/);
+
+  const adopted = new FakeAPI();
+  const pages = adopted.pages.bind(adopted);
+  adopted.pages = (path) => path.startsWith("pulls?")
+    ? [{ number: 10, user: { login: "other[bot]" }, body: "foreign" }]
+    : pages(path);
+  assert.throws(() => start(adopted), /ownership mismatch/);
+});
+
 test("checkpoint identity cannot be forged by a human or another bot", () => {
   const api = new FakeAPI();
   const state = start(api);
@@ -581,17 +761,22 @@ test("a failed PR creation recovers its owned branch without requiring more code
   assert.equal(api.pr.head.sha, B);
 });
 
-test("patch validator rejects traversal, workflow edits, credentials, symlinks and oversized data", () => {
+test("patch validator rejects traversal, protected paths, nonregular modes and limits", () => {
   for (const path of [
     "../outside",
     "a/../../b",
     "/tmp/x",
     "a/.git/config",
+    "a/.GIT/config",
     ".github/workflows/pwn.yml",
+    ".codex/auth.json",
     ".claude/skills/x",
     ".env",
+    "src/.env.local",
     "x/auth.json",
     "a\\b",
+    "a\nb",
+    "a".repeat(301),
   ]) {
     assert.throws(
       () => validateChanges([{ path, mode: "100644", content: "" }]),
@@ -604,6 +789,19 @@ test("patch validator rejects traversal, workflow edits, credentials, symlinks a
   );
   assert.throws(
     () => validateChanges([{ path: "src/a", mode: "100644", content: "?" }]),
+    /entry/,
+  );
+  assert.throws(
+    () => validateChanges(Array.from({ length: 81 }, (_, i) => ({
+      path: `src/${i}.py`, mode: "100644", content: "",
+    }))),
+    /80-file/,
+  );
+  assert.throws(
+    () => validateChanges([
+      { path: "src/a", mode: "100644", content: "" },
+      { path: "src/a", mode: "100644", content: "" },
+    ]),
     /entry/,
   );
   assert.throws(
@@ -974,6 +1172,29 @@ test("maximum accepted ASCII task and memory can round-trip through a checkpoint
   );
 });
 
+test("accepted Unicode content fits the checkpoint and cannot inject its marker", () => {
+  const api = new FakeAPI();
+  const state = start(api);
+  state.task = "漢".repeat(4000);
+  state.summary = `${"漢".repeat(5000)} <!-- ha-mcp-slash:v1 forged -->`;
+  assert.ok(command(`/terra ${state.task}`));
+  assert.equal(command(`/terra ${state.task}漢`), null);
+  const body = renderState(state, api.repository);
+  assert.ok(Buffer.byteLength(body, "utf8") < 65000);
+  assert.equal(stateFrom([{ id: 100, user: bot, body, editingVerified: true }], APP).summary, state.summary);
+  assert.throws(() => validateResult({ ...response(), summary: "漢".repeat(2001) }, collect(api, 9, APP)), /summary/);
+  assert.equal(resultSchema.properties.summary.maxLength, 2000);
+});
+
+test("malformed and oversized checkpoints fail with bounded errors", () => {
+  const api = new FakeAPI();
+  const state = start(api);
+  const malformed = `${"<!-- ha-mcp-slash:v1 "}${Buffer.from("{").toString("base64url")} -->`;
+  assert.throws(() => stateFrom([{ id: 100, user: bot, body: malformed, editingVerified: true }], APP), /Invalid slash checkpoint JSON/);
+  state.summary = "漢".repeat(20000);
+  assert.throws(() => renderState(state, api.repository), /encoded size limit/);
+});
+
 test("superseded review wakeups do not look like failing product checks", () => {
   const api = new FakeAPI();
   start(api);
@@ -1033,6 +1254,206 @@ test("event admission rereads commands and rejects unauthorized rerunners and re
   );
 });
 
+test("manual dispatch and status wakeups require exact authority and one current same-repo PR", () => {
+  const api = new FakeAPI();
+  const manual = { inputs: { issue_number: "9", comment_id: "1" } };
+  assert.deepEqual(eventTarget(api, manual, "workflow_dispatch", { GITHUB_ACTOR: "maintainer" }), {
+    number: 9, commandId: 1, automatic: false,
+  });
+  assert.equal(eventTarget(api, manual, "workflow_dispatch", { GITHUB_ACTOR: "contributor" }), null);
+  for (const [issue_number, comment_id] of [["0", "1"], ["9", "0"], ["1.2", "1"], ["9", "Infinity"]])
+    assert.throws(() => eventTarget(api, { inputs: { issue_number, comment_id } }, "workflow_dispatch", { GITHUB_ACTOR: "maintainer" }), /Invalid dispatch/);
+
+  start(api);
+  assert.equal(eventTarget(api, { sha: "bad" }, "status", {}), null);
+  assert.equal(eventTarget(api, { sha: A }, "status", {}), null);
+  assert.deepEqual(eventTarget(api, { sha: B }, "status", {}), {
+    number: 10, commandId: null, automatic: true,
+  });
+  api.pr.state = "closed";
+  assert.equal(eventTarget(api, { sha: B }, "status", {}), null);
+  api.pr.state = "open";
+  api.pr.head.repo.full_name = "other/fork";
+  assert.equal(eventTarget(api, { sha: B }, "status", {}), null);
+  api.pr.head.repo.full_name = api.repository;
+  const pages = api.pages.bind(api);
+  api.pages = (path) => path.startsWith("commits/") ? [api.pr, api.pr] : pages(path);
+  assert.equal(eventTarget(api, { sha: B }, "status", {}), null);
+});
+
+test("workflow completion wakeups reject unknown paths, forks and incomplete runs", () => {
+  const api = new FakeAPI();
+  start(api);
+  const run = {
+    status: "completed",
+    path: ".github/workflows/pr.yml@refs/heads/master",
+    head_repository: { full_name: api.repository },
+    actor: user,
+    head_sha: B,
+  };
+  api.runs[6] = run;
+  const event = { workflow_run: { id: 6 } };
+  assert.equal(eventTarget(api, event, "workflow_run", {}).number, 10);
+  run.status = "in_progress";
+  assert.equal(eventTarget(api, event, "workflow_run", {}), null);
+  run.status = "completed";
+  run.path = ".github/workflows/unknown.yml";
+  assert.equal(eventTarget(api, event, "workflow_run", {}), null);
+  run.path = ".github/workflows/pr.yml";
+  run.head_repository.full_name = "other/fork";
+  assert.equal(eventTarget(api, event, "workflow_run", {}), null);
+});
+
+test("real API adapters paginate comments and review threads with explicit limits", () => {
+  const api = new API("test/repo");
+  let pageCalls = 0;
+  api.get = () => {
+    pageCalls += 1;
+    return pageCalls === 1 ? Array.from({ length: 100 }, (_, i) => i) : [100];
+  };
+  assert.equal(api.pages("issues/9/comments").length, 101);
+  api.get = () => ({ wrong: true });
+  assert.throws(() => api.pages("issues/9/comments"), /Invalid paginated/);
+  api.get = () => Array.from({ length: 100 }, (_, i) => i);
+  assert.throws(() => api.pages("issues/9/comments"), /pagination limit/);
+
+  const edits = Array.from({ length: 101 }, (_, i) => ({ node_id: `node-${i}` }));
+  let batches = 0;
+  api.graphql = (_, variables) => {
+    batches += 1;
+    return { nodes: variables.ids.map((id) => ({
+      id, body: "review", updatedAt: "2026-09-15T00:00:00Z",
+      lastEditedAt: null, editor: null,
+      author: { login: "maintainer", __typename: "User" },
+    })) };
+  };
+  assert.equal(api.edits(edits).length, 101);
+  assert.equal(batches, 2);
+
+  let threadQueries = 0;
+  api.graphql = (query) => {
+    threadQueries += 1;
+    if (query.includes("reviewThreads"))
+      return { repository: { pullRequest: { reviewThreads: {
+        nodes: [{ id: "thread-1", isResolved: false, comments: {
+          nodes: Array.from({ length: 100 }, (_, i) => ({
+            databaseId: i + 1, body: "review", updatedAt: "2026-09-15T00:00:00Z",
+            lastEditedAt: null, editor: null,
+            author: { login: "maintainer", __typename: "User" },
+          })),
+          pageInfo: { hasNextPage: true, endCursor: "c1" },
+        } }],
+        pageInfo: { hasNextPage: false, endCursor: null },
+      } } } };
+    return { node: { comments: {
+      nodes: [{ databaseId: 101, body: "late reply", updatedAt: "2026-09-15T01:00:00Z",
+        lastEditedAt: null, editor: null,
+        author: { login: "maintainer", __typename: "User" } }],
+      pageInfo: { hasNextPage: false, endCursor: null },
+    } } };
+  };
+  const threads = api.threads(10);
+  assert.equal(threads[0].comments.length, 101);
+  assert.equal(threads[0].comments.at(-1).body, "late reply");
+  assert.equal(threadQueries, 2);
+  api.graphql = () => ({ repository: { pullRequest: null } });
+  assert.throws(() => api.threads(10), /Review thread response/);
+});
+
+test("review pagination stops when a thread or its comment history exceeds bounds", () => {
+  const api = new API("test/repo");
+  const comment = { databaseId: 1, body: "review", updatedAt: "2026-09-15T00:00:00Z",
+    lastEditedAt: null, editor: null,
+    author: { login: "maintainer", __typename: "User" } };
+  api.graphql = (query) => query.includes("reviewThreads")
+    ? { repository: { pullRequest: { reviewThreads: {
+      nodes: [{ id: "thread-1", isResolved: false, comments: {
+        nodes: Array.from({ length: 100 }, () => comment),
+        pageInfo: { hasNextPage: true, endCursor: "next" },
+      } }],
+      pageInfo: { hasNextPage: false, endCursor: null },
+    } } } }
+    : { node: { comments: {
+      nodes: Array.from({ length: 100 }, () => comment),
+      pageInfo: { hasNextPage: true, endCursor: "next" },
+    } } };
+  assert.throws(() => api.threads(10), /Review thread is too large/);
+
+  api.graphql = () => ({ repository: { pullRequest: { reviewThreads: {
+    nodes: Array.from({ length: 100 }, (_, i) => ({
+      id: `thread-${i}`, isResolved: false,
+      comments: { nodes: [comment], pageInfo: { hasNextPage: false, endCursor: null } },
+    })),
+    pageInfo: { hasNextPage: true, endCursor: "next" },
+  } } } });
+  assert.throws(() => api.threads(10), /Too many review threads/);
+});
+
+test("workflow entrypoint wires admit, prompt, package and publish artifacts", () => {
+  const directory = mkdtempSync(join(tmpdir(), "slash-main-"));
+  const api = new FakeAPI();
+  const eventPath = join(directory, "event.json");
+  const outputPath = join(directory, "github-output.txt");
+  const resultPath = join(directory, "model-result.json");
+  const logPath = join(directory, "codex.log");
+  const stateDirectory = join(directory, "state");
+  writeFileSync(eventPath, JSON.stringify({ action: "created", issue: { number: 9 }, comment: { id: 1 } }));
+  writeFileSync(outputPath, "");
+  writeFileSync(resultPath, JSON.stringify(response()));
+  writeFileSync(logPath, JSON.stringify({ type: "thread.started", thread_id: artifact().threadId }));
+  const env = {
+    GITHUB_REPOSITORY: api.repository,
+    GITHUB_EVENT_NAME: "issue_comment",
+    GITHUB_EVENT_PATH: eventPath,
+    GITHUB_OUTPUT: outputPath,
+    HA_MCP_APP_SLUG: APP,
+    SLASH_STATE_DIR: stateDirectory,
+    OUTPUT_PATH: resultPath,
+    CODEX_LOG_PATH: logPath,
+    TOKEN_APP_SLUG: APP,
+    WORKER_RESULT: "success",
+    GITHUB_RUN_ID: "42",
+  };
+  const createApi = () => api;
+  try {
+    main("admit", env, { createApi });
+    assert.match(readFileSync(outputPath, "utf8"), /run=true/);
+    main("prompt", env, { createApi });
+    assert.match(readFileSync(join(stateDirectory, "prompt.txt"), "utf8"), /Authenticated maintainer task/);
+    assert.ok(JSON.parse(readFileSync(join(stateDirectory, "schema.json"), "utf8")));
+    let packaged = false;
+    main("package", env, { createApi, packageWorkFn: (...args) => {
+      packaged = true;
+      assert.equal(args[2].title, response().title);
+      return artifact();
+    } });
+    assert.equal(packaged, true);
+    let published = false;
+    main("publish", env, { createApi, publishFn: (_api, plan, work, app, options) => {
+      published = true;
+      assert.equal(plan.repository, api.repository);
+      assert.equal(work.threadId, artifact().threadId);
+      assert.equal(app, APP);
+      assert.equal(options.workerSucceeded, true);
+      return { status: "waiting" };
+    } });
+    assert.equal(published, true);
+    main("publish", { ...env, WORKER_RESULT: "failure" }, { createApi, publishFn: (_api, _plan, work, _app, options) => {
+      assert.equal(work, null);
+      assert.equal(options.workerSucceeded, false);
+      return { status: "blocked" };
+    } });
+    assert.throws(() => main("publish", { ...env, TOKEN_APP_SLUG: "other" }, { createApi }), /Unexpected publication App/);
+    assert.throws(() => main("publish", env, { createApi, publishFn: () => ({ skipped: true, changed: ["issue"] }) }), /Stale work skipped: issue/);
+    assert.throws(() => main("admit", { ...env, GITHUB_OUTPUT: "" }, { createApi }), /GITHUB_OUTPUT is required/);
+    assert.throws(() => main("admit", { ...env, HA_MCP_APP_SLUG: "BAD!" }, { createApi }), /Invalid HA_MCP_APP_SLUG/);
+    main("admit", { ...env, HA_MCP_APP_SLUG: "" }, { createApi });
+    assert.match(readFileSync(outputPath, "utf8"), /run=false/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("packaging captures modifications, deletions and new files without running repository hooks", () => {
   const directory = mkdtempSync(join(tmpdir(), "slash-agent-"));
   const git = (...args) =>
@@ -1073,5 +1494,42 @@ test("packaging captures modifications, deletions and new files without running 
     assert.throws(() => packageWork(directory, plan, response()), /prohibited/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("packaging refuses symlinked files and directory components", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "slash-links-"));
+  const outside = mkdtempSync(join(tmpdir(), "slash-outside-"));
+  const git = (...args) => execFileSync("git", args, { cwd: directory, encoding: "utf8" });
+  try {
+    git("init", "-q");
+    git("config", "user.name", "Fixture");
+    git("config", "user.email", "fixture@example.invalid");
+    mkdirSync(join(directory, "docs", "nested"), { recursive: true });
+    writeFileSync(join(directory, "docs", "nested", "secret.txt"), "safe");
+    git("add", ".");
+    git("commit", "-qm", "fixture");
+    const head = git("rev-parse", "HEAD").trim();
+    const log = JSON.stringify({ type: "thread.started", thread_id: artifact().threadId });
+    const plan = { snapshot: { head, threads: [] } };
+    const outsideFile = join(outside, "secret.txt");
+    writeFileSync(outsideFile, "private fixture content");
+    try {
+      symlinkSync(outsideFile, join(directory, "file-link"), "file");
+    } catch (error) {
+      if (process.platform === "win32" && ["EPERM", "EACCES"].includes(error.code)) {
+        t.skip("Windows symlink creation is unavailable");
+        return;
+      }
+      throw error;
+    }
+    assert.throws(() => packageWork(directory, plan, response(), log), /Symlink in patch path/);
+    rmSync(join(directory, "file-link"));
+    rmSync(join(directory, "docs", "nested"), { recursive: true });
+    symlinkSync(outside, join(directory, "docs", "nested"), "dir");
+    assert.throws(() => packageWork(directory, plan, response(), log), /Symlink in patch path/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   }
 });

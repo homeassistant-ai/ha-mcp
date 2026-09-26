@@ -5,10 +5,16 @@ import {
   maintainer,
   ORIGIN_MARKER,
   principal,
+  STATE_MARKER,
   stateFrom,
   trustedComment,
   trustedReview,
 } from "./core.mjs";
+
+const COMMENT_FIELDS = "body updatedAt lastEditedAt editor { login __typename } author { login __typename }";
+// The secretless wakeup job is a GitHub Actions check, not a product check.
+const GITHUB_ACTIONS_APP_ID = 15368;
+const REVIEW_WAKEUP_CHECK_NAME = "Slash review event";
 
 export function actor(value) {
   if (!value) return null;
@@ -80,16 +86,15 @@ export class API extends GitHub {
       const batch = comments.slice(offset, offset + 100);
       if (batch.some((c) => typeof c.node_id !== "string"))
         throw Error("Comment identity is missing");
-      const fields =
-        "id body updatedAt lastEditedAt editor { login __typename } author { login __typename }";
       const nodes = this.graphql(
         `query($ids:[ID!]!) { nodes(ids:$ids) {
-        ... on IssueComment { ${fields} }
-        ... on PullRequestReview { ${fields} }
-        ... on PullRequestReviewComment { ${fields} }
+        ... on IssueComment { id ${COMMENT_FIELDS} }
+        ... on PullRequestReview { id ${COMMENT_FIELDS} }
+        ... on PullRequestReviewComment { id ${COMMENT_FIELDS} }
       } }`,
         { ids: batch.map((c) => c.node_id) },
-      ).nodes;
+      )?.nodes;
+      if (!Array.isArray(nodes)) throw Error("Comment edit response is unavailable");
       const byId = new Map(nodes.filter(Boolean).map((n) => [n.id, n]));
       for (const comment of batch) {
         const node = byId.get(comment.node_id);
@@ -123,24 +128,31 @@ export class API extends GitHub {
         repository(owner:$owner,name:$name) { pullRequest(number:$number) {
           reviewThreads(first:100,after:$cursor) { pageInfo { hasNextPage endCursor }
             nodes { id isResolved comments(first:100) { pageInfo { hasNextPage endCursor }
-              nodes { databaseId body updatedAt lastEditedAt editor { login __typename } author { login __typename } } } }
+              nodes { databaseId ${COMMENT_FIELDS} } } }
           }
         } }
       }`,
         { owner, name, number, cursor },
-      ).repository.pullRequest.reviewThreads;
+      )?.repository?.pullRequest?.reviewThreads;
+      if (!data || !Array.isArray(data.nodes) || !data.pageInfo)
+        throw Error("Review thread response is unavailable");
       for (const thread of data.nodes) {
+        if (!Array.isArray(thread.comments?.nodes) || !thread.comments?.pageInfo)
+          throw Error("Review comment response is unavailable");
         const comments = thread.comments.nodes;
         let page = thread.comments.pageInfo;
         while (page.hasNextPage) {
+          if (!page.endCursor) throw Error("Review comment cursor is missing");
           const more = this.graphql(
             `query($id:ID!,$cursor:String!) { node(id:$id) {
             ... on PullRequestReviewThread { comments(first:100,after:$cursor) {
-              pageInfo { hasNextPage endCursor } nodes { databaseId body updatedAt lastEditedAt editor { login __typename } author { login __typename } }
+              pageInfo { hasNextPage endCursor } nodes { databaseId ${COMMENT_FIELDS} }
             } }
           } }`,
             { id: thread.id, cursor: page.endCursor },
-          ).node.comments;
+          )?.node?.comments;
+          if (!more || !Array.isArray(more.nodes) || !more.pageInfo)
+            throw Error("Review comment response is unavailable");
           comments.push(...more.nodes);
           page = more.pageInfo;
           if (comments.length > 3000) throw Error("Review thread is too large");
@@ -160,6 +172,8 @@ export class API extends GitHub {
           })),
         });
       }
+      if (data.pageInfo.hasNextPage && !data.pageInfo.endCursor)
+        throw Error("Review thread cursor is missing");
       cursor = data.pageInfo.hasNextPage ? data.pageInfo.endCursor : null;
       if (nodes.length > 3000) throw Error("Too many review threads");
     } while (cursor);
@@ -267,7 +281,7 @@ export function eventTarget(api, event, eventName, env) {
   return { number: prs[0].number, commandId: null, automatic: true };
 }
 
-export function collect(api, number, app) {
+export function collect(api, number, app, { idleIfUnowned = false } = {}) {
   let issue = api.get(`issues/${number}`);
   let pr = issue.pull_request ? api.get(`pulls/${number}`) : null;
   let root = number;
@@ -276,7 +290,19 @@ export function collect(api, number, app) {
     if (origin) root = Number(origin[1]);
   }
   if (root !== number) issue = api.get(`issues/${root}`);
-  const rootComments = api.edits(api.pages(`issues/${root}/comments`));
+  const rawRootComments = api.pages(`issues/${root}/comments`);
+  if (
+    idleIfUnowned &&
+    root === number &&
+    !rawRootComments.some(
+      (c) =>
+        c.user?.type === "Bot" &&
+        c.user.login === `${app}[bot]` &&
+        c.body?.includes(STATE_MARKER),
+    )
+  )
+    return null;
+  const rootComments = api.edits(rawRootComments);
   const session = stateFrom(rootComments, app);
   if (root !== number && !session)
     throw Error("PR origin has no owned session checkpoint");
@@ -284,6 +310,9 @@ export function collect(api, number, app) {
     throw Error("PR branch does not match its owned session checkpoint");
   if (session && session.root !== root)
     throw Error("Session belongs to another issue");
+  // Automatic signals cannot start a session from a historical slash command.
+  // Stop before reading reviews, threads, roles and checks on unrelated PRs.
+  if (idleIfUnowned && !session) return null;
   if (session?.pr) {
     if (pr && session.pr !== pr.number)
       throw Error("Session belongs to another PR");
@@ -340,7 +369,7 @@ export function collect(api, number, app) {
   const statuses = pr ? api.pages(`commits/${head}/statuses`) : [];
   // Coalesced, secretless wakeups are signals, not tests of the PR's code.
   const checks = checkRuns
-    .filter((c) => !(c.app?.id === 15368 && c.name === "Slash review event"))
+    .filter((c) => !(c.app?.id === GITHUB_ACTIONS_APP_ID && c.name === REVIEW_WAKEUP_CHECK_NAME))
     .map((c) => ({
       name: c.name,
       appId: c.app?.id,
@@ -409,13 +438,11 @@ export function collect(api, number, app) {
     branch,
     head,
   };
-  if (Buffer.byteLength(JSON.stringify(snapshot)) > 512000)
-    throw Error("Conversation exceeds the 512 KiB context limit");
   return snapshot;
 }
 
-export function snapshotGuard(snapshot) {
-  return digest({
+function guardFields(snapshot) {
+  return {
     root: snapshot.root,
     issue: {
       body: snapshot.issue.body,
@@ -436,5 +463,15 @@ export function snapshotGuard(snapshot) {
     roles: snapshot.roles,
     session: snapshot.session,
     head: snapshot.head,
-  });
+  };
+}
+
+export function snapshotGuard(snapshot) {
+  return digest(guardFields(snapshot));
+}
+
+export function snapshotDifferences(previous, current) {
+  const before = guardFields(previous);
+  const after = guardFields(current);
+  return Object.keys(before).filter((key) => digest(before[key]) !== digest(after[key]));
 }

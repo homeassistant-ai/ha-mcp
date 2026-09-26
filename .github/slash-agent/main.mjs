@@ -14,7 +14,10 @@ import { publish } from "./publish.mjs";
 const here = dirname(fileURLToPath(import.meta.url));
 export function prepare(api, trigger, app) {
   if (!trigger) return null;
-  const snapshot = collect(api, trigger.number, app);
+  const snapshot = collect(api, trigger.number, app, {
+    idleIfUnowned: trigger.automatic,
+  });
+  if (!snapshot) return null;
   const decision = decide(snapshot, trigger);
   if (decision.mode === "idle") return null;
   return {
@@ -29,7 +32,7 @@ export function prepare(api, trigger, app) {
 
 export function prompt(plan) {
   const { snapshot: s, decision: d } = plan;
-  return `${readFileSync(resolve(here, "instructions.md"), "utf8")}\n\nAuthenticated maintainer task:\n${JSON.stringify({ author: principal(d.latest).login, task: d.task })}\n\nSource material:\n${JSON.stringify(
+  const content = `${readFileSync(resolve(here, "instructions.md"), "utf8")}\n\nAuthenticated maintainer task:\n${JSON.stringify({ author: principal(d.latest).login, task: d.task })}\n\nSource material:\n${JSON.stringify(
     {
       repository: s.repository,
       issue: { number: s.root, title: s.issue.title, body: s.issue.body },
@@ -47,22 +50,44 @@ export function prompt(plan) {
       round: d.rounds + 1,
     },
   )}`;
+  if (Buffer.byteLength(content, "utf8") > 512000)
+    throw Error("Slash prompt exceeds the 512 KiB context limit");
+  return content;
 }
 
-export function main(operation, env = process.env) {
+export function main(
+  operation,
+  env = process.env,
+  {
+    createApi = (repository) => new API(repository),
+    packageWorkFn = packageWork,
+    publishFn = publish,
+  } = {},
+) {
   const directory = resolve(env.SLASH_STATE_DIR ?? "slash-state");
   const output = (name, value) => {
-    if (env.GITHUB_OUTPUT)
-      appendFileSync(env.GITHUB_OUTPUT, `${name}=${value}\n`);
+    if (!env.GITHUB_OUTPUT) throw Error("GITHUB_OUTPUT is required");
+    appendFileSync(env.GITHUB_OUTPUT, `${name}=${value}\n`);
   };
-  const json = (name) =>
-    JSON.parse(readFileSync(resolve(directory, name), "utf8"));
+  const readJson = (path, label) => {
+    try {
+      return JSON.parse(readFileSync(path, "utf8"));
+    } catch (error) {
+      throw Error(`Cannot read valid ${label} for ${operation}: ${error.message}`);
+    }
+  };
+  const json = (name) => readJson(resolve(directory, name), name);
   if (operation === "admit") {
     const app = env.HA_MCP_APP_SLUG;
-    if (!/^[a-z0-9-]+$/.test(app ?? ""))
-      throw Error("HA_MCP_APP_SLUG is required");
-    const api = new API(env.GITHUB_REPOSITORY);
-    const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8"));
+    if (!app) {
+      console.log("::notice::HA_MCP_AGENT_APP_SLUG is unset; slash agent is inactive");
+      output("run", false);
+      return;
+    }
+    if (!/^[a-z0-9-]+$/.test(app))
+      throw Error("Invalid HA_MCP_APP_SLUG");
+    const api = createApi(env.GITHUB_REPOSITORY);
+    const event = readJson(env.GITHUB_EVENT_PATH, "GitHub event");
     const trigger = eventTarget(api, event, env.GITHUB_EVENT_NAME, env);
     const plan = prepare(api, trigger, app);
     output("run", !!plan);
@@ -82,8 +107,8 @@ export function main(operation, env = process.env) {
       JSON.stringify(resultSchema),
     );
   } else if (operation === "package") {
-    const result = JSON.parse(readFileSync(env.OUTPUT_PATH, "utf8"));
-    const artifact = packageWork(
+    const result = readJson(env.OUTPUT_PATH, "model result");
+    const artifact = packageWorkFn(
       env.SLASH_SOURCE_DIR ?? "source",
       plan,
       result,
@@ -95,16 +120,16 @@ export function main(operation, env = process.env) {
       throw Error("Unexpected publication App");
     const workerSucceeded = env.WORKER_RESULT === "success";
     const artifact = workerSucceeded ? json("result.json") : null;
-    const state = publish(
-      new API(env.GITHUB_REPOSITORY),
+    const state = publishFn(
+      createApi(env.GITHUB_REPOSITORY),
       plan,
       artifact,
       env.HA_MCP_APP_SLUG,
       { runId: env.GITHUB_RUN_ID, workerSucceeded },
     );
-    console.log(
-      state.skipped ? "Stale work skipped" : `Slash session: ${state.status}`,
-    );
+    if (state.skipped)
+      throw Error(`Stale work skipped: ${(state.changed ?? ["unknown guard"]).join(", ")}; send a fresh slash command if needed`);
+    console.log(`Slash session: ${state.status}`);
   } else throw Error("Unknown slash controller operation");
 }
 
@@ -115,7 +140,13 @@ if (
   try {
     main(process.argv[2]);
   } catch (error) {
-    console.error(`::error::${String(error.message).replace(/[\r\n]/g, " ")}`);
+    const message = String(error.message).replace(/[\r\n]/g, " ");
+    const trace = String(error.stack ?? "")
+      .split(/\r?\n/)
+      .slice(1, 4)
+      .map((line) => line.trim())
+      .join(" | ");
+    console.error(`::error::${message}${trace ? ` | ${trace}` : ""}`);
     process.exitCode = 1;
   }
 }

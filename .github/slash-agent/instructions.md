@@ -26,7 +26,8 @@ before fixing it. Check available CI failures using gh; do not claim success for
 checks you did not run. Do not modify .github/, .codex/, .claude/, credentials,
 symlinks or submodules: these need a separate human-controlled change. Do not
 modify Git metadata or root/scoped AGENTS.md and CLAUDE.md entrypoints. Leave
-all intended file changes in the working tree.
+all intended file changes in the working tree. New files ignored by
+`.gitignore` are not packaged; choose a non-ignored path or report blocked.
 
 Return JSON matching the provided schema. Include an accurate title, summary,
 test evidence and a compact memory checkpoint for a later fresh worker. The

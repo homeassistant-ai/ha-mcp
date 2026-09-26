@@ -11,7 +11,7 @@ import {
   validateChanges,
   validateResult,
 } from "./core.mjs";
-import { collect, snapshotGuard } from "./github.mjs";
+import { collect, snapshotDifferences, snapshotGuard } from "./github.mjs";
 
 function save(api, state, app) {
   const data = { body: renderState(state, api.repository) };
@@ -164,8 +164,31 @@ function respond(api, plan, app, state, result, head) {
   }
 }
 
-function description(result, root) {
-  return `## What does this PR do?\n\n${prose(result.summary)}\n\nRefs #${root}.\n\n## Type of change\n\n- [x] Maintenance / implementation requested by a maintainer\n\n## Testing\n\n${prose(result.tests)}\n\n## Checklist\n\n- [ ] Current CI and review findings verified\n\n${ORIGIN_MARKER}${root} -->`;
+const DESCRIPTION_START = "<!-- slash-description:start -->";
+const DESCRIPTION_END = "<!-- slash-description:end -->";
+
+function description(result, root, previous = null) {
+  let kind = "maintenance";
+  if (/^[a-z]+(?:\([^)]*\))?!:/i.test(result.title)) kind = "breaking";
+  else if (/^fix(?:\([^)]*\))?:/i.test(result.title)) kind = "bug";
+  else if (/^feat(?:\([^)]*\))?:/i.test(result.title)) kind = "feature";
+  else if (/^docs(?:\([^)]*\))?:/i.test(result.title)) kind = "docs";
+  else if (/^test(?:\([^)]*\))?:/i.test(result.title)) kind = "tests";
+  const type = (name, label) => `- [${kind === name ? "x" : " "}] ${label}`;
+  const managed = `${DESCRIPTION_START}\n## What does this PR do?\n\n${prose(result.summary)}\n\nRefs #${root}.\n\n## Type of change\n\n${[
+    type("bug", "🐛 Bug fix"),
+    type("feature", "✨ New feature"),
+    type("docs", "📚 Documentation"),
+    type("maintenance", "🔧 Maintenance/refactor"),
+    type("tests", "🧪 Tests only"),
+    type("breaking", "💥 Breaking change"),
+  ].join("\n")}\n\n## Testing\n\n- [x] I have tested these changes with a LLM agent\n- [ ] All automated tests pass (\`uv run pytest\`)\n- [ ] Code follows style guidelines (\`uv run ruff check\`)\n\n${prose(result.tests)}\n\n## Checklist\n\n- [ ] I have updated documentation if needed\n${DESCRIPTION_END}`;
+  if (previous === null) return `${managed}\n\n${ORIGIN_MARKER}${root} -->`;
+  const start = previous.startsWith(`${DESCRIPTION_START}\n`) ? 0 : -1;
+  const end = previous.indexOf(DESCRIPTION_END);
+  // Older App PRs lack delimiters. Preserve their author and review sections.
+  if (start < 0 || end < start) return previous;
+  return previous.slice(0, start) + managed + previous.slice(end + DESCRIPTION_END.length);
 }
 
 export function publish(
@@ -186,7 +209,7 @@ export function publish(
     console.warn(
       "::warning::Slash source changed; stale output was not published. Use a fresh slash command if no new event follows.",
     );
-    return { skipped: true };
+    return { skipped: true, changed: snapshotDifferences(plan.snapshot, fresh) };
   }
   const d = plan.decision;
   if (d.mode === "idle") return { skipped: true };
@@ -235,7 +258,7 @@ export function publish(
   if (!workerSucceeded) {
     state.status = "blocked";
     state.rounds += 1;
-    state.summary = `Worker failed before producing validated output. Inspect Actions run ${runId}, then send a new slash command to retry.`;
+    state.summary = `Worker failed before producing validated output. Inspect the failed step and safe failure metadata in Actions run ${runId}, then send a new slash command to retry. The private Codex transcript is not retained.`;
     save(api, state, app);
     return state;
   }
@@ -356,16 +379,15 @@ export function publish(
         `pulls/${state.pr}`,
         {
           title: result.title.replace(/[\r\n]/g, " "),
-          body: description(result, state.root),
+          body: description(result, state.root, fresh.pr.body),
         },
         "PATCH",
       );
     }
   }
   state.lastHead = head;
-  // Resolve changes are ours; recalculate the feedback digest after those writes.
-  // New human input still needs another turn, so retain the admission digest if
-  // any non-thread input changed while we were publishing.
+  // Resolve changes are ours. Retain the admission snapshot's other feedback so
+  // new human input during publication still causes a later turn.
   state.handled = feedbackHash({
     ...fresh,
     threads: fresh.threads.map((t) =>
@@ -375,17 +397,12 @@ export function publish(
     ),
   });
   state.checkedHead = fresh.head;
-  state.status = state.pr
-    ? "waiting"
-    : result.outcome === "unchanged"
-      ? "complete"
-      : "blocked";
-  if (!state.pr && result.outcome === "unchanged")
+  // A changed result has already bound a PR above; an unchanged issue result
+  // completes in its checkpoint without creating one.
+  state.status = state.pr ? "waiting" : "complete";
+  if (!state.pr)
     state.summary +=
       "\n\nCompleted on the issue without repository changes; no PR was created.";
-  else if (!state.pr)
-    state.summary +=
-      "\n\nNo code changes were produced, so no PR was created. A maintainer can clarify with a new slash command.";
   save(api, state, app);
   if (state.pr) {
     const current = collect(api, state.root, app);
