@@ -33,7 +33,7 @@ import time
 import urllib.error
 import urllib.request
 import warnings
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -42,6 +42,9 @@ import pytest
 import requests
 from testcontainers.core.container import DockerContainer
 from urllib3.exceptions import InsecureRequestWarning
+
+# Must precede the ha_mcp imports below; see the module docstring.
+from . import _collection_data_dir  # noqa: F401
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
@@ -2770,8 +2773,36 @@ def _wait_for_testcontainer_ready(
     return embedded_webhook_url
 
 
+@pytest.fixture(scope="session", autouse=True)
+def in_process_data_dir(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[Path]:
+    """Point the in-process server's data and backup dirs at a temp dir.
+
+    The container and HAOS external lanes run the server inside pytest, and
+    without this every write tool adds an auto-backup snapshot, usage-log line
+    and other files to the developer's ``~/.ha-mcp``. The backup dir is pinned
+    too because an existing ``~/.local/share/ha_mcp/backups`` wins over the data
+    dir. Remote and stdio lanes set their own environment.
+    """
+    from ha_mcp.config import _reset_global_settings
+    from ha_mcp.utils.data_paths import get_data_dir
+
+    config_dir = tmp_path_factory.mktemp("in-process-config")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("HA_MCP_CONFIG_DIR", str(config_dir))
+        mp.setenv("HAMCP_BACKUP_DIR", str(config_dir / "backups"))
+        get_data_dir.cache_clear()
+        _reset_global_settings()
+        try:
+            yield config_dir
+        finally:
+            get_data_dir.cache_clear()
+            _reset_global_settings()
+
+
 @pytest.fixture(scope="session")
-def ha_container_with_fresh_config(request):
+def ha_container_with_fresh_config(request, in_process_data_dir):
     """Create Home Assistant test environment with fresh config.
 
     Default backend: testcontainer (HA Core Docker image). When the
