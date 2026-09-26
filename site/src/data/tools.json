@@ -417,7 +417,7 @@
   {
     "name": "ha_config_get_automation",
     "title": "Get Automation Config",
-    "description": "Get Home Assistant automation configuration.\n\nReturns the complete configuration including triggers, conditions, actions, and mode settings.\n\nThe returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.\n\nThe returned `automation_id` is the resolved entity_id (canonical\nform, e.g. `automation.morning_routine`) when the registry lookup\nsucceeds, falling back to the input `identifier` otherwise.\n\nEXAMPLES:\n- Get automation: ha_config_get_automation(\"automation.morning_routine\")\n- Get by unique_id: ha_config_get_automation(\"my_unique_automation_id\")\n\nFor comprehensive automation documentation, use ha_get_skill_guide.",
+    "description": "Get Home Assistant automation configuration.\n\nReturns the complete configuration including triggers, conditions, actions, and mode settings.\n\nThe returned `config_hash` stays the same across consecutive reads of an unchanged config.\n\nThe returned `automation_id` is the resolved entity_id (canonical\nform, e.g. `automation.morning_routine`) when the registry lookup\nsucceeds, falling back to the input `identifier` otherwise.\n\nEXAMPLES:\n- Get automation: ha_config_get_automation(\"automation.morning_routine\")\n- Get by unique_id: ha_config_get_automation(\"my_unique_automation_id\")\n\nFor comprehensive automation documentation, use ha_get_skill_guide.",
     "inputSchema": {
       "properties": {
         "identifier": {
@@ -608,7 +608,7 @@
   {
     "name": "ha_config_get_calendar_events",
     "title": "Get Calendar Events",
-    "description": "Get calendar events from a calendar entity within a time range.\n\nReturns each event's summary, start, end, description and location. To\nfind calendar entities, use ha_search(domain_filter='calendar').\n\nEXAMPLES:\n- Next week (defaults): ha_config_get_calendar_events(\"calendar.family\")\n- Date range: ha_config_get_calendar_events(\"calendar.work\", start=\"2024-01-01T00:00:00\", end=\"2024-01-31T23:59:59\")",
+    "description": "Get calendar events from a calendar entity within a time range.\n\nReturns each event's summary, start, end, description and location,\nplus the uid, recurrence_id and rrule when the calendar provides them\n(the edit and remove tools use uid and recurrence_id). To find calendar\nentities, use ha_search(domain_filter='calendar').\n\nEXAMPLES:\n- Next week (defaults): ha_config_get_calendar_events(\"calendar.family\")\n- Date range: ha_config_get_calendar_events(\"calendar.work\", start=\"2024-01-01T00:00:00\", end=\"2024-01-31T23:59:59\")",
     "inputSchema": {
       "properties": {
         "entity_id": {
@@ -622,7 +622,7 @@
         },
         "end": {
           "type": "str | None",
-          "description": "End datetime in ISO format (default: 7 days from start)",
+          "description": "End datetime in ISO format (default: 7 days from now, not from start; pass end whenever you pass start)",
           "default": null
         },
         "max_results": {
@@ -953,7 +953,7 @@
   {
     "name": "ha_config_get_dashboard",
     "title": "Get Dashboard",
-    "description": "Get dashboard info - list all dashboards, get config, or search for cards.\n\nMODE 1 — List: list_only=True\n  Lists every dashboard's metadata (url_path, title, icon), storage and\n  YAML alike (metadata only — bodies are never included here).\n\nMODE 2 — Search: any of entity_id / card_type / heading provided\n  Finds cards, badges, and header cards matching the criteria, including\n  cards nested inside stacks, grids, conditional cards, button-card\n  custom_fields, and state-switch states. Each match carries a\n  python_path and a jq_path that locate the card for nested as well as\n  top-level cards. The python_path is a Python subscript chain to be\n  appended after `config` — e.g.\n  python_transform=f'config{m[\"python_path\"]}[\"icon\"] = \"mdi:x\"' (it is\n  NOT valid on its own without the `config` prefix). jq_path is the same\n  location in jq dot-notation.\n  Multiple criteria are AND-ed. Always fetches fresh config, bypassing the cache.\n  Search covers cards/card/custom_fields/states containers up to a depth\n  bound; if the dashboard carries a non-traversed child-bearing shape\n  (e.g. picture-elements `elements`), the result carries a `warnings`\n  entry naming where, so its hidden content is not mistaken for absent.\n  Strategy dashboards are not searchable (no explicit cards).\n\nMODE 3 — Get: Active when list_only=False and no search parameters are provided.\n  Returns the full Lovelace dashboard config, defaulting to the\n  main dashboard if url_path is omitted.\n  With view_path, `config_hash` still covers the FULL config, so a follow-up\n  ha_config_set_dashboard(python_transform=...) addressing\n  config['views'][view_index] validates unchanged. An unknown\n  view_path errors and lists the available view paths.\n  When you only need the render and not the config, use the\n  dedicated ha_get_dashboard_screenshot tool (registered when the\n  dashboard screenshot beta feature is on) instead; it returns images\n  without echoing the config.\n\nMODE 4 — Search all: mode=\"search\" with query=<entity_id or text>\n  Answers \"which dashboards contain this entity/card\" by walking every\n  storage-mode dashboard's views/cards/sections for the query substring.\n  Each match names the url_path, view, card_path, card_type, and the\n  matched field/value. Takes precedence over the other modes (list_only /\n  entity_id / card_type / heading are ignored when mode=\"search\").\n  YAML-mode dashboards are never searched on either path — the component\n  walk skips them in-process and the component-less legacy walk skips any\n  row tagged mode=\"yaml\" — because HA resolves `!secret` when loading a\n  YAML Lovelace config, so searching one could surface resolved secrets.\n  On installs without the ha_mcp_tools component, the default (unnamed)\n  dashboard is also not searched — only dashboards with a url_path are.\n\nReturn a stable `config_hash` (Get and Search modes only; not present in list_only mode) across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.\n\nEXAMPLES:\n- List all dashboards: ha_config_get_dashboard(list_only=True)\n- Get one view only: ha_config_get_dashboard(url_path=\"lovelace-mobile\", view_path=\"office\")\n- Find cards by entity (wildcards allowed): ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"sensor.temperature_*\")\n- Find heading: ha_config_get_dashboard(url_path=\"my-dash\", heading=\"Climate\", card_type=\"heading\")\n- Which dashboards use an entity: ha_config_get_dashboard(mode=\"search\", query=\"light.bedroom\")\n\nSEARCH WORKFLOW EXAMPLE:\n1. find = ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"light.bedroom\")\n2. ha_config_set_dashboard(\n       url_path=\"my-dash\",\n       config_hash=find[\"config_hash\"],\n       python_transform=f'config{find[\"matches\"][0][\"python_path\"]}[\"icon\"] = \"mdi:lamp\"'\n   )",
+    "description": "Get dashboard info - list all dashboards, get config, or search for cards.\n\nMODE 1 — List: list_only=True\n  Lists every dashboard's metadata (url_path, title, icon), storage and\n  YAML alike (metadata only — bodies are never included here).\n\nMODE 2 — Search: any of entity_id / card_type / heading provided\n  Finds cards, badges, and header cards matching the criteria, including\n  cards nested inside stacks, grids, conditional cards, button-card\n  custom_fields, and state-switch states. Each match carries a\n  python_path and a jq_path that locate the card for nested as well as\n  top-level cards. The python_path is a Python subscript chain to be\n  appended after `config` — e.g.\n  python_transform=f'config{m[\"python_path\"]}[\"icon\"] = \"mdi:x\"' (it is\n  NOT valid on its own without the `config` prefix). jq_path is the same\n  location in jq dot-notation.\n  Multiple criteria are AND-ed. Always fetches fresh config, bypassing the cache.\n  Search covers cards/card/custom_fields/states containers up to a depth\n  bound; if the dashboard carries a non-traversed child-bearing shape\n  (e.g. picture-elements `elements`), the result carries a `warnings`\n  entry naming where, so its hidden content is not mistaken for absent.\n  Strategy dashboards are not searchable (no explicit cards).\n\nMODE 3 — Get: Active when list_only=False and no search parameters are provided.\n  Returns the full Lovelace dashboard config, defaulting to the\n  main dashboard if url_path is omitted.\n  With view_path, `config_hash` still covers the FULL config, so a follow-up\n  ha_config_set_dashboard(python_transform=...) addressing\n  config['views'][view_index] validates unchanged. An unknown\n  view_path errors and lists the available view paths.\n  When you only need the render and not the config, use the\n  dedicated ha_get_dashboard_screenshot tool (registered when the\n  dashboard screenshot beta feature is on) instead; it returns images\n  without echoing the config.\n\nMODE 4 — Search all: mode=\"search\" with query=<entity_id or text>\n  Answers \"which dashboards contain this entity/card\" by walking every\n  storage-mode dashboard's views/cards/sections for the query substring.\n  Each match names the url_path, view, card_path, card_type, and the\n  matched field/value. Takes precedence over the other modes (list_only /\n  entity_id / card_type / heading are ignored when mode=\"search\").\n  YAML-mode dashboards are never searched on either path — the component\n  walk skips them in-process and the component-less legacy walk skips any\n  row tagged mode=\"yaml\" — because HA resolves `!secret` when loading a\n  YAML Lovelace config, so searching one could surface resolved secrets.\n  On installs without the ha_mcp_tools component, the default (unnamed)\n  dashboard is also not searched — only dashboards with a url_path are.\n\nMODE 2 (Search) and MODE 3 (Get) return a `config_hash` that stays the same across consecutive reads of an unchanged config; MODE 1 and MODE 4 do not return one.\n\nEXAMPLES:\n- List all dashboards: ha_config_get_dashboard(list_only=True)\n- Get one view only: ha_config_get_dashboard(url_path=\"lovelace-mobile\", view_path=\"office\")\n- Find cards by entity (wildcards allowed): ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"sensor.temperature_*\")\n- Find heading: ha_config_get_dashboard(url_path=\"my-dash\", heading=\"Climate\", card_type=\"heading\")\n- Which dashboards use an entity: ha_config_get_dashboard(mode=\"search\", query=\"light.bedroom\")\n\nSEARCH WORKFLOW EXAMPLE:\n1. find = ha_config_get_dashboard(url_path=\"my-dash\", entity_id=\"light.bedroom\")\n2. ha_config_set_dashboard(\n       url_path=\"my-dash\",\n       config_hash=find[\"config_hash\"],\n       python_transform=f'config{find[\"matches\"][0][\"python_path\"]}[\"icon\"] = \"mdi:lamp\"'\n   )",
     "inputSchema": {
       "properties": {
         "url_path": {
@@ -1066,7 +1066,7 @@
   {
     "name": "ha_config_set_dashboard",
     "title": "Create or Update Dashboard",
-    "description": "Create or update a Home Assistant dashboard.\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n`dashboard-guide.md` and `dashboard-cards.md` ship under `skill_content`\nby default.\n\nMODES (pick one):\n- patch: edit known paths with literal values using JSON Patch\n  add/remove/replace/test and config_hash, e.g.\n  patch=[{\"op\": \"replace\", \"path\": \"/views/0/title\", \"value\": \"Home\"}].\n  move/copy are unsupported. Full guide:\n  https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/dashboard-edits.md\n- python_transform: loops or pattern-based changes across cards and views,\n  e.g. 'config[\"views\"][0][\"cards\"].append({\"type\": \"button\", \"entity\": \"light.bedroom\"})'.\n  After delete/add operations indices shift, so chain multiple ops in ONE\n  expression where possible; a later call needs a fresh config_hash from\n  ha_config_get_dashboard().\n- config: new dashboards only, or a full restructure. Replaces everything.\n  Omit it to create a dashboard without initial config.\n\nUse ha_config_get_dashboard(entity_id=...) to get the path of any card,\nand ha_search / ha_get_overview to find entity IDs — never guess them.\nFor visual re-checks after the write use ha_get_dashboard_screenshot\ninstead of re-sending config.\n\ntitle/icon/require_admin/show_in_sidebar can be updated in a\nmetadata-only call or alongside a full config replacement; with\npython_transform or patch, update metadata in a separate call (combining\nit with patch is rejected). Strategy dashboards (config\n{\"strategy\": {...}}) cannot be converted to custom dashboards here; use\n\"Take Control\" in the Home Assistant UI.\n\nEXAMPLE:\nha_config_set_dashboard(url_path=\"home-dashboard\", title=\"Home Overview\",\n    config={\"views\": [{\"title\": \"Home\", \"type\": \"sections\", \"sections\": [{\"title\": \"Climate\", \"cards\": [{\"type\": \"tile\", \"entity\": \"climate.living_room\"}]}]}]})\n\nThis tool manages storage-mode dashboards only. YAML-mode dashboards (a\n.yaml file registered under ``lovelace: dashboards:`` in\nconfiguration.yaml) and dashboards inlined under ``lovelace:`` are\nedited in their .yaml file; ``ha_config_set_yaml`` can update the\n``lovelace:`` registration but not the dashboard body.",
+    "description": "Create or update a Home Assistant dashboard.\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n`dashboard-guide.md` and `dashboard-cards.md` ship under `skill_content`\nby default.\n\nMODES (pick one):\n- patch: edit known paths with literal values using JSON Patch\n  add/remove/replace/test and config_hash, e.g.\n  patch=[{\"op\": \"replace\", \"path\": \"/views/0/title\", \"value\": \"Home\"}].\n  move/copy are unsupported. Full guide:\n  https://github.com/homeassistant-ai/ha-mcp/blob/master/docs/dashboard-edits.md\n- python_transform: loops or pattern-based changes across cards and views,\n  e.g. 'config[\"views\"][0][\"cards\"].append({\"type\": \"button\", \"entity\": \"light.bedroom\"})'.\n  After delete/add operations indices shift, so chain multiple ops in ONE\n  expression where possible; a later call needs a fresh config_hash from\n  ha_config_get_dashboard().\n- config: new dashboards only, or a full restructure. Replaces everything.\n  Omit it to create a dashboard without initial config.\n\nUse ha_config_get_dashboard(entity_id=...) to get the path of any card,\nand ha_search / ha_get_overview to find entity IDs — never guess them.\nFor visual re-checks after the write, use ha_get_dashboard_screenshot\n(when available) instead of re-sending config.\n\ntitle/icon/require_admin/show_in_sidebar can be updated in a\nmetadata-only call or alongside a full config replacement; with\npython_transform or patch, update metadata in a separate call (combining\nit with patch is rejected). Strategy dashboards (config\n{\"strategy\": {...}}) cannot be converted to custom dashboards here; use\n\"Take Control\" in the Home Assistant UI.\n\nEXAMPLE:\nha_config_set_dashboard(url_path=\"home-dashboard\", title=\"Home Overview\",\n    config={\"views\": [{\"title\": \"Home\", \"type\": \"sections\", \"sections\": [{\"title\": \"Climate\", \"cards\": [{\"type\": \"tile\", \"entity\": \"climate.living_room\"}]}]}]})\n\nThis tool manages storage-mode dashboards only. YAML-mode dashboards (a\n.yaml file registered under ``lovelace: dashboards:`` in\nconfiguration.yaml) and dashboards inlined under ``lovelace:`` are\nedited in their .yaml file; ``ha_config_set_yaml`` can update the\n``lovelace:`` registration but not the dashboard body.",
     "inputSchema": {
       "properties": {
         "url_path": {
@@ -1361,7 +1361,7 @@
   {
     "name": "ha_remove_device",
     "title": "Remove Device",
-    "description": "Remove an orphaned device from the Home Assistant device registry.\n\nWARNING: This removes the device entry from the registry.\n- Use only for orphaned devices that are no longer connected\n- Active devices will typically be re-added by their integration\n- Associated entities may also be removed\n\nThis uses the config entry removal which is the safe way to remove devices.\nIf the device has multiple config entries, they must all be removed.\n\nEXAMPLES:\n- Remove orphaned device: ha_remove_device(\"abc123def456\")\n\nNOTE: For most use cases, consider disabling the device instead:\nha_set_device(device_id=\"abc123\", disabled_by=\"user\")",
+    "description": "Remove an orphaned device from the Home Assistant device registry.\n\nWARNING: This removes the device entry from the registry.\n- Use only for orphaned devices that are no longer connected\n- Active devices will typically be re-added by their integration\n- Associated entities may also be removed\n\nWorks only when the integration supports removing devices.\n\nEXAMPLES:\n- Remove orphaned device: ha_remove_device(\"abc123def456\")\n\nNOTE: For most use cases, consider disabling the device instead:\nha_set_device(device_id=\"abc123\", disabled_by=\"user\")",
     "inputSchema": {
       "properties": {
         "device_id": {
@@ -1405,7 +1405,7 @@
         },
         "disabled_by": {
           "type": "str | None",
-          "description": "Set to 'user' to disable, or None/empty string to enable",
+          "description": "Set to 'user' to disable the device, or '' (empty string) to enable it. Omit to leave the disabled state unchanged.",
           "default": null
         },
         "labels": {
@@ -1686,7 +1686,7 @@
   {
     "name": "ha_delete_file",
     "title": "Delete File",
-    "description": "Delete a file from allowed directories in the Home Assistant config.\n\nPermanently removes a file; this cannot be undone. Allowed directories:\n`www/`, `themes/`, `custom_templates/`, `dashboards/`, plus any custom\ndirectories OR HAOS sibling volumes (`/share`, `/media`, `/ssl`,\n`/backup`) configured in the ha-mcp settings UI. Configuration files\ncannot be deleted; path traversal (../) is blocked.\n\nEXAMPLE: ha_delete_file(path=\"www/deprecated-style.css\", confirm=True)",
+    "description": "Delete a file from allowed directories in the Home Assistant config.\n\nha_manage_backup(scope=\"edits\") can restore a text file from its most\nrecent auto-backup snapshot; a binary file has no snapshot and its\ndeletion is permanent. Allowed directories:\n`www/`, `themes/`, `custom_templates/`, `dashboards/`, plus any custom\ndirectories OR HAOS sibling volumes (`/share`, `/media`, `/ssl`,\n`/backup`) configured in the ha-mcp settings UI. Configuration files\ncannot be deleted; path traversal (../) is blocked.\n\nEXAMPLE: ha_delete_file(path=\"www/deprecated-style.css\", confirm=True)",
     "inputSchema": {
       "properties": {
         "path": {
@@ -1716,7 +1716,7 @@
   {
     "name": "ha_list_files",
     "title": "List Files",
-    "description": "List files in a directory within the Home Assistant config directory.\n\nReturns file names, sizes, and modification times for one of the allowed\ndirectories:\n- `www/` - Web assets (CSS, JS, images for dashboards)\n- `themes/` - Theme files\n- `custom_templates/` - Jinja2 template files\n- `dashboards/` - YAML-mode dashboard files\n- `blueprints/` - Automation/script blueprint sources (read-only)\n- Your configured `packages/` folder, when `homeassistant: packages:` is\n  set (the folder name you bound, default `packages/`)\n- Plus any custom directories OR HAOS sibling volumes (`/share`,\n  `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI\nPath traversal (../) is blocked.\n\nEXAMPLE: ha_list_files(path=\"www/\", pattern=\"*.css\")",
+    "description": "List files in a directory within the Home Assistant config directory.\n\nReturns file names, sizes, and modification times for one of the allowed\ndirectories:\n- `www/` - Web assets (CSS, JS, images for dashboards)\n- `themes/` - Theme files\n- `custom_templates/` - Jinja2 template files\n- `dashboards/` - YAML-mode dashboard files\n- `blueprints/` - Automation/script blueprint sources (read-only)\n- `packages/`, plus the folder bound by `homeassistant: packages:` when\n  it has another name\n- Plus any custom directories OR HAOS sibling volumes (`/share`,\n  `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI\nPath traversal (../) is blocked.\n\nEXAMPLE: ha_list_files(path=\"www/\", pattern=\"*.css\")",
     "inputSchema": {
       "properties": {
         "path": {
@@ -1746,7 +1746,7 @@
   {
     "name": "ha_read_file",
     "title": "Read File",
-    "description": "Read a file from the Home Assistant config directory.\n\nGeneral-purpose escape hatch — prefer a dedicated tool when one exists:\nha_manage_blueprints(action=\"get\") for a blueprint body,\nha_config_get_yaml for a config key, ha_config_get_automation/script/scene\nfor storage-mode items. Reach for ha_read_file only for raw on-disk text\nthose tools don't expose.\n\nSome files have special handling:\n- `secrets.yaml`: Values are masked for security\n- `home-assistant.log` / `home-assistant.log.fault`: Prefer\n  ha_get_logs(source='error_log') and\n  ha_get_logs(source='fault_log') over reading these directly.\n\n**Allowed Read Paths:**\n- `configuration.yaml`, `automations.yaml`, `scripts.yaml`, `scenes.yaml`\n- `secrets.yaml` (values masked)\n- `packages/*.yaml`\n- `home-assistant.log`, `home-assistant.log.fault` (tail only)\n- `www/**`, `themes/**`, `custom_templates/**`, `dashboards/**`, `blueprints/**`\n- `custom_components/**/*.py` (read-only)\n- Plus any custom directories OR HAOS sibling volumes (`/share`,\n  `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI\nPath traversal (../) is blocked.\n\nEXAMPLE: ha_read_file(path=\"packages/alert2.yaml\", yaml_path=\"alert2\")",
+    "description": "Read a file from the Home Assistant config directory.\n\nGeneral-purpose escape hatch — prefer a dedicated tool when one exists:\nha_manage_blueprints(action=\"get\") for a blueprint body,\nha_config_get_yaml for a config key, ha_config_get_automation/script/scene\nfor storage-mode items. Reach for ha_read_file only for raw on-disk text\nthose tools don't expose.\n\nSome files have special handling:\n- `secrets.yaml`: Values are masked for security\n- `home-assistant.log` / `home-assistant.log.fault`: Prefer\n  ha_get_logs(source='error_log') and\n  ha_get_logs(source='fault_log') over reading these directly.\n\n**Allowed Read Paths:**\n- `configuration.yaml`, `automations.yaml`, `scripts.yaml`, `scenes.yaml`\n- `secrets.yaml` (values masked)\n- `*.yaml` at any depth under `packages/` and under the folder bound by\n  `homeassistant: packages:`\n- `home-assistant.log`, `home-assistant.log.fault` (tail only)\n- `www/**`, `themes/**`, `custom_templates/**`, `dashboards/**`, `blueprints/**`\n- `custom_components/**/*.py` (read-only)\n- Plus any custom directories OR HAOS sibling volumes (`/share`,\n  `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI\nPath traversal (../) is blocked.\n\nEXAMPLE: ha_read_file(path=\"packages/alert2.yaml\", yaml_path=\"alert2\")",
     "inputSchema": {
       "properties": {
         "path": {
@@ -2106,7 +2106,7 @@
         },
         "name": {
           "type": "str | None",
-          "description": "Display name for simple/flow helper creation. Optional on helper update. Ignored for helper_type='config_subentry', which uses entry_id/subentry_type/subentry_id instead. For flow-based helper updates (template, group, utility_meter, ...), this is typically ignored because options flows don't expose renaming. Rename a flow helper by deleting and recreating instead.",
+          "description": "Display name for simple/flow helper creation. Optional on helper update. Ignored for helper_type='config_subentry', which uses entry_id/subentry_type/subentry_id instead. For flow-based helper updates (template, group, utility_meter, ...), this is ignored because options flows don't expose renaming; change the resulting entity's display name with ha_set_entity(name=...).",
           "default": null
         },
         "helper_id": {
@@ -2375,7 +2375,7 @@
   {
     "name": "ha_get_automation_traces",
     "title": "Get Automation Traces",
-    "description": "Get execution traces for automations and scripts to debug issues.\n\nTraces show what triggered a run, which conditions passed or failed,\nwhich actions executed (for 'choose', which branch was taken), any\nerrors, and variable values during execution. Traces are stored for a\nlimited time by Home Assistant. The 'state' field shows 'stopped'\n(completed), 'running', or an error state.\n\nUSAGE MODES:\n1. List recent traces (omit run_id): returns a summary of recent runs\n   with timestamps, triggers, and status. Use `offset` to page deeper\n   when `has_more` is true.\n   ha_get_automation_traces(\"automation.motion_light\")\n2. Get a detailed trace (provide run_id): full execution details\n   including trigger info, condition results, action trace with timing,\n   and context variables.\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\")\n3. Add logbook entries and context metadata: detailed=True. Script-style\n   action paths (sequence/, numeric) are always matched regardless of\n   this flag.\n4. Variables at every step (trigger sets and null entries are still\n   omitted): deduplicate=False.",
+    "description": "Get execution traces for automations and scripts to debug issues.\n\nTraces show what triggered a run, which conditions passed or failed,\nwhich actions executed (for 'choose', which branch was taken), any\nerrors, and variable values during execution. Home Assistant keeps\nonly the most recent runs of each automation or script (its\nstored_traces setting), so older runs are not available. The 'state'\nfield shows 'stopped' (completed), 'running', or an error state.\n\nUSAGE MODES:\n1. List recent traces (omit run_id): returns a summary of recent runs\n   with timestamps, triggers, and status. Use `offset` to page deeper\n   when `has_more` is true.\n   ha_get_automation_traces(\"automation.motion_light\")\n2. Get a detailed trace (provide run_id): full execution details\n   including trigger info, condition results, action trace with timing,\n   and context variables.\n   ha_get_automation_traces(\"automation.motion_light\", run_id=\"1705312800.123456\")\n3. Add logbook entries and context metadata: detailed=True. Script-style\n   action paths (sequence/, numeric) are always matched regardless of\n   this flag.\n4. Variables at every step (trigger sets and null entries are still\n   omitted): deduplicate=False.",
     "inputSchema": {
       "properties": {
         "automation_id": {
@@ -2760,7 +2760,7 @@
   {
     "name": "ha_get_system_health",
     "title": "Get System Health (incl. ZHA/Z-Wave/integration diagnostics)",
-    "description": "Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.\n\nReturns health check results from integrations, system resources, and\nconnectivity; available information varies by installation type and\nloaded integrations. Optional sections are selected with `include`.\n\nThe result also carries ``ha_mcp_update`` ``{current, latest,\nupdate_available}``, reporting whether a newer ha-mcp release is\navailable (PyPI for pip/Docker, the Supervisor store for the app) —\nproactively tell the user to upgrade. Present on every install type\nincluding the HA app; omitted for the ``unknown`` version, when\n``HA_MCP_DISABLE_UPDATE_CHECK`` is set, or when the update check itself\nfailed.\n\nEXAMPLES:\n- ha_get_system_health(include=\"repairs,zha_network,zwave_network,config_check\")\n- Page a list-valued diagnostics sub-tree: ha_get_system_health(include=\"diagnostics\", config_entry_id=\"abc\", diagnostics_data_path=\"<list-valued path>\", diagnostics_data_limit=10), then repeat with diagnostics_data_offset=10 while has_more is true.",
+    "description": "Get Home Assistant system health, including Zigbee (ZHA), Z-Wave JS, and per-integration diagnostics dumps.\n\nReturns health check results from integrations, system resources, and\nconnectivity; available information varies by installation type and\nloaded integrations. Optional sections are selected with `include`.\n\nThe result may include ``ha_mcp_update`` ``{current, latest,\nupdate_available}``. When update_available is true, tell the user a\nnewer ha-mcp release is available.\n\nEXAMPLES:\n- ha_get_system_health(include=\"repairs,zha_network,zwave_network,config_check\")\n- Page a list-valued diagnostics sub-tree: ha_get_system_health(include=\"diagnostics\", config_entry_id=\"abc\", diagnostics_data_path=\"<list-valued path>\", diagnostics_data_limit=10), then repeat with diagnostics_data_offset=10 while has_more is true.",
     "inputSchema": {
       "properties": {
         "include": {
@@ -3166,7 +3166,7 @@
       "properties": {
         "scene_id": {
           "type": "str | None",
-          "description": "Scene identifier",
+          "description": "Scene storage ID from listing (e.g. 'movie_night') or the scene's entity_id; an entity_id is resolved to the storage ID.",
           "default": null
         },
         "query": {
@@ -3303,7 +3303,7 @@
   {
     "name": "ha_config_get_script",
     "title": "Get Script Config",
-    "description": "Get Home Assistant script configuration.\n\nReturns the complete configuration for a script, including sequence, mode, fields, and other settings.\n\nThe returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.\n\nThe returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. Prefix handling matches `ha_config_get_automation` in behavior (mechanism differs: automations resolve via state lookup; scripts strip the prefix).\n\nEXAMPLES:\n- Get script (bare form): ha_config_get_script(\"morning_routine\")\n- Get script (entity_id form): ha_config_get_script(\"script.morning_routine\")\n\nFor detailed script configuration help, use ha_get_skill_guide.",
+    "description": "Get Home Assistant script configuration.\n\nReturns the complete configuration for a script, including sequence, mode, fields, and other settings.\n\nThe returned `config_hash` stays the same across consecutive reads of an unchanged config.\n\nThe returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. Prefix handling matches `ha_config_get_automation` in behavior (mechanism differs: automations resolve via state lookup; scripts strip the prefix).\n\nEXAMPLES:\n- Get script (bare form): ha_config_get_script(\"morning_routine\")\n- Get script (entity_id form): ha_config_get_script(\"script.morning_routine\")\n\nFor detailed script configuration help, use ha_get_skill_guide.",
     "inputSchema": {
       "properties": {
         "script_id": {
@@ -3651,6 +3651,7 @@
         },
         "parallel": {
           "type": "bool",
+          "description": "Dispatch operations concurrently (default) or one at a time when False.",
           "default": true
         },
         "selector": {
@@ -3676,6 +3677,7 @@
             "allow_inf_nan": false,
             "strict": true
           },
+          "description": "Selector mode only: confirmation wait in seconds for every resolved entity. In operations mode set timeout_seconds on each operation instead; a top-level value is rejected in operations mode.",
           "default": null
         },
         "validate_first": {
@@ -3683,6 +3685,7 @@
           "constraints": {
             "strict": true
           },
+          "description": "Selector mode only: report ENTITY_NOT_FOUND for a target that does not exist. In operations mode set validate_first on each operation instead; a top-level False is rejected in operations mode.",
           "default": true
         },
         "dry_run": {
@@ -3690,6 +3693,7 @@
           "constraints": {
             "strict": true
           },
+          "description": "Selector mode only; True is rejected in operations mode.",
           "default": false
         }
       }
@@ -3710,10 +3714,12 @@
     "inputSchema": {
       "properties": {
         "event_type": {
-          "type": "str"
+          "type": "str",
+          "description": "Event type to fire, e.g. 'my_custom_event'."
         },
         "data": {
           "type": "dict[str, Any] | None",
+          "description": "Optional event payload, delivered to subscribers as the event's data (trigger.event.data in an automation).",
           "default": null
         }
       },
@@ -3802,7 +3808,7 @@
   {
     "name": "ha_get_operation_status",
     "title": "Get Operation Status",
-    "description": "Get the status of one or more device operations with real-time WebSocket verification.\n\nThe timeout_seconds wait window bounds single and bulk checks. Bulk checks poll\nall operations concurrently under one shared window and report\nper-item failures inside detailed_results instead of aborting the\nbatch.\n\nUse this to track operations initiated by ha_bulk_control or ha_call_service.\nFor current entity states, use ha_get_state instead.",
+    "description": "Get the status of one or more device operations with real-time WebSocket verification.\n\nBulk checks poll all operations concurrently under one shared\ntimeout_seconds window and report per-item failures inside\ndetailed_results instead of aborting the batch.\n\nUse this to track the operation_ids that ha_bulk_control returns.\nFor current entity states, use ha_get_state instead.",
     "inputSchema": {
       "properties": {
         "operation_id": {
@@ -3815,6 +3821,7 @@
             "ge": 0,
             "allow_inf_nan": false
           },
+          "description": "Seconds to wait for a pending operation to finish before returning its status. 0 returns the current status at once.",
           "default": 10
         }
       },
@@ -3934,7 +3941,7 @@
   {
     "name": "ha_config_set_yaml",
     "title": "Raw YAML Config Edit",
-    "description": "Update raw YAML configuration in configuration.yaml, packages/*.yaml, or themes/*.yaml (LAST RESORT).\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n``template-guidelines.md`` ships under ``skill_content`` by default.\n\nDestructive, disabled by default. Prefer the dedicated tools:\nha_config_set_helper for template sensors and every other helper type,\nha_config_set_automation / ha_config_set_script / ha_config_set_scene\nfor storage-mode items.\n\nIntended for YAML-only integrations with no config-flow or API\nequivalent (command_line, rest, shell_command, notify platforms),\nfor integrations with significant YAML-only configuration (knx\nentities in package files), for registering YAML-mode dashboards via\n``lovelace.dashboards.<url_path>`` (no other ``lovelace.*`` keys),\nand for editing theme files in ``themes/*.yaml``. Themes only load when\nconfiguration.yaml carries the ``frontend: themes:`` include (e.g.\n``!include_dir_merge_named themes``); this tool cannot add that include\n(``frontend`` is not an allowed key). ``automation``, ``script`` and\n``scene`` keys are accepted only when ``file`` is a ``packages/*.yaml``;\nwrites of those keys to ``configuration.yaml`` are rejected — use the\nstorage-mode tools.\n\nCheck ``post_action`` in the response: most keys need a full HA\nrestart. For ``themes/*.yaml`` this tool *performs* the reload itself\n(``frontend.reload_themes``), so ``post_action`` is ``reload_performed``\n(or ``reload_available`` plus ``reload_error`` if that reload failed).\nFor template, mqtt, group, automation, script, and scene it only\n*advertises* the reload service (``post_action: reload_available`` with\na ``reload_service`` to call yourself); the edit is on disk but not yet\nlive. Preserves YAML comments and HA tags (``!include``,\n``!secret``) on round-trip; ``replace`` swaps the subtree as-is.\n\nTwo-step confirmation (default ON, toggle ENABLE_YAML_EDIT_CONFIRM /\nServer Settings): the first call returns ``preview: true`` with a\nunified ``diff`` of exactly what would change on disk and a\n``confirm_token`` — nothing is written. Review the diff, then repeat\nthe identical call adding ``confirm_token`` to apply. Every applied\nwrite also returns the final ``diff``. A token mismatch means the file\nchanged since the preview (or the token was wrong); use the freshly\nreturned token.",
+    "description": "Update raw YAML configuration in configuration.yaml, packages/*.yaml, or themes/*.yaml (LAST RESORT).\n\nMUST call ha_get_skill_guide OR refer to your locally installed skills first.\n``template-guidelines.md`` ships under ``skill_content`` by default.\n\nDestructive, disabled by default. Prefer the dedicated tools:\nha_config_set_helper for template sensors and every other helper type,\nha_config_set_automation / ha_config_set_script / ha_config_set_scene\nfor storage-mode items.\n\nIntended for YAML-only integrations with no config-flow or API\nequivalent (command_line, rest, shell_command, notify platforms),\nfor integrations with significant YAML-only configuration (knx\nentities in package files), for registering YAML-mode dashboards via\n``lovelace.dashboards.<url_path>`` (no other ``lovelace.*`` keys),\nand for editing theme files in ``themes/*.yaml``. Themes only load when\nconfiguration.yaml carries the ``frontend: themes:`` include (e.g.\n``!include_dir_merge_named themes``); this tool cannot add that include\n(``frontend`` is not an allowed key). ``automation``, ``script`` and\n``scene`` keys are accepted only when ``file`` is a ``packages/*.yaml``\nand the operator has turned on that key's packages setting (each is\noff by default); writes of those keys to ``configuration.yaml`` are\nrejected; use the storage-mode tools.\n\nCheck ``post_action`` in the response: most keys need a full HA\nrestart. For ``themes/*.yaml`` this tool *performs* the reload itself\n(``frontend.reload_themes``), so ``post_action`` is ``reload_performed``\n(or ``reload_available`` plus ``reload_error`` if that reload failed).\nFor template, mqtt, group, automation, script, and scene it only\n*advertises* the reload service (``post_action: reload_available`` with\na ``reload_service`` to call yourself); the edit is on disk but not yet\nlive. Preserves YAML comments and HA tags (``!include``,\n``!secret``) on round-trip; ``replace`` swaps the subtree as-is.\n\nTwo-step confirmation (default ON, toggle ENABLE_YAML_EDIT_CONFIRM /\nServer Settings): the first call returns ``preview: true`` with a\nunified ``diff`` of exactly what would change on disk and a\n``confirm_token`` — nothing is written. Review the diff, then repeat\nthe identical call adding ``confirm_token`` to apply. Every applied\nwrite also returns the final ``diff``. A token mismatch means the file\nchanged since the preview (or the token was wrong); use the freshly\nreturned token.",
     "inputSchema": {
       "properties": {
         "yaml_path": {
