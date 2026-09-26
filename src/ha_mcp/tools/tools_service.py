@@ -2145,17 +2145,26 @@ class ServiceTools:
                 ),
             ),
         ],
-        timeout_seconds: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 10,
+        timeout_seconds: Annotated[
+            float,
+            Field(
+                ge=0,
+                allow_inf_nan=False,
+                description=(
+                    "Seconds to wait for a pending operation to finish before "
+                    "returning its status. 0 returns the current status at once."
+                ),
+            ),
+        ] = 10,
     ) -> dict[str, Any]:
         """
         Get the status of one or more device operations with real-time WebSocket verification.
 
-        The timeout_seconds wait window bounds single and bulk checks. Bulk checks poll
-        all operations concurrently under one shared window and report
-        per-item failures inside detailed_results instead of aborting the
-        batch.
+        Bulk checks poll all operations concurrently under one shared
+        timeout_seconds window and report per-item failures inside
+        detailed_results instead of aborting the batch.
 
-        Use this to track operations initiated by ha_bulk_control or ha_call_service.
+        Use this to track the operation_ids that ha_bulk_control returns.
         For current entity states, use ha_get_state instead.
         """
         try:
@@ -2211,7 +2220,15 @@ class ServiceTools:
             # supplies the runtime default without a `| None` mypy would then
             # require type-narrowing for at every use below `selector is None`.
         ] = cast(Any, None),
-        parallel: bool = True,
+        parallel: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Dispatch operations concurrently (default) or one at a "
+                    "time when False."
+                ),
+            ),
+        ] = True,
         ctx: Context | None = None,
         selector: Annotated[
             SkipValidation[BulkControlSelector] | None,
@@ -2234,10 +2251,38 @@ class ServiceTools:
         ] = None,
         timeout_seconds: Annotated[
             float | None,
-            Field(ge=0, le=60, allow_inf_nan=False, strict=True),
+            Field(
+                ge=0,
+                le=60,
+                allow_inf_nan=False,
+                strict=True,
+                description=(
+                    "Selector mode only: confirmation wait in seconds for every "
+                    "resolved entity. In operations mode set timeout_seconds on "
+                    "each operation instead; a top-level value is rejected in "
+                    "operations mode."
+                ),
+            ),
         ] = None,
-        validate_first: Annotated[bool, Field(strict=True)] = True,
-        dry_run: Annotated[bool, Field(strict=True)] = False,
+        validate_first: Annotated[
+            bool,
+            Field(
+                strict=True,
+                description=(
+                    "Selector mode only: report ENTITY_NOT_FOUND for a target "
+                    "that does not exist. In operations mode set "
+                    "validate_first on each operation instead; a top-level "
+                    "False is rejected in operations mode."
+                ),
+            ),
+        ] = True,
+        dry_run: Annotated[
+            bool,
+            Field(
+                strict=True,
+                description="Selector mode only; True is rejected in operations mode.",
+            ),
+        ] = False,
     ) -> dict[str, Any]:
         """Manage explicit operations or one deterministic structural bulk action.
 
@@ -2449,8 +2494,22 @@ class ServiceTools:
     @log_tool_usage
     async def ha_call_event(
         self,
-        event_type: str,
-        data: Annotated[dict[str, Any] | None, JSON_STRING_COERCION] = None,
+        event_type: Annotated[
+            str,
+            Field(
+                description="Event type to fire, e.g. 'my_custom_event'.",
+            ),
+        ],
+        data: Annotated[
+            dict[str, Any] | None,
+            JSON_STRING_COERCION,
+            Field(
+                description=(
+                    "Optional event payload, delivered to subscribers as the "
+                    "event's data (trigger.event.data in an automation)."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
         """Execute a custom event on the Home Assistant event bus.
 

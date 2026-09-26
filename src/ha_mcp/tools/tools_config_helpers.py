@@ -4422,8 +4422,8 @@ class HelperConfigTools:
                     "Ignored for helper_type='config_subentry', which uses "
                     "entry_id/subentry_type/subentry_id instead. For flow-based "
                     "helper updates (template, group, utility_meter, ...), this is "
-                    "typically ignored because options flows don't expose renaming. "
-                    "Rename a flow helper by deleting and recreating instead."
+                    "ignored because options flows don't expose renaming; change the "
+                    "resulting entity's display name with ha_set_entity(name=...)."
                 ),
                 default=None,
             ),

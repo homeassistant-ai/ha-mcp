@@ -118,9 +118,10 @@ class TraceTools:
 
         Traces show what triggered a run, which conditions passed or failed,
         which actions executed (for 'choose', which branch was taken), any
-        errors, and variable values during execution. Traces are stored for a
-        limited time by Home Assistant. The 'state' field shows 'stopped'
-        (completed), 'running', or an error state.
+        errors, and variable values during execution. Home Assistant keeps
+        only the most recent runs of each automation or script (its
+        stored_traces setting), so older runs are not available. The 'state'
+        field shows 'stopped' (completed), 'running', or an error state.
 
         USAGE MODES:
         1. List recent traces (omit run_id): returns a summary of recent runs

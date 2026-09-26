@@ -1922,7 +1922,7 @@ class DashboardConfigTools:
           On installs without the ha_mcp_tools component, the default (unnamed)
           dashboard is also not searched — only dashboards with a url_path are.
 
-        Return a stable `config_hash` (Get and Search modes only; not present in list_only mode) across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
+        Get and Search modes return a `config_hash` (list_only does not) that stays the same across consecutive reads of an unchanged config.
 
         EXAMPLES:
         - List all dashboards: ha_config_get_dashboard(list_only=True)
@@ -2852,8 +2852,8 @@ class DashboardConfigTools:
 
         Use ha_config_get_dashboard(entity_id=...) to get the path of any card,
         and ha_search / ha_get_overview to find entity IDs — never guess them.
-        For visual re-checks after the write use ha_get_dashboard_screenshot
-        instead of re-sending config.
+        For visual re-checks after the write, use ha_get_dashboard_screenshot
+        (when available) instead of re-sending config.
 
         title/icon/require_admin/show_in_sidebar can be updated in a
         metadata-only call or alongside a full config replacement; with

@@ -182,7 +182,8 @@ class CalendarTools:
         end: Annotated[
             str | None,
             Field(
-                description="End datetime in ISO format (default: 7 days from start)",
+                description="End datetime in ISO format (default: 7 days from now, "
+                "not from start; pass end whenever you pass start)",
                 default=None,
             ),
         ] = None,
@@ -193,8 +194,10 @@ class CalendarTools:
     ) -> dict[str, Any]:
         """Get calendar events from a calendar entity within a time range.
 
-        Returns each event's summary, start, end, description and location. To
-        find calendar entities, use ha_search(domain_filter='calendar').
+        Returns each event's summary, start, end, description and location,
+        plus the uid, recurrence_id and rrule when the calendar provides them
+        (the edit and remove tools use uid and recurrence_id). To find calendar
+        entities, use ha_search(domain_filter='calendar').
 
         EXAMPLES:
         - Next week (defaults): ha_config_get_calendar_events("calendar.family")

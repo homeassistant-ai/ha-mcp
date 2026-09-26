@@ -133,7 +133,7 @@ class ConfigScriptTools:
 
         Returns the complete configuration for a script, including sequence, mode, fields, and other settings.
 
-        The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
+        The returned `config_hash` stays the same across consecutive reads of an unchanged config.
 
         The returned `script_id` is the canonical bare storage key resolved by the REST client (matching what `ha_config_set_script` / `ha_config_remove_script` expect), falling back to the input identifier on the rare path where the REST envelope omits it. Prefix handling matches `ha_config_get_automation` in behavior (mechanism differs: automations resolve via state lookup; scripts strip the prefix).
 

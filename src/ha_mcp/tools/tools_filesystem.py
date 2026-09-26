@@ -582,8 +582,8 @@ class FilesystemTools:
         - `custom_templates/` - Jinja2 template files
         - `dashboards/` - YAML-mode dashboard files
         - `blueprints/` - Automation/script blueprint sources (read-only)
-        - Your configured `packages/` folder, when `homeassistant: packages:` is
-          set (the folder name you bound, default `packages/`)
+        - `packages/`, plus the folder bound by `homeassistant: packages:` when
+          it has another name
         - Plus any custom directories OR HAOS sibling volumes (`/share`,
           `/media`, `/ssl`, `/backup`) configured in the ha-mcp settings UI
         Path traversal (../) is blocked.
@@ -699,7 +699,8 @@ class FilesystemTools:
         **Allowed Read Paths:**
         - `configuration.yaml`, `automations.yaml`, `scripts.yaml`, `scenes.yaml`
         - `secrets.yaml` (values masked)
-        - `packages/*.yaml`
+        - `*.yaml` at any depth under `packages/` and under the folder bound by
+          `homeassistant: packages:`
         - `home-assistant.log`, `home-assistant.log.fault` (tail only)
         - `www/**`, `themes/**`, `custom_templates/**`, `dashboards/**`, `blueprints/**`
         - `custom_components/**/*.py` (read-only)
@@ -895,7 +896,9 @@ class FilesystemTools:
     ) -> dict[str, Any]:
         """Delete a file from allowed directories in the Home Assistant config.
 
-        Permanently removes a file; this cannot be undone. Allowed directories:
+        The file's text is snapshotted first, so ha_manage_backup(scope="edits")
+        can restore it; a binary file is not snapshotted and its deletion is
+        permanent. Allowed directories:
         `www/`, `themes/`, `custom_templates/`, `dashboards/`, plus any custom
         directories OR HAOS sibling volumes (`/share`, `/media`, `/ssl`,
         `/backup`) configured in the ha-mcp settings UI. Configuration files

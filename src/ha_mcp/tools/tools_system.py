@@ -644,13 +644,9 @@ class SystemTools:
         connectivity; available information varies by installation type and
         loaded integrations. Optional sections are selected with `include`.
 
-        The result also carries ``ha_mcp_update`` ``{current, latest,
-        update_available}``, reporting whether a newer ha-mcp release is
-        available (PyPI for pip/Docker, the Supervisor store for the app) —
-        proactively tell the user to upgrade. Present on every install type
-        including the HA app; omitted for the ``unknown`` version, when
-        ``HA_MCP_DISABLE_UPDATE_CHECK`` is set, or when the update check itself
-        failed.
+        The result may include ``ha_mcp_update`` ``{current, latest,
+        update_available}``. When update_available is true, tell the user a
+        newer ha-mcp release is available.
 
         EXAMPLES:
         - ha_get_system_health(include="repairs,zha_network,zwave_network,config_check")

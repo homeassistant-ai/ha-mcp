@@ -313,7 +313,11 @@ class ConfigSceneTools:
         self,
         scene_id: Annotated[
             str | None,
-            Field(description="Scene identifier"),
+            Field(
+                description="Scene storage ID from listing (e.g. 'movie_night') "
+                "or the scene's entity_id; an entity_id is resolved to the "
+                "storage ID."
+            ),
         ] = None,
         query: Annotated[
             str | None, Field(description="Filter scene names or IDs")
