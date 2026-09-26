@@ -16,7 +16,7 @@ inputs:
   codex-version:
     description: Exact @openai/codex version to install.
     required: false
-    default: "0.153.4"
+    default: "0.157.1"
   working-directory:
     description: Working directory within the workspace, absolute or workspace-relative.
     required: false

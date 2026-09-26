@@ -3,7 +3,7 @@ import { prose } from "../issue-intake/intake.mjs";
 
 export const MODELS = {
   astra: "gpt-6-astra",
-  sol: "gpt-5.6-sol",
+  sol: "gpt-6-sol",
   terra: "gpt-5.6-terra",
 };
 export const REVIEW_BOTS = [
@@ -79,7 +79,7 @@ export function stateFrom(comments, app) {
     state.root < 1 ||
     !Number.isSafeInteger(state.rounds) ||
     state.rounds < 0 ||
-    !Object.values(MODELS).includes(state.model) ||
+    ![...Object.values(MODELS), "gpt-5.6-sol"].includes(state.model) ||
     !Number.isSafeInteger(state.commandId) ||
     typeof state.summary !== "string" ||
     state.summary.length > 12000 ||

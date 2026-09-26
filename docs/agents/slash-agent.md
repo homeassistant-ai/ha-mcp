@@ -14,10 +14,12 @@ The command explicitly authorizes this lifecycle through readiness, including
 publication and review replies. A separate ready command is not needed; pause
 remains available before the readiness transition.
 
-The model mapping is fixed: Astra uses `gpt-6-astra`, Sol uses `gpt-5.6-sol`,
-and Terra uses `gpt-5.6-terra`. An issue starts `agents/issue-N` from the default
-branch and creates a draft PR when the result changes the repository. An
-unchanged result instead completes in the App-owned issue checkpoint, whose
+The model mapping is fixed: Astra uses `gpt-6-astra`, Sol uses `gpt-6-sol`,
+and Terra uses `gpt-5.6-terra`. An existing checkpoint that records the former
+`gpt-5.6-sol` model remains readable; a new `/sol` command selects `gpt-6-sol`.
+An issue starts `agents/issue-N` from the default branch and creates a draft PR
+when the result changes the repository. An unchanged result instead completes
+in the App-owned issue checkpoint, whose
 summary is the public answer, without creating a branch or PR. A blocked result
 uses the same comment to explain the maintainer input it needs.
 A command on an existing same-repository PR works on its current branch. Forks,

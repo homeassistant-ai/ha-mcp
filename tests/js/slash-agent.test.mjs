@@ -301,7 +301,7 @@ const green = (api) => {
 
 test("only anchored, nonempty slash commands select supported models", () => {
   assert.equal(command("/astra implement this").model, "gpt-6-astra");
-  assert.equal(command("/sol fix it\r\nkeep scope").model, "gpt-5.6-sol");
+  assert.equal(command("/sol fix it\r\nkeep scope").model, "gpt-6-sol");
   assert.equal(command("/terra explain this").model, "gpt-5.6-terra");
   for (const text of [
     "/astra",
@@ -574,6 +574,18 @@ test("four published rounds exhaust the budget until a new maintainer command", 
   const resumed = initial(api);
   assert.equal(resumed.decision.mode, "code");
   assert.equal(resumed.decision.rounds, 0);
+});
+
+test("existing Sol checkpoints remain readable while new Sol commands use GPT-6", () => {
+  const api = new FakeAPI();
+  const state = start(api);
+  state.model = "gpt-5.6-sol";
+  api.comments.find((comment) => comment.id === 100).body = renderState(state, api.repository);
+  assert.equal(stateFrom(api.edits(api.comments), APP).model, "gpt-5.6-sol");
+  api.command.body = "/sol resume";
+  api.command.updated_at = "2026-09-15T21:00:00Z";
+  const plan = initial(api);
+  assert.equal(plan.decision.parsed.model, "gpt-6-sol");
 });
 
 test("stale work, repo/App mismatch and protected branches perform no publication", () => {
