@@ -532,7 +532,8 @@ jobs:
           echo "::error::Unit tests wrote to ~/.ha-mcp"
           exit 1
         fi
-        if pgrep -fa '[s]tdio_settings_sidecar'; then
+        # procps (pgrep) is not in the slim image; read /proc directly.
+        if grep -ls '[s]tdio_settings_sidecar' /proc/[0-9]*/cmdline; then
           echo "::error::Unit tests left a settings sidecar running"
           exit 1
         fi

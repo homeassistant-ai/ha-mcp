@@ -102,21 +102,26 @@ def _isolated_data_dir(tmp_path_factory, monkeypatch):
     """Give every unit test its own empty ``HA_MCP_CONFIG_DIR``.
 
     Without it, tests share the session data dir, so tool config, usage logs
-    or OAuth clients one test writes are visible to the next. Tests that need
-    a specific directory still set ``HA_MCP_CONFIG_DIR`` themselves.
+    or OAuth clients one test writes are visible to the next. The cached
+    ``Settings`` is reset too, since it holds the feature flags read from the
+    previous test's directory. Tests that need a specific directory still set
+    ``HA_MCP_CONFIG_DIR`` themselves.
     """
     monkeypatch.setenv(
         "HA_MCP_CONFIG_DIR", str(tmp_path_factory.mktemp("ha-mcp-config"))
     )
     try:
+        from ha_mcp.config import _reset_global_settings
         from ha_mcp.utils.data_paths import get_data_dir
     except ImportError:
         # ha_mcp not importable in this test run; nothing to clear.
         yield
         return
     get_data_dir.cache_clear()
+    _reset_global_settings()
     yield
     get_data_dir.cache_clear()
+    _reset_global_settings()
 
 
 @pytest.fixture(autouse=True)
