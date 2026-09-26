@@ -896,9 +896,9 @@ class FilesystemTools:
     ) -> dict[str, Any]:
         """Delete a file from allowed directories in the Home Assistant config.
 
-        The file's text is snapshotted first, so ha_manage_backup(scope="edits")
-        can restore it; a binary file is not snapshotted and its deletion is
-        permanent. Allowed directories:
+        ha_manage_backup(scope="edits") can restore a text file from its most
+        recent auto-backup snapshot; a binary file has no snapshot and its
+        deletion is permanent. Allowed directories:
         `www/`, `themes/`, `custom_templates/`, `dashboards/`, plus any custom
         directories OR HAOS sibling volumes (`/share`, `/media`, `/ssl`,
         `/backup`) configured in the ha-mcp settings UI. Configuration files

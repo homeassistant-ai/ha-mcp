@@ -1922,7 +1922,7 @@ class DashboardConfigTools:
           On installs without the ha_mcp_tools component, the default (unnamed)
           dashboard is also not searched — only dashboards with a url_path are.
 
-        Get and Search modes return a `config_hash` (list_only does not) that stays the same across consecutive reads of an unchanged config.
+        MODE 2 (Search) and MODE 3 (Get) return a `config_hash` that stays the same across consecutive reads of an unchanged config; MODE 1 and MODE 4 do not return one.
 
         EXAMPLES:
         - List all dashboards: ha_config_get_dashboard(list_only=True)

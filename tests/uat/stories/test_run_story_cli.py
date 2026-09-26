@@ -24,3 +24,25 @@ def test_several_story_paths_run_in_one_invocation():
     assert result.returncode == 0, f"stderr: {result.stderr}"
     assert "# t01:" in result.stdout
     assert "# t02:" in result.stdout
+
+
+def test_arguments_after_double_dash_are_not_story_paths():
+    """Arguments after ``--`` go to run_uat.py. Reading them as story paths
+    breaks the pass-through channel (e.g. ``story.yaml -- --timeout 60``)."""
+    story = next(CATALOG.glob("t01_*.yaml"))
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(RUN_STORY),
+            "--dry-run",
+            str(story),
+            "--",
+            "--timeout",
+            "60",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+    assert result.stdout.count("# t01:") == 1

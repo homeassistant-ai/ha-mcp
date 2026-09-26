@@ -31,6 +31,9 @@ Usage:
     # Keep container alive after run (for verification/debugging)
     uv run python tests/uat/stories/run_story.py --all --agents gemini --keep-container
 
+    # Pass extra arguments to run_uat.py after --
+    uv run python tests/uat/stories/run_story.py --all --agents gemini -- --timeout 600
+
     # Just print the BAT scenario JSON
     uv run python tests/uat/stories/run_story.py tests/uat/stories/catalog/s01_automation_sunset_lights.yaml --dry-run
 """
@@ -1578,6 +1581,18 @@ async def run_stories(
     return _log_run_summary(all_results, backend_aborted, run_start, args)
 
 
+def _split_passthrough(argv: list[str]) -> tuple[list[str], list[str]]:
+    """Split argv at ``--`` into (run_story args, run_uat.py pass-through).
+
+    Both the story paths and the pass-through take any number of values, so
+    argparse cannot tell them apart; everything after ``--`` is pass-through.
+    """
+    if "--" not in argv:
+        return argv, []
+    split = argv.index("--")
+    return argv[:split], argv[split + 1 :]
+
+
 def main() -> None:
     parser = SuggestingArgumentParser(
         description="Run user acceptance stories via BAT",
@@ -1652,8 +1667,9 @@ def main() -> None:
             "(local model); override with --mcp-env ENABLE_TOOL_SEARCH=false."
         ),
     )
-    parser.add_argument("extra_args", nargs="*", help="Extra args passed to run_uat.py")
-    args = parser.parse_args()
+    argv, extra_args = _split_passthrough(sys.argv[1:])
+    args = parser.parse_args(argv)
+    args.extra_args = extra_args
 
     # Validate --base-url is provided when using the openai agent
     agent_list = [a.strip() for a in args.agents.split(",")]
