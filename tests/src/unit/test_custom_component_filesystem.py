@@ -11,6 +11,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -2609,3 +2610,59 @@ class TestListingHidesDeniedNames:
         result = _list_files_sync(tmp_path / "www", tmp_path, None)
 
         assert [f["name"] for f in result["files"]] == ["ok.txt"]
+
+
+class TestBinaryFileDeleteBackup:
+    """The pre-delete snapshot reads the file through the component's
+    read_file. For a binary file that read fails; the mandatory capture must
+    skip the snapshot, or ha_delete_file refuses to delete an image in www/.
+    Uses the component's real read_file handler so the test breaks if its
+    binary error wording drifts from what the capture side recognises."""
+
+    async def test_mandatory_capture_skips_binary_file(self, tmp_path, monkeypatch):
+        import custom_components.ha_mcp_tools as comp
+        from ha_mcp import backup_manager as bm
+
+        (tmp_path / "www").mkdir()
+        (tmp_path / "www" / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\x00")
+
+        monkeypatch.setattr(comp, "_caller_token_ok", lambda hass, call: True)
+        monkeypatch.setattr(comp, "_current_extra_dirs", lambda hass: [])
+        monkeypatch.setattr(
+            comp, "_detect_package_dirs", AsyncMock(return_value={"packages"})
+        )
+
+        async def _run_in_executor(func, *args):
+            return func(*args)
+
+        hass = MagicMock()
+        hass.config.config_dir = str(tmp_path)
+        hass.async_add_executor_job = _run_in_executor
+        read_file = comp._build_read_file_handler(hass)
+
+        async def _call_service(_client, service, data):
+            assert service == "read_file"
+            call = MagicMock()
+            call.data = data
+            return await read_file(call)
+
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_filesystem.call_mcp_tools_service", _call_service
+        )
+        monkeypatch.setattr(
+            "ha_mcp.tools.util_helpers.unwrap_service_response", lambda r: r
+        )
+
+        settings = SimpleNamespace(
+            enable_auto_backup=True,
+            auto_backup_throttle_minutes=0,
+            auto_backup_retain_per_entity=5,
+            auto_backup_dir=str(tmp_path / "backups"),
+        )
+        client = object()
+        mgr = bm.BackupManager(settings, client)
+        bm.register_default_handlers(mgr, client)
+        assert (
+            await mgr.maybe_snapshot("file", "www/logo.png", mandatory=True, force=True)
+            is None
+        )

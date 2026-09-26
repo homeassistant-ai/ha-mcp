@@ -1052,7 +1052,10 @@ class RegistryTools:
         disabled_by: Annotated[
             str | None,
             Field(
-                description="Set to 'user' to disable, or None/empty string to enable",
+                description=(
+                    "Set to 'user' to disable the device, or '' (empty string) "
+                    "to enable it. Omit to leave the disabled state unchanged."
+                ),
                 default=None,
             ),
         ] = None,
@@ -1139,8 +1142,7 @@ class RegistryTools:
         - Active devices will typically be re-added by their integration
         - Associated entities may also be removed
 
-        This uses the config entry removal which is the safe way to remove devices.
-        If the device has multiple config entries, they must all be removed.
+        Works only when the integration supports removing devices.
 
         EXAMPLES:
         - Remove orphaned device: ha_remove_device("abc123def456")

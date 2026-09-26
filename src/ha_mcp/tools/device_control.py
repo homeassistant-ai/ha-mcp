@@ -137,7 +137,7 @@ class DeviceControlTools:
                         f"Invalid entity ID format: {entity_id}",
                         suggestions=[
                             "Entity ID must be in format 'domain.entity_name'",
-                            "Use smart_entity_search to find correct entity ID",
+                            "Use ha_search to find the correct entity ID",
                         ],
                         context={"entity_id": entity_id, "action": action},
                     )
@@ -211,12 +211,12 @@ class DeviceControlTools:
                     "command_sent": True,
                     "operation_id": operation_id,
                     "status": "pending_verification",
-                    "message": f"Command sent to {entity_id}. Use get_device_operation_status() to verify completion.",
+                    "message": f"Command sent to {entity_id}. Use ha_get_operation_status to verify completion.",
                     "service_call": service_call,
                     "expected_state": expected_state,
                     "timeout_seconds": timeout_seconds,
                     "follow_up": {
-                        "tool": "get_device_operation_status",
+                        "tool": "ha_get_operation_status",
                         "parameters": {
                             "operation_id": operation_id,
                             "timeout_seconds": timeout_seconds,
@@ -292,7 +292,7 @@ class DeviceControlTools:
                         ErrorCode.ENTITY_NOT_FOUND,
                         f"Entity not found: {entity_id}",
                         suggestions=[
-                            "Use smart_entity_search to find the correct entity",
+                            "Use ha_search to find the correct entity",
                             "Check entity is not disabled in Home Assistant",
                         ],
                         context={"entity_id": entity_id, "action": action},
@@ -509,7 +509,7 @@ class DeviceControlTools:
                     suggestions=[
                         "Operation may have been cleaned up after completion",
                         "Check operation ID spelling",
-                        "Use control_device_smart to start new operation",
+                        "Use ha_bulk_control to start a new operation",
                     ],
                     context={"operation_id": operation_id},
                 )
@@ -535,7 +535,7 @@ class DeviceControlTools:
                             suggestions=[
                                 "Operation may have completed and been purged before "
                                 + "verification finished",
-                                "Use control_device_smart to start new operation",
+                                "Use ha_bulk_control to start a new operation",
                             ],
                             context={"operation_id": operation_id},
                         )
@@ -620,7 +620,7 @@ class DeviceControlTools:
                 "tips": [
                     "Operation will auto-complete when device state changes",
                     "Physical devices may take 1-3 seconds to respond",
-                    "Call this function again to check for updates",
+                    "Call ha_get_operation_status again to check for updates",
                 ],
             }
 
@@ -935,7 +935,7 @@ class DeviceControlTools:
                 total=len(valid_operations),
                 message=(
                     f"dispatched {len(operation_ids)} op(s); "
-                    "use get_bulk_operation_status to verify completion"
+                    "use ha_get_operation_status to verify completion"
                 ),
             )
 
@@ -1539,7 +1539,7 @@ class DeviceControlTools:
             "follow_up": (
                 {
                     "message": (
-                        f"Use get_bulk_operation_status() to check all "
+                        f"Use ha_get_operation_status(operation_id=[...]) to check all "
                         f"{len(operation_ids)} operations"
                     ),
                     "operation_ids": operation_ids,
@@ -1587,7 +1587,7 @@ class DeviceControlTools:
                     ErrorCode.VALIDATION_MISSING_PARAMETER,
                     "No operation IDs provided",
                     suggestions=[
-                        "Provide a list of operation IDs from control_device_smart"
+                        "Provide the operation_ids that ha_bulk_control returned"
                     ],
                 )
             )

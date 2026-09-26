@@ -562,7 +562,7 @@ class AutomationConfigTools:
 
         Returns the complete configuration including triggers, conditions, actions, and mode settings.
 
-        The returned `config_hash` is stable across consecutive reads of an unchanged config — `compute_config_hash` documents the underlying contract.
+        The returned `config_hash` stays the same across consecutive reads of an unchanged config.
 
         The returned `automation_id` is the resolved entity_id (canonical
         form, e.g. `automation.morning_routine`) when the registry lookup

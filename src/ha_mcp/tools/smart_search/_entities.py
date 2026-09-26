@@ -601,8 +601,7 @@ class EntitySearchMixin(_SearchBase):
                 e,
                 suggestions=[
                     "Check Home Assistant connection",
-                    "Try common room names: salon, chambre, cuisine",
-                    "Use smart_entity_search to find entities first",
+                    "Use ha_search to find entities first",
                 ],
                 context={"area_query": area_query},
             )

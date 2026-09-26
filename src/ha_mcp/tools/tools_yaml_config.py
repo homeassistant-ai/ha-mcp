@@ -397,9 +397,10 @@ class YamlConfigTools:
         configuration.yaml carries the ``frontend: themes:`` include (e.g.
         ``!include_dir_merge_named themes``); this tool cannot add that include
         (``frontend`` is not an allowed key). ``automation``, ``script`` and
-        ``scene`` keys are accepted only when ``file`` is a ``packages/*.yaml``;
-        writes of those keys to ``configuration.yaml`` are rejected — use the
-        storage-mode tools.
+        ``scene`` keys are accepted only when ``file`` is a ``packages/*.yaml``
+        and the operator has turned on that key's packages setting (each is
+        off by default); writes of those keys to ``configuration.yaml`` are
+        rejected; use the storage-mode tools.
 
         Check ``post_action`` in the response: most keys need a full HA
         restart. For ``themes/*.yaml`` this tool *performs* the reload itself

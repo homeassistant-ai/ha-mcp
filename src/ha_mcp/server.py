@@ -873,8 +873,8 @@ class HomeAssistantSmartMCPServer:
             "see ha_get_skill_guide."
         ),
         "ha_config_set_yaml": (
-            "Update raw YAML in configuration.yaml or packages/*.yaml "
-            "via add / replace / remove on a single top-level key "
+            "Update raw YAML in configuration.yaml, packages/*.yaml or "
+            "themes/*.yaml via add / replace / remove on a single top-level key "
             "(LAST RESORT). By default the first call returns a diff "
             "preview plus confirm_token; repeat with confirm_token to "
             "apply.\n\n"
@@ -884,8 +884,9 @@ class HomeAssistantSmartMCPServer:
             "should be preferred. Use this only for YAML-only "
             "integrations (command_line, rest, shell_command, notify), "
             "YAML-heavy integrations like knx (in packages/*.yaml), "
-            "or registering YAML-mode dashboards via "
-            "`lovelace.dashboards.<url_path>`. Most edits require a "
+            "registering YAML-mode dashboards via "
+            "`lovelace.dashboards.<url_path>`, or editing theme files in "
+            "themes/*.yaml (reloaded automatically). Most edits require a "
             "full HA restart; template, mqtt, and group support "
             "reload.\n\n"
             "For routing guidance and the full allowlist, see "
