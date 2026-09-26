@@ -404,31 +404,6 @@ def _split_component_entry_row(
     return entry, subentries
 
 
-def _flatten_option_sections(options: dict[str, Any]) -> dict[str, Any]:
-    """Additively surface one level of nested option *sections* at the top level.
-
-    HA's OptionsFlow groups related fields under a *section* key, so a template
-    helper persists e.g. ``{"advanced_options": {"availability": "..."}}``. The
-    legacy OptionsFlow-derived read flattens those sections — exposing
-    ``options["availability"]`` directly — whereas the component serves the RAW
-    persisted mapping with the section nesting intact. To keep the two read paths
-    interchangeable for consumers, copy each nested section's leaf keys up to the
-    top level WITHOUT overwriting an existing top-level key (first section wins on
-    a cross-section collision) and WITHOUT removing the nested original (raw
-    nesting preserved for fidelity). Returns a NEW dict; the input is not mutated.
-    A non-dict is returned unchanged.
-    """
-    if not isinstance(options, dict):
-        return options
-    flattened: dict[str, Any] = dict(options)
-    for value in options.values():
-        if isinstance(value, dict):
-            for leaf_key, leaf_value in value.items():
-                if leaf_key not in flattened:
-                    flattened[leaf_key] = leaf_value
-    return flattened
-
-
 async def _get_entry_id_for_flow_helper(
     client: Any,
     helper_type: str,
@@ -765,15 +740,17 @@ class IntegrationTools:
         STATES: 'loaded', 'setup_error', 'setup_retry', 'not_loaded',
         'failed_unload', 'migration_error'.
 
-        OPTIONS: ``options`` reflect the entry's persisted values; a field that
-        was never set may be absent (rather than shown at its schema default).
-        Values that match a ``secrets.yaml`` entry are returned as
-        ``"**redacted**"``. Use ``include_schema=True`` to see every editable
-        field and its default/type. Nested option *sections* (e.g. a template
-        helper's ``advanced_options``) are additively flattened one level —
-        each section's leaf keys are copied to the top of ``options`` (mirroring
-        the OptionsFlow-derived read) while the raw nested section is preserved
-        for fidelity, and an existing top-level key is never overwritten.
+        OPTIONS: ``options`` reflect the entry's persisted values. Values that
+        match a ``secrets.yaml`` entry are returned as ``"**redacted**"``. Use
+        ``include_schema=True`` to see every editable field and its
+        default/type. The shape depends on the read path, which the response
+        does not name: when the ha_mcp_tools custom component serves the read,
+        ``options`` are the stored mapping as-is, so a field never set may be
+        absent and a section's fields stay nested under the section key (e.g. a
+        template helper's ``additional_options``). Otherwise they are read from
+        the options flow form, which shows unset fields at their schema default
+        and lists a section's fields at the top level. Check both places for a
+        section field.
 
         Each entry carries ``log_level``: the canonical Python logger level name
         (``DEBUG``/``INFO``/``WARNING``/``ERROR``/``CRITICAL``) when the
@@ -1145,10 +1122,6 @@ class IntegrationTools:
             )
         entry, subentries = _split_component_entry_row(rows[0])
         entry.setdefault("options", {})
-        # Mirror the OptionsFlow-derived read: additively flatten one level of
-        # nested option sections (raw nesting preserved). See
-        # `_flatten_option_sections`.
-        entry["options"] = _flatten_option_sections(entry["options"])
 
         resp: dict[str, Any] = {
             "success": True,
@@ -1605,10 +1578,8 @@ class IntegrationTools:
         The component already filtered by ``domain`` (server-side) and
         materialized each entry's ``options`` on the row, so the read itself
         needs no per-entry OptionsFlow probe. ``options`` are raw persisted
-        values (a field never set may be absent), may contain
-        ``"**redacted**"`` markers, and have nested option sections additively
-        flattened one level (raw nesting preserved) — see
-        ``ha_get_integration``'s OPTIONS note and ``_flatten_option_sections``.
+        values (a field never set may be absent) and may contain
+        ``"**redacted**"`` markers.
         With ``redact_secrets`` on, the returned page IS probed per entry
         after pagination (``_redact_component_options``) to learn each
         entry's password markers — the one case where this path probes.
@@ -1619,15 +1590,6 @@ class IntegrationTools:
             self._format_entry(row, include_opts, logger_levels, bool(level_warnings))
             for row in rows
         ]
-        # Mirror the OptionsFlow-derived read: additively flatten one level of
-        # nested option sections on each row (raw nesting preserved). Only the
-        # include_opts path carries an ``options`` key. See
-        # `_flatten_option_sections`.
-        if include_opts:
-            for formatted in formatted_entries:
-                formatted["options"] = _flatten_option_sections(
-                    formatted.get("options", {})
-                )
         result = self._finalize_entry_list(
             formatted_entries,
             domain,

@@ -267,10 +267,9 @@ class TestRedactOptionsByFlowSchema:
         options = {"api_key": "keep"}
         assert redact_options_by_flow_schema(options, None) == options
 
-    def test_nested_section_raw_copy_redacted(self):
-        # Sections are additively flattened: the leaf appears BOTH at the
-        # top level and inside the raw nested dict — both copies must be
-        # redacted.
+    def test_nested_section_redacted(self):
+        # A section's password leaf is redacted inside the nested dict, and a
+        # top-level key of the same name is redacted as well.
         options = {
             "inner_token": "tok-INNERSECRET",
             "advanced": {"inner_token": "tok-INNERSECRET"},
@@ -490,6 +489,21 @@ class TestRedactComponentOptions:
         assert entry["options"] == {"host": "1.2.3.4", "api_key": REDACTED_SET}
         assert warnings == []
         tools._client.abort_options_flow.assert_awaited_once_with("f1")
+
+    @pytest.mark.asyncio
+    async def test_form_schema_redacts_password_inside_section(self):
+        tools = self._tools_with_flow(
+            {"flow_id": "f1", "type": "form", "data_schema": FLOW_SCHEMA}
+        )
+        entry = {
+            "entry_id": "e1",
+            "supports_options": True,
+            "options": {"advanced": {"inner_token": "tok-INNERSECRET"}},
+        }
+        warnings: list[str] = []
+        await tools._redact_component_options("e1", entry, warnings)
+        assert entry["options"] == {"advanced": {"inner_token": REDACTED_SET}}
+        assert warnings == []
 
     @pytest.mark.asyncio
     async def test_menu_flow_fails_closed_with_warning(self):

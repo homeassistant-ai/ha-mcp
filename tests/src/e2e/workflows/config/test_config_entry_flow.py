@@ -210,7 +210,7 @@ class TestConfigEntryFlow:
         )
 
     async def test_update_template_sensor_availability(self, mcp_client):
-        """Persist and read a template field nested under advanced options."""
+        """Persist and read a template field nested under additional options."""
         config = {
             "next_step_id": "sensor",
             "name": "test_template_availability_e2e",
@@ -247,7 +247,10 @@ class TestConfigEntryFlow:
                     {"entry_id": entry_id, "include_options": True},
                 )
             options = (integration_data.get("entry") or {}).get("options") or {}
-            assert options.get("availability") == availability, (
+            # Stored options keep the section nested; the options-flow read
+            # (no custom component) lists its fields at the top level.
+            section = options.get("additional_options", options)
+            assert section.get("availability") == availability, (
                 "Nested availability option was not persisted or read back; "
                 f"got {options!r}"
             )
