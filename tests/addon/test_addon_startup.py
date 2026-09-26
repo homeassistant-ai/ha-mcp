@@ -626,7 +626,6 @@ class TestAddonStartup:
         """Create the add-on container for testing (image built by build_image fixture)."""
         return (
             DockerContainer(image=IMAGE_TAG)
-            .with_bind_ports(9583, 9583)
             .with_env("SUPERVISOR_TOKEN", "test-supervisor-token")
             .with_env("HOMEASSISTANT_URL", "http://supervisor/core")
             .with_volume_mapping(str(addon_config.parent), "/data", mode="rw")
@@ -694,7 +693,6 @@ class TestAddonStartup:
 
         container = (
             DockerContainer(image=IMAGE_TAG)
-            .with_bind_ports(9583, 9583)
             .with_env("SUPERVISOR_TOKEN", "test-supervisor-token")
             .with_env("HOMEASSISTANT_URL", "http://supervisor/core")
             .with_volume_mapping(str(config_file.parent), "/data", mode="rw")
@@ -773,10 +771,8 @@ class TestAddonStartup:
 
     def test_addon_startup_missing_supervisor_token(self, addon_config):
         """Test that add-on exits with error when SUPERVISOR_TOKEN is missing."""
-        container = (
-            DockerContainer(image=IMAGE_TAG)
-            .with_bind_ports(9583, 9583)
-            .with_volume_mapping(str(addon_config.parent), "/data", mode="ro")
+        container = DockerContainer(image=IMAGE_TAG).with_volume_mapping(
+            str(addon_config.parent), "/data", mode="ro"
         )
 
         container.start()

@@ -23,6 +23,6 @@ uv run python tests/uat/stories/run_story.py --all --agents openai \
 ```
 
 Key flags:
-- `--mcp-env KEY=VALUE` — pass env vars to the MCP server (repeatable)
+- `--mcp-env KEY=VALUE` — pass env vars to the MCP server (repeatable). The server gets a fresh, empty `HA_MCP_CONFIG_DIR`, so tool pins and settings in your `~/.ha-mcp` do not apply; pass `--mcp-env HA_MCP_CONFIG_DIR=<dir>` to run with a specific config.
 - `--no-think` disables reasoning: prepends /no_think (original Qwen3) and sends the enable_thinking=false chat-template kwarg (Qwen3.5/3.6)
 - `--results-file` — JSONL file to append results to (default: `local/uat-results.jsonl`)

@@ -522,6 +522,22 @@ jobs:
     - name: Run unit tests
       run: uv run pytest tests/src/unit/ -n auto --tb=short -v
 
+    - name: Check unit tests left no local state
+      # The runner's home starts without ~/.ha-mcp. A unit test that writes
+      # there or leaves a settings sidecar running bypassed the isolation in
+      # tests/src/unit/conftest.py and would do the same on a developer machine.
+      run: |
+        if [ -e ~/.ha-mcp ]; then
+          find ~/.ha-mcp
+          echo "::error::Unit tests wrote to ~/.ha-mcp"
+          exit 1
+        fi
+        # procps (pgrep) is not in the slim image; read /proc directly.
+        if grep -ls '[s]tdio_settings_sidecar' /proc/[0-9]*/cmdline; then
+          echo "::error::Unit tests left a settings sidecar running"
+          exit 1
+        fi
+
     - name: Run add-on structure tests
       # tests/addon/ validates add-on packaging / config.yaml structure (e.g.
       # the backup-filename-safe name guard, #1707) — previously these ran
