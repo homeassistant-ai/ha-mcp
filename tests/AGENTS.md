@@ -119,10 +119,12 @@ tests against them.
    docs say. A dependency may set up the failure; the assertion is on how
    our code handles it. See the FastMCP schema-validation note under
    [E2E Test Patterns](#e2e-test-patterns).
-2. **Prove the test catches the bug.** For a test written after the fix,
-   revert the fix, confirm the test fails, then restore it. Do this for
-   every fix. A test that builds its input by hand, or covers only a pure
-   helper, can pass with the fix reverted.
+2. **Prove the test catches the bug.** Write the regression test first
+   and watch it fail, as the root `AGENTS.md` requires. When a test is
+   added to a fix that already exists (for example during review), revert
+   the fix, confirm the test fails, then restore it. A test that builds its
+   input by hand, or covers only a pure helper, can pass with the fix
+   reverted.
 3. **One property, one test.** Test each property at the lowest layer that
    can see it: logic in unit tests; wiring, packaging and real Home
    Assistant behaviour in E2E. Two tests that assert the same property are
@@ -139,10 +141,12 @@ tests against them.
 6. **A test supplies its own world.** No reads from the real home directory
    or `~/.ha-mcp`, no network beyond the test's own containers, no answer
    taken from the wall clock, the local timezone or another test's
-   leftovers. Code that reads the clock takes `now` as a parameter. See
-   **Config-dir isolation** below.
-7. **Name the defect.** The test name and docstring say what breaks for the
-   user, not the function name.
+   leftovers. Code that reads the clock takes `now` as a parameter, unless
+   the test harness already controls the clock (the JSDOM harness below
+   does). See **Config-dir isolation** below.
+7. **Name the defect.** The test name, and its docstring or the
+   framework's own description, say what breaks for the user, not the
+   function name.
 
 ## Test Patterns
 
