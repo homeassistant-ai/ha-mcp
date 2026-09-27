@@ -172,12 +172,14 @@ async def test_first_admin_route_answer_settles_an_unanswered_probe(client, user
 
 
 @pytest.mark.asyncio
-async def test_server_error_does_not_settle_an_unanswered_probe(client):
+@pytest.mark.parametrize("status", [404, 405, 500])
+async def test_non_success_does_not_settle_an_unanswered_probe(client, status):
+    """A 404 or 405 can come from the router, before the admin gate runs."""
     client._current_user = AsyncMock(return_value=None)
-    client.httpx_client.request = AsyncMock(return_value=_response(500))
+    client.httpx_client.request = AsyncMock(return_value=_response(status))
     for _ in range(2):
         with pytest.raises(HomeAssistantAPIError):
-            await client._raw_request("POST", "/config/core/check_config")
+            await client._raw_request("GET", "/error_log")
     assert client._current_user.await_count == 2
     assert client.known_is_admin is None
 
@@ -446,3 +448,50 @@ def test_constructor_seeds_a_known_admin_status():
     )
     assert client.known_is_admin is True
     assert client.admin_route_refused is False
+
+
+@pytest.mark.asyncio
+async def test_unknown_status_service_calls_let_one_401_out(client):
+    """With no probe answer, parallel admin-only services must not each 401."""
+    client._current_user = AsyncMock(return_value=None)
+
+    async def slow_401(*_args, **_kwargs):
+        await asyncio.sleep(0.01)
+        return _response(401)
+
+    client.httpx_client.request = AsyncMock(side_effect=slow_401)
+    client.send_websocket_message = AsyncMock(
+        return_value={"success": False, "error": "Command failed: Unauthorized"}
+    )
+    results = await asyncio.gather(
+        *(client.call_service("automation", "reload") for _ in range(4)),
+        return_exceptions=True,
+    )
+    assert all(isinstance(r, HomeAssistantAdminRequiredError) for r in results)
+    client.httpx_client.request.assert_awaited_once()
+    assert client.send_websocket_message.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_401_on_a_service_for_a_cached_admin_falls_back_to_websocket(client):
+    """A token demoted after the probe answered must not keep sending 401s."""
+    client._current_user = AsyncMock(return_value=_current_user(True))
+    client.httpx_client.request = AsyncMock(return_value=_response(401))
+    client.send_websocket_message = AsyncMock(
+        return_value={"success": False, "error": "Command failed: Unauthorized"}
+    )
+    for _ in range(2):
+        with pytest.raises(HomeAssistantAdminRequiredError):
+            await client.call_service("automation", "reload")
+    client.httpx_client.request.assert_awaited_once()
+    assert client.admin_route_refused is True
+
+
+def test_constructor_seeds_the_refusal_latch():
+    client = HomeAssistantClient(
+        base_url="http://test.local:8123",
+        token="t",
+        verify_ssl=True,
+        admin_route_refused=True,
+    )
+    assert client.admin_route_refused is True

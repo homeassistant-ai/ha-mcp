@@ -1442,11 +1442,13 @@ class HomeAssistantSmartMCPServer:
             token_value: str | None
             verify_ssl: bool | None
             known_is_admin: bool | None
+            admin_route_refused: bool
             try:
                 url = client.base_url
                 token_value = client.token
                 verify_ssl = client.verify_ssl
                 known_is_admin = client.known_is_admin
+                admin_route_refused = client.admin_route_refused is True
             except Exception:
                 logger.debug(
                     "policy decisions: no credentials for the result event; "
@@ -1459,7 +1461,11 @@ class HomeAssistantSmartMCPServer:
             # ever reclaim. A wrong PIN retried by a chatty automation would
             # otherwise open one per attempt.
             async with HomeAssistantClient(
-                url, token_value, verify_ssl=verify_ssl, is_admin=known_is_admin
+                url,
+                token_value,
+                verify_ssl=verify_ssl,
+                is_admin=known_is_admin,
+                admin_route_refused=admin_route_refused,
             ) as result_client:
                 await emit_approval_result(
                     result_client,

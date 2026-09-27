@@ -346,7 +346,7 @@ def test_the_result_event_closes_the_client_it_built():
 
 
 def test_the_result_client_inherits_the_known_admin_status():
-    """A fresh client per event would otherwise re-probe the token every time."""
+    """A fresh client per event would otherwise re-probe, or re-send a 401."""
     import anyio
 
     from ha_mcp.server import HomeAssistantSmartMCPServer
@@ -356,7 +356,8 @@ def test_the_result_client_inherits_the_known_admin_status():
         base_url="http://ha.local:8123",
         token="tok",
         verify_ssl=True,
-        known_is_admin=True,
+        known_is_admin=None,
+        admin_route_refused=True,
     )
     HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
 
@@ -374,7 +375,7 @@ def test_the_result_client_inherits_the_known_admin_status():
     with patch("ha_mcp.client.rest_client.HomeAssistantClient", new=fake_client):
         anyio.run(lambda: emitter("tok-1", "approve", applied=True, reason="applied"))
 
-    assert seen == [{"verify_ssl": True, "is_admin": True}]
+    assert seen == [{"verify_ssl": True, "is_admin": None, "admin_route_refused": True}]
 
 
 def test_a_refused_result_event_logs_one_line_without_a_traceback(caplog):

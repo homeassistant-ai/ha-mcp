@@ -18,6 +18,7 @@ from ha_mcp.client.rest_client import (
     HomeAssistantAdminRequiredError,
     HomeAssistantAuthError,
     HomeAssistantClient,
+    HomeAssistantError,
 )
 from ha_mcp.tools.smart_search import SmartSearchTools
 from tests.test_constants import NON_ADMIN_TEST_TOKEN
@@ -215,6 +216,41 @@ async def test_non_admin_service_calls_go_over_websocket(
     )
     assert result == []
     assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_unanswered_probe_lets_one_service_401_reach_home_assistant(
+    ha_client: HomeAssistantClient, non_admin_client: HomeAssistantClient
+):
+    """Parallel admin-only services with no probe answer send one REST request.
+
+    The rest go over WebSocket, where core refuses them without counting.
+    """
+    non_admin_client._current_user = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    sent = _record_requests(non_admin_client)
+    try:
+        results = await asyncio.gather(
+            *(non_admin_client.call_service("automation", "reload") for _ in range(4)),
+            return_exceptions=True,
+        )
+    finally:
+        await _dismiss_login_notification(ha_client)
+    assert all(isinstance(r, HomeAssistantAdminRequiredError) for r in results), results
+    assert sent == ["/api/services/automation/reload"]
+
+
+@pytest.mark.asyncio
+async def test_a_pre_gate_response_does_not_mark_the_token_admin(
+    ha_client: HomeAssistantClient, non_admin_client: HomeAssistantClient
+):
+    """On HAOS /api/error_log is unregistered, so even a non-admin gets 404."""
+    non_admin_client._current_user = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    try:
+        with pytest.raises(HomeAssistantError):
+            await non_admin_client._request("GET", "/error_log")
+    finally:
+        await _dismiss_login_notification(ha_client)
+    assert non_admin_client.known_is_admin is not True
 
 
 @pytest.mark.asyncio

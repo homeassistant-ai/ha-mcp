@@ -354,6 +354,7 @@ class HomeAssistantClient:
         timeout: int | None = None,
         verify_ssl: bool | None = None,
         is_admin: bool | None = None,
+        admin_route_refused: bool = False,
     ):
         """
         Initialize Home Assistant client.
@@ -367,6 +368,8 @@ class HomeAssistantClient:
                 self-signed certs or hostname mismatches.
             is_admin: Whether the token's user is an administrator, when
                 another client for the same token already knows.
+            admin_route_refused: Whether another client for the same token
+                already got a 401 on an admin-only request.
         """
         if base_url is None or token is None or verify_ssl is None:
             settings = get_global_settings()
@@ -411,9 +414,9 @@ class HomeAssistantClient:
         # Whether the token's user is an admin; ``None`` until Home Assistant
         # has answered. See ``token_is_admin`` and ``guarded_request``.
         self._is_admin: bool | None = is_admin
-        # Set by a 401 on an admin-only route, so no further admin-only
-        # request is sent. See ``guarded_request``.
-        self._admin_route_refused = False
+        # Set by a 401 on an admin-only route or service call, so no further
+        # admin-only request is sent over REST. See ``guarded_request``.
+        self._admin_route_refused = admin_route_refused
         self._admin_route_lock = asyncio.Lock()
 
         logger.info(f"Initialized Home Assistant client for {self.base_url}")
@@ -533,8 +536,8 @@ class HomeAssistantClient:
         token is known to be a non-admin's, or after an admin-only request got
         401. While Home Assistant has not answered whether the token is an
         admin's, admin-only requests go out one at a time and the first
-        response settles it: a 401 stops further ones, and any other status
-        below 500 proves the token is an admin's.
+        response settles it: a 401 stops further ones, and a 2xx proves the
+        token is an admin's (a 404 or 405 can come before the admin gate).
         """
         if not is_admin_only_route(method, endpoint):
             return await self.httpx_client.request(method, endpoint, **kwargs)
@@ -556,8 +559,7 @@ class HomeAssistantClient:
                     "user is not an administrator"
                 )
             response = await self.httpx_client.request(method, endpoint, **kwargs)
-            status = response.status_code
-            if is_admin is None and status != 401 and status < 500:
+            if is_admin is None and 200 <= response.status_code < 300:
                 self._is_admin = True
             self._note_admin_route_response(response)
             return response
@@ -717,22 +719,55 @@ class HomeAssistantClient:
 
         payload = data or {}
 
-        if await self.token_is_admin() is False:
+        if self._admin_route_refused or await self.token_is_admin() is False:
             return await self._call_service_over_websocket(
                 domain, service, payload, return_response
             )
+        if self._is_admin is True:
+            return await self._call_service_over_rest(
+                domain, service, payload, return_response
+            )
+        # Admin status unknown: one REST call at a time, so a 401 for an
+        # admin-only service latches before a second is sent.
+        async with self._admin_route_lock:
+            if self._admin_route_refused:
+                return await self._call_service_over_websocket(
+                    domain, service, payload, return_response
+                )
+            return await self._call_service_over_rest(
+                domain, service, payload, return_response
+            )
 
+    async def _call_service_over_rest(
+        self,
+        domain: str,
+        service: str,
+        payload: dict[str, Any],
+        return_response: bool,
+    ) -> list[dict[str, Any]] | dict[str, Any]:
+        """POST the service call; on a 401 latch and retry it over WebSocket.
+
+        A 401 means Home Assistant refused before running the service, so the
+        WebSocket retry cannot apply it twice.
+        """
         # Build query params for return_response
         params = {}
         if return_response:
             params["return_response"] = "true"
 
-        result = await self._request(
-            "POST",
-            f"/services/{domain}/{service}",
-            json=payload,
-            params=params if params else None,
-        )
+        try:
+            result = await self._request(
+                "POST",
+                f"/services/{domain}/{service}",
+                json=payload,
+                params=params if params else None,
+            )
+        except HomeAssistantAuthError:
+            self._is_admin = None
+            self._admin_route_refused = True
+            return await self._call_service_over_websocket(
+                domain, service, payload, return_response
+            )
 
         # When return_response is True, HA returns a dict with service_response key
         if return_response:
