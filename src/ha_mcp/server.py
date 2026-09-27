@@ -1663,7 +1663,7 @@ class HomeAssistantSmartMCPServer:
         if skills_dir is None:
             logger.warning(
                 "Skills directory not found at %s; skill resources unavailable. "
-                "%s will still be registered and report an empty listing.",
+                "%s will still be registered; its calls report an error.",
                 Path(__file__).parent / "resources" / "skills-vendor" / "skills",
                 SKILL_TOOL_NAME,
             )
@@ -1782,6 +1782,29 @@ class HomeAssistantSmartMCPServer:
             logger.warning("Error reading skill files in %s: %s", skill_dir, e)
         return files
 
+    def _best_practices_skill(
+        self, skills_dir: Path | None
+    ) -> tuple[str, Path, dict[str, Any]] | None:
+        """Return the bundled best-practices skill, or None when it cannot be served.
+
+        Registration and every call use this one check, so the tool
+        description and the call agree on whether the skill is available.
+        A symlinked skill folder counts as missing: every file under its
+        target would otherwise become readable.
+        """
+        from .tools.util_helpers import _HA_BEST_PRACTICES_SKILL_NAME
+
+        if skills_dir is None:
+            return None
+        skill_dir = skills_dir / _HA_BEST_PRACTICES_SKILL_NAME
+        main_file = skill_dir / "SKILL.md"
+        if skill_dir.is_symlink() or not main_file.is_file():
+            return None
+        frontmatter = self._parse_skill_frontmatter(main_file)
+        if not frontmatter:
+            return None
+        return (skill_dir.name, skill_dir, frontmatter)
+
     def _register_skill_guide_tool(self, skills_dir: Path | None) -> int:
         """Register the ``ha_get_skill_guide`` tool unconditionally.
 
@@ -1796,28 +1819,19 @@ class HomeAssistantSmartMCPServer:
         clients that don't read server instructions (claude.ai) still see
         its trigger conditions in the catalog.
         """
-        from .tools.util_helpers import _HA_BEST_PRACTICES_SKILL_NAME
+        skill = self._best_practices_skill(skills_dir)
 
-        skills = [
-            entry
-            for entry in (
-                self._list_bundled_skills(skills_dir) if skills_dir is not None else []
-            )
-            if entry[0] == _HA_BEST_PRACTICES_SKILL_NAME
-        ]
-
-        if skills:
+        if skill:
             # Keeps the "CALL THIS FIRST" framing so claude.ai's
             # catalog-level retrieval surfaces the tool for relevant tasks.
-            (name, _dir, frontmatter) = skills[0]
+            (name, _dir, frontmatter) = skill
             tool_description = (
                 "Get the bundled Home Assistant best-practices skill. "
                 "CALL THIS FIRST before performing matching actions.\n\n"
                 "Call with no arguments to read SKILL.md: the workflow, the "
                 "common mistakes, and a table that says which reference "
-                "file to read for each task. Then call again with "
-                "file='<path>' (e.g. 'references/automation-patterns.md') "
-                "for only the files that table points to.\n\n"
+                "file to read for each task. Then read only the files that "
+                "table points to.\n\n"
                 f"### {name} (skill://{name}/SKILL.md)\n"
                 f"{frontmatter['description'].strip()}"
                 f"\n\n{self._SKILL_USE_BEFORE_KEYWORDS}\n\n" + _OLD_SKILL_TOOL_ALIASES
@@ -1870,9 +1884,9 @@ class HomeAssistantSmartMCPServer:
         logger.info(
             "Registered %s (%d bundled skill(s))",
             SKILL_TOOL_NAME,
-            len(skills),
+            1 if skill else 0,
         )
-        return len(skills)
+        return 1 if skill else 0
 
     def _handle_skill_guide_call(
         self, skills_dir: Path | None, file: str = "SKILL.md"
@@ -1892,21 +1906,15 @@ class HomeAssistantSmartMCPServer:
         """
         from .tools.util_helpers import _HA_BEST_PRACTICES_SKILL_NAME as skill
 
-        skill_dir = skills_dir / skill if skills_dir is not None else None
-        # A symlinked skill folder would make every file under its target
-        # readable, so it counts as missing.
-        if (
-            skill_dir is None
-            or skill_dir.is_symlink()
-            or not (skill_dir / "SKILL.md").is_file()
-        ):
+        entry = self._best_practices_skill(skills_dir)
+        if entry is None:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
                     message=(
                         f"The {skill!r} skill is not available on this "
                         "server. The skills-vendor submodule may be missing "
-                        "or uninitialized."
+                        "or uninitialized, or its SKILL.md failed to parse."
                     ),
                     context={"file": file},
                     suggestions=[
@@ -1917,6 +1925,7 @@ class HomeAssistantSmartMCPServer:
                 )
             )
 
+        skill_dir = entry[1]
         requested = file or "SKILL.md"
         allowed = self._list_skill_files(skill_dir)
         if requested not in allowed:

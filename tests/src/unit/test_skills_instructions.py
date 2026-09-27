@@ -451,13 +451,20 @@ class TestHandleSkillGuideCall:
         assert "skill_content_hint" not in skill_md
         assert "MandatoryBPS=false" in reference["skill_content_hint"]
 
-    @pytest.mark.parametrize("state", ["no_skills_dir", "no_best_practices_skill"])
+    @pytest.mark.parametrize(
+        "state", ["no_skills_dir", "no_best_practices_skill", "bad_frontmatter"]
+    )
     def test_unavailable_skill_raises_with_operator_fix(self, server, tmp_path, state):
-        """Without the bundled skill, the call must fail with an error that
-        names the fix, not return empty content the model would trust."""
+        """Without a usable bundled skill, the call must fail with an error
+        that names the fix, as the tool description then promises, not
+        return content the model would trust."""
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
         skills_dir = None if state == "no_skills_dir" else tmp_path
+        if state == "bad_frontmatter":
+            skill = tmp_path / _HA_BEST_PRACTICES_SKILL_NAME
+            skill.mkdir()
+            (skill / "SKILL.md").write_text("# No frontmatter here\n")
         with pytest.raises(ToolError) as excinfo:
             server._handle_skill_guide_call(skills_dir)
         assert "submodule" in str(excinfo.value)

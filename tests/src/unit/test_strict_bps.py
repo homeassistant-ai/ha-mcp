@@ -635,7 +635,10 @@ def _make_bare_server() -> object:
 def _best_practices_skills_dir(tmp_path: Path) -> Path:
     skill = tmp_path / "home-assistant-best-practices"
     skill.mkdir()
-    (skill / "SKILL.md").write_text("# Best practices\nReal content here.\n")
+    (skill / "SKILL.md").write_text(
+        "---\nname: best-practices\ndescription: Best practices.\n---\n"
+        "# Best practices\nReal content here.\n"
+    )
     return tmp_path
 
 
