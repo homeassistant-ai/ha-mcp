@@ -880,8 +880,11 @@ class DevTools:
             Field(
                 default=None,
                 description=(
-                    "set_tool: require user approval before every call to this "
-                    "tool (adds/removes an unconditional security-policy rule)"
+                    "set_tool: toggle the tool's unconditional security-policy "
+                    "rule. In a require-approval list gated=true adds it (every "
+                    "call needs approval); in an allow list that rule approves "
+                    "the tool, so gated=true removes it. Conditional rules are "
+                    "left in place and still apply"
                 ),
             ),
         ] = None,
@@ -892,13 +895,14 @@ class DevTools:
                 default=None,
                 description=(
                     "set_policy: the full policy object "
-                    "{wait_seconds, approval_ttl_minutes, "
+                    "{rule_effect, wait_seconds, approval_ttl_minutes, "
                     "event_decisions_enabled, rules, version, "
                     "schema_version}. Replaces the WHOLE document: a field "
                     "you omit reverts to its default, so send back an "
                     "edited copy of get_policy rather than a fragment "
                     "(omitting event_decisions_enabled switches the "
-                    "event-bus approval channel off)"
+                    "event-bus approval channel off; omitting rule_effect "
+                    "while the stored policy is an allow list is refused)"
                 ),
             ),
         ] = None,
@@ -1012,7 +1016,8 @@ class DevTools:
                     f"'setting' is required for action={action!r}",
                 )
             )
-        # set/reset only; 'list' returned above, and reads are never gated.
+        # set/reset only; 'list' returned above, and reads never need
+        # security-policy access.
         _guard_security_policy_setting(setting)
 
         from ..config import (
@@ -1090,27 +1095,21 @@ class DevTools:
         return load_tool_metadata_cache()
 
     @staticmethod
-    def _gated_tool_names() -> set[str] | None:
-        """Tool names carrying the bare unconditional gate (the Tools-tab toggle).
+    def _load_policy_or_none() -> Any | None:
+        """The stored policy, or ``None`` when ``tool_policy.json`` is unreadable.
 
-        The Tools-tab per-tool gate toggle manages only the bare rule (no
-        predicates); conditional rules are authored in the Policies tab. Keying
-        this on the bare rule keeps the reported toggle state consistent with
-        what set_tool(gated=...) writes.
-
-        Returns ``None`` when ``tool_policy.json`` is unreadable — the caller
-        must surface that (a silent ``set()`` would render every tool
-        ``gated=False``, indistinguishable from a clean no-gates policy, while
-        the sibling actions raise CONFIG_INVALID for the same file).
+        ``None`` must be surfaced by the caller: a silent empty policy would
+        render every tool ``gated=False``, indistinguishable from a clean
+        no-gates policy, while the sibling actions raise CONFIG_INVALID for the
+        same file.
         """
         from ..policy.persistence import load_policy
         from ..utils.data_paths import get_data_dir
 
         try:
-            policy = load_policy(get_data_dir())
+            return load_policy(get_data_dir())
         except ValueError:
             return None
-        return {rule.tool_name for rule in policy.rules if not rule.when}
 
     async def _list_tool_states(self) -> dict[str, Any]:
         """List every tool with its state / LLM-API / gate + lock flags.
@@ -1134,13 +1133,15 @@ class DevTools:
             states.setdefault(name, "pinned")
         env_pinned = env_pinned_tools()
         overrides = load_llm_api_overrides()
-        gated = self._gated_tool_names()
+        from ..policy.model import Policy, bare_rule_gates
+
+        policy = self._load_policy_or_none()
         warnings: list[str] = []
-        if gated is None:
+        if policy is None:
             # Degrade rather than fail the whole listing: states/exposure stay
             # useful for troubleshooting, but the gate column must not read as
             # a clean no-gates policy.
-            gated = set()
+            policy = Policy()
             warnings.append(
                 "tool_policy.json is invalid; 'gated' is reported as false "
                 "for every tool. Call get_policy for the parse error."
@@ -1171,7 +1172,7 @@ class DevTools:
                     ],
                     overrides,
                 ),
-                "gated": t["name"] in gated,
+                "gated": bare_rule_gates(policy, t["name"]),
                 "env_pinned": t["name"] in env_pinned,
                 "mandatory": t["name"] in mandatory,
                 "bps_locked": t["name"] in bps_locked,
@@ -1228,9 +1229,10 @@ class DevTools:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.VALIDATION_INVALID_PARAMETER,
-                    "tool='*' is a policy wildcard, not a specific tool; it "
-                    "would gate every tool. Use set_policy to author a wildcard "
-                    "rule deliberately.",
+                    "tool='*' is a policy wildcard, not a specific tool; its "
+                    "rule would gate (or, in an allow list, approve) every "
+                    "tool. Use set_policy to author a wildcard rule "
+                    "deliberately.",
                 )
             )
         if not any(v is not None for v in (state, llm_api, gated)):
@@ -1422,7 +1424,9 @@ class DevTools:
         from ..policy.persistence import load_policy, save_policy
         from ..utils.data_paths import get_data_dir
 
-        data["gated"] = bool(plan["gate_val"])
+        from ..policy.model import bare_rule_gates
+
+        data["gated"] = bare_rule_gates(plan["new_policy"], data["tool"])
         data["policy_rules_changed"] = plan["gate_changed"]
         if plan["gate_changed"]:
             data_dir = get_data_dir()
@@ -1443,6 +1447,12 @@ class DevTools:
             save_policy(data_dir, plan["new_policy"])
             self._clear_remember_cache()
         warnings: list[str] = []
+        if plan["gate_val"] and not data["gated"]:
+            warnings.append(
+                "The policy is an allow list with an unconditional '*' rule, "
+                "which approves every tool; this tool still runs without "
+                "approval until that rule is removed."
+            )
         if not get_global_settings().enable_tool_security_policies:
             warnings.append(
                 "Tool security policies are disabled "
@@ -1527,16 +1537,19 @@ class DevTools:
         """Return (policy, changed) after adding/removing the bare gate rule.
 
         Pure (no I/O): manages only the bare unconditional rule (when == [])
-        for ``tool``; predicate-bearing rules are preserved.
+        for ``tool``; predicate-bearing rules are preserved. Under an allow
+        list the bare rule approves the tool, so gating removes it.
         """
         from ..policy.model import Rule
 
+        want_bare = gated != (policy.rule_effect == "allow")
         has_bare = any(r.tool_name == tool and not r.when for r in policy.rules)
-        if gated and not has_bare:
+        if want_bare and not has_bare:
             # Insert before the first wildcard rule (mirrors the web UI's
-            # wildcardInsertIndex): find_matching_rule() is first-match, so a
-            # gate appended after a `*` rule would never supply this tool's
-            # remember_minutes / matched_rule.
+            # wildcardInsertIndex): in a require-approval list
+            # find_matching_rule() is first-match, so a gate appended after a
+            # `*` rule would never supply this tool's remember_minutes /
+            # matched_rule. An allow list does not depend on the order.
             rules = list(policy.rules)
             insert_at = next(
                 (i for i, r in enumerate(rules) if r.tool_name == "*"), len(rules)
@@ -1544,7 +1557,7 @@ class DevTools:
             rules.insert(insert_at, Rule(tool_name=tool))
             updated = policy.model_copy(update={"rules": rules})
             return updated, True
-        if not gated and has_bare:
+        if not want_bare and has_bare:
             updated = policy.model_copy(
                 update={
                     "rules": [r for r in policy.rules if r.tool_name != tool or r.when]

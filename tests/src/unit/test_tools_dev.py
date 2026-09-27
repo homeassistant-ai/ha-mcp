@@ -1113,6 +1113,79 @@ class TestManageToolsGate:
         assert self._rules() == []  # the gate was never written
 
 
+@pytest.mark.usefixtures("_policy_access_on")
+class TestManageToolsGateUnderAllowList:
+    """Under an allow list the bare rule approves its tool (issue #2540)."""
+
+    @pytest.fixture
+    def dev_tools(self):
+        return DevTools(MagicMock())
+
+    @staticmethod
+    def _store(*tools: str) -> None:
+        from ha_mcp.policy.model import Policy, Rule
+        from ha_mcp.policy.persistence import save_policy
+
+        save_policy(
+            get_data_dir(),
+            Policy(rule_effect="allow", rules=[Rule(tool_name=t) for t in tools]),
+        )
+
+    @pytest.fixture(autouse=True)
+    def _allow_list(self):
+        self._store("ha_get_state")
+
+    def _rules(self):
+        from ha_mcp.policy.persistence import load_policy
+
+        return load_policy(get_data_dir()).rules
+
+    async def test_gate_on_removes_the_approval(self, dev_tools):
+        result = await dev_tools.ha_dev_manage_settings(
+            action="set_tool", tool="ha_get_state", gated=True
+        )
+        assert result["data"]["policy_rules_changed"] is True
+        assert self._rules() == []
+
+    async def test_gate_off_adds_the_approval(self, dev_tools):
+        await dev_tools.ha_dev_manage_settings(
+            action="set_tool", tool="ha_search", gated=False
+        )
+        assert sorted(r.tool_name for r in self._rules()) == [
+            "ha_get_state",
+            "ha_search",
+        ]
+
+    async def test_gate_on_under_an_approve_everything_rule_warns(self, dev_tools):
+        self._store("ha_get_state", "*")
+        result = await dev_tools.ha_dev_manage_settings(
+            action="set_tool", tool="ha_get_state", gated=True
+        )
+        assert result["data"]["gated"] is False
+        assert any("unconditional '*' rule" in w for w in result["warnings"])
+
+    async def test_list_reports_nothing_gated_under_an_approve_everything_rule(
+        self, dev_tools
+    ):
+        _seed_metadata([{"name": "ha_call_service", "tags": ["Control"]}])
+        self._store("*")
+        result = await dev_tools.ha_dev_manage_settings(action="list_tools")
+        rows = {r["name"]: r for r in result["data"]["tools"]}
+        assert rows["ha_call_service"]["gated"] is False
+
+    async def test_list_reports_unapproved_tools_as_gated(self, dev_tools):
+        _seed_metadata(
+            [
+                {"name": "ha_get_state", "tags": ["Search"]},
+                {"name": "ha_call_service", "tags": ["Control"]},
+            ]
+        )
+        result = await dev_tools.ha_dev_manage_settings(action="list_tools")
+        rows = {r["name"]: r for r in result["data"]["tools"]}
+        assert rows["ha_get_state"]["gated"] is False
+        assert rows["ha_call_service"]["gated"] is True
+
+
 class TestListToolStates:
     @pytest.mark.usefixtures("_policy_access_on")
     async def test_list_reflects_state_llm_and_gate(self):

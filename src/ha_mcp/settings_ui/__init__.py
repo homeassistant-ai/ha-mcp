@@ -216,7 +216,7 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
 
     from ..policy.decision_pin import is_pin_set
     from ..policy.handlers import build_decision_pin_handlers
-    from ..policy.model import Policy
+    from ..policy.model import ALLOW_LIST_OMITTED_MESSAGE, PolicyWrite, drops_allow_list
     from ..policy.persistence import load_policy, save_policy
 
     async def get_config(_: Request) -> JSONResponse:
@@ -232,7 +232,7 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
 
     async def put_config(request: Request) -> JSONResponse:
         try:
-            new_policy = Policy.model_validate(await request.json())
+            new_policy = PolicyWrite.model_validate(await request.json())
         except (ValidationError, ValueError) as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         # Mirror main-server optimistic concurrency: reject if on-disk
@@ -245,6 +245,10 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
 
         async with config_write_guard():
             current = load_policy(data_dir)
+            if drops_allow_list(new_policy, current):
+                return JSONResponse(
+                    {"error": ALLOW_LIST_OMITTED_MESSAGE}, status_code=400
+                )
             # Mirror the main-server PIN guard, and for the same reason it
             # sits inside the lock there: the PIN delete runs under this
             # lock and leaves the policy version untouched when the switch

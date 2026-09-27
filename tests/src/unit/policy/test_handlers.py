@@ -199,19 +199,23 @@ def test_put_with_stale_version_returns_409(tmp_path):
     assert payload["current_policy"]["rules"][0]["tool_name"] == "ha_first"
 
 
-def test_put_config_clears_remember_cache_when_rules_change(tmp_path):
-    """A tightened rule must take effect immediately. Without
-    invalidation, an approval remembered before the save would still
-    grant pass-through until the remember window expires."""
+@pytest.mark.parametrize(
+    "change",
+    [{"rules": [Rule(tool_name="ha_new_rule")]}, {"rule_effect": "allow"}],
+    ids=["rules", "rule_effect"],
+)
+def test_put_config_clears_remember_cache_when_rules_change(tmp_path, change):
+    """A tightened rule, or a switched rule_effect (issue #2540), must take
+    effect immediately. Without invalidation, an approval remembered before
+    the save would still grant pass-through until the remember window
+    expires."""
     queue = ApprovalQueue()
     queue.remember("ha_call_service", "abc123", minutes=10)
     assert queue.is_remembered("ha_call_service", "abc123") is True
 
     c = make_app(tmp_path, queue)
     current = c.get("/api/policy/config").json()
-    body = Policy(
-        rules=[Rule(tool_name="ha_new_rule")], version=current["version"]
-    ).model_dump(mode="json")
+    body = Policy(version=current["version"], **change).model_dump(mode="json")
     assert c.put("/api/policy/config", json=body).status_code == 200
 
     assert queue.is_remembered("ha_call_service", "abc123") is False, (
@@ -566,3 +570,29 @@ def test_an_already_decided_request_still_says_so(tmp_path):
 
     assert r.status_code == 409
     assert r.json()["current_decision"] == "approved"
+
+
+def test_put_config_refuses_to_drop_an_allow_list_by_omission(tmp_path):
+    """An older settings page does not send rule_effect; saving its document
+    must not silently invert a stored allow list (issue #2540)."""
+    c = make_app(tmp_path, ApprovalQueue())
+    body = Policy(rule_effect="allow", rules=[Rule(tool_name="ha_x")])
+    assert c.put("/api/policy/config", json=body.model_dump(mode="json")).status_code == 200
+    stale = c.get("/api/policy/config").json()
+    del stale["rule_effect"]
+    r = c.put("/api/policy/config", json=stale)
+    assert r.status_code == 400
+    assert "rule_effect" in r.json()["error"]
+    assert c.get("/api/policy/config").json()["rule_effect"] == "allow"
+
+
+def test_put_config_refuses_unknown_keys(tmp_path):
+    """A misspelled "rule_efect" would otherwise store a require-approval list."""
+    c = make_app(tmp_path, ApprovalQueue())
+    body = Policy(rules=[Rule(tool_name="ha_x")]).model_dump(mode="json")
+    del body["rule_effect"]
+    body["rule_efect"] = "allow"
+    r = c.put("/api/policy/config", json=body)
+    assert r.status_code == 400
+    assert "rule_efect" in r.json()["error"]
+    assert c.get("/api/policy/config").json()["rules"] == []

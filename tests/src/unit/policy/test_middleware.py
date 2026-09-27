@@ -1111,6 +1111,80 @@ async def test_gated_call_announces_the_pending_request(queue):
 
 
 @pytest.mark.anyio
+async def test_allow_list_gates_unapproved_calls_and_passes_approved_ones(queue):
+    """Under an allow list nothing matched the gated call, so no rule is named."""
+    pol = Policy(rule_effect="allow", rules=[Rule(tool_name="ha_get_state")])
+    client = AsyncMock()
+    mw = PolicyMiddleware(
+        policy_provider=lambda: pol,
+        queue=queue,
+        wait_seconds=0,
+        get_client=lambda: client,
+    )
+
+    call_next = AsyncMock(return_value="ok")
+    assert await mw.on_call_tool(make_context("ha_get_state", {}), call_next) == "ok"
+
+    with pytest.raises(ToolError) as exc:
+        await mw.on_call_tool(
+            make_context("ha_call_service", {"domain": "lock"}), AsyncMock()
+        )
+    assert "matched_rule" not in str(exc.value)
+    _, payload = client.fire_event.await_args.args
+    assert payload["tool_name"] == "ha_call_service"
+    assert "matched_rule" not in payload
+
+
+@pytest.mark.anyio
+async def test_allow_list_names_no_rule_and_remembers_nothing(queue):
+    """A case variant misses an approving rule that carries remember_minutes.
+
+    Without the allow-list guard in ``find_matching_rule`` the middleware
+    would name that rule as the gate and arm its remember window.
+    """
+    rule = Rule(
+        tool_name="ha_call_service",
+        when=[Predicate(path="args.data.topic", op="eq", value="home/bridge")],
+        remember_minutes=5,
+    )
+    pol = Policy(rule_effect="allow", rules=[rule])
+    client = AsyncMock()
+    mw = PolicyMiddleware(
+        policy_provider=lambda: pol,
+        queue=queue,
+        wait_seconds=0,
+        get_client=lambda: client,
+    )
+    args = {"data": {"topic": "Home/Bridge"}}
+
+    with pytest.raises(ToolError):
+        await mw.on_call_tool(make_context("ha_call_service", args), AsyncMock())
+    _, payload = client.fire_event.await_args.args
+    assert "matched_rule" not in payload
+
+    queue.approve(queue.list_pending()[0].token)
+    call_next = AsyncMock(return_value="ok")
+    assert await mw.on_call_tool(make_context("ha_call_service", args), call_next) == "ok"
+    with pytest.raises(ToolError):
+        await mw.on_call_tool(make_context("ha_call_service", args), AsyncMock())
+
+
+@pytest.mark.anyio
+async def test_empty_allow_list_leaves_approval_management_ungated(queue):
+    """An empty allow list gates everything except deciding the queue itself."""
+    pol = Policy(rule_effect="allow")
+    mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)
+    call_next = AsyncMock(return_value="ok")
+    decide = make_context(
+        "ha_dev_manage_server", {"action": "approve", "token": "t"}
+    )
+    assert await mw.on_call_tool(decide, call_next) == "ok"
+    assert await mw.on_call_tool(make_context("ha_search_tools", {}), call_next) == "ok"
+    with pytest.raises(ToolError):
+        await mw.on_call_tool(make_context("ha_get_state", {}), AsyncMock())
+
+
+@pytest.mark.anyio
 async def test_a_shared_pending_row_is_announced_once(queue):
     """A later identical call joins the existing row (``find_or_create``).
 

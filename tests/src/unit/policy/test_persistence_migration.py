@@ -105,6 +105,27 @@ class TestMigration:
         assert len(kept.rules) == 1
         assert len(kept.rules[0].when) == 2
 
+    def test_unstamped_allow_list_is_stamped_without_split(self, tmp_path):
+        # An allow list postdates #1993; splitting its AND into an OR would
+        # widen what it approves.
+        rule = {
+            "tool_name": "ha_call_service",
+            "when": [
+                {"path": "args.domain", "op": "eq", "value": "mqtt"},
+                {"path": "args.service", "op": "eq", "value": "publish"},
+            ],
+            "remember_minutes": 0,
+        }
+        _write_raw(
+            tmp_path,
+            {"rule_effect": "allow", "version": 2, "rules": [rule]},
+        )
+        assert migrate_policy_any_semantics(tmp_path) is True
+        raw = _read_raw(tmp_path)
+        assert raw["schema_version"] == POLICY_SCHEMA_VERSION
+        assert raw["rules"] == [rule]
+        assert raw["rule_effect"] == "allow"
+
     def test_migration_runs_once(self, tmp_path):
         _write_raw(
             tmp_path,

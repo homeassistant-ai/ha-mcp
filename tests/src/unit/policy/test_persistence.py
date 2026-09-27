@@ -90,4 +90,6 @@ def test_serialized_shape_is_stable(tmp_path: Path):
         # that lives in approval_pin.json, out of reach of every reader of
         # this file.
         "event_decisions_enabled",
+        # Whether a matching rule gates or approves the call (issue #2540).
+        "rule_effect",
     }

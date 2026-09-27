@@ -1266,8 +1266,13 @@ def _policy_panel_dom() -> str:
     extras = """
       <div id="policy-pending-list"></div>
       <div id="policy-load-error" style="display:none"></div>
+      <h3 id="policy-rules-title"></h3>
       <div id="policy-rules-empty" style="display:none"></div>
       <div id="policy-rules-list"></div>
+      <select id="policy-rule-effect">
+        <option value="require_approval"></option><option value="allow"></option>
+      </select>
+      <span id="policy-global-save-status"></span>
       <input id="policy-wait-seconds" />
       <input id="policy-ttl-minutes" />
       <input id="policy-event-decisions-toggle" type="checkbox" />
@@ -6433,7 +6438,7 @@ class TestAdvancedAutoSaveReloadGuard:
 
 
 class TestLoadPolicyStateKeepsPriorGated:
-    """loadPolicyState() keeps the previously-loaded gatedTools when the
+    """loadPolicyState() keeps the previously-loaded gate state when the
     /api/policy/config reload fails, instead of clobbering it to empty —
     so a transient blip can't make the Tools tab falsely claim nothing is
     gated.
@@ -6486,7 +6491,7 @@ class TestLoadPolicyStateKeepsPriorGated:
             initial_html=MIN_DOM,
             fetch_map=fetches,
             invoke="""
-              await new Promise(r => setTimeout(r, 200));  // first load seeds gatedTools
+              await new Promise(r => setTimeout(r, 200));  // first load seeds the gate state
               const before = document.querySelector('input[name="tool:ha_get_state:gated"]');
               const checkedBefore = !!(before && before.checked);
               await loadPolicyState();   // second load: policy/config 500 -> keep prior
@@ -6495,7 +6500,7 @@ class TestLoadPolicyStateKeepsPriorGated:
               document.body.setAttribute('data-before', String(checkedBefore));
               document.body.setAttribute('data-after', String(!!(after && after.checked)));
               document.body.setAttribute(
-                'data-has', String(policyState.gatedTools.has('ha_get_state')));
+                'data-has', String(isToolGated('ha_get_state')));
             """,
         )
         _assert_clean_init(result)
@@ -6503,7 +6508,7 @@ class TestLoadPolicyStateKeepsPriorGated:
             "precondition: the tool should render gated after the first load"
         )
         assert _probe(result, "has") == "true", (
-            "gatedTools was cleared after the failed policy reload"
+            "the gate state was cleared after the failed policy reload"
         )
         assert _probe(result, "after") == "true", (
             "the gated checkbox lost its checked state after the failed reload"
@@ -7760,3 +7765,259 @@ class TestApprovalPinInvalidStatus:
         probe = re.search(r'<div[^>]*id="__pin_absent_probe"[^>]*>', result.dom)
         assert probe is not None
         assert "No PIN set" in probe.group(0), probe.group(0)
+
+
+class TestAllowListPolicyUi:
+    """rule_effect='allow' (issue #2540): the bare rule approves its tool, so
+    the Tools-tab gate toggle and the rule cards read the other way round."""
+
+    ALLOW_POLICY = {
+        "rule_effect": "allow",
+        "wait_seconds": 60,
+        "approval_ttl_minutes": 5,
+        "version": 4,
+        "rules": [{"tool_name": "ha_get_state", "when": [], "remember_minutes": 0}],
+    }
+
+    def _fetches(self, policy: dict | None = None) -> dict:
+        return {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {"status": 200, "json": policy or self.ALLOW_POLICY},
+        }
+
+    def _puts(self, result: HarnessResult) -> list[dict]:
+        return [
+            json.loads(f["body"])
+            for f in result.fetches
+            if f["method"] == "PUT" and "/api/policy/config" in f["url"]
+        ]
+
+    def test_gating_an_approved_tool_removes_its_approval(
+        self, settings_script: str
+    ) -> None:
+        fetches = self._fetches()
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="await loadPolicyState(); await window.syncPolicyRule('ha_get_state', true);",
+        )
+        _assert_clean_init(result)
+        (body,) = self._puts(result)
+        assert body["rules"] == []
+        assert body["rule_effect"] == "allow"
+
+    def test_ungating_a_tool_approves_it(self, settings_script: str) -> None:
+        fetches = self._fetches()
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="await loadPolicyState(); await window.syncPolicyRule('ha_call_service', false);",
+        )
+        _assert_clean_init(result)
+        (body,) = self._puts(result)
+        assert sorted(r["tool_name"] for r in body["rules"]) == [
+            "ha_call_service",
+            "ha_get_state",
+        ]
+
+    def test_toggle_shows_unapproved_tools_as_gated(
+        self, settings_script: str
+    ) -> None:
+        fetches = self._fetches()
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await loadPolicyState();
+              document.body.setAttribute(
+                'data-approved', String(isToolGated('ha_get_state')));
+              document.body.setAttribute(
+                'data-other', String(isToolGated('ha_call_service')));
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "approved") == "false"
+        assert _probe(result, "other") == "true"
+
+    def test_rule_cards_use_allow_list_wording(self, settings_script: str) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=DEFAULT_FETCHES,
+            invoke=(
+                "renderPolicyCards(" + json.dumps(self.ALLOW_POLICY) + ");"
+            ),
+        )
+        _assert_clean_init(result)
+        assert 'data-i18n="policies.rules.title_allow"' in result.dom
+        assert "Approved tools" in result.dom
+        assert "approves every call to this tool" in result.dom
+        assert 'class="policy-rule-lifetime" style="display:none"' in result.dom
+
+    def test_empty_allow_list_explains_that_everything_is_gated(
+        self, settings_script: str
+    ) -> None:
+        empty = {**self.ALLOW_POLICY, "rules": []}
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=DEFAULT_FETCHES,
+            invoke="renderPolicyCards(" + json.dumps(empty) + ");",
+        )
+        _assert_clean_init(result)
+        assert 'data-i18n-html="policies.rules.empty_allow"' in result.dom
+        assert "every tool call needs your approval" in result.dom
+
+    def test_switching_effect_asks_first_and_sends_it(
+        self, settings_script: str
+    ) -> None:
+        require = {**self.ALLOW_POLICY, "rule_effect": "require_approval"}
+        fetches = self._fetches(require)
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              let confirms = 0;
+              window.confirm = () => { confirms += 1; return false; };
+              document.getElementById('policy-rule-effect').value = 'allow';
+              await saveGlobalSettings();
+              window.confirm = () => { confirms += 1; return true; };
+              document.getElementById('policy-rule-effect').value = 'allow';
+              await saveGlobalSettings();
+              document.body.setAttribute('data-confirms', String(confirms));
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "confirms") == "2"
+        puts = self._puts(result)
+        assert len(puts) == 1, "a declined switch must not be saved"
+        assert puts[0]["rule_effect"] == "allow"
+
+    def test_unchanged_allow_list_saves_without_asking(
+        self, settings_script: str
+    ) -> None:
+        fetches = self._fetches()
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              let confirms = 0;
+              window.confirm = () => { confirms += 1; return true; };
+              await policyLoadConfig();
+              await saveGlobalSettings();
+              document.body.setAttribute('data-confirms', String(confirms));
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "confirms") == "0"
+        (body,) = self._puts(result)
+        assert body["rule_effect"] == "allow"
+
+    def test_mode_switched_elsewhere_is_not_written_back(
+        self, settings_script: str
+    ) -> None:
+        """The page loaded a require-approval list; the server now holds an
+        allow list. Saving the page's stale selector must not invert it."""
+        fetches = self._fetches()
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              let confirms = 0;
+              window.confirm = () => { confirms += 1; return true; };
+              policyState.cardsEffect = 'require_approval';
+              document.getElementById('policy-rule-effect').value = 'require_approval';
+              await saveGlobalSettings();
+              document.body.setAttribute('data-confirms', String(confirms));
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "confirms") == "0"
+        assert self._puts(result) == []
+        assert "Reload the page" in result.dom
+
+    def test_gate_toggle_refuses_when_the_mode_changed_elsewhere(
+        self, settings_script: str
+    ) -> None:
+        fetches = self._fetches()
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              policyState.toolsEffect = 'require_approval';
+              try {
+                await window.syncPolicyRule('ha_call_service', true);
+                document.body.setAttribute('data-threw', 'false');
+              } catch (e) {
+                document.body.setAttribute('data-threw', 'true');
+              }
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "threw") == "true"
+        assert self._puts(result) == []
+
+    def test_card_save_refuses_after_a_tools_reload_saw_a_new_mode(
+        self, settings_script: str
+    ) -> None:
+        """The Tools-tab reload learns of the allow list; the cards on the
+        Policies tab were rendered for a require-approval list and still say
+        so, so a condition saved from them must not land as an approval."""
+        require = {**self.ALLOW_POLICY, "rule_effect": "require_approval"}
+        fetches = {
+            **DEFAULT_FETCHES,
+            "/api/policy/config": {
+                "responses": [
+                    {"status": 200, "json": require},
+                    {"status": 200, "json": self.ALLOW_POLICY},
+                    {"status": 200, "json": self.ALLOW_POLICY},
+                    {"status": 200, "json": self.ALLOW_POLICY},
+                ]
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              policyState.cardsEffect = 'require_approval';
+              await loadPolicyState();
+              try {
+                await savePolicyRule('ha_call_service', {
+                  conditions: [[{path: 'args.entity_id', op: 'eq', value: 'lock.front_door'}]],
+                  remembers: [0], remember_minutes: 0, rememberDirty: false,
+                });
+                document.body.setAttribute('data-threw', 'false');
+              } catch (e) {
+                document.body.setAttribute('data-threw', 'true');
+              }
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "threw") == "true"
+        assert self._puts(result) == []
+
+    def test_approve_everything_rule_leaves_no_tool_gated(
+        self, settings_script: str
+    ) -> None:
+        star = {**self.ALLOW_POLICY, "rules": [{"tool_name": "*", "when": []}]}
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=self._fetches(star),
+            invoke="""
+              await loadPolicyState();
+              document.body.setAttribute(
+                'data-gated', String(isToolGated('ha_call_service')));
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "gated") == "false"

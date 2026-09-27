@@ -119,8 +119,9 @@ class PolicyMiddleware(Middleware):
         # rewrites a retired name before it arrives. Resolving it again costs a
         # dict lookup and removes the ordering dependency, which here is the
         # difference between gated and ungated: rules are keyed on the current
-        # name, and ``evaluate`` returns ALLOW when nothing matches, so a gate
-        # reading a stale name lets the call through.
+        # name, and under a require-approval list ``evaluate`` returns ALLOW
+        # when nothing matches, so a gate reading a stale name lets the call
+        # through (under an allow list it would gate an approved call).
         name = current_tool_name(context.message.name)
         # Normalize stringified JSON containers (a client like Claude Desktop
         # stdio can send a nested parameter, e.g. `selector`, as a JSON

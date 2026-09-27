@@ -506,3 +506,101 @@ class TestCrossSurfaceInterop:
         assert policy["rules"][0]["tool_name"] in {"ha_restart", "ha_call_service"}
         raw = json.loads((get_data_dir() / "tool_policy.json").read_text("utf-8"))
         assert raw["version"] == 2
+
+
+class TestAllowListGuard:
+    """rule_effect defaults to require_approval, so dropping it from a
+    whole-document write would invert a stored allow list (issue #2540)."""
+
+    @pytest.fixture
+    def policy_tools(self):
+        return SecurityPolicyTools(MagicMock(), None)
+
+    async def _store_allow_list(self, policy_tools):
+        await policy_tools.ha_manage_security_policy(
+            action="set",
+            policy={"rule_effect": "allow", "rules": [{"tool_name": "ha_get_state"}]},
+        )
+
+    async def test_omitting_rule_effect_from_an_allow_list_is_rejected(
+        self, policy_tools
+    ):
+        await self._store_allow_list(policy_tools)
+        with pytest.raises(ToolError, match="rule_effect") as exc:
+            await policy_tools.ha_manage_security_policy(
+                action="set", policy={"rules": [{"tool_name": "ha_get_state"}]}
+            )
+        assert "ha_manage_security_policy('get')" in str(exc.value)
+        got = await policy_tools.ha_manage_security_policy(action="get")
+        assert got["data"]["policy"]["rule_effect"] == "allow"
+
+    async def test_omitting_rule_effect_is_fine_for_a_require_approval_list(
+        self, policy_tools
+    ):
+        result = await policy_tools.ha_manage_security_policy(
+            action="set", policy={"rules": []}
+        )
+        assert result["success"] is True
+
+    async def test_switching_back_explicitly_is_allowed_and_warns(self, policy_tools):
+        await self._store_allow_list(policy_tools)
+        result = await policy_tools.ha_manage_security_policy(
+            action="set",
+            policy={
+                "rule_effect": "require_approval",
+                "rules": [{"tool_name": "ha_get_state"}],
+            },
+        )
+        assert any(
+            "switched rule_effect from 'allow' to 'require_approval'" in w
+            for w in result["warnings"]
+        )
+
+    async def test_switching_effect_clears_remember_cache(self):
+        queue = _queue(remembered=True)
+        await SecurityPolicyTools(
+            MagicMock(), SimpleNamespace(approval_queue=queue)
+        ).ha_manage_security_policy(
+            action="set", policy={"rule_effect": "allow", "rules": []}
+        )
+        assert not queue.is_remembered("ha_call_service", "argshash")
+
+    async def test_empty_allow_list_still_warns_while_policies_disabled(
+        self, policy_tools
+    ):
+        # An empty allow list gates every call, so its enforcement state matters.
+        result = await policy_tools.ha_manage_security_policy(
+            action="set", policy={"rule_effect": "allow", "rules": [], "version": 0}
+        )
+        assert any("won't enforce" in w for w in result["warnings"])
+
+    async def test_misspelled_rule_effect_is_rejected(self, policy_tools):
+        # Dropped silently, the typo would store a require-approval list and
+        # turn the intended approvals into gates.
+        with pytest.raises(ToolError, match="rule_efect"):
+            await policy_tools.ha_manage_security_policy(
+                action="set",
+                policy={"rule_efect": "allow", "rules": [{"tool_name": "ha_x"}]},
+            )
+        got = await policy_tools.ha_manage_security_policy(action="get")
+        assert got["data"]["policy"]["rules"] == []
+
+    async def test_adding_an_approving_rule_warns(self, policy_tools):
+        await self._store_allow_list(policy_tools)
+        result = await policy_tools.ha_manage_security_policy(
+            action="set",
+            policy={
+                "rule_effect": "allow",
+                "rules": [{"tool_name": "ha_get_state"}, {"tool_name": "ha_restart"}],
+            },
+        )
+        assert any(
+            "added 1 approving rule(s), covering: ha_restart" in w
+            for w in result["warnings"]
+        )
+
+    async def test_adding_a_gating_rule_does_not_warn(self, policy_tools):
+        result = await policy_tools.ha_manage_security_policy(
+            action="set", policy={"rules": [{"tool_name": "ha_restart"}]}
+        )
+        assert not [w for w in result["warnings"] if "approving rule" in w]

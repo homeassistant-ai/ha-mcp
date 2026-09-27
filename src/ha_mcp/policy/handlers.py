@@ -15,7 +15,12 @@ from starlette.responses import JSONResponse
 from ..utils.config_write_lock import config_write_guard
 from .approval_queue import ApprovalQueue
 from .decision_pin import clear_pin, is_pin_set, pin_status, set_pin, validate_pin
-from .model import Policy
+from .model import (
+    ALLOW_LIST_OMITTED_MESSAGE,
+    PolicyWrite,
+    drops_allow_list,
+    gates_differ,
+)
 from .persistence import load_policy, save_policy
 from .value_sources import (
     all_value_sources_for,
@@ -83,7 +88,7 @@ async def _put_config(
     data_dir: Path, queue: ApprovalQueue, request: Request
 ) -> JSONResponse:
     try:
-        new_policy = Policy.model_validate(await request.json())
+        new_policy = PolicyWrite.model_validate(await request.json())
     except (ValidationError, ValueError) as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     # Optimistic concurrency: reject if the on-disk version moved
@@ -95,6 +100,8 @@ async def _put_config(
     # writer can't slip between the read and the write and lose an update.
     async with config_write_guard():
         current = load_policy(data_dir)
+        if drops_allow_list(new_policy, current):
+            return JSONResponse({"error": ALLOW_LIST_OMITTED_MESSAGE}, status_code=400)
         # Inside the guard: DELETE /api/policy/decision-pin clears the PIN
         # under this same lock, and when the stored policy already has the
         # switch off it does so without bumping the version. Checked before
@@ -125,12 +132,12 @@ async def _put_config(
                 status_code=409,
             )
         save_policy(data_dir, new_policy)
-        # Drop the remember-cache only when rules actually changed.
+        # Drop the remember-cache only when the gates actually changed.
         # Editing just wait_seconds / approval_ttl_minutes shouldn't
-        # invalidate in-flight remembered approvals; only a rule change
-        # could make a previously-approved call now want a different
-        # outcome.
-        if current.rules != new_policy.rules:
+        # invalidate in-flight remembered approvals; only a rule or
+        # rule_effect change could make a previously-approved call now want
+        # a different outcome.
+        if gates_differ(current, new_policy):
             queue.clear_remember_cache()
     return JSONResponse({"saved": True, "version": new_policy.version + 1})
 

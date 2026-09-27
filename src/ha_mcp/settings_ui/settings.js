@@ -220,10 +220,12 @@ let llmApiAvailable = false;
 let saveTimer = null;
 let openGroups = new Set();
 
-// Per-tool "security gated" toggle state mirrors policy.rules from
-// /api/policy/config. A tool is gated iff there's any rule with a
-// matching tool_name (with or without conditions). The Tools tab
-// uses this set to render the third toggle alongside enabled/pinned.
+// Per-tool "security gated" toggle state mirrors the bare (condition-free)
+// rules in policy.rules from /api/policy/config. Under the default
+// require-approval list a bare rule gates its tool; under an allow list
+// (rule_effect 'allow') it approves it, so there the toggle reads "gated"
+// exactly when the tool has NO bare rule. The Tools tab uses isToolGated()
+// to render the third toggle alongside enabled/pinned.
 // `enabled` is tri-state: true/false from the addon-config flag, or
 // null when the features fetch failed — downstream branches need to
 // distinguish "definitively off" from "couldn't determine" so they
@@ -231,7 +233,14 @@ let openGroups = new Set();
 const policyState = {
   enabled: false,
   enabledKnown: false,
-  gatedTools: new Set(),
+  bareRuleTools: new Set(),
+  // rule_effect each surface was last rendered under: the Tools-tab gate
+  // toggles (loadPolicyState) and the Policies-tab cards and selector
+  // (policyLoadConfig) load separately. policyPut refuses a write from a
+  // surface whose mode is stale, so a mode switched elsewhere is neither
+  // written back nor used to save a rule meant for the other mode.
+  toolsEffect: 'require_approval',
+  cardsEffect: 'require_approval',
   // enable_security_policy_tool — registers ha_manage_security_policy, the
   // MCP tool that can rewrite these rules. Independent of `enabled`: it
   // governs who may edit the policy, not whether it is enforced.
@@ -335,23 +344,24 @@ async function loadPolicyState() {
   try {
     const r = await fetch('./api/policy/config');
     if (!r.ok) {
-      // Transient failure — keep the previously-loaded gatedTools (a Set)
-      // rather than clobbering it to empty, so a blip doesn't make the
-      // Tools tab falsely claim nothing is gated.
+      // Transient failure — keep the previously-loaded gate state rather
+      // than clobbering it to empty, so a blip doesn't make the Tools tab
+      // falsely claim nothing is gated.
       console.warn('[ha-mcp] /api/policy/config returned HTTP ' + r.status + '; keeping prior gated-tools state');
       return;
     }
     const p = await r.json();
     // The Tools-tab gate toggle reflects the BARE unconditional rule only
     // (no predicates); conditional rules are managed in the Policies tab.
-    policyState.gatedTools = new Set(
+    policyState.bareRuleTools = new Set(
       (p.rules || [])
         .filter(rule => !rule.when || rule.when.length === 0)
         .map(rule => rule.tool_name)
     );
+    policyState.toolsEffect = effectOf(p);
   } catch (e) {
     // Policy endpoint unavailable (sidecar stub) or network blip — keep the
-    // prior gatedTools rather than resetting it to empty. On first load it
+    // prior gate state rather than resetting it to empty. On first load it
     // is already an empty Set, so the default still holds.
     console.warn('[ha-mcp] failed to load policy config', e);
   }
@@ -361,7 +371,19 @@ async function loadPolicyState() {
 // the 409 (optimistic-concurrency) and other failure paths. The full
 // policy round-trips through every caller, so the version GET'd here
 // goes back out in the PUT body and the server can reject stale writes.
-async function policyPut(policy, opLabel) {
+function effectOf(policy) {
+  return (policy && policy.rule_effect) || 'require_approval';
+}
+
+async function policyPut(policy, opLabel, surfaceEffect, expectedEffect = effectOf(policy)) {
+  // A rule reads the opposite way in the other mode, so never write on the
+  // strength of a mode the user was not shown.
+  if (surfaceEffect !== expectedEffect) {
+    throw new Error(t(
+      'policies.errors.effect_changed', {operation: opLabel},
+      opLabel + ' failed: the policy changed what a matching rule does since this page loaded it. Reload the page, then re-apply your changes.'
+    ));
+  }
   const w = await fetch('./api/policy/config', {
     method: 'PUT',
     headers: {'Content-Type': 'application/json'},
@@ -382,12 +404,20 @@ async function policyPut(policy, opLabel) {
 }
 
 // Where a NEW tool's rules belong in the rule list: before the first
-// wildcard rule, else at the end. find_matching_rule() is first-match (it
-// supplies remember_minutes and the matched_rule shown to the user), so a
-// tool-specific rule appended after a `*` rule would never be the match.
+// wildcard rule, else at the end. In a require-approval list
+// find_matching_rule() is first-match (it supplies remember_minutes and the
+// matched_rule shown to the user), so a tool-specific rule appended after a
+// `*` rule would never be the match. An allow list does not depend on order.
 function wildcardInsertIndex(rules) {
   const idx = rules.findIndex(rule => rule.tool_name === '*');
   return idx === -1 ? rules.length : idx;
+}
+
+function isToolGated(toolName) {
+  // Mirrors bare_rule_gates() in policy/model.py.
+  const bare = policyState.bareRuleTools;
+  if (policyState.toolsEffect === 'allow') return !bare.has(toolName) && !bare.has('*');
+  return bare.has(toolName);
 }
 
 async function syncPolicyRule(toolName, gated) {
@@ -398,10 +428,11 @@ async function syncPolicyRule(toolName, gated) {
   // The gate toggle manages ONLY the bare, unconditional rule (empty `when`)
   // for this tool; predicate-bearing rules authored in the policy editor are
   // preserved. A conditional rule must not be mistaken for the gate (enabling
-  // would silently no-op) nor wiped on un-gate.
+  // would silently no-op) nor wiped on un-gate. Under an allow list the bare
+  // rule approves the tool, so gating it means removing that rule.
   const isBareGate = rule =>
     rule.tool_name === toolName && (!rule.when || rule.when.length === 0);
-  if (gated) {
+  if (gated !== (policy.rule_effect === 'allow')) {
     if (!policy.rules.some(isBareGate)) {
       policy.rules.splice(wildcardInsertIndex(policy.rules), 0,
         {tool_name: toolName, when: [], remember_minutes: 0});
@@ -409,7 +440,7 @@ async function syncPolicyRule(toolName, gated) {
   } else {
     policy.rules = policy.rules.filter(rule => !isBareGate(rule));
   }
-  await policyPut(policy, t('policies.operations.sync_gated', {}, 'Sync gated toggle'));
+  await policyPut(policy, t('policies.operations.sync_gated', {}, 'Sync gated toggle'), policyState.toolsEffect);
 }
 
 async function loadTools() {
@@ -453,7 +484,7 @@ async function loadTools() {
   READ_ONLY_EXEMPT = new Set(data.read_only_exempt || []);
   // Load policy state before the first render so the "security gated"
   // toggle reflects current policy.rules. loadPolicyState() never throws
-  // — it keeps the prior gatedTools on failure.
+  // — it keeps the prior gate state on failure.
   await loadPolicyState();
   syncReadOnlyToggle();
   // /api/settings/info drives the restart-button mode, restart-notice
@@ -1161,7 +1192,7 @@ function render() {
                `title="${policyState.enabled ? '' : escapeHtml(tr('tools.security.enable_first', {}, 'Enable Tool Security Policies in App (add-on) config first.'))}">` +
             `<label class="switch"><input type="checkbox" name="tool:${escapeHtml(t.name)}:gated" data-tool="${escapeHtml(t.name)}" data-field="gated" ` +
               `aria-label="${escapeHtml(tr('tools.aria.security_gated', {title}, `${title} security gated`))}" ` +
-              `${policyState.gatedTools.has(t.name) ? 'checked' : ''} ` +
+              `${isToolGated(t.name) ? 'checked' : ''} ` +
               `${canGate ? '' : 'disabled'}>` +
               `<span class="slider"></span></label>` +
             `<span>${escapeHtml(tr('tools.states.security_gated', {}, 'security gated'))}</span>` +
@@ -1177,15 +1208,17 @@ function render() {
           if (field === 'gated') {
             // Optimistic UI: flip local state, sync to server, rollback on failure.
             // Gated lives in policy.rules (not tool_config), so we skip scheduleSave().
-            const wasGated = policyState.gatedTools.has(t.name);
+            const wasGated = isToolGated(t.name);
             const nowGated = e.target.checked;
-            if (nowGated) policyState.gatedTools.add(t.name);
-            else policyState.gatedTools.delete(t.name);
+            const setBare = gated => {
+              if (gated !== (policyState.toolsEffect === 'allow')) policyState.bareRuleTools.add(t.name);
+              else policyState.bareRuleTools.delete(t.name);
+            };
+            setBare(nowGated);
             try {
               await syncPolicyRule(t.name, nowGated);
             } catch (err) {
-              if (wasGated) policyState.gatedTools.add(t.name);
-              else policyState.gatedTools.delete(t.name);
+              setBare(wasGated);
               e.target.checked = wasGated;
               alert(tr(
                 'policies.errors.update_tool',
@@ -2863,6 +2896,8 @@ async function policyLoadConfig() {
     return;
   }
   const p = await resp.json();
+  policyState.cardsEffect = effectOf(p);
+  document.getElementById('policy-rule-effect').value = policyState.cardsEffect;
   document.getElementById('policy-wait-seconds').value = p.wait_seconds ?? 60;
   document.getElementById('policy-ttl-minutes').value = p.approval_ttl_minutes ?? 5;
   document.getElementById('policy-event-decisions-toggle').checked = !!p.event_decisions_enabled;
@@ -2985,6 +3020,18 @@ function renderPolicyCards(policy) {
   listEl.innerHTML = '';
   policyRuleEdits = {};
   const rules = (policy && policy.rules) || [];
+  const allowList = effectOf(policy) === 'allow';
+  // Swap the keys, not just the text, so a later applyStaticTranslations()
+  // (language switch) keeps the wording of the current mode.
+  const titleEl = document.getElementById('policy-rules-title');
+  titleEl.dataset.i18n = allowList ? 'policies.rules.title_allow' : 'policies.rules.title';
+  titleEl.textContent = allowList
+    ? t('policies.rules.title_allow', {}, 'Approved tools')
+    : t('policies.rules.title', {}, 'Gated tools');
+  emptyEl.dataset.i18nHtml = allowList ? 'policies.rules.empty_allow' : 'policies.rules.empty';
+  emptyEl.innerHTML = allowList
+    ? tHtml('policies.rules.empty_allow', {}, 'No tools approved, so every tool call needs your approval, except tool search and managing pending approvals. Approve a tool by switching off its gate on the <a href="#" data-panel-link="tools">Tools</a> tab.')
+    : tHtml('policies.rules.empty', {}, 'No tools currently security-gated. Enable per-tool gating from the <a href="#" data-panel-link="tools">Tools</a> tab.');
   if (rules.length === 0) {
     emptyEl.style.display = '';
     return;
@@ -3018,7 +3065,7 @@ function renderPolicyCards(policy) {
       {tool_name: toolName, conditions: conditions, remembers: remembers,
        remember_minutes: remember, rememberDirty: false}
     ));
-    listEl.appendChild(renderPolicyCard(toolName, policyRuleEdits[toolName]));
+    listEl.appendChild(renderPolicyCard(toolName, policyRuleEdits[toolName], allowList));
   });
 }
 
@@ -3029,7 +3076,7 @@ function displayPredicate(p) {
   return p.path + ' ' + t(`policies.operators.${p.op}`, {}, p.op) + ' ' + val;
 }
 
-function renderPolicyCard(toolName, rule) {
+function renderPolicyCard(toolName, rule, allowList = false) {
   const card = document.createElement('div');
   card.className = 'policy-rule-card';
   card.dataset.tool = toolName;
@@ -3040,7 +3087,9 @@ function renderPolicyCard(toolName, rule) {
   // predicate; multi-predicate conditions (hand-authored) can be removed.
   const displayCondition = (preds) => (preds.length
     ? preds.map(displayPredicate).join(t('policies.card.and_join', {}, ' AND '))
-    : t('policies.card.always_row', {}, '(always — gates every call to this tool)'));
+    : (allowList
+      ? t('policies.card.always_row_allow', {}, '(always — approves every call to this tool)')
+      : t('policies.card.always_row', {}, '(always — gates every call to this tool)')));
   const predicateRows = rule.conditions.map((preds, i) => (
     '<li class="policy-predicate-row" data-idx="' + i + '">' +
       '<code>' + escapeHtml(displayCondition(preds)) + '</code>' +
@@ -3061,7 +3110,9 @@ function renderPolicyCard(toolName, rule) {
     '</div>' +
     '<div class="policy-rule-predicates">' +
       '<label class="features-sub" style="display:block;margin-bottom:4px">' +
-        escapeHtml(t('policies.card.conditions_intro', {}, 'Require approval when ANY of these conditions matches (no conditions = always require approval):')) +
+        escapeHtml(allowList
+          ? t('policies.card.conditions_intro_allow', {}, 'Approve without asking when ANY condition matches (no conditions = always approve):')
+          : t('policies.card.conditions_intro', {}, 'Require approval when ANY of these conditions matches (no conditions = always require approval):')) +
       '</label>' +
       '<ul class="policy-predicate-list">' + emptyHint + predicateRows + '</ul>' +
       '<button class="policy-add-predicate">' + escapeHtml(t('policies.card.add_condition', {}, '+ Add condition')) + '</button>' +
@@ -3099,7 +3150,9 @@ function renderPolicyCard(toolName, rule) {
         '<div class="policy-predicate-form-error" style="display:none;"></div>' +
       '</div>' +
     '</div>' +
-    '<div class="policy-rule-lifetime">' +
+    // An approving rule never raises an approval, so it has nothing to
+    // remember; the stored value is kept but not offered.
+    '<div class="policy-rule-lifetime"' + (allowList ? ' style="display:none"' : '') + '>' +
       '<label>' + escapeHtml(t('policies.card.remember_for', {}, 'Remember approval for:')) +
         '<input type="number" name="policy:remember-minutes" min="0" max="1440" class="policy-remember-minutes" ' +
           'value="' + (rule.remember_minutes || 0) + '">' +
@@ -3613,7 +3666,8 @@ async function savePolicyRule(toolName, ruleObj) {
   // Expand the card's conditions into ONE rule each (they OR at evaluation —
   // the tool gates if ANY condition matches; a condition's own predicates AND
   // together as sub-parameters). No conditions = a single bare rule that
-  // always requires approval. Replaces all of this tool's rules.
+  // matches every call (gates it, or approves it in an allow list). Replaces
+  // all of this tool's rules.
   const remember = ruleObj.remember_minutes || 0;
   const conditions = ruleObj.conditions || [];
   const remembers = ruleObj.remembers || [];
@@ -3645,7 +3699,7 @@ async function savePolicyRule(toolName, ruleObj) {
   // wildcard's remember_minutes, never the new rule's.
   if (insertAt === -1) insertAt = wildcardInsertIndex(others);
   policy.rules = others.slice(0, insertAt).concat(expanded, others.slice(insertAt));
-  await policyPut(policy, t('policies.operations.save_rule', {}, 'Save rule'));
+  await policyPut(policy, t('policies.operations.save_rule', {}, 'Save rule'), policyState.cardsEffect);
 }
 
 async function removePolicyRule(toolName) {
@@ -3656,7 +3710,7 @@ async function removePolicyRule(toolName) {
   if (!r.ok) throw new Error(t('policies.errors.load', {status: r.status}, 'Could not load policy: ' + r.status));
   const policy = await r.json();
   policy.rules = (policy.rules || []).filter(rule => rule.tool_name !== toolName);
-  await policyPut(policy, t('policies.operations.save_rule', {}, 'Remove rule'));
+  await policyPut(policy, t('policies.operations.save_rule', {}, 'Remove rule'), policyState.cardsEffect);
 }
 
 async function saveGlobalSettings() {
@@ -3681,13 +3735,32 @@ async function saveGlobalSettings() {
     return;
   }
   const policy = await resp.json();
+  const serverEffect = effectOf(policy);
+  const switchedEffect = document.getElementById('policy-rule-effect').value;
+  const effectChanged = switchedEffect !== serverEffect;
+  const effectName = effect => t('policies.global.rule_effect.' + effect, {}, effect);
+  if (effectChanged && serverEffect === policyState.cardsEffect && !confirm(t(
+    'policies.global.rule_effect.confirm',
+    {from: effectName(serverEffect), to: effectName(switchedEffect)},
+    'Switch from "' + effectName(serverEffect) + '" to "' + effectName(switchedEffect) + '"?\n\nEvery rule below then has the opposite effect: calls it gated will run without approval, or calls it approved will need approval. Calls no rule matches flip the other way, and in an allow list conditions match more strictly.'
+  ))) {
+    document.getElementById('policy-rule-effect').value = serverEffect;
+    statusEl.textContent = '';
+    return;
+  }
+  policy.rule_effect = switchedEffect;
   policy.wait_seconds = parseInt(document.getElementById('policy-wait-seconds').value, 10);
   policy.approval_ttl_minutes = parseInt(document.getElementById('policy-ttl-minutes').value, 10);
   policy.event_decisions_enabled = document.getElementById('policy-event-decisions-toggle').checked;
   try {
-    await policyPut(policy, t('policies.operations.save_global', {}, 'Save global settings'));
+    await policyPut(policy, t('policies.operations.save_global', {}, 'Save global settings'), policyState.cardsEffect, serverEffect);
     statusEl.textContent = t('status.saved', {}, 'Saved.');
     showToast(t('status.saved', {}, 'Saved.'));
+    if (effectChanged) {
+      // The rule cards and the Tools-tab toggles both read differently now;
+      // policyLoadConfig() reloads both.
+      await policyLoadConfig();
+    }
   } catch (e) {
     setStatusAlert(statusEl, true);
     statusEl.textContent = e.message;
