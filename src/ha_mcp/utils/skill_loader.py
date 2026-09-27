@@ -37,6 +37,9 @@ import logging
 import re
 from collections.abc import Iterable, Iterator
 from pathlib import Path
+from typing import Any
+
+import yaml  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +148,81 @@ def _skills_dir_at(root: Path) -> Path | None:
     :func:`resolve_skill_files` are the real safety layer.
     """
     return root if root.exists() else None
+
+
+BEST_PRACTICES_SKILL_NAME = "home-assistant-best-practices"
+
+
+def parse_skill_frontmatter(main_file: Path) -> dict | None:
+    """Parse YAML frontmatter from a SKILL.md file.
+
+    Returns the frontmatter dict if valid, or None with a logged
+    warning for each failure case.
+    """
+    try:
+        content = main_file.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.warning("Could not read %s: %s", main_file, e)
+        return None
+
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        logger.warning("No valid frontmatter delimiters in %s", main_file)
+        return None
+
+    try:
+        frontmatter = yaml.safe_load(parts[1])
+    except yaml.YAMLError as e:
+        # yaml.YAMLError exposes `.problem` and `.problem_mark` for
+        # parse errors — both are the entire debugging payload for
+        # an operator trying to fix the SKILL.md.
+        logger.warning("Could not parse YAML frontmatter in %s: %s", main_file, e)
+        return None
+
+    if not isinstance(frontmatter, dict):
+        logger.warning("Frontmatter is not a mapping in %s", main_file)
+        return None
+
+    description = frontmatter.get("description", "")
+    if not description:
+        logger.warning("No description in frontmatter for %s", main_file.parent.name)
+        return None
+    if not isinstance(description, str):
+        # Truthy non-string values (e.g. `description: [foo]` or
+        # `description: 42`) would later crash on `.strip()` in the
+        # callers. Fail closed here so malformed bundles only break
+        # themselves, not the whole skill registration.
+        logger.warning(
+            "Description in frontmatter for %s is not a string (got %s); skipping",
+            main_file.parent.name,
+            type(description).__name__,
+        )
+        return None
+
+    return frontmatter
+
+
+def best_practices_skill(
+    skills_dir: Path | None,
+) -> tuple[str, Path, dict[str, Any]] | None:
+    """Return the bundled best-practices skill, or None when it cannot be served.
+
+    ``ha_get_skill_guide`` registration, every guide call, and the strict
+    best-practices gate all use this one check. The gate fails open when it
+    returns None, because the guide is then unable to publish the
+    acknowledgment key. A symlinked skill folder counts as missing: every
+    file under its target would otherwise become readable.
+    """
+    if skills_dir is None:
+        return None
+    skill_dir = skills_dir / BEST_PRACTICES_SKILL_NAME
+    main_file = skill_dir / "SKILL.md"
+    if skill_dir.is_symlink() or not main_file.is_file():
+        return None
+    frontmatter = parse_skill_frontmatter(main_file)
+    if not frontmatter:
+        return None
+    return (skill_dir.name, skill_dir, frontmatter)
 
 
 def get_skills_dir() -> Path | None:

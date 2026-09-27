@@ -165,12 +165,13 @@ def strict_bps_effective() -> bool:
     * A ``ValidationError`` from the settings load — a corrupt settings env
       must not brick every gated write. Mirrors the narrow degrade in
       ``build_skill_content`` (util_helpers.py).
-    * ``get_skills_dir()`` returns None (skills-vendor submodule absent) —
-      with the vendor missing the key is unobtainable, so the gate would
-      otherwise lock out every gated write with no recovery path.
+    * No best-practices skill the guide can serve (skills-vendor
+      submodule absent, skill folder missing or symlinked, or SKILL.md
+      frontmatter unparseable). The key is then unobtainable, so the gate
+      would otherwise lock out every gated write with no recovery path.
     """
     from .config import get_global_settings
-    from .utils.skill_loader import get_skills_dir
+    from .utils.skill_loader import best_practices_skill, get_skills_dir
 
     try:
         settings = get_global_settings()
@@ -185,13 +186,13 @@ def strict_bps_effective() -> bool:
     if not (settings.enable_mandatory_bps and settings.enable_strict_mandatory_bps):
         return False
 
-    if get_skills_dir() is None:
+    if best_practices_skill(get_skills_dir()) is None:
         _warn_degraded_once(
             "skills-vendor",
-            "strict-BPS gate disabled: skills-vendor submodule is missing, so "
-            "the acknowledgment key is unobtainable — allowing gated writes "
-            "through rather than locking them out. Run "
-            "`git submodule update --init` on the server install.",
+            "strict-BPS gate disabled: the best-practices skill in skills-vendor "
+            "is missing or unreadable, so the acknowledgment key is "
+            "unobtainable. Allowing gated writes through rather than locking "
+            "them out. Run `git submodule update --init` on the server install.",
         )
         return False
 

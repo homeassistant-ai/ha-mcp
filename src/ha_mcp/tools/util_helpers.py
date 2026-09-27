@@ -29,6 +29,9 @@ from ..client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
+from ..utils.skill_loader import (
+    BEST_PRACTICES_SKILL_NAME as _HA_BEST_PRACTICES_SKILL_NAME,
+)
 from .component_api import get_component_caps
 
 logger = logging.getLogger(__name__)
@@ -2225,8 +2228,6 @@ def _resolve_data_path(data: Any, path: str) -> tuple[Any, str | None]:
 # ---------------------------------------------------------------------------
 # Skill content assembly (write-tool MandatoryBPS parameter, issue #1182)
 # ---------------------------------------------------------------------------
-
-_HA_BEST_PRACTICES_SKILL_NAME = "home-assistant-best-practices"
 
 
 def build_skill_content(

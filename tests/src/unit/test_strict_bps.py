@@ -78,7 +78,7 @@ def _patch_skills_dir(monkeypatch, value: Path | None) -> None:
 class TestStrictBpsEffective:
     def test_both_on_is_effective(self, monkeypatch, tmp_path):
         _patch_settings(monkeypatch, parent=True, child=True)
-        _patch_skills_dir(monkeypatch, tmp_path)
+        _patch_skills_dir(monkeypatch, _best_practices_skills_dir(tmp_path))
         assert strict_bps_effective() is True
 
     def test_parent_off_is_not_effective(self, monkeypatch, tmp_path):
@@ -112,10 +112,12 @@ class TestStrictBpsEffective:
         ]
         assert len(warned) == 1
 
-    def test_missing_skills_dir_fails_open(self, monkeypatch, caplog):
-        """Both flags on but skills-vendor absent ⇒ False (key unobtainable)."""
+    def test_unservable_skill_fails_open(self, monkeypatch, caplog, tmp_path):
+        """Both flags on, skills root present, but no best-practices skill
+        the guide can serve: the key is unobtainable, so gated writes must
+        pass instead of deadlocking on a guide that cannot publish it."""
         _patch_settings(monkeypatch, parent=True, child=True)
-        _patch_skills_dir(monkeypatch, None)
+        _patch_skills_dir(monkeypatch, tmp_path)
         monkeypatch.setattr("ha_mcp.strict_bps._DEGRADE_WARNED", set())
         with caplog.at_level(logging.WARNING, logger="ha_mcp.strict_bps"):
             assert strict_bps_effective() is False

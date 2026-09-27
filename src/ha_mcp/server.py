@@ -13,7 +13,6 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
-import yaml  # type: ignore[import-untyped]
 from pydantic import Field
 
 from ha_mcp._vendor.mcp.types import Icon
@@ -24,6 +23,11 @@ from .http_transport import HttpTransportFastMCP as FastMCP
 from .server_lifespan import server_lifespan
 from .tools.helpers import raise_tool_error
 from .transforms import DEFAULT_PINNED_TOOLS
+from .utils.skill_loader import (
+    BEST_PRACTICES_SKILL_NAME,
+    best_practices_skill,
+    parse_skill_frontmatter,
+)
 
 if TYPE_CHECKING:
     from .client.rest_client import HomeAssistantClient
@@ -473,56 +477,7 @@ class HomeAssistantSmartMCPServer:
 
         return instructions
 
-    @staticmethod
-    def _parse_skill_frontmatter(main_file: Path) -> dict | None:
-        """Parse YAML frontmatter from a SKILL.md file.
-
-        Returns the frontmatter dict if valid, or None with a logged
-        warning for each failure case.
-        """
-        try:
-            content = main_file.read_text(encoding="utf-8")
-        except OSError as e:
-            logger.warning("Could not read %s: %s", main_file, e)
-            return None
-
-        parts = content.split("---", 2)
-        if len(parts) < 3:
-            logger.warning("No valid frontmatter delimiters in %s", main_file)
-            return None
-
-        try:
-            frontmatter = yaml.safe_load(parts[1])
-        except yaml.YAMLError as e:
-            # yaml.YAMLError exposes `.problem` and `.problem_mark` for
-            # parse errors — both are the entire debugging payload for
-            # an operator trying to fix the SKILL.md.
-            logger.warning("Could not parse YAML frontmatter in %s: %s", main_file, e)
-            return None
-
-        if not isinstance(frontmatter, dict):
-            logger.warning("Frontmatter is not a mapping in %s", main_file)
-            return None
-
-        description = frontmatter.get("description", "")
-        if not description:
-            logger.warning(
-                "No description in frontmatter for %s", main_file.parent.name
-            )
-            return None
-        if not isinstance(description, str):
-            # Truthy non-string values (e.g. `description: [foo]` or
-            # `description: 42`) would later crash on `.strip()` in the
-            # callers. Fail closed here so malformed bundles only break
-            # themselves, not the whole skill registration.
-            logger.warning(
-                "Description in frontmatter for %s is not a string (got %s); skipping",
-                main_file.parent.name,
-                type(description).__name__,
-            )
-            return None
-
-        return frontmatter
+    _parse_skill_frontmatter = staticmethod(parse_skill_frontmatter)
 
     def _build_skill_block(self, skill_name: str, main_file: Path) -> str | None:
         """Build an instruction block for a single skill.
@@ -1782,29 +1737,6 @@ class HomeAssistantSmartMCPServer:
             logger.warning("Error reading skill files in %s: %s", skill_dir, e)
         return files
 
-    def _best_practices_skill(
-        self, skills_dir: Path | None
-    ) -> tuple[str, Path, dict[str, Any]] | None:
-        """Return the bundled best-practices skill, or None when it cannot be served.
-
-        Registration and every call use this one check, so the tool
-        description and the call agree on whether the skill is available.
-        A symlinked skill folder counts as missing: every file under its
-        target would otherwise become readable.
-        """
-        from .tools.util_helpers import _HA_BEST_PRACTICES_SKILL_NAME
-
-        if skills_dir is None:
-            return None
-        skill_dir = skills_dir / _HA_BEST_PRACTICES_SKILL_NAME
-        main_file = skill_dir / "SKILL.md"
-        if skill_dir.is_symlink() or not main_file.is_file():
-            return None
-        frontmatter = self._parse_skill_frontmatter(main_file)
-        if not frontmatter:
-            return None
-        return (skill_dir.name, skill_dir, frontmatter)
-
     def _register_skill_guide_tool(self, skills_dir: Path | None) -> int:
         """Register the ``ha_get_skill_guide`` tool unconditionally.
 
@@ -1819,7 +1751,7 @@ class HomeAssistantSmartMCPServer:
         clients that don't read server instructions (claude.ai) still see
         its trigger conditions in the catalog.
         """
-        skill = self._best_practices_skill(skills_dir)
+        skill = best_practices_skill(skills_dir)
 
         if skill:
             # Keeps the "CALL THIS FIRST" framing so claude.ai's
@@ -1904,9 +1836,8 @@ class HomeAssistantSmartMCPServer:
         same lookup. Failures raise ``ToolError`` (via
         ``raise_tool_error``) per .gemini/styleguide.md.
         """
-        from .tools.util_helpers import _HA_BEST_PRACTICES_SKILL_NAME as skill
-
-        entry = self._best_practices_skill(skills_dir)
+        skill = BEST_PRACTICES_SKILL_NAME
+        entry = best_practices_skill(skills_dir)
         if entry is None:
             raise_tool_error(
                 create_error_response(
