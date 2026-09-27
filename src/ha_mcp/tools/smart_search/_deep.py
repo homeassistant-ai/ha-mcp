@@ -1347,11 +1347,11 @@ class DeepSearchMixin(SceneSearchMixin):
             graph_surfaces_skipped=graph_surfaces_skipped,
             graph_unavailable=graph_unavailable,
         )
-        # ``is True``: the client is a MagicMock in unit tests, and a failure
-        # sample names only the first error, not every one.
+        # Keyed on the client, not the failure sample, which names only the first
+        # error. ``getattr``/``is True`` because test doubles are duck-typed.
         if (
             automation_failed or script_failed or scene_stats.get("failed")
-        ) and self.client.admin_route_refused is True:
+        ) and getattr(self.client, "admin_route_refused", False) is True:
             response.setdefault("warnings", []).append(NON_ADMIN_TOKEN_WARNING)
         return response
 
