@@ -1610,3 +1610,23 @@ async def test_the_channel_attempt_runs_before_the_announcement_latch(queue):
     assert notified_when_channel_opened[0] is False
     assert entries[0]._notified is True
     client.fire_event.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_misspelled_key_in_the_stored_file_fails_closed(queue, tmp_path):
+    """A hand-edited "rule_efect" must block calls, not read an allow list
+    as a require-approval list that lets everything else run (issue #2540)."""
+    from ha_mcp.policy.persistence import POLICY_FILENAME, load_policy
+
+    (tmp_path / POLICY_FILENAME).write_text(
+        json.dumps({"rule_efect": "allow", "rules": [{"tool_name": "ha_get_state"}]})
+    )
+    mw = PolicyMiddleware(
+        policy_provider=lambda: load_policy(tmp_path), queue=queue, wait_seconds=0
+    )
+    call_next = AsyncMock()
+    with pytest.raises(ToolError, match="POLICY_LOAD_FAILED"):
+        await mw.on_call_tool(
+            make_context("ha_call_service", {"domain": "lock"}), call_next
+        )
+    call_next.assert_not_awaited()

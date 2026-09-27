@@ -252,6 +252,16 @@ class TestAllowListSplittableStrings:
         args = {"domain": "lock", "service": "unlock", "entity_id": entity_id}
         assert evaluate("ha_call_service", args, policy) == Verdict.REQUIRE_APPROVAL
 
+    @pytest.mark.parametrize(
+        "op,value", [("regex", r"^light\."), ("contains", "light."), ("in", ["light.a"])]
+    )
+    @pytest.mark.parametrize("entity_id", ["light.a,lock.front_door", "light.a "])
+    def test_splittable_string_fails_positive_ops_too(self, entity_id, op, value):
+        policy = _allow_one("args.entity_id", op, value)
+        args = {"entity_id": entity_id}
+        assert evaluate("ha_call_service", args, policy) == Verdict.REQUIRE_APPROVAL
+        assert evaluate("ha_call_service", {"entity_id": "light.a"}, policy) == Verdict.ALLOW
+
     def test_plain_other_entity_is_approved(self):
         policy = _allow_one("args.entity_id", "neq", "lock.x")
         assert (
@@ -266,6 +276,19 @@ class TestAllowListObjectValues:
         policy = _allow_one("args.*", "neq", "lock.front")
         args = {"target": {"entity_id": "lock.front"}}
         assert evaluate("ha_call_service", args, policy) == Verdict.REQUIRE_APPROVAL
+
+
+    def test_not_in_does_not_approve_an_object(self):
+        policy = _allow_one("args.*", "not_in", ["lock.front"])
+        args = {"target": {"entity_id": "lock.front"}}
+        assert evaluate("ha_call_service", args, policy) == Verdict.REQUIRE_APPROVAL
+
+    def test_object_is_approved_only_by_exact_eq(self):
+        target = {"entity_id": "light.a"}
+        policy = _allow_one("args.target", "eq", target)
+        assert evaluate("ha_call_service", {"target": target}, policy) == Verdict.ALLOW
+        other = {"target": {"entity_id": "lock.front"}}
+        assert evaluate("ha_call_service", other, policy) == Verdict.REQUIRE_APPROVAL
 
 
 class TestAllowListDispatch:

@@ -1833,7 +1833,7 @@ class TestPolicyTabFlow:
             settings_script,
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
-            invoke="await window.syncPolicyRule('ha_call_service', false);",
+            invoke="await loadPolicyState(); await window.syncPolicyRule('ha_call_service', false);",
         )
         _assert_clean_init(result)
         puts = [
@@ -1880,7 +1880,7 @@ class TestPolicyTabFlow:
             settings_script,
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
-            invoke="await window.syncPolicyRule('ha_call_service', true);",
+            invoke="await loadPolicyState(); await window.syncPolicyRule('ha_call_service', true);",
         )
         _assert_clean_init(result)
         puts = [
@@ -1916,6 +1916,7 @@ class TestPolicyTabFlow:
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
             invoke="""
+              await policyLoadConfig();
               await window.savePolicyRule('ha_call_service', {
                 tool_name: 'ha_call_service',
                 conditions: [
@@ -1961,6 +1962,7 @@ class TestPolicyTabFlow:
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
             invoke="""
+              await policyLoadConfig();
               await window.savePolicyRule('ha_call_service', {
                 tool_name: 'ha_call_service',
                 conditions: [
@@ -2015,6 +2017,7 @@ class TestPolicyTabFlow:
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
             invoke="""
+              await policyLoadConfig();
               await window.savePolicyRule('ha_call_service', {
                 tool_name: 'ha_call_service',
                 conditions: [[{path: 'args.domain', op: 'eq', value: 'lock'}]],
@@ -2059,6 +2062,7 @@ class TestPolicyTabFlow:
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
             invoke="""
+              await policyLoadConfig();
               await window.savePolicyRule('ha_call_service', {
                 tool_name: 'ha_call_service',
                 conditions: [[{path: 'args.domain', op: 'eq', value: 'lock'}]],
@@ -2101,7 +2105,7 @@ class TestPolicyTabFlow:
             settings_script,
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
-            invoke="await window.syncPolicyRule('ha_call_service', true);",
+            invoke="await loadPolicyState(); await window.syncPolicyRule('ha_call_service', true);",
         )
         _assert_clean_init(result)
         puts = [
@@ -7881,6 +7885,7 @@ class TestAllowListPolicyUi:
             initial_html=_policy_panel_dom(),
             fetch_map=fetches,
             invoke="""
+              await policyLoadConfig();
               let confirms = 0;
               window.confirm = () => { confirms += 1; return false; };
               document.getElementById('policy-rule-effect').value = 'allow';
@@ -8021,3 +8026,142 @@ class TestAllowListPolicyUi:
         )
         _assert_clean_init(result)
         assert _probe(result, "gated") == "false"
+
+    ONE_CONDITION = {
+        **ALLOW_POLICY,
+        "rules": [
+            {
+                "tool_name": "ha_call_service",
+                "when": [{"path": "args.domain", "op": "eq", "value": "light"}],
+                "remember_minutes": 0,
+            }
+        ],
+    }
+
+    def test_removing_the_last_condition_asks_before_approving_everything(
+        self, settings_script: str
+    ) -> None:
+        """Without conditions an allow-list card approves every call to the
+        tool; that is never saved without the user confirming it."""
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=self._fetches(self.ONE_CONDITION),
+            invoke="""
+              await policyLoadConfig();
+              let asked = 0;
+              window.confirm = () => { asked += 1; return false; };
+              document.querySelector('.policy-remove-predicate').click();
+              await new Promise(r => setTimeout(r, 200));
+              document.body.setAttribute('data-asked', String(asked));
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "asked") == "1"
+        assert self._puts(result) == []
+
+    def test_card_redrawn_after_an_edit_keeps_allow_list_wording(
+        self, settings_script: str
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=self._fetches(self.ONE_CONDITION),
+            invoke="""
+              await policyLoadConfig();
+              window.confirm = () => true;
+              document.querySelector('.policy-remove-predicate').click();
+              await new Promise(r => setTimeout(r, 200));
+            """,
+        )
+        _assert_clean_init(result)
+        (body,) = self._puts(result)
+        assert body["rules"] == [
+            {"tool_name": "ha_call_service", "when": [], "remember_minutes": 0}
+        ]
+        assert "Approve without asking" in result.dom
+        assert "Require approval when ANY" not in result.dom
+        assert 'class="policy-rule-lifetime" style="display:none"' in result.dom
+
+    def test_rule_removal_refuses_when_the_mode_changed_elsewhere(
+        self, settings_script: str
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=self._fetches(),
+            invoke="""
+              policyState.cardsEffect = 'require_approval';
+              try {
+                await removePolicyRule('ha_get_state');
+                document.body.setAttribute('data-threw', 'false');
+              } catch (e) {
+                document.body.setAttribute('data-threw', 'true');
+              }
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "threw") == "true"
+        assert self._puts(result) == []
+
+    def test_write_before_the_mode_was_read_says_so(
+        self, settings_script: str
+    ) -> None:
+        result = run_script(
+            settings_script,
+            initial_html=_policy_panel_dom(),
+            fetch_map=self._fetches(),
+            invoke="""
+              policyState.toolsEffect = null;
+              try {
+                await window.syncPolicyRule('ha_call_service', true);
+              } catch (e) {
+                document.body.setAttribute('data-msg', e.message);
+              }
+            """,
+        )
+        _assert_clean_init(result)
+        assert "could not read what a matching rule does" in (_probe(result, "msg") or "")
+        assert self._puts(result) == []
+
+    def test_gate_toggle_click_under_an_allow_list(self, settings_script: str) -> None:
+        """Ticking "security gated" on an approved tool removes its approval,
+        and the optimistic state follows the allow-list reading."""
+        tool = {"name": "ha_get_state", "title": "Get State", "category": "read",
+                "description": "Read a state."}
+        fetches = {
+            **self._fetches(),
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {"tools": [tool], "states": {}, "env_pinned": {},
+                         "read_only_exempt": []},
+            },
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {"enable_tool_security_policies": {
+                        "value": True, "origin": "default", "editable": True,
+                        "type": "bool"}},
+                    "beta_sub_flags": [], "is_addon": False,
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const box = document.querySelector('input[name="tool:ha_get_state:gated"]');
+              document.body.setAttribute('data-before', String(box.checked));
+              box.checked = true;
+              box.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 200));
+              document.body.setAttribute('data-gated', String(isToolGated('ha_get_state')));
+            """,
+        )
+        _assert_clean_init(result)
+        assert _probe(result, "before") == "false"
+        (body,) = self._puts(result)
+        assert body["rules"] == []
+        assert _probe(result, "gated") == "true"

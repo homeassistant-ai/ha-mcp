@@ -107,14 +107,15 @@ class Policy(BaseModel):
     matches more strictly in that mode, so neither a case variant nor one
     listed value among unlisted ones can ride an approval.
 
-    ``extra="ignore"`` so policy files written by older builds (which may
-    carry fields since dropped from the schema) still load; dropped fields
-    are silently discarded on next save. Predicate/Rule keep
-    ``extra="forbid"`` since those are constructed from UI / user-typed
-    JSON where typos should fail loudly.
+    ``extra="forbid"``, like Predicate and Rule: an unknown key is refused
+    on every write and fails the load of a stored file (the middleware then
+    fails closed) instead of being dropped, because a dropped misspelling
+    such as ``"rule_efect": "allow"`` would silently read an allow list as a
+    require-approval list. No released build wrote a top-level field this
+    model lacks.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     wait_seconds: int = Field(default=60, ge=5, le=600)
     approval_ttl_minutes: int = Field(default=5, ge=1, le=60)
@@ -188,14 +189,3 @@ def bare_rule_gates(policy: Policy, tool: str) -> bool:
     if policy.rule_effect == "allow":
         return tool not in bare and "*" not in bare
     return tool in bare
-
-
-class PolicyWrite(Policy):
-    """``Policy`` for incoming writes: unknown keys are refused.
-
-    ``Policy`` ignores unknown keys so files from older builds still load,
-    but a write is where a typo lands: ``"rule_efect": "allow"`` would store
-    a require-approval list and turn the intended approvals into gates.
-    """
-
-    model_config = ConfigDict(extra="forbid")

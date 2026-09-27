@@ -17,7 +17,7 @@ from .approval_queue import ApprovalQueue
 from .decision_pin import clear_pin, is_pin_set, pin_status, set_pin, validate_pin
 from .model import (
     ALLOW_LIST_OMITTED_MESSAGE,
-    PolicyWrite,
+    Policy,
     drops_allow_list,
     gates_differ,
 )
@@ -88,7 +88,7 @@ async def _put_config(
     data_dir: Path, queue: ApprovalQueue, request: Request
 ) -> JSONResponse:
     try:
-        new_policy = PolicyWrite.model_validate(await request.json())
+        new_policy = Policy.model_validate(await request.json())
     except (ValidationError, ValueError) as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     # Optimistic concurrency: reject if the on-disk version moved

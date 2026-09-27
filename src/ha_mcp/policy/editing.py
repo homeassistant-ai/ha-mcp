@@ -90,7 +90,7 @@ async def set_policy(
     import asyncio
 
     from ..utils.config_write_lock import get_config_write_lock, run_with_file_lock
-    from .model import PolicyWrite
+    from .model import Policy
 
     if not isinstance(policy, dict):
         raise_tool_error(
@@ -116,7 +116,7 @@ async def set_policy(
             )
         )
     try:
-        new_policy = PolicyWrite.model_validate(policy)
+        new_policy = Policy.model_validate(policy)
     except (ValidationError, ValueError) as exc:
         raise_tool_error(
             create_error_response(

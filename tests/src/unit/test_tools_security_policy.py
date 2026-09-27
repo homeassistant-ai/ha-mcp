@@ -556,6 +556,16 @@ class TestAllowListGuard:
             for w in result["warnings"]
         )
 
+    async def test_switching_to_an_allow_list_warns(self, policy_tools):
+        result = await policy_tools.ha_manage_security_policy(
+            action="set", policy={"rule_effect": "allow", "rules": []}
+        )
+        assert any(
+            "switched rule_effect from 'require_approval' to 'allow'" in w
+            and "every other call requires approval" in w
+            for w in result["warnings"]
+        )
+
     async def test_switching_effect_clears_remember_cache(self):
         queue = _queue(remembered=True)
         await SecurityPolicyTools(

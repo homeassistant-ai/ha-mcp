@@ -126,6 +126,14 @@ class TestMigration:
         assert raw["rules"] == [rule]
         assert raw["rule_effect"] == "allow"
 
+    def test_unstamped_file_with_unknown_key_is_left_for_the_load_to_refuse(
+        self, tmp_path
+    ):
+        payload = {"rule_efect": "allow", "version": 2, "rules": []}
+        _write_raw(tmp_path, payload)
+        assert migrate_policy_any_semantics(tmp_path) is False
+        assert _read_raw(tmp_path) == payload
+
     def test_migration_runs_once(self, tmp_path):
         _write_raw(
             tmp_path,

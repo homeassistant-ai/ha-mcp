@@ -236,11 +236,12 @@ const policyState = {
   bareRuleTools: new Set(),
   // rule_effect each surface was last rendered under: the Tools-tab gate
   // toggles (loadPolicyState) and the Policies-tab cards and selector
-  // (policyLoadConfig) load separately. policyPut refuses a write from a
-  // surface whose mode is stale, so a mode switched elsewhere is neither
-  // written back nor used to save a rule meant for the other mode.
-  toolsEffect: 'require_approval',
-  cardsEffect: 'require_approval',
+  // (renderPolicyCards) load separately. null until that surface loaded.
+  // policyPut refuses a write from a surface whose mode is stale or was
+  // never read, so a mode switched elsewhere is neither written back nor
+  // used to save a rule meant for the other mode.
+  toolsEffect: null,
+  cardsEffect: null,
   // enable_security_policy_tool — registers ha_manage_security_policy, the
   // MCP tool that can rewrite these rules. Independent of `enabled`: it
   // governs who may edit the policy, not whether it is enforced.
@@ -378,6 +379,12 @@ function effectOf(policy) {
 async function policyPut(policy, opLabel, surfaceEffect, expectedEffect = effectOf(policy)) {
   // A rule reads the opposite way in the other mode, so never write on the
   // strength of a mode the user was not shown.
+  if (surfaceEffect === null) {
+    throw new Error(t(
+      'policies.errors.effect_unknown', {operation: opLabel},
+      opLabel + ' failed: this page could not read what a matching rule does. Reload the page, then re-apply your changes.'
+    ));
+  }
   if (surfaceEffect !== expectedEffect) {
     throw new Error(t(
       'policies.errors.effect_changed', {operation: opLabel},
@@ -2896,8 +2903,7 @@ async function policyLoadConfig() {
     return;
   }
   const p = await resp.json();
-  policyState.cardsEffect = effectOf(p);
-  document.getElementById('policy-rule-effect').value = policyState.cardsEffect;
+  document.getElementById('policy-rule-effect').value = effectOf(p);
   document.getElementById('policy-wait-seconds').value = p.wait_seconds ?? 60;
   document.getElementById('policy-ttl-minutes').value = p.approval_ttl_minutes ?? 5;
   document.getElementById('policy-event-decisions-toggle').checked = !!p.event_decisions_enabled;
@@ -3020,7 +3026,9 @@ function renderPolicyCards(policy) {
   listEl.innerHTML = '';
   policyRuleEdits = {};
   const rules = (policy && policy.rules) || [];
-  const allowList = effectOf(policy) === 'allow';
+  // The cards (and every card re-rendered in place later) read this.
+  policyState.cardsEffect = effectOf(policy);
+  const allowList = policyState.cardsEffect === 'allow';
   // Swap the keys, not just the text, so a later applyStaticTranslations()
   // (language switch) keeps the wording of the current mode.
   const titleEl = document.getElementById('policy-rules-title');
@@ -3065,7 +3073,7 @@ function renderPolicyCards(policy) {
       {tool_name: toolName, conditions: conditions, remembers: remembers,
        remember_minutes: remember, rememberDirty: false}
     ));
-    listEl.appendChild(renderPolicyCard(toolName, policyRuleEdits[toolName], allowList));
+    listEl.appendChild(renderPolicyCard(toolName, policyRuleEdits[toolName]));
   });
 }
 
@@ -3076,7 +3084,8 @@ function displayPredicate(p) {
   return p.path + ' ' + t(`policies.operators.${p.op}`, {}, p.op) + ' ' + val;
 }
 
-function renderPolicyCard(toolName, rule, allowList = false) {
+function renderPolicyCard(toolName, rule) {
+  const allowList = policyState.cardsEffect === 'allow';
   const card = document.createElement('div');
   card.className = 'policy-rule-card';
   card.dataset.tool = toolName;
@@ -3659,6 +3668,14 @@ function renderPolicyCard(toolName, rule, allowList = false) {
 }
 
 async function savePolicyRule(toolName, ruleObj) {
+  // Under an allow list a card left without conditions approves every call
+  // to the tool: the loosening direction, so it is never saved silently.
+  if (policyState.cardsEffect === 'allow' && !(ruleObj.conditions || []).length && !confirm(t(
+    'policies.card.confirm_approve_all', {tool: toolName},
+    'Approve every call to "' + toolName + '" without asking?'
+  ))) {
+    throw new Error(t('policies.card.not_saved', {}, 'Not saved.'));
+  }
   const r = await fetch('./api/policy/config');
   if (!r.ok) throw new Error(t('policies.errors.load', {status: r.status}, 'Could not load policy: ' + r.status));
   const policy = await r.json();

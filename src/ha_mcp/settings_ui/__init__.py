@@ -216,7 +216,7 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
 
     from ..policy.decision_pin import is_pin_set
     from ..policy.handlers import build_decision_pin_handlers
-    from ..policy.model import ALLOW_LIST_OMITTED_MESSAGE, PolicyWrite, drops_allow_list
+    from ..policy.model import ALLOW_LIST_OMITTED_MESSAGE, Policy, drops_allow_list
     from ..policy.persistence import load_policy, save_policy
 
     async def get_config(_: Request) -> JSONResponse:
@@ -232,7 +232,7 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
 
     async def put_config(request: Request) -> JSONResponse:
         try:
-            new_policy = PolicyWrite.model_validate(await request.json())
+            new_policy = Policy.model_validate(await request.json())
         except (ValidationError, ValueError) as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         # Mirror main-server optimistic concurrency: reject if on-disk

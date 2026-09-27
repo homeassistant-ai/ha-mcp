@@ -38,27 +38,16 @@ def test_save_and_roundtrip(tmp_path: Path):
     assert loaded.rules[0].remember_minutes == 5
 
 
-def test_load_drops_unknown_fields(tmp_path: Path):
-    """``extra='ignore'`` lets policies written by older builds load — fields
-    since dropped from the schema (e.g. ``default_action``, ``enabled``)
-    must NOT cause ValidationError; they're silently discarded so the next
-    save normalises the file."""
+def test_load_refuses_unknown_fields(tmp_path: Path):
+    """An unknown key fails the load instead of being dropped: a dropped
+    misspelling such as "rule_efect": "allow" would read an allow list as a
+    require-approval list (issue #2540). The middleware turns the ValueError
+    into a fail-closed POLICY_LOAD_FAILED."""
     (tmp_path / POLICY_FILENAME).write_text(
-        json.dumps(
-            {
-                "wait_seconds": 60,
-                "approval_ttl_minutes": 5,
-                "rules": [],
-                "version": 7,
-                "default_action": "deny",  # never-shipped field
-                "enabled": True,  # dropped during this PR
-            }
-        )
+        json.dumps({"rule_efect": "allow", "rules": [], "version": 7})
     )
-    p = load_policy(tmp_path)
-    assert p.version == 7
-    assert p.rules == []
-    assert not hasattr(p, "enabled")  # silently discarded
+    with pytest.raises(ValueError, match="rule_efect"):
+        load_policy(tmp_path)
 
 
 def test_save_writes_atomically(tmp_path: Path):
