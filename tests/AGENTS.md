@@ -111,7 +111,7 @@ asserts both halves.
 
 ## Test Design Rules
 
-Every unit, E2E and JS test follows these. Reviewers check new and changed
+Every test under `tests/` follows these. Reviewers check new and changed
 tests against them.
 
 1. **Test our code, not the platform.** Assert on behaviour this repository
