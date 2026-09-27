@@ -45,6 +45,8 @@ REPO_ROOT = TESTS_DIR.parent
 sys.path.insert(0, str(TESTS_DIR))
 from test_constants import HA_TEST_IMAGE, TEST_TOKEN  # noqa: E402
 from uat._logging import configure_cli_logging  # noqa: E402
+from uat.codex_agent import command as codex_command  # noqa: E402
+from uat.codex_agent import parse_events, persist_auth, prepare_home  # noqa: E402
 from uat.ha_wait import wait_for_ha_ready  # noqa: E402
 
 HA_IMAGE = HA_TEST_IMAGE
@@ -394,10 +396,17 @@ def _assemble_cli_result(
     return result
 
 
-async def run_cli(cmd: list[str], timeout: int, cwd: Path | None = None) -> dict:
+async def run_cli(
+    cmd: list[str],
+    timeout: int,
+    cwd: Path | None = None,
+    env_override: dict[str, str] | None = None,
+) -> dict:
     """Run a CLI command and capture output."""
     # Strip CLAUDECODE env var to allow nested Claude CLI sessions
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    if env_override:
+        env.update(env_override)
 
     start = time.monotonic()
     # Default for the response schema; both return paths re-assign before
@@ -534,6 +543,8 @@ async def _run_agent_phase(
     max_tools: int | None,
     no_think: bool,
     max_tokens: int | None,
+    codex_home: Path | None = None,
+    codex_workdir: Path | None = None,
 ) -> dict:
     """Build the agent command for one phase and run it, returning the result."""
     if agent_name == "claude":
@@ -557,6 +568,16 @@ async def _run_agent_phase(
             max_tokens=max_tokens,
         )
         return await run_cli(cmd, timeout)
+    elif agent_name == "codex":
+        assert codex_home is not None and codex_workdir is not None
+        assert model is not None
+        raw = await run_cli(
+            codex_command(prompt, model, codex_workdir),
+            timeout,
+            cwd=codex_workdir,
+            env_override={"CODEX_HOME": str(codex_home)},
+        )
+        return parse_events(raw["output"], raw)
     else:
         return {
             "completed": False,
@@ -609,12 +630,17 @@ async def run_agent_scenario(
     # Prepare MCP config
     stdio_config_path: Path | None = None
     gemini_workdir: Path | None = None
+    codex_root: Path | None = None
+    codex_home: Path | None = None
 
     if agent_name in ("claude", "openai"):
         stdio_config_path = write_stdio_mcp_config(ha_url, ha_token, branch, extra_env)
     elif agent_name == "gemini":
         gemini_workdir = Path(tempfile.mkdtemp(prefix="gemini_bat_"))
         write_gemini_mcp_config(ha_url, ha_token, branch, gemini_workdir, extra_env)
+    elif agent_name == "codex":
+        config = build_stdio_mcp_config(ha_url, ha_token, branch, extra_env)
+        codex_root, codex_home = prepare_home(config)
 
     try:
         for phase in ("setup_prompt", "test_prompt", "teardown_prompt"):
@@ -637,6 +663,8 @@ async def run_agent_scenario(
                 max_tools=max_tools,
                 no_think=no_think,
                 max_tokens=max_tokens,
+                codex_home=codex_home,
+                codex_workdir=codex_root / "work" if codex_root else None,
             )
 
             results[phase_key] = result
@@ -646,6 +674,12 @@ async def run_agent_scenario(
             _forward_agent_stderr(agent_name, result)
     finally:
         _cleanup_scenario_temp(stdio_config_path, gemini_workdir)
+        if codex_root:
+            try:
+                assert codex_home is not None
+                persist_auth(codex_home)
+            finally:
+                shutil.rmtree(codex_root)
 
     return results
 
@@ -669,6 +703,10 @@ def _add_phase_stats(summary: dict, phase_result: dict) -> None:
         summary["tokens_output"] = phase_result["tokens_output"]
     if phase_result.get("tokens_thoughts") is not None:
         summary["tokens_thoughts"] = phase_result["tokens_thoughts"]
+    if phase_result.get("tokens_cached") is not None:
+        summary["tokens_cached"] = phase_result["tokens_cached"]
+    if phase_result.get("tool_sequence") is not None:
+        summary["tool_sequence"] = phase_result["tool_sequence"]
 
 
 def make_phase_summary(phase_key: str, phase_result: dict) -> dict:
@@ -799,6 +837,8 @@ def _resolve_active_agents(
             "--base-url is required when using the openai agent. "
             "Example: --base-url http://localhost:1234/v1"
         )
+    if "codex" in active_agents and not getattr(args, "model", None):
+        raise ValueError("--model is required for the Codex BAT agent")
     return agents, active_agents
 
 
@@ -813,6 +853,10 @@ def _run_preflight_checks(args: argparse.Namespace, active_agents: list[str]) ->
         err = preflight_check_base_url(args.base_url)
         if err:
             raise RuntimeError(err)
+    if "codex" in active_agents:
+        auth_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+        if not (auth_home / "auth.json").is_file():
+            raise ValueError("Codex BAT requires CODEX_HOME/auth.json")
 
 
 async def _run_all_agents(
@@ -957,7 +1001,7 @@ Examples:
     )
     parser.add_argument(
         "--model",
-        help="Model to use (e.g., haiku/sonnet/opus for Claude, or model name for openai agent)",
+        help="Model to use (required for codex; e.g. gpt-6-astra, gpt-6-sol, gpt-5.6-terra)",
     )
     parser.add_argument(
         "--base-url",

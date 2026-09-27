@@ -132,3 +132,9 @@ belong in `ha-mcp-workflows-dev`, use its own secrets and manifest fixtures, and
 never mutate product issues/PRs. The bench is manually dispatched, with no canary.
 The runtime workflow becomes available only after its dependencies and this PR
 reach the default branch and the App permissions are installed.
+
+Codex model behavior against a disposable HA instance is exercised separately
+through the [BAT Codex adapter](../../tests/uat/README.md#codex-on-the-actions-bench)
+and a manual bench workflow. It does not change slash command syntax, admission,
+credentials or publication, and its story results are not evidence of slash PR
+lifecycle coverage.

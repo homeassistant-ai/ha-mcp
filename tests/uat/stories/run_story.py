@@ -794,7 +794,7 @@ def _add_tool_sequence(record: dict, session_file: str | None, agent: str) -> No
     # Extract tool call count from session file if not in summary.
     # Always extract the ordered sequence too — flip-flop count is the BAT's
     # primary native-path metric (openai path emits the sequence directly).
-    seq = _extract_tool_sequence(session_file, agent)
+    seq = record.get("tool_sequence") or _extract_tool_sequence(session_file, agent)
     if record["tool_calls"] is None and seq is not None:
         record["tool_calls"] = len(seq)
     if seq:
@@ -815,7 +815,7 @@ def _add_token_usage(
             tokens = {
                 "input": ti or 0,
                 "output": to or 0,
-                "cached": 0,
+                "cached": test_phase.get("tokens_cached") or 0,
                 "thoughts": test_phase.get("tokens_thoughts") or 0,
             }
     if tokens:
@@ -891,6 +891,8 @@ def append_result(
     }
     if session_file:
         record["session_file"] = session_file
+    if test_phase.get("tool_sequence"):
+        record["tool_sequence"] = test_phase["tool_sequence"]
 
     _add_result_markers(record, test_phase)
 

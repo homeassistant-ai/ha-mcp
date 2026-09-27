@@ -218,5 +218,63 @@ Uses dev dependencies:
 | `claude` | `claude` | Temp JSON file via `--mcp-config` | Uses `--permission-mode bypassPermissions` |
 | `gemini` | `gemini` | `.gemini/settings.json` in temp cwd | Uses `--approval-mode yolo` |
 | `openai` | `openai_agent.py` | Temp JSON file via `--mcp-config` | Any OpenAI-compatible API (LM Studio, Ollama, vLLM, etc.). Requires `--base-url`. |
+| `codex` | `codex exec` | Private, temporary Codex profile | Requires `--model`, Codex CLI and a dedicated `CODEX_HOME/auth.json`. Shell and hosted apps are disabled. |
+
+## Codex on the Actions bench
+
+The manual `BAT Codex story` workflow in `ha-mcp-workflows-dev` checks out a
+maintainer-supplied full `ha-mcp` commit SHA. It selects `gpt-6-astra`,
+`gpt-6-sol`, or `gpt-5.6-terra` and runs one existing story against a disposable
+Home Assistant container. The bench supplies its own OAuth credential; no
+product issue, PR or branch is modified. The story runner performs deterministic
+setup and `ha_checks`, and records the model, source SHA, response, observed MCP
+tool calls, turns and token usage in its normal JSONL result. The workflow
+publishes only a compact result row to the Actions summary. Run each model
+separately to compare results on the same SHA and story.
+
+For a local run with a test credential:
+
+```bash
+uv run python tests/uat/stories/run_story.py \
+  tests/uat/stories/catalog/s01_automation_sunset_lights.yaml \
+  --agents codex --model gpt-6-sol
+```
+
+The BAT adapter copies `CODEX_HOME/auth.json` into a private directory per
+scenario, creates a strict read-only profile containing only the BAT's stdio MCP
+server, and starts a fresh ephemeral Codex process for every phase. Shell and
+hosted apps are disabled; the MCP server receives only its explicit HA test
+connection variables. A rotated auth file is copied back to the caller's
+dedicated `CODEX_HOME` for the bench's separate persistence step. Do not point
+`CODEX_HOME` at a personal or product OAuth profile when using the bench.
+
+This is agent behavior testing of `ha-mcp` tools. A single story is evidence for
+that story and model only. It does not test the slash agent's GitHub admission,
+coding, publication, review continuation or readiness logic. The benchmark
+does not run automatically, and model nondeterminism means one pass cannot
+establish regression freedom. For comparisons, hold the story, model, CLI
+version and HA image fixed, run baseline and candidate SHAs separately, then
+inspect the recorded tool sequence and HA checks. The Codex adapter uses the
+CLI's JSON events; unsupported or missing event fields remain absent instead
+of being estimated.
+
+The alternatives considered were:
+
+| Connection | Value | Tradeoff and decision |
+|---|---|---|
+| Attach disposable HA to `/astra`, `/sol`, `/terra` coding turns | Focused developer smoke testing | Mixes BAT fixture state and task context, lacks a fresh blind agent run and independent scoring; omitted. |
+| Let the slash coding worker design and judge BAT scenarios | Adaptive coverage | Shares the coding worker's context and potential bias, consumes more model calls, and needs a separate trusted evaluator; deferred. |
+| Give the agent a general runner to orchestrate multi-phase BAT work | Flexible experiments | Expands runtime and credential surface and makes runs harder to reproduce; deferred. |
+| Run Codex as a BAT agent on the manual bench | Exercises the actual MCP client behavior with existing setup, checks and metrics | One explicit story per dispatch limits cost and keeps the slash controller unchanged; implemented. |
+
+The implemented path spends one model invocation for each populated BAT phase
+and one HA container per agent, plus container startup and Codex CLI setup on
+the runner. Astra, Sol and Terra have separate inference cost and may produce
+different tool paths. The other options would add model calls inside ordinary
+slash coding turns or require a second model to judge generated scenarios.
+The chosen path keeps the slash App token and its publication runner out of
+scope; only the bench's dedicated OAuth session and disposable HA token are
+present. The exact product SHA, story, HA image and CLI version are recorded or
+pinned, while model responses remain nondeterministic.
 
 Unavailable agents are skipped with a warning (no error). The `openai` agent is always available since it's a local script.
