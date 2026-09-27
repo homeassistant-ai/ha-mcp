@@ -3,9 +3,9 @@
 A non-admin user's request to one of these is answered 401, and Home
 Assistant's ``http.ban`` counts every 401 as a failed login, so a burst of
 them IP-bans the ha-mcp host (#2546). Verified against home-assistant/core
-``api/__init__.py``, ``config/{view,core,config_entries}.py`` and
-``hassio/http.py``. Routes that check entity permissions instead (e.g.
-``GET /api/states/<id>``) are not listed.
+``api/__init__.py``, ``config/{view,core,config_entries}.py``,
+``diagnostics/__init__.py`` and ``hassio/http.py``. Routes that check entity
+permissions instead (e.g. ``GET /api/states/<id>``) are not listed.
 """
 
 import re
@@ -22,6 +22,7 @@ _ADMIN_ONLY_ROUTES: tuple[tuple[frozenset[str], re.Pattern[str]], ...] = tuple(
         (_ANY_METHOD, r"hassio/.+"),
         (_ANY_METHOD, r"config/(automation|script|scene)/config/[^/]+"),
         ({"POST"}, r"config/core/check_config"),
+        ({"GET"}, r"diagnostics/[^/]+/[^/]+(/[^/]+/[^/]+)?"),
         ({"DELETE"}, r"config/config_entries/entry/[^/]+"),
         ({"POST"}, r"config/config_entries/entry/[^/]+/reload"),
         (

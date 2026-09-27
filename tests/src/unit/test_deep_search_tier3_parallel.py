@@ -576,16 +576,16 @@ class TestYamlSkippedClassification:
         assert "admin-only" in failed_sample
 
     @pytest.mark.parametrize(
-        ("sample", "warned"),
-        [
-            ("HomeAssistantAdminRequiredError: GET /api/x is admin-only", True),
-            ("HTTP 500: Internal Server Error", False),
-            (None, False),
-        ],
+        ("refused", "failed", "warned"),
+        [(True, 1, True), (False, 1, False), (True, 0, False)],
+        ids=["refused-with-failures", "admin-token", "nothing-failed"],
     )
-    def test_admin_required_sample_adds_the_unsupported_warning(
-        self, smart_tools, sample, warned
+    def test_refused_admin_routes_add_the_unsupported_warning(
+        self, mock_client, smart_tools, refused, failed, warned
     ):
+        """Keyed on the client, not the failure sample, which names only the
+        first error (a 500 can take its slot)."""
+        mock_client.admin_route_refused = refused
         response = smart_tools._paginate_and_build_response(
             {"automations": [], "scripts": [], "scenes": [], "helpers": []},
             "anything",
@@ -602,8 +602,10 @@ class TestYamlSkippedClassification:
                 "registry_failed": False,
                 "failed_sample": None,
             },
-            automation_failed=1 if sample else 0,
-            automation_failed_sample=sample,
+            automation_failed=failed,
+            automation_failed_sample="HTTP 500: Internal Server Error"
+            if failed
+            else None,
         )
         assert (NON_ADMIN_TOKEN_WARNING in response.get("warnings", [])) is warned
 

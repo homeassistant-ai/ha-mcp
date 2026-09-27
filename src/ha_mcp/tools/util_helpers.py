@@ -21,6 +21,8 @@ from pydantic import BeforeValidator, ValidationError
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
+    NON_ADMIN_TOKEN_WARNING,
+    HomeAssistantAdminRequiredError,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantCommandError,
@@ -1874,12 +1876,15 @@ async def _fetch_raw_diagnostics(
     """Fetch diagnostics from HA, populating result['data'] or result['error']."""
     try:
         result["data"] = await client._request("GET", endpoint, timeout=timeout_seconds)
+    except HomeAssistantAdminRequiredError as e:
+        result["error"] = f"{e}. {NON_ADMIN_TOKEN_WARNING}"
     except HomeAssistantAuthError as e:
         logger.warning("Diagnostics fetch auth error: %s", e)
         result["error"] = (
             "Authentication failed for diagnostics endpoint (HTTP 401): the "
-            "configured access token is invalid or expired. Generate a new "
-            "long-lived access token from the HA user profile page."
+            "configured access token is invalid or expired, or belongs to a "
+            "non-admin user. Use a long-lived access token from an "
+            "administrator's profile."
         )
     except HomeAssistantAPIError as e:
         status = getattr(e, "status_code", None)
@@ -1893,8 +1898,9 @@ async def _fetch_raw_diagnostics(
             logger.debug("Diagnostics not available (404): %s", e)
         elif status == 403:
             result["error"] = (
-                "Diagnostics endpoint refused the request: admin scope required "
-                "(HA's @http.require_admin gate)."
+                "Diagnostics endpoint refused the request (HTTP 403): a reverse "
+                "proxy blocked it, or Home Assistant's http.ban has banned this "
+                "host's IP."
             )
             logger.warning("Diagnostics fetch refused (403): %s", e)
         else:

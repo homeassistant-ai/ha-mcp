@@ -8,11 +8,7 @@ from typing import Any
 from ha_mcp._vendor.fastmcp import Context
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ...client.rest_client import (
-    NON_ADMIN_TOKEN_WARNING,
-    HomeAssistantAdminRequiredError,
-    HomeAssistantAPIError,
-)
+from ...client.rest_client import NON_ADMIN_TOKEN_WARNING, HomeAssistantAPIError
 from ...errors import get_error_code, get_error_message
 from ..component_api import component_supports, get_component_caps
 from ..config_entry_flow import FLOW_HELPER_TYPES
@@ -44,9 +40,6 @@ from ._graph import (
 from ._scenes import SceneSearchMixin
 
 logger = logging.getLogger(__name__)
-
-# ``summarize_fetch_error`` renders a guard refusal as ``<type name>: <message>``.
-_ADMIN_REQUIRED_SAMPLE_PREFIX = f"{HomeAssistantAdminRequiredError.__name__}:"
 
 
 async def _scrub_results_for_enforce(
@@ -1354,14 +1347,11 @@ class DeepSearchMixin(SceneSearchMixin):
             graph_surfaces_skipped=graph_surfaces_skipped,
             graph_unavailable=graph_unavailable,
         )
-        if any(
-            sample and sample.startswith(_ADMIN_REQUIRED_SAMPLE_PREFIX)
-            for sample in (
-                automation_failed_sample,
-                script_failed_sample,
-                scene_stats.get("failed_sample"),
-            )
-        ):
+        # ``is True``: the client is a MagicMock in unit tests, and a failure
+        # sample names only the first error, not every one.
+        if (
+            automation_failed or script_failed or scene_stats.get("failed")
+        ) and self.client.admin_route_refused is True:
             response.setdefault("warnings", []).append(NON_ADMIN_TOKEN_WARNING)
         return response
 

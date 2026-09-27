@@ -391,10 +391,11 @@ source ~/.zshrc
 4. **Use an administrator's token** - non-admin tokens are not officially
    supported but still work, with limitations. With a non-admin user's token,
    ha-mcp logs a warning (at startup, or on first use in OAuth mode) and
-   refuses admin-only operations (automation, script and scene
-   configs, config flows, logs, events) with `AUTH_INSUFFICIENT_PERMISSIONS`
-   instead of sending them: Home Assistant answers each with a 401, which its
-   `http.ban` counts toward an IP ban of the ha-mcp host.
+   refuses admin-only operations (automation, script and scene configs,
+   config flows, diagnostics, logs, events) with
+   `AUTH_INSUFFICIENT_PERMISSIONS` instead of sending them: Home Assistant
+   answers each with a 401, which its `http.ban` counts toward an IP ban of
+   the ha-mcp host.
 
 ### Claude says it can't see Home Assistant
 

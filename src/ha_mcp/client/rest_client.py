@@ -408,8 +408,9 @@ class HomeAssistantClient:
         # Home Assistant has answered it. See ``token_is_admin``.
         self._is_admin: bool | None = None
         # Set by a 401 on an admin-only route, so an unanswered probe cannot
-        # let a burst of them through.
+        # let a burst of them through. See ``send_guarded``.
         self._admin_route_refused = False
+        self._admin_route_lock = asyncio.Lock()
 
         logger.info(f"Initialized Home Assistant client for {self.base_url}")
 
@@ -462,18 +463,19 @@ class HomeAssistantClient:
                 response_data set from JSON body when possible).
             HomeAssistantConnectionError: Network, timeout, or transport error.
         """
-        admin_only = await self._refuse_admin_only_route(method, endpoint)
         backoff = 0.5
         for attempt in range(1, _MAX_REQUEST_ATTEMPTS + 1):
             try:
-                response = await self.httpx_client.request(method, endpoint, **kwargs)
+                response = await self.send_guarded(
+                    method,
+                    endpoint,
+                    lambda: self.httpx_client.request(method, endpoint, **kwargs),
+                )
 
                 if response.status_code == 401:
-                    if admin_only:
-                        self._admin_route_refused = True
                     raise HomeAssistantAuthError(
                         _ADMIN_ONLY_401_MESSAGE
-                        if admin_only
+                        if is_admin_only_route(method, endpoint)
                         else "Invalid authentication token"
                     )
 
@@ -520,24 +522,46 @@ class HomeAssistantClient:
         # Unreachable: the final attempt takes the non-retry branch and raises.
         raise AssertionError("_raw_request retry loop exhausted without returning")
 
-    async def _refuse_admin_only_route(self, method: str, endpoint: str) -> bool:
-        """Raise for an admin-only route on a non-admin token; return whether it is admin-only."""
-        if not is_admin_only_route(method, endpoint):
-            return False
-        if self._admin_route_refused:
-            raise HomeAssistantAuthError(_ADMIN_ONLY_401_MESSAGE)
-        if await self.token_is_admin() is False:
-            raise HomeAssistantAdminRequiredError(
-                f"{method.upper()} /api/{endpoint.lstrip('/')} is admin-only in "
-                "Home Assistant and this token's user is not an administrator"
-            )
-        return True
+    async def send_guarded(
+        self,
+        method: str,
+        endpoint: str,
+        send: Callable[[], Awaitable[httpx.Response]],
+    ) -> httpx.Response:
+        """Await ``send()`` unless ``endpoint`` is an admin-only route this token can't use.
+
+        While Home Assistant has not answered whether the token is an admin's,
+        admin-only requests go out one at a time, so the first 401 is latched
+        before a second one is sent.
+        """
+        if not is_admin_only_route(method, endpoint) or self._is_admin is True:
+            return await send()
+        async with self._admin_route_lock:
+            if self._admin_route_refused:
+                raise HomeAssistantAuthError(_ADMIN_ONLY_401_MESSAGE)
+            is_admin = await self.token_is_admin()
+            if is_admin is False:
+                raise HomeAssistantAdminRequiredError(
+                    f"{method.upper()} /api/{endpoint.lstrip('/')} is admin-only in "
+                    "Home Assistant and this token's user is not an administrator"
+                )
+            if is_admin is None:
+                response = await send()
+                if response.status_code == 401:
+                    self._admin_route_refused = True
+                return response
+        return await send()
+
+    @property
+    def admin_route_refused(self) -> bool:
+        """Whether admin-only routes are being refused for this token."""
+        return self._is_admin is False or self._admin_route_refused
 
     async def token_is_admin(self) -> bool | None:
         """Whether this token's user is a Home Assistant administrator.
 
         ``None`` when Home Assistant gave no answer; only a definite answer is
-        cached. Concurrent first callers may each ask.
+        cached.
         """
         if self._is_admin is None:
             user = await self._current_user()

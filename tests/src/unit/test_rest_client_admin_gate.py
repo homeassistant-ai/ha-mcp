@@ -7,6 +7,7 @@ ha-mcp host IP-banned. The client now asks ``auth/current_user`` once per
 token and refuses admin-only routes locally when the answer is non-admin.
 """
 
+import asyncio
 import json
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -53,6 +54,7 @@ def client():
         c._supervised_detected = None
         c._is_admin = None
         c._admin_route_refused = False
+        c._admin_route_lock = asyncio.Lock()
         c._current_user = AsyncMock(return_value=_current_user(False))
         return c
 
@@ -72,6 +74,8 @@ def client():
         ("GET", "/hassio/core/logs"),
         ("GET", "/hassio/addons/core_ssh/logs"),
         ("POST", "/config/core/check_config"),
+        ("GET", "/diagnostics/config_entry/abc"),
+        ("GET", "/diagnostics/config_entry/abc/device/dev1"),
         ("DELETE", "/config/config_entries/entry/abc"),
         ("POST", "/config/config_entries/entry/abc/reload"),
         ("POST", "/config/config_entries/flow"),
@@ -215,6 +219,46 @@ async def test_401_on_admin_route_names_the_admin_requirement(client):
 
 
 @pytest.mark.asyncio
+async def test_unanswered_probe_lets_one_concurrent_admin_request_out(client):
+    """Ten parallel ``ha_search`` fetches must not all reach HA before the latch."""
+    client._current_user = AsyncMock(return_value=None)
+
+    async def slow_401(*_args, **_kwargs):
+        await asyncio.sleep(0.01)
+        return _response(401)
+
+    client.httpx_client.request = AsyncMock(side_effect=slow_401)
+    results = await asyncio.gather(
+        *(
+            client._raw_request("GET", f"/config/automation/config/{i}")
+            for i in range(10)
+        ),
+        return_exceptions=True,
+    )
+    assert all(isinstance(r, HomeAssistantAuthError) for r in results)
+    client.httpx_client.request.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_confirmed_admin_requests_skip_the_lock(client):
+    client._current_user = AsyncMock(return_value=_current_user(True))
+    await client._raw_request("GET", "/config/automation/config/1")
+    async with client._admin_route_lock:
+        await client._raw_request("GET", "/config/automation/config/2")
+    assert client.httpx_client.request.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_admin_route_refused_reflects_either_signal(client):
+    assert client.admin_route_refused is False
+    client._is_admin = False
+    assert client.admin_route_refused is True
+    client._is_admin = None
+    client._admin_route_refused = True
+    assert client.admin_route_refused is True
+
+
+@pytest.mark.asyncio
 async def test_401_on_admin_route_stops_further_admin_requests(client):
     client._current_user = AsyncMock(return_value=None)
     client.httpx_client.request = AsyncMock(return_value=_response(401))
@@ -246,3 +290,35 @@ async def test_first_non_admin_answer_logs_the_unsupported_warning(client, caplo
         assert await client.token_is_admin() is False
     warnings = [r for r in caplog.records if NON_ADMIN_TOKEN_WARNING in r.getMessage()]
     assert len(warnings) == 1
+
+
+def _bridge(client):
+    from types import SimpleNamespace
+
+    from ha_mcp.tools.tools_code import _SandboxBridge
+
+    return _SandboxBridge(
+        MagicMock(), client, SimpleNamespace(code_mode_max_invocations=10)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call", "endpoint"),
+    [("api_get", "/config/automation/config/1"), ("api_post", "/template")],
+)
+async def test_code_mode_admin_route_is_refused_with_the_warning(
+    client, call, endpoint
+):
+    result = await getattr(_bridge(client), call)(endpoint)
+    assert "admin-only" in result["error"]
+    assert result["warnings"] == [NON_ADMIN_TOKEN_WARNING]
+    client.httpx_client.request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_code_mode_open_route_still_sends(client):
+    client.httpx_client.request = AsyncMock(
+        return_value=_response(200, json_body=[{"entity_id": "sun.sun"}])
+    )
+    assert await _bridge(client).api_get("/states") == [{"entity_id": "sun.sun"}]

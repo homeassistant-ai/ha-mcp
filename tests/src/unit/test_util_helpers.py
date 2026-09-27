@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from ha_mcp.client.rest_client import (
+    NON_ADMIN_TOKEN_WARNING,
+    HomeAssistantAdminRequiredError,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantConnectionError,
@@ -574,7 +576,7 @@ class TestFetchIntegrationDiagnostics:
         assert "device" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_403_maps_to_admin_required(self):
+    async def test_403_names_proxy_or_ip_ban(self):
         client = MagicMock()
         client._request = AsyncMock(
             side_effect=HomeAssistantAPIError(
@@ -582,16 +584,14 @@ class TestFetchIntegrationDiagnostics:
             )
         )
         result = await fetch_integration_diagnostics(client, "entry_abc")
-        assert "admin scope required" in result["error"]
+        assert "HTTP 403" in result["error"]
+        assert "http.ban" in result["error"]
 
     @pytest.mark.asyncio
     async def test_auth_error_maps_to_token_validity_message(self):
-        """401 = stale/invalid token, NOT admin scope.
+        """401 = invalid token, or a non-admin one past an inconclusive probe.
 
-        ``HomeAssistantAuthError`` only fires on HTTP 401 per
-        ``rest_client.py``. The @require_admin gate rejects with 403, which
-        is handled by ``HomeAssistantAPIError``. The 401 message must steer
-        operators toward token validity, not admin scope.
+        Core's ``@require_admin`` raises ``Unauthorized``, which becomes a 401.
         """
         client = MagicMock()
         client._request = AsyncMock(
@@ -600,9 +600,20 @@ class TestFetchIntegrationDiagnostics:
         result = await fetch_integration_diagnostics(client, "entry_abc")
         assert "HTTP 401" in result["error"]
         assert "invalid or expired" in result["error"]
+        assert "non-admin" in result["error"]
         assert "long-lived access token" in result["error"]
-        # The admin-scope hint belongs on the 403 branch only.
-        assert "admin scope" not in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_admin_required_names_the_unsupported_token(self):
+        client = MagicMock()
+        client._request = AsyncMock(
+            side_effect=HomeAssistantAdminRequiredError(
+                "GET /api/diagnostics/config_entry/entry_abc is admin-only"
+            )
+        )
+        result = await fetch_integration_diagnostics(client, "entry_abc")
+        assert "is admin-only" in result["error"]
+        assert NON_ADMIN_TOKEN_WARNING in result["error"]
 
     @pytest.mark.asyncio
     async def test_timeout_maps_to_timeout_message_with_duration(self):
