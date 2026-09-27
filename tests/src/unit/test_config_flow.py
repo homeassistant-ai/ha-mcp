@@ -64,10 +64,10 @@ _ha_const.__version__ = "2026.8.0"
 sys.modules["homeassistant.const"] = _ha_const
 
 
-# Inert selector stand-ins: the options flow builds SelectSelector dropdowns,
-# but these tests hand user_input straight to the handler, so the selector
-# never validates - it only needs to construct (and expose .config for the
-# schema-shape assertions below).
+# Inert selector stand-ins: the options flow builds selectors, but these tests
+# hand user_input straight to the handler, so the selector never validates - it
+# only needs to construct (and expose .config for the schema-shape assertions
+# below).
 class _SelectSelectorConfig:
     def __init__(self, **kwargs):
         self.__dict__.update(kwargs)
@@ -86,10 +86,25 @@ class _SelectSelectorMode:
     LIST = "list"
 
 
+class _TextSelectorConfig(_SelectSelectorConfig):
+    pass
+
+
+class _TextSelector(_SelectSelector):
+    pass
+
+
+class _TextSelectorType:
+    TEXT = "text"
+
+
 _sel = MagicMock()
 _sel.SelectSelector = _SelectSelector
 _sel.SelectSelectorConfig = _SelectSelectorConfig
 _sel.SelectSelectorMode = _SelectSelectorMode
+_sel.TextSelector = _TextSelector
+_sel.TextSelectorConfig = _TextSelectorConfig
+_sel.TextSelectorType = _TextSelectorType
 sys.modules["homeassistant.helpers.selector"] = _sel
 
 for _mod in [
@@ -408,6 +423,19 @@ class TestServerOptionsFlow:
         assert form["type"] == "form"
         assert form["step_id"] == "init"
         assert "mcp_abc" in form["description_placeholders"]["connect_url"]
+
+    def test_direct_access_path_is_explicit_plain_text_selector(self):
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+
+        form = asyncio.run(flow.async_step_init(None))
+        validators = {
+            marker.schema: validator
+            for marker, validator in form["data_schema"].schema.items()
+        }
+        selector = validators[const.OPT_SECRET_PATH_OVERRIDE]
+
+        assert isinstance(selector, _TextSelector)
+        assert selector.config.type == _TextSelectorType.TEXT
 
     def test_versions_placeholder_present_and_populated(self, monkeypatch):
         # The Configure form carries a "versions" placeholder that names the

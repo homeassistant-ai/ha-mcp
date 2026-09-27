@@ -38,6 +38,9 @@ from homeassistant.helpers.selector import (
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
 )
 from homeassistant.loader import async_get_integration
 from packaging.version import InvalidVersion, Version
@@ -673,7 +676,7 @@ class HaMcpServerOptionsFlow(OptionsFlow):
                     description={
                         "suggested_value": opts.get(OPT_SECRET_PATH_OVERRIDE, "")
                     },
-                ): str,
+                ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
                 vol.Optional(
                     OPT_REGENERATE_SECRETS,
                     default=False,
