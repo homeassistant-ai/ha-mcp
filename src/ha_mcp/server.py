@@ -20,8 +20,8 @@ from ha_mcp._vendor.mcp.types import Icon
 
 from .config import _PACKAGE_VERSION, get_global_settings
 from .errors import ErrorCode, create_error_response
-from .hacs_auto_refresh import hacs_refresh_lifespan
 from .http_transport import HttpTransportFastMCP as FastMCP
+from .server_lifespan import server_lifespan
 from .tools.helpers import raise_tool_error
 from .transforms import DEFAULT_PINNED_TOOLS
 
@@ -144,7 +144,7 @@ class HomeAssistantSmartMCPServer:
             version=server_version,
             icons=SERVER_ICONS,
             instructions=instructions,
-            lifespan=hacs_refresh_lifespan,
+            lifespan=server_lifespan,
         )
 
         # Register all tools and expert prompts
@@ -1443,10 +1443,14 @@ class HomeAssistantSmartMCPServer:
             url: str | None
             token_value: str | None
             verify_ssl: bool | None
+            known_is_admin: bool | None
+            admin_route_refused: bool
             try:
                 url = client.base_url
                 token_value = client.token
                 verify_ssl = client.verify_ssl
+                known_is_admin = client.known_is_admin
+                admin_route_refused = client.admin_route_refused is True
             except Exception:
                 logger.debug(
                     "policy decisions: no credentials for the result event; "
@@ -1459,7 +1463,11 @@ class HomeAssistantSmartMCPServer:
             # ever reclaim. A wrong PIN retried by a chatty automation would
             # otherwise open one per attempt.
             async with HomeAssistantClient(
-                url, token_value, verify_ssl=verify_ssl
+                url,
+                token_value,
+                verify_ssl=verify_ssl,
+                is_admin=known_is_admin,
+                admin_route_refused=admin_route_refused,
             ) as result_client:
                 await emit_approval_result(
                     result_client,

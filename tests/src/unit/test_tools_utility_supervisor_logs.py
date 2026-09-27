@@ -63,6 +63,8 @@ def mock_client():
         client.verify_ssl = True
         client.httpx_client = MagicMock()
         client._supervised_detected = None
+        client._is_admin = True
+        client._admin_route_refused = False
         return client
 
 

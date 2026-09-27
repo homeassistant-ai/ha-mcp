@@ -17,6 +17,7 @@ import httpx
 from .._vendor.websockets.exceptions import WebSocketException
 from .._version import get_supervisor_base_url, is_running_in_addon
 from ..config import get_global_settings
+from .admin_routes import is_admin_only_route
 from .supervisor_client import make_supervisor_httpx_client
 
 
@@ -70,6 +71,15 @@ MIN_LOG_WINDOW_LINES = 2
 # journald's cursor/timestamp metadata exists only in the journal export
 # format, which the hassio-proxy route cannot request.
 _PROBE_ENTRIES = 8
+NON_ADMIN_TOKEN_WARNING = (
+    "ha-mcp does not officially support non-admin Home Assistant tokens. They "
+    "still work, but admin-only operations fail. Use a long-lived access token "
+    "from an administrator's profile for full access."
+)
+_ADMIN_ONLY_401_MESSAGE = (
+    "Home Assistant returned 401 for an admin-only endpoint: "
+    "the token is invalid or its user is not an administrator"
+)
 
 
 class HomeAssistantError(Exception):
@@ -111,6 +121,15 @@ class HomeAssistantAuthError(HomeAssistantError):
     polling logic. Sites that specifically need to catch both must list
     them explicitly (see ``_get_supervisor_log`` and
     ``_get_system_service_log`` in ``log_sources_supervisor.py``).
+    """
+
+
+class HomeAssistantAdminRequiredError(HomeAssistantAuthError):
+    """An admin-only request refused because the token's user is not an admin.
+
+    A REST request is refused locally, never sent: Home Assistant would answer
+    401 and count it toward its IP ban (#2546). A service call is refused by
+    Home Assistant over WebSocket, where a refusal is not counted.
     """
 
 
@@ -334,6 +353,8 @@ class HomeAssistantClient:
         token: str | None = None,
         timeout: int | None = None,
         verify_ssl: bool | None = None,
+        is_admin: bool | None = None,
+        admin_route_refused: bool = False,
     ):
         """
         Initialize Home Assistant client.
@@ -345,6 +366,10 @@ class HomeAssistantClient:
             verify_ssl: Whether to verify the HA server's TLS certificate
                 (defaults to ``settings.verify_ssl``). Pass False to allow
                 self-signed certs or hostname mismatches.
+            is_admin: Whether the token's user is an administrator, when
+                another client for the same token already knows.
+            admin_route_refused: Whether another client for the same token
+                already got a 401 on an admin-only request.
         """
         if base_url is None or token is None or verify_ssl is None:
             settings = get_global_settings()
@@ -385,6 +410,14 @@ class HomeAssistantClient:
         # transient probe failure on the first call doesn't permanently
         # disable the supervised branch — subsequent calls re-probe.
         self._supervised_detected: bool | None = None
+
+        # Whether the token's user is an admin; ``None`` until Home Assistant
+        # has answered. See ``token_is_admin`` and ``guarded_request``.
+        self._is_admin: bool | None = is_admin
+        # Set by a 401 on an admin-only route or service call, so no further
+        # admin-only request is sent over REST. See ``guarded_request``.
+        self._admin_route_refused = admin_route_refused
+        self._admin_route_lock = asyncio.Lock()
 
         logger.info(f"Initialized Home Assistant client for {self.base_url}")
 
@@ -432,6 +465,8 @@ class HomeAssistantClient:
         is never replayed.
 
         Raises:
+            HomeAssistantAdminRequiredError: Admin-only route refused without
+                being sent (see ``guarded_request``).
             HomeAssistantAuthError: 401 response.
             HomeAssistantAPIError: Non-2xx response (with status_code and
                 response_data set from JSON body when possible).
@@ -440,10 +475,14 @@ class HomeAssistantClient:
         backoff = 0.5
         for attempt in range(1, _MAX_REQUEST_ATTEMPTS + 1):
             try:
-                response = await self.httpx_client.request(method, endpoint, **kwargs)
+                response = await self.guarded_request(method, endpoint, **kwargs)
 
                 if response.status_code == 401:
-                    raise HomeAssistantAuthError("Invalid authentication token")
+                    raise HomeAssistantAuthError(
+                        _ADMIN_ONLY_401_MESSAGE
+                        if is_admin_only_route(method, endpoint)
+                        else "Invalid authentication token"
+                    )
 
                 if response.status_code >= 400:
                     message, error_data = self._error_message_from_response(response)
@@ -487,6 +526,104 @@ class HomeAssistantClient:
 
         # Unreachable: the final attempt takes the non-retry branch and raises.
         raise AssertionError("_raw_request retry loop exhausted without returning")
+
+    async def guarded_request(
+        self, method: str, endpoint: str, **kwargs: Any
+    ) -> httpx.Response:
+        """Send a request, unless it is an admin-only route this token can't use.
+
+        Raises ``HomeAssistantAdminRequiredError`` without sending when the
+        token is known to be a non-admin's, or after an admin-only request got
+        401. While Home Assistant has not answered whether the token is an
+        admin's, admin-only requests go out one at a time and the first
+        response settles it: a 401 stops further ones, and a 2xx proves the
+        token is an admin's (a 404 or 405 can come before the admin gate).
+        """
+        if not is_admin_only_route(method, endpoint):
+            return await self.httpx_client.request(method, endpoint, **kwargs)
+        if self._is_admin is True:
+            response = await self.httpx_client.request(method, endpoint, **kwargs)
+            self._note_admin_route_response(response)
+            return response
+        async with self._admin_route_lock:
+            route = f"{method.upper()} /api/{endpoint.lstrip('/')}"
+            if self._admin_route_refused:
+                raise HomeAssistantAdminRequiredError(
+                    f"{route} not sent: an earlier admin-only request got 401 "
+                    "(the token is invalid or its user is not an administrator)"
+                )
+            is_admin = await self.token_is_admin()
+            if is_admin is False:
+                raise HomeAssistantAdminRequiredError(
+                    f"{route} is admin-only in Home Assistant and this token's "
+                    "user is not an administrator"
+                )
+            response = await self.httpx_client.request(method, endpoint, **kwargs)
+            if is_admin is None and 200 <= response.status_code < 300:
+                self._is_admin = True
+            self._note_admin_route_response(response)
+            return response
+
+    def _note_admin_route_response(self, response: httpx.Response) -> None:
+        if response.status_code == 401:
+            self._is_admin = None
+            self._admin_route_refused = True
+
+    @property
+    def admin_route_refused(self) -> bool:
+        """Whether admin-only requests are being refused for this token."""
+        return self._is_admin is False or self._admin_route_refused
+
+    @property
+    def known_is_admin(self) -> bool | None:
+        """The cached answer to ``token_is_admin``, without asking."""
+        return self._is_admin
+
+    async def token_is_admin(self) -> bool | None:
+        """Whether this token's user is a Home Assistant administrator.
+
+        ``None`` when Home Assistant gave no answer; only a definite answer is
+        cached. The first non-admin answer logs ``NON_ADMIN_TOKEN_WARNING``.
+        """
+        if self._is_admin is None:
+            user = await self._current_user()
+            is_admin = user.get("is_admin") if user else None
+            if not isinstance(is_admin, bool):
+                return None
+            self._is_admin = is_admin
+            if not is_admin:
+                logger.warning(
+                    "The Home Assistant token for %s belongs to a non-admin user. %s",
+                    self.base_url,
+                    NON_ADMIN_TOKEN_WARNING,
+                )
+        return self._is_admin
+
+    async def _current_user(self) -> dict[str, Any] | None:
+        """``auth/current_user`` for this token, or ``None`` when it can't be asked.
+
+        Asked over WebSocket because ``auth/current_user`` answers every user;
+        REST has no such route, only admin-only ones whose 401 would count
+        toward ``http.ban``. It uses a connection of its own: the pooled one
+        may be serving the caller's own event handler (a policy result event
+        fired from the bus), which would wait on itself.
+        """
+        from .websocket_client import HomeAssistantWebSocketClient
+
+        ws = HomeAssistantWebSocketClient(
+            self.base_url, self.token, verify_ssl=self.verify_ssl
+        )
+        try:
+            if not await ws.connect():
+                return None
+            reply = await ws.send_command("auth/current_user")
+        except (HomeAssistantError, WebSocketException, OSError) as e:
+            logger.debug(f"auth/current_user probe failed: {e}")
+            return None
+        finally:
+            await ws.disconnect()
+        user = reply.get("result")
+        return user if isinstance(user, dict) else None
 
     async def _request(
         self, method: str, endpoint: str, **kwargs: Any
@@ -582,17 +719,55 @@ class HomeAssistantClient:
 
         payload = data or {}
 
+        if self._admin_route_refused or await self.token_is_admin() is False:
+            return await self._call_service_over_websocket(
+                domain, service, payload, return_response
+            )
+        if self._is_admin is True:
+            return await self._call_service_over_rest(
+                domain, service, payload, return_response
+            )
+        # Admin status unknown: one REST call at a time, so a 401 for an
+        # admin-only service latches before a second is sent.
+        async with self._admin_route_lock:
+            if self._admin_route_refused:
+                return await self._call_service_over_websocket(
+                    domain, service, payload, return_response
+                )
+            return await self._call_service_over_rest(
+                domain, service, payload, return_response
+            )
+
+    async def _call_service_over_rest(
+        self,
+        domain: str,
+        service: str,
+        payload: dict[str, Any],
+        return_response: bool,
+    ) -> list[dict[str, Any]] | dict[str, Any]:
+        """POST the service call; on a 401 latch and retry it over WebSocket.
+
+        A 401 means Home Assistant refused before running the service, so the
+        WebSocket retry cannot apply it twice.
+        """
         # Build query params for return_response
         params = {}
         if return_response:
             params["return_response"] = "true"
 
-        result = await self._request(
-            "POST",
-            f"/services/{domain}/{service}",
-            json=payload,
-            params=params if params else None,
-        )
+        try:
+            result = await self._request(
+                "POST",
+                f"/services/{domain}/{service}",
+                json=payload,
+                params=params if params else None,
+            )
+        except HomeAssistantAuthError:
+            self._is_admin = None
+            self._admin_route_refused = True
+            return await self._call_service_over_websocket(
+                domain, service, payload, return_response
+            )
 
         # When return_response is True, HA returns a dict with service_response key
         if return_response:
@@ -605,6 +780,45 @@ class HomeAssistantClient:
             return result
         else:
             return []
+
+    async def _call_service_over_websocket(
+        self,
+        domain: str,
+        service: str,
+        payload: dict[str, Any],
+        return_response: bool,
+    ) -> list[dict[str, Any]] | dict[str, Any]:
+        """Call a service for a non-admin token, in ``call_service``'s return shape.
+
+        Over REST an admin-only service answers a non-admin with a 401 that
+        ``http.ban`` counts; over WebSocket the refusal is only an error
+        (#2546). WebSocket reports no changed states, so that list is empty.
+        """
+        reply = await self.send_websocket_message(
+            {
+                "type": "call_service",
+                "domain": domain,
+                "service": service,
+                "service_data": payload,
+                "return_response": return_response,
+            }
+        )
+        if not reply.get("success"):
+            error = str(reply.get("error", "Service call failed"))
+            if error.removeprefix("Command failed: ") == "Unauthorized":
+                raise HomeAssistantAdminRequiredError(
+                    f"Service {domain}.{service} is admin-only in Home Assistant "
+                    "and this token's user is not an administrator"
+                )
+            raise HomeAssistantAPIError(
+                f"API error: 400 - {error}",
+                status_code=400,
+                response_data={"message": error},
+            )
+        if return_response:
+            result = reply.get("result") or {}
+            return {"changed_states": [], "service_response": result.get("response")}
+        return []
 
     async def get_services(self) -> dict[str, Any]:
         """Get all available services."""

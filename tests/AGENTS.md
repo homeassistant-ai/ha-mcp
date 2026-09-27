@@ -109,6 +109,45 @@ component capabilities answer while the privileged *services* stay gone —
 that split is the whole point of the lanes, and `test_tools_entry_absent.py`
 asserts both halves.
 
+## Test Design Rules
+
+Every test under `tests/` follows these. Reviewers check new and changed
+tests against them.
+
+1. **Test our code, not the platform.** Assert on behaviour this repository
+   owns, not that Python, FastMCP, pydantic or Home Assistant do what their
+   docs say. A dependency may set up the failure; the assertion is on how
+   our code handles it. See the FastMCP schema-validation note under
+   [E2E Test Patterns](#e2e-test-patterns).
+2. **Prove the test catches the bug.** Write the regression test first
+   and watch it fail, as the root `AGENTS.md` requires. When a test is
+   added to a fix that already exists (for example during review), revert
+   the fix, confirm the test fails, then restore it. A test that builds its
+   input by hand, or covers only a pure helper, can pass with the fix
+   reverted.
+3. **One property, one test.** Test each property at the lowest layer that
+   can see it: logic in unit tests; wiring, packaging and real Home
+   Assistant behaviour in E2E. Two tests that assert the same property are
+   one too many, whatever layer or client they use. Check for an existing
+   test first. In a parametrized table, keep one case per branch, plus any
+   value that failed in the wild. If deleting a case leaves coverage
+   unchanged, it was a duplicate.
+4. **Do not restate the implementation.** Assert the property that must
+   hold, not the code's own formula or literals. For example, assert that a
+   truncated response is under its size limit, not that its length equals
+   the number the code computed.
+5. **Make the untestable path testable.** A failure path a test cannot
+   reach gets a small, obvious seam the test can replace.
+6. **A test supplies its own world.** No reads from the real home directory
+   or `~/.ha-mcp`, no network beyond the test's own containers, no answer
+   taken from the wall clock, the local timezone or another test's
+   leftovers. Code that reads the clock takes `now` as a parameter, unless
+   the test harness already controls the clock (the JSDOM harness below
+   does). See **Config-dir isolation** below.
+7. **Name the defect.** The test name, and its docstring or the
+   framework's own description, say what breaks for the user, not the
+   function name.
+
 ## Test Patterns
 
 - Tests expecting tool **success**: use `mcp.call_tool_success()` inside `MCPAssertions` context

@@ -388,6 +388,17 @@ source ~/.zshrc
    - Create Token → Copy immediately (shown only once)
 2. **Check token format** - Don't wrap the token in quotes in your config
 3. **Token expiration** - Tokens don't expire by default, but can be revoked
+4. **Use an administrator's token** - non-admin tokens are not officially
+   supported but still work, with limitations. With a non-admin user's token,
+   ha-mcp logs a warning (at startup, or on the first admin-only request in
+   OAuth mode). Admin-only operations fail with
+   `AUTH_INSUFFICIENT_PERMISSIONS`. ha-mcp keeps them from getting the
+   ha-mcp host IP-banned: Home Assistant answers an admin-only REST request
+   (automation, script and scene configs, config flows, diagnostics, logs,
+   events) from a non-admin with a 401 that its `http.ban` counts as a
+   failed login, so ha-mcp refuses those without sending them, and it calls
+   services over WebSocket, where a refused admin-only service is not
+   counted.
 
 ### Claude says it can't see Home Assistant
 
@@ -1009,9 +1020,9 @@ the error tells the agent to do.
 
 If no event arrives at all, check the token the server authenticates with:
 Home Assistant only accepts `POST /api/events/<type>` from an admin user, so
-a standalone install running on a non-admin long-lived token gets a 403 that
-goes to the server log and nowhere else. The embedded component provisions
-its own admin token, so it is not affected.
+a standalone install running on a non-admin long-lived token does not fire
+the event and logs that to the server log and nowhere else. The embedded
+component provisions its own admin token, so it is not affected.
 
 Approving happens in the Tool Security Policies tab by default. Answering
 from an automation is possible too, behind a switch and a PIN — see the next

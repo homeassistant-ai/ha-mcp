@@ -182,7 +182,7 @@ To fix this, you need to provide your Home Assistant connection details:
   1. HOMEASSISTANT_URL - Your Home Assistant instance URL
      Example: http://homeassistant.local:8123
 
-  2. HOMEASSISTANT_TOKEN - A long-lived access token
+  2. HOMEASSISTANT_TOKEN - A long-lived access token (an administrator's is recommended)
      Get one from: Home Assistant -> Profile -> Long-Lived Access Tokens
 
 Configuration options:
