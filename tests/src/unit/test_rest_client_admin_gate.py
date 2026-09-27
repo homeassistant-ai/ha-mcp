@@ -18,14 +18,14 @@ from ha_mcp.client.rest_client import (
     HomeAssistantAdminRequiredError,
     HomeAssistantAuthError,
     HomeAssistantClient,
-    HomeAssistantConnectionError,
+    HomeAssistantCommandError,
 )
 from ha_mcp.errors import ErrorCode
 from ha_mcp.tools.helpers import exception_to_structured_error
 
 
 def _current_user(is_admin):
-    return {"success": True, "result": {"id": "u1", "is_admin": is_admin}}
+    return {"id": "u1", "is_admin": is_admin}
 
 
 def _response(status_code, json_body=None):
@@ -49,7 +49,7 @@ def client():
         c.httpx_client.request = AsyncMock(return_value=_response(200))
         c._supervised_detected = None
         c._is_admin = None
-        c.send_websocket_message = AsyncMock(return_value=_current_user(False))
+        c._current_user = AsyncMock(return_value=_current_user(False))
         return c
 
 
@@ -123,12 +123,12 @@ async def test_admin_required_error_is_an_auth_error(client):
 async def test_non_admin_token_still_sends_open_routes_without_probing(client):
     await client._raw_request("GET", "/states")
     client.httpx_client.request.assert_awaited_once()
-    client.send_websocket_message.assert_not_awaited()
+    client._current_user.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_admin_token_sends_admin_route(client):
-    client.send_websocket_message = AsyncMock(return_value=_current_user(True))
+    client._current_user = AsyncMock(return_value=_current_user(True))
     await client._raw_request("GET", "/config/automation/config/123")
     client.httpx_client.request.assert_awaited_once()
 
@@ -138,34 +138,72 @@ async def test_probe_answer_is_cached_per_client(client):
     for _ in range(3):
         with pytest.raises(HomeAssistantAdminRequiredError):
             await client._raw_request("GET", "/config/script/config/s")
-    client.send_websocket_message.assert_awaited_once_with(
-        {"type": "auth/current_user"}
-    )
+    client._current_user.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "probe",
-    [
-        AsyncMock(side_effect=HomeAssistantConnectionError("ws down")),
-        AsyncMock(return_value={"success": False, "error": "unknown command"}),
-        AsyncMock(return_value={"success": True, "result": {"id": "u1"}}),
-    ],
-    ids=["transport-failure", "command-failure", "no-is_admin-field"],
+    "user",
+    [None, {"id": "u1"}, {"id": "u1", "is_admin": "yes"}],
+    ids=["no-answer", "no-is_admin-field", "non-bool-is_admin"],
 )
-async def test_inconclusive_probe_sends_and_reprobes(client, probe):
-    client.send_websocket_message = probe
+async def test_inconclusive_probe_sends_and_reprobes(client, user):
+    client._current_user = AsyncMock(return_value=user)
     await client._raw_request("GET", "/config/automation/config/123")
     await client._raw_request("GET", "/config/automation/config/123")
     assert client.httpx_client.request.await_count == 2
-    assert probe.await_count == 2
+    assert client._current_user.await_count == 2
+
+
+def _fake_ws(*, connected=True, reply=None, error=None):
+    ws = MagicMock()
+    ws.connect = AsyncMock(return_value=connected)
+    ws.send_command = AsyncMock(return_value=reply, side_effect=error)
+    ws.disconnect = AsyncMock()
+    return ws
+
+
+@pytest.mark.asyncio
+async def test_current_user_asks_on_its_own_connection(client):
+    """The pooled connection may be running the caller's own bus handler."""
+    client.send_websocket_message = AsyncMock()
+    ws = _fake_ws(reply={"success": True, "result": _current_user(False)})
+    with patch(
+        "ha_mcp.client.websocket_client.HomeAssistantWebSocketClient",
+        return_value=ws,
+    ) as ws_class:
+        user = await HomeAssistantClient._current_user(client)
+    assert user == _current_user(False)
+    ws_class.assert_called_once_with(
+        client.base_url, client.token, verify_ssl=client.verify_ssl
+    )
+    ws.send_command.assert_awaited_once_with("auth/current_user")
+    ws.disconnect.assert_awaited_once()
+    client.send_websocket_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ws",
+    [
+        _fake_ws(connected=False),
+        _fake_ws(error=HomeAssistantCommandError("Command failed: unknown")),
+        _fake_ws(error=ConnectionResetError("peer reset")),
+    ],
+    ids=["connect-failed", "command-failed", "connection-reset"],
+)
+async def test_current_user_returns_none_when_unanswered(client, ws):
+    with patch(
+        "ha_mcp.client.websocket_client.HomeAssistantWebSocketClient",
+        return_value=ws,
+    ):
+        assert await HomeAssistantClient._current_user(client) is None
+    ws.disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_401_on_admin_route_names_the_admin_requirement(client):
-    client.send_websocket_message = AsyncMock(
-        side_effect=HomeAssistantConnectionError("ws down")
-    )
+    client._current_user = AsyncMock(return_value=None)
     client.httpx_client.request = AsyncMock(return_value=_response(401))
     with pytest.raises(HomeAssistantAuthError) as exc:
         await client._raw_request("GET", "/config/automation/config/123")

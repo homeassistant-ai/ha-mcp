@@ -523,18 +523,12 @@ class HomeAssistantClient:
     async def _token_is_admin(self) -> bool | None:
         """Whether this token's user is a Home Assistant administrator.
 
-        Asked over WebSocket, where a refused admin-only command does not count
-        toward ``http.ban``. ``None`` when Home Assistant gave no answer; only a
-        definite answer is cached. Concurrent first callers may each ask.
+        ``None`` when Home Assistant gave no answer; only a definite answer is
+        cached. Concurrent first callers may each ask.
         """
         if self._is_admin is None:
-            try:
-                reply = await self.send_websocket_message({"type": "auth/current_user"})
-            except HomeAssistantError as e:
-                logger.debug(f"auth/current_user probe failed: {e}")
-                return None
-            user = reply.get("result") if reply.get("success") else None
-            is_admin = user.get("is_admin") if isinstance(user, dict) else None
+            user = await self._current_user()
+            is_admin = user.get("is_admin") if user else None
             if not isinstance(is_admin, bool):
                 return None
             self._is_admin = is_admin
@@ -546,6 +540,31 @@ class HomeAssistantClient:
                     self.base_url,
                 )
         return self._is_admin
+
+    async def _current_user(self) -> dict[str, Any] | None:
+        """``auth/current_user`` for this token, or ``None`` when it can't be asked.
+
+        Asked over WebSocket, where no refusal counts toward ``http.ban``, on a
+        connection of its own: the pooled one may be serving the caller's own
+        event handler (a policy result event fired from the bus), which would
+        wait on itself.
+        """
+        from .websocket_client import HomeAssistantWebSocketClient
+
+        ws = HomeAssistantWebSocketClient(
+            self.base_url, self.token, verify_ssl=self.verify_ssl
+        )
+        try:
+            if not await ws.connect():
+                return None
+            reply = await ws.send_command("auth/current_user")
+        except (HomeAssistantError, WebSocketException, OSError) as e:
+            logger.debug(f"auth/current_user probe failed: {e}")
+            return None
+        finally:
+            await ws.disconnect()
+        user = reply.get("result")
+        return user if isinstance(user, dict) else None
 
     async def _request(
         self, method: str, endpoint: str, **kwargs: Any

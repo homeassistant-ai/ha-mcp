@@ -281,10 +281,8 @@ def _classify_exception(
                 ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
                 error_msg,
                 suggestions=[
-                    "Use a long-lived access token from a Home Assistant "
-                    "administrator's profile",
-                    "The HA-MCP custom component's in-process server provisions "
-                    "its own admin token",
+                    "Use a long-lived access token from an administrator's profile",
+                    "Or use the in-process server, which provisions its own admin token",
                 ],
                 context=context,
             )
