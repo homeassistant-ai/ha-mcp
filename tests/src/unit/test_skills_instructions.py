@@ -58,15 +58,19 @@ class TestParseSkillFrontmatter:
         assert "Best practices" in result["description"]
 
     def test_dashes_inside_description_do_not_end_frontmatter(self, server, tmp_path):
-        """Only a line that is exactly ``---`` closes the frontmatter; a
-        description containing ``---`` must parse whole, or the skill would
-        count as unavailable."""
+        """Only an unindented ``---`` line closes the frontmatter; a value
+        containing ``---``, inline or as an indented block-scalar line,
+        must parse whole, or the skill would count as unavailable."""
         skill_md = tmp_path / "test-skill" / "SKILL.md"
         skill_md.parent.mkdir()
-        skill_md.write_text('---\ndescription: "Use --- separators"\n---\n# Body\n')
+        skill_md.write_text(
+            '---\nname: "Use --- separators"\n'
+            "description: |\n  Before\n  ---\n  After\n---\n# Body\n"
+        )
         result = server._parse_skill_frontmatter(skill_md)
         assert result is not None
-        assert result["description"] == "Use --- separators"
+        assert result["name"] == "Use --- separators"
+        assert result["description"].splitlines() == ["Before", "---", "After"]
 
     def test_horizontal_rules_in_body_are_not_frontmatter(self, server, tmp_path):
         """Frontmatter must open on the first line; two Markdown rules

@@ -168,14 +168,14 @@ def parse_skill_frontmatter(main_file: Path, *, warn: bool = True) -> dict | Non
         log("Could not read %s: %s", main_file, e)
         return None
 
-    # Frontmatter opens on the first line and closes at the next line that
-    # is exactly "---"; a "---" inside a value or a Markdown rule in the
-    # body is not a delimiter.
+    # Frontmatter opens on the first line and closes at the next unindented
+    # "---" line; a "---" inside a value (inline or an indented block-scalar
+    # line) or a Markdown rule in the body is not a delimiter.
     lines = content.removeprefix("\ufeff").splitlines()
     closing = next(
-        (i for i, line in enumerate(lines[1:], 1) if line.strip() == "---"), None
+        (i for i, line in enumerate(lines[1:], 1) if line.rstrip() == "---"), None
     )
-    if not lines or lines[0].strip() != "---" or closing is None:
+    if not lines or lines[0].rstrip() != "---" or closing is None:
         log("No valid frontmatter delimiters in %s", main_file)
         return None
 
