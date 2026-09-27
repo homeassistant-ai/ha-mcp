@@ -50,6 +50,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    reject_malformed_list_fields,
     validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
@@ -1770,6 +1771,11 @@ class AutomationConfigTools:
                     details=f"Received type: {type(parsed_config).__name__}",
                 )
             )
+        reject_malformed_list_fields(
+            parsed_config,
+            ("triggers", "trigger", "conditions", "condition", "actions", "action"),
+            {"parameter": "config"},
+        )
 
         return cast(dict[str, Any], parsed_config)
 

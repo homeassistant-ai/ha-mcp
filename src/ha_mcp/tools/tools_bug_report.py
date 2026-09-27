@@ -38,7 +38,12 @@ from ..utils.usage_logger import (
     get_startup_logs,
 )
 from .component_api import get_component_caps
-from .helpers import log_tool_usage, raise_tool_error, register_tool_methods
+from .helpers import (
+    extract_tool_error_message,
+    log_tool_usage,
+    raise_tool_error,
+    register_tool_methods,
+)
 from .util_helpers import (
     ANSI_ESCAPE_RE,
     JSON_STRING_COERCION,
@@ -1413,7 +1418,7 @@ def _generate_bug_title(
         error_msg = log.get("error_message")
         if error_msg:
             tool_name = log.get("tool_name", "unknown")
-            title = f"{tool_name}: {error_msg}"
+            title = f"{tool_name}: {extract_tool_error_message(error_msg)}"
             break
 
     if not title:

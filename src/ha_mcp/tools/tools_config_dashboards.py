@@ -72,6 +72,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    reject_malformed_list_fields,
     validate_identifier_not_empty,
 )
 from .util_helpers import (
@@ -1053,6 +1054,25 @@ def _collect_all_dashboard_doc_matches(
         _collect_all_dashboard_header_card_matches(
             view, view_index, url_path, dash_title, view_title, query_lower, matches
         )
+
+
+def _reject_malformed_dashboard_lists(config: dict[str, Any], url_path: str) -> None:
+    """Check the list positions the frontend types as arrays (issue #2548).
+
+    Home Assistant saves any dict here, and the frontend calls ``.map`` on them.
+    """
+    views = config.get("views")
+    fields: dict[str, Any] = {"views": views}
+    for i, view in enumerate(views if isinstance(views, list) else []):
+        if not isinstance(view, dict):
+            continue
+        for key in ("cards", "sections", "badges"):
+            fields[f"views[{i}].{key}"] = view.get(key)
+        sections = view.get("sections")
+        for j, section in enumerate(sections if isinstance(sections, list) else []):
+            if isinstance(section, dict):
+                fields[f"views[{i}].sections[{j}].cards"] = section.get("cards")
+    reject_malformed_list_fields(fields, tuple(fields), {"url_path": url_path})
 
 
 def _all_dashboard_view_card_containers(
@@ -3853,6 +3873,8 @@ class DashboardConfigTools:
         MandatoryBPS: bool,
     ) -> "dict[str, Any] | ToolResult":
         """Execute config-replacement mode (create-or-update) and return the tool response."""
+        if isinstance(config, dict):
+            _reject_malformed_dashboard_lists(config, url_path)
         (
             dashboard_exists,
             dashboard_id,

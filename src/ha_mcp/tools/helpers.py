@@ -68,8 +68,8 @@ def raise_tool_error(error_response: dict[str, Any]) -> NoReturn:
     )
 
 
-def extract_tool_error_message(te: ToolError) -> str:
-    """Extract a human-readable error message from a ToolError.
+def extract_tool_error_message(te: ToolError | str) -> str:
+    """Extract a human-readable error message from a ToolError or its logged text.
 
     Pairs with raise_tool_error() which serializes error dicts as JSON.
     Falls back to str(te) if the message is not valid JSON.
@@ -115,6 +115,40 @@ def extract_structured_error_reason(exc: BaseException) -> str | None:
     if isinstance(first, str) and first:
         return f"{message} {first}"
     return message
+
+
+def reject_malformed_list_fields(
+    config: dict[str, Any], list_keys: tuple[str, ...], context: dict[str, Any]
+) -> None:
+    """Reject list fields received as ``{"item": ...}`` or ``""`` (issue #2548).
+
+    Home Assistant either rejects these shapes with an error that does not name
+    them, or stores them and fails later, so retries never find the cause.
+    """
+    received = {
+        k: '{"item": ...}' if isinstance(v, dict) and list(v) == ["item"] else '""'
+        for k in list_keys
+        if (v := config.get(k)) == "" or (isinstance(v, dict) and list(v) == ["item"])
+    }
+    if not received:
+        return
+    names = ", ".join(f"'{k}'" for k in received)
+    shapes = "; ".join(f"'{k}' as {shape}" for k, shape in received.items())
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"Received config {shapes} instead of a JSON array; nothing was sent "
+            "to Home Assistant",
+            suggestions=[
+                f"Send {names} as a JSON array, e.g. "
+                f'"{next(iter(received))}": [{{...}}, {{...}}], or omit an empty one',
+                "If it still arrives malformed, pass the whole config as one "
+                "JSON-encoded string",
+                "If neither works, check the model or MCP client in use",
+            ],
+            context={**context, "malformed_list_fields": received},
+        )
+    )
 
 
 def validate_identifier_not_empty(
