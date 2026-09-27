@@ -445,7 +445,9 @@ class ConfigScriptTools:
             )
 
         config_dict = cast(dict[str, Any], parsed_config)
-        reject_malformed_list_fields(config_dict, ("sequence",), {"script_id": script_id})
+        reject_malformed_list_fields(
+            config_dict, ("sequence",), {"script_id": script_id}
+        )
 
         # Extract category before sending to HA REST API (which rejects unknown keys).
         # Parameter takes precedence over config dict value.

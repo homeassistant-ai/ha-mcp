@@ -9,7 +9,10 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.tools.config_entry_flow_form import _consume_form_schema
 from ha_mcp.tools.tools_config_automations import AutomationConfigTools
-from ha_mcp.tools.tools_config_dashboards import _reject_malformed_dashboard_lists
+from ha_mcp.tools.tools_config_dashboards import (
+    _reject_malformed_dashboard_lists,
+    _reject_malformed_dashboard_patch,
+)
 from ha_mcp.tools.tools_config_scripts import ConfigScriptTools
 
 _ACTION = {"action": "light.turn_on", "target": {"entity_id": "light.x"}}
@@ -172,3 +175,45 @@ def test_dashboard_malformed_list_is_named(config: dict, path: str) -> None:
 )
 def test_dashboard_valid_configs_pass(config: dict) -> None:
     _reject_malformed_dashboard_lists(config, "test-dash")
+
+
+_STACK = {"type": "vertical-stack", "cards": {"item": [{"type": "tile"}]}}
+
+
+def test_dashboard_nested_stack_card_list_is_named() -> None:
+    config = {"views": [{"cards": [{"type": "grid", "cards": [_STACK]}]}]}
+    with pytest.raises(ToolError) as exc_info:
+        _reject_malformed_dashboard_lists(config, "test-dash")
+    assert "'views[0].cards[0].cards[0].cards'" in _error(exc_info.value)["message"]
+
+
+def test_dashboard_custom_card_cards_option_passes() -> None:
+    config = {"views": [{"cards": [{"type": "custom:x", "cards": {"item": "a"}}]}]}
+    _reject_malformed_dashboard_lists(config, "test-dash")
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        {"op": "replace", "path": "/views/0/cards", "value": {"item": [{}]}},
+        {"op": "add", "path": "/views/-", "value": {"sections": ""}},
+        {"op": "add", "path": "/views/0/sections/1/cards/-", "value": _STACK},
+    ],
+)
+def test_dashboard_patch_malformed_list_is_named(op: dict) -> None:
+    with pytest.raises(ToolError) as exc_info:
+        _reject_malformed_dashboard_patch([op], "test-dash")
+    assert f"({op['path']})" in _error(exc_info.value)["message"]
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        {"op": "add", "path": "/views/0/cards/-", "value": {"type": "tile"}},
+        {"op": "test", "path": "/views/0/cards", "value": {"item": [{}]}},
+        {"op": "replace", "path": "/views/0/title", "value": ""},
+        {"op": "remove", "path": "/views/0/cards/0"},
+    ],
+)
+def test_dashboard_patch_valid_ops_pass(op: dict) -> None:
+    _reject_malformed_dashboard_patch([op], "test-dash")
