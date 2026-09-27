@@ -576,22 +576,26 @@ class TestYamlSkippedClassification:
         assert "admin-only" in failed_sample
 
     @pytest.mark.parametrize(
-        ("refused", "failed", "helper_failed", "warned"),
+        ("refused", "failures", "warned"),
         [
-            (True, 1, 0, True),
-            (True, 0, 1, True),
-            (False, 1, 0, False),
-            (True, 0, 0, False),
+            (True, {"automation_failed": 1}, True),
+            (True, {"script_failed": 1}, True),
+            (True, {"scene_failed": 1}, True),
+            (True, {"helper_failed": 1}, True),
+            (False, {"automation_failed": 1}, False),
+            (True, {}, False),
         ],
         ids=[
-            "refused-config-fetch",
+            "refused-automation-fetch",
+            "refused-script-fetch",
+            "refused-scene-fetch",
             "refused-flow-helper-probe",
             "admin-token",
             "nothing-failed",
         ],
     )
     def test_refused_admin_routes_add_the_unsupported_warning(
-        self, mock_client, smart_tools, refused, failed, helper_failed, warned
+        self, mock_client, smart_tools, refused, failures, warned
     ):
         """Keyed on the client, not the failure sample, which names only the
         first error (a 500 can take its slot)."""
@@ -604,7 +608,7 @@ class TestYamlSkippedClassification:
             10,
             False,
             {
-                "failed": 0,
+                "failed": failures.pop("scene_failed", 0),
                 "yaml_skipped": 0,
                 "skipped": 0,
                 "timeout": 0,
@@ -612,11 +616,8 @@ class TestYamlSkippedClassification:
                 "registry_failed": False,
                 "failed_sample": None,
             },
-            automation_failed=failed,
-            automation_failed_sample="HTTP 500: Internal Server Error"
-            if failed
-            else None,
-            helper_failed=helper_failed,
+            automation_failed_sample="HTTP 500: Internal Server Error",
+            **failures,
         )
         assert (NON_ADMIN_TOKEN_WARNING in response.get("warnings", [])) is warned
 

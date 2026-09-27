@@ -390,12 +390,15 @@ source ~/.zshrc
 3. **Token expiration** - Tokens don't expire by default, but can be revoked
 4. **Use an administrator's token** - non-admin tokens are not officially
    supported but still work, with limitations. With a non-admin user's token,
-   ha-mcp logs a warning (at startup, or on first use in OAuth mode) and
-   refuses admin-only operations (automation, script and scene configs,
-   config flows, diagnostics, logs, events) with
-   `AUTH_INSUFFICIENT_PERMISSIONS` instead of sending them: Home Assistant
-   answers each with a 401, which its `http.ban` counts toward an IP ban of
-   the ha-mcp host.
+   ha-mcp logs a warning (at startup, or on the first admin-only request in
+   OAuth mode). Admin-only operations fail with
+   `AUTH_INSUFFICIENT_PERMISSIONS`. ha-mcp keeps them from getting the
+   ha-mcp host IP-banned: Home Assistant answers an admin-only REST request
+   (automation, script and scene configs, config flows, diagnostics, logs,
+   events) from a non-admin with a 401 that its `http.ban` counts as a
+   failed login, so ha-mcp refuses those without sending them, and it calls
+   services over WebSocket, where a refused admin-only service is not
+   counted.
 
 ### Claude says it can't see Home Assistant
 

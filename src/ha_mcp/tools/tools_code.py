@@ -761,11 +761,7 @@ class _SandboxBridge:
             logger.warning("api_get rejected endpoint %r: %s", endpoint, exc)
             return {"error": str(exc)}
         try:
-            response = await self.client.send_guarded(
-                "GET",
-                normalized,
-                lambda: self.client.httpx_client.request("GET", normalized),
-            )
+            response = await self.client.guarded_request("GET", normalized)
             try:
                 return response.json()
             except json.JSONDecodeError:
@@ -814,12 +810,8 @@ class _SandboxBridge:
             post_kwargs: dict[str, Any] = {}
             if data is not None:
                 post_kwargs["json"] = data
-            response = await self.client.send_guarded(
-                "POST",
-                normalized,
-                lambda: self.client.httpx_client.request(
-                    "POST", normalized, **post_kwargs
-                ),
+            response = await self.client.guarded_request(
+                "POST", normalized, **post_kwargs
             )
             try:
                 return response.json()

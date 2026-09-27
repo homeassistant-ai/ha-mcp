@@ -1,10 +1,9 @@
 """Unit tests for the REST client's non-admin guard (#2546).
 
 Home Assistant answers a non-admin user's request to an admin-only REST route
-with 401, and ``http.ban`` counts every 401 as a failed login. A config-body
-``ha_search`` fans out ten of those at once, so a non-admin token got the
-ha-mcp host IP-banned. The client now asks ``auth/current_user`` once per
-token and refuses admin-only routes locally when the answer is non-admin.
+with 401, and ``http.ban`` counts it as a failed login. The client asks
+``auth/current_user`` once per token, refuses admin-only routes locally for a
+non-admin answer, and calls services over WebSocket for a non-admin token.
 """
 
 import asyncio
@@ -20,6 +19,7 @@ from ha_mcp.client.admin_routes import is_admin_only_route
 from ha_mcp.client.rest_client import (
     NON_ADMIN_TOKEN_WARNING,
     HomeAssistantAdminRequiredError,
+    HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantClient,
     HomeAssistantCommandError,
@@ -71,8 +71,8 @@ def client():
         ("POST", "/events/my_event"),
         ("POST", "/template"),
         ("GET", "/error_log"),
-        ("GET", "/hassio/core/logs"),
-        ("GET", "/hassio/addons/core_ssh/logs"),
+        ("GET", "/error_log?lines=50"),
+        ("GET", "/stream"),
         ("POST", "/config/core/check_config"),
         ("GET", "/diagnostics/config_entry/abc"),
         ("GET", "/diagnostics/config_entry/abc/device/dev1"),
@@ -80,7 +80,7 @@ def client():
         ("POST", "/config/config_entries/entry/abc/reload"),
         ("POST", "/config/config_entries/flow"),
         ("POST", "/config/config_entries/flow/f1"),
-        ("GET", "/config/config_entries/flow/f1"),
+        ("GET", "/config/config_entries/flow/f1?step=user"),
         ("POST", "/config/config_entries/options/flow"),
         ("POST", "/config/config_entries/options/flow/f1"),
         ("POST", "/config/config_entries/subentries/flow"),
@@ -107,6 +107,12 @@ def test_admin_only_routes_match(method, endpoint):
         # Aborting a flow has no admin gate in core.
         ("DELETE", "/config/config_entries/flow/f1"),
         ("DELETE", "/config/config_entries/options/flow/f1"),
+        # The flow index answers GET with 405, not an admin refusal.
+        ("GET", "/config/config_entries/flow"),
+        # The hassio proxy returns its 401 instead of raising, so it is not
+        # counted; the logo/icon paths are open to everyone.
+        ("GET", "/hassio/core/logs"),
+        ("GET", "/hassio/addons/core_ssh/logo"),
     ],
 )
 def test_routes_open_to_non_admin_do_not_match(method, endpoint):
@@ -155,12 +161,25 @@ async def test_probe_answer_is_cached_per_client(client):
     [None, {"id": "u1"}, {"id": "u1", "is_admin": "yes"}],
     ids=["no-answer", "no-is_admin-field", "non-bool-is_admin"],
 )
-async def test_inconclusive_probe_sends_and_reprobes(client, user):
+async def test_first_admin_route_answer_settles_an_unanswered_probe(client, user):
+    """A non-401 below 500 from an admin-only route proves the token is an admin's."""
     client._current_user = AsyncMock(return_value=user)
     await client._raw_request("GET", "/config/automation/config/123")
     await client._raw_request("GET", "/config/automation/config/123")
     assert client.httpx_client.request.await_count == 2
+    client._current_user.assert_awaited_once()
+    assert client.known_is_admin is True
+
+
+@pytest.mark.asyncio
+async def test_server_error_does_not_settle_an_unanswered_probe(client):
+    client._current_user = AsyncMock(return_value=None)
+    client.httpx_client.request = AsyncMock(return_value=_response(500))
+    for _ in range(2):
+        with pytest.raises(HomeAssistantAPIError):
+            await client._raw_request("POST", "/config/core/check_config")
     assert client._current_user.await_count == 2
+    assert client.known_is_admin is None
 
 
 def _fake_ws(*, connected=True, reply=None, error=None):
@@ -237,6 +256,9 @@ async def test_unanswered_probe_lets_one_concurrent_admin_request_out(client):
     )
     assert all(isinstance(r, HomeAssistantAuthError) for r in results)
     client.httpx_client.request.assert_awaited_once()
+    # A re-probe per queued request would be a failed WS handshake each time
+    # for an invalid token, which http.ban also counts.
+    client._current_user.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -244,8 +266,23 @@ async def test_confirmed_admin_requests_skip_the_lock(client):
     client._current_user = AsyncMock(return_value=_current_user(True))
     await client._raw_request("GET", "/config/automation/config/1")
     async with client._admin_route_lock:
-        await client._raw_request("GET", "/config/automation/config/2")
+        await asyncio.wait_for(
+            client._raw_request("GET", "/config/automation/config/2"), 1
+        )
     assert client.httpx_client.request.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_401_for_a_confirmed_admin_latches(client):
+    """A token demoted mid-session must not keep sending admin-only requests."""
+    client._current_user = AsyncMock(return_value=_current_user(True))
+    await client._raw_request("GET", "/config/automation/config/1")
+    client.httpx_client.request = AsyncMock(return_value=_response(401))
+    with pytest.raises(HomeAssistantAuthError):
+        await client._raw_request("GET", "/config/automation/config/2")
+    with pytest.raises(HomeAssistantAdminRequiredError):
+        await client._raw_request("GET", "/config/automation/config/3")
+    client.httpx_client.request.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -262,10 +299,13 @@ async def test_admin_route_refused_reflects_either_signal(client):
 async def test_401_on_admin_route_stops_further_admin_requests(client):
     client._current_user = AsyncMock(return_value=None)
     client.httpx_client.request = AsyncMock(return_value=_response(401))
-    for _ in range(3):
-        with pytest.raises(HomeAssistantAuthError) as exc:
+    with pytest.raises(HomeAssistantAuthError) as exc:
+        await client._raw_request("GET", "/config/automation/config/123")
+    assert "returned 401" in str(exc.value)
+    for _ in range(2):
+        with pytest.raises(HomeAssistantAdminRequiredError) as exc:
             await client._raw_request("GET", "/config/automation/config/123")
-        assert "administrator" in str(exc.value)
+        assert "not sent" in str(exc.value)
     client.httpx_client.request.assert_awaited_once()
 
     client.httpx_client.request = AsyncMock(return_value=_response(200))
@@ -322,3 +362,87 @@ async def test_code_mode_open_route_still_sends(client):
         return_value=_response(200, json_body=[{"entity_id": "sun.sun"}])
     )
     assert await _bridge(client).api_get("/states") == [{"entity_id": "sun.sun"}]
+
+
+@pytest.mark.asyncio
+async def test_non_admin_service_call_goes_over_websocket(client):
+    """Over REST an admin-only service would answer 401, counted by http.ban."""
+    client.send_websocket_message = AsyncMock(
+        return_value={"success": True, "result": {"context": {"id": "c"}}}
+    )
+    result = await client.call_service(
+        "light", "turn_on", {"entity_id": "light.kitchen"}
+    )
+    assert result == []
+    client.httpx_client.request.assert_not_awaited()
+    client.send_websocket_message.assert_awaited_once_with(
+        {
+            "type": "call_service",
+            "domain": "light",
+            "service": "turn_on",
+            "service_data": {"entity_id": "light.kitchen"},
+            "return_response": False,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_non_admin_service_call_keeps_the_response_shape(client):
+    client.send_websocket_message = AsyncMock(
+        return_value={
+            "success": True,
+            "result": {"context": {"id": "c"}, "response": {"events": []}},
+        }
+    )
+    result = await client.call_service(
+        "calendar", "get_events", {}, return_response=True
+    )
+    assert result == {"changed_states": [], "service_response": {"events": []}}
+
+
+@pytest.mark.asyncio
+async def test_admin_only_service_refusal_raises_admin_required(client):
+    client.send_websocket_message = AsyncMock(
+        return_value={
+            "success": False,
+            "error": "Command failed: Unauthorized",
+            "error_code": "home_assistant_error",
+        }
+    )
+    with pytest.raises(HomeAssistantAdminRequiredError) as exc:
+        await client.call_service("automation", "reload")
+    assert "automation.reload" in str(exc.value)
+    client.httpx_client.request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_other_websocket_service_failures_raise_api_errors(client):
+    client.send_websocket_message = AsyncMock(
+        return_value={
+            "success": False,
+            "error": "Command failed: Service light.nope not found.",
+            "error_code": "not_found",
+        }
+    )
+    with pytest.raises(HomeAssistantAPIError) as exc:
+        await client.call_service("light", "nope")
+    assert exc.value.status_code == 400
+    assert "not found" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_admin_service_call_stays_on_rest(client):
+    client._current_user = AsyncMock(return_value=_current_user(True))
+    client.httpx_client.request = AsyncMock(return_value=_response(200, json_body=[]))
+    client.send_websocket_message = AsyncMock()
+    await client.call_service("automation", "reload")
+    client.httpx_client.request.assert_awaited_once()
+    client.send_websocket_message.assert_not_awaited()
+
+
+def test_constructor_seeds_a_known_admin_status():
+    client = HomeAssistantClient(
+        base_url="http://test.local:8123", token="t", verify_ssl=True, is_admin=True
+    )
+    assert client.known_is_admin is True
+    assert client.admin_route_refused is False

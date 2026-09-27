@@ -46,10 +46,13 @@ async def _dismiss_login_notification(ha_client: HomeAssistantClient) -> None:
     )
 
 
-async def _diagnostics_path(ha_client: HomeAssistantClient) -> str:
+async def _sun_entry_id(ha_client: HomeAssistantClient) -> str:
     entries = await ha_client._request("GET", "/config/config_entries/entry")
-    entry_id = next(e["entry_id"] for e in entries if e["domain"] == "sun")
-    return f"/diagnostics/config_entry/{entry_id}"
+    return next(e["entry_id"] for e in entries if e["domain"] == "sun")
+
+
+async def _diagnostics_path(ha_client: HomeAssistantClient) -> str:
+    return f"/diagnostics/config_entry/{await _sun_entry_id(ha_client)}"
 
 
 @pytest.fixture
@@ -100,26 +103,107 @@ async def test_diagnostics_is_refused_without_a_request(
     assert sent == []
 
 
+# Every entry in client/admin_routes.py, in the shape ha-mcp sends it, plus
+# the service route non-admin calls avoid. ``{entry}`` is the seeded sun entry.
+_ADMIN_ONLY_REQUESTS = [
+    ("GET", "/config/automation/config/ha_mcp_e2e_absent", None),
+    ("GET", "/config/script/config/ha_mcp_e2e_absent", None),
+    ("GET", "/config/scene/config/ha_mcp_e2e_absent", None),
+    ("POST", "/config/core/check_config", None),
+    ("POST", "/template", {"template": "{{ 1 }}"}),
+    ("GET", "/error_log", None),
+    ("GET", "/stream", None),
+    ("POST", "/events/ha_mcp_e2e_probe", {}),
+    ("POST", "/states/sensor.ha_mcp_e2e_probe", {"state": "1"}),
+    ("GET", "/diagnostics/config_entry/{entry}", None),
+    ("POST", "/config/config_entries/entry/{entry}/reload", None),
+    ("DELETE", "/config/config_entries/entry/ha_mcp_e2e_absent", None),
+    ("POST", "/config/config_entries/flow", {"handler": "sun"}),
+    ("GET", "/config/config_entries/flow/ha_mcp_e2e_absent", None),
+    ("POST", "/config/config_entries/options/flow", {"handler": "{entry}"}),
+    ("POST", "/services/automation/reload", {}),
+]
+# Routes the table deliberately leaves out: open to every user in core.
+_OPEN_REQUESTS = [
+    ("GET", "/config/config_entries/entry", None),
+    ("DELETE", "/config/config_entries/flow/ha_mcp_e2e_absent", None),
+    ("GET", "/config/config_entries/flow", None),
+]
+
+
+async def _raw_status(
+    ha_client: HomeAssistantClient, method: str, path: str, body: dict | None
+) -> int:
+    entry_id = await _sun_entry_id(ha_client)
+    path = path.replace("{entry}", entry_id)
+    if body is not None:
+        body = {
+            k: v.replace("{entry}", entry_id) if isinstance(v, str) else v
+            for k, v in body.items()
+        }
+    async with httpx.AsyncClient(verify=ha_client.verify_ssl, timeout=10) as http:
+        response = await http.request(
+            method,
+            f"{ha_client.base_url}/api{path}",
+            headers={"Authorization": f"Bearer {NON_ADMIN_TEST_TOKEN}"},
+            json=body,
+        )
+    return response.status_code
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("route", ["automation_config", "diagnostics"])
+@pytest.mark.parametrize(("method", "path", "body"), _ADMIN_ONLY_REQUESTS)
 async def test_home_assistant_answers_non_admin_with_401(
-    ha_client: HomeAssistantClient, route: str
+    ha_client: HomeAssistantClient, method: str, path: str, body: dict | None
 ):
     """The premise for each listed route: core refuses a non-admin with 401."""
-    path = (
-        _ADMIN_ONLY_PATH
-        if route == "automation_config"
-        else await _diagnostics_path(ha_client)
-    )
     try:
-        async with httpx.AsyncClient(verify=ha_client.verify_ssl) as http:
-            response = await http.get(
-                f"{ha_client.base_url}/api{path}",
-                headers={"Authorization": f"Bearer {NON_ADMIN_TEST_TOKEN}"},
-            )
-        assert response.status_code == 401
+        assert await _raw_status(ha_client, method, path, body) == 401
     finally:
         await _dismiss_login_notification(ha_client)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("method", "path", "body"), _OPEN_REQUESTS)
+async def test_unlisted_routes_do_not_refuse_non_admin_with_401(
+    ha_client: HomeAssistantClient, method: str, path: str, body: dict | None
+):
+    assert await _raw_status(ha_client, method, path, body) != 401
+
+
+@pytest.mark.asyncio
+async def test_first_admin_route_response_settles_an_unanswered_probe(
+    ha_client: HomeAssistantClient,
+):
+    """Without a probe answer, a success proves the token is an admin's."""
+    client = HomeAssistantClient(
+        base_url=ha_client.base_url,
+        token=ha_client.token,
+        verify_ssl=ha_client.verify_ssl,
+    )
+    client._current_user = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    try:
+        for _ in range(2):
+            await client._request("GET", _SEED_AUTOMATION_PATH)
+    finally:
+        await client.close()
+    client._current_user.assert_awaited_once()
+    assert client.known_is_admin is True
+
+
+@pytest.mark.asyncio
+async def test_non_admin_service_calls_go_over_websocket(
+    non_admin_client: HomeAssistantClient,
+):
+    """REST would answer an admin-only service with a 401 that http.ban counts."""
+    sent = _record_requests(non_admin_client)
+    with pytest.raises(HomeAssistantAdminRequiredError, match=r"automation.reload"):
+        await non_admin_client.call_service("automation", "reload")
+    result = await non_admin_client.call_service(
+        "persistent_notification", "dismiss", {"notification_id": "ha_mcp_e2e_absent"}
+    )
+    assert result == []
+    assert sent == []
 
 
 @pytest.mark.asyncio

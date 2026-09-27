@@ -1347,14 +1347,14 @@ class DeepSearchMixin(SceneSearchMixin):
             graph_surfaces_skipped=graph_surfaces_skipped,
             graph_unavailable=graph_unavailable,
         )
-        # Keyed on the client, not the failure sample, which names only the first
-        # error. ``getattr``/``is True`` because test doubles are duck-typed.
+        # Keyed on the client, not the failure sample, which names only the
+        # first error.
         if (
             automation_failed
             or script_failed
             or scene_stats.get("failed")
             or helper_failed
-        ) and getattr(self.client, "admin_route_refused", False) is True:
+        ) and self.client.admin_route_refused is True:
             response.setdefault("warnings", []).append(NON_ADMIN_TOKEN_WARNING)
         return response
 

@@ -23,16 +23,25 @@ async def warn_if_non_admin_token() -> None:
         if is_embedded() or settings.homeassistant_token == OAUTH_MODE_TOKEN:
             return
         async with HomeAssistantClient() as client:
-            await client.token_is_admin()
+            if await client.token_is_admin() is None:
+                logger.info(
+                    "Could not ask Home Assistant whether the token is an "
+                    "administrator's; admin-only requests go out one at a time "
+                    "until the first one answers it"
+                )
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.debug("Startup admin-token check skipped", exc_info=True)
+        logger.warning("Startup admin-token check failed", exc_info=True)
 
 
 @asynccontextmanager
 async def server_lifespan(server: Any) -> AsyncIterator[dict[str, Any]]:
-    """Run the HACS startup nudge and the admin-token check for the server's lifetime."""
+    """Run the HACS startup nudge and the admin-token check for the server's lifetime.
+
+    Attached as the FastMCP ``lifespan`` so it runs on every launcher, including
+    the app's ``start.py``, which calls ``mcp.run()`` directly.
+    """
     async with hacs_refresh_lifespan(server) as state:
         task = asyncio.create_task(warn_if_non_admin_token())
         try:

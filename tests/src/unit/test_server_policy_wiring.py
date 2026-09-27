@@ -343,3 +343,58 @@ def test_the_result_event_closes_the_client_it_built():
 
     assert len(built) == 1
     built[0].__aexit__.assert_awaited_once()
+
+
+def test_the_result_client_inherits_the_known_admin_status():
+    """A fresh client per event would otherwise re-probe the token every time."""
+    import anyio
+
+    from ha_mcp.server import HomeAssistantSmartMCPServer
+
+    stub = _make_server_stub(enable_policies=True)
+    stub.client = MagicMock(
+        base_url="http://ha.local:8123",
+        token="tok",
+        verify_ssl=True,
+        known_is_admin=True,
+    )
+    HomeAssistantSmartMCPServer._apply_tool_security_policies(stub)
+
+    seen: list[dict] = []
+
+    def fake_client(*_args, **kwargs):
+        seen.append(kwargs)
+        client = MagicMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=None)
+        client.fire_event = AsyncMock()
+        return client
+
+    emitter = stub.approval_response_listener._emit_result
+    with patch("ha_mcp.client.rest_client.HomeAssistantClient", new=fake_client):
+        anyio.run(lambda: emitter("tok-1", "approve", applied=True, reason="applied"))
+
+    assert seen == [{"verify_ssl": True, "is_admin": True}]
+
+
+def test_a_refused_result_event_logs_one_line_without_a_traceback(caplog):
+    import logging
+
+    import anyio
+
+    from ha_mcp.client.rest_client import HomeAssistantAdminRequiredError
+    from ha_mcp.policy.events import emit_approval_result
+
+    client = MagicMock()
+    client.fire_event = AsyncMock(
+        side_effect=HomeAssistantAdminRequiredError("POST /api/events/x is admin-only")
+    )
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.policy.events"):
+        anyio.run(
+            lambda: emit_approval_result(
+                client, "tok-1", "approve", applied=True, reason="applied"
+            )
+        )
+    [record] = caplog.records
+    assert "administrator's token" in record.getMessage()
+    assert record.exc_info is None
