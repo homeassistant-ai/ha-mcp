@@ -179,6 +179,7 @@ async def test_http_submit_failure_preserves_application_knowledge(
     ) as http_client:
         native = HomeAssistantClient.__new__(HomeAssistantClient)
         native.httpx_client = http_client
+        native._is_admin = True
         client = _client()
         client.submit_options_flow_step = AsyncMock(
             wraps=native.submit_options_flow_step

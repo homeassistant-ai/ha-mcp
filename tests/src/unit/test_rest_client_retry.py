@@ -32,6 +32,7 @@ def client():
         c.verify_ssl = True
         c.httpx_client = MagicMock()
         c._supervised_detected = None
+        c._is_admin = True
         return c
 
 

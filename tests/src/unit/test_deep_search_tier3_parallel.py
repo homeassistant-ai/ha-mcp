@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from ha_mcp.client.rest_client import (
+    HomeAssistantAdminRequiredError,
     HomeAssistantAPIError,
     HomeAssistantConnectionError,
     SceneStorageConfigNotFoundError,
@@ -539,6 +540,39 @@ class TestYamlSkippedClassification:
         assert yaml_skipped_count == 0, (
             f"only 404s count as yaml_skipped; got yaml_skipped={yaml_skipped_count}"
         )
+
+    @pytest.mark.asyncio
+    async def test_automation_admin_required_names_the_cause(
+        self, mock_client, smart_tools
+    ):
+        """A non-admin token's locally refused fetch (#2546) is reported as
+        failed with a sample that names the admin requirement."""
+        automations = _make_automation_entities(3)
+        mock_client.get_states = AsyncMock(return_value=automations)
+        mock_client._request = AsyncMock(
+            side_effect=HomeAssistantAdminRequiredError(
+                "GET /api/config/automation/config/uid_0 is admin-only"
+            )
+        )
+
+        (
+            _matches,
+            _skipped_count,
+            failed_count,
+            yaml_skipped_count,
+            _timeout_count,
+            failed_sample,
+        ) = await smart_tools._deep_search_automations(
+            automations,
+            {a["entity_id"]: a["attributes"]["id"] for a in automations},
+            query_lower="anything",
+            exact_match=False,
+        )
+        assert failed_count == 3
+        assert yaml_skipped_count == 0
+        assert failed_sample is not None
+        assert failed_sample.startswith("HomeAssistantAdminRequiredError:")
+        assert "admin-only" in failed_sample
 
     @pytest.mark.asyncio
     async def test_automation_none_status_code_classifies_as_failed(
