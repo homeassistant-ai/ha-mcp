@@ -640,6 +640,24 @@ def _best_practices_skills_dir(tmp_path: Path) -> Path:
 
 
 class TestSkillGuideKeyInjection:
+    def test_ack_line_prepended_when_strict_effective(self, monkeypatch, tmp_path):
+        """A model reads the key from the top of the served file; without
+        it every gated write stays blocked."""
+        from ha_mcp import strict_bps
+
+        monkeypatch.setattr("ha_mcp.strict_bps.strict_bps_effective", lambda: True)
+        # Freeze the clock: content generation and the assertions each
+        # derive the key; an hour-boundary straddle between them would flake.
+        monkeypatch.setattr(
+            strict_bps, "time", SimpleNamespace(time=lambda: 1_000_000_000.0)
+        )
+        srv = _make_bare_server()
+        skills_dir = _best_practices_skills_dir(tmp_path)
+        result = srv._handle_skill_guide_call(skills_dir)
+        assert result["content"].startswith(strict_bps_ack_line())
+        assert current_strict_bps_ack_key() in result["content"]
+        assert "Real content here." in result["content"]
+
     def test_ack_line_absent_when_strict_off(self, monkeypatch, tmp_path):
         monkeypatch.setattr("ha_mcp.strict_bps.strict_bps_effective", lambda: False)
         srv = _make_bare_server()
