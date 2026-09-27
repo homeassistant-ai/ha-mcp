@@ -100,9 +100,14 @@ ha-mcp uses the long-lived access token the operator provides. That token's
 permissions in Home Assistant are what they are. If the configured token is an
 admin token, ha-mcp can perform admin-level operations. Reports stating "ha-mcp
 can do X" where X is permitted by the configured token are not vulnerabilities —
-they are the intended behavior. Restricting HA permissions is done in Home
-Assistant (e.g. by creating a non-admin user and generating a token for that
-user).
+they are the intended behavior. ha-mcp expects an administrator's token;
+non-admin tokens are not officially supported but still work, with
+limitations: admin-only operations fail. Home Assistant answers an
+admin-only REST request from a non-admin with a 401 that `http.ban` counts
+toward an IP ban, so ha-mcp refuses those locally and calls services over
+WebSocket, where a refusal is not counted.
+To limit what an agent can do, use ha-mcp's tool security policies or
+disable tools rather than a non-admin token.
 
 ### Entity visibility enforce mode is best-effort concealment
 

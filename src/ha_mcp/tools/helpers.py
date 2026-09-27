@@ -16,6 +16,8 @@ from ha_mcp._vendor.fastmcp import Context
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
+    NON_ADMIN_TOKEN_WARNING,
+    HomeAssistantAdminRequiredError,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
     HomeAssistantCommandError,
@@ -322,6 +324,17 @@ def _classify_exception(
             result = create_connection_error(
                 error_msg, timeout="timeout" in error_str, context=context
             )
+        case HomeAssistantAdminRequiredError():
+            result = create_error_response(
+                ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+                error_msg,
+                suggestions=[
+                    "Use a long-lived access token from an administrator's profile",
+                    "Or use the in-process server, which provisions its own admin token",
+                ],
+                context=context,
+            )
+            result["warnings"] = [NON_ADMIN_TOKEN_WARNING]
         case HomeAssistantAuthError():
             result = create_auth_error(
                 error_msg, expired="expired" in error_str, context=context

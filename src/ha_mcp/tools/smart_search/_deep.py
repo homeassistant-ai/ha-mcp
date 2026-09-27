@@ -8,7 +8,7 @@ from typing import Any
 from ha_mcp._vendor.fastmcp import Context
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-from ...client.rest_client import HomeAssistantAPIError
+from ...client.rest_client import NON_ADMIN_TOKEN_WARNING, HomeAssistantAPIError
 from ...errors import get_error_code, get_error_message
 from ..component_api import component_supports, get_component_caps
 from ..config_entry_flow import FLOW_HELPER_TYPES
@@ -1347,6 +1347,15 @@ class DeepSearchMixin(SceneSearchMixin):
             graph_surfaces_skipped=graph_surfaces_skipped,
             graph_unavailable=graph_unavailable,
         )
+        # Keyed on the client, not the failure sample, which names only the
+        # first error.
+        if (
+            automation_failed
+            or script_failed
+            or scene_stats.get("failed")
+            or helper_failed
+        ) and self.client.admin_route_refused is True:
+            response.setdefault("warnings", []).append(NON_ADMIN_TOKEN_WARNING)
         return response
 
     @staticmethod

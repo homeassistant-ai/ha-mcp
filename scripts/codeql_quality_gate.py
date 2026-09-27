@@ -113,6 +113,16 @@ ALLOWLIST: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "py/ineffectual-statement",
+        "src/ha_mcp/server_lifespan.py",
+        "This statement has no effect",
+        "await task",
+        "False positive on the bare 'await task' inside contextlib.suppress "
+        "in server_lifespan: awaiting the cancelled admin-token check IS the "
+        "effect (it waits for the task to finish unwinding before the server "
+        "lifespan exits).",
+    ),
+    (
+        "py/ineffectual-statement",
         "tests/src/unit/test_websocket_client.py",
         "This statement has no effect",
         "await task",

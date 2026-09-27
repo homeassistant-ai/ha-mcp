@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 import anyio
 
+from ..client.rest_client import HomeAssistantAdminRequiredError
 from .approval_queue import PendingApproval
 from .model import Rule
 
@@ -184,6 +185,13 @@ async def emit_approval_result(
                 token,
                 EMIT_TIMEOUT_SECONDS,
             )
+    except HomeAssistantAdminRequiredError:
+        logger.warning(
+            "policy events: %s for token=%s not fired: events need an "
+            "administrator's token; the decision itself is unaffected",
+            APPROVAL_RESULT_EVENT,
+            token,
+        )
     except Exception:
         logger.warning(
             "policy events: failed to fire %s for token=%s; the decision "
@@ -227,6 +235,14 @@ async def emit_approval_requested(
                 entry.tool_name,
                 EMIT_TIMEOUT_SECONDS,
             )
+    except HomeAssistantAdminRequiredError:
+        logger.warning(
+            "policy events: %s for tool=%s not fired: events need an "
+            "administrator's token; the pending request is still queued and "
+            "visible in the settings UI",
+            APPROVAL_REQUESTED_EVENT,
+            entry.tool_name,
+        )
     except Exception:
         # Broad by intent: every failure mode here has the same handling —
         # log it and leave the gate working. Narrowing would turn an

@@ -35,6 +35,10 @@ from pydantic import Field
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp._vendor.fastmcp.server.context import Context
 
+from ..client.rest_client import (
+    NON_ADMIN_TOKEN_WARNING,
+    HomeAssistantAdminRequiredError,
+)
 from ..config import get_global_settings
 from ..errors import ErrorCode, create_error_response
 from .helpers import log_tool_usage, raise_tool_error
@@ -757,11 +761,13 @@ class _SandboxBridge:
             logger.warning("api_get rejected endpoint %r: %s", endpoint, exc)
             return {"error": str(exc)}
         try:
-            response = await self.client.httpx_client.request("GET", normalized)
+            response = await self.client.guarded_request("GET", normalized)
             try:
                 return response.json()
             except json.JSONDecodeError:
                 return response.text
+        except HomeAssistantAdminRequiredError as exc:
+            return {"error": str(exc), "warnings": [NON_ADMIN_TOKEN_WARNING]}
         except Exception as exc:
             logger.warning("api_get(%r) failed", endpoint, exc_info=True)
             return {"error": str(exc)[:200]}
@@ -804,13 +810,15 @@ class _SandboxBridge:
             post_kwargs: dict[str, Any] = {}
             if data is not None:
                 post_kwargs["json"] = data
-            response = await self.client.httpx_client.request(
+            response = await self.client.guarded_request(
                 "POST", normalized, **post_kwargs
             )
             try:
                 return response.json()
             except json.JSONDecodeError:
                 return response.text
+        except HomeAssistantAdminRequiredError as exc:
+            return {"error": str(exc), "warnings": [NON_ADMIN_TOKEN_WARNING]}
         except Exception as exc:
             logger.warning("api_post(%r) failed", endpoint, exc_info=True)
             return {"error": str(exc)[:200]}
