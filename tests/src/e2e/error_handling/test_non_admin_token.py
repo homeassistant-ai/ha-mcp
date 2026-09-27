@@ -154,11 +154,22 @@ async def _raw_status(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("method", "path", "body"), _ADMIN_ONLY_REQUESTS)
 async def test_home_assistant_answers_non_admin_with_401(
-    ha_client: HomeAssistantClient, method: str, path: str, body: dict | None
+    ha_client: HomeAssistantClient,
+    ha_container_with_fresh_config,
+    method: str,
+    path: str,
+    body: dict | None,
 ):
     """The premise for each listed route: core refuses a non-admin with 401."""
+    expected = 401
+    if path == "/error_log" and str(
+        ha_container_with_fresh_config.get("backend")
+    ).startswith("haos"):
+        # Supervised installs never register /api/error_log (see
+        # HomeAssistantClient.get_error_log); ha-mcp reads logs elsewhere there.
+        expected = 404
     try:
-        assert await _raw_status(ha_client, method, path, body) == 401
+        assert await _raw_status(ha_client, method, path, body) == expected
     finally:
         await _dismiss_login_notification(ha_client)
 
