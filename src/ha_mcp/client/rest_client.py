@@ -72,9 +72,10 @@ MIN_LOG_WINDOW_LINES = 2
 # format, which the hassio-proxy route cannot request.
 _PROBE_ENTRIES = 8
 NON_ADMIN_TOKEN_WARNING = (
-    "ha-mcp does not officially support non-admin Home Assistant tokens: "
-    "admin-only operations are refused without being sent. Use a long-lived "
-    "access token from an administrator's profile."
+    "ha-mcp does not officially support non-admin Home Assistant tokens. They "
+    "still work, but admin-only operations are refused without being sent. "
+    "Use a long-lived access token from an administrator's profile for full "
+    "access."
 )
 _ADMIN_ONLY_401_MESSAGE = (
     "Home Assistant returned 401 for an admin-only endpoint: "

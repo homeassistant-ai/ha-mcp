@@ -316,8 +316,8 @@ def create_consent_html(
                     autocomplete="off"
                 >
                 <p class="help-text">
-                    Create a token while signed in as an administrator (non-admin
-                    tokens are not officially supported): Home Assistant &rarr; Profile &rarr;
+                    Create a token (an administrator's is recommended; non-admin
+                    tokens work with limitations) at: Home Assistant &rarr; Profile &rarr;
                     <a href="https://www.home-assistant.io/docs/authentication/#your-account-profile" target="_blank" rel="noopener">
                         Long-Lived Access Tokens
                     </a>

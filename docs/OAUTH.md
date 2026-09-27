@@ -2,7 +2,7 @@
 
 > **Status:** Beta — OAuth provides an alternative to the private URL method. Fully functional but still being refined.
 
-OAuth authentication lets multiple users authenticate with their own Home Assistant Long-Lived Access Token via a consent form. Each token must come from an administrator account: non-admin tokens are not officially supported, and ha-mcp refuses admin-only operations for them (see the [FAQ](FAQ.md#token-invalid-or-authentication-errors)).
+OAuth authentication lets multiple users authenticate with their own Home Assistant Long-Lived Access Token via a consent form. An administrator's token is recommended: non-admin tokens are not officially supported but still work, with limitations — ha-mcp refuses admin-only operations for them (see the [FAQ](FAQ.md#token-invalid-or-authentication-errors)).
 
 ## Migrating from v6.x
 
@@ -93,7 +93,7 @@ uvx --from=ha-mcp@latest ha-mcp-oauth
 | `MCP_SETTINGS_SECRET_PATH` | Dedicated secret path for the web settings UI. In OAuth mode the settings UI never shares the MCP path (its custom routes bypass OAuth auth), so it is served under this separate secret. Auto-generated and printed in the startup log when unset. | Auto-generated `/private_<token>` |
 | `HA_MCP_DISABLE_SETTINGS_UI` | Set truthy (`1`/`true`/`yes`/`on`) to not serve the web settings UI at all. | unset (UI served) |
 
-> **Note:** `HOMEASSISTANT_TOKEN` is NOT required in OAuth mode. Each user provides their own administrator Long-Lived Access Token via the consent form.
+> **Note:** `HOMEASSISTANT_TOKEN` is NOT required in OAuth mode. Each user provides their own Long-Lived Access Token (an administrator's is recommended) via the consent form.
 
 ### 4. Connect in Claude.ai
 
