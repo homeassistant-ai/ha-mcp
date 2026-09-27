@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from ha_mcp.client.rest_client import (
+    NON_ADMIN_TOKEN_WARNING,
     HomeAssistantAdminRequiredError,
     HomeAssistantAPIError,
     HomeAssistantConnectionError,
@@ -573,6 +574,38 @@ class TestYamlSkippedClassification:
         assert failed_sample is not None
         assert failed_sample.startswith("HomeAssistantAdminRequiredError:")
         assert "admin-only" in failed_sample
+
+    @pytest.mark.parametrize(
+        ("sample", "warned"),
+        [
+            ("HomeAssistantAdminRequiredError: GET /api/x is admin-only", True),
+            ("HTTP 500: Internal Server Error", False),
+            (None, False),
+        ],
+    )
+    def test_admin_required_sample_adds_the_unsupported_warning(
+        self, smart_tools, sample, warned
+    ):
+        response = smart_tools._paginate_and_build_response(
+            {"automations": [], "scripts": [], "scenes": [], "helpers": []},
+            "anything",
+            ["automation"],
+            0,
+            10,
+            False,
+            {
+                "failed": 0,
+                "yaml_skipped": 0,
+                "skipped": 0,
+                "timeout": 0,
+                "integration_skipped": 0,
+                "registry_failed": False,
+                "failed_sample": None,
+            },
+            automation_failed=1 if sample else 0,
+            automation_failed_sample=sample,
+        )
+        assert (NON_ADMIN_TOKEN_WARNING in response.get("warnings", [])) is warned
 
     @pytest.mark.asyncio
     async def test_automation_none_status_code_classifies_as_failed(
