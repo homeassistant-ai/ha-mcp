@@ -224,7 +224,7 @@ const clientsData = [
     "name": "Antigravity",
     "company": "Google",
     "logo": "/logos/antigravity.svg",
-    "transports": ["stdio"],
+    "transports": ["stdio", "streamable-http"],
     "configFormat": "json",
     "configLocation": "mcp_config.json (in Antigravity UI)",
     "accuracy": 3,
@@ -2247,7 +2247,7 @@ ingress:
               <li>Click <strong>Manage MCP Servers</strong> at the top</li>
               <li>Click <strong>View raw config</strong> to edit <code class="bg-slate-800 px-1 rounded">mcp_config.json</code></li>
             </ol>
-            ${!isStdio ? `<p class="mt-2 text-amber-400"><strong>Note:</strong> HTTP transport in Antigravity can experience "connection closed" or "SSE stream failed to reconnect" errors — if you hit those, switch to stdio.</p>` : ''}
+            ${!isStdio ? `<p class="mt-2 text-amber-400"><strong>Note:</strong> Antigravity's built-in HTTP client can fail with <code class="bg-slate-800 px-1 rounded">sending "subscriptions/listen": … session not found</code>, "connection closed", or "SSE stream failed to reconnect" errors — if you hit those, connect through the <code class="bg-slate-800 px-1 rounded">fastmcp-remote</code> stdio bridge instead (<a href="${base}/faq#antigravity-troubleshooting" class="text-blue-400 hover:underline">details</a>).</p>` : ''}
           </div>
         </div>`);
       }
