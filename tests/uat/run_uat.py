@@ -45,13 +45,14 @@ REPO_ROOT = TESTS_DIR.parent
 sys.path.insert(0, str(TESTS_DIR))
 from test_constants import HA_TEST_IMAGE, TEST_TOKEN  # noqa: E402
 from uat._logging import configure_cli_logging  # noqa: E402
-from uat.codex_agent import command as codex_command  # noqa: E402
 from uat.codex_agent import (  # noqa: E402
+    auth_path,
     isolation_probe,
     parse_events,
     persist_auth,
     prepare_home,
 )
+from uat.codex_agent import command as codex_command  # noqa: E402
 from uat.ha_wait import wait_for_ha_ready  # noqa: E402
 
 HA_IMAGE = HA_TEST_IMAGE
@@ -868,8 +869,7 @@ def _run_preflight_checks(args: argparse.Namespace, active_agents: list[str]) ->
         if err:
             raise RuntimeError(err)
     if "codex" in active_agents:
-        auth_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
-        if not (auth_home / "auth.json").is_file():
+        if not auth_path().is_file():
             raise ValueError("Codex BAT requires CODEX_HOME/auth.json")
 
 

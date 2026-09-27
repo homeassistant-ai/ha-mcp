@@ -13,8 +13,15 @@ import tempfile
 from pathlib import Path
 
 
+def auth_path() -> Path:
+    configured = os.environ.get("CODEX_HOME")
+    if not configured:
+        raise ValueError("Codex BAT requires an explicit CODEX_HOME/auth.json")
+    return Path(configured) / "auth.json"
+
+
 def prepare_home(mcp_config: dict) -> tuple[Path, Path]:
-    source = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "auth.json"
+    source = auth_path()
     if not source.is_file():
         raise ValueError("Codex BAT requires CODEX_HOME/auth.json")
     root = Path(tempfile.mkdtemp(prefix="codex_bat_"))
@@ -54,12 +61,12 @@ def prepare_home(mcp_config: dict) -> tuple[Path, Path]:
 
 def persist_auth(home: Path) -> None:
     """Return a rotated credential to the caller's dedicated auth directory."""
+    target = auth_path()
     current = home / "auth.json"
     data = current.read_bytes()
     auth = json.loads(data)
     if not isinstance(auth, dict) or not auth.get("auth_mode"):
         raise ValueError("Codex BAT produced an invalid auth.json")
-    target = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "auth.json"
     with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as tmp:
         tmp.write(data)
         staging = Path(tmp.name)

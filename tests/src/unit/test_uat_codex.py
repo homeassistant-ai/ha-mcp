@@ -119,3 +119,11 @@ def test_missing_auth_fails_before_model(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     with pytest.raises(ValueError, match=r"CODEX_HOME/auth\.json"):
         codex_agent.prepare_home({"mcpServers": {"home-assistant": {}}})
+
+
+def test_unset_home_cannot_fall_back_to_personal_auth(monkeypatch):
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    with pytest.raises(ValueError, match="explicit CODEX_HOME"):
+        codex_agent.prepare_home({"mcpServers": {"home-assistant": {}}})
+    with pytest.raises(ValueError, match="explicit CODEX_HOME"):
+        codex_agent.persist_auth(Path("unused"))
