@@ -46,7 +46,12 @@ sys.path.insert(0, str(TESTS_DIR))
 from test_constants import HA_TEST_IMAGE, TEST_TOKEN  # noqa: E402
 from uat._logging import configure_cli_logging  # noqa: E402
 from uat.codex_agent import command as codex_command  # noqa: E402
-from uat.codex_agent import parse_events, persist_auth, prepare_home  # noqa: E402
+from uat.codex_agent import (  # noqa: E402
+    isolation_probe,
+    parse_events,
+    persist_auth,
+    prepare_home,
+)
 from uat.ha_wait import wait_for_ha_ready  # noqa: E402
 
 HA_IMAGE = HA_TEST_IMAGE
@@ -643,6 +648,15 @@ async def run_agent_scenario(
         codex_root, codex_home = prepare_home(config)
 
     try:
+        if codex_home and codex_root:
+            probe = await run_cli(
+                isolation_probe(codex_home, codex_root / "work"),
+                30,
+                cwd=codex_root / "work",
+                env_override={"CODEX_HOME": str(codex_home)},
+            )
+            if probe["exit_code"] != 0:
+                raise RuntimeError("Codex BAT credential isolation preflight failed")
         for phase in ("setup_prompt", "test_prompt", "teardown_prompt"):
             prompt = scenario.get(phase)
             if not prompt:

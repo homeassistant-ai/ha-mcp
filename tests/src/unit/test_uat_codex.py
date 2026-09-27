@@ -36,13 +36,17 @@ def test_private_profile_only_grants_bat_mcp(tmp_path, monkeypatch):
         assert server["command"] == "uv"
         assert server["env"]["HOMEASSISTANT_TOKEN"] == "ha-fixture"
         assert profile["permissions"]["bat"]["network"]["enabled"] is False
-        assert profile["permissions"]["bat"]["extends"] == ":read-only"
+        assert profile["permissions"]["bat"]["extends"] == ":workspace"
+        assert profile["permissions"]["bat"]["filesystem"][str(home)] == "deny"
         assert (home / "auth.json").read_text() == (source / "auth.json").read_text()
         cmd = codex_agent.command("Find lights", "gpt-6-sol", root / "work")
         assert "--disable" in cmd and "shell_tool" in cmd
         assert "ha-fixture" not in " ".join(cmd)
         assert "--strict-config" in cmd and "--ephemeral" in cmd
         assert "--skip-git-repo-check" in cmd
+        probe = codex_agent.isolation_probe(home, root / "work")
+        assert "--permission-profile" in probe
+        assert str(home / "auth.json") == probe[-1]
         (home / "auth.json").write_text('{"auth_mode":"rotated"}')
         codex_agent.persist_auth(home)
         assert (source / "auth.json").read_text() == '{"auth_mode":"rotated"}'

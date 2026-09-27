@@ -241,10 +241,12 @@ uv run python tests/uat/stories/run_story.py \
 ```
 
 The BAT adapter copies `CODEX_HOME/auth.json` into a private directory per
-scenario, creates a strict read-only profile containing only the BAT's stdio MCP
-server, and starts a fresh ephemeral Codex process for every phase. Shell and
-hosted apps are disabled; the MCP server receives only its explicit HA test
-connection variables. A rotated auth file is copied back to the caller's
+scenario, creates a strict workspace profile containing only the BAT's stdio MCP
+server, and starts a fresh ephemeral Codex process for every phase. The writable
+workspace is an empty temporary directory, never the repository. The OAuth
+directory is explicitly denied and probed with `codex sandbox` before the
+model runs. Shell, command network and hosted apps are disabled; the MCP server
+receives only its explicit HA test connection variables. A rotated auth file is copied back to the caller's
 dedicated `CODEX_HOME` for the bench's separate persistence step. Do not point
 `CODEX_HOME` at a personal or product OAuth profile when using the bench.
 

@@ -28,7 +28,9 @@ def prepare_home(mcp_config: dict) -> tuple[Path, Path]:
     profile = [
         'default_permissions = "bat"',
         "[permissions.bat]",
-        'extends = ":read-only"',
+        'extends = ":workspace"',
+        "[permissions.bat.filesystem]",
+        f'{json.dumps(str(home))} = "deny"',
         "[permissions.bat.network]",
         "enabled = false",
         "[mcp_servers.home-assistant]",
@@ -90,6 +92,26 @@ def command(prompt: str, model: str, workdir: Path) -> list[str]:
         "--model",
         model,
         prompt,
+    ]
+
+
+def isolation_probe(home: Path, workdir: Path) -> list[str]:
+    """Check the exact profile used by the agent before granting MCP writes."""
+    return [
+        "codex",
+        "sandbox",
+        "--profile",
+        "bat",
+        "--permission-profile",
+        "bat",
+        "--cd",
+        str(workdir),
+        "--",
+        "bash",
+        "-c",
+        '[[ ! -r "$1" && ! -w "$1" ]]',
+        "_",
+        str(home / "auth.json"),
     ]
 
 
