@@ -168,13 +168,19 @@ def parse_skill_frontmatter(main_file: Path, *, warn: bool = True) -> dict | Non
         log("Could not read %s: %s", main_file, e)
         return None
 
-    parts = content.split("---", 2)
-    if len(parts) < 3:
+    # Frontmatter opens on the first line and closes at the next line that
+    # is exactly "---"; a "---" inside a value or a Markdown rule in the
+    # body is not a delimiter.
+    lines = content.removeprefix("\ufeff").splitlines()
+    closing = next(
+        (i for i, line in enumerate(lines[1:], 1) if line.strip() == "---"), None
+    )
+    if not lines or lines[0].strip() != "---" or closing is None:
         log("No valid frontmatter delimiters in %s", main_file)
         return None
 
     try:
-        frontmatter = yaml.safe_load(parts[1])
+        frontmatter = yaml.safe_load("\n".join(lines[1:closing]))
     except yaml.YAMLError as e:
         # yaml.YAMLError exposes `.problem` and `.problem_mark` for
         # parse errors — both are the entire debugging payload for

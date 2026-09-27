@@ -57,6 +57,25 @@ class TestParseSkillFrontmatter:
         assert result["name"] == "test-skill"
         assert "Best practices" in result["description"]
 
+    def test_dashes_inside_description_do_not_end_frontmatter(self, server, tmp_path):
+        """Only a line that is exactly ``---`` closes the frontmatter; a
+        description containing ``---`` must parse whole, or the skill would
+        count as unavailable."""
+        skill_md = tmp_path / "test-skill" / "SKILL.md"
+        skill_md.parent.mkdir()
+        skill_md.write_text('---\ndescription: "Use --- separators"\n---\n# Body\n')
+        result = server._parse_skill_frontmatter(skill_md)
+        assert result is not None
+        assert result["description"] == "Use --- separators"
+
+    def test_horizontal_rules_in_body_are_not_frontmatter(self, server, tmp_path):
+        """Frontmatter must open on the first line; two Markdown rules
+        further down must not be read as frontmatter."""
+        skill_md = tmp_path / "test-skill" / "SKILL.md"
+        skill_md.parent.mkdir()
+        skill_md.write_text("# Title\n---\ndescription: not frontmatter\n---\n")
+        assert server._parse_skill_frontmatter(skill_md) is None
+
     def test_no_frontmatter_delimiters(self, server, tmp_path):
         """File without --- delimiters returns None."""
         skill_md = tmp_path / "bad-skill" / "SKILL.md"
