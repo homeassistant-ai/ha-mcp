@@ -25,38 +25,42 @@ def prepare_home(mcp_config: dict) -> tuple[Path, Path]:
     if not source.is_file():
         raise ValueError("Codex BAT requires CODEX_HOME/auth.json")
     root = Path(tempfile.mkdtemp(prefix="codex_bat_"))
-    root.chmod(0o700)
-    home = root / "home"
-    home.mkdir(mode=0o700)
-    shutil.copyfile(source, home / "auth.json")
-    (home / "auth.json").chmod(0o600)
+    try:
+        root.chmod(0o700)
+        home = root / "home"
+        home.mkdir(mode=0o700)
+        shutil.copyfile(source, home / "auth.json")
+        (home / "auth.json").chmod(0o600)
 
-    server = mcp_config["mcpServers"]["home-assistant"]
-    profile = [
-        'default_permissions = "bat"',
-        "[permissions.bat]",
-        'extends = ":read-only"',
-        "[permissions.bat.filesystem]",
-        f'{json.dumps(str(home))} = "deny"',
-        "[permissions.bat.network]",
-        "enabled = false",
-        "[mcp_servers.home-assistant]",
-        f"command = {json.dumps(server['command'])}",
-        f"args = {json.dumps(server['args'])}",
-        'default_tools_approval_mode = "approve"',
-        "required = true",
-        "startup_timeout_sec = 120",
-        "tool_timeout_sec = 120",
-        "[mcp_servers.home-assistant.env]",
-    ]
-    profile.extend(
-        f"{json.dumps(k)} = {json.dumps(v)}" for k, v in server["env"].items()
-    )
-    path = home / "bat.config.toml"
-    path.write_text("\n".join(profile) + "\n", encoding="utf-8")
-    path.chmod(0o600)
-    (root / "work").mkdir()
-    return root, home
+        server = mcp_config["mcpServers"]["home-assistant"]
+        profile = [
+            'default_permissions = "bat"',
+            "[permissions.bat]",
+            'extends = ":read-only"',
+            "[permissions.bat.filesystem]",
+            f'{json.dumps(str(home))} = "deny"',
+            "[permissions.bat.network]",
+            "enabled = false",
+            "[mcp_servers.home-assistant]",
+            f"command = {json.dumps(server['command'])}",
+            f"args = {json.dumps(server['args'])}",
+            'default_tools_approval_mode = "approve"',
+            "required = true",
+            "startup_timeout_sec = 120",
+            "tool_timeout_sec = 120",
+            "[mcp_servers.home-assistant.env]",
+        ]
+        profile.extend(
+            f"{json.dumps(k)} = {json.dumps(v)}" for k, v in server["env"].items()
+        )
+        path = home / "bat.config.toml"
+        path.write_text("\n".join(profile) + "\n", encoding="utf-8")
+        path.chmod(0o600)
+        (root / "work").mkdir()
+        return root, home
+    except Exception:
+        shutil.rmtree(root, ignore_errors=True)
+        raise
 
 
 def persist_auth(home: Path) -> None:

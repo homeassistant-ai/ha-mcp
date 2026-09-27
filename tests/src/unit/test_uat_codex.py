@@ -127,3 +127,27 @@ def test_unset_home_cannot_fall_back_to_personal_auth(monkeypatch):
         codex_agent.prepare_home({"mcpServers": {"home-assistant": {}}})
     with pytest.raises(ValueError, match="explicit CODEX_HOME"):
         codex_agent.persist_auth(Path("unused"))
+
+
+def test_partial_home_is_removed_after_setup_error(monkeypatch, tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "auth.json").write_text('{"auth_mode":"fixture"}')
+    monkeypatch.setenv("CODEX_HOME", str(source))
+    private = tmp_path / "private"
+    private.mkdir()
+    monkeypatch.setattr(codex_agent.tempfile, "mkdtemp", lambda **_: str(private))
+    config = {
+        "mcpServers": {"home-assistant": {"command": "uv", "args": [], "env": {}}}
+    }
+    original = Path.write_text
+
+    def fail_profile_write(path, data, **kwargs):
+        if path.name == "bat.config.toml":
+            raise OSError("fixture profile write failed")
+        return original(path, data, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_profile_write)
+    with pytest.raises(OSError, match="fixture profile write failed"):
+        codex_agent.prepare_home(config)
+    assert not private.exists()
