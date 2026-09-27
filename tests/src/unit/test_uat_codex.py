@@ -36,8 +36,9 @@ def test_private_profile_only_grants_bat_mcp(tmp_path, monkeypatch):
         assert server["command"] == "uv"
         assert server["env"]["HOMEASSISTANT_TOKEN"] == "ha-fixture"
         assert profile["permissions"]["bat"]["network"]["enabled"] is False
-        assert profile["permissions"]["bat"]["extends"] == ":workspace"
+        assert profile["permissions"]["bat"]["extends"] == ":read-only"
         assert profile["permissions"]["bat"]["filesystem"][str(home)] == "deny"
+        assert server["default_tools_approval_mode"] == "approve"
         assert (home / "auth.json").read_text() == (source / "auth.json").read_text()
         cmd = codex_agent.command("Find lights", "gpt-6-sol", root / "work")
         assert "--disable" in cmd and "shell_tool" in cmd

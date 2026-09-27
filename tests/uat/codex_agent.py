@@ -28,7 +28,7 @@ def prepare_home(mcp_config: dict) -> tuple[Path, Path]:
     profile = [
         'default_permissions = "bat"',
         "[permissions.bat]",
-        'extends = ":workspace"',
+        'extends = ":read-only"',
         "[permissions.bat.filesystem]",
         f'{json.dumps(str(home))} = "deny"',
         "[permissions.bat.network]",
@@ -36,6 +36,7 @@ def prepare_home(mcp_config: dict) -> tuple[Path, Path]:
         "[mcp_servers.home-assistant]",
         f"command = {json.dumps(server['command'])}",
         f"args = {json.dumps(server['args'])}",
+        'default_tools_approval_mode = "approve"',
         "required = true",
         "startup_timeout_sec = 120",
         "tool_timeout_sec = 120",
