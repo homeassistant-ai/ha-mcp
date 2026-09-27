@@ -75,6 +75,10 @@ Pytest configuration lives in the repository root `pyproject.toml` so every invo
 - **Workflows**: Automation, device control, scripts, scenes
 - **Error Handling**: Invalid inputs, network failures
 
+## ✍️ Writing Tests
+
+Before writing or changing a test, read the [test design rules](AGENTS.md#test-design-rules).
+
 ## 🐛 Debugging
 
 1. Start: `uv run hamcp-test-env`

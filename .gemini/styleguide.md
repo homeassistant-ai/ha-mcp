@@ -38,6 +38,9 @@ severity for manual verification.
 - E2E tests (preferred for tools): `tests/src/e2e/`
 - Unit tests (utilities): `tests/src/unit/`
 
+Check new and changed tests against the
+[test design rules](../tests/AGENTS.md#test-design-rules).
+
 ## Exception Handling in Test Polling Loops
 
 Boot-phase verification helpers and async polling loops in `tests/src/e2e/` use **narrow `except (Specific1, Specific2, ...)` clauses + debug-level logging** for expected transient failures. Catch only the exception classes the polling target legitimately raises — e.g. `(requests.exceptions.RequestException, json.JSONDecodeError)` for direct HTTP polling, or the `_POLLING_TRANSIENT_ERRORS` tuple in `tests/src/e2e/utilities/wait_helpers.py` for MCP-client polling.
