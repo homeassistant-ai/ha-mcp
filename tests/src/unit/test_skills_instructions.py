@@ -401,6 +401,22 @@ class TestHandleSkillGuideCall:
             server._handle_skill_guide_call(skills_dir, "evil.md")
         assert "SECRET OUTSIDE" not in str(excinfo.value)
 
+    def test_symlinked_skill_dir_is_refused(self, server, tmp_path):
+        """A skill folder that is itself a symlink must not be walked:
+        every file under its target would become readable."""
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
+
+        target = tmp_path / "elsewhere"
+        target.mkdir()
+        (target / "SKILL.md").write_text("# Not the bundled skill\n")
+        (target / "secret.txt").write_text("SECRET OUTSIDE\n")
+        root = tmp_path / "skills"
+        root.mkdir()
+        symlink_or_skip(root / _HA_BEST_PRACTICES_SKILL_NAME, target)
+        with pytest.raises(ToolError) as excinfo:
+            server._handle_skill_guide_call(root, "secret.txt")
+        assert "SECRET OUTSIDE" not in str(excinfo.value)
+
     def test_oserror_on_read_raises_tool_error(self, server, skills_dir, monkeypatch):
         """A read failure must surface as a ToolError naming the file,
         not as a success payload with empty content."""

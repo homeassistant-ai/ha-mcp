@@ -1893,7 +1893,13 @@ class HomeAssistantSmartMCPServer:
         from .tools.util_helpers import _HA_BEST_PRACTICES_SKILL_NAME as skill
 
         skill_dir = skills_dir / skill if skills_dir is not None else None
-        if skill_dir is None or not (skill_dir / "SKILL.md").is_file():
+        # A symlinked skill folder would make every file under its target
+        # readable, so it counts as missing.
+        if (
+            skill_dir is None
+            or skill_dir.is_symlink()
+            or not (skill_dir / "SKILL.md").is_file()
+        ):
             raise_tool_error(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
