@@ -101,9 +101,8 @@ async def set_policy(
                 suggestions=[f"Call {caller.get_call} for the shape"],
             )
         )
-    # ``rules`` defaults to [] on the model and Policy ignores unknown keys,
-    # so an omitted (or misspelled) key would validate and silently delete
-    # every approval gate. Demand it explicitly instead.
+    # ``rules`` defaults to [] on the model, so an omitted key would validate
+    # and silently delete every approval gate. Demand it explicitly instead.
     if "rules" not in policy:
         raise_tool_error(
             create_error_response(
