@@ -466,9 +466,12 @@ class TestHandleSkillGuideCall:
             "bad_frontmatter",
             "undecodable_skill_md",
             "symlinked_skill_md",
+            "unlistable_skill_dir",
         ],
     )
-    def test_unavailable_skill_raises_with_operator_fix(self, server, tmp_path, state):
+    def test_unavailable_skill_raises_with_operator_fix(
+        self, server, tmp_path, monkeypatch, state
+    ):
         """Without a usable bundled skill, the call must fail with an error
         that names the fix, as the tool description then promises, not
         return content the model would trust."""
@@ -487,6 +490,15 @@ class TestHandleSkillGuideCall:
             outside = tmp_path / "outside.md"
             outside.write_text(valid)
             symlink_or_skip(skill / "SKILL.md", outside)
+        elif state == "unlistable_skill_dir":
+            # SKILL.md is readable, but the walk that builds the allowlist
+            # fails, so the guide could not serve even SKILL.md.
+            (skill / "SKILL.md").write_text(valid)
+
+            def fail_walk(self, pattern):
+                raise PermissionError("simulated unlistable directory")
+
+            monkeypatch.setattr(Path, "rglob", fail_walk)
         with pytest.raises(ToolError) as excinfo:
             server._handle_skill_guide_call(skills_dir)
         assert "submodule" in str(excinfo.value)

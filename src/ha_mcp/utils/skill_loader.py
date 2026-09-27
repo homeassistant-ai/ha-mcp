@@ -153,21 +153,24 @@ def _skills_dir_at(root: Path) -> Path | None:
 BEST_PRACTICES_SKILL_NAME = "home-assistant-best-practices"
 
 
-def parse_skill_frontmatter(main_file: Path) -> dict | None:
+def parse_skill_frontmatter(main_file: Path, *, warn: bool = True) -> dict | None:
     """Parse YAML frontmatter from a SKILL.md file.
 
     Returns the frontmatter dict if valid, or None with a logged
-    warning for each failure case.
+    warning for each failure case. ``warn=False`` logs at DEBUG instead,
+    for callers that run on every request and report the failure once
+    themselves.
     """
+    log = logger.warning if warn else logger.debug
     try:
         content = main_file.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as e:
-        logger.warning("Could not read %s: %s", main_file, e)
+        log("Could not read %s: %s", main_file, e)
         return None
 
     parts = content.split("---", 2)
     if len(parts) < 3:
-        logger.warning("No valid frontmatter delimiters in %s", main_file)
+        log("No valid frontmatter delimiters in %s", main_file)
         return None
 
     try:
@@ -176,23 +179,23 @@ def parse_skill_frontmatter(main_file: Path) -> dict | None:
         # yaml.YAMLError exposes `.problem` and `.problem_mark` for
         # parse errors — both are the entire debugging payload for
         # an operator trying to fix the SKILL.md.
-        logger.warning("Could not parse YAML frontmatter in %s: %s", main_file, e)
+        log("Could not parse YAML frontmatter in %s: %s", main_file, e)
         return None
 
     if not isinstance(frontmatter, dict):
-        logger.warning("Frontmatter is not a mapping in %s", main_file)
+        log("Frontmatter is not a mapping in %s", main_file)
         return None
 
     description = frontmatter.get("description", "")
     if not description:
-        logger.warning("No description in frontmatter for %s", main_file.parent.name)
+        log("No description in frontmatter for %s", main_file.parent.name)
         return None
     if not isinstance(description, str):
         # Truthy non-string values (e.g. `description: [foo]` or
         # `description: 42`) would later crash on `.strip()` in the
         # callers. Fail closed here so malformed bundles only break
         # themselves, not the whole skill registration.
-        logger.warning(
+        log(
             "Description in frontmatter for %s is not a string (got %s); skipping",
             main_file.parent.name,
             type(description).__name__,
@@ -200,6 +203,31 @@ def parse_skill_frontmatter(main_file: Path) -> dict | None:
         return None
 
     return frontmatter
+
+
+def list_skill_files(skill_dir: Path, *, warn: bool = True) -> list[str]:
+    """Return relative POSIX paths of the regular files in a skill.
+
+    Symlinks are skipped (defense against a malicious skill bundle
+    linking outside its dir) and ``is_relative_to(resolved_root)``
+    rejects anything that resolves outside the skill's own tree. POSIX
+    form keeps the names equal to SKILL.md's links on Windows too.
+    ``warn`` works as in :func:`parse_skill_frontmatter`.
+    """
+    files: list[str] = []
+    try:
+        resolved_root = skill_dir.resolve()
+        for f in sorted(skill_dir.rglob("*")):
+            if not f.is_file() or f.is_symlink():
+                continue
+            if not f.resolve().is_relative_to(resolved_root):
+                continue
+            files.append(f.relative_to(skill_dir).as_posix())
+    except OSError as e:
+        (logger.warning if warn else logger.debug)(
+            "Error reading skill files in %s: %s", skill_dir, e
+        )
+    return files
 
 
 def best_practices_skill(
@@ -210,18 +238,21 @@ def best_practices_skill(
     ``ha_get_skill_guide`` registration, every guide call, and the strict
     best-practices gate all use this one check. The gate fails open when it
     returns None, because the guide is then unable to publish the
-    acknowledgment key. A symlinked skill folder counts as missing: every
-    file under its target would otherwise become readable. A symlinked
-    SKILL.md counts as missing too, because the guide never serves a
-    symlink.
+    acknowledgment key. The skill counts as served only when SKILL.md is in
+    the same file list the guide serves from, so a symlinked SKILL.md or an
+    unlistable folder counts as missing. A symlinked skill folder counts as
+    missing too: every file under its target would otherwise become
+    readable. Checks run quietly because the gate runs on every gated
+    write; startup logs the reason once when it builds the instructions.
     """
     if skills_dir is None:
         return None
     skill_dir = skills_dir / BEST_PRACTICES_SKILL_NAME
-    main_file = skill_dir / "SKILL.md"
-    if skill_dir.is_symlink() or main_file.is_symlink() or not main_file.is_file():
+    if skill_dir.is_symlink() or "SKILL.md" not in list_skill_files(
+        skill_dir, warn=False
+    ):
         return None
-    frontmatter = parse_skill_frontmatter(main_file)
+    frontmatter = parse_skill_frontmatter(skill_dir / "SKILL.md", warn=False)
     if not frontmatter:
         return None
     return (skill_dir.name, skill_dir, frontmatter)

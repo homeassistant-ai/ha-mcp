@@ -113,18 +113,24 @@ class TestStrictBpsEffective:
         assert len(warned) == 1
 
     def test_unservable_skill_fails_open(self, monkeypatch, caplog, tmp_path):
-        """Both flags on, skills root present, but no best-practices skill
-        the guide can serve: the key is unobtainable, so gated writes must
-        pass instead of deadlocking on a guide that cannot publish it."""
+        """Both flags on, skills root present, but a best-practices skill the
+        guide cannot serve: the key is unobtainable, so gated writes must
+        pass instead of deadlocking on a guide that cannot publish it. The
+        gate runs on every gated write, so the log must carry one warning,
+        not one per write."""
+        skill = tmp_path / "home-assistant-best-practices"
+        skill.mkdir()
+        (skill / "SKILL.md").write_text("# No frontmatter here\n")
         _patch_settings(monkeypatch, parent=True, child=True)
         _patch_skills_dir(monkeypatch, tmp_path)
         monkeypatch.setattr("ha_mcp.strict_bps._DEGRADE_WARNED", set())
-        with caplog.at_level(logging.WARNING, logger="ha_mcp.strict_bps"):
+        with caplog.at_level(logging.WARNING):
             assert strict_bps_effective() is False
-            # Warn-once: a second degraded call must not log again.
             assert strict_bps_effective() is False
-        warned = [r for r in caplog.records if "skills-vendor" in r.getMessage()]
-        assert len(warned) == 1
+            assert strict_bps_effective() is False
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert len(warnings) == 1, [r.getMessage() for r in warnings]
+        assert "skills-vendor" in warnings[0].getMessage()
 
 
 # ---------------------------------------------------------------------------

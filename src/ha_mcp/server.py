@@ -26,6 +26,7 @@ from .transforms import DEFAULT_PINNED_TOOLS
 from .utils.skill_loader import (
     BEST_PRACTICES_SKILL_NAME,
     best_practices_skill,
+    list_skill_files,
     parse_skill_frontmatter,
 )
 
@@ -1715,28 +1716,6 @@ class HomeAssistantSmartMCPServer:
             skills.append((skill_dir.name, skill_dir, frontmatter))
         return skills
 
-    @staticmethod
-    def _list_skill_files(skill_dir: Path) -> list[str]:
-        """Return relative file paths for a skill, filtering symlinks and traversal.
-
-        Symlinks are skipped (defense against a malicious skill bundle
-        linking outside its dir) and ``is_relative_to(resolved_root)``
-        rejects anything that resolves outside the skill's own tree.
-        """
-        files: list[str] = []
-        resolved_root = skill_dir.resolve()
-        try:
-            for f in sorted(skill_dir.rglob("*")):
-                if not f.is_file() or f.is_symlink():
-                    continue
-                if not f.resolve().is_relative_to(resolved_root):
-                    continue
-                # POSIX form so names match SKILL.md's links on Windows too.
-                files.append(f.relative_to(skill_dir).as_posix())
-        except OSError as e:
-            logger.warning("Error reading skill files in %s: %s", skill_dir, e)
-        return files
-
     def _register_skill_guide_tool(self, skills_dir: Path | None) -> int:
         """Register the ``ha_get_skill_guide`` tool unconditionally.
 
@@ -1858,7 +1837,7 @@ class HomeAssistantSmartMCPServer:
 
         skill_dir = entry[1]
         requested = file or "SKILL.md"
-        allowed = self._list_skill_files(skill_dir)
+        allowed = list_skill_files(skill_dir)
         if requested not in allowed:
             raise_tool_error(
                 create_error_response(
