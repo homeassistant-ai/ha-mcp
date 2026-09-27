@@ -7775,7 +7775,7 @@ class TestAllowListPolicyUi:
     """rule_effect='allow' (issue #2540): the bare rule approves its tool, so
     the Tools-tab gate toggle and the rule cards read the other way round."""
 
-    ALLOW_POLICY = {
+    ALLOW_POLICY: ClassVar[dict] = {
         "rule_effect": "allow",
         "wait_seconds": 60,
         "approval_ttl_minutes": 5,
@@ -7826,9 +7826,7 @@ class TestAllowListPolicyUi:
             "ha_get_state",
         ]
 
-    def test_toggle_shows_unapproved_tools_as_gated(
-        self, settings_script: str
-    ) -> None:
+    def test_toggle_shows_unapproved_tools_as_gated(self, settings_script: str) -> None:
         fetches = self._fetches()
         result = run_script(
             settings_script,
@@ -7851,9 +7849,7 @@ class TestAllowListPolicyUi:
             settings_script,
             initial_html=_policy_panel_dom(),
             fetch_map=DEFAULT_FETCHES,
-            invoke=(
-                "renderPolicyCards(" + json.dumps(self.ALLOW_POLICY) + ");"
-            ),
+            invoke=("renderPolicyCards(" + json.dumps(self.ALLOW_POLICY) + ");"),
         )
         _assert_clean_init(result)
         assert 'data-i18n="policies.rules.title_allow"' in result.dom
@@ -8027,7 +8023,7 @@ class TestAllowListPolicyUi:
         _assert_clean_init(result)
         assert _probe(result, "gated") == "false"
 
-    ONE_CONDITION = {
+    ONE_CONDITION: ClassVar[dict] = {
         **ALLOW_POLICY,
         "rules": [
             {
@@ -8104,9 +8100,7 @@ class TestAllowListPolicyUi:
         assert _probe(result, "threw") == "true"
         assert self._puts(result) == []
 
-    def test_write_before_the_mode_was_read_says_so(
-        self, settings_script: str
-    ) -> None:
+    def test_write_before_the_mode_was_read_says_so(self, settings_script: str) -> None:
         result = run_script(
             settings_script,
             initial_html=_policy_panel_dom(),
@@ -8121,28 +8115,44 @@ class TestAllowListPolicyUi:
             """,
         )
         _assert_clean_init(result)
-        assert "could not read what a matching rule does" in (_probe(result, "msg") or "")
+        assert "could not read what a matching rule does" in (
+            _probe(result, "msg") or ""
+        )
         assert self._puts(result) == []
 
     def test_gate_toggle_click_under_an_allow_list(self, settings_script: str) -> None:
         """Ticking "security gated" on an approved tool removes its approval,
         and the optimistic state follows the allow-list reading."""
-        tool = {"name": "ha_get_state", "title": "Get State", "category": "read",
-                "description": "Read a state."}
+        tool = {
+            "name": "ha_get_state",
+            "title": "Get State",
+            "category": "read",
+            "description": "Read a state.",
+        }
         fetches = {
             **self._fetches(),
             "/api/settings/tools": {
                 "status": 200,
-                "json": {"tools": [tool], "states": {}, "env_pinned": {},
-                         "read_only_exempt": []},
+                "json": {
+                    "tools": [tool],
+                    "states": {},
+                    "env_pinned": {},
+                    "read_only_exempt": [],
+                },
             },
             "/api/settings/features": {
                 "status": 200,
                 "json": {
-                    "flags": {"enable_tool_security_policies": {
-                        "value": True, "origin": "default", "editable": True,
-                        "type": "bool"}},
-                    "beta_sub_flags": [], "is_addon": False,
+                    "flags": {
+                        "enable_tool_security_policies": {
+                            "value": True,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                        }
+                    },
+                    "beta_sub_flags": [],
+                    "is_addon": False,
                 },
             },
         }

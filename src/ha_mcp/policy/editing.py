@@ -189,8 +189,7 @@ def _pre_save_warnings(
             f"This write switched rule_effect from '{current.rule_effect}' to "
             f"'{new_policy.rule_effect}': every rule now "
             + (
-                "approves the calls it matches, and every other call requires "
-                "approval."
+                "approves the calls it matches, and every other call requires approval."
                 if new_policy.rule_effect == "allow"
                 else "requires approval for the calls it matches, and every "
                 "other call runs without approval."

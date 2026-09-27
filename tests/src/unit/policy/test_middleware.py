@@ -1164,7 +1164,9 @@ async def test_allow_list_names_no_rule_and_remembers_nothing(queue):
 
     queue.approve(queue.list_pending()[0].token)
     call_next = AsyncMock(return_value="ok")
-    assert await mw.on_call_tool(make_context("ha_call_service", args), call_next) == "ok"
+    assert (
+        await mw.on_call_tool(make_context("ha_call_service", args), call_next) == "ok"
+    )
     with pytest.raises(ToolError):
         await mw.on_call_tool(make_context("ha_call_service", args), AsyncMock())
 
@@ -1175,9 +1177,7 @@ async def test_empty_allow_list_leaves_approval_management_ungated(queue):
     pol = Policy(rule_effect="allow")
     mw = PolicyMiddleware(policy_provider=lambda: pol, queue=queue, wait_seconds=0)
     call_next = AsyncMock(return_value="ok")
-    decide = make_context(
-        "ha_dev_manage_server", {"action": "approve", "token": "t"}
-    )
+    decide = make_context("ha_dev_manage_server", {"action": "approve", "token": "t"})
     assert await mw.on_call_tool(decide, call_next) == "ok"
     assert await mw.on_call_tool(make_context("ha_search_tools", {}), call_next) == "ok"
     with pytest.raises(ToolError):

@@ -577,7 +577,10 @@ def test_put_config_refuses_to_drop_an_allow_list_by_omission(tmp_path):
     must not silently invert a stored allow list (issue #2540)."""
     c = make_app(tmp_path, ApprovalQueue())
     body = Policy(rule_effect="allow", rules=[Rule(tool_name="ha_x")])
-    assert c.put("/api/policy/config", json=body.model_dump(mode="json")).status_code == 200
+    assert (
+        c.put("/api/policy/config", json=body.model_dump(mode="json")).status_code
+        == 200
+    )
     stale = c.get("/api/policy/config").json()
     del stale["rule_effect"]
     r = c.put("/api/policy/config", json=stale)

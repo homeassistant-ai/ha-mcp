@@ -7,6 +7,8 @@ case-sensitively and case-insensitively, and for every value a wildcard path
 or a list argument yields.
 """
 
+from typing import ClassVar
+
 import pytest
 
 from ha_mcp.policy.evaluator import Verdict, evaluate, find_matching_rule
@@ -18,9 +20,7 @@ def _allow(*rules: Rule) -> Policy:
 
 
 def _allow_one(path: str, op: str, value, tool: str = "ha_call_service") -> Policy:
-    return _allow(
-        Rule(tool_name=tool, when=[Predicate(path=path, op=op, value=value)])
-    )
+    return _allow(Rule(tool_name=tool, when=[Predicate(path=path, op=op, value=value)]))
 
 
 MQTT_PUBLISH = Rule(
@@ -78,7 +78,10 @@ class TestAllowListVerdicts:
         # Middleware names the rule that gated a call; under an allow list a
         # call is gated because nothing approved it, so there is none.
         policy = _allow(MQTT_PUBLISH)
-        assert find_matching_rule("ha_call_service", _publish("home/bridge"), policy) is None
+        assert (
+            find_matching_rule("ha_call_service", _publish("home/bridge"), policy)
+            is None
+        )
 
 
 class TestAllowListIsCaseSensitive:
@@ -115,12 +118,12 @@ class TestAllowListIsCaseSensitive:
             assert (
                 evaluate("ha_call_service", args, policy) == Verdict.REQUIRE_APPROVAL
             ), domain
-        assert (
-            evaluate("ha_call_service", {"domain": "light"}, policy) == Verdict.ALLOW
-        )
+        assert evaluate("ha_call_service", {"domain": "light"}, policy) == Verdict.ALLOW
 
     def test_negated_selector_domain_is_not_satisfied_by_a_case_variant(self):
-        policy = _allow_one("args.selector.domain", "neq", "lock", tool="ha_bulk_control")
+        policy = _allow_one(
+            "args.selector.domain", "neq", "lock", tool="ha_bulk_control"
+        )
         args = {"selector": {"domain": "LOCK"}, "action": "unlock"}
         assert evaluate("ha_bulk_control", args, policy) == Verdict.REQUIRE_APPROVAL
 
@@ -206,7 +209,9 @@ class TestAllowListListArguments:
                 tool_name="ha_call_service",
                 when=[
                     Predicate(
-                        path="args.data.entity_id", op="in", value=["light.a", "light.b"]
+                        path="args.data.entity_id",
+                        op="in",
+                        value=["light.a", "light.b"],
                     )
                 ],
             )
@@ -237,7 +242,12 @@ class TestAllowListSplittableStrings:
 
     @pytest.mark.parametrize(
         "entity_id",
-        ["light.a,lock.front_door", "light.a, lock.front_door", "lock.front_door ", " x"],
+        [
+            "light.a,lock.front_door",
+            "light.a, lock.front_door",
+            "lock.front_door ",
+            " x",
+        ],
     )
     @pytest.mark.parametrize(
         "op,value",
@@ -253,14 +263,18 @@ class TestAllowListSplittableStrings:
         assert evaluate("ha_call_service", args, policy) == Verdict.REQUIRE_APPROVAL
 
     @pytest.mark.parametrize(
-        "op,value", [("regex", r"^light\."), ("contains", "light."), ("in", ["light.a"])]
+        "op,value",
+        [("regex", r"^light\."), ("contains", "light."), ("in", ["light.a"])],
     )
     @pytest.mark.parametrize("entity_id", ["light.a,lock.front_door", "light.a "])
     def test_splittable_string_fails_positive_ops_too(self, entity_id, op, value):
         policy = _allow_one("args.entity_id", op, value)
         args = {"entity_id": entity_id}
         assert evaluate("ha_call_service", args, policy) == Verdict.REQUIRE_APPROVAL
-        assert evaluate("ha_call_service", {"entity_id": "light.a"}, policy) == Verdict.ALLOW
+        assert (
+            evaluate("ha_call_service", {"entity_id": "light.a"}, policy)
+            == Verdict.ALLOW
+        )
 
     def test_plain_other_entity_is_approved(self):
         policy = _allow_one("args.entity_id", "neq", "lock.x")
@@ -276,7 +290,6 @@ class TestAllowListObjectValues:
         policy = _allow_one("args.*", "neq", "lock.front")
         args = {"target": {"entity_id": "lock.front"}}
         assert evaluate("ha_call_service", args, policy) == Verdict.REQUIRE_APPROVAL
-
 
     def test_not_in_does_not_approve_an_object(self):
         policy = _allow_one("args.*", "not_in", ["lock.front"])
@@ -308,7 +321,7 @@ class TestAllowListDispatch:
 class TestAllowListSelectorCalls:
     """A selector resolves its targets inside the tool, after the gate."""
 
-    SELECTOR_CALL = {"selector": {"domain": "light"}, "action": "on"}
+    SELECTOR_CALL: ClassVar[dict] = {"selector": {"domain": "light"}, "action": "on"}
 
     def test_operations_rule_cannot_approve_a_selector_call(self):
         # ``args.*`` reaches the selector dict too, so ``exists`` holds for

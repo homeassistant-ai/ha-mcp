@@ -1421,10 +1421,9 @@ class DevTools:
     def _commit_gate(self, plan: dict[str, Any], data: dict[str, Any]) -> list[str]:
         """Persist the gate portion of a set_tool plan; returns any warnings."""
         from ..config import get_global_settings
+        from ..policy.model import bare_rule_gates
         from ..policy.persistence import load_policy, save_policy
         from ..utils.data_paths import get_data_dir
-
-        from ..policy.model import bare_rule_gates
 
         data["gated"] = bare_rule_gates(plan["new_policy"], data["tool"])
         data["policy_rules_changed"] = plan["gate_changed"]
