@@ -3274,11 +3274,11 @@ class DashboardConfigTools:
         self, url_path: str, patch: list[dict[str, Any]]
     ) -> None:
         """Check the patched config when an edit lands inside a card."""
+        current, _ = await _get_dashboard_config_internal(self._client, url_path)
         try:
-            current, _ = await _get_dashboard_config_internal(self._client, url_path)
             candidate = apply_dashboard_patch(current, patch)
-        except (ToolError, ValueError):
-            return  # The edit call below reports the real failure.
+        except ValueError:
+            return  # An unapplicable patch is rejected by the edit itself.
         reject_malformed_dashboard_lists(candidate, url_path, source="patch")
 
     async def _run_dashboard_patch(

@@ -382,3 +382,17 @@ def test_patch_writes_inside_card_only_for_structural_edits(
     op: dict, expected: bool
 ) -> None:
     assert patch_writes_inside_card([op]) is expected
+
+
+@pytest.mark.anyio
+async def test_dashboard_patch_check_fails_closed_when_read_fails(monkeypatch) -> None:
+    async def fetch(_client, _url_path):
+        raise ToolError("read failed")
+
+    monkeypatch.setattr(
+        "ha_mcp.tools.tools_config_dashboards._get_dashboard_config_internal", fetch
+    )
+    with pytest.raises(ToolError, match="read failed"):
+        await DashboardConfigTools(object())._reject_malformed_patched_dashboard(
+            "test-dash", [_DEEP_OP]
+        )

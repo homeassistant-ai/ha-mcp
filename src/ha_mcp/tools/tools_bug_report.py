@@ -1418,7 +1418,9 @@ def _generate_bug_title(
         error_msg = log.get("error_message")
         if error_msg:
             tool_name = log.get("tool_name", "unknown")
-            message = _sanitize_log_text(extract_tool_error_message(error_msg))
+            message = " ".join(
+                _sanitize_log_text(extract_tool_error_message(error_msg)).split()
+            )
             title = f"{tool_name}: {message}"
             break
 

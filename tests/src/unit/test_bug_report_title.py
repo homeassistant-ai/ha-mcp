@@ -30,3 +30,9 @@ def test_title_scrubs_secrets() -> None:
     envelope = json.dumps({"error": {"message": "bad token=abc123secret"}})
     logs = [{"tool_name": "ha_call_service", "error_message": envelope}]
     assert "abc123secret" not in _generate_bug_title({}, logs)
+
+
+def test_title_stays_on_one_line() -> None:
+    envelope = json.dumps({"error": {"message": "first line\nsecond line"}})
+    logs = [{"tool_name": "x", "error_message": envelope}]
+    assert _generate_bug_title({}, logs) == "x: first line second line"
