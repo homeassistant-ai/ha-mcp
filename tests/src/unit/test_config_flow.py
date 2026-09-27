@@ -490,6 +490,32 @@ class TestServerOptionsFlow:
             == user_input[const.OPT_WEBHOOK_ID_OVERRIDE]
         )
 
+    def test_webhook_id_override_rejects_slash(self):
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+
+        result = asyncio.run(
+            flow.async_step_init({const.OPT_WEBHOOK_ID_OVERRIDE: "mcp/abc"})
+        )
+
+        assert result["type"] == "form"
+        assert result["errors"] == {const.OPT_WEBHOOK_ID_OVERRIDE: "invalid_webhook_id"}
+
+    def test_connect_path_overrides_accept_surrounding_whitespace(self):
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+
+        result = asyncio.run(
+            flow.async_step_init(
+                {
+                    const.OPT_SECRET_PATH_OVERRIDE: " \t/nested/direct/path\r\n",
+                    const.OPT_WEBHOOK_ID_OVERRIDE: " \tmcp_abc\r\n",
+                }
+            )
+        )
+
+        assert result["type"] == "entry"
+        assert result["data"][const.OPT_SECRET_PATH_OVERRIDE] == "/nested/direct/path"
+        assert result["data"][const.OPT_WEBHOOK_ID_OVERRIDE] == "mcp_abc"
+
     def test_versions_placeholder_present_and_populated(self, monkeypatch):
         # The Configure form carries a "versions" placeholder that names the
         # component version (from the manifest) and the installed server version.

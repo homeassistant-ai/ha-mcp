@@ -769,9 +769,14 @@ class HaMcpServerOptionsFlow(OptionsFlow):
         """Return field errors for values that cannot be embedded in a URL path."""
         errors: dict[str, str] = {}
         for key in (OPT_SECRET_PATH_OVERRIDE, OPT_WEBHOOK_ID_OVERRIDE):
-            value = str(user_input.get(key, "") or "")
+            # Match _normalize's long-standing paste-friendly behavior: outer
+            # whitespace is discarded before saving, while whitespace inside
+            # the value remains invalid because it breaks the resulting URL.
+            value = str(user_input.get(key, "") or "").strip()
             if any(character in "#?%" or character.isspace() for character in value):
                 errors[key] = "invalid_connect_path"
+            elif key == OPT_WEBHOOK_ID_OVERRIDE and "/" in value:
+                errors[key] = "invalid_webhook_id"
         return errors
 
     @staticmethod
