@@ -37,8 +37,8 @@ async def non_admin_client(
 async def test_probe_reads_admin_status_from_home_assistant(
     ha_client: HomeAssistantClient, non_admin_client: HomeAssistantClient
 ):
-    assert await ha_client._token_is_admin() is True
-    assert await non_admin_client._token_is_admin() is False
+    assert await ha_client.token_is_admin() is True
+    assert await non_admin_client.token_is_admin() is False
 
 
 @pytest.mark.asyncio

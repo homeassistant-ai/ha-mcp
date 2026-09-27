@@ -416,6 +416,8 @@ class TestLifespanWiring:
         assert cancelled, "exiting the lifespan must cancel the pending nudge"
 
     async def test_server_attaches_the_lifespan(self):
+        from ha_mcp import server_lifespan
+
         # The built server's FastMCP instance carries the lifespan — the pin
         # that catches a future constructor change dropping it, which is the
         # sibling of the add-on gap this wiring replaced.
@@ -435,4 +437,4 @@ class TestLifespanWiring:
             settings.read_only_mode = False
             server = HomeAssistantSmartMCPServer()
 
-        assert server.mcp._lifespan is hacs_auto_refresh.hacs_refresh_lifespan
+        assert server.mcp._lifespan is server_lifespan.server_lifespan

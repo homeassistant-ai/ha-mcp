@@ -7,6 +7,8 @@ ha-mcp host IP-banned. The client now asks ``auth/current_user`` once per
 token and refuses admin-only routes locally when the answer is non-admin.
 """
 
+import json
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -15,6 +17,7 @@ import pytest
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.admin_routes import is_admin_only_route
 from ha_mcp.client.rest_client import (
+    NON_ADMIN_TOKEN_WARNING,
     HomeAssistantAdminRequiredError,
     HomeAssistantAuthError,
     HomeAssistantClient,
@@ -215,4 +218,15 @@ def test_admin_required_error_classifies_as_insufficient_permissions():
         exception_to_structured_error(
             HomeAssistantAdminRequiredError("GET /api/error_log is admin-only")
         )
-    assert ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS.value in str(exc.value)
+    payload = json.loads(str(exc.value))
+    assert payload["error"]["code"] == ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS.value
+    assert payload["warnings"] == [NON_ADMIN_TOKEN_WARNING]
+
+
+@pytest.mark.asyncio
+async def test_first_non_admin_answer_logs_the_unsupported_warning(client, caplog):
+    with caplog.at_level(logging.WARNING, logger="ha_mcp.client.rest_client"):
+        assert await client.token_is_admin() is False
+        assert await client.token_is_admin() is False
+    warnings = [r for r in caplog.records if NON_ADMIN_TOKEN_WARNING in r.getMessage()]
+    assert len(warnings) == 1

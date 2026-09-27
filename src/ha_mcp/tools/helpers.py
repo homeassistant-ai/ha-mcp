@@ -16,6 +16,7 @@ from ha_mcp._vendor.fastmcp import Context
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
 from ..client.rest_client import (
+    NON_ADMIN_TOKEN_WARNING,
     HomeAssistantAdminRequiredError,
     HomeAssistantAPIError,
     HomeAssistantAuthError,
@@ -286,6 +287,7 @@ def _classify_exception(
                 ],
                 context=context,
             )
+            result["warnings"] = [NON_ADMIN_TOKEN_WARNING]
         case HomeAssistantAuthError():
             result = create_auth_error(
                 error_msg, expired="expired" in error_str, context=context

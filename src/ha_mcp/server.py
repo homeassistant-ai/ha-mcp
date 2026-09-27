@@ -20,8 +20,8 @@ from ha_mcp._vendor.mcp.types import Icon
 
 from .config import _PACKAGE_VERSION, get_global_settings
 from .errors import ErrorCode, create_error_response
-from .hacs_auto_refresh import hacs_refresh_lifespan
 from .http_transport import HttpTransportFastMCP as FastMCP
+from .server_lifespan import server_lifespan
 from .tools.helpers import raise_tool_error
 from .transforms import DEFAULT_PINNED_TOOLS
 
@@ -144,7 +144,7 @@ class HomeAssistantSmartMCPServer:
             version=server_version,
             icons=SERVER_ICONS,
             instructions=instructions,
-            lifespan=hacs_refresh_lifespan,
+            lifespan=server_lifespan,
         )
 
         # Register all tools and expert prompts

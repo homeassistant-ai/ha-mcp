@@ -71,6 +71,11 @@ MIN_LOG_WINDOW_LINES = 2
 # journald's cursor/timestamp metadata exists only in the journal export
 # format, which the hassio-proxy route cannot request.
 _PROBE_ENTRIES = 8
+NON_ADMIN_TOKEN_WARNING = (
+    "ha-mcp does not officially support non-admin Home Assistant tokens: "
+    "admin-only operations are refused without being sent. Use a long-lived "
+    "access token from an administrator's profile."
+)
 _ADMIN_ONLY_401_MESSAGE = (
     "Home Assistant returned 401 for an admin-only endpoint: "
     "the token is invalid or its user is not an administrator"
@@ -399,7 +404,7 @@ class HomeAssistantClient:
         self._supervised_detected: bool | None = None
 
         # ``auth/current_user``'s ``is_admin`` for this token; ``None`` until
-        # Home Assistant has answered it. See ``_token_is_admin``.
+        # Home Assistant has answered it. See ``token_is_admin``.
         self._is_admin: bool | None = None
 
         logger.info(f"Initialized Home Assistant client for {self.base_url}")
@@ -513,14 +518,14 @@ class HomeAssistantClient:
         """Raise for an admin-only route on a non-admin token; return whether it is admin-only."""
         if not is_admin_only_route(method, endpoint):
             return False
-        if await self._token_is_admin() is False:
+        if await self.token_is_admin() is False:
             raise HomeAssistantAdminRequiredError(
                 f"{method.upper()} /api/{endpoint.lstrip('/')} is admin-only in "
                 "Home Assistant and this token's user is not an administrator"
             )
         return True
 
-    async def _token_is_admin(self) -> bool | None:
+    async def token_is_admin(self) -> bool | None:
         """Whether this token's user is a Home Assistant administrator.
 
         ``None`` when Home Assistant gave no answer; only a definite answer is
@@ -534,10 +539,9 @@ class HomeAssistantClient:
             self._is_admin = is_admin
             if not is_admin:
                 logger.warning(
-                    "The Home Assistant token for %s belongs to a non-admin user. "
-                    "ha-mcp needs an administrator's token; admin-only requests "
-                    "are refused without being sent to Home Assistant.",
+                    "The Home Assistant token for %s belongs to a non-admin user. %s",
                     self.base_url,
+                    NON_ADMIN_TOKEN_WARNING,
                 )
         return self._is_admin
 
