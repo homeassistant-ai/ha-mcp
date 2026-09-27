@@ -576,12 +576,22 @@ class TestYamlSkippedClassification:
         assert "admin-only" in failed_sample
 
     @pytest.mark.parametrize(
-        ("refused", "failed", "warned"),
-        [(True, 1, True), (False, 1, False), (True, 0, False)],
-        ids=["refused-with-failures", "admin-token", "nothing-failed"],
+        ("refused", "failed", "helper_failed", "warned"),
+        [
+            (True, 1, 0, True),
+            (True, 0, 1, True),
+            (False, 1, 0, False),
+            (True, 0, 0, False),
+        ],
+        ids=[
+            "refused-config-fetch",
+            "refused-flow-helper-probe",
+            "admin-token",
+            "nothing-failed",
+        ],
     )
     def test_refused_admin_routes_add_the_unsupported_warning(
-        self, mock_client, smart_tools, refused, failed, warned
+        self, mock_client, smart_tools, refused, failed, helper_failed, warned
     ):
         """Keyed on the client, not the failure sample, which names only the
         first error (a 500 can take its slot)."""
@@ -606,6 +616,7 @@ class TestYamlSkippedClassification:
             automation_failed_sample="HTTP 500: Internal Server Error"
             if failed
             else None,
+            helper_failed=helper_failed,
         )
         assert (NON_ADMIN_TOKEN_WARNING in response.get("warnings", [])) is warned
 
