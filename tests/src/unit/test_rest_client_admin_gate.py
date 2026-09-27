@@ -52,6 +52,7 @@ def client():
         c.httpx_client.request = AsyncMock(return_value=_response(200))
         c._supervised_detected = None
         c._is_admin = None
+        c._admin_route_refused = False
         c._current_user = AsyncMock(return_value=_current_user(False))
         return c
 
@@ -211,6 +212,21 @@ async def test_401_on_admin_route_names_the_admin_requirement(client):
     with pytest.raises(HomeAssistantAuthError) as exc:
         await client._raw_request("GET", "/config/automation/config/123")
     assert "administrator" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_401_on_admin_route_stops_further_admin_requests(client):
+    client._current_user = AsyncMock(return_value=None)
+    client.httpx_client.request = AsyncMock(return_value=_response(401))
+    for _ in range(3):
+        with pytest.raises(HomeAssistantAuthError) as exc:
+            await client._raw_request("GET", "/config/automation/config/123")
+        assert "administrator" in str(exc.value)
+    client.httpx_client.request.assert_awaited_once()
+
+    client.httpx_client.request = AsyncMock(return_value=_response(200))
+    await client._raw_request("GET", "/states")
+    client.httpx_client.request.assert_awaited_once()
 
 
 def test_admin_required_error_classifies_as_insufficient_permissions():

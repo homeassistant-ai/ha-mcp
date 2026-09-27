@@ -2785,7 +2785,7 @@ Authorization = "Bearer YOUR_TOKEN"</pre>
       } else {
         hints.push(`<li>Replace <code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_URL}}</code> (braces and all) with your Home Assistant URL (e.g., <code>http://homeassistant.local:8123</code>)</li>`);
       }
-      hints.push(`<li>Replace <code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_TOKEN}}</code> (braces and all) with your long-lived access token</li>`);
+      hints.push(`<li>Replace <code class="bg-amber-900/30 px-1 rounded">{{HOMEASSISTANT_TOKEN}}</code> (braces and all) with a long-lived access token from a Home Assistant administrator account</li>`);
     }
     if (isRemote && (derivedDeployment === 'uvx' || derivedDeployment === 'docker') && state.remotePath !== 'webhook-proxy') {
       hints.push(`<li>Replace <code class="bg-red-900/30 px-1 rounded text-red-300">{{RANDOM_STRING}}</code> (braces and all) with a random secret string (e.g., <code>abc123xyz</code>) — <strong class="text-red-400">keep this private!</strong></li>`);

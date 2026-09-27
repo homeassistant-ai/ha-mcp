@@ -60,6 +60,7 @@ def client():
         c.httpx_client = MagicMock()
         c._supervised_detected = None
         c._is_admin = True
+        c._admin_route_refused = False
         return c
 
 

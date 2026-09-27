@@ -406,6 +406,9 @@ class HomeAssistantClient:
         # ``auth/current_user``'s ``is_admin`` for this token; ``None`` until
         # Home Assistant has answered it. See ``token_is_admin``.
         self._is_admin: bool | None = None
+        # Set by a 401 on an admin-only route, so an unanswered probe cannot
+        # let a burst of them through.
+        self._admin_route_refused = False
 
         logger.info(f"Initialized Home Assistant client for {self.base_url}")
 
@@ -465,6 +468,8 @@ class HomeAssistantClient:
                 response = await self.httpx_client.request(method, endpoint, **kwargs)
 
                 if response.status_code == 401:
+                    if admin_only:
+                        self._admin_route_refused = True
                     raise HomeAssistantAuthError(
                         _ADMIN_ONLY_401_MESSAGE
                         if admin_only
@@ -518,6 +523,8 @@ class HomeAssistantClient:
         """Raise for an admin-only route on a non-admin token; return whether it is admin-only."""
         if not is_admin_only_route(method, endpoint):
             return False
+        if self._admin_route_refused:
+            raise HomeAssistantAuthError(_ADMIN_ONLY_401_MESSAGE)
         if await self.token_is_admin() is False:
             raise HomeAssistantAdminRequiredError(
                 f"{method.upper()} /api/{endpoint.lstrip('/')} is admin-only in "
