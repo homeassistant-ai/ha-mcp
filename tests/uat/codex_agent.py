@@ -130,6 +130,7 @@ def parse_events(stdout: str, result: dict) -> dict:
             "totalFail": sum(t.get("status") != "completed" for t in tools),
         },
         tool_sequence=[t.get("tool", "") for t in tools],
+        raw_json=events,
     )
     if isinstance(usage, dict):
         for source, target in (

@@ -93,6 +93,7 @@ def test_jsonl_metrics_are_observed_not_inferred():
     assert result["tool_stats"] == {"totalCalls": 2, "totalSuccess": 1, "totalFail": 1}
     assert result["tool_sequence"] == ["ha_search", "ha_config_set_automation"]
     assert result["tokens_cached"] == 20
+    assert result["raw_json"] == events
     assert (
         run_uat.make_phase_summary("test", {**result, "duration_ms": 1, "stderr": ""})[
             "tool_sequence"
