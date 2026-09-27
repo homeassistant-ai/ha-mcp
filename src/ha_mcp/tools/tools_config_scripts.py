@@ -45,6 +45,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    reject_malformed_list_fields,
     validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
@@ -444,6 +445,9 @@ class ConfigScriptTools:
             )
 
         config_dict = cast(dict[str, Any], parsed_config)
+        reject_malformed_list_fields(
+            config_dict, ("sequence",), {"script_id": script_id}
+        )
 
         # Extract category before sending to HA REST API (which rejects unknown keys).
         # Parameter takes precedence over config dict value.
@@ -921,6 +925,12 @@ class ConfigScriptTools:
                 )
             )
 
+        reject_malformed_list_fields(
+            transformed_config,
+            ("sequence",),
+            {"action": "python_transform", "script_id": script_id},
+            source="python_transform",
+        )
         # Validate transformed config
         if (
             "sequence" not in transformed_config

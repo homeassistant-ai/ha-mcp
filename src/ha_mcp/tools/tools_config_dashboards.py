@@ -66,6 +66,12 @@ from .dashboard_edit_errors import (
     raise_dashboard_edit_fetch_error,
     raise_known_dashboard_save_rejection,
 )
+from .dashboard_list_checks import (
+    patch_writes_inside_card,
+    reject_malformed_dashboard_config,
+    reject_malformed_dashboard_lists,
+    reject_malformed_dashboard_patch,
+)
 from .helpers import (
     exception_to_structured_error,
     extract_tool_error_message,
@@ -3149,6 +3155,9 @@ class DashboardConfigTools:
             replacement_config=transformed_config,
             action="python_transform",
         )
+        reject_malformed_dashboard_lists(
+            transformed_config, url_path, source="python_transform"
+        )
         return transformed_config
 
     async def _save_dashboard_python_transform(
@@ -3261,6 +3270,17 @@ class DashboardConfigTools:
             "warnings": [warning] if warning else [],
         }
 
+    async def _reject_malformed_patched_dashboard(
+        self, url_path: str, patch: list[dict[str, Any]]
+    ) -> None:
+        """Check the patched config when an edit lands inside a card."""
+        current, _ = await _get_dashboard_config_internal(self._client, url_path)
+        try:
+            candidate = apply_dashboard_patch(current, patch)
+        except ValueError:
+            return  # An unapplicable patch is rejected by the edit itself.
+        reject_malformed_dashboard_lists(candidate, url_path, source="patch")
+
     async def _run_dashboard_patch(
         self,
         url_path: str,
@@ -3294,6 +3314,9 @@ class DashboardConfigTools:
                     context={"action": "patch", "url_path": url_path},
                 )
             )
+        reject_malformed_dashboard_patch(parsed_patch, url_path)
+        if patch_writes_inside_card(parsed_patch):
+            await self._reject_malformed_patched_dashboard(url_path, parsed_patch)
         result = await edit_dashboard_via_component(
             self._client,
             url_path,
@@ -3853,6 +3876,7 @@ class DashboardConfigTools:
         MandatoryBPS: bool,
     ) -> "dict[str, Any] | ToolResult":
         """Execute config-replacement mode (create-or-update) and return the tool response."""
+        reject_malformed_dashboard_config(config, url_path)
         (
             dashboard_exists,
             dashboard_id,

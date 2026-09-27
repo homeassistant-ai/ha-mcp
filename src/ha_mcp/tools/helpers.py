@@ -68,8 +68,8 @@ def raise_tool_error(error_response: dict[str, Any]) -> NoReturn:
     )
 
 
-def extract_tool_error_message(te: ToolError) -> str:
-    """Extract a human-readable error message from a ToolError.
+def extract_tool_error_message(te: ToolError | str) -> str:
+    """Extract a human-readable error message from a ToolError or its logged text.
 
     Pairs with raise_tool_error() which serializes error dicts as JSON.
     Falls back to str(te) if the message is not valid JSON.
@@ -115,6 +115,53 @@ def extract_structured_error_reason(exc: BaseException) -> str | None:
     if isinstance(first, str) and first:
         return f"{message} {first}"
     return message
+
+
+def reject_malformed_list_fields(
+    config: dict[str, Any],
+    list_keys: tuple[str, ...],
+    context: dict[str, Any],
+    *,
+    source: Literal["config", "patch", "python_transform"] = "config",
+) -> None:
+    """Reject list fields received as ``{"item": ...}`` or ``""`` (issue #2548).
+
+    Home Assistant either rejects these shapes with an error that does not name
+    them, or stores them and fails later, so the caller cannot tell what to fix.
+    """
+    received = {
+        k: '{"item": ...}' if isinstance(v, dict) and list(v) == ["item"] else '""'
+        for k in list_keys
+        if (v := config.get(k)) == "" or (isinstance(v, dict) and list(v) == ["item"])
+    }
+    if not received:
+        return
+    names = ", ".join(f"'{k}'" for k in received)
+    shapes = "; ".join(f"'{k}' as {shape}" for k, shape in received.items())
+    first = next(iter(received))
+    example = "[{...}, {...}]"
+    if re.fullmatch(r"\w+", first):
+        example = f'"{first}": {example}'
+    if source == "python_transform":
+        message = f"python_transform produced {shapes} instead of a list"
+        suggestions = [f"Assign {names} a list, e.g. {example}, or delete an empty one"]
+    else:
+        noun = "config" if source == "config" else "patch value"
+        message = f"Received {noun} {shapes} instead of a JSON array"
+        suggestions = [
+            f"Send {names} as a JSON array, e.g. {example}, or omit an empty one",
+            f"If it still arrives malformed, pass the whole {source} as one "
+            + "JSON-encoded string instead",
+            "If neither works, check the model or MCP client in use",
+        ]
+    raise_tool_error(
+        create_error_response(
+            ErrorCode.VALIDATION_INVALID_PARAMETER,
+            f"{message}; nothing was saved in Home Assistant",
+            suggestions=suggestions,
+            context={**context, "malformed_list_fields": received},
+        )
+    )
 
 
 def validate_identifier_not_empty(

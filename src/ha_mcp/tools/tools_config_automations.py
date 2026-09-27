@@ -50,6 +50,7 @@ from .helpers import (
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
+    reject_malformed_list_fields,
     validate_identifier_not_empty,
 )
 from .reference_validator import validate_config_references
@@ -1371,6 +1372,12 @@ class AutomationConfigTools:
                 )
             )
 
+        reject_malformed_list_fields(
+            transformed_config,
+            ("triggers", "trigger", "conditions", "condition", "actions", "action"),
+            {"action": "python_transform", "identifier": identifier},
+            source="python_transform",
+        )
         # Pop category before sending to HA REST API (rejects unknown keys)
         _reject_enabled_in_config(transformed_config)
         transform_category = transformed_config.pop("category", None)
@@ -1770,6 +1777,11 @@ class AutomationConfigTools:
                     details=f"Received type: {type(parsed_config).__name__}",
                 )
             )
+        reject_malformed_list_fields(
+            parsed_config,
+            ("triggers", "trigger", "conditions", "condition", "actions", "action"),
+            {"parameter": "config"},
+        )
 
         return cast(dict[str, Any], parsed_config)
 

@@ -21,7 +21,7 @@ from typing import Any
 from ..errors import ErrorCode, create_error_response
 from ..redaction import carries_sentinel
 from .config_entry_flow_menu import _MENU_SELECTION_KEY_ORDER
-from .helpers import raise_tool_error
+from .helpers import raise_tool_error, reject_malformed_list_fields
 
 # Membership form of the canonical selection-key order — defined here, in the
 # module that checks membership on every form field, and imported onward by
@@ -645,6 +645,11 @@ def _consume_leaf_field(
     """
     if name in remaining_config:
         value = remaining_config.pop(name)
+        # ActionSelector stores values unvalidated; template platforms then fail setup.
+        if "action" in (field.get("selector") or {}):
+            reject_malformed_list_fields(
+                {name: value}, (name,), {"field": _section_path(path_prefix, name)}
+            )
         clearing = keep_current_values and value is None and _clears_by_omission(field)
         form_data[name] = _CLEARED if clearing else value
         _mark_consumed(consumed_config_keys, path_prefix, name)

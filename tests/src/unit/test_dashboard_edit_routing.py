@@ -1676,3 +1676,32 @@ async def test_real_failed_discovery_never_downgrades_dashboard_write(
     assert not any(m["type"] == "lovelace/config/save" for m in messages)
     ws.send_command.assert_awaited_once_with("ha_mcp_tools/info")
     native_connection.assert_not_awaited()
+
+
+def _writes(messages):
+    return [m["type"] for m in messages if m["type"].endswith(("/save", "/create"))]
+
+
+async def test_malformed_patch_list_never_saves(legacy_dashboard):
+    client, document, messages = legacy_dashboard
+    with pytest.raises(ToolError, match="instead of a JSON array"):
+        await DashboardConfigTools(client).ha_config_set_dashboard(
+            url_path="test-dashboard",
+            config_hash=compute_config_hash(document),
+            patch=[{"op": "replace", "path": "/views/0/cards", "value": {"item": []}}],
+            MandatoryBPS=False,
+        )
+    assert _writes(messages) == []
+
+
+@pytest.mark.parametrize(
+    "config",
+    [{"views": {"item": [{"cards": []}]}}, json.dumps({"views": [{"cards": ""}]})],
+)
+async def test_malformed_config_list_never_creates_or_saves(legacy_dashboard, config):
+    client, _, messages = legacy_dashboard
+    with pytest.raises(ToolError, match="instead of a JSON array"):
+        await DashboardConfigTools(client).ha_config_set_dashboard(
+            url_path="new-dashboard", config=config, MandatoryBPS=False
+        )
+    assert _writes(messages) == []
