@@ -9,7 +9,7 @@ Each warning ends with a 2-route ' See ...' suffix naming every
 LLM-discoverable way to pull the relevant skill content:
 
 1. ``skill://`` resource URI — for clients that auto-fetch resource URIs.
-2. ``ha_get_skill_guide(skill=..., file=...)`` — explicit tool call,
+2. ``ha_get_skill_guide(file=...)``: explicit tool call,
    works on every MCP client regardless of resource-fetch support.
 
 The write tools also auto-embed the matching section into the next

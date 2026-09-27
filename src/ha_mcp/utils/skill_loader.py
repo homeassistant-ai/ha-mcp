@@ -1,9 +1,8 @@
 """Load skill reference files from the bundled skills-vendor directory.
 
-Shared helper for the consolidated ``ha_get_skill_guide`` tool and the
-write-tool ``MandatoryBPS`` parameter. Mirrors the symlink + path-traversal
-guards in ``server.py::_handle_skill_guide_call`` so any caller that needs to
-read a ``(skill, file)`` pair gets the same safety contract.
+Helper behind the write-tool ``MandatoryBPS`` parameter. Refuses symlinks
+and paths that resolve outside the skill directory, so any caller that needs
+to read a ``(skill, file)`` pair gets that safety contract.
 
 Functions:
 
@@ -27,9 +26,9 @@ Functions:
 The silent-skip contract is deliberate. Callers (write tools) attach the
 returned dict to a ``skill_content`` response field. A missing reference
 should never fail the surrounding write operation — the agent still gets
-any warnings plus whatever files did resolve. The strict-error path stays
-with ``_handle_skill_guide_call``, which must raise ``ToolError`` for the
-explicit user-requested file lookup.
+any warnings plus whatever files did resolve. The explicit
+``ha_get_skill_guide`` lookup lives in ``server.py`` and raises ``ToolError``
+instead.
 """
 
 from __future__ import annotations
@@ -254,8 +253,7 @@ def _read_file_safely(
     candidate = skill_dir / rel_path
     # Pre-resolve symlink check: ``resolve()`` returns the canonical
     # non-symlink path, so a post-resolve ``is_symlink()`` check would
-    # always be False. Matches the guard in
-    # ``server.py::_handle_skill_guide_call``.
+    # always be False.
     if candidate.is_symlink():
         logger.warning("Refusing symlink in skill (security): %s/%s", skill, rel_path)
         return None

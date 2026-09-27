@@ -8,7 +8,6 @@ warnings and builds the ' See ...' suffix.
 
 _SKILL_URI_PREFIX = "skill://home-assistant-best-practices/references"
 _DEFAULT_SKILL_PREFIX = _SKILL_URI_PREFIX
-_SKILL_NAME = "home-assistant-best-practices"
 
 
 class BestPracticeCheckResult(list[str]):
@@ -76,7 +75,7 @@ def _skill_route_suffix(skill_prefix: str | None, file_ref: str) -> str:
 
     1. ``skill://`` URI — for clients that auto-fetch resource URIs.
        Anchor preserved.
-    2. ``ha_get_skill_guide(skill=..., file=...)`` — explicit tool call,
+    2. ``ha_get_skill_guide(file=...)``: explicit tool call,
        works on every MCP client. Anchor stripped (the tool reads the
        whole file).
 
@@ -91,6 +90,6 @@ def _skill_route_suffix(skill_prefix: str | None, file_ref: str) -> str:
     bare_file = f"references/{file_ref.split('#', 1)[0]}"
     routes = [
         f"{skill_prefix}/{file_ref}",
-        f"call ha_get_skill_guide(skill={_SKILL_NAME!r}, file={bare_file!r})",
+        f"call ha_get_skill_guide(file={bare_file!r})",
     ]
     return " See " + " | ".join(routes)

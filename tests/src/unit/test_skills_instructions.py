@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from ha_mcp.tools.util_helpers import _HA_BEST_PRACTICES_SKILL_NAME
+
 from ._symlink_support import symlink_or_skip
 
 
@@ -338,163 +340,111 @@ class TestLogSkillRegistrationSummary:
 
 
 class TestHandleSkillGuideCall:
-    """Tests for the three-tier ha_get_skill_guide handler.
+    """Tests for the ``ha_get_skill_guide`` handler.
 
-    Validates the tier dispatch, path-traversal guards, and the
-    degraded-mode behavior when no skills directory exists. The handler
-    is split out from the registered tool closure specifically so it
-    can be unit-tested without an MCP client round-trip.
+    The handler is split out from the registered tool closure so it can
+    be unit-tested without an MCP client round-trip.
     """
 
     @pytest.fixture
-    def populated_skills_dir(self, tmp_path):
-        """A tmp skills dir with one valid skill and one ignored entry."""
-        skill = tmp_path / "best-practices"
-        skill.mkdir()
+    def skills_dir(self, tmp_path):
+        """A skills root holding the best-practices skill, plus a file
+        outside the skill that no request may reach."""
+        root = tmp_path / "skills"
+        skill = root / _HA_BEST_PRACTICES_SKILL_NAME
+        (skill / "references").mkdir(parents=True)
         (skill / "SKILL.md").write_text(
             "---\nname: best-practices\n"
             "description: |\n"
             "  Best practices for HA tasks.\n"
-            "---\n# Best practices\nReal content here.\n"
+            "---\n# Best practices\nWorkflow content here.\n"
         )
-        (skill / "reference.md").write_text("# Reference\nReal reference.\n")
-
-        # Ignored: not a directory.
-        (tmp_path / "stray.txt").write_text("ignored")
-
-        # Ignored: dir without SKILL.md.
-        (tmp_path / "no-skill-md").mkdir()
-        (tmp_path / "no-skill-md" / "other.md").write_text("ignored")
-
-        return tmp_path
-
-    def test_tier1_lists_only_valid_skills(self, server, populated_skills_dir):
-        """No-args call lists only dirs with parseable SKILL.md."""
-        result = server._handle_skill_guide_call(populated_skills_dir, None, None)
-        assert result["success"] is True
-        assert "skills" in result
-        names = [s["skill"] for s in result["skills"]]
-        assert names == ["best-practices"]
-        assert result["skills"][0]["uri"] == "skill://best-practices/SKILL.md"
-        assert "Best practices" in result["skills"][0]["description"]
-
-    def test_tier2_lists_files(self, server, populated_skills_dir):
-        """skill arg lists every file in the skill dir."""
-        result = server._handle_skill_guide_call(
-            populated_skills_dir, "best-practices", None
+        (skill / "references" / "reference.md").write_text(
+            "# Reference\nReal reference.\n"
         )
-        assert result["success"] is True
-        assert result["skill"] == "best-practices"
-        names = sorted(f["name"] for f in result["files"])
-        assert names == ["SKILL.md", "reference.md"]
+        (tmp_path / "outside.md").write_text("# Outside\nSECRET OUTSIDE\n")
+        return root
 
-    def test_tier3_reads_content(self, server, populated_skills_dir):
-        """skill + file args read the file content verbatim."""
-        result = server._handle_skill_guide_call(
-            populated_skills_dir, "best-practices", "reference.md"
-        )
+    def test_no_file_returns_skill_md(self, server, skills_dir):
+        """A call with no arguments must deliver SKILL.md itself, so a
+        model that makes one call gets the workflow and the table of
+        reference files."""
+        result = server._handle_skill_guide_call(skills_dir)
         assert result["success"] is True
-        assert result["skill"] == "best-practices"
-        assert result["file"] == "reference.md"
-        assert "Real reference" in result["content"]
+        assert result["file"] == "SKILL.md"
+        assert "Workflow content here." in result["content"]
+        assert "file=" in result["how_to_use"]
 
-    def test_unknown_skill_raises(self, server, populated_skills_dir):
-        """An unknown skill name raises ToolError, not silent empty dict."""
+    @pytest.mark.parametrize("file", ["../outside.md", "references"])
+    def test_file_outside_allowlist_is_refused(self, server, skills_dir, file):
+        """Only the exact names of regular files in the skill are served.
+        A traversal to a real file, or a directory name, must fail instead
+        of reading from disk."""
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-        with pytest.raises(ToolError):
-            server._handle_skill_guide_call(
-                populated_skills_dir, "does-not-exist", None
-            )
+        with pytest.raises(ToolError) as excinfo:
+            server._handle_skill_guide_call(skills_dir, file)
+        payload = str(excinfo.value)
+        assert "SECRET OUTSIDE" not in payload
+        assert "RESOURCE_NOT_FOUND" in payload
+        # The error names the valid files so the model can retry.
+        assert "references/reference.md" in payload
 
-    def test_skill_traversal_raises(self, server, populated_skills_dir):
-        """``../`` in the skill arg must not escape the skills dir."""
+    def test_symlink_in_skill_is_refused(self, server, skills_dir):
+        """A symlink placed inside the skill must not be followed, even
+        though its name is inside the skill directory."""
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-        with pytest.raises(ToolError):
-            server._handle_skill_guide_call(populated_skills_dir, "../..", None)
+        skill = skills_dir / _HA_BEST_PRACTICES_SKILL_NAME
+        symlink_or_skip(skill / "evil.md", skills_dir.parent / "outside.md")
+        with pytest.raises(ToolError) as excinfo:
+            server._handle_skill_guide_call(skills_dir, "evil.md")
+        assert "SECRET OUTSIDE" not in str(excinfo.value)
 
-    @pytest.mark.parametrize(
-        "skill", [".", "./", "./best-practices/..", "best-practices/.."]
-    )
-    def test_skill_dot_aliases_to_root_are_rejected(
-        self, server, populated_skills_dir, skill
-    ):
-        """``"."``, ``"./"``, and ``"x/.."`` all resolve to the skills root.
+    def test_oserror_on_read_raises_tool_error(self, server, skills_dir, monkeypatch):
+        """A read failure must surface as a ToolError naming the file,
+        not as a success payload with empty content."""
+        from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-        Without an explicit guard, all four guards (exists, is_dir,
-        is_relative_to, is_symlink) pass and tier 2 silently enumerates
-        every file under every bundled skill. That contradicts tier 1's
-        "one skill at a time" contract. Reject with RESOURCE_NOT_FOUND.
+        original_read_text = Path.read_text
+
+        def boom(self, *args, **kwargs):
+            if self.name == "reference.md":
+                raise PermissionError("simulated EACCES")
+            return original_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", boom)
+
+        with pytest.raises(ToolError) as excinfo:
+            server._handle_skill_guide_call(skills_dir, "references/reference.md")
+        payload = str(excinfo.value)
+        assert "reference.md" in payload
+        assert "INTERNAL_ERROR" in payload
+
+    def test_optout_hint_only_on_reference_files(self, server, skills_dir):
+        """The ``MandatoryBPS=false`` hint must not ride on SKILL.md.
+
+        Every first call returns SKILL.md. A model that took the hint
+        there would switch off the reference files the write tools
+        attach, before it had read any of them.
         """
-        from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-        with pytest.raises(ToolError):
-            server._handle_skill_guide_call(populated_skills_dir, skill, None)
-
-    def test_file_traversal_raises(self, server, populated_skills_dir):
-        """``../`` in the file arg must not escape the skill dir."""
-        from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-        with pytest.raises(ToolError):
-            server._handle_skill_guide_call(
-                populated_skills_dir,
-                "best-practices",
-                "../../etc/passwd",
-            )
-
-    def test_missing_file_raises(self, server, populated_skills_dir):
-        """A file that doesn't exist in a valid skill raises rather than 404s."""
-        from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-        with pytest.raises(ToolError):
-            server._handle_skill_guide_call(
-                populated_skills_dir, "best-practices", "missing.md"
-            )
-
-    def test_degraded_mode_tier1_returns_empty_listing(self, server):
-        """No skills dir → tier 1 returns an empty list with an explanation
-        and an explicit ``degraded`` flag.
-
-        This is the always-registered-tool contract: callers see a
-        structured response explaining the situation, not a missing
-        tool, when the skills submodule is uninitialized. The
-        ``degraded`` flag distinguishes this from a healthy server with
-        zero bundled skills (same response shape otherwise).
-        """
-        result = server._handle_skill_guide_call(None, None, None)
-        assert result["success"] is True
-        assert result["degraded"] is True, (
-            "Degraded mode must flip ``degraded`` to True so LLM clients "
-            "can branch on misconfiguration without parsing prose."
+        skill_md = server._handle_skill_guide_call(skills_dir)
+        reference = server._handle_skill_guide_call(
+            skills_dir, "references/reference.md"
         )
-        assert result["skills"] == []
-        assert "submodule" in result["how_to_use"].lower()
+        assert "skill_content_hint" not in skill_md
+        assert "MandatoryBPS=false" in reference["skill_content_hint"]
 
-    def test_healthy_empty_skills_dir_is_not_degraded(self, server, tmp_path):
-        """Healthy server with an empty skills directory must NOT report
-        degraded — that signal is reserved for missing-submodule and
-        equivalent server-side misconfigurations."""
-        result = server._handle_skill_guide_call(tmp_path, None, None)
-        assert result["success"] is True
-        assert result["skills"] == []
-        # Crucially absent (or False), so the LLM treats this as
-        # "healthy server, no bundles installed yet."
-        assert result.get("degraded") is not True
-
-    def test_degraded_mode_tier2_raises(self, server):
-        """No skills dir → asking for a specific skill raises explicitly."""
+    @pytest.mark.parametrize("state", ["no_skills_dir", "no_best_practices_skill"])
+    def test_unavailable_skill_raises_with_operator_fix(self, server, tmp_path, state):
+        """Without the bundled skill, the call must fail with an error that
+        names the fix, not return empty content the model would trust."""
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-        with pytest.raises(ToolError):
-            server._handle_skill_guide_call(None, "best-practices", None)
-
-    def test_degraded_mode_tier3_raises(self, server):
-        """No skills dir → asking for a file raises explicitly."""
-        from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-        with pytest.raises(ToolError):
-            server._handle_skill_guide_call(None, "best-practices", "SKILL.md")
+        skills_dir = None if state == "no_skills_dir" else tmp_path
+        with pytest.raises(ToolError) as excinfo:
+            server._handle_skill_guide_call(skills_dir)
+        assert "submodule" in str(excinfo.value)
 
 
 class TestSkillToolMandatoryPinning:
@@ -581,7 +531,7 @@ class TestSkillToolAliasKeywords:
 
         # Build a minimal valid skill so the populated-mode description
         # branch runs.
-        skill = tmp_path / "best-practices"
+        skill = tmp_path / _HA_BEST_PRACTICES_SKILL_NAME
         skill.mkdir()
         (skill / "SKILL.md").write_text(
             "---\nname: best-practices\ndescription: |\n"
@@ -638,7 +588,7 @@ class TestSkillToolAliasKeywords:
 
 
 class TestSkillToolRegistration:
-    """Registration-time invariants that aren't covered by tier-dispatch
+    """Registration-time invariants that aren't covered by the handler
     tests in TestHandleSkillGuideCall.
 
     These guard against silent regressions in `mcp.tool()` arguments —
@@ -649,7 +599,7 @@ class TestSkillToolRegistration:
 
     @pytest.fixture
     def populated_dir(self, tmp_path):
-        skill = tmp_path / "best-practices"
+        skill = tmp_path / _HA_BEST_PRACTICES_SKILL_NAME
         skill.mkdir()
         (skill / "SKILL.md").write_text(
             "---\nname: best-practices\ndescription: |\n  Best practices.\n---\n"
@@ -791,131 +741,6 @@ class TestSkillToolRegistration:
         assert HomeAssistantSmartMCPServer._SKILL_USE_BEFORE_KEYWORDS in desc
 
 
-class TestHandleSkillGuideCallReadFailures:
-    """Coverage of the OSError-on-read branch (server.py tier 3).
-
-    The earlier traversal/missing-file tests exercise the structural
-    failure modes but never force `read_text` to raise. A regression
-    that swallows the OSError into a 200 with empty content would slip
-    past — these tests pin the contract by either pointing at an
-    unreadable path or by patching `read_text` to raise.
-    """
-
-    @pytest.fixture
-    def populated_dir(self, tmp_path):
-        skill = tmp_path / "best-practices"
-        skill.mkdir()
-        (skill / "SKILL.md").write_text(
-            "---\nname: best-practices\ndescription: |\n  Best practices.\n---\n"
-        )
-        (skill / "reference.md").write_text("# Ref\n")
-        return tmp_path
-
-    def test_oserror_on_read_raises_tool_error(
-        self, server, populated_dir, monkeypatch
-    ):
-        """`read_text` raising OSError must surface as ToolError with
-        INTERNAL_ERROR, not as a success payload with empty content."""
-        from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-        original_read_text = Path.read_text
-
-        def boom(self, *args, **kwargs):
-            # Only blow up on the skill file; leave SKILL.md parsing
-            # (called during _list_bundled_skills) untouched.
-            if self.name == "reference.md":
-                raise PermissionError("simulated EACCES")
-            return original_read_text(self, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "read_text", boom)
-
-        with pytest.raises(ToolError) as excinfo:
-            server._handle_skill_guide_call(
-                populated_dir, "best-practices", "reference.md"
-            )
-
-        # The structured-error payload should mention the file name so
-        # operators can correlate with logs, and carry INTERNAL_ERROR
-        # (not SERVICE_CALL_FAILED — file reads aren't HA service calls).
-        payload = str(excinfo.value)
-        assert "reference.md" in payload
-        assert "INTERNAL_ERROR" in payload
-
-    def test_resolve_oserror_raises_tool_error(
-        self, server, populated_dir, monkeypatch
-    ):
-        """`Path.resolve` raising OSError (rare; some platforms) must
-        surface as ToolError, not bubble as INTERNAL_ERROR via
-        fastmcp's generic wrapper."""
-        from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-        original_resolve = Path.resolve
-
-        def boom(self, *args, **kwargs):
-            # Force the failure on the tier-3 candidate path; leave the
-            # skills_dir.resolve() in the is_relative_to check (called
-            # later) intact by name-checking.
-            if self.name == "reference.md":
-                raise OSError("simulated resolve failure")
-            return original_resolve(self, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "resolve", boom)
-
-        with pytest.raises(ToolError):
-            server._handle_skill_guide_call(
-                populated_dir, "best-practices", "reference.md"
-            )
-
-
-class TestSymlinkRejection:
-    """Symlinks in skill bundles must be filtered in both directions
-    (tier 2 listing) and rejected (tier 3 read).
-
-    The e2e path-traversal tests cover string-based traversal in the
-    args; this class covers on-disk symlinks placed inside an
-    otherwise-valid skill directory. Without these tests, a regression
-    that removed the `is_symlink()` filter from `_list_skill_files`
-    or the tier-3 candidate check would not fail.
-    """
-
-    @pytest.fixture
-    def dir_with_symlink(self, tmp_path):
-        skill = tmp_path / "best-practices"
-        skill.mkdir()
-        (skill / "SKILL.md").write_text(
-            "---\nname: best-practices\ndescription: |\n  Best practices.\n---\n"
-        )
-        (skill / "regular.md").write_text("# Regular\n")
-
-        # Symlink pointing outside the skill dir (worst case).
-        outside_target = tmp_path / "outside.md"
-        outside_target.write_text("# Outside\n")
-        symlink_or_skip(skill / "evil.md", outside_target)
-
-        return tmp_path
-
-    def test_list_skill_files_skips_symlinks(self, server, dir_with_symlink):
-        files = server._list_skill_files(dir_with_symlink / "best-practices")
-        assert "regular.md" in files
-        assert "SKILL.md" in files
-        assert "evil.md" not in files, (
-            "_list_skill_files must filter symlinks — a malicious or "
-            "misconfigured skill bundle could otherwise expose files "
-            "outside the skill directory via tier 2 listings."
-        )
-
-    def test_tier3_rejects_symlink_file(self, server, dir_with_symlink):
-        """Tier 3 read on the symlink name must raise, not return the
-        outside file's content."""
-        from ha_mcp._vendor.fastmcp.exceptions import ToolError
-
-        with pytest.raises(ToolError) as excinfo:
-            server._handle_skill_guide_call(
-                dir_with_symlink, "best-practices", "evil.md"
-            )
-        assert "symlink" in str(excinfo.value).lower()
-
-
 class TestRegisterSkillsOrchestration:
     """End-to-end coverage of `_register_skills` — the outer method that
     sequences resource provider registration and tool registration.
@@ -929,7 +754,7 @@ class TestRegisterSkillsOrchestration:
 
     @pytest.fixture
     def populated_dir(self, tmp_path):
-        skill = tmp_path / "best-practices"
+        skill = tmp_path / _HA_BEST_PRACTICES_SKILL_NAME
         skill.mkdir()
         (skill / "SKILL.md").write_text(
             "---\nname: best-practices\ndescription: |\n  Best practices.\n---\n"

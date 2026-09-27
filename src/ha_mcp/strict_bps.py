@@ -45,7 +45,6 @@ from ha_mcp._vendor.fastmcp.server.middleware.middleware import (
 
 from .errors import ErrorCode, create_error_response
 from .tools.helpers import raise_tool_error
-from .tools.util_helpers import _HA_BEST_PRACTICES_SKILL_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +81,7 @@ def _warn_degraded_once(branch: str, message: str, *, exc_info: bool = False) ->
 #   principle intact.
 #
 # The key is published ONLY by ``strict_bps_ack_line`` (surfaced through
-# ha_get_skill_guide Tier 3 when strict mode is effective) and validated ONLY
+# every ha_get_skill_guide read when strict mode is effective) and validated ONLY
 # by the middleware — it must never appear in a block error, a tool
 # docstring, or a skill_content embed.
 STRICT_BPS_ACK_KEY_PREFIX = "I-HAVE-READ-THE-BEST-PRACTICES-GUIDE"
@@ -202,8 +201,8 @@ def strict_bps_effective() -> bool:
 def strict_bps_ack_line() -> str:
     """Return the single line that publishes the acknowledgment key.
 
-    Prepended to the ha_get_skill_guide Tier-3 best-practices content when
-    strict mode is effective (server.py). This is the ONLY place the actual
+    Prepended to every file ha_get_skill_guide serves when strict mode is
+    effective (server.py). This is the ONLY place the actual
     key value is emitted to a caller.
     """
     return (
@@ -240,8 +239,8 @@ def _raise_bps_ack_required_error(name: str) -> NoReturn:
             ErrorCode.BPS_ACKNOWLEDGMENT_REQUIRED,
             message,
             suggestions=[
-                f"Call ha_get_skill_guide(skill={_HA_BEST_PRACTICES_SKILL_NAME!r}, "
-                f"file={reference_file!r}), read the content, then retry with "
+                f"Call ha_get_skill_guide(file={reference_file!r}), read the "
+                f"content, then retry with "
                 f"{STRICT_BPS_KEY_PARAM} set.",
                 f"If your client then rejects the retry with a schema-validation "
                 f"error such as 'must NOT have additional properties', it is "

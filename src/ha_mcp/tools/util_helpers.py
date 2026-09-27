@@ -2334,8 +2334,8 @@ _SKILL_CONTENT_OPTOUT_HINT = (
 # array, and the matching section body auto-embeds inline.
 _WRITE_TOOL_BP_HINT_SUGGESTION = (
     "For Home Assistant best-practice guidance, call "
-    "ha_get_skill_guide(skill='home-assistant-best-practices') and consult "
-    "the relevant reference file before retrying."
+    "ha_get_skill_guide() to read SKILL.md, then the reference file its "
+    "table points to, before retrying."
 )
 
 

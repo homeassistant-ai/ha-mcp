@@ -640,45 +640,10 @@ def _best_practices_skills_dir(tmp_path: Path) -> Path:
 
 
 class TestSkillGuideKeyInjection:
-    def test_ack_line_prepended_when_strict_effective(self, monkeypatch, tmp_path):
-        from ha_mcp import strict_bps
-
-        monkeypatch.setattr("ha_mcp.strict_bps.strict_bps_effective", lambda: True)
-        # Freeze the clock: content generation and the assertions each
-        # derive the key; an hour-boundary straddle between them would flake.
-        monkeypatch.setattr(
-            strict_bps, "time", SimpleNamespace(time=lambda: 1_000_000_000.0)
-        )
-        srv = _make_bare_server()
-        skills_dir = _best_practices_skills_dir(tmp_path)
-        result = srv._handle_skill_guide_call(
-            skills_dir, "home-assistant-best-practices", "SKILL.md"
-        )
-        assert result["success"] is True
-        assert result["content"].startswith(strict_bps_ack_line())
-        assert current_strict_bps_ack_key() in result["content"]
-        # Original body still follows the injected line.
-        assert "Real content here." in result["content"]
-
     def test_ack_line_absent_when_strict_off(self, monkeypatch, tmp_path):
         monkeypatch.setattr("ha_mcp.strict_bps.strict_bps_effective", lambda: False)
         srv = _make_bare_server()
         skills_dir = _best_practices_skills_dir(tmp_path)
-        result = srv._handle_skill_guide_call(
-            skills_dir, "home-assistant-best-practices", "SKILL.md"
-        )
-        assert result["success"] is True
-        assert current_strict_bps_ack_key() not in result["content"]
-
-    def test_ack_line_absent_for_other_skill_even_if_strict(
-        self, monkeypatch, tmp_path
-    ):
-        """A non-best-practices skill never carries the key, even when strict."""
-        monkeypatch.setattr("ha_mcp.strict_bps.strict_bps_effective", lambda: True)
-        srv = _make_bare_server()
-        other = tmp_path / "some-other-skill"
-        other.mkdir()
-        (other / "SKILL.md").write_text("# Other\nUnrelated.\n")
-        result = srv._handle_skill_guide_call(tmp_path, "some-other-skill", "SKILL.md")
+        result = srv._handle_skill_guide_call(skills_dir)
         assert result["success"] is True
         assert current_strict_bps_ack_key() not in result["content"]
