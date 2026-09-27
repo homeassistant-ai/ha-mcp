@@ -437,6 +437,59 @@ class TestServerOptionsFlow:
         assert isinstance(selector, _TextSelector)
         assert selector.config.type == _TextSelectorType.TEXT
 
+    def test_legacy_oauth_secret_is_explicit_plain_text_selector(self):
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+
+        form = asyncio.run(flow.async_step_init(None))
+        validators = {
+            marker.schema: validator
+            for marker, validator in form["data_schema"].schema.items()
+        }
+        selector = validators[const.OPT_OAUTH_CLIENT_SECRET]
+
+        assert isinstance(selector, _TextSelector)
+        assert selector.config.type == _TextSelectorType.TEXT
+
+    @pytest.mark.parametrize(
+        "field",
+        [const.OPT_SECRET_PATH_OVERRIDE, const.OPT_WEBHOOK_ID_OVERRIDE],
+    )
+    @pytest.mark.parametrize("invalid_character", ["#", "?", "%", " ", "\t"])
+    def test_connect_path_override_rejects_url_breaking_characters(
+        self, field, invalid_character
+    ):
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        invalid_value = f"safe{invalid_character}value"
+
+        result = asyncio.run(flow.async_step_init({field: invalid_value}))
+
+        assert result["type"] == "form"
+        assert result["step_id"] == "init"
+        assert result["errors"] == {field: "invalid_connect_path"}
+        marker = next(
+            marker for marker in result["data_schema"].schema if marker.schema == field
+        )
+        assert marker.description["suggested_value"] == invalid_value
+
+    def test_connect_path_overrides_accept_url_safe_values(self):
+        flow = _make_options_flow(data={const.DATA_WEBHOOK_ID: "mcp_abc"})
+        user_input = {
+            const.OPT_SECRET_PATH_OVERRIDE: "/mcp_safe-token.123",
+            const.OPT_WEBHOOK_ID_OVERRIDE: "mcp_safe-token.123",
+        }
+
+        result = asyncio.run(flow.async_step_init(user_input))
+
+        assert result["type"] == "entry"
+        assert (
+            result["data"][const.OPT_SECRET_PATH_OVERRIDE]
+            == user_input[const.OPT_SECRET_PATH_OVERRIDE]
+        )
+        assert (
+            result["data"][const.OPT_WEBHOOK_ID_OVERRIDE]
+            == user_input[const.OPT_WEBHOOK_ID_OVERRIDE]
+        )
+
     def test_versions_placeholder_present_and_populated(self, monkeypatch):
         # The Configure form carries a "versions" placeholder that names the
         # component version (from the manifest) and the installed server version.
