@@ -24,6 +24,10 @@
         }
     },
     "options": {
+        "error": {
+            "invalid_connect_path": "Must not contain #, ?, %, or whitespace.",
+            "invalid_webhook_id": "Webhook IDs must not contain a slash (/)."
+        },
         "step": {
             "tools_info": {
                 "title": "HA-MCP File & YAML Tools",
