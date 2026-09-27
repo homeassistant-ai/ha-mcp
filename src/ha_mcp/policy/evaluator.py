@@ -207,7 +207,8 @@ def match_predicate(
     for a non-wildcard path there is at most one value.
 
     ``strict`` is allow mode, where a match APPROVES the call, so every
-    ambiguity must resolve towards "no match":
+    ambiguity must resolve towards "no match" (``exists`` tests presence
+    only and returns before these rules apply):
 
     - EVERY value must satisfy the op, and a list found at the path counts
       as its items, so an approval naming ``light.a`` covers neither an
