@@ -42,6 +42,7 @@ def test_private_profile_only_grants_bat_mcp(tmp_path, monkeypatch):
         assert "--disable" in cmd and "shell_tool" in cmd
         assert "ha-fixture" not in " ".join(cmd)
         assert "--strict-config" in cmd and "--ephemeral" in cmd
+        assert "--skip-git-repo-check" in cmd
         (home / "auth.json").write_text('{"auth_mode":"rotated"}')
         codex_agent.persist_auth(home)
         assert (source / "auth.json").read_text() == '{"auth_mode":"rotated"}'

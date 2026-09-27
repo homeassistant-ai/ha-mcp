@@ -74,6 +74,7 @@ def command(prompt: str, model: str, workdir: Path) -> list[str]:
         "--profile",
         "bat",
         "--strict-config",
+        "--skip-git-repo-check",
         "-c",
         "apps._default.enabled=false",
         "-c",
