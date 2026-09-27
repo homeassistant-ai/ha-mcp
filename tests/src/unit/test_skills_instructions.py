@@ -417,19 +417,26 @@ class TestHandleSkillGuideCall:
             server._handle_skill_guide_call(root, "secret.txt")
         assert "SECRET OUTSIDE" not in str(excinfo.value)
 
-    def test_oserror_on_read_raises_tool_error(self, server, skills_dir, monkeypatch):
-        """A read failure must surface as a ToolError naming the file,
-        not as a success payload with empty content."""
+    @pytest.mark.parametrize("failure", ["permission", "invalid_utf8"])
+    def test_read_failure_raises_tool_error(
+        self, server, skills_dir, monkeypatch, failure
+    ):
+        """A read failure must surface as a structured ToolError naming the
+        file, not as a success payload or an unhandled exception."""
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-        original_read_text = Path.read_text
+        reference = skills_dir / _HA_BEST_PRACTICES_SKILL_NAME / "references"
+        if failure == "invalid_utf8":
+            (reference / "reference.md").write_bytes(b"# Ref \xff\xfe\n")
+        else:
+            original_read_text = Path.read_text
 
-        def boom(self, *args, **kwargs):
-            if self.name == "reference.md":
-                raise PermissionError("simulated EACCES")
-            return original_read_text(self, *args, **kwargs)
+            def boom(self, *args, **kwargs):
+                if self.name == "reference.md":
+                    raise PermissionError("simulated EACCES")
+                return original_read_text(self, *args, **kwargs)
 
-        monkeypatch.setattr(Path, "read_text", boom)
+            monkeypatch.setattr(Path, "read_text", boom)
 
         with pytest.raises(ToolError) as excinfo:
             server._handle_skill_guide_call(skills_dir, "references/reference.md")
@@ -452,7 +459,14 @@ class TestHandleSkillGuideCall:
         assert "MandatoryBPS=false" in reference["skill_content_hint"]
 
     @pytest.mark.parametrize(
-        "state", ["no_skills_dir", "no_best_practices_skill", "bad_frontmatter"]
+        "state",
+        [
+            "no_skills_dir",
+            "no_best_practices_skill",
+            "bad_frontmatter",
+            "undecodable_skill_md",
+            "symlinked_skill_md",
+        ],
     )
     def test_unavailable_skill_raises_with_operator_fix(self, server, tmp_path, state):
         """Without a usable bundled skill, the call must fail with an error
@@ -460,11 +474,19 @@ class TestHandleSkillGuideCall:
         return content the model would trust."""
         from ha_mcp._vendor.fastmcp.exceptions import ToolError
 
-        skills_dir = None if state == "no_skills_dir" else tmp_path
+        skills_dir = None if state == "no_skills_dir" else tmp_path / "skills"
+        skill = tmp_path / "skills" / _HA_BEST_PRACTICES_SKILL_NAME
+        skill.mkdir(parents=True)
+        valid = "---\nname: bp\ndescription: Best practices.\n---\n# Body\n"
         if state == "bad_frontmatter":
-            skill = tmp_path / _HA_BEST_PRACTICES_SKILL_NAME
-            skill.mkdir()
             (skill / "SKILL.md").write_text("# No frontmatter here\n")
+        elif state == "undecodable_skill_md":
+            (skill / "SKILL.md").write_bytes(b"---\ndescription: \xff\xfe\n---\n")
+        elif state == "symlinked_skill_md":
+            # The file list skips symlinks, so the guide could never serve it.
+            outside = tmp_path / "outside.md"
+            outside.write_text(valid)
+            symlink_or_skip(skill / "SKILL.md", outside)
         with pytest.raises(ToolError) as excinfo:
             server._handle_skill_guide_call(skills_dir)
         assert "submodule" in str(excinfo.value)

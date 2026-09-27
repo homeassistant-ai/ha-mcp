@@ -1880,7 +1880,7 @@ class HomeAssistantSmartMCPServer:
         """Read one skill file, raising a structured error on I/O failure."""
         try:
             return target.read_text(encoding="utf-8")
-        except OSError as e:
+        except (OSError, UnicodeDecodeError) as e:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.INTERNAL_ERROR,

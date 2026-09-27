@@ -161,7 +161,7 @@ def parse_skill_frontmatter(main_file: Path) -> dict | None:
     """
     try:
         content = main_file.read_text(encoding="utf-8")
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         logger.warning("Could not read %s: %s", main_file, e)
         return None
 
@@ -211,13 +211,15 @@ def best_practices_skill(
     best-practices gate all use this one check. The gate fails open when it
     returns None, because the guide is then unable to publish the
     acknowledgment key. A symlinked skill folder counts as missing: every
-    file under its target would otherwise become readable.
+    file under its target would otherwise become readable. A symlinked
+    SKILL.md counts as missing too, because the guide never serves a
+    symlink.
     """
     if skills_dir is None:
         return None
     skill_dir = skills_dir / BEST_PRACTICES_SKILL_NAME
     main_file = skill_dir / "SKILL.md"
-    if skill_dir.is_symlink() or not main_file.is_file():
+    if skill_dir.is_symlink() or main_file.is_symlink() or not main_file.is_file():
         return None
     frontmatter = parse_skill_frontmatter(main_file)
     if not frontmatter:
