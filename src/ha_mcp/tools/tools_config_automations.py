@@ -1372,6 +1372,12 @@ class AutomationConfigTools:
                 )
             )
 
+        reject_malformed_list_fields(
+            transformed_config,
+            ("triggers", "trigger", "conditions", "condition", "actions", "action"),
+            {"action": "python_transform", "identifier": identifier},
+            source="python_transform",
+        )
         # Pop category before sending to HA REST API (rejects unknown keys)
         _reject_enabled_in_config(transformed_config)
         transform_category = transformed_config.pop("category", None)

@@ -66,13 +66,18 @@ from .dashboard_edit_errors import (
     raise_dashboard_edit_fetch_error,
     raise_known_dashboard_save_rejection,
 )
+from .dashboard_list_checks import (
+    patch_writes_inside_card,
+    reject_malformed_dashboard_config,
+    reject_malformed_dashboard_lists,
+    reject_malformed_dashboard_patch,
+)
 from .helpers import (
     exception_to_structured_error,
     extract_tool_error_message,
     log_tool_usage,
     raise_tool_error,
     register_tool_methods,
-    reject_malformed_list_fields,
     validate_identifier_not_empty,
 )
 from .util_helpers import (
@@ -1054,93 +1059,6 @@ def _collect_all_dashboard_doc_matches(
         _collect_all_dashboard_header_card_matches(
             view, view_index, url_path, dash_title, view_title, query_lower, matches
         )
-
-
-# Core stack cards; custom cards may give ``cards`` any shape, so they are skipped.
-_STACK_CARD_TYPES = frozenset({"vertical-stack", "horizontal-stack", "grid"})
-
-
-def _items(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
-def _collect_card_lists(card: Any, path: str, fields: dict[str, Any]) -> None:
-    if isinstance(card, dict) and card.get("type") in _STACK_CARD_TYPES:
-        fields[f"{path}.cards"] = card.get("cards")
-        for i, child in enumerate(_items(card.get("cards"))):
-            _collect_card_lists(child, f"{path}.cards[{i}]", fields)
-
-
-def _collect_section_lists(section: Any, path: str, fields: dict[str, Any]) -> None:
-    if isinstance(section, dict):
-        fields[f"{path}.cards"] = section.get("cards")
-        for i, card in enumerate(_items(section.get("cards"))):
-            _collect_card_lists(card, f"{path}.cards[{i}]", fields)
-
-
-def _collect_view_lists(view: Any, path: str, fields: dict[str, Any]) -> None:
-    if not isinstance(view, dict):
-        return
-    for key in ("cards", "sections", "badges"):
-        fields[f"{path}.{key}"] = view.get(key)
-    for i, card in enumerate(_items(view.get("cards"))):
-        _collect_card_lists(card, f"{path}.cards[{i}]", fields)
-    for i, section in enumerate(_items(view.get("sections"))):
-        _collect_section_lists(section, f"{path}.sections[{i}]", fields)
-
-
-_LIST_ITEM_COLLECTORS = {
-    "views": _collect_view_lists,
-    "sections": _collect_section_lists,
-    "cards": _collect_card_lists,
-}
-
-
-def _reject_malformed_dashboard_lists(config: dict[str, Any], url_path: str) -> None:
-    """Check the list positions the frontend types as arrays (issue #2548).
-
-    Home Assistant saves any dict here, and the frontend calls ``.map`` on them.
-    """
-    views = config.get("views")
-    fields: dict[str, Any] = {"views": views}
-    for i, view in enumerate(_items(views)):
-        _collect_view_lists(view, f"views[{i}]", fields)
-    reject_malformed_list_fields(fields, tuple(fields), {"url_path": url_path})
-
-
-# JSON Patch paths whose value has a known dashboard shape: a typed list, or one item of it.
-_PATCH_LIST_PATH = re.compile(
-    r"/(views)|/views/\d+/(cards|sections|badges)|/views/\d+/sections/\d+/(cards)"
-)
-_PATCH_ITEM_PATH = re.compile(
-    r"/(views)/(?:\d+|-)|/views/\d+/(sections)/(?:\d+|-)"
-    r"|/views/\d+/(?:sections/\d+/)?(cards)/(?:\d+|-)"
-)
-
-
-def _reject_malformed_dashboard_patch(
-    patch: list[dict[str, Any]], url_path: str
-) -> None:
-    """Apply the list check to add/replace values before Core applies the patch."""
-    fields: dict[str, Any] = {}
-    for n, op in enumerate(patch):
-        if not isinstance(op, dict) or op.get("op") not in ("add", "replace"):
-            continue
-        path, value = str(op.get("path", "")), op.get("value")
-        label = f"patch[{n}].value ({path})"
-        if match := _PATCH_LIST_PATH.fullmatch(path):
-            kind = next(k for k in match.groups() if k)
-            fields[label] = value
-            collect = _LIST_ITEM_COLLECTORS.get(kind)
-            if collect is not None:
-                for i, item in enumerate(_items(value)):
-                    collect(item, f"{label}[{i}]", fields)
-        elif match := _PATCH_ITEM_PATH.fullmatch(path):
-            kind = next(k for k in match.groups() if k)
-            _LIST_ITEM_COLLECTORS[kind](value, label, fields)
-    reject_malformed_list_fields(
-        fields, tuple(fields), {"url_path": url_path, "action": "patch"}
-    )
 
 
 def _all_dashboard_view_card_containers(
@@ -3237,6 +3155,9 @@ class DashboardConfigTools:
             replacement_config=transformed_config,
             action="python_transform",
         )
+        reject_malformed_dashboard_lists(
+            transformed_config, url_path, source="python_transform"
+        )
         return transformed_config
 
     async def _save_dashboard_python_transform(
@@ -3349,6 +3270,17 @@ class DashboardConfigTools:
             "warnings": [warning] if warning else [],
         }
 
+    async def _reject_malformed_patched_dashboard(
+        self, url_path: str, patch: list[dict[str, Any]]
+    ) -> None:
+        """Check the patched config when an edit lands inside a card."""
+        try:
+            current, _ = await _get_dashboard_config_internal(self._client, url_path)
+            candidate = apply_dashboard_patch(current, patch)
+        except (ToolError, ValueError):
+            return  # The edit call below reports the real failure.
+        reject_malformed_dashboard_lists(candidate, url_path, source="patch")
+
     async def _run_dashboard_patch(
         self,
         url_path: str,
@@ -3382,7 +3314,9 @@ class DashboardConfigTools:
                     context={"action": "patch", "url_path": url_path},
                 )
             )
-        _reject_malformed_dashboard_patch(parsed_patch, url_path)
+        reject_malformed_dashboard_patch(parsed_patch, url_path)
+        if patch_writes_inside_card(parsed_patch):
+            await self._reject_malformed_patched_dashboard(url_path, parsed_patch)
         result = await edit_dashboard_via_component(
             self._client,
             url_path,
@@ -3942,8 +3876,7 @@ class DashboardConfigTools:
         MandatoryBPS: bool,
     ) -> "dict[str, Any] | ToolResult":
         """Execute config-replacement mode (create-or-update) and return the tool response."""
-        if isinstance(config, dict):
-            _reject_malformed_dashboard_lists(config, url_path)
+        reject_malformed_dashboard_config(config, url_path)
         (
             dashboard_exists,
             dashboard_id,

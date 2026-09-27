@@ -18,3 +18,15 @@ def test_title_uses_structured_error_message() -> None:
 def test_title_keeps_plain_error_text() -> None:
     logs = [{"tool_name": "ha_get_state", "error_message": "CancelledError"}]
     assert _generate_bug_title({}, logs) == "ha_get_state: CancelledError"
+
+
+def test_title_falls_back_when_envelope_has_no_message() -> None:
+    envelope = json.dumps({"success": False, "error": "boom"})
+    logs = [{"tool_name": "ha_call_service", "error_message": envelope}]
+    assert _generate_bug_title({}, logs).startswith("ha_call_service: {")
+
+
+def test_title_scrubs_secrets() -> None:
+    envelope = json.dumps({"error": {"message": "bad token=abc123secret"}})
+    logs = [{"tool_name": "ha_call_service", "error_message": envelope}]
+    assert "abc123secret" not in _generate_bug_title({}, logs)

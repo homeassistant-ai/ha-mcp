@@ -925,6 +925,12 @@ class ConfigScriptTools:
                 )
             )
 
+        reject_malformed_list_fields(
+            transformed_config,
+            ("sequence",),
+            {"action": "python_transform", "script_id": script_id},
+            source="python_transform",
+        )
         # Validate transformed config
         if (
             "sequence" not in transformed_config

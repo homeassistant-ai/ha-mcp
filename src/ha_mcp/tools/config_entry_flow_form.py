@@ -645,7 +645,7 @@ def _consume_leaf_field(
     """
     if name in remaining_config:
         value = remaining_config.pop(name)
-        # HA's ActionSelector stores any value unvalidated; setup then fails.
+        # ActionSelector stores values unvalidated; template platforms then fail setup.
         if "action" in (field.get("selector") or {}):
             reject_malformed_list_fields(
                 {name: value}, (name,), {"field": _section_path(path_prefix, name)}
