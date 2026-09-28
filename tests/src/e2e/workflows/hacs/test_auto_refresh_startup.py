@@ -178,9 +178,9 @@ async def _wait_for_hacs_ws_ready(container_info: dict) -> None:
                     # Container weather, not the nudge: the other HACS suites
                     # skip on the same condition (test_list_integrations).
                     pytest.skip(
-                        f"the seeded HACS entry is {state} in this container "
-                        "(GitHub rate-limiting during its setup), so HACS never "
-                        "registers the WebSocket handlers the startup nudge needs"
+                        f"the seeded HACS entry is {state} in this container, "
+                        "so HACS never registers the WebSocket handlers the "
+                        "startup nudge needs"
                     )
             if loop.time() >= deadline:
                 pytest.fail(

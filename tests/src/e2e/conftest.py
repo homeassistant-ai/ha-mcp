@@ -33,7 +33,7 @@ import time
 import urllib.error
 import urllib.request
 import warnings
-from collections.abc import AsyncGenerator, Iterator
+from collections.abc import AsyncGenerator, Generator, Iterator
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -111,6 +111,17 @@ logger = logging.getLogger(__name__)
 # capture buffer (refs #366).
 _READINESS_TIMINGS: list[dict[str, Any]] = []
 _ALL_READINESS_TIMINGS: list[dict[str, Any]] = []
+# Home Assistant logs taken when a non-fatal gate gives up, routed the same
+# way: a WARNING logged from a session fixture is shown only if the test that
+# set it up fails, so the session would otherwise carry on with no record.
+_READINESS_DIAGNOSTICS: list[str] = []
+_ALL_READINESS_DIAGNOSTICS: list[str] = []
+
+# The session's Home Assistant container on the testcontainer lanes, so a
+# failing test can attach the Home Assistant log from its own time window.
+_HA_CONTAINER_KEY = pytest.StashKey[DockerContainer]()
+# Bounds the attached log when one fault fails many tests at once.
+_FAILED_TEST_LOG_TAIL = 200
 
 
 # --- Embedded backend (in-process server entry of ha_mcp_tools, #1527) --------
@@ -563,6 +574,38 @@ def pytest_runtest_logreport(report):
         )
 
 
+def _container_log(container: DockerContainer, **log_kwargs: Any) -> str:
+    """The container's log, or why it could not be read."""
+    import docker as _docker
+
+    try:
+        raw = container.get_wrapped_container().logs(**log_kwargs)
+    except _docker.errors.DockerException as exc:
+        return f"docker logs failed: {type(exc).__name__}: {exc}"
+    return raw.decode("utf-8", errors="ignore")
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    # A tool failure often has its real cause only in the Home Assistant log
+    # (a webhook 502 names the upstream error there and nowhere else).
+    report = yield
+    if report.when == "call" and report.failed:
+        container = item.config.stash.get(_HA_CONTAINER_KEY, None)
+        if container is not None:
+            report.sections.append(
+                (
+                    "Home Assistant log during this test",
+                    _container_log(
+                        container, since=call.start, tail=_FAILED_TEST_LOG_TAIL
+                    ),
+                )
+            )
+    return report
+
+
 def pytest_sessionfinish(session, exitstatus):
     """xdist worker hook: hand collected timings up to the master.
 
@@ -573,6 +616,8 @@ def pytest_sessionfinish(session, exitstatus):
     workeroutput = getattr(session.config, "workeroutput", None)
     if workeroutput is not None and _READINESS_TIMINGS:
         workeroutput["readiness_timings"] = list(_READINESS_TIMINGS)
+    if workeroutput is not None and _READINESS_DIAGNOSTICS:
+        workeroutput["readiness_diagnostics"] = list(_READINESS_DIAGNOSTICS)
 
 
 def pytest_testnodedown(node, error):
@@ -584,6 +629,7 @@ def pytest_testnodedown(node, error):
     """
     workeroutput = getattr(node, "workeroutput", {})
     _ALL_READINESS_TIMINGS.extend(workeroutput.get("readiness_timings", []))
+    _ALL_READINESS_DIAGNOSTICS.extend(workeroutput.get("readiness_diagnostics", []))
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
@@ -592,6 +638,11 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     Falls back to the local list when running without xdist (no
     ``pytest_testnodedown`` fires in that mode, so ``_ALL_*`` stays empty).
     """
+    diagnostics = _ALL_READINESS_DIAGNOSTICS or _READINESS_DIAGNOSTICS
+    if diagnostics:
+        terminalreporter.section("Readiness gate diagnostics")
+        for dump in diagnostics:
+            terminalreporter.write_line(dump)
     timings = _ALL_READINESS_TIMINGS or _READINESS_TIMINGS
     if not timings:
         return
@@ -1479,6 +1530,7 @@ _ENTRIES_LOADED_TIMEOUT = 60
 
 
 def _wait_for_entries_loaded(
+    container: DockerContainer,
     base_url: str,
     headers: dict[str, str],
     timeout: int = _ENTRIES_LOADED_TIMEOUT,
@@ -1493,9 +1545,10 @@ def _wait_for_entries_loaded(
     while a sibling test probing the same entry seconds later passes. This
     gate closes exactly that window.
 
-    Bounded and non-fatal: on timeout the unloaded entries are logged loudly
-    and the session proceeds — a genuinely broken entry should fail its own
-    tests with the timing line as the named cause, not abort the whole run.
+    Bounded and non-fatal: on timeout the unloaded entries and the Home
+    Assistant log so far go to the terminal summary and the session proceeds.
+    A genuinely broken entry should fail its own tests with the timing line as
+    the named cause, not abort the whole run.
     """
     start = time.monotonic()
     while True:
@@ -1511,12 +1564,12 @@ def _wait_for_entries_loaded(
             )
             return
         if elapsed >= timeout:
-            logger.warning(
-                "entries_loaded gate timed out after %.0fs: %d/%d loaded%s",
-                elapsed,
-                loaded,
-                total,
-                f" (not loaded: {unloaded})" if unloaded else "",
+            _READINESS_DIAGNOSTICS.append(
+                f"entries_loaded gate timed out after {elapsed:.0f}s: "
+                f"{loaded}/{total} loaded"
+                + (f" (not loaded: {unloaded})" if unloaded else "")
+                + ". Home Assistant log so far:\n"
+                + _container_log(container)
             )
             _log_readiness_timing(
                 "entries_loaded",
@@ -2738,7 +2791,7 @@ def _wait_for_testcontainer_ready(
     # finding on #2040); the gate's own loop keeps polling through snapshot
     # failures and stays bounded by its timeout.
     if entries_unloaded or not snapshot_ok:
-        _wait_for_entries_loaded(base_url, headers)
+        _wait_for_entries_loaded(container, base_url, headers)
 
     _wait_for_testcontainer_sun(base_url, headers, container, SUN_WAIT)
 
@@ -2982,9 +3035,11 @@ def ha_container_with_fresh_config(request, in_process_data_dir):
             "embedded_webhook_url": embedded_webhook_url,
         }
 
+        request.config.stash[_HA_CONTAINER_KEY] = container
         try:
             yield container_info
         finally:
+            del request.config.stash[_HA_CONTAINER_KEY]
             # Container cleanup runs via the enclosing ``with container:``
             # block's ``__exit__`` (calls ``stop()`` which removes the
             # container). With ``TESTCONTAINERS_RYUK_DISABLED=true`` set in
