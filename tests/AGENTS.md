@@ -136,12 +136,13 @@ tests against them.
    hold, not the code's own formula or literals. For example, assert that a
    truncated response is under its size limit, not that its length equals
    the number the code computed. This covers configuration too: a test that
-   asserts a workflow or config value equals what was written (a path, a
-   job name, a timeout, a suite list) fails on a change only because it
-   restates the value, so the revert check in rule 2 proves nothing for it.
-   Test a property that holds across the file instead, such as every
-   analysis output being gated. When no test can observe the behaviour,
-   explain the value in a comment.
+   asserts a value chosen freely (a path, a timeout, a version number) fails
+   on a change only because it restates the value, so the revert check in
+   rule 2 proves nothing for it. Explain such a value in a comment, or test
+   a property that holds across the file, such as every analysis output
+   being gated. When something outside the file requires the value, such as
+   a ruleset's required check name or a policy that a suite must run,
+   assert that requirement.
 5. **Make the untestable path testable.** A failure path a test cannot
    reach gets a small, obvious seam the test can replace.
 6. **A test supplies its own world.** No reads from the real home directory

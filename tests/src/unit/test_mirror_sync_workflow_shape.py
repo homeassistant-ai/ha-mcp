@@ -63,14 +63,16 @@ class TestShape:
 
 
 def _isolated_env(**extra: str) -> dict[str, str]:
-    """The environment without Git's repository variables.
+    """The environment without Git's repository variables or caller config.
 
     A pre-commit hook in a linked worktree exports ``GIT_DIR``; inherited, it
     points every ``git`` below at the repository being committed instead of
     the temporary repositories this module builds, so ``init --bare`` and
-    ``commit`` rewrite the real one.
+    ``commit`` rewrite the real one. The caller's global and system config
+    (hooks path, commit signing) are shut out for the same reason.
     """
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
     env.update(extra)
     return env
 

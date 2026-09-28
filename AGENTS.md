@@ -94,7 +94,7 @@ For an accepted inline finding, implement the fix, reply with evidence, resolve 
 
 Testing behavior belongs in this root because it applies to every code change:
 
-- Bug fixes require a failing regression test first, then the minimal fix, unless the only possible test would restate a configuration value (rule 4 in [`tests/AGENTS.md`](tests/AGENTS.md)).
+- Bug fixes require a failing regression test first, then the minimal fix, unless the only possible test would restate a freely chosen configuration value (rule 4 in [`tests/AGENTS.md`](tests/AGENTS.md)).
 - New MCP tools need E2E coverage. Any existing tool without tests gains E2E coverage even when it is not otherwise part of the current pull request. Core changes in `client/`, `server.py`, or `errors.py` need focused coverage.
 - Refactors with strong existing coverage, documentation-only changes, minor parameters on well-tested tools, and utilities whose behaviour an existing test already asserts may not need a new test.
 - Run the smallest relevant tests after changes. Read [`tests/AGENTS.md`](tests/AGENTS.md) for test design rules, lanes, markers, polling, and test patterns, and the [development reference](docs/agents/development.md#test-commands) for exact commands.

@@ -2,8 +2,11 @@
 
 The workflow folds a two-leg language matrix and an aggregating gate job into
 ONE job (#2311). Three properties the matrix gave for free now hold only while
-the steps stay consistent with each other, so these tests check relations
-across the file, not the values it happens to contain:
+the steps stay consistent with each other, so most of these tests check
+relations across the file, not the values it happens to contain. Two values
+are asserted because something outside the file requires them: the job name
+is the master ruleset's required check, and the code-scanning suites are the
+pre-merge security gate.
 
 * A red language must not hide the other one. Serially that holds only while
   every step from the first SARIF upload onward carries
@@ -30,6 +33,10 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "codeql-quality.yml"
+
+# The required-status-check context on the master ruleset. A job that no
+# longer emits it leaves the required check pending and blocks every merge.
+_REQUIRED_CONTEXT = "CodeQL Gate"
 
 _LANGUAGES = ("python", "javascript")
 
@@ -78,8 +85,10 @@ def _run(step: dict[str, Any]) -> str:
 def test_pull_requests_always_emit_the_required_context() -> None:
     """A ``paths`` filter would leave the required check permanently pending
     on a PR that touches nothing matching it."""
+    workflow = _workflow()
     # PyYAML resolves the bare ``on:`` key to the boolean True.
-    assert "paths" not in _workflow()[True]["pull_request"]
+    assert "paths" not in workflow[True]["pull_request"]
+    assert _gate_job()["name"] == _REQUIRED_CONTEXT
 
 
 def test_every_step_after_the_first_upload_reports_on_a_red_run() -> None:
@@ -103,6 +112,18 @@ def test_no_step_uses_always() -> None:
     """``always()`` keeps a cancelled run paying for the remaining analysis."""
     for step in _steps():
         assert "always()" not in str(step.get("if", ""))
+
+
+def test_each_language_runs_both_its_quality_and_security_suites() -> None:
+    """The security suite is gated here because GitHub default setup only
+    analyzes master post-merge (workflow header)."""
+    analyses = "\n".join(
+        _run(step) for step in _steps() if "database analyze" in _run(step)
+    )
+    for language in _LANGUAGES:
+        for kind in ("code-quality", "code-scanning"):
+            suite = f"codeql/{language}-queries:codeql-suites/{language}-{kind}.qls"
+            assert suite in analyses, f"{suite} is no longer analyzed"
 
 
 def test_each_language_gates_on_its_own_sarif_file() -> None:
