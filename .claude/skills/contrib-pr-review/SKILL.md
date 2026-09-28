@@ -281,7 +281,7 @@ Ready to merge once CI passes.
 Thanks for tackling [problem]. [Metric/impact] shows this addresses a real need.
 
 **Test coverage:**
-Missing tests for the new [feature]. Please add at least one E2E test validating [behavior]. Performance tests not required.
+Missing tests for the new [feature]. Please add a unit test for its logic, and an E2E test for a new tool or for its wiring or Home Assistant behaviour. Performance tests not required.
 
 **[Second concern if applicable]:**
 [Brief explanation and request]

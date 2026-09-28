@@ -62,10 +62,26 @@ class TestShape:
 # ------------------------------------------------------------------ behaviour
 
 
+def _isolated_env(**extra: str) -> dict[str, str]:
+    """The environment without Git's repository variables or caller config.
+
+    A pre-commit hook in a linked worktree exports ``GIT_DIR``; inherited, it
+    points every ``git`` below at the repository being committed instead of
+    the temporary repositories this module builds, so ``init --bare`` and
+    ``commit`` rewrite the real one. The caller's global and system config
+    (hooks path, commit signing) are shut out for the same reason.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    env.update(extra)
+    return env
+
+
 def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
         cwd=cwd,
+        env=_isolated_env(),
         check=True,
         capture_output=True,
         text=True,
@@ -117,7 +133,7 @@ def _run_gate(world: dict[str, Path]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", "-eo", "pipefail", "-c", script],
         cwd=world["checkout"],
-        env={**os.environ, "MIRROR_DIR": str(world["mirror"])},
+        env=_isolated_env(MIRROR_DIR=str(world["mirror"])),
         capture_output=True,
         text=True,
         check=False,

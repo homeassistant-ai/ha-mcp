@@ -17,6 +17,9 @@ name: CodeQL Code Quality
 # and pays for ONE checkout / Python setup / CodeQL CLI install instead of
 # two. The job keeps the name `CodeQL Gate`, so the required-status-check
 # context on the master ruleset is unchanged and needs no maintainer edit.
+# Renaming the job, or splitting it into several, leaves that required
+# context pending, which blocks every merge into master until the ruleset is
+# edited to match.
 #
 # The matrix also gave each language its OWN runner and its own 20-minute
 # budget. Serially they share one job, so the create+analyze steps carry
