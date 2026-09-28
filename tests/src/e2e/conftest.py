@@ -33,7 +33,7 @@ import time
 import urllib.error
 import urllib.request
 import warnings
-from collections.abc import AsyncGenerator, Iterator
+from collections.abc import AsyncGenerator, Generator, Iterator
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -586,7 +586,9 @@ def _container_log(container: DockerContainer, **log_kwargs: Any) -> str:
 
 
 @pytest.hookimpl(wrapper=True)
-def pytest_runtest_makereport(item, call):
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
     # A tool failure often has its real cause only in the Home Assistant log
     # (a webhook 502 names the upstream error there and nowhere else).
     report = yield
@@ -597,7 +599,7 @@ def pytest_runtest_makereport(item, call):
                 (
                     "Home Assistant log during this test",
                     _container_log(
-                        container, since=int(call.start), tail=_FAILED_TEST_LOG_TAIL
+                        container, since=call.start, tail=_FAILED_TEST_LOG_TAIL
                     ),
                 )
             )

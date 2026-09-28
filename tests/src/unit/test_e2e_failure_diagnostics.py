@@ -55,7 +55,7 @@ def test_failed_test_shows_the_home_assistant_log_from_its_own_run() -> None:
             "MCP webhook: upstream request failed: reset\n",
         )
     ]
-    assert container.log_kwargs["since"] == 1_700_000_000
+    assert container.log_kwargs["since"] == 1_700_000_000.7
 
 
 @pytest.mark.parametrize(

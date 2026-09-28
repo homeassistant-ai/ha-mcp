@@ -180,8 +180,7 @@ async def _wait_for_hacs_ws_ready(container_info: dict) -> None:
                     pytest.skip(
                         f"the seeded HACS entry is {state} in this container, "
                         "so HACS never registers the WebSocket handlers the "
-                        "startup nudge needs; the Home Assistant log is under "
-                        "'Readiness gate diagnostics' in the session summary"
+                        "startup nudge needs"
                     )
             if loop.time() >= deadline:
                 pytest.fail(

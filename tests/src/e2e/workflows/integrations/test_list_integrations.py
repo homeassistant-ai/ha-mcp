@@ -391,9 +391,7 @@ class TestIntegrationFiltering:
             pytest.skip(
                 "the seeded HACS entry is not loaded in this container, and "
                 "it is the only entry with known-non-empty options, so the "
-                "OptionsFlow probe is unverifiable here; the Home Assistant "
-                "log is under 'Readiness gate diagnostics' in the session "
-                "summary"
+                "OptionsFlow probe is unverifiable here"
             )
         non_empty = [e for e in entries_with_support if e["options"]]
         assert non_empty, (
