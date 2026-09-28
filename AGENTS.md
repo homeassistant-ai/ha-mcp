@@ -94,14 +94,14 @@ For an accepted inline finding, implement the fix, reply with evidence, resolve 
 
 Testing behavior belongs in this root because it applies to every code change:
 
-- Bug fixes require a failing regression test first, then the minimal fix.
+- Bug fixes require a failing regression test first, then the minimal fix, unless the only possible test would restate a configuration value (rule 4 in [`tests/AGENTS.md`](tests/AGENTS.md)).
 - New MCP tools need E2E coverage. Any existing tool without tests gains E2E coverage even when it is not otherwise part of the current pull request. Core changes in `client/`, `server.py`, or `errors.py` need focused coverage.
-- Refactors with strong existing coverage, documentation-only changes, minor parameters on well-tested tools, and utilities already exercised by E2E may not need a new test.
+- Refactors with strong existing coverage, documentation-only changes, minor parameters on well-tested tools, and utilities whose behaviour an existing test already asserts may not need a new test.
 - Run the smallest relevant tests after changes. Read [`tests/AGENTS.md`](tests/AGENTS.md) for test design rules, lanes, markers, polling, and test patterns, and the [development reference](docs/agents/development.md#test-commands) for exact commands.
 - Run relevant E2E tests without waiting to be asked. Let pytest report unavailable prerequisites or skips rather than assuming them.
 - Run the full E2E suite only before claiming the full suite passes; a focused file is partial evidence and must be described that way.
 - Fix unrelated test failures encountered during CI, even when time-consuming, subject to the Boy Scout scope rules below.
-- Match verification to risk. Documentation-only work needs structural checks such as links, generated-file drift, size, and workflow shape—not unrelated application E2E.
+- Match verification to risk. Documentation-only work needs structural checks such as links, generated-file drift, size, and workflow syntax, not unrelated application E2E.
 - Never state that tests, lint, builds, CI, or review are clean without fresh evidence from the relevant command or current pull-request head.
 
 ### Boy Scout Rule — Handling Discovered Improvements

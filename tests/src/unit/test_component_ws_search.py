@@ -891,22 +891,18 @@ class TestInfo:
         assert wsapi._do_info()["tools_services"] is None
 
     def test_manifest_version_parity(self):
-        """Manifest and COMPONENT_VERSION lockstep, plus the ONE literal pin.
-
-        The lockstep catches a bump that touches one file but not the other.
-        The literal is deliberate and lives ONLY here: it catches a wholesale
-        accidental downgrade (an old component tree copied over reverts BOTH
-        files together — lockstep alone would pass) and makes every version
-        change a conscious, review-visible test edit. Update the literal when
-        bumping; WHEN to bump is docs/agents/custom-component.md's version-cycle
-        rule. Do not narrate current stable/pending state here; it quickly rots.
+        """A bump that touches manifest.json but not COMPONENT_VERSION (or the
+        reverse) makes ``ha_mcp_tools/info`` report a version HACS did not
+        install. A version behind the released stable is the Component
+        Version Gate's job in pr.yml; WHEN to bump is
+        docs/agents/custom-component.md's version-cycle rule.
         """
         manifest = json.loads(
             (
                 _REPO_ROOT / "custom_components" / "ha_mcp_tools" / "manifest.json"
             ).read_text(encoding="utf-8")
         )
-        assert manifest["version"] == COMPONENT_VERSION == "2.2.1"
+        assert manifest["version"] == COMPONENT_VERSION
 
 
 # =============================================================================

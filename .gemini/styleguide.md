@@ -35,8 +35,8 @@ change's scope or an allowed exception is unclear, flag test adequacy as MEDIUM
 severity for manual verification.
 
 **Test locations:**
-- E2E tests (preferred for tools): `tests/src/e2e/`
-- Unit tests (utilities): `tests/src/unit/`
+- E2E tests (tool wiring and real Home Assistant behaviour): `tests/src/e2e/`
+- Unit tests (logic): `tests/src/unit/`
 
 Check new and changed tests against the
 [test design rules](../tests/AGENTS.md#test-design-rules).

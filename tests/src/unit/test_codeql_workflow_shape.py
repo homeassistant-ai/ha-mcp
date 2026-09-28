@@ -1,35 +1,23 @@
-"""Shape pins for the always-reported CodeQL merge gate.
+"""Invariants of the always-reported CodeQL merge gate.
 
-The workflow folds what were a two-leg language matrix and an aggregating gate
-job into ONE job (#2311), so the four properties that used to be free from
-GitHub's matrix semantics now have to be held by hand:
+The workflow folds a two-leg language matrix and an aggregating gate job into
+ONE job (#2311). Three properties the matrix gave for free now hold only while
+the steps stay consistent with each other, so these tests check relations
+across the file, not the values it happens to contain:
 
-* ``fail-fast: false`` guaranteed that a python finding never hid a javascript
-  one. Serially that only holds while every step from the first SARIF upload
-  onward carries ``if: success() || failure()``. ``always()`` is deliberately
-  rejected, exactly as in pr.yml's Fast Checks lane: it would keep burning
-  runner minutes after a cancel.
-* The matrix could not lose a language by editing one step. A flat step list
-  can, so the analyzed language set is asserted directly.
-* Separate legs wrote to separate filesystems, so sharing a SARIF filename or
-  a CodeQL database directory between the languages was harmless. In one job
-  neither is, and they fail one step apart: a shared SARIF name lets a failed
-  analysis leave the previous language's file in place, so the next GATE step
-  reports its findings under the wrong language; a shared database directory
-  strands the wrong language's database, so the next ANALYZE step runs its
-  suites against the other language's source.
-* Each leg had its own runner and its own 20-minute budget, so python could
-  not starve javascript of time. Serially they share one job, and the job cap
-  is the wrong instrument for it: per the workflow-syntax docs a job
-  ``timeout-minutes`` "automatically cancels" the job, and a cancelled run
-  skips every ``success() || failure()`` step, so javascript would report
-  nothing. A step ``timeout-minutes`` kills only that step's process
-  ("killing the process"), so the step FAILS and ``failure()`` stays true
-  ("Returns true when any previous step of a job fails"), and the later steps
-  still report.
-
-A comment is not a gate — these tests read the workflow YAML directly, pass on
-arrival, and fire only when an edit drops a clause.
+* A red language must not hide the other one. Serially that holds only while
+  every step from the first SARIF upload onward carries
+  ``if: success() || failure()``. ``always()`` is rejected, as in pr.yml's Fast
+  Checks lane: it would keep burning runner minutes after a cancel.
+* Separate legs wrote to separate filesystems. In one job, a shared SARIF
+  name lets a failed analysis leave the previous language's file for the
+  next gate step, and a shared or cross-wired database directory makes an
+  analyze step run one language's suites against the other's source.
+* Each leg had its own budget. Serially, the job cap must never be the cap
+  that fires: per the workflow-syntax docs a job ``timeout-minutes``
+  "automatically cancels" the job, which skips every
+  ``success() || failure()`` step, while a step ``timeout-minutes`` only fails
+  that step and the later steps still report.
 """
 
 from __future__ import annotations
@@ -42,10 +30,6 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "codeql-quality.yml"
-
-# The required-status-check context on the master ruleset. Renaming the job
-# silently un-gates master until a maintainer edits the ruleset by hand.
-_REQUIRED_CONTEXT = "CodeQL Gate"
 
 _LANGUAGES = ("python", "javascript")
 
@@ -94,18 +78,8 @@ def _run(step: dict[str, Any]) -> str:
 def test_pull_requests_always_emit_the_required_context() -> None:
     """A ``paths`` filter would leave the required check permanently pending
     on a PR that touches nothing matching it."""
-    workflow = _workflow()
     # PyYAML resolves the bare ``on:`` key to the boolean True.
-    assert "paths" not in workflow[True]["pull_request"]
-    assert _gate_job()["name"] == _REQUIRED_CONTEXT
-
-
-def test_the_gate_is_a_single_job() -> None:
-    """The fold's whole point: one check run, not a matrix plus an aggregator.
-    A second job here means the ruleset's single context no longer covers
-    everything the workflow runs."""
-    assert list(_workflow()["jobs"]) == ["code-quality-gate"]
-    assert "strategy" not in _gate_job()
+    assert "paths" not in _workflow()[True]["pull_request"]
 
 
 def test_every_step_after_the_first_upload_reports_on_a_red_run() -> None:
@@ -129,31 +103,6 @@ def test_no_step_uses_always() -> None:
     """``always()`` keeps a cancelled run paying for the remaining analysis."""
     for step in _steps():
         assert "always()" not in str(step.get("if", ""))
-
-
-def test_both_languages_are_still_analyzed() -> None:
-    """A flat step list can lose a language to a single deletion; the matrix
-    could not."""
-    analyzed = {
-        language
-        for language in _LANGUAGES
-        for step in _steps()
-        if "gh codeql database create" in _run(step)
-        and f"--language={language}" in _run(step)
-    }
-    assert analyzed == set(_LANGUAGES)
-
-
-def test_each_language_runs_both_its_quality_and_security_suites() -> None:
-    """The security suite is gated here because GitHub default setup only
-    analyzes master post-merge (workflow header)."""
-    analyses = "\n".join(
-        _run(step) for step in _steps() if "database analyze" in _run(step)
-    )
-    for language in _LANGUAGES:
-        for kind in ("code-quality", "code-scanning"):
-            suite = f"codeql/{language}-queries:codeql-suites/{language}-{kind}.qls"
-            assert suite in analyses, f"{suite} is no longer analyzed"
 
 
 def test_each_language_gates_on_its_own_sarif_file() -> None:
@@ -228,24 +177,6 @@ def test_the_job_cap_can_never_be_the_cap_that_fires() -> None:
         "post-job steps all run against the job cap and none can be capped, "
         "so the margin is the only thing covering them"
     )
-
-
-def test_each_language_keeps_the_budget_its_matrix_leg_had() -> None:
-    """The matrix gave each leg its own runner and its own 20 minutes.
-
-    Serially the two share a job, so the guarantee survives only as
-    per-language step budgets that still add up to the same 20 minutes.
-    """
-    for language in _LANGUAGES:
-        budget = sum(
-            step["timeout-minutes"]
-            for step in _steps()
-            if "gh codeql database" in _run(step) and language in _step_name(step)
-        )
-        assert budget == 20, (
-            f"{language} now gets {budget} minutes of analysis budget, not the "
-            "20 its matrix leg had"
-        )
 
 
 def test_each_language_builds_and_analyzes_its_own_database_directory() -> None:

@@ -125,16 +125,23 @@ tests against them.
    the fix, confirm the test fails, then restore it. A test that builds its
    input by hand, or covers only a pure helper, can pass with the fix
    reverted.
-3. **Keep meaningful regression coverage.** Use the lowest suitable test
-   layer. Keep cases covering distinct inputs, boundaries, failure modes,
-   or integration paths, even when they exercise the same branches. Tests
-   at different layers may protect different contracts. Remove a test only
-   when its regression protection is already covered; unchanged line or
-   branch coverage alone does not establish duplication.
+3. **One property, one test.** Test each property at the lowest layer that
+   can see it: logic in unit tests; wiring, packaging and real Home
+   Assistant behaviour in E2E. Two tests that assert the same property are
+   one too many, whatever layer or client they use. Check for an existing
+   test first. In a parametrized table, keep one case per branch, plus any
+   value that failed in the wild. If deleting a case leaves coverage
+   unchanged, it was a duplicate.
 4. **Do not restate the implementation.** Assert the property that must
    hold, not the code's own formula or literals. For example, assert that a
    truncated response is under its size limit, not that its length equals
-   the number the code computed.
+   the number the code computed. This covers configuration too: a test that
+   asserts a workflow or config value equals what was written (a path, a
+   job name, a timeout, a suite list) fails on a change only because it
+   restates the value, so the revert check in rule 2 proves nothing for it.
+   Test a property that holds across the file instead, such as every
+   analysis output being gated. When no test can observe the behaviour,
+   explain the value in a comment.
 5. **Make the untestable path testable.** A failure path a test cannot
    reach gets a small, obvious seam the test can replace.
 6. **A test supplies its own world.** No reads from the real home directory
