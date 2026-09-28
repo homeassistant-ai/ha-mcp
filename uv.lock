@@ -1435,11 +1435,11 @@ wheels = [
 
 [[package]]
 name = "probatio"
-version = "0.11.4"
+version = "0.12.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ae/69/ba688575e1fb405bb552528b5da73a51061c19b2a8a8adcf29358997ef36/probatio-0.11.4.tar.gz", hash = "sha256:7c407497ff22dd6133321fa3315ed394f564a83d642c1498848993cd87093be3", size = 368768, upload-time = "2026-08-29T16:31:45.341Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bc/75/ed2300cef9badd3f9235b37af1d31e7b83d2f90a701784b7e113ded0ba37/probatio-0.12.2.tar.gz", hash = "sha256:9c8de343f951552d762474fb71f5035c434012357cdfb2221aa090df274f49cc", size = 375748, upload-time = "2026-09-13T17:50:39.978Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0c/1c/728ee57e0ae8d7fce6c7afb5b5d2ca43d38098c2b5e756c251c1a79c0574/probatio-0.11.4-py3-none-any.whl", hash = "sha256:39edf5370c2ebe4b06bc0d78b53c97fe23c05d5266e599cf40660ce90d88b270", size = 222133, upload-time = "2026-08-29T16:31:42.686Z" },
+    { url = "https://files.pythonhosted.org/packages/68/97/27f31b324a3ad019511e51ba8127b4a2a44c530cf42192c18b40f9ae0a1c/probatio-0.12.2-py3-none-any.whl", hash = "sha256:db6e9767e59cb659f3f00259d74ec2fd478e25bddcacd8323a2a45ecb607d11a", size = 225365, upload-time = "2026-09-13T17:50:37.387Z" },
 ]
 
 [[package]]
