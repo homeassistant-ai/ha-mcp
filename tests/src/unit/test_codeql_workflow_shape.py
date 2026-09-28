@@ -5,8 +5,8 @@ ONE job (#2311). Three properties the matrix gave for free now hold only while
 the steps stay consistent with each other, so most of these tests check
 relations across the file, not the values it happens to contain. Two values
 are asserted because something outside the file requires them: the job name
-is the master ruleset's required check, and the code-scanning suites are the
-pre-merge security gate.
+is the master ruleset's required check (so the workflow stays one job with no
+matrix), and the code-scanning suites are the pre-merge security gate.
 
 * A red language must not hide the other one. Serially that holds only while
   every step from the first SARIF upload onward carries
@@ -89,6 +89,15 @@ def test_pull_requests_always_emit_the_required_context() -> None:
     # PyYAML resolves the bare ``on:`` key to the boolean True.
     assert "paths" not in workflow[True]["pull_request"]
     assert _gate_job()["name"] == _REQUIRED_CONTEXT
+
+
+def test_the_gate_is_a_single_job() -> None:
+    """The master ruleset requires one context, ``CodeQL Gate``. A matrix
+    ``strategy`` renames the check runs so that context never reports and
+    every merge stays blocked; a second job reports, but outside the required
+    context, so its findings no longer block a merge."""
+    assert list(_workflow()["jobs"]) == ["code-quality-gate"]
+    assert "strategy" not in _gate_job()
 
 
 def test_every_step_after_the_first_upload_reports_on_a_red_run() -> None:
