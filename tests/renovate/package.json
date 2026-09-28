@@ -1,8 +1,0 @@
-{
-  "name": "ha-mcp-renovate-test-harness",
-  "version": "0.0.0",
-  "private": true,
-  "dependencies": {
-    "@actions/expressions": "0.3.61"
-  }
-}
