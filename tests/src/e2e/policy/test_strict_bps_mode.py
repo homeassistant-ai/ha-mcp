@@ -7,9 +7,9 @@ the testcontainer HA, and verifies the full contract:
 - with strict effective, a keyless ``ha_config_set_automation`` write is
   BLOCKED with the structured BPS_ACKNOWLEDGMENT_REQUIRED error and no
   automation is created;
-- ``ha_get_skill_guide`` Tier-3 best-practices content carries the
-  acknowledgment key line (the only caller-facing surface that does);
-- the SAME write, now carrying ``BestPracticeKey=<the key>``, succeeds;
+- the SAME write succeeds when it carries the key published at the top
+  of the file ``ha_get_skill_guide`` serves (the only caller-facing
+  surface that carries it);
 - with strict disabled, a keyless write succeeds (baseline).
 
 Requires Docker (testcontainers) and the skills-vendor submodule (the gate
@@ -18,12 +18,12 @@ fails open without it); runs in CI.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
 from test_constants import TEST_TOKEN
 
-from ha_mcp import strict_bps
 from ha_mcp._vendor.fastmcp import Client
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
 from ha_mcp.client.rest_client import HomeAssistantClient
@@ -45,7 +45,6 @@ from ..utilities.entity_finders import find_test_light_entity
 # and every success-path write goes through ha_config_set_automation — so the
 # whole module runs on the no-tools lanes and pins the policy there as well.
 
-_BEST_PRACTICES_SKILL = "home-assistant-best-practices"
 _AUTOMATION_PATTERNS_REF = "references/automation-patterns.md"
 
 
@@ -202,34 +201,22 @@ async def test_keyless_write_blocked_with_structured_error(strict_bps_mcp):
 
 
 @pytest.mark.asyncio
-async def test_skill_guide_publishes_ack_key(strict_bps_mcp):
+async def test_write_with_key_from_skill_guide_succeeds(strict_bps_mcp):
+    """The flow a model follows: read the file the block error names,
+    take the key published at its top, and repeat the write with it."""
     client, _server = strict_bps_mcp
-    result = await client.call_tool(
-        "ha_get_skill_guide",
-        {"skill": _BEST_PRACTICES_SKILL, "file": _AUTOMATION_PATTERNS_REF},
+    guide = parse_mcp_result(
+        await client.call_tool("ha_get_skill_guide", {"file": _AUTOMATION_PATTERNS_REF})
     )
-    body = parse_mcp_result(result)
-    assert body.get("success") is True, body
-    # Accept either currently-valid key: content generation and this
-    # assertion derive the key independently, and an hour-boundary straddle
-    # between them would otherwise flake an exact-match check.
-    content = body.get("content", "")
-    assert any(key in content for key in strict_bps._valid_ack_keys()), (
-        "strict mode ON: the Tier-3 best-practices content must publish the "
-        "acknowledgment key"
-    )
+    match = re.search(r"Acknowledgment key: (\S+)", guide.get("content", ""))
+    assert match, "strict mode ON: the guide must publish the acknowledgment key"
 
-
-@pytest.mark.asyncio
-async def test_write_with_key_succeeds(strict_bps_mcp):
-    client, _server = strict_bps_mcp
     light = await find_test_light_entity(client)
     config = _automation_config("Strict BPS WithKey E2E", light)
-
     result = await safe_call_tool(
         client,
         "ha_config_set_automation",
-        {"config": config, "BestPracticeKey": current_strict_bps_ack_key()},
+        {"config": config, "BestPracticeKey": match.group(1)},
     )
     assert result.get("success"), f"keyed write should succeed: {result}"
 

@@ -13,7 +13,6 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
-import yaml  # type: ignore[import-untyped]
 from pydantic import Field
 
 from ha_mcp._vendor.mcp.types import Icon
@@ -24,6 +23,12 @@ from .http_transport import HttpTransportFastMCP as FastMCP
 from .server_lifespan import server_lifespan
 from .tools.helpers import raise_tool_error
 from .transforms import DEFAULT_PINNED_TOOLS
+from .utils.skill_loader import (
+    BEST_PRACTICES_SKILL_NAME,
+    best_practices_skill,
+    list_skill_files,
+    parse_skill_frontmatter,
+)
 
 if TYPE_CHECKING:
     from .client.rest_client import HomeAssistantClient
@@ -31,7 +36,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Name of the consolidated polymorphic skill tool. Defined as a module
+# Name of the consolidated skill tool. Defined as a module
 # constant so settings UI, instructions, tests, and pinning all agree on
 # one canonical string. 18 chars — well under the 40-char cap that
 # Cloudflare's MCP portal enforces (#1121).
@@ -420,8 +425,10 @@ class HomeAssistantSmartMCPServer:
                 "Read the skill via MCP resources (resources/read with the "
                 "skill:// URI) — if you can read these instructions, you "
                 "should be able to access resources as well. If for any "
-                f"reason you cannot access MCP resources, use the {SKILL_TOOL_NAME} "
-                "tool as a fallback. If you can access resources normally, do "
+                f"reason you cannot access MCP resources, call {SKILL_TOOL_NAME}() "
+                "with no arguments as a fallback: it returns SKILL.md, then "
+                "pass file='<path>' for a reference file. If you can access "
+                "resources normally, do "
                 "not waste time or tokens on that tool."
             )
 
@@ -471,56 +478,7 @@ class HomeAssistantSmartMCPServer:
 
         return instructions
 
-    @staticmethod
-    def _parse_skill_frontmatter(main_file: Path) -> dict | None:
-        """Parse YAML frontmatter from a SKILL.md file.
-
-        Returns the frontmatter dict if valid, or None with a logged
-        warning for each failure case.
-        """
-        try:
-            content = main_file.read_text(encoding="utf-8")
-        except OSError as e:
-            logger.warning("Could not read %s: %s", main_file, e)
-            return None
-
-        parts = content.split("---", 2)
-        if len(parts) < 3:
-            logger.warning("No valid frontmatter delimiters in %s", main_file)
-            return None
-
-        try:
-            frontmatter = yaml.safe_load(parts[1])
-        except yaml.YAMLError as e:
-            # yaml.YAMLError exposes `.problem` and `.problem_mark` for
-            # parse errors — both are the entire debugging payload for
-            # an operator trying to fix the SKILL.md.
-            logger.warning("Could not parse YAML frontmatter in %s: %s", main_file, e)
-            return None
-
-        if not isinstance(frontmatter, dict):
-            logger.warning("Frontmatter is not a mapping in %s", main_file)
-            return None
-
-        description = frontmatter.get("description", "")
-        if not description:
-            logger.warning(
-                "No description in frontmatter for %s", main_file.parent.name
-            )
-            return None
-        if not isinstance(description, str):
-            # Truthy non-string values (e.g. `description: [foo]` or
-            # `description: 42`) would later crash on `.strip()` in the
-            # callers. Fail closed here so malformed bundles only break
-            # themselves, not the whole skill registration.
-            logger.warning(
-                "Description in frontmatter for %s is not a string (got %s); skipping",
-                main_file.parent.name,
-                type(description).__name__,
-            )
-            return None
-
-        return frontmatter
+    _parse_skill_frontmatter = staticmethod(parse_skill_frontmatter)
 
     def _build_skill_block(self, skill_name: str, main_file: Path) -> str | None:
         """Build an instruction block for a single skill.
@@ -1230,7 +1188,7 @@ class HomeAssistantSmartMCPServer:
         Replaces the full tool catalog with a unified BM25 search tool and
         three categorized call proxies (read/write/delete). Pinned tools
         remain directly visible in list_tools() for individual permission
-        gating. The polymorphic ``ha_get_skill_guide`` tool is pinned via
+        gating. The ``ha_get_skill_guide`` tool is pinned via
         ``DEFAULT_PINNED_TOOLS`` (transforms/categorized_search.py) so the
         bundled skill trigger-conditions stay in the catalog — no explicit
         ``pinned.append(...)`` for it here.
@@ -1625,25 +1583,23 @@ class HomeAssistantSmartMCPServer:
     )
 
     def _register_skills(self) -> None:
-        """Register bundled skills as MCP resources and a polymorphic tool.
+        """Register bundled skills as MCP resources and the skill tool.
 
         Two paths to the same content:
 
-        - **Resources** — ``SkillsDirectoryProvider`` serves every skill
+        - **Resources**: ``SkillsDirectoryProvider`` serves every skill
           file at ``skill://<skill>/<path>``. Resource-capable clients
           (Claude Code, Cursor, anything that supports the MCP
           ``resources/list`` / ``resources/read`` methods) discover and
           read skills natively. Best-effort: skipped if the provider
           can't be loaded or the skills dir is missing.
-        - **Tool** — ``ha_get_skill_guide`` is a single polymorphic tool
-          for tool-only clients (claude.ai, etc. that don't read server
-          instructions). Three tiers: no args lists skills with their
-          frontmatter descriptions; ``skill`` arg lists reference files;
-          ``skill`` + ``file`` reads file content. **Registration is
-          always attempted** so an absent tool isn't a silent failure
-          mode — even if the skills submodule is missing, the tool
-          surfaces that fact at call time via an explanatory empty
-          listing with ``degraded: True``. A genuine registration
+        - **Tool**: ``ha_get_skill_guide`` serves the best-practices
+          skill to tool-only clients (claude.ai, etc. that don't read
+          server instructions). No arguments returns SKILL.md; ``file``
+          returns one reference file. **Registration is always
+          attempted** so an absent tool isn't a silent failure mode:
+          even if the skills submodule is missing, the tool reports that
+          at call time with an explanatory error. A genuine registration
           failure (FastMCP API regression, etc.) is caught at the call
           site, logged with full traceback, and flips
           ``status["tool"] = "failed"`` so the summary log warns
@@ -1663,7 +1619,7 @@ class HomeAssistantSmartMCPServer:
         if skills_dir is None:
             logger.warning(
                 "Skills directory not found at %s; skill resources unavailable. "
-                "%s will still be registered and report an empty listing.",
+                "%s will still be registered; its calls report an error.",
                 Path(__file__).parent / "resources" / "skills-vendor" / "skills",
                 SKILL_TOOL_NAME,
             )
@@ -1691,7 +1647,7 @@ class HomeAssistantSmartMCPServer:
                     logger.exception("Failed to register skills as resources")
                     status["provider"] = "failed"
 
-        # Phase 3: Register the polymorphic tool unconditionally. Tool
+        # Phase 3: Register the skill tool unconditionally. Tool
         # absence would be a silent failure for tool-only clients; an
         # always-registered tool that reports "no skills available" is
         # the loud-failure alternative. Wrap the registration call so a
@@ -1760,116 +1716,70 @@ class HomeAssistantSmartMCPServer:
             skills.append((skill_dir.name, skill_dir, frontmatter))
         return skills
 
-    @staticmethod
-    def _list_skill_files(skill_dir: Path) -> list[str]:
-        """Return relative file paths for a skill, filtering symlinks and traversal.
-
-        Symlinks are skipped (defense against a malicious skill bundle
-        linking outside its dir) and ``is_relative_to(resolved_root)``
-        rejects anything that resolves outside the skill's own tree.
-        """
-        files: list[str] = []
-        resolved_root = skill_dir.resolve()
-        try:
-            for f in sorted(skill_dir.rglob("*")):
-                if not f.is_file() or f.is_symlink():
-                    continue
-                if not f.resolve().is_relative_to(resolved_root):
-                    continue
-                files.append(str(f.relative_to(skill_dir)))
-        except OSError as e:
-            logger.warning("Error reading skill files in %s: %s", skill_dir, e)
-        return files
-
     def _register_skill_guide_tool(self, skills_dir: Path | None) -> int:
-        """Register the polymorphic ``ha_get_skill_guide`` tool unconditionally.
+        """Register the ``ha_get_skill_guide`` tool unconditionally.
 
-        Returns the number of bundled skills whose frontmatter parsed
-        successfully (used by ``_register_skills`` for the summary log).
-        The tool is **always** registered regardless of the count — a
-        missing tool would be a silent failure for tool-only clients.
-        When no skills are reachable (missing submodule, empty dir, all
-        frontmatter unparseable), the tool's description says so and
-        Tier 1 returns an empty list with an explanatory note.
+        Returns 1 when the bundled best-practices skill's frontmatter
+        parsed, else 0 (used by ``_register_skills`` for the summary log).
+        The tool is **always** registered: a missing tool would be a
+        silent failure for tool-only clients. When the skill is not
+        reachable (missing submodule, unparseable frontmatter), the
+        description says so and every call raises an explanatory error.
 
-        The tool's description embeds every available skill's
-        frontmatter ``description`` so claude.ai (which doesn't read
-        server instructions) still sees trigger conditions in the
-        catalog — same model the prior per-skill guidance tools used,
-        collapsed into one tool.
+        The description embeds the skill's frontmatter ``description`` so
+        clients that don't read server instructions (claude.ai) still see
+        its trigger conditions in the catalog.
         """
-        skills = self._list_bundled_skills(skills_dir) if skills_dir is not None else []
+        skill = best_practices_skill(skills_dir)
 
-        if skills:
-            # Build the tool description with each skill's trigger
-            # conditions. Keeps the "CALL THIS FIRST" framing the
-            # per-skill tools used so claude.ai's catalog-level retrieval
-            # surfaces it for relevant tasks.
-            skill_blocks = [
-                f"### {name} ({f'skill://{name}/SKILL.md'})\n"
-                f"{fm['description'].strip()}"
-                for name, _dir, fm in skills
-            ]
+        if skill:
+            # Keeps the "CALL THIS FIRST" framing so claude.ai's
+            # catalog-level retrieval surfaces the tool for relevant tasks.
+            (name, _dir, frontmatter) = skill
             tool_description = (
-                "Get bundled Home Assistant best-practice skill guides. "
+                "Get the bundled Home Assistant best-practices skill. "
                 "CALL THIS FIRST before performing matching actions.\n\n"
-                "Three modes (progressive disclosure):\n"
-                "- No args: list bundled skills with their trigger conditions.\n"
-                "- skill arg: list reference files for that skill.\n"
-                "- skill + file args: read the file content.\n\n"
-                "Bundled skills:\n\n"
-                + "\n\n".join(skill_blocks)
-                + f"\n\n{self._SKILL_USE_BEFORE_KEYWORDS}\n\n"
-                + _OLD_SKILL_TOOL_ALIASES
+                "Call with no arguments to read SKILL.md: the workflow, the "
+                "common mistakes, and a table that says which reference "
+                "file to read for each task. Then read only the files that "
+                "table points to.\n\n"
+                f"### {name} (skill://{name}/SKILL.md)\n"
+                f"{frontmatter['description'].strip()}"
+                f"\n\n{self._SKILL_USE_BEFORE_KEYWORDS}\n\n" + _OLD_SKILL_TOOL_ALIASES
             )
         else:
-            # Degraded mode: tool registered but skills directory is
-            # missing/empty. The description signals this so the LLM
-            # doesn't keep retrying calls expecting content.
             # Even in degraded mode, append the action-phrased keyword
             # block so BM25 retrieval still ranks this tool for the
-            # workflow positions the description covers — the tool is
-            # mandatory-pinned, so it stays in the catalog regardless,
-            # but the keywords keep ranking sane for tool-search.
+            # workflow positions the description covers. The tool is
+            # mandatory-pinned, so it stays in the catalog regardless.
             tool_description = (
-                "Get bundled Home Assistant best-practice skill guides. "
-                "No skill bundles are currently available on this server — "
-                "the skills directory is missing, empty, or all SKILL.md "
-                "files failed to parse. Calls return an empty listing; "
-                "ask the operator to verify the skills-vendor submodule "
-                f"is initialized.\n\n{self._SKILL_USE_BEFORE_KEYWORDS}\n\n"
-                + _OLD_SKILL_TOOL_ALIASES
+                "Get the bundled Home Assistant best-practices skill. "
+                "The skill is currently not available on this server: the "
+                "skills directory is missing or its SKILL.md failed to "
+                "parse. Calls return an error; ask the operator to verify "
+                "the skills-vendor submodule is initialized."
+                f"\n\n{self._SKILL_USE_BEFORE_KEYWORDS}\n\n" + _OLD_SKILL_TOOL_ALIASES
             )
 
         async def ha_get_skill_guide(
-            skill: Annotated[
-                str | None,
-                Field(
-                    description=(
-                        "Skill name from the no-args listing "
-                        "(e.g., 'home-assistant-best-practices')."
-                    ),
-                ),
-            ] = None,
             file: Annotated[
-                str | None,
+                str,
                 Field(
                     description=(
-                        "Reference file path within the skill, relative "
-                        "to the skill directory (e.g., 'SKILL.md' or "
-                        "'references/automation-patterns.md'). Requires "
-                        "skill to be set."
+                        "Path of the file to read, exactly as SKILL.md links "
+                        "it (e.g. 'references/automation-patterns.md'). "
+                        "Omit to read SKILL.md."
                     ),
                 ),
-            ] = None,
+            ] = "SKILL.md",
         ) -> dict[str, Any]:
             # Re-read the skills dir live on every call (#1820 review):
             # the strict-BPS gate also reads it live, so a registration-time
-            # capture deadlocks the one recovery path — vendor absent at
+            # capture deadlocks the one recovery path. Vendor absent at
             # boot (gate fails open), operator runs `git submodule update
             # --init` in place, the gate flips ON, but a captured None here
             # would keep the acknowledgment key unobtainable until restart.
-            return self._handle_skill_guide_call(self._get_skills_dir(), skill, file)
+            return self._handle_skill_guide_call(self._get_skills_dir(), file)
 
         self.mcp.tool(
             name=SKILL_TOOL_NAME,
@@ -1885,273 +1795,71 @@ class HomeAssistantSmartMCPServer:
         logger.info(
             "Registered %s (%d bundled skill(s))",
             SKILL_TOOL_NAME,
-            len(skills),
+            1 if skill else 0,
         )
-        return len(skills)
+        return 1 if skill else 0
 
     def _handle_skill_guide_call(
-        self,
-        skills_dir: Path | None,
-        skill: str | None,
-        file: str | None,
+        self, skills_dir: Path | None, file: str = "SKILL.md"
     ) -> dict[str, Any]:
-        """Dispatch a ``ha_get_skill_guide`` call to the right tier.
+        """Serve one file of the bundled best-practices skill.
 
         Split out from the registered async closure so the same logic is
         unit-testable without round-tripping through the MCP tool layer.
         Synchronous because every operation is bounded local disk I/O.
 
-        Return shape per tier:
-        - Tier 1 (no args): ``{"success": True, "skills": [...], "how_to_use": ...}``
-        - Tier 2 (skill): ``{"success": True, "skill": ..., "files": [...], ...}``
-        - Tier 3 (skill+file): ``{"success": True, "skill": ..., "file": ..., "content": ...}``
-
-        ``skills_dir`` is ``None`` when no skills directory exists on
-        disk. In that case Tier 1 returns ``{"success": True,
-        "degraded": True, "skills": [], ...}`` — the explicit
-        ``degraded`` flag lets LLM clients branch on the
-        misconfiguration without parsing the ``how_to_use`` prose,
-        while ``success: True`` keeps generic "call succeeded"
-        predicates honest. Tier 2/3 in degraded mode raise so the
-        caller gets a clear error instead of a confusing empty result.
-        Tool-level failures raise ``ToolError`` (via
-        ``raise_tool_error``) per .gemini/styleguide.md, so clients see
-        ``isError=true`` rather than a success payload with an
-        embedded error.
+        The default is SKILL.md, whose table links every reference file
+        by the path this tool accepts. ``file`` is matched exactly against
+        the regular files that exist in the skill; no path is built from
+        it, so traversal, absolute paths and symlinks are refused by the
+        same lookup. Failures raise ``ToolError`` (via
+        ``raise_tool_error``) per .gemini/styleguide.md.
         """
-        # Degraded mode: no skills directory. Always return a structured
-        # response so callers can detect the situation rather than
-        # silently believing the tool list is just empty.
-        if skills_dir is None:
-            return self._skill_guide_degraded_response(skill, file)
-
-        # Tier 1: no args → list bundled skills with frontmatter
-        if not skill:
-            return self._skill_guide_tier1_response(skills_dir)
-
-        skill_dir = self._resolve_skill_dir(skills_dir, skill)
-
-        # Tier 2: skill only → list reference files
-        if not file:
-            return self._skill_guide_tier2_response(skill, skill_dir)
-
-        # Tier 3: skill + file → read content.
-        target = self._resolve_skill_file_target(skill, skill_dir, file)
-        content = self._read_skill_file_content(skill, file, target)
-        return self._build_skill_guide_tier3_response(skill, file, content)
-
-    def _skill_guide_degraded_response(
-        self, skill: str | None, file: str | None
-    ) -> dict[str, Any]:
-        """Handle a skill-guide call when no skills directory exists.
-
-        Tier 1 (no ``skill``) returns a structured degraded listing.
-        Tier 2/3 (``skill`` given) raise, since there's nothing to read.
-        """
-        if not skill:
-            # Explicit ``degraded`` flag so LLM clients can detect the
-            # misconfiguration signal without parsing the
-            # ``how_to_use`` prose. ``success: True`` is kept so
-            # generic "call succeeded" predicates don't trip — the
-            # tool DID return a structured response — but
-            # ``degraded`` is the actionable branch.
-            return {
-                "success": True,
-                "degraded": True,
-                "skills": [],
-                "how_to_use": (
-                    "No skill bundles are available on this server. "
-                    "The skills-vendor submodule may be missing or "
-                    "uninitialized. Contact the server operator."
-                ),
-            }
-        raise_tool_error(
-            create_error_response(
-                ErrorCode.RESOURCE_NOT_FOUND,
-                message=(
-                    "Cannot read skill: no skills directory is available "
-                    "on this server."
-                ),
-                context={"skill": skill, "file": file},
-                suggestions=[
-                    f"Call {SKILL_TOOL_NAME}() with no args to confirm "
-                    "skill availability.",
-                    "Ask the server operator to initialize the "
-                    "skills-vendor submodule "
-                    "(`git submodule update --init`).",
-                ],
-            )
-        )
-
-    def _skill_guide_tier1_response(self, skills_dir: Path) -> dict[str, Any]:
-        """Tier 1: no args → list bundled skills with frontmatter."""
-        skills = self._list_bundled_skills(skills_dir)
-        return {
-            "success": True,
-            "skills": [
-                {
-                    "skill": name,
-                    "uri": f"skill://{name}/SKILL.md",
-                    "description": fm["description"].strip(),
-                }
-                for name, _dir, fm in skills
-            ],
-            "how_to_use": (
-                f"Call {SKILL_TOOL_NAME}(skill='<name>') to list a "
-                f"skill's reference files, then "
-                f"{SKILL_TOOL_NAME}(skill='<name>', file='<path>') "
-                "to read content. Resource-capable clients can also "
-                "read skill:// URIs via resources/read."
-            ),
-        }
-
-    def _resolve_skill_dir(self, skills_dir: Path, skill: str) -> Path:
-        """Resolve and validate the on-disk directory for ``skill``.
-
-        Reject four classes of bad ``skill`` argument before any I/O on
-        the resolved path:
-
-        (a) Traversal — ``"../something"`` lets tier 2 list directories
-            above the skills root.
-        (b) Symlinked skill DIRECTORY — applies the same anti-symlink
-            stance as ``_list_skill_files`` (which filters symlinks
-            per-file inside a skill) one level up, at the skill-dir
-            entry point. The two scopes differ but the intent is the
-            same: don't follow symlinks added to the skill bundle.
-        (c) Root-aliases — ``"."``, ``"./"``, ``"x/.."`` all resolve
-            to the skills root itself. Without this check tier 2
-            silently downgrades from "list one skill's files" to
-            "list every file across every bundle." Not a security
-            escape (skills are bundled content) but a contract
-            mismatch with tier 1.
-        (d) Resolve failures — bubble as a structured INTERNAL_ERROR
-            rather than a generic INTERNAL_ERROR from fastmcp's
-            wrapper, mirroring tier 3.
-        """
-        skill_dir = skills_dir / skill
-        try:
-            skill_resolved = skill_dir.resolve()
-            skills_resolved = skills_dir.resolve()
-        except OSError as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.INTERNAL_ERROR,
-                    message=(f"Could not resolve path for skill {skill!r}: {e}"),
-                    context={"skill": skill},
-                    suggestions=[
-                        "Check filesystem permissions on the skills-vendor directory.",
-                        "Check the server logs for the underlying OSError.",
-                    ],
-                )
-            )
-        if (
-            not skill_dir.exists()
-            or not skill_dir.is_dir()
-            or not skill_resolved.is_relative_to(skills_resolved)
-            or skill_resolved == skills_resolved
-            or skill_dir.is_symlink()
-        ):
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.RESOURCE_NOT_FOUND,
-                    message=f"Unknown skill: {skill!r}.",
-                    context={"skill": skill},
-                    suggestions=[
-                        f"Call {SKILL_TOOL_NAME}() with no args to list "
-                        "available skills.",
-                        "Check the skill name for typos or path separators.",
-                    ],
-                )
-            )
-        return skill_dir
-
-    def _skill_guide_tier2_response(
-        self, skill: str, skill_dir: Path
-    ) -> dict[str, Any]:
-        """Tier 2: skill only → list reference files."""
-        files = self._list_skill_files(skill_dir)
-        return {
-            "success": True,
-            "skill": skill,
-            "uri": f"skill://{skill}/SKILL.md",
-            "files": [
-                {"name": name, "uri": f"skill://{skill}/{name}"} for name in files
-            ],
-            "how_to_use": (
-                f"Call {SKILL_TOOL_NAME}(skill={skill!r}, file='<name>') "
-                "to read a specific file. Start with SKILL.md for the "
-                "decision workflow."
-            ),
-        }
-
-    def _resolve_skill_file_target(
-        self, skill: str, skill_dir: Path, file: str
-    ) -> Path:
-        """Resolve and validate the on-disk file for tier 3.
-
-        Check ``candidate.is_symlink()`` HERE, before
-        ``candidate.resolve()``. ``resolve()`` returns the canonical
-        non-symlink path, so a post-resolve ``is_symlink()`` check
-        would always be False — the pre-resolve check is the only one
-        that actually catches a symlink. Matches the is_symlink()
-        filter in _list_skill_files (tier 2 listings hide symlinks, so
-        tier 3 must reject them with the same semantics).
-        """
-        candidate = skill_dir / file
-        if candidate.is_symlink():
+        skill = BEST_PRACTICES_SKILL_NAME
+        entry = best_practices_skill(skills_dir)
+        if entry is None:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
                     message=(
-                        f"Refusing to follow symlink at {file!r} in skill {skill!r}."
+                        f"The {skill!r} skill is not available on this "
+                        "server. The skills-vendor submodule may be missing "
+                        "or uninitialized, or its SKILL.md failed to parse."
                     ),
-                    context={"skill": skill, "file": file},
+                    context={"file": file},
                     suggestions=[
-                        f"Call {SKILL_TOOL_NAME}(skill={skill!r}) to see the "
-                        "non-symlink files this skill exposes.",
-                        "Ask the operator to replace the symlink with a "
-                        "regular file inside the skill directory.",
+                        "Ask the server operator to initialize the "
+                        "skills-vendor submodule "
+                        "(`git submodule update --init`).",
                     ],
                 )
             )
-        try:
-            target = candidate.resolve()
-        except OSError as e:
-            raise_tool_error(
-                create_error_response(
-                    ErrorCode.INTERNAL_ERROR,
-                    message=(
-                        f"Could not resolve path for file {file!r} in skill "
-                        f"{skill!r}: {e}"
-                    ),
-                    context={"skill": skill, "file": file},
-                    suggestions=[
-                        "Check filesystem permissions on the skills-vendor directory.",
-                        "Check the server logs for the underlying OSError.",
-                    ],
-                )
-            )
-        if not target.is_relative_to(skill_dir.resolve()) or not target.is_file():
+
+        skill_dir = entry[1]
+        requested = file or "SKILL.md"
+        allowed = list_skill_files(skill_dir)
+        if requested not in allowed:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.RESOURCE_NOT_FOUND,
-                    message=f"Unknown file {file!r} in skill {skill!r}.",
-                    context={"skill": skill, "file": file},
+                    message=f"Unknown file {requested!r} in skill {skill!r}.",
+                    context={"file": requested},
                     suggestions=[
-                        f"Call {SKILL_TOOL_NAME}(skill={skill!r}) to list "
-                        "available files.",
-                        "Verify the file path is relative to the skill "
-                        "directory (e.g., 'references/foo.md').",
+                        "Pass one of these paths exactly as written: "
+                        + ", ".join(allowed),
+                        f"Call {SKILL_TOOL_NAME}() with no arguments to read "
+                        "SKILL.md, whose table says which file to read.",
                     ],
                 )
             )
-        return target
+        content = self._read_skill_file_content(skill, requested, skill_dir / requested)
+        return self._build_skill_guide_response(skill, requested, content)
 
     def _read_skill_file_content(self, skill: str, file: str, target: Path) -> str:
-        """Read the resolved tier-3 file, raising a structured error on I/O failure."""
+        """Read one skill file, raising a structured error on I/O failure."""
         try:
             return target.read_text(encoding="utf-8")
-        except OSError as e:
+        except (OSError, UnicodeDecodeError) as e:
             raise_tool_error(
                 create_error_response(
                     ErrorCode.INTERNAL_ERROR,
@@ -2164,44 +1872,46 @@ class HomeAssistantSmartMCPServer:
                 )
             )
 
-    def _build_skill_guide_tier3_response(
+    def _build_skill_guide_response(
         self, skill: str, file: str, content: str
     ) -> dict[str, Any]:
-        """Build the tier-3 response, prepending the strict-BPS ack line when relevant.
+        """Build the response for one skill file.
 
-        Hint goes at the top of the response so the LLM sees it before
-        parsing the (potentially large) content body. Scoped to the
-        best-practice skill because that's the one the write-tool
-        MandatoryBPS param gates; other skills (if any) are unrelated.
+        In strict mode the acknowledgment key goes at the top of every
+        file this tool serves (#1779), so a model obtains it whether it
+        reads SKILL.md or the reference file a block error points to.
+        The skill:// resources read raw files and never carry it;
+        resource-preferring clients recover through the block error's
+        suggestion, which points back at this tool.
+
+        The ``MandatoryBPS=false`` hint rides only on reference files.
+        SKILL.md is what every first call returns, and a model that took
+        the hint there would drop the reference files the write tools
+        attach before it had read any of them.
         """
         from .strict_bps import strict_bps_ack_line, strict_bps_effective
-        from .tools.util_helpers import _HA_BEST_PRACTICES_SKILL_NAME
 
-        is_best_practices = skill == _HA_BEST_PRACTICES_SKILL_NAME
-
-        # Publish the acknowledgment key inside the best-practices content
-        # itself (#1779) when strict mode is effective — this Tier-3 read is
-        # the ONLY caller-facing surface that carries the key. Prepended to
-        # the content body so a model that reads the guide obtains the key
-        # it must pass as BestPracticeKey on gated writes. The skill://
-        # resource surface reads raw files and does NOT get this line; that
-        # is accepted — resource-preferring clients recover via the block
-        # error's suggestion, which points them back at this tool.
-        if is_best_practices and strict_bps_effective():
+        if strict_bps_effective():
             content = f"{strict_bps_ack_line()}\n\n{content}"
 
         response: dict[str, Any] = {}
-        if is_best_practices:
+        if file != "SKILL.md":
             response["skill_content_hint"] = _SKILL_GUIDE_MANDATORYBPS_HINT
         response.update(
             {
                 "success": True,
-                "skill": skill,
                 "file": file,
                 "uri": f"skill://{skill}/{file}",
                 "content": content,
             }
         )
+        if file == "SKILL.md":
+            response["how_to_use"] = (
+                f"Call {SKILL_TOOL_NAME}(file='<path>') for the reference "
+                "files the table above points to for your task, using the "
+                "path exactly as linked (e.g. 'references/automation-"
+                "patterns.md'). Read only those; do not load every file."
+            )
         return response
 
     async def start(self) -> None:

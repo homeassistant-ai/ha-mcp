@@ -29,6 +29,9 @@ from ..client.rest_client import (
     HomeAssistantCommandTimeout,
     HomeAssistantConnectionError,
 )
+from ..utils.skill_loader import (
+    BEST_PRACTICES_SKILL_NAME as _HA_BEST_PRACTICES_SKILL_NAME,
+)
 from .component_api import get_component_caps
 
 logger = logging.getLogger(__name__)
@@ -2226,8 +2229,6 @@ def _resolve_data_path(data: Any, path: str) -> tuple[Any, str | None]:
 # Skill content assembly (write-tool MandatoryBPS parameter, issue #1182)
 # ---------------------------------------------------------------------------
 
-_HA_BEST_PRACTICES_SKILL_NAME = "home-assistant-best-practices"
-
 
 def build_skill_content(
     MandatoryBPS: bool,
@@ -2340,8 +2341,8 @@ _SKILL_CONTENT_OPTOUT_HINT = (
 # array, and the matching section body auto-embeds inline.
 _WRITE_TOOL_BP_HINT_SUGGESTION = (
     "For Home Assistant best-practice guidance, call "
-    "ha_get_skill_guide(skill='home-assistant-best-practices') and consult "
-    "the relevant reference file before retrying."
+    "ha_get_skill_guide() to read SKILL.md, then the reference file its "
+    "table points to, before retrying."
 )
 
 

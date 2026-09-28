@@ -50,10 +50,10 @@ def yaml_config_tools_enabled(ha_container_with_fresh_config):
     addon container has its own env and is started with the flag set at
     install time (see ``build_image.install_ha_mcp_dev_addon``).
     """
-    os.environ[FEATURE_FLAG] = "true"
-    logger.info("YAML config editing feature flag enabled")
-    yield
-    os.environ.pop(FEATURE_FLAG, None)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv(FEATURE_FLAG, "true")
+        logger.info("YAML config editing feature flag enabled")
+        yield
 
 
 @pytest.fixture

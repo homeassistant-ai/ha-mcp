@@ -70,9 +70,9 @@ def _require_seeded_backend(container_info: dict) -> None:
 @pytest.fixture(scope="module")
 def yaml_editing_enabled(ha_container_with_fresh_config):
     """Enable YAML editing for the module — only needed to seed a package."""
-    os.environ[FEATURE_FLAG] = "true"
-    yield
-    os.environ.pop(FEATURE_FLAG, None)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv(FEATURE_FLAG, "true")
+        yield
 
 
 async def _set_yaml_confirmed(mcp: Any, args: dict[str, Any]) -> dict[str, Any]:

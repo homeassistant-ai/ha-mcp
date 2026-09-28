@@ -1726,8 +1726,7 @@ class TestTwoRouteWarningSuffix:
 
     def test_default_warning_names_ha_get_skill_guide_route(self):
         msg = self._first_warning()
-        assert "ha_get_skill_guide(skill='home-assistant-best-practices'" in msg
-        assert "file='references/automation-patterns.md'" in msg
+        assert "ha_get_skill_guide(file='references/automation-patterns.md')" in msg
 
     def test_warning_does_not_mention_MandatoryBPS_param(self):
         """MandatoryBPS must not appear in warnings. The param is visible

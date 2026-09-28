@@ -1,10 +1,9 @@
 """Tests for the skill_loader utility.
 
-The loader is the shared resolver behind both the explicit ha_get_skill_guide
-tool and the write-tool MandatoryBPS parameter. Symlink + path-traversal
-guards mirror server.py::_handle_skill_guide_call, but unlike that handler the
-loader returns a partial dict instead of raising, so a missing reference can
-never fail the write operation that's embedding the response.
+The loader is the resolver behind the write-tool MandatoryBPS parameter. It
+refuses symlinks and path traversal, and returns a partial dict instead of
+raising, so a missing reference can never fail the write operation that's
+embedding the response.
 """
 
 from __future__ import annotations
@@ -81,7 +80,7 @@ def test_resolve_skill_files_skips_missing(fake_skills_dir: Path) -> None:
 def test_resolve_skill_files_rejects_symlink(
     tmp_path: Path, fake_skills_dir: Path
 ) -> None:
-    """Symlinks inside the skill dir are refused (matches _handle_skill_guide_call)."""
+    """Symlinks inside the skill dir are refused."""
     skill_dir = fake_skills_dir / "home-assistant-best-practices"
     target = tmp_path / "outside.md"
     target.write_text("escaped\n")
