@@ -24,6 +24,10 @@
     }
   },
   "options": {
+    "error": {
+      "invalid_connect_path": "不得包含 #、?、% 或空白字元。",
+      "invalid_webhook_id": "Webhook ID 不得包含斜線 (/)。"
+    },
     "step": {
       "tools_info": {
         "title": "HA-MCP File & YAML Tools",

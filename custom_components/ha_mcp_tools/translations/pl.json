@@ -24,6 +24,10 @@
     }
   },
   "options": {
+    "error": {
+      "invalid_connect_path": "Nie może zawierać znaków #, ?, % ani białych znaków.",
+      "invalid_webhook_id": "Identyfikatory webhooków nie mogą zawierać ukośnika (/)."
+    },
     "step": {
       "tools_info": {
         "title": "Narzędzia plików i YAML HA-MCP",

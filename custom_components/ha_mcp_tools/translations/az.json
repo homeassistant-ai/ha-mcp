@@ -24,6 +24,10 @@
     }
   },
   "options": {
+    "error": {
+      "invalid_connect_path": "#, ?, %, və ya boşluq simvolları ola bilməz.",
+      "invalid_webhook_id": "Webhook ID-ləri əyri xətt (/) ehtiva etməməlidir."
+    },
     "step": {
       "tools_info": {
         "title": "HA-MCP File & YAML Tools",

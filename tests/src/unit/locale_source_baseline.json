@@ -40,6 +40,8 @@
     "issues.server_start_failed.title": "c98ba303dfff904a",
     "issues.server_update_held.description": "304b8cff91e8add7",
     "issues.server_update_held.title": "7db1ec6a49c1b97d",
+    "options.error.invalid_connect_path": "81ef612096f79ea7",
+    "options.error.invalid_webhook_id": "7baf17fca020f98b",
     "options.step.init.data.auto_update": "87da322440c96f54",
     "options.step.init.data.bind_host": "0226fc91b55c9cfa",
     "options.step.init.data.channel": "d89ba8a2a6fcf5d5",

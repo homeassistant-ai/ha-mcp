@@ -24,6 +24,10 @@
     }
   },
   "options": {
+    "error": {
+      "invalid_connect_path": "Ne devas enhavi #, ?, %, aŭ blankspacon.",
+      "invalid_webhook_id": "Webhook-identigiloj ne devas enhavi oblikvon (/)."
+    },
     "step": {
       "tools_info": {
         "title": "HA-MCP Dosieraj & YAML Iloj",
