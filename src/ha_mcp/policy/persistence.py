@@ -22,7 +22,7 @@ def load_policy(data_dir: Path) -> Policy:
         return Policy()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
         raise ValueError(f"tool_policy.json is not valid JSON: {e}") from e
     try:
         policy = Policy.model_validate(raw)

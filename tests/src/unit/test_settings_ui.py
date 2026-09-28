@@ -5174,6 +5174,30 @@ class TestSidecarPolicyPinGuard:
         assert load_policy(tmp_path).rule_effect == "allow"
 
     @pytest.mark.anyio
+    async def test_sidecar_put_reports_a_corrupt_stored_policy(
+        self, sidecar_put, tmp_path
+    ):
+        stored = tmp_path / "tool_policy.json"
+        stored.write_text("{not valid json")
+        response = await sidecar_put({"rules": []})
+        assert response.status_code == 500
+        assert json.loads(response.body)["policy_file_corrupt"] is True
+        assert stored.read_text() == "{not valid json"
+
+    @pytest.mark.anyio
+    async def test_sidecar_get_reports_a_corrupt_stored_policy(
+        self, sidecar_put, tmp_path
+    ):
+        # sidecar_put has pointed the data dir at tmp_path for this test.
+        from ha_mcp.settings_ui import build_settings_handlers
+
+        (tmp_path / "tool_policy.json").write_text("{not valid json")
+        handlers = build_settings_handlers(None, is_sidecar=True)
+        response = await handlers["policy_get_config"](MagicMock())
+        assert response.status_code == 500
+        assert json.loads(response.body)["policy_file_corrupt"] is True
+
+    @pytest.mark.anyio
     async def test_sidecar_refuses_unknown_keys(self, sidecar_put):
         response = await sidecar_put({"rules": [], "rule_efect": "allow"})
         assert response.status_code == 400

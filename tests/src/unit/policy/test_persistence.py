@@ -64,6 +64,12 @@ def test_corrupt_file_raises(tmp_path: Path):
         load_policy(tmp_path)
 
 
+def test_a_file_that_is_not_utf8_is_named_in_the_error(tmp_path: Path):
+    (tmp_path / POLICY_FILENAME).write_bytes(b"\xff\xfe{}")
+    with pytest.raises(ValueError, match=r"tool_policy\.json is not valid JSON"):
+        load_policy(tmp_path)
+
+
 def test_serialized_shape_is_stable(tmp_path: Path):
     save_policy(tmp_path, Policy())
     data = json.loads((tmp_path / POLICY_FILENAME).read_text())

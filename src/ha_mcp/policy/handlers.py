@@ -71,17 +71,24 @@ def _extract_arg_paths(parameters: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def policy_file_corrupt_response(exc: ValueError) -> JSONResponse:
+    """The response for a corrupt or schema-invalid stored tool_policy.json.
+
+    Shared by GET and PUT here and in the sidecar: the body names the problem
+    and flags it (the page adds its repair hint on load), and the log records
+    it for whoever reads the server log rather than the page.
+    """
+    logger.warning("tool_policy.json could not be read: %s", exc)
+    return JSONResponse(
+        {"error": str(exc), "policy_file_corrupt": True}, status_code=500
+    )
+
+
 async def _get_config(data_dir: Path) -> JSONResponse:
     try:
         return JSONResponse(load_policy(data_dir).model_dump(mode="json"))
     except ValueError as e:
-        # Surface a corrupt or schema-invalid tool_policy.json to the
-        # UI so the user has a visible repair path; without this the
-        # tab would just spinner forever on an opaque 500.
-        return JSONResponse(
-            {"error": str(e), "policy_file_corrupt": True},
-            status_code=500,
-        )
+        return policy_file_corrupt_response(e)
 
 
 async def _put_config(
@@ -99,7 +106,11 @@ async def _put_config(
     # sidecar runs this same handler in its own process) so a concurrent
     # writer can't slip between the read and the write and lose an update.
     async with config_write_guard():
-        current = load_policy(data_dir)
+        try:
+            current = load_policy(data_dir)
+        except ValueError as e:
+            # No version to compare against, so the write is refused too.
+            return policy_file_corrupt_response(e)
         if drops_allow_list(new_policy, current):
             return JSONResponse({"error": ALLOW_LIST_OMITTED_MESSAGE}, status_code=400)
         # Inside the guard: DELETE /api/policy/decision-pin clears the PIN

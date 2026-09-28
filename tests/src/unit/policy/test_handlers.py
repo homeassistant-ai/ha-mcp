@@ -193,6 +193,24 @@ def test_get_config_returns_500_when_policy_corrupt(tmp_path):
     assert "error" in body
 
 
+@pytest.mark.parametrize("content", ["{not valid json", '{"rules": "not-a-list"}'])
+def test_put_config_returns_500_when_the_stored_policy_is_corrupt(tmp_path, content):
+    """The PUT reads the stored file for its version check; a corrupt or
+    schema-invalid file gets the same response as the GET and is left as it
+    was. The early return releases the write lock: once the file is gone,
+    the next save goes through."""
+    stored = tmp_path / "tool_policy.json"
+    stored.write_text(content)
+    c = make_app(tmp_path, ApprovalQueue())
+    body = Policy().model_dump(mode="json")
+    r = c.put("/api/policy/config", json=body)
+    assert r.status_code == 500
+    assert r.json()["policy_file_corrupt"] is True
+    assert stored.read_text() == content
+    stored.unlink()
+    assert c.put("/api/policy/config", json=body).status_code == 200
+
+
 def test_put_with_stale_version_returns_409(tmp_path):
     """Optimistic concurrency: PUT with stale version → 409.
 
