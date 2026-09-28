@@ -93,7 +93,13 @@ def has_dynamic_selector_targets(name: str, args: dict[str, Any]) -> bool:
     return name == "ha_bulk_control" and args.get("selector") is not None
 
 
-def iter_path_values(args: dict[str, Any], path: str) -> Iterator[Any]:
+MISSING = object()
+"""What ``iter_path_values(..., report_missing=True)`` yields for a dead end."""
+
+
+def iter_path_values(
+    args: dict[str, Any], path: str, *, report_missing: bool = False
+) -> Iterator[Any]:
     """Yield every value the dotted path resolves to.
 
     The leading ``args`` segment is implicit and stripped. A ``*`` segment
@@ -101,6 +107,12 @@ def iter_path_values(args: dict[str, Any], path: str) -> Iterator[Any]:
     across items for lists — so ``args.*`` yields every top-level
     argument, ``args.config.*`` yields every leaf of the ``config``
     sub-dict, and so on. Empty iterator = no match.
+
+    A branch that cannot continue (a missing key, a named segment on a value
+    that is not a dict, or a ``*`` on a scalar) is skipped, unless
+    ``report_missing``, which yields ``MISSING`` for it instead and also for a
+    ``*`` over an empty container. Allow mode needs that: an operation without
+    the constrained field is a value the predicate never saw.
     """
     parts = path.split(".")
     if parts[0] == "args":
@@ -112,17 +124,32 @@ def iter_path_values(args: dict[str, Any], path: str) -> Iterator[Any]:
             return
         head, tail = rest[0], rest[1:]
         if head == "*":
-            if isinstance(cur, dict):
-                for v in cur.values():
-                    yield from walk(v, tail)
-            elif isinstance(cur, (list, tuple)):
-                for v in cur:
-                    yield from walk(v, tail)
+            children = _children(cur)
+            if report_missing and not children:
+                # An empty container is a dead end too: the branch holds no
+                # value the predicate could examine.
+                children = None
+        elif isinstance(cur, dict) and head in cur:
+            children = [cur[head]]
+        else:
+            children = None
+        if children is None:
+            if report_missing:
+                yield MISSING
             return
-        if isinstance(cur, dict) and head in cur:
-            yield from walk(cur[head], tail)
+        for child in children:
+            yield from walk(child, tail)
 
     yield from walk(args, parts)
+
+
+def _children(node: Any) -> Iterable[Any] | None:
+    """What a ``*`` segment fans out over; None for a scalar."""
+    if isinstance(node, dict):
+        return node.values()
+    if isinstance(node, (list, tuple)):
+        return node
+    return None
 
 
 def _ci(x: Any, strict: bool = False) -> Any:
@@ -203,13 +230,19 @@ def match_predicate(
 ) -> bool:
     """Whether ``predicate`` holds for ``args``.
 
-    A wildcard path matches when ANY value at the wildcard satisfies the op;
-    for a non-wildcard path there is at most one value.
+    Outside allow mode a wildcard path matches when ANY value at the wildcard
+    satisfies the op; for a non-wildcard path there is at most one value.
 
     ``strict`` is allow mode, where a match APPROVES the call, so every
-    ambiguity must resolve towards "no match" (``exists`` tests presence
-    only and returns before these rules apply):
+    ambiguity must resolve towards "no match":
 
+    - EVERY branch the path reaches must hold the field, ``exists``
+      included, so ``args.operations.*.parameters.brightness`` does not
+      approve a batch whose unlock operation carries no ``parameters`` (or
+      an empty one), and ``args.*.entity_id`` does not approve a ``target``
+      object that names only an area. A scalar argument lacks every field,
+      so ``args.*.<field>`` approves no call that also has one. The
+      remaining rules do not apply to ``exists``.
     - EVERY value must satisfy the op, and a list found at the path counts
       as its items, so an approval naming ``light.a`` covers neither an
       ``operations`` list nor an ``entity_id`` list that also names a lock.
@@ -226,15 +259,16 @@ def match_predicate(
       satisfied by a case variant, because Home Assistant lower-cases
       domains, services and entity IDs and would run ``LOCK`` as ``lock``.
     """
-    values = list(iter_path_values(args, predicate.path))
-    if predicate.op == "exists":
-        return bool(values)
-    if strict:
-        values = list(_flatten_lists(values))
-    if not values:
+    values = list(iter_path_values(args, predicate.path, report_missing=strict))
+    if not values or any(v is MISSING for v in values):
         return False
+    if predicate.op == "exists":
+        return True
     if not strict:
         return any(_op_matches(v, predicate.op, predicate.value) for v in values)
+    values = list(_flatten_lists(values))
+    if not values:
+        return False
     return all(
         not _splits_into_other_values(v)
         and (not isinstance(v, dict) or predicate.op in ("eq", "in"))
@@ -288,8 +322,8 @@ def _predicate_reaches_operations(path: str) -> bool:
     literal segment right after that wildcard (e.g. ``domain`` in
     ``args.*.domain``) can only ever match a *dict* value at that level (like
     ``selector``) — ``walk()`` requires ``isinstance(cur, dict)`` for a
-    literal head, so it silently yields nothing against a list and can never
-    reach an operation row. Only a SECOND wildcard (``args.*.*...``, as in
+    literal head, so it yields no value against a list (only ``MISSING`` under
+    ``report_missing``) and can never reach an operation row. Only a SECOND wildcard (``args.*.*...``, as in
     ``args.*.*.entity_id``) or no further segment at all (bare ``args.*``,
     which yields the raw ``operations`` list value itself) can actually reach
     into the list. Any other concrete first segment (e.g. ``selector``) can

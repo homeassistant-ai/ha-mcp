@@ -61,6 +61,24 @@ def test_put_config_validation_error_returns_400(tmp_path):
     assert r.status_code == 400
 
 
+def test_put_config_without_an_operand_keeps_the_stored_policy(tmp_path):
+    """A condition that omits its operand is refused before anything is
+    written, so the stored policy still loads afterwards."""
+    c = make_app(tmp_path, ApprovalQueue())
+    stored = Policy(rules=[Rule(tool_name="ha_x")]).model_dump(mode="json")
+    assert c.put("/api/policy/config", json=stored).status_code == 200
+    body = c.get("/api/policy/config").json()
+    body["rules"] = [
+        {"tool_name": "ha_y", "when": [{"path": "args.domain", "op": "not_in"}]}
+    ]
+    r = c.put("/api/policy/config", json=body)
+    assert r.status_code == 400
+    assert "op='not_in' requires value: list" in r.json()["error"]
+    after = c.get("/api/policy/config")
+    assert after.status_code == 200
+    assert [rule["tool_name"] for rule in after.json()["rules"]] == ["ha_x"]
+
+
 def test_approve_flow(tmp_path):
     queue = ApprovalQueue()
     entry = queue.create("ha_x", "deadbeef", {"foo": "bar"}, ttl_minutes=5)

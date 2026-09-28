@@ -884,7 +884,8 @@ class DevTools:
                     "rule. In a require-approval list gated=true adds it (every "
                     "call needs approval); in an allow list that rule approves "
                     "the tool, so gated=true removes it. Conditional rules are "
-                    "left in place and still apply"
+                    "left in place and still apply. gated=true is refused while "
+                    "an allow list's unconditional '*' rule approves every tool"
                 ),
             ),
         ] = None,
@@ -1307,6 +1308,7 @@ class DevTools:
         gate_changed); raises ToolError on the first invalid field.
         """
         from ..config import get_global_settings
+        from ..policy.model import bare_rule_gates
         from ..policy.persistence import load_policy
         from ..settings_ui._persistence import env_pinned_tools
         from ..utils.data_paths import get_data_dir
@@ -1337,6 +1339,21 @@ class DevTools:
                     )
                 )
             new_policy, changed = self._apply_gate_to_policy(policy, tool, gate_val)
+            if bare_rule_gates(new_policy, tool) != gate_val:
+                # Only an allow list's bare `*` rule, which approves every
+                # tool, leaves the toggle without effect.
+                raise_tool_error(
+                    create_error_response(
+                        ErrorCode.VALIDATION_INVALID_PARAMETER,
+                        "An unconditional '*' rule in this allow list approves "
+                        f"every tool, so {tool} cannot be gated.",
+                        suggestions=[
+                            "Remove the '*' rule with no conditions first "
+                            "(set_policy, or the Tool Security Policies tab), "
+                            "then retry.",
+                        ],
+                    )
+                )
             plan["gate_val"] = gate_val
             plan["new_policy"] = new_policy
             plan["gate_changed"] = changed
@@ -1446,12 +1463,6 @@ class DevTools:
             save_policy(data_dir, plan["new_policy"])
             self._clear_remember_cache()
         warnings: list[str] = []
-        if plan["gate_val"] and not data["gated"]:
-            warnings.append(
-                "The policy is an allow list with an unconditional '*' rule, "
-                "which approves every tool; this tool still runs without "
-                "approval until that rule is removed."
-            )
         if not get_global_settings().enable_tool_security_policies:
             warnings.append(
                 "Tool security policies are disabled "

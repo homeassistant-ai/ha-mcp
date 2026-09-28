@@ -126,7 +126,11 @@ def _migrate_policy_any_semantics_locked(data_dir: Path) -> bool:
     try:
         policy = Policy.model_validate(raw)
     except ValidationError:
-        logger.warning("policy migration: %s failed validation; leaving as-is", path)
+        logger.warning(
+            "policy migration: %s failed validation; leaving as-is",
+            path,
+            exc_info=True,
+        )
         return False
     if policy.rule_effect == "allow":
         # An allow list postdates #1993, so its rules were never packed by the

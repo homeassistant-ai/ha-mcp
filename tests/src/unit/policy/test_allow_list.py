@@ -171,6 +171,124 @@ class TestAllowListWildcardIsUniversal:
         args = {"operations": []}
         assert evaluate("ha_bulk_control", args, policy) == Verdict.REQUIRE_APPROVAL
 
+    def test_an_operation_without_the_field_needs_approval(self):
+        # The unlock carries no ``parameters``; the brightness condition never
+        # saw it, so it must not approve the batch.
+        dim = _allow_one(
+            "args.operations.*.parameters.brightness",
+            "lt",
+            150,
+            tool="ha_bulk_control",
+        )
+        args = {
+            "operations": [
+                {
+                    "entity_id": "light.a",
+                    "action": "on",
+                    "parameters": {"brightness": 100},
+                },
+                {"entity_id": "lock.front", "action": "unlock"},
+            ]
+        }
+        assert evaluate("ha_bulk_control", args, dim) == Verdict.REQUIRE_APPROVAL
+        args["operations"][1]["parameters"] = {"brightness": 120}
+        assert evaluate("ha_bulk_control", args, dim) == Verdict.ALLOW
+
+    def test_an_operation_with_an_empty_container_needs_approval(self):
+        # ``parameters: {}`` holds nothing for the condition to examine, the
+        # same as leaving ``parameters`` out.
+        dim = _allow_one(
+            "args.operations.*.parameters.*", "lt", 150, tool="ha_bulk_control"
+        )
+        args = {
+            "operations": [
+                {
+                    "entity_id": "light.a",
+                    "action": "on",
+                    "parameters": {"brightness": 100},
+                },
+                {"entity_id": "lock.front", "action": "unlock", "parameters": {}},
+            ]
+        }
+        assert evaluate("ha_bulk_control", args, dim) == Verdict.REQUIRE_APPROVAL
+        args["operations"][1]["parameters"] = {"brightness": 120}
+        assert evaluate("ha_bulk_control", args, dim) == Verdict.ALLOW
+
+    def test_exists_needs_the_field_on_every_operation(self):
+        has_params = _allow(
+            Rule(
+                tool_name="ha_bulk_control",
+                when=[Predicate(path="args.operations.*.parameters", op="exists")],
+            )
+        )
+        args = {
+            "operations": [
+                {"entity_id": "light.a", "action": "on", "parameters": {}},
+                {"entity_id": "lock.front", "action": "unlock"},
+            ]
+        }
+        assert evaluate("ha_bulk_control", args, has_params) == Verdict.REQUIRE_APPROVAL
+        args["operations"][1]["parameters"] = {}
+        assert evaluate("ha_bulk_control", args, has_params) == Verdict.ALLOW
+
+    def test_an_argument_without_the_field_needs_approval(self):
+        # A dict fan-out: ``target`` names an area and no entity, so the rule
+        # never saw what it addresses.
+        policy = _allow_one("args.*.entity_id", "eq", "light.a", tool="ha_example")
+        args = {"target": {"area_id": "garage"}, "data": {"entity_id": "light.a"}}
+        assert evaluate("ha_example", args, policy) == Verdict.REQUIRE_APPROVAL
+        args["target"] = {"entity_id": "light.a"}
+        assert evaluate("ha_example", args, policy) == Verdict.ALLOW
+
+    def test_a_scalar_argument_is_a_branch_without_the_field(self):
+        # A top-level string can itself be a target, so ``args.*.entity_id``
+        # cannot skip it; such a rule no longer approves a call with scalar
+        # arguments like ha_call_service's domain and service.
+        policy = _allow_one("args.*.entity_id", "eq", "light.a")
+        args = {
+            "domain": "light",
+            "service": "turn_on",
+            "data": {"entity_id": "light.a"},
+        }
+        assert evaluate("ha_call_service", args, policy) == Verdict.REQUIRE_APPROVAL
+
+    @pytest.mark.parametrize("op,value", [("eq", "light.a"), ("exists", None)])
+    def test_a_wildcard_over_a_scalar_is_a_branch_without_values(self, op, value):
+        # ``domain`` has no children for the second ``*`` to fan out over.
+        policy = _allow_one("args.*.*", op, value, tool="ha_example")
+        args = {"domain": "lock", "data": {"entity_id": "light.a"}}
+        assert evaluate("ha_example", args, policy) == Verdict.REQUIRE_APPROVAL
+        del args["domain"]
+        assert evaluate("ha_example", args, policy) == Verdict.ALLOW
+
+    def test_require_approval_list_still_gates_when_one_branch_lacks_the_field(
+        self,
+    ):
+        # A missing field ends only that branch outside allow mode: the other
+        # operation still triggers the gate.
+        gate_bright = Rule(
+            tool_name="ha_bulk_control",
+            when=[
+                Predicate(
+                    path="args.operations.*.parameters.brightness", op="gt", value=200
+                )
+            ],
+        )
+        args = {
+            "operations": [
+                {
+                    "entity_id": "light.a",
+                    "action": "on",
+                    "parameters": {"brightness": 250},
+                },
+                {"entity_id": "lock.front", "action": "unlock"},
+            ]
+        }
+        assert (
+            evaluate("ha_bulk_control", args, Policy(rules=[gate_bright]))
+            == Verdict.REQUIRE_APPROVAL
+        )
+
     def test_require_approval_list_keeps_any_semantics(self):
         gate_locks = Rule(
             tool_name="ha_bulk_control",

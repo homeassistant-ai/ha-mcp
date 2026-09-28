@@ -224,7 +224,7 @@ let openGroups = new Set();
 // rules in policy.rules from /api/policy/config. Under the default
 // require-approval list a bare rule gates its tool; under an allow list
 // (rule_effect 'allow') it approves it, so there the toggle reads "gated"
-// exactly when the tool has NO bare rule. The Tools tab uses isToolGated()
+// exactly when neither the tool nor `*` has a bare rule. The Tools tab uses isToolGated()
 // to render the third toggle alongside enabled/pinned.
 // `enabled` is tri-state: true/false from the addon-config flag, or
 // null when the features fetch failed — downstream branches need to
@@ -420,11 +420,14 @@ function wildcardInsertIndex(rules) {
   return idx === -1 ? rules.length : idx;
 }
 
-function isToolGated(toolName) {
-  // Mirrors bare_rule_gates() in policy/model.py.
-  const bare = policyState.bareRuleTools;
-  if (policyState.toolsEffect === 'allow') return !bare.has(toolName) && !bare.has('*');
+// Mirrors bare_rule_gates() in policy/model.py.
+function bareRuleGates(bare, effect, toolName) {
+  if (effect === 'allow') return !bare.has(toolName) && !bare.has('*');
   return bare.has(toolName);
+}
+
+function isToolGated(toolName) {
+  return bareRuleGates(policyState.bareRuleTools, policyState.toolsEffect, toolName);
 }
 
 async function syncPolicyRule(toolName, gated) {
@@ -446,6 +449,21 @@ async function syncPolicyRule(toolName, gated) {
     }
   } else {
     policy.rules = policy.rules.filter(rule => !isBareGate(rule));
+  }
+  // An allow list's bare `*` rule approves every tool, so gating one would
+  // save a no-op; refuse instead (set_tool(gated=) refuses the same way).
+  // A mode change since the page loaded is left to policyPut, whose message
+  // (reload) is the one that applies then.
+  const bare = new Set(policy.rules
+    .filter(rule => !rule.when || rule.when.length === 0)
+    .map(rule => rule.tool_name));
+  if (effectOf(policy) === policyState.toolsEffect
+      && bareRuleGates(bare, effectOf(policy), toolName) !== gated) {
+    throw new Error(t(
+      'policies.errors.wildcard_rule',
+      {},
+      'An unconditional "*" rule in this allow list approves every tool, so this switch cannot gate one. Remove that rule on the Tool Security Policies tab first.'
+    ));
   }
   await policyPut(policy, t('policies.operations.sync_gated', {}, 'Sync gated toggle'), policyState.toolsEffect);
 }
@@ -1216,16 +1234,19 @@ function render() {
             // Optimistic UI: flip local state, sync to server, rollback on failure.
             // Gated lives in policy.rules (not tool_config), so we skip scheduleSave().
             const wasGated = isToolGated(t.name);
+            const hadBare = policyState.bareRuleTools.has(t.name);
             const nowGated = e.target.checked;
-            const setBare = gated => {
-              if (gated !== (policyState.toolsEffect === 'allow')) policyState.bareRuleTools.add(t.name);
+            const setBare = present => {
+              if (present) policyState.bareRuleTools.add(t.name);
               else policyState.bareRuleTools.delete(t.name);
             };
-            setBare(nowGated);
+            setBare(nowGated !== (policyState.toolsEffect === 'allow'));
             try {
               await syncPolicyRule(t.name, nowGated);
             } catch (err) {
-              setBare(wasGated);
+              // Restore the rule set itself: under a bare `*` rule the
+              // switch's old position does not say whether this tool had one.
+              setBare(hadBare);
               e.target.checked = wasGated;
               alert(tr(
                 'policies.errors.update_tool',

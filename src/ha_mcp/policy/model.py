@@ -37,7 +37,10 @@ class Predicate(BaseModel):
 
     path: str
     op: PredicateOp
-    value: Any | None = None
+    # validate_default: an omitted value must fail the same checks an explicit
+    # null does. Otherwise ``{"op": "not_in"}`` saves as ``"value": null``,
+    # which the next load refuses, and every tool call is then refused too.
+    value: Any | None = Field(default=None, validate_default=True)
 
     @field_validator("path")
     @classmethod
@@ -182,8 +185,8 @@ def bare_rule_gates(policy: Policy, tool: str) -> bool:
 
     What the per-tool "security gated" toggle shows and ``set_tool(gated=)``
     sets. A bare rule gates its tool in a require-approval list and approves
-    it in an allow list, where a bare ``*`` rule approves every tool.
-    Conditional rules are not considered.
+    it in an allow list, where a bare ``*`` rule approves every tool, so the
+    toggle cannot gate a tool it covers. Conditional rules are not considered.
     """
     bare = {rule.tool_name for rule in policy.rules if not rule.when}
     if policy.rule_effect == "allow":

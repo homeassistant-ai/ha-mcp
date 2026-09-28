@@ -8175,3 +8175,96 @@ class TestAllowListPolicyUi:
         (body,) = self._puts(result)
         assert body["rules"] == []
         assert _probe(result, "gated") == "true"
+
+    def _click_gate_under_wildcard(
+        self, settings_script: str, effect: str, rules: list[dict]
+    ) -> HarnessResult:
+        policy = {**self.ALLOW_POLICY, "rule_effect": effect, "rules": rules}
+        tool = {
+            "name": "ha_get_state",
+            "title": "Get State",
+            "category": "read",
+            "description": "Read a state.",
+        }
+        fetches = {
+            **self._fetches(policy),
+            "/api/settings/tools": {
+                "status": 200,
+                "json": {
+                    "tools": [tool],
+                    "states": {},
+                    "env_pinned": {},
+                    "read_only_exempt": [],
+                },
+            },
+            "/api/settings/features": {
+                "status": 200,
+                "json": {
+                    "flags": {
+                        "enable_tool_security_policies": {
+                            "value": True,
+                            "origin": "default",
+                            "editable": True,
+                            "type": "bool",
+                        }
+                    },
+                    "beta_sub_flags": [],
+                    "is_addon": False,
+                },
+            },
+        }
+        result = run_script(
+            settings_script,
+            initial_html=MIN_DOM,
+            fetch_map=fetches,
+            invoke="""
+              await new Promise(r => setTimeout(r, 200));
+              const box = document.querySelector('input[name="tool:ha_get_state:gated"]');
+              document.body.setAttribute('data-before', String(box.checked));
+              box.checked = !box.checked;
+              box.dispatchEvent(new Event('change'));
+              await new Promise(r => setTimeout(r, 200));
+              const after = document.querySelector('input[name="tool:ha_get_state:gated"]');
+              document.body.setAttribute('data-after', String(after.checked));
+              document.body.setAttribute('data-bare', [...policyState.bareRuleTools].join(','));
+            """,
+        )
+        _assert_clean_init(result)
+        return result
+
+    def test_gate_toggle_under_an_approve_everything_rule_is_refused(
+        self, settings_script: str
+    ) -> None:
+        """An allow list's bare ``*`` rule approves every tool, so gating one
+        cannot take effect: nothing is saved, the switch returns to where it
+        was, and the alert names the rule to remove."""
+        result = self._click_gate_under_wildcard(
+            settings_script,
+            "allow",
+            [{"tool_name": "*", "when": [], "remember_minutes": 0}],
+        )
+        assert _probe(result, "before") == "false"
+        assert self._puts(result) == []
+        assert _probe(result, "after") == "false"
+        assert _probe(result, "bare") == "*"
+        assert len(result.alerts) == 1
+        assert 'unconditional "*" rule' in result.alerts[0]
+
+    def test_gate_toggle_off_under_a_gate_everything_rule_saves(
+        self, settings_script: str
+    ) -> None:
+        """In a require-approval list the tool's own bare rule is first-match
+        ahead of ``*`` (it supplies the remember window), so removing it is a
+        real change and must not be refused."""
+        result = self._click_gate_under_wildcard(
+            settings_script,
+            "require_approval",
+            [
+                {"tool_name": "ha_get_state", "when": [], "remember_minutes": 0},
+                {"tool_name": "*", "when": [], "remember_minutes": 60},
+            ],
+        )
+        assert _probe(result, "before") == "true"
+        (body,) = self._puts(result)
+        assert [r["tool_name"] for r in body["rules"]] == ["*"]
+        assert result.alerts == []

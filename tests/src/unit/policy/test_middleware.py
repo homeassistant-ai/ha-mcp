@@ -1185,6 +1185,85 @@ async def test_empty_allow_list_leaves_approval_management_ungated(queue):
 
 
 @pytest.mark.anyio
+async def test_switching_to_an_allow_list_mid_wait_remembers_nothing(queue):
+    """A call waiting under a require-approval rule with remember_minutes is
+    approved after the switch to an allow list. Its approval arms the
+    remember window it captured, and nothing clears the cache (a sidecar
+    save cannot reach it), so the allow list must not read that window."""
+    pol = [Policy(rules=[Rule(tool_name="ha_call_service", remember_minutes=10)])]
+    mw = PolicyMiddleware(policy_provider=lambda: pol[0], queue=queue, wait_seconds=5)
+    args = {"domain": "lock"}
+
+    async def switch_then_approve():
+        await anyio.sleep(0.05)
+        pol[0] = Policy(rule_effect="allow", rules=[Rule(tool_name="ha_get_state")])
+        queue.approve(queue.list_pending()[0].token)
+
+    call_next = AsyncMock(return_value="ok")
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(switch_then_approve)
+        assert (
+            await mw.on_call_tool(make_context("ha_call_service", args), call_next)
+            == "ok"
+        )
+    assert queue.is_remembered("ha_call_service", compute_args_hash(args))
+
+    no_wait = PolicyMiddleware(
+        policy_provider=lambda: pol[0], queue=queue, wait_seconds=0
+    )
+    later = AsyncMock()
+    with pytest.raises(ToolError):
+        await no_wait.on_call_tool(make_context("ha_call_service", args), later)
+    later.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_a_waiter_under_an_allow_list_does_not_ride_the_winners_window(
+    queue, monkeypatch: pytest.MonkeyPatch
+):
+    """Two identical calls share one row across the switch to an allow list.
+
+    The first, which started under a rule with remember_minutes, wins the
+    approval and arms its window. The second joined under the allow list, so
+    losing the claim must leave it without an approval rather than let it
+    read that window: one click, one dispatch.
+    """
+    args = {"domain": "lock"}
+    pol = [Policy(rules=[Rule(tool_name="ha_call_service", remember_minutes=10)])]
+    mw = PolicyMiddleware(policy_provider=lambda: pol[0], queue=queue, wait_seconds=5)
+    call_next = AsyncMock(return_value="ok")
+    attached: list[int] = []
+    outcomes: list[object] = []
+    await _attach_counting_find_or_create(queue, monkeypatch, attached)
+
+    async def call():
+        try:
+            outcomes.append(
+                await mw.on_call_tool(
+                    make_context("ha_call_service", dict(args)), call_next
+                )
+            )
+        except ToolError:
+            outcomes.append("pending")
+
+    async def switch_join_and_approve(tg):
+        await _wait_until_attached(attached, 1)
+        pol[0] = Policy(rule_effect="allow", rules=[Rule(tool_name="ha_get_state")])
+        tg.start_soon(call)
+        await _wait_until_attached(attached, 2)
+        pending = queue.list_pending()
+        assert len(pending) == 1
+        queue.approve(pending[0].token)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(call)
+        tg.start_soon(switch_join_and_approve, tg)
+
+    assert sorted(outcomes, key=str) == ["ok", "pending"]
+    assert call_next.await_count == 1
+
+
+@pytest.mark.anyio
 async def test_a_shared_pending_row_is_announced_once(queue):
     """A later identical call joins the existing row (``find_or_create``).
 

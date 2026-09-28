@@ -1100,6 +1100,21 @@ class TestManageToolsGate:
         )
         assert [r.tool_name for r in self._rules()] == ["ha_call_service", "*"]
 
+    async def test_gate_round_trips_under_a_gate_everything_rule(self, dev_tools):
+        # The tool's own bare rule is first-match ahead of `*`, so it carries
+        # its own remember window: removing it again is a real change.
+        from ha_mcp.policy.model import Policy, Rule
+        from ha_mcp.policy.persistence import save_policy
+
+        save_policy(
+            get_data_dir(), Policy(rules=[Rule(tool_name="*", remember_minutes=60)])
+        )
+        for gated in (True, False):
+            await dev_tools.ha_dev_manage_settings(
+                action="set_tool", tool="ha_call_service", gated=gated
+            )
+        assert [r.tool_name for r in self._rules()] == ["*"]
+
     async def test_combined_set_tool_is_atomic_on_validation_failure(self, dev_tools):
         # A combined state+gate request whose state fails validation must NOT
         # have persisted the gate rule — preflight validates before any write.
@@ -1156,13 +1171,15 @@ class TestManageToolsGateUnderAllowList:
             "ha_search",
         ]
 
-    async def test_gate_on_under_an_approve_everything_rule_warns(self, dev_tools):
+    async def test_gate_on_under_an_approve_everything_rule_is_refused(self, dev_tools):
         self._store("ha_get_state", "*")
-        result = await dev_tools.ha_dev_manage_settings(
-            action="set_tool", tool="ha_get_state", gated=True
-        )
-        assert result["data"]["gated"] is False
-        assert any("unconditional '*' rule" in w for w in result["warnings"])
+        with pytest.raises(
+            ToolError, match="unconditional '\\*' rule in this allow list approves"
+        ):
+            await dev_tools.ha_dev_manage_settings(
+                action="set_tool", tool="ha_get_state", gated=True
+            )
+        assert [r.tool_name for r in self._rules()] == ["ha_get_state", "*"]
 
     async def test_list_reports_nothing_gated_under_an_approve_everything_rule(
         self, dev_tools

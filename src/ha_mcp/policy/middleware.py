@@ -172,8 +172,17 @@ class PolicyMiddleware(Middleware):
         remember_minutes = (
             0 if dynamic_targets else rule.remember_minutes if rule else 0
         )
+        # An allow list has no remember window (find_matching_rule returns no
+        # rule for it, so remember_minutes is 0). A remembered entry is then
+        # left over from a require-approval list: a call left pending there
+        # and approved after the switch, or a switch saved from the sidecar or
+        # by a hand edit, neither of which clears this cache. It must not
+        # approve a call the allow list gates.
+        reads_remembered = (
+            not dynamic_targets and policy.rule_effect == "require_approval"
+        )
 
-        if not dynamic_targets and self._queue.is_remembered(name, args_hash):
+        if reads_remembered and self._queue.is_remembered(name, args_hash):
             return await call_next(context)
 
         # A dynamic selector call must never consume an entry it did not
@@ -202,6 +211,7 @@ class PolicyMiddleware(Middleware):
             name,
             args_hash,
             dynamic_targets=dynamic_targets,
+            reads_remembered=reads_remembered,
             remember_minutes=remember_minutes,
         ):
             return await call_next(context)
@@ -223,7 +233,7 @@ class PolicyMiddleware(Middleware):
                 pending,
                 name,
                 args_hash,
-                dynamic_targets=dynamic_targets,
+                reads_remembered=reads_remembered,
                 remember_minutes=remember_minutes,
             ):
                 return await call_next(context)
@@ -358,6 +368,7 @@ class PolicyMiddleware(Middleware):
         args_hash: str,
         *,
         dynamic_targets: bool,
+        reads_remembered: bool,
         remember_minutes: int,
     ) -> bool:
         """Act on an entry this call did not create. True means dispatch now.
@@ -384,7 +395,7 @@ class PolicyMiddleware(Middleware):
                 existing,
                 name,
                 args_hash,
-                dynamic_targets=dynamic_targets,
+                reads_remembered=reads_remembered,
                 remember_minutes=remember_minutes,
             )
         if existing.decision == "denied":
@@ -398,7 +409,7 @@ class PolicyMiddleware(Middleware):
         name: str,
         args_hash: str,
         *,
-        dynamic_targets: bool,
+        reads_remembered: bool,
         remember_minutes: int,
     ) -> bool:
         """Consume an approved entry for this invocation.
@@ -412,22 +423,23 @@ class PolicyMiddleware(Middleware):
         earlier in ``on_call_tool`` ran before the approval existed, which
         is why it has to be re-checked here rather than relied upon.
 
-        A dynamic selector call never reads the remember-cache -- that
-        same gate skips the lookup for it, and ``remember_minutes`` is
-        forced to 0 -- so it must not consult one here either. No
-        reachable case arms such a key today (``has_dynamic_selector_targets``
-        is a pure function of the name and args that also produce
-        ``args_hash``, so static and dynamic calls cannot collide on one
-        key), but the guard keeps this branch degrading the same
-        direction as the defensive claim check in
-        ``_resolve_already_decided``: toward an extra prompt, never
-        toward a dispatch the caller was not entitled to.
+        A call that skips that gate (``reads_remembered`` is false for a
+        dynamic selector call and for every call under an allow list) must
+        not consult the cache here either. Under an allow list an entry left
+        over from a require-approval list can be live. For a dynamic
+        selector call no reachable case arms one today
+        (``has_dynamic_selector_targets`` is a pure function of the name and
+        args that also produce ``args_hash``, so static and dynamic calls
+        cannot collide on one key), but the guard keeps this branch
+        degrading the same direction as the defensive claim check in
+        ``_resolve_already_decided``: toward an extra prompt, never toward a
+        dispatch the caller was not entitled to.
         """
         if self._queue.consume_and_maybe_remember(
             entry, remember_minutes=remember_minutes
         ):
             return True
-        if dynamic_targets:
+        if not reads_remembered:
             return False
         return self._queue.is_remembered(name, args_hash)
 
