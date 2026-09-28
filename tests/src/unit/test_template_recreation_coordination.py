@@ -196,11 +196,13 @@ async def test_cancelled_recreation_releases_waiting_entry_write(recovery):
 @pytest.mark.parametrize("exclusive", [False, True])
 async def test_entry_guard_is_reentrant_for_its_task(recovery, exclusive):
     guard = recovery.manager.config_entry_write_guard
-    async with asyncio.timeout(2):
-        async with guard("old-entry", exclusive=exclusive):
-            async with guard("old-entry", exclusive=exclusive):
-                async with guard("new-entry"):
-                    pass
+    async with (
+        asyncio.timeout(2),
+        guard("old-entry", exclusive=exclusive),
+        guard("old-entry", exclusive=exclusive),
+        guard("new-entry"),
+    ):
+        pass
 
 
 async def test_cancelled_waiting_restore_does_not_block_new_writes(recovery):
