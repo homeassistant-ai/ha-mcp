@@ -45,6 +45,10 @@ name: CodeQL Code Quality
 # run no longer uploads a partial artifact, which is the price of not paying
 # for the remainder of the job after a cancel.
 #
+# Databases are created under $RUNNER_TEMP, outside the scanned tree: a
+# database inside it gets its own source archive extracted as more source,
+# and the gate cannot verify allowlist entries for those duplicate findings.
+#
 # Languages gated (one step group each), both scanning the whole tree
 # (--source-root .):
 #   - python      vendored fixtures under tests/initial_test_state/ are dropped
@@ -137,7 +141,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh codeql database create ha-mcp-db-python \
+          gh codeql database create "$RUNNER_TEMP/ha-mcp-db-python" \
             --language=python \
             --build-mode=none \
             --source-root . \
@@ -148,7 +152,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh codeql database analyze ha-mcp-db-python \
+          gh codeql database analyze "$RUNNER_TEMP/ha-mcp-db-python" \
             codeql/python-queries:codeql-suites/python-code-quality.qls \
             codeql/python-queries:codeql-suites/python-code-scanning.qls \
             --format=sarif-latest \
@@ -175,7 +179,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh codeql database create ha-mcp-db-javascript \
+          gh codeql database create "$RUNNER_TEMP/ha-mcp-db-javascript" \
             --language=javascript \
             --build-mode=none \
             --source-root . \
@@ -187,7 +191,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh codeql database analyze ha-mcp-db-javascript \
+          gh codeql database analyze "$RUNNER_TEMP/ha-mcp-db-javascript" \
             codeql/javascript-queries:codeql-suites/javascript-code-quality.qls \
             codeql/javascript-queries:codeql-suites/javascript-code-scanning.qls \
             --format=sarif-latest \

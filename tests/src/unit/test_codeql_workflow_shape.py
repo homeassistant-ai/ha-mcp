@@ -138,7 +138,7 @@ def test_both_languages_are_still_analyzed() -> None:
         language
         for language in _LANGUAGES
         for step in _steps()
-        if "database create ha-mcp-db" in _run(step)
+        if "gh codeql database create" in _run(step)
         and f"--language={language}" in _run(step)
     }
     assert analyzed == set(_LANGUAGES)
@@ -265,13 +265,13 @@ def test_each_language_builds_and_analyzes_its_own_database_directory() -> None:
     analyses: list[tuple[str, set[str]]] = []
     for step in _steps():
         run = _run(step)
-        for match in re.finditer(r"gh codeql database create (\S+)", run):
+        for match in re.finditer(r'gh codeql database create "?([^"\s]+)', run):
             language_flag = re.search(r"--language=(\S+)", run)
             assert language_flag, f"create step {_step_name(step)!r} names no language"
             creates.append((match.group(1), language_flag.group(1)))
         analyses.extend(
             (match.group(1), set(re.findall(r"codeql/(\w+)-queries", run)))
-            for match in re.finditer(r"gh codeql database analyze (\S+)", run)
+            for match in re.finditer(r'gh codeql database analyze "?([^"\s]+)', run)
         )
 
     assert len(creates) == len(analyses) == len(_LANGUAGES)
