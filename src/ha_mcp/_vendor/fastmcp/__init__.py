@@ -32,7 +32,7 @@ from ha_mcp._vendor.fastmcp import _compat
 
 _compat.install()
 
-__version__ = "4.0.3"
+__version__ = "4.0.5"
 
 if settings.deprecation_warnings:
     warnings.simplefilter("default", FastMCPDeprecationWarning)
