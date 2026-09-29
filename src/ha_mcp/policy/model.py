@@ -16,6 +16,11 @@ PredicateOp = Literal[
     "eq", "neq", "in", "not_in", "regex", "contains", "exists", "gt", "lt"
 ]
 
+# What a matching rule does. ``require_approval`` (the default) gates matching
+# calls and lets everything else run; ``allow`` approves matching calls and
+# gates everything else.
+RuleEffect = Literal["require_approval", "allow"]
+
 # Schema generation of the persisted policy file. Version 2 = ANY-match
 # condition semantics (PR #1993): each UI condition is its own rule; a rule's
 # predicates AND together (a condition with sub-parameters). Files WITHOUT the
@@ -32,7 +37,10 @@ class Predicate(BaseModel):
 
     path: str
     op: PredicateOp
-    value: Any | None = None
+    # validate_default: an omitted value must fail the same checks an explicit
+    # null does. Otherwise ``{"op": "not_in"}`` saves as ``"value": null``,
+    # which the next load refuses, and every tool call is then refused too.
+    value: Any | None = Field(default=None, validate_default=True)
 
     @field_validator("path")
     @classmethod
@@ -72,8 +80,9 @@ class Predicate(BaseModel):
 class Rule(BaseModel):
     """One policy rule.
 
-    When this tool is called and all `when` predicates match, the call
-    requires user approval. Use ``tool_name="*"`` to match any tool
+    When this tool is called and all `when` predicates match, the policy's
+    ``rule_effect`` applies to the call: it requires user approval, or (in
+    allow mode) it runs without one. Use ``tool_name="*"`` to match any tool
     (combine with predicates for cross-tool rules).
     """
 
@@ -94,21 +103,26 @@ class Rule(BaseModel):
 class Policy(BaseModel):
     """Full tool security policy, persisted to tool_policy.json.
 
-    The system is always "allow unless a rule matches; rule = require
-    approval". There is no global deny/require-approval default — rules
-    grant approval gates, nothing else.
+    ``rule_effect`` decides how the rule list reads. With
+    ``require_approval`` (the default) a matching rule gates the call and an
+    unmatched call runs. With ``allow`` a matching rule approves the call and
+    an unmatched call requires approval; ``evaluator.match_predicate`` also
+    matches more strictly in that mode, so neither a case variant nor one
+    listed value among unlisted ones can ride an approval.
 
-    ``extra="ignore"`` so policy files written by older builds (which may
-    carry fields since dropped from the schema) still load; dropped fields
-    are silently discarded on next save. Predicate/Rule keep
-    ``extra="forbid"`` since those are constructed from UI / user-typed
-    JSON where typos should fail loudly.
+    ``extra="forbid"``, like Predicate and Rule: an unknown key is refused
+    on every write and fails the load of a stored file (the middleware then
+    fails closed) instead of being dropped, because a dropped misspelling
+    such as ``"rule_efect": "allow"`` would silently read an allow list as a
+    require-approval list. No released build wrote a top-level field this
+    model lacks.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     wait_seconds: int = Field(default=60, ge=5, le=600)
     approval_ttl_minutes: int = Field(default=5, ge=1, le=60)
+    rule_effect: RuleEffect = "require_approval"
     rules: list[Rule] = Field(default_factory=list)
     # Whether a PIN-carrying ha_mcp_approval_response event may decide a
     # pending approval (``policy.decisions``). Off by default, and off is
@@ -138,3 +152,43 @@ class Policy(BaseModel):
                 "issues a fresh pending row."
             )
         return self
+
+
+ALLOW_LIST_OMITTED_MESSAGE = (
+    "'rule_effect' is missing from the policy document, but the stored policy "
+    "is an allow list (rule_effect='allow'). The whole document is replaced, "
+    "so an omitted field would fall back to 'require_approval' and turn every "
+    "approved call into a gated one and every other call into an ungated one. "
+    'Send "rule_effect": "allow" to keep the allow list, or '
+    '"rule_effect": "require_approval" to switch deliberately.'
+)
+
+
+def drops_allow_list(new: Policy, current: Policy) -> bool:
+    """Whether writing ``new`` would leave allow mode only by omission.
+
+    ``rule_effect`` defaults to ``require_approval``, so a whole-document
+    write that omits it (an older settings page, a document copied from an
+    example) would invert a stored allow list silently. Every write path
+    refuses that instead of guessing.
+    """
+    return current.rule_effect == "allow" and "rule_effect" not in new.model_fields_set
+
+
+def gates_differ(a: Policy, b: Policy) -> bool:
+    """Whether a remembered approval may no longer hold after ``a`` -> ``b``."""
+    return (a.rule_effect, a.rules) != (b.rule_effect, b.rules)
+
+
+def bare_rule_gates(policy: Policy, tool: str) -> bool:
+    """Whether ``tool`` is gated as far as its unconditional rule goes.
+
+    What the per-tool "security gated" toggle shows and ``set_tool(gated=)``
+    sets. A bare rule gates its tool in a require-approval list and approves
+    it in an allow list, where a bare ``*`` rule approves every tool, so the
+    toggle cannot gate a tool it covers. Conditional rules are not considered.
+    """
+    bare = {rule.tool_name for rule in policy.rules if not rule.when}
+    if policy.rule_effect == "allow":
+        return tool not in bare and "*" not in bare
+    return tool in bare

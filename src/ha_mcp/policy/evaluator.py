@@ -2,7 +2,7 @@
 
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from enum import StrEnum
 from typing import Any
 
@@ -93,7 +93,13 @@ def has_dynamic_selector_targets(name: str, args: dict[str, Any]) -> bool:
     return name == "ha_bulk_control" and args.get("selector") is not None
 
 
-def iter_path_values(args: dict[str, Any], path: str) -> Iterator[Any]:
+MISSING = object()
+"""What ``iter_path_values(..., report_missing=True)`` yields for a dead end."""
+
+
+def iter_path_values(
+    args: dict[str, Any], path: str, *, report_missing: bool = False
+) -> Iterator[Any]:
     """Yield every value the dotted path resolves to.
 
     The leading ``args`` segment is implicit and stripped. A ``*`` segment
@@ -101,6 +107,12 @@ def iter_path_values(args: dict[str, Any], path: str) -> Iterator[Any]:
     across items for lists — so ``args.*`` yields every top-level
     argument, ``args.config.*`` yields every leaf of the ``config``
     sub-dict, and so on. Empty iterator = no match.
+
+    A branch that cannot continue (a missing key, a named segment on a value
+    that is not a dict, or a ``*`` on a scalar) is skipped, unless
+    ``report_missing``, which yields ``MISSING`` for it instead and also for a
+    ``*`` over an empty container. Allow mode needs that: an operation without
+    the constrained field is a value the predicate never saw.
     """
     parts = path.split(".")
     if parts[0] == "args":
@@ -112,36 +124,56 @@ def iter_path_values(args: dict[str, Any], path: str) -> Iterator[Any]:
             return
         head, tail = rest[0], rest[1:]
         if head == "*":
-            if isinstance(cur, dict):
-                for v in cur.values():
-                    yield from walk(v, tail)
-            elif isinstance(cur, (list, tuple)):
-                for v in cur:
-                    yield from walk(v, tail)
+            children = _children(cur)
+            if report_missing and not children:
+                # An empty container is a dead end too: the branch holds no
+                # value the predicate could examine.
+                children = None
+        elif isinstance(cur, dict) and head in cur:
+            children = [cur[head]]
+        else:
+            children = None
+        if children is None:
+            if report_missing:
+                yield MISSING
             return
-        if isinstance(cur, dict) and head in cur:
-            yield from walk(cur[head], tail)
+        for child in children:
+            yield from walk(child, tail)
 
     yield from walk(args, parts)
 
 
-def _ci(x: Any) -> Any:
+def _children(node: Any) -> Iterable[Any] | None:
+    """What a ``*`` segment fans out over; None for a scalar."""
+    if isinstance(node, dict):
+        return node.values()
+    if isinstance(node, (list, tuple)):
+        return node
+    return None
+
+
+def _ci(x: Any, strict: bool = False) -> Any:
     """Lower-case strings for case-insensitive comparison; pass other
     types through unchanged so type semantics (int != "1") survive.
-    Used on both sides of every string op — security gates should fire
-    whether the caller wrote 'Lock' or 'LOCK' or 'lock'."""
-    return x.lower() if isinstance(x, str) else x
+    Used on both sides of the equality and membership ops — security gates
+    should fire whether the caller wrote 'Lock' or 'LOCK' or 'lock'.
+
+    ``strict`` keeps the case; ``match_predicate`` explains why allow mode
+    compares both ways."""
+    return x.lower() if isinstance(x, str) and not strict else x
 
 
-def _contains_matches(val: Any, pv: Any) -> bool:
+def _contains_matches(val: Any, pv: Any, strict: bool) -> bool:
     if isinstance(val, str) and isinstance(pv, str):
-        return pv.lower() in val.lower()
-    # Mirror the case-insensitive treatment that ``eq`` / ``in`` /
-    # ``not_in`` already apply: a rule listing ``["light.kitchen"]``
+        return _ci(pv, strict) in _ci(val, strict)
+    # Outside strict mode, mirror the case-insensitive treatment that ``eq``
+    # / ``in`` / ``not_in`` apply: a rule listing ``["light.kitchen"]``
     # must match an LLM passing ``"Light.Kitchen"``. Per-element
     # ``_ci`` guards non-string entries so mixed-type collections
     # (e.g. ``[1, "two"]``) keep their natural equality semantics.
-    return isinstance(val, (list, tuple, set)) and any(_ci(pv) == _ci(x) for x in val)
+    return isinstance(val, (list, tuple, set)) and any(
+        _ci(pv, strict) == _ci(x, strict) for x in val
+    )
 
 
 def _numeric_matches(val: Any, op: str, pv: Any) -> bool:
@@ -160,59 +192,118 @@ def _numeric_matches(val: Any, op: str, pv: Any) -> bool:
         return False
 
 
-def _op_matches(val: Any, op: str, pv: Any) -> bool:
+def _op_matches(val: Any, op: str, pv: Any, strict: bool = False) -> bool:
     """Apply one op to one concrete value. Predicate dispatches over
     the candidate values (which may be many for wildcard paths).
 
     String comparisons are case-insensitive (security gates shouldn't
-    care whether the LLM lowercased its args). Non-string types
-    preserve their natural comparison semantics.
+    care whether the LLM lowercased its args) unless ``strict`` (see
+    ``_ci``). Non-string types preserve their natural comparison semantics.
     """
     match op:
         case "eq":
-            return bool(_ci(val) == _ci(pv))
+            return bool(_ci(val, strict) == _ci(pv, strict))
         case "neq":
-            return bool(_ci(val) != _ci(pv))
+            return bool(_ci(val, strict) != _ci(pv, strict))
         case "in":
-            return _ci(val) in [_ci(x) for x in (pv or [])]
+            return _ci(val, strict) in [_ci(x, strict) for x in (pv or [])]
         case "not_in":
-            return _ci(val) not in [_ci(x) for x in (pv or [])]
+            return _ci(val, strict) not in [_ci(x, strict) for x in (pv or [])]
         case "regex":
             # `regex` is re.search (substring match). Anchor with ^...$
-            # for full-match. re.IGNORECASE so '^light\.' matches 'Light.x'.
+            # for full-match. re.IGNORECASE (unless strict) so '^light\.'
+            # matches 'Light.x'.
             return (
                 isinstance(val, str)
                 and isinstance(pv, str)
-                and re.search(pv, val, re.IGNORECASE) is not None
+                and re.search(pv, val, 0 if strict else re.IGNORECASE) is not None
             )
         case "contains":
-            return _contains_matches(val, pv)
+            return _contains_matches(val, pv, strict)
         case "gt" | "lt":
             return _numeric_matches(val, op, pv)
     return False
 
 
-def match_predicate(predicate: Predicate, args: dict[str, Any]) -> bool:
-    values = list(iter_path_values(args, predicate.path))
+def match_predicate(
+    predicate: Predicate, args: dict[str, Any], *, strict: bool = False
+) -> bool:
+    """Whether ``predicate`` holds for ``args``.
+
+    Outside allow mode a wildcard path matches when ANY value at the wildcard
+    satisfies the op; for a non-wildcard path there is at most one value.
+
+    ``strict`` is allow mode, where a match APPROVES the call, so every
+    ambiguity must resolve towards "no match":
+
+    - EVERY branch the path reaches must hold the field, ``exists``
+      included, so ``args.operations.*.parameters.brightness`` does not
+      approve a batch whose unlock operation carries no ``parameters`` (or
+      an empty one), and ``args.*.entity_id`` does not approve a ``target``
+      object that names only an area. A scalar argument lacks every field,
+      so ``args.*.<field>`` approves no call that also has one. The
+      remaining rules do not apply to ``exists``.
+    - EVERY value must satisfy the op, and a list found at the path counts
+      as its items, so an approval naming ``light.a`` covers neither an
+      ``operations`` list nor an ``entity_id`` list that also names a lock.
+    - A string with a comma or surrounding whitespace never matches: Home
+      Assistant splits ``"light.a, lock.x"`` into two entity IDs and strips
+      each, so the string would stand for values the op never saw.
+    - A dict value (an object argument) can only be matched exactly, by
+      ``eq`` or ``in``; ``neq "lock.x"`` says nothing about what the object
+      holds, so it must not approve it.
+    - The op must hold both case-sensitively and case-insensitively. A
+      positive op (``eq``, ``in``) then needs the exact case, so
+      ``home/bridge`` does not approve the different MQTT topic
+      ``Home/Bridge``; a negated op (``neq``, ``not_in``) cannot be
+      satisfied by a case variant, because Home Assistant lower-cases
+      domains, services and entity IDs and would run ``LOCK`` as ``lock``.
+    """
+    values = list(iter_path_values(args, predicate.path, report_missing=strict))
+    if not values or any(v is MISSING for v in values):
+        return False
     if predicate.op == "exists":
-        return bool(values)
+        return True
+    if not strict:
+        return any(_op_matches(v, predicate.op, predicate.value) for v in values)
+    values = list(_flatten_lists(values))
     if not values:
         return False
-    # Existential semantics: a wildcard path matches if ANY value at the
-    # wildcard satisfies the op. For non-wildcard paths there's at most
-    # one value so the any() collapses to a single check.
-    return any(_op_matches(v, predicate.op, predicate.value) for v in values)
+    return all(
+        not _splits_into_other_values(v)
+        and (not isinstance(v, dict) or predicate.op in ("eq", "in"))
+        and _op_matches(v, predicate.op, predicate.value, strict=True)
+        and _op_matches(v, predicate.op, predicate.value)
+        for v in values
+    )
 
 
-def match_rule(rule: Rule, tool_name: str, args: dict[str, Any]) -> bool:
+def _splits_into_other_values(value: Any) -> bool:
+    return isinstance(value, str) and ("," in value or value != value.strip())
+
+
+def _flatten_lists(values: Iterable[Any]) -> Iterator[Any]:
+    for value in values:
+        if isinstance(value, (list, tuple)):
+            yield from _flatten_lists(value)
+        else:
+            yield value
+
+
+def match_rule(
+    rule: Rule, tool_name: str, args: dict[str, Any], *, strict: bool = False
+) -> bool:
     if rule.tool_name not in ("*", tool_name):
         return False
-    return all(match_predicate(p, args) for p in rule.when)
+    return all(match_predicate(p, args, strict=strict) for p in rule.when)
 
 
 def find_matching_rule(
     tool_name: str, args: dict[str, Any], policy: Policy
 ) -> Rule | None:
+    """First rule gating this call under a require-approval list, else None."""
+    if policy.rule_effect != "require_approval":
+        return None
     for rule in policy.rules:
         if match_rule(rule, tool_name, args):
             return rule
@@ -231,8 +322,8 @@ def _predicate_reaches_operations(path: str) -> bool:
     literal segment right after that wildcard (e.g. ``domain`` in
     ``args.*.domain``) can only ever match a *dict* value at that level (like
     ``selector``) — ``walk()`` requires ``isinstance(cur, dict)`` for a
-    literal head, so it silently yields nothing against a list and can never
-    reach an operation row. Only a SECOND wildcard (``args.*.*...``, as in
+    literal head, so it yields no value against a list (only ``MISSING`` under
+    ``report_missing``) and can never reach an operation row. Only a SECOND wildcard (``args.*.*...``, as in
     ``args.*.*.entity_id``) or no further segment at all (bare ``args.*``,
     which yields the raw ``operations`` list value itself) can actually reach
     into the list. Any other concrete first segment (e.g. ``selector``) can
@@ -266,7 +357,38 @@ def _rule_needs_resolved_operations(rule: Rule) -> bool:
 
 
 def evaluate(tool_name: str, args: dict[str, Any], policy: Policy) -> Verdict:
-    """Decide whether one tool call requires approval under ``policy``.
+    """Decide whether one tool call requires approval under ``policy``."""
+    if policy.rule_effect == "require_approval":
+        return _evaluate_require_approval_list(tool_name, args, policy)
+    return _evaluate_allow_list(tool_name, args, policy)
+
+
+def _evaluate_allow_list(
+    tool_name: str, args: dict[str, Any], policy: Policy
+) -> Verdict:
+    """Allow mode: a call runs only when some rule approves it.
+
+    Unmatched calls, a ``ws_command`` call included, already require
+    approval here (a bare ``ha_call_service`` or ``*`` rule does approve
+    one), so the require-approval list's first fail-safe has
+    no counterpart. The selector one does: a rule that inspects
+    ``args.operations`` cannot see the targets a selector call resolves to
+    later, so it must not be what approves that call.
+    """
+    dynamic = has_dynamic_selector_targets(tool_name, args)
+    for rule in policy.rules:
+        if not match_rule(rule, tool_name, args, strict=True):
+            continue
+        if dynamic and _rule_needs_resolved_operations(rule):
+            continue
+        return Verdict.ALLOW
+    return Verdict.REQUIRE_APPROVAL
+
+
+def _evaluate_require_approval_list(
+    tool_name: str, args: dict[str, Any], policy: Policy
+) -> Verdict:
+    """Require-approval mode (the default): gate matching calls.
 
     A normal rule match (``find_matching_rule``) decides most calls. Two
     fail-safes broaden approval beyond an exact predicate match, each only

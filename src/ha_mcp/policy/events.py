@@ -84,9 +84,10 @@ def build_requested_payload(
     at ``ARG_VALUE_LIMIT``. The settings UI's pending list remains the place
     to read an argument in full.
 
-    ``matched_rule`` is present exactly when a rule matched this call. The
+    ``matched_rule`` is present exactly when a rule gated this call. The
     policy's two fail-safes (``evaluator.evaluate``) gate a call without a
-    matching rule, and then there is none to name.
+    matching rule, and under an allow list a call is gated because no rule
+    approved it; then there is none to name.
     """
     payload: dict[str, Any] = {
         "token": entry.token,

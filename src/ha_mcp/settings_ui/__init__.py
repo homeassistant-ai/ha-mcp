@@ -215,20 +215,18 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
     from pydantic import ValidationError
 
     from ..policy.decision_pin import is_pin_set
-    from ..policy.handlers import build_decision_pin_handlers
-    from ..policy.model import Policy
+    from ..policy.handlers import (
+        build_decision_pin_handlers,
+        policy_file_corrupt_response,
+    )
+    from ..policy.model import ALLOW_LIST_OMITTED_MESSAGE, Policy, drops_allow_list
     from ..policy.persistence import load_policy, save_policy
 
     async def get_config(_: Request) -> JSONResponse:
         try:
             return JSONResponse(load_policy(data_dir).model_dump(mode="json"))
         except ValueError as e:
-            # Mirror the main-server handler: surface corruption rather
-            # than crash the sidecar tab on a 500.
-            return JSONResponse(
-                {"error": str(e), "policy_file_corrupt": True},
-                status_code=500,
-            )
+            return policy_file_corrupt_response(e)
 
     async def put_config(request: Request) -> JSONResponse:
         try:
@@ -244,7 +242,14 @@ def _build_stub_policy_handlers(*, data_dir: Path) -> dict[str, Any]:
         from ..utils.config_write_lock import config_write_guard
 
         async with config_write_guard():
-            current = load_policy(data_dir)
+            try:
+                current = load_policy(data_dir)
+            except ValueError as e:
+                return policy_file_corrupt_response(e)
+            if drops_allow_list(new_policy, current):
+                return JSONResponse(
+                    {"error": ALLOW_LIST_OMITTED_MESSAGE}, status_code=400
+                )
             # Mirror the main-server PIN guard, and for the same reason it
             # sits inside the lock there: the PIN delete runs under this
             # lock and leaves the policy version untouched when the switch

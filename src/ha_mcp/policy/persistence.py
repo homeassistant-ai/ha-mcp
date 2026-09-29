@@ -22,7 +22,7 @@ def load_policy(data_dir: Path) -> Policy:
         return Policy()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
         raise ValueError(f"tool_policy.json is not valid JSON: {e}") from e
     try:
         policy = Policy.model_validate(raw)
@@ -85,7 +85,8 @@ def migrate_policy_any_semantics(data_dir: Path) -> bool:
     editor now writes one rule per condition and the UI reads "ANY condition
     matches" — so an untouched old file would silently enforce AND while the
     UI claims ANY. This splits every multi-predicate rule of an UNSTAMPED
-    file into one single-predicate rule each (the explicit, documented
+    require-approval file (an allow list is only stamped) into one
+    single-predicate rule each (the explicit, documented
     breaking change: old AND conditions become OR, the more-restrictive
     direction) and stamps ``schema_version`` so the migration never re-runs —
     post-upgrade multi-predicate rules (a condition with AND-ed
@@ -125,8 +126,19 @@ def _migrate_policy_any_semantics_locked(data_dir: Path) -> bool:
     try:
         policy = Policy.model_validate(raw)
     except ValidationError:
-        logger.warning("policy migration: %s failed validation; leaving as-is", path)
+        logger.warning(
+            "policy migration: %s failed validation; leaving as-is",
+            path,
+            exc_info=True,
+        )
         return False
+    if policy.rule_effect == "allow":
+        # An allow list postdates #1993, so its rules were never packed by the
+        # old editor; splitting one would turn an AND into an OR and widen
+        # what it approves.
+        save_policy(data_dir, policy)
+        logger.info("Stamped schema_version on %s (allow list, rules untouched).", path)
+        return True
     new_rules: list[Rule] = []
     split = 0
     for rule in policy.rules:
