@@ -32,6 +32,11 @@ auto-merge, deletes branches, or requests a reviewer.
 
 The default-branch workflow has three jobs:
 
+Wakeups for a slash-command issue or a CI head are serialized through
+publication. Distinct CI commits use separate queues, so status bursts on
+unrelated PRs cannot fill the command queue. The coding and publication jobs
+retain their own credential and write serialization.
+
 1. Admission independently rereads GitHub state, verifies authority and prepares
    an immutable plan artifact. It has read-only GitHub permissions and no secrets.
 2. A coding worker checks out the admitted SHA, runs Codex and relevant tests,

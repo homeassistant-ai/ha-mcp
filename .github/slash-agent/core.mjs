@@ -110,10 +110,10 @@ export function renderState(state, repository) {
 }
 
 export function feedbackHash(snapshot) {
+  // Reporter material stays in context and the stale-publication guard, but
+  // cannot authorize a paid turn through an unrelated CI/status event.
   return digest({
     feedback: snapshot.feedback,
-    // Reporter material stays in context and the stale-publication guard, but
-    // cannot authorize a paid turn through an unrelated CI/status event.
     threads: snapshot.threads
       .filter((t) => !t.isResolved)
       .map((t) => ({

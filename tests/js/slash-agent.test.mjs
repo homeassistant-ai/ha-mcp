@@ -484,6 +484,22 @@ test("a new CI failure resumes work, while pending checks do not consume a turn"
   );
 });
 
+test("a second wakeup after a failed-check iteration does not buy another worker turn", () => {
+  const api = new FakeAPI();
+  start(api);
+  green(api);
+  api.checks[0].conclusion = "failure";
+  const first = prepare(api, { number: 10, automatic: true }, APP);
+  assert.equal(first.decision.mode, "code");
+  const work = artifact();
+  work.changes = [];
+  work.result.outcome = "unchanged";
+  publish(api, first, work, APP, { runId: "43" });
+  assert.equal(stateFrom(api.comments, APP).rounds, 2);
+  assert.equal(prepare(api, { number: 10, automatic: true }, APP), null);
+  assert.equal(prepare(api, { number: 10, automatic: true }, APP), null);
+});
+
 test("an agent reply left unresolved does not trigger another coding turn itself", () => {
   const api = new FakeAPI();
   start(api);

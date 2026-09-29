@@ -30,7 +30,15 @@ def test_slash_agent_behavior() -> None:
 def test_slash_workflow_keeps_publication_and_auth_outside_generated_code() -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/slash-agent.yml").read_text())
     assert all(value == "read" for value in workflow["permissions"].values())
-    assert "concurrency" not in workflow
+    assert workflow["concurrency"] == {
+        "group": (
+            "slash-agent-${{ github.repository }}-${{ "
+            "github.event.issue.number || inputs.issue_number || "
+            "github.event.workflow_run.head_sha || github.event.sha || github.run_id }}"
+        ),
+        "cancel-in-progress": False,
+        "queue": "max",
+    }
     jobs = workflow["jobs"]
     admission = jobs["admit"]
     assert "homeassistant-ai/ha-mcp" in admission["if"]

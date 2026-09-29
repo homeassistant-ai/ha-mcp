@@ -33,6 +33,13 @@ permissions:
   checks: read
   statuses: read
 
+# Serialize a session's wakeups through publication. CI/status events queue by
+# commit, so unrelated PRs cannot crowd out a maintainer's slash command.
+concurrency:
+  group: slash-agent-${{ github.repository }}-${{ github.event.issue.number || inputs.issue_number || github.event.workflow_run.head_sha || github.event.sha || github.run_id }}
+  cancel-in-progress: false
+  queue: max
+
 jobs:
   admit:
     if: >-
