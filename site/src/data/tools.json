@@ -4478,9 +4478,44 @@
   {
     "name": "ha_report_issue",
     "title": "Report Issue or Feedback",
-    "description": "Get diagnostic information and templates for filing issue reports or feedback.\n\nGenerates templates for two report types, and you MUST pick from the\nconversation context:\n- RUNTIME BUG: the user reports an error, failure, or unexpected\n  behavior; a tool returned an error or incorrect result; something in\n  ha-mcp is broken.\n- AGENT BEHAVIOR FEEDBACK: the user says you used the wrong tool,\n  suggests a more efficient workflow, or reports your inefficiency or\n  mistakes.\nIf unclear which, ask: \"Are you reporting a bug in ha-mcp, or providing\nfeedback on how I used the tools?\"\n\nOUTPUT: both templates plus diagnostic data. The full response is LARGE\n(the captured logs appear in the raw log keys AND inside each template)\n— pass fields=... to fetch only the keys you need once you know which\ntemplate applies. Key fields: `runtime_bug_template` /\n`agent_behavior_template`; `recent_logs`, `startup_logs` (captured\nha-mcp tool/server log entries); `addon_logs` (app container\nstdout/stderr, HA app installs only, empty string otherwise);\n`core_error_log` (Home Assistant error log over REST, carries auth /\nintegration errors that don't show in addon_logs); `missing_tool_hint`\n— check this FIRST when the report is about a missing/unavailable tool:\na stale client tool list (not a bug) is the usual cause and refreshing\nthe MCP connection is the fix; `suggested_title`,\n`duplicate_check_urls`, `anonymization_guide`.",
+    "description": "Get diagnostics and a finished GitHub issue for a bug report or agent feedback.\n\nUse it when the user reports an ha-mcp error, failure or wrong result,\nor says you used the wrong tool or worked inefficiently. If it is\nunclear which, ask: \"Are you reporting a bug in ha-mcp, or providing\nfeedback on how I used the tools?\"\n\nPass the report text in the call: the server combines it with the\ndiagnostics it collects into `issue_title`, `issue_body` (the full\nreport with logs) and `issue_url` (a new-issue link with title and\nbody filled in, log sections left out to fit GitHub's URL limit;\nerror messages stay in, with secrets redacted). A call\nwithout text still returns diagnostics, with placeholders in the body.\n\nThe response is LARGE; `fields=` narrows it. Read `instructions`\nbefore showing anything to the user: it covers the missing-tool and\nknown-client pre-checks, the duplicate check, the mandatory\nanonymisation step, and how to file the issue. Check\n`missing_tool_hint` FIRST when the report is about a missing tool: a\nstale client tool list (not a bug) is the usual cause.",
     "inputSchema": {
       "properties": {
+        "report_type": {
+          "type": "Literal['runtime_bug', 'agent_behavior']",
+          "default": "runtime_bug",
+          "description": "'runtime_bug' when ha-mcp errored or behaved wrongly; 'agent_behavior' when the user says you used the wrong tool or worked inefficiently."
+        },
+        "title": {
+          "type": "str | None",
+          "default": null,
+          "description": "One-line summary of what broke, for the issue title."
+        },
+        "description": {
+          "type": "str | None",
+          "default": null,
+          "description": "What went wrong in markdown: steps to reproduce, expected and actual behavior. For agent_behavior: what you did and what you should have done."
+        },
+        "user_prompt": {
+          "type": "str | None",
+          "default": null,
+          "description": "The user message that led to the problem, verbatim."
+        },
+        "tool_calls": {
+          "type": "str | None",
+          "default": null,
+          "description": "The tool call(s) that produced the problem, verbatim: name, arguments and the (shortened) response."
+        },
+        "ai_model": {
+          "type": "str | None",
+          "default": null,
+          "description": "Your own model identity, as specific as you know it. Do not invent a version."
+        },
+        "client_app": {
+          "type": "str | None",
+          "default": null,
+          "description": "The app and version the user runs you in, as the USER states it (usually on the app's About screen or from its --version command). Never guess it."
+        },
         "tool_call_count": {
           "type": "int",
           "default": 10,
@@ -4493,7 +4528,7 @@
         "fields": {
           "type": "str | list[str] | None",
           "default": null,
-          "description": "Return only the specified top-level response keys. None = full response. Typical for a runtime bug: 'runtime_bug_template,suggested_title,runtime_bug_submit_url,duplicate_check_urls,anonymization_guide,missing_tool_hint,known_client_issues_hint,instructions'; for agent feedback swap in agent_behavior_template and agent_behavior_submit_url. The templates already embed the relevant logs, so the raw log keys are only needed for your own analysis. Available keys: diagnostic_info, recent_logs, startup_logs, addon_logs, core_error_log, log_count, startup_log_count, formatted_report, runtime_bug_template, agent_behavior_template, anonymization_guide, suggested_title, runtime_bug_submit_url, agent_behavior_submit_url, duplicate_check_urls, missing_tool_hint, known_client_issues_hint, instructions."
+          "description": "Return only the specified top-level response keys. None = full response. Typical: 'issue_title,issue_body,issue_url,duplicate_check_urls,anonymization_guide,missing_tool_hint,known_client_issues_hint,instructions'. issue_body already embeds the relevant logs, so the raw log keys are only needed for your own analysis. Available keys: diagnostic_info, recent_logs, startup_logs, addon_logs, core_error_log, log_count, startup_log_count, formatted_report, issue_title, issue_body, issue_url, anonymization_guide, duplicate_check_urls, missing_tool_hint, known_client_issues_hint, instructions."
         }
       }
     },

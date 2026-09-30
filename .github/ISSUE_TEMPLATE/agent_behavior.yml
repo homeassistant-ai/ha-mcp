@@ -17,9 +17,12 @@ body:
 
         > 📝 **Title tip:** replace the default `[AGENT] ` with a one-line summary
         > of what the agent did wrong (e.g. `[AGENT] re-runs ha_search
-        > instead of caching the result`). If `ha_report_issue` gave you a
-        > submission link, the title is already filled in — keep it or refine it,
-        > just don't leave it as a bare `[AGENT]`.
+        > instead of caching the result`), not a bare `[AGENT]`.
+        >
+        > **Easier:** ask your AI agent to report it with the `ha_report_issue` tool and
+        > file the issue for you. It can open the issue itself (GitHub CLI, a GitHub
+        > connector, or your browser), save the report as a file for you to paste into a
+        > blank issue, or give you a link that opens an issue with the report filled in.
 
   - type: textarea
     id: user_commentary
@@ -52,7 +55,7 @@ body:
 
         **Tell your AI agent:**
 
-        > "You struggled with [describe the issue from your first field]. Let's make an issue report with the ha_report_issue tool."
+        > "You struggled with [describe the issue from your first field]. Report it with the ha_report_issue tool and file the issue for me."
 
         The agent will collect:
         - Tool call history

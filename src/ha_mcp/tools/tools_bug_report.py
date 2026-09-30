@@ -15,9 +15,11 @@ import platform
 import re
 import sys
 import time
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Annotated, Any
-from urllib.parse import quote_plus
+from typing import Annotated, Any, Literal
+from urllib.parse import quote_plus, urlencode
 
 import httpx
 from pydantic import Field
@@ -53,13 +55,21 @@ from .util_helpers import (
 
 logger = logging.getLogger(__name__)
 
-# GitHub issue template URLs
-RUNTIME_BUG_URL = (
-    "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=runtime_bug.yml"
-)
-AGENT_BEHAVIOR_URL = (
-    "https://github.com/homeassistant-ai/ha-mcp/issues/new?template=agent_behavior.yml"
-)
+NEW_ISSUE_URL = "https://github.com/homeassistant-ai/ha-mcp/issues/new"
+
+# GitHub rejects an /issues/new URL of about 8 KB or more with 414 URI Too
+# Long (measured 2026-09-30: 8,167 characters loaded, 8,217 did not). That is
+# observed behaviour, not a documented limit, so the budget stays below it.
+_ISSUE_URL_MAX_CHARS = 7500
+
+# Last line of every generated issue body. A paste that lost its end, for
+# example because a chat UI closed the code block early, is visibly short.
+REPORT_END_MARKER = "<!-- end of ha_report_issue report -->"
+
+_TITLE_PREFIXES = {"runtime_bug": "[BUG] ", "agent_behavior": "[AGENT] "}
+
+# GitHub refuses a longer issue title.
+_ISSUE_TITLE_MAX_CHARS = 256
 
 # Guidance surfaced when the reported problem is a tool that never shows up in
 # the client's tool list. In issue #1804 this produced a false bug report: the
@@ -124,6 +134,9 @@ _CORE_LOG_MAX_CHARS = 5000
 # 20,000-line fetch hang (#2279). 500 keeps an order of magnitude of headroom
 # for short lines.
 _CORE_LOG_WINDOW_LINES = 500
+
+# A slow or missing Supervisor must not hold up the whole report.
+_SUPERVISOR_PROBE_TIMEOUT = 10.0
 
 # IPv4 sanitization: only redact addresses with strong network context so that
 # four-segment version strings (e.g. "ha-mcp version 1.2.3.4") are preserved.
@@ -327,9 +340,10 @@ def _websockets_dependency_state() -> dict[str, Any]:
 
 
 # Tool-surface-shaping toggles surfaced in bug reports. The set is small on
-# purpose: only flags that materially change which tools the agent sees, since
-# the same bug report behaves very differently depending on these. New
-# tool-shaping toggles should be added here so triage doesn't have to ask.
+# purpose: only settings that change which tools the agent sees or whether a
+# call runs, since the same bug report behaves very differently depending on
+# these. New settings of that kind should be added here so triage doesn't
+# have to ask.
 #
 # ``enable_beta_features`` leads the list because it is the master gate: when
 # off it force-disables every beta sub-flag (filesystem tools, code mode, YAML
@@ -337,8 +351,12 @@ def _websockets_dependency_state() -> dict[str, Any]:
 # report is meaningless without it. ``enable_filesystem_tools`` is a beta-gated
 # tool family from issue #1804 — surfacing it lets triage see at a glance whether
 # the tool the user couldn't find was even enabled server-side.
+# ``read_only_mode`` removes the write tools, and tool security policies can
+# hold or refuse a call, so a "write did nothing" report depends on both.
 _CONFIG_TOGGLE_FIELDS: tuple[str, ...] = (
     "enable_beta_features",
+    "read_only_mode",
+    "enable_tool_security_policies",
     "enable_websocket",
     "enable_dashboard_partial_tools",
     "enable_tool_search",
@@ -384,6 +402,31 @@ def _get_config_toggles(settings: Settings | None = None) -> dict[str, Any]:
             type(e).__name__,
         )
         return {}
+
+
+def _tool_policy_summary() -> str:
+    """Describe the stored tool security policy in one line, best-effort.
+
+    The import stays inside the ``try``: the server keeps running when the
+    policy package fails to import, and the report must still work then.
+    """
+    try:
+        from ..policy.persistence import load_policy
+        from ..utils.data_paths import get_data_dir
+
+        policy = load_policy(get_data_dir())
+    except Exception as e:
+        logger.warning("Tool policy probe failed: %s (%s)", e, type(e).__name__)
+        # load_policy's message can quote rule contents, so only its kind
+        # reaches the report.
+        if "not valid JSON" in str(e):
+            return "unreadable (invalid JSON)"
+        if "schema validation" in str(e):
+            return "unreadable (schema validation failed)"
+        return f"unreadable ({type(e).__name__})"
+    count = len(policy.rules)
+    rules = "1 rule" if count == 1 else f"{count} rules"
+    return f"{rules}, rule_effect={policy.rule_effect}"
 
 
 def _extract_client_info(ctx: Context | None) -> dict[str, str]:
@@ -838,6 +881,7 @@ def _build_formatted_report(
         f"Operating System: {platform_info['os']} {platform_info['os_release']} ({platform_info['architecture']})",
         f"Python Version: {platform_info['python_version']}",
         f"Home Assistant Version: {diagnostic_info['home_assistant_version']}",
+        f"Supervisor: {_format_supervisor_value(diagnostic_info)}",
         f"Connection Status: {diagnostic_info['connection_status']}",
         f"Entity Count: {diagnostic_info['entity_count']}",
         f"websockets Dependency: {_format_websockets_dependency_value(diagnostic_info)}",
@@ -972,6 +1016,31 @@ class BugReportTools:
             )
         return "not added"
 
+    async def _detect_supervisor_info(self) -> dict[str, str]:
+        """Read the Supervisor version and host OS, best-effort.
+
+        App tools go through the Supervisor, so a report about them needs its
+        release (#2270, #2278). Called only on a supervised install; a failure
+        keeps its error type so a timeout or a rejected token is visible.
+        """
+        from .tools_addons import _supervisor_api_call
+
+        try:
+            response = await asyncio.wait_for(
+                _supervisor_api_call(self._client, "/info"),
+                timeout=_SUPERVISOR_PROBE_TIMEOUT,
+            )
+        except Exception as e:
+            logger.info("Supervisor info probe failed: %s (%s)", e, type(e).__name__)
+            return {"error": type(e).__name__}
+        info = response.get("result")
+        if not isinstance(info, dict):
+            return {"error": "unexpected response"}
+        return {
+            "supervisor_version": str(info.get("supervisor") or "unknown"),
+            "host_os": str(info.get("operating_system") or "unknown"),
+        }
+
     @tool(
         name="ha_report_issue",
         tags={"Utilities"},
@@ -985,6 +1054,73 @@ class BugReportTools:
     @log_tool_usage
     async def ha_report_issue(
         self,
+        report_type: Annotated[
+            Literal["runtime_bug", "agent_behavior"],
+            Field(
+                default="runtime_bug",
+                description=(
+                    "'runtime_bug' when ha-mcp errored or behaved wrongly; "
+                    "'agent_behavior' when the user says you used the wrong "
+                    "tool or worked inefficiently."
+                ),
+            ),
+        ] = "runtime_bug",
+        title: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="One-line summary of what broke, for the issue title.",
+            ),
+        ] = None,
+        description: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "What went wrong in markdown: steps to reproduce, expected "
+                    "and actual behavior. For agent_behavior: what you did and "
+                    "what you should have done."
+                ),
+            ),
+        ] = None,
+        user_prompt: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description="The user message that led to the problem, verbatim.",
+            ),
+        ] = None,
+        tool_calls: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "The tool call(s) that produced the problem, verbatim: name, "
+                    "arguments and the (shortened) response."
+                ),
+            ),
+        ] = None,
+        ai_model: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Your own model identity, as specific as you know it. Do not "
+                    "invent a version."
+                ),
+            ),
+        ] = None,
+        client_app: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "The app and version the user runs you in, as the USER "
+                    "states it (usually on the app's About screen or from its "
+                    "--version command). Never guess it."
+                ),
+            ),
+        ] = None,
         tool_call_count: Annotated[
             int,
             Field(
@@ -1004,21 +1140,16 @@ class BugReportTools:
                 default=None,
                 description=(
                     "Return only the specified top-level response keys. "
-                    "None = full response. Typical for a runtime bug: "
-                    "'runtime_bug_template,suggested_title,"
-                    "runtime_bug_submit_url,duplicate_check_urls,"
+                    "None = full response. Typical: "
+                    "'issue_title,issue_body,issue_url,duplicate_check_urls,"
                     "anonymization_guide,missing_tool_hint,"
-                    "known_client_issues_hint,instructions'; for agent feedback "
-                    "swap in agent_behavior_template and "
-                    "agent_behavior_submit_url. The templates already embed "
-                    "the relevant logs, so the raw log keys are only needed "
-                    "for your own analysis. "
+                    "known_client_issues_hint,instructions'. issue_body "
+                    "already embeds the relevant logs, so the raw log keys are "
+                    "only needed for your own analysis. "
                     "Available keys: diagnostic_info, recent_logs, "
                     "startup_logs, addon_logs, core_error_log, log_count, "
-                    "startup_log_count, formatted_report, "
-                    "runtime_bug_template, agent_behavior_template, "
-                    "anonymization_guide, suggested_title, "
-                    "runtime_bug_submit_url, agent_behavior_submit_url, "
+                    "startup_log_count, formatted_report, issue_title, "
+                    "issue_body, issue_url, anonymization_guide, "
                     "duplicate_check_urls, missing_tool_hint, "
                     "known_client_issues_hint, instructions."
                 ),
@@ -1026,32 +1157,26 @@ class BugReportTools:
         ] = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        """Get diagnostic information and templates for filing issue reports or feedback.
+        """Get diagnostics and a finished GitHub issue for a bug report or agent feedback.
 
-        Generates templates for two report types, and you MUST pick from the
-        conversation context:
-        - RUNTIME BUG: the user reports an error, failure, or unexpected
-          behavior; a tool returned an error or incorrect result; something in
-          ha-mcp is broken.
-        - AGENT BEHAVIOR FEEDBACK: the user says you used the wrong tool,
-          suggests a more efficient workflow, or reports your inefficiency or
-          mistakes.
-        If unclear which, ask: "Are you reporting a bug in ha-mcp, or providing
+        Use it when the user reports an ha-mcp error, failure or wrong result,
+        or says you used the wrong tool or worked inefficiently. If it is
+        unclear which, ask: "Are you reporting a bug in ha-mcp, or providing
         feedback on how I used the tools?"
 
-        OUTPUT: both templates plus diagnostic data. The full response is LARGE
-        (the captured logs appear in the raw log keys AND inside each template)
-        — pass fields=... to fetch only the keys you need once you know which
-        template applies. Key fields: `runtime_bug_template` /
-        `agent_behavior_template`; `recent_logs`, `startup_logs` (captured
-        ha-mcp tool/server log entries); `addon_logs` (app container
-        stdout/stderr, HA app installs only, empty string otherwise);
-        `core_error_log` (Home Assistant error log over REST, carries auth /
-        integration errors that don't show in addon_logs); `missing_tool_hint`
-        — check this FIRST when the report is about a missing/unavailable tool:
-        a stale client tool list (not a bug) is the usual cause and refreshing
-        the MCP connection is the fix; `suggested_title`,
-        `duplicate_check_urls`, `anonymization_guide`.
+        Pass the report text in the call: the server combines it with the
+        diagnostics it collects into `issue_title`, `issue_body` (the full
+        report with logs) and `issue_url` (a new-issue link with title and
+        body filled in, log sections left out to fit GitHub's URL limit;
+        error messages stay in, with secrets redacted). A call
+        without text still returns diagnostics, with placeholders in the body.
+
+        The response is LARGE; `fields=` narrows it. Read `instructions`
+        before showing anything to the user: it covers the missing-tool and
+        known-client pre-checks, the duplicate check, the mandatory
+        anonymisation step, and how to file the issue. Check
+        `missing_tool_hint` FIRST when the report is about a missing tool: a
+        stale client tool list (not a bug) is the usual cause.
         """
         # Validate fields= before anything is collected: the projection at the
         # end was the only parse, outside any ValueError handler, so a
@@ -1066,10 +1191,20 @@ class BugReportTools:
             except ValueError as exc:
                 raise_tool_error(create_validation_error(str(exc), parameter="fields"))
 
+        text = _ReportText(
+            title=title,
+            description=description,
+            user_prompt=user_prompt,
+            tool_calls=tool_calls,
+            ai_model=ai_model,
+            client_app=client_app,
+        )
+
         # Detect installation method, platform, and runtime config.
         install_method = _detect_installation_method()
         platform_info = _detect_platform()
         config_toggles = _get_config_toggles()
+        config_toggles["tool_policy"] = await asyncio.to_thread(_tool_policy_summary)
         mcp_transport = _detect_mcp_transport()
         client_info = _extract_client_info(ctx)
         client_host = (
@@ -1092,6 +1227,7 @@ class BugReportTools:
             "component_version": component_version,
             "tools_entry_status": tools_entry_status,
             "server_entry_status": server_entry_status,
+            "supervisor": {"error": "not probed"},
             "instance": _instance_identity(),
             "installation_method": install_method,
             "platform": platform_info,
@@ -1113,9 +1249,17 @@ class BugReportTools:
             diagnostic_info["home_assistant_version"] = config.get("version", "Unknown")
             diagnostic_info["location_name"] = config.get("location_name", "Unknown")
             diagnostic_info["time_zone"] = config.get("time_zone", "Unknown")
+            # Only a supervised install loads the hassio integration. Probing
+            # without it only produces an "Unknown command" error.
+            if "hassio" in config.get("components", []):
+                diagnostic_info["supervisor"] = await self._detect_supervisor_info()
+            else:
+                diagnostic_info["supervisor"] = {"none": "true"}
         except Exception as e:
             logger.warning(f"Failed to get Home Assistant config: {e}")
-            diagnostic_info["connection_status"] = f"Connection Error: {str(e)}"
+            diagnostic_info["connection_status"] = (
+                f"Connection Error: {_sanitize_log_text(str(e))}"
+            )
 
         # Try to get entity count
         try:
@@ -1163,32 +1307,36 @@ class BugReportTools:
             core_error_log,
         )
 
-        # Generate suggested title up-front so it can be folded into the
-        # submission URLs as a `&title=` query param. This auto-fills the
-        # GitHub issue title field — without it, users routinely submit reports
-        # titled just "[BUG]".
+        # Without the agent's title, the one generated from the last error
+        # keeps reports from being filed as a bare "[BUG]".
         suggested_title = _generate_bug_title(diagnostic_info, recent_logs)
-        title_query = quote_plus(suggested_title)
-        runtime_bug_submit_url = f"{RUNTIME_BUG_URL}&title={title_query}"
-        agent_behavior_submit_url = f"{AGENT_BEHAVIOR_URL}&title={title_query}"
+        issue_title = _issue_title(report_type, text, suggested_title)
 
-        # Generate BOTH templates
-        runtime_bug_template = _generate_runtime_bug_template(
-            diagnostic_info,
-            log_summary,
-            startup_log_summary,
-            recent_logs,
-            startup_logs,
-            addon_logs=addon_logs,
-            core_error_log=core_error_log,
-            submit_url=runtime_bug_submit_url,
-        )
+        def build_body(include_logs: bool, text_cap: int | None = None) -> str:
+            if report_type == "agent_behavior":
+                return _generate_agent_behavior_template(
+                    diagnostic_info,
+                    log_summary,
+                    text=text,
+                    include_logs=include_logs,
+                    text_cap=text_cap,
+                )
+            return _generate_runtime_bug_template(
+                diagnostic_info,
+                log_summary,
+                startup_log_summary,
+                recent_logs,
+                startup_logs,
+                addon_logs=addon_logs,
+                core_error_log=core_error_log,
+                text=text,
+                include_logs=include_logs,
+                text_cap=text_cap,
+            )
 
-        agent_behavior_template = _generate_agent_behavior_template(
-            diagnostic_info,
-            log_summary,
-            recent_logs,
-            submit_url=agent_behavior_submit_url,
+        issue_body = build_body(include_logs=True)
+        issue_url = _build_issue_url(
+            issue_title, lambda cap: build_body(include_logs=False, text_cap=cap)
         )
 
         # Anonymization instructions
@@ -1223,17 +1371,15 @@ class BugReportTools:
             "log_count": len(recent_logs),
             "startup_log_count": len(startup_logs),
             "formatted_report": formatted_report,
-            "runtime_bug_template": runtime_bug_template,
-            "agent_behavior_template": agent_behavior_template,
+            "issue_title": issue_title,
+            "issue_body": issue_body,
+            "issue_url": issue_url,
             "anonymization_guide": anonymization_guide,
-            "suggested_title": suggested_title,
-            "runtime_bug_submit_url": runtime_bug_submit_url,
-            "agent_behavior_submit_url": agent_behavior_submit_url,
             "duplicate_check_urls": duplicate_check_urls,
             "missing_tool_hint": MISSING_TOOL_HINT,
             "known_client_issues_hint": KNOWN_CLIENT_ISSUES_HINT,
             "instructions": (
-                "WORKFLOW FOR PRESENTING BUG REPORTS:\n\n"
+                "WORKFLOW FOR FILING A REPORT:\n\n"
                 "0. **PRE-CHECK — is the problem a missing/unavailable tool?** If "
                 "the user's issue is that a tool they expected is missing or "
                 "cannot be called, DO NOT file a bug yet. See the "
@@ -1247,68 +1393,75 @@ class BugReportTools:
                 "bug with an upstream ticket. See the `known_client_issues_hint` "
                 "field for the workaround to give the user, and only continue "
                 "if the problem persists after it.\n\n"
-                "1. **Check for duplicates FIRST** (before presenting the template):\n"
+                "1. **Check for duplicates FIRST**:\n"
                 "   - Use the duplicate_check_urls to search for similar issues\n"
                 '   - If gh CLI is available: use `gh issue list --search "keyword"`\n'
                 "   - Otherwise: inform user to check the duplicate_check_urls\n"
                 "   - If duplicates found, ask user if they want to comment on existing issue instead\n\n"
-                "2. **Determine which template to present**:\n"
-                "   - ANALYZE THE CONVERSATION to determine which template to present\n\n"
-                "   🐛 Present RUNTIME_BUG_TEMPLATE if:\n"
-                "      - User reports an error, failure, or unexpected behavior in ha-mcp\n"
-                "      - A tool returned an error or incorrect result\n"
-                "      - Something is broken or not working\n\n"
-                "   🤖 Present AGENT_BEHAVIOR_TEMPLATE if:\n"
-                "      - User mentions YOU (the agent) used the wrong tool\n"
-                "      - User suggests YOU should have done something differently\n"
-                "      - User reports YOUR inefficiency or mistakes\n\n"
-                "   If UNCLEAR which type, ASK: 'Are you reporting a bug in ha-mcp, or providing feedback on how I used the tools?'\n\n"
-                "3. **ANONYMIZE before presenting** (CRITICAL):\n"
-                "   BEFORE showing the report to the user, YOU MUST anonymize sensitive information:\n"
+                "2. **Pass the report text** (call ha_report_issue again if this "
+                "call had none): report_type, title, description, user_prompt, "
+                "tool_calls, ai_model and client_app. The server builds "
+                "issue_title, issue_body and issue_url from them. Anonymize the "
+                "text first (step 3).\n"
+                "   - report_type: 'runtime_bug' when ha-mcp errored or behaved "
+                "wrongly; 'agent_behavior' when the user says YOU used the wrong "
+                "tool, should have done something differently, or worked "
+                "inefficiently. If unclear, ASK: 'Are you reporting a bug in "
+                "ha-mcp, or providing feedback on how I used the tools?'\n"
+                "   - user_prompt and tool_calls: the EXACT user message and the "
+                "tool call(s) that produced the problem, copied verbatim. This "
+                "is the single most useful part for triage. Do not skip it.\n"
+                "   - ai_model: your own identity, as specific as you know it. "
+                "Do not invent a version number.\n"
+                "   - client_app: the **MCP Client Host:** line in issue_body is "
+                'auto-detected. If it says "not detected", "stdio bridge", '
+                'or the version is "unknown", ASK the user which app and '
+                "version they are using (usually on the app's About screen or "
+                "from its --version command) and pass THEIR answer. NEVER "
+                "fill it in yourself: you cannot know the app or its version, "
+                "and a guessed value sends triage the wrong way. If the user "
+                'does not know, pass "unknown (user asked)". Client-side '
+                "regressions often depend on the exact app release.\n\n"
+                "3. **ANONYMIZE** (CRITICAL), both in the text you pass and in "
+                "the logs inside issue_body:\n"
                 "   a. Replace person names with generic labels (person.user1, person.user2)\n"
                 "   b. Replace location names with generic names (Home, Location1)\n"
                 "   c. Replace device names containing personal info (e.g., 'juliens_bedroom') with generic ones (e.g., 'bedroom_1')\n"
                 "   d. Verify no tokens, passwords, or IPs are visible\n"
                 "   e. Keep entity domains, error messages, and technical details\n"
-                "   See anonymization_guide for full details.\n\n"
-                "4. **Fill in the self-reported fields BEFORE presenting**:\n"
-                "   - `**AI Model:**` — write your identity on this line (provider/family + the\n"
-                "     most specific version you know, in whatever form you'd describe yourself).\n"
-                "     Do not invent a version number. If you don't know it, say so or omit the\n"
-                "     version. There are no options to pick from — just answer honestly.\n"
-                "   - `**Triggering Prompt & Tool Call:** <fill in>` — the EXACT user message\n"
-                "     and the tool call(s) that produced the bug, copy-pasted verbatim. Truncate\n"
-                "     long inputs only after anonymization. This is the single most useful field\n"
-                "     for triage — do not skip it.\n"
-                "   `MCP Transport` and `MCP Client` are auto-detected by the server (the latter\n"
-                "   from the MCP `initialize` handshake); leave both as-is unless they're clearly\n"
-                "   wrong.\n"
-                "   - `**MCP Client Host:**` — the app that launched ha-mcp and its release, read\n"
-                "     from the parent process over stdio. Claude Desktop only advertises\n"
-                "     `local-agent-mode-<server> 1.0.0` in the handshake, and Desktop releases are\n"
-                "     what client-side regressions hinge on (#2472). If this line says\n"
-                '     "not detected", "stdio bridge", or the version is "unknown", ASK the\n'
-                "     user which app and version they are using (Claude Desktop: Settings ->\n"
-                "     About; Claude Code: `claude --version`) and write THEIR answer on this\n"
-                "     line. NEVER fill it in yourself: you cannot know the app or its version,\n"
-                "     and a guessed value sends triage the wrong way. If the user does not\n"
-                '     know, write "unknown (user asked)". An `MCP Client` of `mcp 0.1.0` is\n'
-                "     a bridge such as fastmcp-remote, not the real client, so the same rule\n"
-                "     applies there.\n\n"
-                "5. **Present the anonymized report to the user**:\n"
-                "   a. Show the suggested_title (user can edit if needed) and tell them GitHub's\n"
-                "      title field is now pre-filled via the submission URL — they don't need to\n"
-                "      retype it.\n"
-                "   b. Present the chosen ANONYMIZED template IN A MARKDOWN CODE BLOCK (```markdown...```) for easy copy/paste\n"
-                "   c. PROMINENTLY display the submission URL at the top — these include the\n"
-                "      pre-filled title:\n"
-                "      - Runtime bugs: see runtime_bug_submit_url\n"
-                "      - Agent behavior: see agent_behavior_submit_url\n"
-                "   d. Ask them to fill in the description sections\n"
-                "   e. For HA add-on installs, the runtime bug template includes a collapsible '📦 Add-on Container Logs' section auto-filled from addon_logs — keep it as-is\n"
-                "   e2. When present, the template also includes a collapsible 'Home Assistant Error Log' section auto-filled from core_error_log (auth / integration errors) — keep it as-is\n"
-                "   f. Remind them to review for any remaining personal information before submitting\n\n"
-                "CRITICAL: Always ANONYMIZE the report BEFORE presenting it in markdown code blocks!"
+                "   See anonymization_guide for full details. Apart from these "
+                "replacements, pass issue_body on UNCHANGED: do not summarize, "
+                "shorten or rewrite it.\n\n"
+                "4. **Show the user issue_title and issue_body, then file it "
+                "the first way you can:**\n"
+                "   a. You can act on GitHub (gh CLI, a GitHub connector, or a "
+                "browser you control): file the issue only after the user says "
+                "yes.\n"
+                "      - gh: save issue_title and issue_body to files, then run "
+                "`gh issue create --repo homeassistant-ai/ha-mcp --title "
+                '"$(cat <title-file>)" --body-file <body-file>`. Never put the '
+                "title text itself on the command line: the shell would run "
+                "backticks or $(...) inside it.\n"
+                "      - Browser: open https://github.com/homeassistant-ai/ha-mcp/issues/new "
+                "in the user's signed-in browser, set the title and description "
+                "fields directly (fill or set the value; do not type it key by "
+                "key), and let the user review it and click Create.\n"
+                "   b. You can write files: save issue_body as a .md file. Tell "
+                "the user to open issue_url, replace the pre-filled description "
+                "with the file's content, and click Create.\n"
+                "   c. Chat only: give the user issue_url prominently. It opens "
+                "a new issue with the title and report filled in, without the "
+                "logs. Then show issue_body in a code block fenced with FOUR "
+                "backticks (````markdown ... ````) so it stays in one piece, and "
+                "ask the user to paste its log sections into the issue. You "
+                "cannot edit the link's text, and its error messages come from "
+                "the server: if they show personal names, tell the user to "
+                "replace them in GitHub's editor. Remind them to check the "
+                "pre-filled text for personal information before clicking "
+                "Create.\n\n"
+                f"5. The last line of issue_body is `{REPORT_END_MARKER}`. A "
+                "copy without it was cut short.\n\n"
+                "CRITICAL: Always ANONYMIZE before showing or filing the report!"
             ),
         }
         return project_fields(result, parsed_fields)
@@ -1395,7 +1548,11 @@ def _extract_error_messages(logs: list[dict[str, Any]]) -> list[str]:
             timestamp = log.get("timestamp", "?")[:19]  # Trim to seconds
             tool_name = log.get("tool_name", "unknown")
             # Format: [timestamp] tool_name: error_message
-            error_messages.append(f"[{timestamp}] {tool_name}: {error}")
+            # Sanitized here: these lines also go into the pre-filled link,
+            # which the agent cannot edit.
+            error_messages.append(
+                f"[{timestamp}] {tool_name}: {_sanitize_log_text(str(error))}"
+            )
 
     return error_messages
 
@@ -1483,6 +1640,130 @@ def _generate_search_keywords(
     return list(keywords)
 
 
+@dataclass(frozen=True)
+class _ReportText:
+    """The parts of a report only the agent can write. Any may be missing."""
+
+    title: str | None = None
+    description: str | None = None
+    user_prompt: str | None = None
+    tool_calls: str | None = None
+    ai_model: str | None = None
+    client_app: str | None = None
+
+
+_FENCE_LINE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+
+_LOGS_LEFT_OUT = """## 📊 Logs
+
+The logs are not in this pre-filled link, which has to stay short. Paste them
+here from the full report in the chat.
+"""
+
+
+def _fenced(text: str) -> str:
+    """Wrap ``text`` in a tilde code fence that nothing inside can close.
+
+    Agents show the report inside a backtick code block, and a tilde line
+    never closes a backtick fence, so the report stays in one piece. The
+    fence is longer than any tilde run in ``text``, so a log or tool call
+    with its own tilde fence stays inside.
+    """
+    longest = max((len(run) for run in re.findall(r"~+", text)), default=0)
+    fence = "~" * max(3, longest + 1)
+    return f"{fence}\n{text}\n{fence}"
+
+
+def _shorten(value: str | None, cap: int | None) -> str | None:
+    """Cut ``value`` to ``cap`` characters and say so; None means no cap."""
+    if value is None or cap is None or len(value) <= cap:
+        return value
+    return f"{value[:cap]}\n… (cut to fit the link; the full text is in the chat)"
+
+
+def _shorten_text(text: _ReportText, cap: int | None) -> _ReportText:
+    """Cut every part of the agent's text except the title to ``cap``."""
+    return replace(
+        text,
+        description=_shorten(text.description, cap),
+        user_prompt=_shorten(text.user_prompt, cap),
+        tool_calls=_shorten(text.tool_calls, cap),
+        ai_model=_shorten(text.ai_model, cap),
+        client_app=_shorten(text.client_app, cap),
+    )
+
+
+def _close_open_block(text: str) -> str:
+    """Close a code fence or HTML comment that a cut left open.
+
+    Either one left open hides or swallows everything after it, including
+    the note that says the text was cut.
+    """
+    if text.rfind("<!--") > text.rfind("-->"):
+        return f"{text} -->"
+    return _close_open_fence(text)
+
+
+def _close_open_fence(text: str) -> str:
+    """Close a code fence that a cut left open, so the rest renders normally."""
+    open_fence: str | None = None
+    for line in text.split("\n"):
+        match = _FENCE_LINE_RE.match(line)
+        if match is None:
+            continue
+        run, rest = match.groups()
+        if open_fence is None:
+            open_fence = run
+        elif (
+            run[0] == open_fence[0] and len(run) >= len(open_fence) and not rest.strip()
+        ):
+            open_fence = None
+    return text if open_fence is None else f"{text}\n{open_fence}"
+
+
+def _format_supervisor_value(diagnostic_info: dict[str, Any]) -> str:
+    """Render the Supervisor probe, keeping a failed probe visible."""
+    info = diagnostic_info.get("supervisor") or {"error": "not probed"}
+    if "none" in info:
+        return "none (Home Assistant runs without a Supervisor)"
+    if "error" in info:
+        return f"probe failed ({info['error']})"
+    return f"{info['supervisor_version']} (host OS: {info['host_os']})"
+
+
+def _format_client_host_line(diagnostic_info: dict[str, Any], text: _ReportText) -> str:
+    """Render the client host row, preferring the user's own answer.
+
+    The auto-detected value can carry a hint for the agent to ask the user,
+    which means nothing to a reader once the user has answered.
+    """
+    if text.client_app:
+        return f"{text.client_app} _(reported by the user)_"
+    return f"{_format_client_host_for_template(diagnostic_info)} _(auto-detected)_"
+
+
+def _tool_call_section(text: _ReportText, heading_note: str) -> str:
+    """Render the triggering prompt and tool call, or placeholders for them."""
+    if text.user_prompt:
+        prompt = f"**User prompt:**\n\n{_fenced(text.user_prompt)}"
+    else:
+        prompt = "**User prompt:** <fill in>"
+    calls = _fenced(
+        text.tool_calls
+        or "<fill in: name + arguments + (truncated) response, e.g.:\n"
+        'ha_call_service(domain="light", service="turn_on", '
+        'entity_id="light.example")\n'
+        "→ ToolError: Service not found\n>"
+    )
+    return f"""## 💬 Triggering Prompt & Tool Call
+
+{prompt}
+
+**{heading_note}**
+{calls}
+"""
+
+
 def _generate_runtime_bug_template(
     diagnostic_info: dict[str, Any],
     log_summary: str,
@@ -1492,98 +1773,38 @@ def _generate_runtime_bug_template(
     *,
     addon_logs: str = "",
     core_error_log: str = "",
-    submit_url: str = RUNTIME_BUG_URL,
+    text: _ReportText = _ReportText(),
+    include_logs: bool = True,
+    text_cap: int | None = None,
 ) -> str:
-    """
-    Generate a runtime bug report template matching runtime_bug.md format.
+    """Build the runtime bug report as a GitHub issue body.
 
-    This template matches the GitHub issue template EXACTLY so users can
-    copy-paste without format conflicts.
+    ``text`` fills the parts only the agent knows; without it they stay as
+    placeholders. The pre-filled link has to stay short, so for it
+    ``include_logs=False`` leaves the log sections out and ``text_cap`` cuts
+    every part of ``text`` except the title, and the error messages, to that
+    many characters each.
     """
+    text = _shorten_text(text, text_cap)
     platform_info = diagnostic_info.get("platform", {})
     config_toggles = diagnostic_info.get("config_toggles") or {}
     mcp_transport = diagnostic_info.get("mcp_transport", "unknown")
     client_info = diagnostic_info.get("mcp_client_info") or {}
 
-    # Extract error messages from recent logs
     error_messages = _extract_error_messages(recent_logs)
-    error_section = (
+    error_section = _shorten(
         "\n".join(error_messages)
         if error_messages
-        else "<!-- No errors detected in recent logs -->"
+        else "No errors detected in recent logs",
+        text_cap,
     )
 
     config_toggles_section = _format_config_toggles_for_template(config_toggles)
 
-    # Show startup logs section only if they exist
-    startup_section = ""
-    if startup_logs:
-        startup_section = f"""
----
-
-## 🚀 Startup Logs (if relevant)
-
-<details>
-<summary>Click to expand startup logs</summary>
-
-```
-{startup_log_summary}
-```
-
-</details>
-"""
-
-    # Show addon container logs section only when available (addon installs only)
-    addon_section = ""
-    if addon_logs:
-        addon_section = f"""
----
-
-## 📦 Add-on Container Logs
-
-<details>
-<summary>Click to expand ha-mcp add-on logs</summary>
-
-```
-{addon_logs}
-```
-
-</details>
-"""
-
-    # Show the Home Assistant error log section when available (all install
-    # types). This carries the auth / integration errors that diagnose issues
-    # like #1694 and don't appear in the add-on container log above.
-    core_log_section = ""
-    if core_error_log:
-        core_log_section = f"""
----
-
-## Home Assistant Error Log
-
-<details>
-<summary>Click to expand home-assistant.log (auth / integration errors)</summary>
-
-```
-{core_error_log}
-```
-
-</details>
-"""
-
-    return f"""## 🚨 Auto-Generated by `ha_report_issue` Tool
-
-> This template was auto-generated by the ha_report_issue tool.
-> All environment info and logs below were collected automatically.
-
-**Submit this report at:**
-{submit_url}
-
-(The submission link above pre-fills the issue title — you don't need to retype it.)
-
----
-
-## 📋 Bug Description
+    if text.description:
+        description_section = f"## 📋 Bug Description\n\n{text.description}\n"
+    else:
+        description_section = """## 📋 Bug Description
 <!-- ONE clear sentence: What went wrong? -->
 
 
@@ -1600,27 +1821,77 @@ def _generate_runtime_bug_template(
 
 **Actual:**
 <!-- What actually happened? -->
+"""
 
+    if not include_logs:
+        log_sections = f"\n---\n\n{_LOGS_LEFT_OUT}"
+    else:
+        log_sections = f"""
+---
+
+## 📊 Recent Tool Calls
+
+<details>
+<summary>Click to expand recent tool calls (auto-filled by ha_report_issue)</summary>
+
+{_fenced(log_summary)}
+
+</details>
+"""
+        if startup_logs:
+            log_sections += f"""
+---
+
+## 🚀 Startup Logs (if relevant)
+
+<details>
+<summary>Click to expand startup logs</summary>
+
+{_fenced(startup_log_summary)}
+
+</details>
+"""
+        # Add-on installs only.
+        if addon_logs:
+            log_sections += f"""
+---
+
+## 📦 Add-on Container Logs
+
+<details>
+<summary>Click to expand ha-mcp add-on logs</summary>
+
+{_fenced(addon_logs)}
+
+</details>
+"""
+        # All install types. This carries the auth / integration errors that
+        # diagnose issues like #1694 and don't appear in the add-on log above.
+        if core_error_log:
+            log_sections += f"""
+---
+
+## Home Assistant Error Log
+
+<details>
+<summary>Click to expand home-assistant.log (auth / integration errors)</summary>
+
+{_fenced(core_error_log)}
+
+</details>
+"""
+
+    return f"""## 🚨 Auto-Generated by `ha_report_issue` Tool
+
+> This report was generated by the ha_report_issue tool.
+> Environment info and logs were collected automatically.
 
 ---
 
-## 💬 Triggering Prompt & Tool Call
+{description_section}
+---
 
-<!-- The calling AI agent fills this in. Paste, verbatim, the user message that
-     triggered this bug AND the tool call(s) that produced it. Truncate only
-     after anonymizing tokens / personal names. This is the highest-leverage
-     field for triage. -->
-
-**User prompt:** <fill in>
-
-**Tool call(s):**
-```
-<fill in — name + arguments + (truncated) response, e.g.:
-ha_call_service(domain="light", service="turn_on", entity_id="light.example")
-→ ToolError: Service not found
->
-```
-
+{_tool_call_section(text, "Tool call(s):")}
 ---
 
 ## 🔧 Environment
@@ -1632,11 +1903,12 @@ ha_call_service(domain="light", service="turn_on", entity_id="light.example")
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
 - **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
-- **MCP Client Host:** {_format_client_host_for_template(diagnostic_info)} _(auto-detected; if this says "not detected" or "unknown", ask the user which app and version launched ha-mcp and write it here)_
-- **AI Model:**
+- **MCP Client Host:** {_format_client_host_line(diagnostic_info, text)}
+- **AI Model:** {text.ai_model or ""}
 - **Operating System:** {platform_info.get("os", "Unknown")} {platform_info.get("os_release", "")} ({platform_info.get("architecture", "Unknown")})
 - **Python Version:** {platform_info.get("python_version", "Unknown")}
 - **Home Assistant Version:** {diagnostic_info.get("home_assistant_version", "Unknown")}
+- **Supervisor:** {_format_supervisor_value(diagnostic_info)}
 - **Connection Status:** {diagnostic_info.get("connection_status", "Unknown")}
 - **Entity Count:** {diagnostic_info.get("entity_count", 0)}
 
@@ -1644,9 +1916,9 @@ ha_call_service(domain="light", service="turn_on", entity_id="light.example")
 
 ## ⚙️ ha-mcp Configuration
 
-These flags shape which tools the agent sees, so the same report can mean
-different things depending on toggle state. Auto-collected from the running
-server:
+These settings shape which tools the agent sees and whether a call runs, so
+the same report can mean different things depending on them. Auto-collected
+from the running server:
 
 {config_toggles_section}
 
@@ -1654,23 +1926,8 @@ server:
 
 ## 🚨 Error Messages
 
-```
-{error_section}
-```
-
----
-
-## 📊 Recent Tool Calls
-
-<details>
-<summary>Click to expand recent tool calls (auto-filled by ha_report_issue)</summary>
-
-```
-{log_summary}
-```
-
-</details>
-{startup_section}{addon_section}{core_log_section}
+{_fenced(error_section or "")}
+{log_sections}
 ---
 
 ## 💡 Additional Context
@@ -1685,44 +1942,34 @@ server:
 ---
 
 **Privacy reminder:** Please review and anonymize sensitive information (tokens, IPs, personal names) before submitting.
+
+{REPORT_END_MARKER}
 """
 
 
 def _generate_agent_behavior_template(
     diagnostic_info: dict[str, Any],
     log_summary: str,
-    recent_logs: list[dict[str, Any]],
     *,
-    submit_url: str = AGENT_BEHAVIOR_URL,
+    text: _ReportText = _ReportText(),
+    include_logs: bool = True,
+    text_cap: int | None = None,
 ) -> str:
-    """
-    Generate an agent behavior feedback template matching agent_behavior_feedback.md format.
+    """Build the agent behavior feedback as a GitHub issue body.
 
-    This template focuses on AI agent tool usage patterns and inefficiencies.
+    ``text``, ``include_logs`` and ``text_cap`` work as in the runtime bug
+    template.
     """
+    text = _shorten_text(text, text_cap)
     config_toggles = diagnostic_info.get("config_toggles") or {}
     mcp_transport = diagnostic_info.get("mcp_transport", "unknown")
     client_info = diagnostic_info.get("mcp_client_info") or {}
     config_toggles_section = _format_config_toggles_for_template(config_toggles)
 
-    # _extract_error_messages and recent_logs are unused in the agent template;
-    # tool sequence already lives in log_summary. Kept in the signature so
-    # callers don't have to remember which template needs which arg.
-    del recent_logs
-
-    return f"""## 🤖 Auto-Generated by `ha_report_issue` Tool
-
-> This template was auto-generated by the ha_report_issue tool.
-> Tool call history was collected automatically to help analyze agent behavior.
-
-**Submit this feedback at:**
-{submit_url}
-
-(The submission link above pre-fills the issue title — you don't need to retype it.)
-
----
-
-## 🤖 What Did the AI Agent Do?
+    if text.description:
+        description_section = f"## 🤖 What Happened\n\n{text.description}\n"
+    else:
+        description_section = """## 🤖 What Did the AI Agent Do?
 
 <!-- Describe what the AI agent did that could be improved -->
 <!-- Examples: -->
@@ -1742,36 +1989,35 @@ def _generate_agent_behavior_template(
 
 <!-- Provide context about what you were trying to do -->
 <!-- Example: "I asked the agent to create an automation that..." -->
+"""
 
-
----
-
-## 💬 Triggering Prompt & Tool Call
-
-<!-- The AI agent fills this in. Paste, verbatim, the user message that
-     prompted the questionable behavior AND the tool call(s) the agent made
-     in response. Truncate only after anonymizing tokens / personal names. -->
-
-**User prompt:** <fill in>
-
-**Tool call(s) the agent chose:**
-```
-<fill in — name + arguments + (truncated) response>
-```
-
----
-
-## 🔧 Tool Calls Made (Auto-Filled)
+    if include_logs:
+        log_section = f"""## 🔧 Tool Calls Made (Auto-Filled)
 
 <details>
 <summary>Click to expand tool call sequence</summary>
 
-```
-{log_summary}
-```
+{_fenced(log_summary)}
 
 </details>
+"""
+    else:
+        log_section = _LOGS_LEFT_OUT
 
+    return f"""## 🤖 Auto-Generated by `ha_report_issue` Tool
+
+> This report was generated by the ha_report_issue tool.
+> Tool call history was collected automatically to help analyze agent behavior.
+
+---
+
+{description_section}
+---
+
+{_tool_call_section(text, "Tool call(s) the agent chose:")}
+---
+
+{log_section}
 ---
 
 ## 💡 Suggested Improvement
@@ -1800,16 +2046,17 @@ def _generate_agent_behavior_template(
 - **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
 - **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
 - **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
-- **MCP Client Host:** {_format_client_host_for_template(diagnostic_info)} _(auto-detected; if this says "not detected" or "unknown", ask the user which app and version launched ha-mcp and write it here)_
-- **AI Model:**
+- **MCP Client Host:** {_format_client_host_line(diagnostic_info, text)}
+- **AI Model:** {text.ai_model or ""}
 - **Home Assistant Version:** {diagnostic_info.get("home_assistant_version", "Unknown")}
+- **Supervisor:** {_format_supervisor_value(diagnostic_info)}
 
 ---
 
 ## ⚙️ ha-mcp Configuration
 
-These flags shape which tools the agent sees, so the same behavior may be
-expected vs. surprising depending on toggle state:
+These settings shape which tools the agent sees and whether a call runs, so
+the same behavior may be expected or surprising depending on them:
 
 {config_toggles_section}
 
@@ -1822,8 +2069,71 @@ expected vs. surprising depending on toggle state:
 
 ---
 
-**Note:** This is for improving AI agent behavior. For ha-mcp bugs (errors, crashes), use the Runtime Bug template instead.
+**Note:** This is for improving AI agent behavior. For ha-mcp bugs (errors, crashes), file a runtime bug report instead.
+
+{REPORT_END_MARKER}
 """
+
+
+def _issue_title(report_type: str, text: _ReportText, suggested_title: str) -> str:
+    """Return a one-line issue title carrying the report type's prefix."""
+    title = " ".join((text.title or suggested_title).split())
+    prefix = _TITLE_PREFIXES[report_type]
+    if not title.upper().startswith(prefix.strip()):
+        title = prefix + title
+    if len(title) > _ISSUE_TITLE_MAX_CHARS:
+        title = title[: _ISSUE_TITLE_MAX_CHARS - 3] + "..."
+    return title
+
+
+def _new_issue_url(title: str, body: str) -> str:
+    return f"{NEW_ISSUE_URL}?{urlencode({'title': title, 'body': body})}"
+
+
+def _build_issue_url(title: str, render: Callable[[int | None], str]) -> str:
+    """Return a new-issue link with title and body filled in.
+
+    ``render(cap)`` builds the body with every part of the agent's text
+    except the title, and the error messages, cut to ``cap`` characters, or
+    uncut for None. Long text is shortened first, so the
+    environment block, which triage needs most, stays in the link. Only when
+    that is not enough is the body itself cut from the end.
+    """
+    url = _new_issue_url(title, render(None))
+    if len(url) <= _ISSUE_URL_MAX_CHARS:
+        return url
+    best: str | None = None
+    low, high = 0, len(url)
+    while low <= high:
+        mid = (low + high) // 2
+        candidate = _new_issue_url(title, render(mid))
+        if len(candidate) <= _ISSUE_URL_MAX_CHARS:
+            best, low = candidate, mid + 1
+        else:
+            high = mid - 1
+    return best or _cut_to_fit(title, render(0))
+
+
+def _cut_to_fit(title: str, body: str) -> str:
+    """Cut ``body`` at the longest prefix whose link fits, and say so."""
+    note = (
+        "\n\n_(Cut to fit the link. The full report is in the chat.)_\n\n"
+        f"{REPORT_END_MARKER}\n"
+    )
+    core = body.removesuffix(f"{REPORT_END_MARKER}\n").rstrip()
+
+    def fits(length: int) -> bool:
+        cut = _close_open_block(core[:length]) + note
+        return len(_new_issue_url(title, cut)) <= _ISSUE_URL_MAX_CHARS
+
+    low, high = 0, len(core)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if fits(mid):
+            low = mid
+        else:
+            high = mid - 1
+    return _new_issue_url(title, _close_open_block(core[:low]) + note)
 
 
 def _generate_anonymization_guide() -> str:
