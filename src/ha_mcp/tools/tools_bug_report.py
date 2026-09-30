@@ -665,11 +665,18 @@ def _sanitize_log_text(text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
+    # Authorization values in any other scheme (Basic, Digest, ...). The
+    # Bearer rule above has already handled Bearer, so it is skipped here.
+    text = re.sub(
+        r"\b(authorization['\"]?\s*[:=]\s*['\"]?)(?!bearer\b)(?:[A-Za-z]+\s+)?[^\s'\",}]+",
+        r"\1[REDACTED]",
+        text,
+        flags=re.IGNORECASE,
+    )
     # Generic key=value credentials (api_key, token, secret, password, etc.).
     # Negative lookbehind for a letter so OPENAI_API_KEY=... still matches
     # (underscore is a word-char, so \b doesn't fire there).
-    # "authorization" is intentionally omitted — the Bearer rule above already
-    # handles "Authorization: Bearer ..." and overlapping rules double-tap.
+    # "authorization" has its own rule above.
     # A quoted key and value, as in JSON or a Python dict repr, are covered
     # too: {"token": "a b"} and {'password': 'x'}.
     text = re.sub(
@@ -1723,28 +1730,38 @@ def _close_open_block(text: str) -> str:
     """Close a code fence or HTML comment that a cut left open.
 
     Either one left open hides or swallows everything after it, including
-    the note that says the text was cut.
+    the note that says the text was cut. ``<!--`` inside a code fence is
+    text, not a comment, so the scan tracks which block it is in.
     """
-    if text.rfind("<!--") > text.rfind("-->"):
-        return f"{text} -->"
-    return _close_open_fence(text)
-
-
-def _close_open_fence(text: str) -> str:
-    """Close a code fence that a cut left open, so the rest renders normally."""
     open_fence: str | None = None
+    in_comment = False
     for line in text.split("\n"):
         match = _FENCE_LINE_RE.match(line)
-        if match is None:
+        if open_fence is not None:
+            if match is not None:
+                run, rest = match.groups()
+                if (
+                    run[0] == open_fence[0]
+                    and len(run) >= len(open_fence)
+                    and not rest.strip()
+                ):
+                    open_fence = None
             continue
-        run, rest = match.groups()
-        if open_fence is None:
-            open_fence = run
-        elif (
-            run[0] == open_fence[0] and len(run) >= len(open_fence) and not rest.strip()
-        ):
-            open_fence = None
-    return text if open_fence is None else f"{text}\n{open_fence}"
+        if not in_comment and match is not None:
+            open_fence = match.group(1)
+            continue
+        pos = 0
+        while True:
+            marker = "-->" if in_comment else "<!--"
+            found = line.find(marker, pos)
+            if found < 0:
+                break
+            in_comment, pos = not in_comment, found + len(marker)
+    if open_fence is not None:
+        return f"{text}\n{open_fence}"
+    if in_comment:
+        return f"{text} -->"
+    return text
 
 
 def _format_supervisor_value(diagnostic_info: dict[str, Any]) -> str:
@@ -2117,10 +2134,12 @@ the same behavior may be expected or surprising depending on them:
 
 def _issue_title(report_type: str, text: _ReportText, suggested_title: str) -> str:
     """Return a one-line issue title carrying the report type's prefix."""
-    title = " ".join((text.title or suggested_title).split())
-    prefix = _TITLE_PREFIXES[report_type]
-    if not title.upper().startswith(prefix.strip()):
-        title = prefix + title
+    prefix = _TITLE_PREFIXES[report_type].strip()
+    title = " ".join((text.title or "").split())
+    if title.upper().startswith(prefix):
+        title = title[len(prefix) :].strip()
+    # A title that was only the prefix or whitespace says nothing.
+    title = f"{prefix} {title or ' '.join(suggested_title.split())}"
     if len(title) > _ISSUE_TITLE_MAX_CHARS:
         title = title[: _ISSUE_TITLE_MAX_CHARS - 3] + "..."
     return title

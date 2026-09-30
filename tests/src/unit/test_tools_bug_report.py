@@ -1230,6 +1230,9 @@ class TestSanitizeLogText:
             # JSON and Python dict reprs of an error payload (Codex #2588)
             ('{"token": "abc 123 secret"}', "secret"),
             ("{'password': 'hunter2'}", "hunter2"),
+            # Authorization schemes other than Bearer (Codex #2588)
+            ("Authorization: Basic dXNlcjpzZWNyZXQ=", "dXNlcjpzZWNyZXQ="),
+            ('{"authorization": "Digest abc123"}', "abc123"),
         ]
         for text, secret in cases:
             result = _sanitize_log_text(text)
@@ -2607,6 +2610,11 @@ class TestFinishedIssue:
         result = await ha_report_issue_func(title="x" * 1000)
         assert len(result["issue_title"]) <= 256
 
+        # A title that is only the prefix falls back to the generated one
+        for empty in ("[BUG]", "  "):
+            title = (await ha_report_issue_func(title=empty))["issue_title"]
+            assert title.removeprefix("[BUG]").strip()
+
     @pytest.mark.asyncio
     async def test_link_stays_under_githubs_limit_and_keeps_the_environment(
         self, ha_report_issue_func
@@ -2780,8 +2788,13 @@ class TestFinishedIssue:
         [
             "intro\n~~~\n" + "x" * 20_000 + "\n~~~\nrest\n",
             "intro\n<!-- " + "x" * 20_000 + " -->\nrest\n",
+            "intro\n~~~\n<!-- sample\n" + "x" * 20_000 + "\n~~~\nrest\n",
         ],
-        ids=["inside a code fence", "inside an HTML comment"],
+        ids=[
+            "inside a code fence",
+            "inside an HTML comment",
+            "inside a code fence that shows <!--",
+        ],
     )
     def test_cut_body_keeps_its_cut_note_visible(self, body):
         """A cut inside an open code fence or HTML comment would hide the
