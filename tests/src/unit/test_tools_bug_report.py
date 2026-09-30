@@ -1227,6 +1227,9 @@ class TestSanitizeLogText:
             ("token=ghp_AbCdEf1234567890qwerty1234567890qwer", "ghp_AbCdEf"),
             ("password=hunter2-S3cret!", "hunter2"),
             ("api_key: somekey1234", "somekey1234"),
+            # JSON and Python dict reprs of an error payload (Codex #2588)
+            ('{"token": "abc 123 secret"}', "secret"),
+            ("{'password': 'hunter2'}", "hunter2"),
         ]
         for text, secret in cases:
             result = _sanitize_log_text(text)
@@ -2577,6 +2580,7 @@ class TestFinishedIssue:
             "tool_calls": 'ha_config_set_script(script_id="test") -> created',
             "ai_model": "Model X 1.0",
             "client_app": "Claude Desktop 2.2553.1",
+            "user_comment": "It said created but I never saw the script.",
         }
         result = await ha_report_issue_func(report_type=report_type, **text)
 
@@ -2811,3 +2815,32 @@ class TestFinishedIssue:
             "**tool_policy:** `unreadable (ModuleNotFoundError)`"
             in result["issue_body"]
         )
+
+    @pytest.mark.asyncio
+    async def test_failed_toggle_read_stays_visible(self, ha_report_issue_func):
+        """A settings failure must not look like a normal configuration."""
+        with patch(
+            "ha_mcp.tools.tools_bug_report.get_global_settings",
+            side_effect=RuntimeError("bad settings"),
+        ):
+            body = (await ha_report_issue_func())["issue_body"]
+        assert "config toggles unavailable" in body
+
+    @pytest.mark.asyncio
+    async def test_cut_description_does_not_swallow_the_rest_of_the_link(
+        self, ha_report_issue_func
+    ):
+        """A long description whose code block is cut open would pull the
+        environment block into that code block."""
+        from markdown_it import MarkdownIt
+
+        description = "Details:\n```\n" + "log line\n" * 3_000 + "```\nend"
+        result = await ha_report_issue_func(description=description)
+
+        tokens = MarkdownIt().parse(self._url_body(result["issue_url"]))
+        headings = [
+            tokens[i + 1].content
+            for i, t in enumerate(tokens)
+            if t.type == "heading_open"
+        ]
+        assert "🔧 Environment" in headings

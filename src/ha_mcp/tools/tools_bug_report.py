@@ -670,8 +670,11 @@ def _sanitize_log_text(text: str) -> str:
     # (underscore is a word-char, so \b doesn't fire there).
     # "authorization" is intentionally omitted — the Bearer rule above already
     # handles "Authorization: Bearer ..." and overlapping rules double-tap.
+    # A quoted key and value, as in JSON or a Python dict repr, are covered
+    # too: {"token": "a b"} and {'password': 'x'}.
     text = re.sub(
-        r"(?<![A-Za-z])(api[_-]?key|access[_-]?key|secret[_-]?key|token|secret|password|passwd)\b(\s*[:=]\s*)\S+",
+        r"(?<![A-Za-z])(api[_-]?key|access[_-]?key|secret[_-]?key|token|secret|password|passwd)\b"
+        r"(['\"]?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,}]+)",
         r"\1\2[REDACTED]",
         text,
         flags=re.IGNORECASE,
@@ -894,6 +897,9 @@ def _build_formatted_report(
         report_lines.extend(["", "=== ha-mcp Config Toggles ==="])
         for key, value in config_toggles.items():
             report_lines.append(f"  {key}: {value}")
+    report_lines.append(
+        f"Tool Policy: {diagnostic_info.get('tool_policy', 'not probed')}"
+    )
     if startup_logs:
         report_lines.extend(
             [
@@ -1090,6 +1096,17 @@ class BugReportTools:
                 description="The user message that led to the problem, verbatim.",
             ),
         ] = None,
+        user_comment: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "The user's own words on what went wrong or what bothered "
+                    "them, verbatim. Ask the user for it; never write it "
+                    "yourself."
+                ),
+            ),
+        ] = None,
         tool_calls: Annotated[
             str | None,
             Field(
@@ -1196,6 +1213,7 @@ class BugReportTools:
             description=description,
             user_prompt=user_prompt,
             tool_calls=tool_calls,
+            user_comment=user_comment,
             ai_model=ai_model,
             client_app=client_app,
         )
@@ -1204,7 +1222,7 @@ class BugReportTools:
         install_method = _detect_installation_method()
         platform_info = _detect_platform()
         config_toggles = _get_config_toggles()
-        config_toggles["tool_policy"] = await asyncio.to_thread(_tool_policy_summary)
+        tool_policy = await asyncio.to_thread(_tool_policy_summary)
         mcp_transport = _detect_mcp_transport()
         client_info = _extract_client_info(ctx)
         client_host = (
@@ -1237,6 +1255,7 @@ class BugReportTools:
             "mcp_client_host": client_host,
             "http_user_agent": user_agent,
             "config_toggles": config_toggles,
+            "tool_policy": tool_policy,
             "connection_status": "Unknown",
             "home_assistant_version": "Unknown",
             "entity_count": 0,
@@ -1399,8 +1418,8 @@ class BugReportTools:
                 "   - Otherwise: inform user to check the duplicate_check_urls\n"
                 "   - If duplicates found, ask user if they want to comment on existing issue instead\n\n"
                 "2. **Pass the report text** (call ha_report_issue again if this "
-                "call had none): report_type, title, description, user_prompt, "
-                "tool_calls, ai_model and client_app. The server builds "
+                "call had none): report_type, title, description, user_comment, "
+                "user_prompt, tool_calls, ai_model and client_app. The server builds "
                 "issue_title, issue_body and issue_url from them. Anonymize the "
                 "text first (step 3).\n"
                 "   - report_type: 'runtime_bug' when ha-mcp errored or behaved "
@@ -1411,6 +1430,10 @@ class BugReportTools:
                 "   - user_prompt and tool_calls: the EXACT user message and the "
                 "tool call(s) that produced the problem, copied verbatim. This "
                 "is the single most useful part for triage. Do not skip it.\n"
+                "   - user_comment: ASK the user to say in their own words what "
+                "went wrong or what bothered them, and pass it verbatim. Never "
+                "write it yourself: maintainers need the user's view, not "
+                "yours.\n"
                 "   - ai_model: your own identity, as specific as you know it. "
                 "Do not invent a version number.\n"
                 "   - client_app: the **MCP Client Host:** line in issue_body is "
@@ -1648,6 +1671,7 @@ class _ReportText:
     description: str | None = None
     user_prompt: str | None = None
     tool_calls: str | None = None
+    user_comment: str | None = None
     ai_model: str | None = None
     client_app: str | None = None
 
@@ -1678,7 +1702,8 @@ def _shorten(value: str | None, cap: int | None) -> str | None:
     """Cut ``value`` to ``cap`` characters and say so; None means no cap."""
     if value is None or cap is None or len(value) <= cap:
         return value
-    return f"{value[:cap]}\n… (cut to fit the link; the full text is in the chat)"
+    cut = _close_open_block(value[:cap])
+    return f"{cut}\n… (cut to fit the link; the full text is in the chat)"
 
 
 def _shorten_text(text: _ReportText, cap: int | None) -> _ReportText:
@@ -1688,6 +1713,7 @@ def _shorten_text(text: _ReportText, cap: int | None) -> _ReportText:
         description=_shorten(text.description, cap),
         user_prompt=_shorten(text.user_prompt, cap),
         tool_calls=_shorten(text.tool_calls, cap),
+        user_comment=_shorten(text.user_comment, cap),
         ai_model=_shorten(text.ai_model, cap),
         client_app=_shorten(text.client_app, cap),
     )
@@ -1740,6 +1766,14 @@ def _format_client_host_line(diagnostic_info: dict[str, Any], text: _ReportText)
     if text.client_app:
         return f"{text.client_app} _(reported by the user)_"
     return f"{_format_client_host_for_template(diagnostic_info)} _(auto-detected)_"
+
+
+def _user_comment_section(text: _ReportText) -> str:
+    """Render the reporter's own words, which the issue forms always required."""
+    comment = text.user_comment or (
+        "<fill in: ask the user to describe the problem in their own words>"
+    )
+    return f"## 🗣️ In the Reporter's Words\n\n{comment}\n\n"
 
 
 def _tool_call_section(text: _ReportText, heading_note: str) -> str:
@@ -1799,7 +1833,10 @@ def _generate_runtime_bug_template(
         text_cap,
     )
 
-    config_toggles_section = _format_config_toggles_for_template(config_toggles)
+    config_toggles_section = (
+        f"{_format_config_toggles_for_template(config_toggles)}\n"
+        f"- **tool_policy:** `{diagnostic_info.get('tool_policy', 'not probed')}`"
+    )
 
     if text.description:
         description_section = f"## 📋 Bug Description\n\n{text.description}\n"
@@ -1888,7 +1925,7 @@ def _generate_runtime_bug_template(
 
 ---
 
-{description_section}
+{_user_comment_section(text)}{description_section}
 ---
 
 {_tool_call_section(text, "Tool call(s):")}
@@ -1964,7 +2001,10 @@ def _generate_agent_behavior_template(
     config_toggles = diagnostic_info.get("config_toggles") or {}
     mcp_transport = diagnostic_info.get("mcp_transport", "unknown")
     client_info = diagnostic_info.get("mcp_client_info") or {}
-    config_toggles_section = _format_config_toggles_for_template(config_toggles)
+    config_toggles_section = (
+        f"{_format_config_toggles_for_template(config_toggles)}\n"
+        f"- **tool_policy:** `{diagnostic_info.get('tool_policy', 'not probed')}`"
+    )
 
     if text.description:
         description_section = f"## 🤖 What Happened\n\n{text.description}\n"
@@ -2011,7 +2051,7 @@ def _generate_agent_behavior_template(
 
 ---
 
-{description_section}
+{_user_comment_section(text)}{description_section}
 ---
 
 {_tool_call_section(text, "Tool call(s) the agent chose:")}

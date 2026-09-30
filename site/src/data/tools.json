@@ -4501,6 +4501,11 @@
           "default": null,
           "description": "The user message that led to the problem, verbatim."
         },
+        "user_comment": {
+          "type": "str | None",
+          "default": null,
+          "description": "The user's own words on what went wrong or what bothered them, verbatim. Ask the user for it; never write it yourself."
+        },
         "tool_calls": {
           "type": "str | None",
           "default": null,
