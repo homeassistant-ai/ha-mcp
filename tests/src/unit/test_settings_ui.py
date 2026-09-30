@@ -2510,6 +2510,11 @@ class TestSettingsInfoEndpoint:
 
     def _capture_handler(self, monkeypatch):
         monkeypatch.setenv("SUPERVISOR_TOKEN", "fake")
+        # These tests are about process identity, not the version: do not
+        # read the developer's installed package metadata.
+        monkeypatch.setattr(
+            "ha_mcp.settings_ui._handlers_server.get_version", lambda: "1.2.3"
+        )
         captured: dict[str, SaveHandler] = {}
 
         def custom_route_factory(path, methods):
