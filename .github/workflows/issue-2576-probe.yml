@@ -1,0 +1,51 @@
+name: Issue 2576 tool search probe
+on:
+  push:
+    branches: [investigate/2576-tool-search]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        source: [current, v8.5.0]
+    env:
+      TESTCONTAINERS_RYUK_DISABLED: "true"
+      HA_IMAGE_GHCR: ghcr.io/home-assistant/home-assistant:2026.9.4
+      ISSUE_2576_ARTIFACT_DIR: ${{ github.workspace }}/evidence
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: probe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ matrix.source == 'current' && github.sha || matrix.source }}
+          path: source
+          submodules: true
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.17"
+      - run: uv python install 3.13
+      - run: uv sync --all-extras --dev
+        working-directory: source
+      - name: Install diagnostic test on selected revision
+        run: cp probe/tests/src/e2e/policy/test_issue_2576_probe.py source/tests/src/e2e/policy/
+      - name: Focused baseline unit checks
+        working-directory: source/tests
+        run: uv run pytest src/unit/test_categorized_search.py -q
+      - name: Exercise tool search against disposable Home Assistant
+        working-directory: source/tests
+        run: uv run pytest src/e2e/policy/test_issue_2576_probe.py -v -s --tb=short
+        env:
+          HAMCP_ENV_FILE: tests/.env.test
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: issue-2576-${{ matrix.source }}
+          path: evidence/

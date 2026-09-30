@@ -1,0 +1,12 @@
+{
+  "reason": "Issue 2576 diagnostic matrix adds two external_only cases.",
+  "deltas": {
+    "haos_stdio": 2,
+    "haos_inaddon": 2,
+    "haos_inaddon_no_tools": 2,
+    "embedded": 2,
+    "embedded_no_tools": 2,
+    "haos_embedded": 2,
+    "haos_embedded_no_tools": 2
+  }
+}
