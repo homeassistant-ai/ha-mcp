@@ -16,10 +16,12 @@ body:
         **Not for startup issues** (use Startup/Installation Bug template instead).
 
         > 📝 **Title tip:** replace the default `[BUG] ` with a one-line summary of what
-        > broke (e.g. `[BUG] ha_call_service times out on light.turn_on`). If you ran
-        > `ha_report_issue` and clicked the submission link it gave you, the title
-        > field is already filled in — keep it or refine it, just don't leave it as
-        > a bare `[BUG]`.
+        > broke (e.g. `[BUG] ha_call_service times out on light.turn_on`), not a bare `[BUG]`.
+        >
+        > **Easier:** ask your AI agent to report it with the `ha_report_issue` tool and
+        > file the issue for you. It can open the issue itself (GitHub CLI, a GitHub
+        > connector, or your browser), save the report as a file for you to paste into a
+        > blank issue, or give you a link that opens an issue with the report filled in.
 
   - type: checkboxes
     id: connect_preflight
@@ -66,7 +68,7 @@ body:
 
         **Tell your AI agent:**
 
-        > "I got an error: [describe the error from your first field]. Let's make an issue report with the ha_report_issue tool."
+        > "I got an error: [describe the error from your first field]. Report it with the ha_report_issue tool and file the issue for me."
 
         The agent will collect:
         - Error messages and stack traces

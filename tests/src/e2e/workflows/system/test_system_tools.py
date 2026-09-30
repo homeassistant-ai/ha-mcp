@@ -978,13 +978,32 @@ class TestReportIssueE2E:
         diag = data.get("diagnostic_info", {})
         assert isinstance(diag.get("mcp_client_host"), dict)
         assert "MCP Client Host:" in report
-        for key in ("runtime_bug_template", "agent_behavior_template"):
-            assert "**MCP Client Host:**" in data.get(key, "")
+        assert "**MCP Client Host:**" in data.get("issue_body", "")
 
         logger.info(
             "ha_report_issue hint + beta flag verified end-to-end "
             f"(enable_beta_features={toggles['enable_beta_features']})"
         )
+
+    @pytest.mark.asyncio
+    async def test_report_text_reaches_the_finished_issue(self, mcp_client):
+        """The agent's text passes the tool schema and lands in the finished
+        issue."""
+        description = "E2E: script created but never registered."
+        result = await mcp_client.call_tool(
+            "ha_report_issue",
+            {
+                "report_type": "agent_behavior",
+                "title": "E2E report title",
+                "description": description,
+                "fields": "issue_title,issue_body,issue_url",
+            },
+        )
+        data = parse_mcp_result(result)
+        assert data.get("success") is True, extract_error_message(data)
+
+        assert data["issue_title"] == "[AGENT] E2E report title"
+        assert description in data["issue_body"]
 
 
 class TestGetSystemHealthDiagnosticsE2E:

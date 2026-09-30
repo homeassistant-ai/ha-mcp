@@ -933,28 +933,26 @@ class HomeAssistantSmartMCPServer:
             "actually contains, and the encryption key a restore needs, see "
             "ha_get_skill_guide (`references/backups.md`)."
         ),
-        # ha_report_issue: the dedented docstring is what gets advertised,
-        # not the raw indented one (2351 chars), and the lite value is about
-        # a third of it. Same reason as above for not quoting a pair.
+        # ha_report_issue: the lite value is about two thirds of the full
+        # docstring. As for ha_manage_backup, no exact pair is quoted.
         #
         # Unlike every other entry here, the deferral target is the tool's
         # OWN RESPONSE, not the skill guide: `instructions` (see
         # tools_bug_report.py) independently re-derives the duplicate check,
-        # the template choice, the missing-tool pre-check, and the mandatory
+        # the report type choice, the missing-tool pre-check, and the mandatory
         # anonymisation step. Issue reporting is ha-mcp product meta — it
         # cannot go in the skill pack, whose CONTRIBUTING forbids coupling
         # skill content to specific MCP tool names. The lite text says so
         # outright so a compliant agent doesn't spend a call finding out.
         "ha_report_issue": (
-            "Get diagnostic information plus a ready-to-file report "
-            "template. Covers two kinds of report: a runtime bug (ha-mcp "
-            "errored or behaved unexpectedly) and agent-behaviour feedback "
-            "(the AI used the wrong tool or worked inefficiently). Pick "
-            "based on whether the fault was in ha-mcp or in the agent's own "
-            "choices.\n\n"
+            "Get diagnostic information plus a finished GitHub issue. Covers "
+            "two kinds of report: a runtime bug (ha-mcp errored or behaved "
+            "unexpectedly) and agent-behaviour feedback (the AI used the wrong "
+            "tool or worked inefficiently). Pass the report text in the call; "
+            "the server builds the issue title, body and a pre-filled link.\n\n"
             "The response carries the full workflow in its `instructions` "
-            "field — duplicate check, template selection, the mandatory "
-            "anonymisation step, and the submit URLs — plus "
+            "field (duplicate check, the mandatory anonymisation step, and "
+            "how to file the issue), plus "
             '`missing_tool_hint` for the "a tool I expected is missing" '
             "case, which is usually a stale client tool list rather than a "
             "bug. Read `instructions` before presenting anything to the "
