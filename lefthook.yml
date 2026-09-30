@@ -45,6 +45,17 @@ pre-commit:
               - "tests/js/issue-intake*"
               - "src/ha_mcp/tools/tools_bug_report.py"
             run: node --test tests/js/issue-intake*.test.mjs
+          # The settings UI, consent form and site pages are tested by pytest
+          # files that run their scripts in JSDOM through tests/js. The
+          # unit-tests job reaches them only when a .py file is staged.
+          - name: ui-js-tests
+            glob:
+              - "src/ha_mcp/settings_ui/**"
+              - "src/ha_mcp/auth/consent_form.py"
+              - "site/src/**"
+              - "tests/js/harness.mjs"
+              - "tests/js/extract_astro_vars.mjs"
+            run: cd tests && uv run pytest $(git grep -l _js_harness -- src/unit) -n auto -q
           - name: unit-tests
             glob:
               - "**/*.py"
