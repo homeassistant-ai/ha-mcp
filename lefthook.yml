@@ -35,6 +35,16 @@ pre-commit:
           - name: mypy-webhook-proxy-dev
             glob: "**/*.py"
             run: uv run mypy homeassistant-addon-webhook-proxy-dev/start.py
+          # The unit-tests job reaches these Node suites only through pytest,
+          # and only when a .py file is staged. The last glob is the file
+          # whose report heading the intake tests check.
+          - name: issue-intake-js
+            glob:
+              - ".github/issue-intake/**"
+              - ".github/workflows/close-needs-info.yml"
+              - "tests/js/issue-intake*"
+              - "src/ha_mcp/tools/tools_bug_report.py"
+            run: node --test tests/js/issue-intake*.test.mjs
           - name: unit-tests
             glob:
               - "**/*.py"
