@@ -15,6 +15,7 @@ from test_constants import TEST_TOKEN
 import ha_mcp.config
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.server import HomeAssistantSmartMCPServer
+from ha_mcp.transforms.categorized_search import CategorizedSearchTransform
 from ha_mcp.utils.data_paths import get_data_dir
 
 QUERIES = (
@@ -26,6 +27,13 @@ QUERIES = (
     "ha_get_state",
     "ha_search",
     "which lights are on my desktop",
+    "create helper",
+    "energy dashboard preferences",
+    "get history",
+    "calendar events",
+    "create automation",
+    "backup snapshot",
+    "read script",
 )
 
 
@@ -175,6 +183,49 @@ async def test_issue_2576_catalog_and_real_state_reads(
                     assert record["state"] == actual["state"], state
                     observations["lights"] = lights_raw
                     observations["state"] = state_raw
+            # Diagnostic intervention only: include pins in the search corpus.
+            # Do not use this override as a production fix: the same method also
+            # guards pinned code-mode tools in the proxy category cache.
+            monkeypatch.setattr(
+                CategorizedSearchTransform,
+                "_get_visible_tools",
+                CategorizedSearchTransform.get_tool_catalog,
+            )
+            evidence["include_pinned_searches"] = {}
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://testserver",
+                headers={"Accept": "application/json, text/event-stream"},
+            ) as http:
+                for query in QUERIES:
+                    raw = await _rpc(
+                        http,
+                        "tools/call",
+                        {
+                            "name": "ha_search_tools",
+                            "arguments": {"query": query},
+                        },
+                    )
+                    results = _body(raw)
+                    evidence["include_pinned_searches"][query] = raw
+                    print(
+                        json.dumps(
+                            {
+                                "include_pinned": True,
+                                "pinned": pinned,
+                                "query": query,
+                                "names": [tool["name"] for tool in results],
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+                exact = _body(evidence["include_pinned_searches"]["ha_get_state"])
+                discovered = next(
+                    tool for tool in exact if tool["name"] == "ha_get_state"
+                )
+                assert discovered["inputSchema"] == state_tool["inputSchema"]
+                exact_search = _body(evidence["include_pinned_searches"]["ha_search"])
+                assert any(tool["name"] == "ha_search" for tool in exact_search)
             english, french = evidence["locales"]["en"], evidence["locales"]["fr"]
             assert english["catalog"] == french["catalog"]
             assert english["searches"] == french["searches"]
