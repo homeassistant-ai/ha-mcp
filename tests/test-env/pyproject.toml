@@ -1,0 +1,16 @@
+# Dev-only package that provides the `hamcp-test-env` command. The root
+# project's dev group installs it as an editable path dependency, so
+# `uv run hamcp-test-env` works in a checkout while the published ha-mcp
+# wheel ships only `ha_mcp`.
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "hamcp-test-env"
+version = "0.1.0"
+description = "Starts the ha-mcp Home Assistant test container"
+requires-python = ">=3.13"
+
+[project.scripts]
+hamcp-test-env = "hamcp_test_env:main"

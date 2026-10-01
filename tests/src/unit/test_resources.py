@@ -5,9 +5,14 @@ accessible within the package. Dashboard guide, card types, and domain
 docs content has moved to skill reference files (skills repo v1.2.0).
 """
 
+import shutil
+import subprocess
+import zipfile
 from pathlib import Path
 
 import pytest
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _get_resources_dir() -> Path:
@@ -98,100 +103,56 @@ class TestResourcesAccessibility:
         assert len(content) > 0, "domain-docs.md is empty"
 
 
-class TestPyprojectPackageData:
-    """Test that pyproject.toml correctly specifies package data."""
+@pytest.fixture(scope="module")
+def wheel_files(tmp_path_factory) -> set[str]:
+    """Build a wheel from this checkout and list the files it holds."""
+    out = tmp_path_factory.mktemp("wheel")
+    subprocess.run(
+        [
+            shutil.which("uv") or "uv",
+            "build",
+            "--wheel",
+            "--offline",
+            "--out-dir",
+            str(out),
+            str(_REPO_ROOT),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (wheel,) = out.glob("*.whl")
+    with zipfile.ZipFile(wheel) as archive:
+        return set(archive.namelist())
 
-    def test_pyproject_includes_resources(self):
-        """pyproject.toml should include resource files in package-data."""
-        # Find pyproject.toml relative to ha_mcp package
-        import ha_mcp
 
-        package_dir = Path(ha_mcp.__file__).parent
-        project_root = package_dir.parent.parent  # src/ha_mcp -> project root
+class TestWheelContents:
+    """The published wheel is what PyPI users and the HA app install."""
 
-        # Try common locations for pyproject.toml
-        pyproject_paths = [
-            project_root / "pyproject.toml",
-            project_root.parent / "pyproject.toml",
+    def test_the_wheel_installs_only_the_ha_mcp_package(self, wheel_files):
+        """Any other top-level package lands in every user's site-packages,
+        where it can shadow a package of the same name from another project."""
+        tops = {name.split("/")[0] for name in wheel_files}
+        assert {top for top in tops if not top.endswith(".dist-info")} == {"ha_mcp"}
+
+    def test_the_wheel_carries_every_asset_the_server_reads(self, wheel_files):
+        """The settings UI and the skill guides are read from files beside
+        the code. A file missing from the wheel breaks every install, while
+        a checkout still has it on disk."""
+        package = _REPO_ROOT / "src" / "ha_mcp"
+        assets = [
+            package / "settings_ui" / name
+            for name in ("settings.html", "settings.js", "settings.css")
         ]
-
-        pyproject_path = None
-        for path in pyproject_paths:
-            if path.exists():
-                pyproject_path = path
-                break
-
-        # Skip test if pyproject.toml not found (installed from wheel)
-        if pyproject_path is None:
-            pytest.skip("pyproject.toml not found - likely installed from distribution")
-
-        content = pyproject_path.read_text()
-
-        # Verify package-data includes skills-vendor pattern
-        assert "resources/skills-vendor/**/*" in content, (
-            "pyproject.toml should include 'resources/skills-vendor/**/*' in package-data"
+        assets += (package / "settings_ui" / "locales").glob("*.json")
+        # Bug reports detect a PyPI install by this marker.
+        assets.append(package / "_pypi_marker")
+        assets += (
+            path
+            for path in (package / "resources" / "skills-vendor" / "skills").rglob("*")
+            if path.is_file()
         )
+        expected = {path.relative_to(package.parent).as_posix() for path in assets}
+        assert len(expected) > 3, "found no locale or skill files to check"
 
-    def test_settings_assets_are_packaged(self):
-        """settings.js and settings.css must be declared for both the wheel
-        (pyproject package-data) and the sdist (MANIFEST.in).
-
-        settings_ui/__init__.py reads both files at import time, and the HA add-on's
-        Dockerfile copies only the installed .venv -- so the files reach the
-        add-on solely via wheel package-data. A future edit dropping either
-        entry would break 100% of installs at import, invisible to the unit
-        suite (the dev tree always has the files on disk). Lock the packaging
-        declarations here so that regression fails a test instead.
-        """
-        import ha_mcp
-
-        package_dir = Path(ha_mcp.__file__).parent
-        project_root = package_dir.parent.parent  # src/ha_mcp -> project root
-
-        candidate_roots = [project_root, project_root.parent]
-        pyproject_path = next(
-            (
-                root / "pyproject.toml"
-                for root in candidate_roots
-                if (root / "pyproject.toml").exists()
-            ),
-            None,
-        )
-        manifest_path = next(
-            (
-                root / "MANIFEST.in"
-                for root in candidate_roots
-                if (root / "MANIFEST.in").exists()
-            ),
-            None,
-        )
-        if pyproject_path is None or manifest_path is None:
-            pytest.skip(
-                "pyproject.toml / MANIFEST.in not found - likely installed from distribution"
-            )
-
-        pyproject = pyproject_path.read_text()
-        manifest = manifest_path.read_text()
-
-        for asset in (
-            "settings_ui/settings.html",
-            "settings_ui/settings.js",
-            "settings_ui/settings.css",
-        ):
-            assert f'"{asset}"' in pyproject, (
-                f"pyproject.toml package-data must list {asset} (wheel + add-on rely on it)"
-            )
-            assert f"src/ha_mcp/{asset}" in manifest, (
-                f"MANIFEST.in must include src/ha_mcp/{asset} (sdist relies on it)"
-            )
-
-        assert '"settings_ui/locales/*.json"' in pyproject, (
-            "pyproject.toml package-data must include settings UI locale catalogs"
-        )
-        assert "src/ha_mcp/settings_ui/locales" in manifest, (
-            "MANIFEST.in must include settings UI locale catalogs"
-        )
-
-        locales = package_dir / "settings_ui" / "locales"
-        assert (locales / "en.json").is_file()
-        assert (locales / "ru.json").is_file()
+        assert sorted(expected - wheel_files) == []

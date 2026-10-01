@@ -932,8 +932,8 @@ def _build_embedded_server_wheel(dest_dir: Path) -> Path:
     under ``uv run pytest`` in a uv-created venv that ships no ``pip``, so a
     ``python -m pip wheel`` call exits non-zero (verified on CI run 28705609217 —
     it is also why the container-lane embedded test silently skips). ``uv`` is
-    always on PATH (setup-uv) and provisions the setuptools build backend from
-    its cache (already warmed by the lane's ``uv sync``). Returns the wheel path.
+    always on PATH (setup-uv) and builds with its own ``uv_build`` backend.
+    Returns the wheel path.
     """
     import shutil as _shutil
 
