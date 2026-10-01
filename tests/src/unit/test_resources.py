@@ -101,36 +101,68 @@ class TestResourcesAccessibility:
 class TestPyprojectPackageData:
     """Test that pyproject.toml correctly specifies package data."""
 
-    def test_pyproject_includes_resources(self):
-        """pyproject.toml should include resource files in package-data."""
-        # Find pyproject.toml relative to ha_mcp package
+    def test_wheel_ships_the_skills_and_nothing_else_from_the_submodule(self):
+        """The wheel must carry every skill file, or ha_get_skill_guide and the
+        skill_content attach serve nothing on an installed server. It must not
+        carry the rest of the skills repo: its eval scripts would land inside
+        the ha_mcp package and be scanned as ha-mcp code."""
+        import tomllib
+
         import ha_mcp
 
         package_dir = Path(ha_mcp.__file__).parent
-        project_root = package_dir.parent.parent  # src/ha_mcp -> project root
-
-        # Try common locations for pyproject.toml
-        pyproject_paths = [
-            project_root / "pyproject.toml",
-            project_root.parent / "pyproject.toml",
-        ]
-
-        pyproject_path = None
-        for path in pyproject_paths:
-            if path.exists():
-                pyproject_path = path
-                break
-
-        # Skip test if pyproject.toml not found (installed from wheel)
-        if pyproject_path is None:
+        pyproject_path = package_dir.parent.parent / "pyproject.toml"
+        vendor_dir = package_dir / "resources" / "skills-vendor"
+        if not pyproject_path.exists():
             pytest.skip("pyproject.toml not found - likely installed from distribution")
+        if not (vendor_dir / "skills").is_dir():
+            pytest.skip("skills-vendor submodule not initialised in this checkout")
 
-        content = pyproject_path.read_text()
+        patterns = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))["tool"][
+            "setuptools"
+        ]["package-data"]["ha_mcp"]
+        packaged = {
+            path.relative_to(vendor_dir).as_posix()
+            for pattern in patterns
+            for path in package_dir.glob(pattern)
+            if path.is_file() and vendor_dir in path.parents
+        }
+        skill_files = {
+            path.relative_to(vendor_dir).as_posix()
+            for path in (vendor_dir / "skills").rglob("*")
+            if path.is_file()
+        }
 
-        # Verify package-data includes skills-vendor pattern
-        assert "resources/skills-vendor/**/*" in content, (
-            "pyproject.toml should include 'resources/skills-vendor/**/*' in package-data"
+        assert skill_files <= packaged, sorted(skill_files - packaged)
+        assert packaged - skill_files == {"LICENSE"}, sorted(packaged - skill_files)
+
+    def test_no_skills_submodule_folder_is_packaged_as_python(self):
+        """Package discovery must not pick up the skills submodule. If it does,
+        the skills repo's own scripts ship inside the wheel as ha_mcp modules."""
+        import tomllib
+
+        from setuptools import find_namespace_packages
+
+        import ha_mcp
+
+        project_root = Path(ha_mcp.__file__).parent.parent.parent
+        pyproject_path = project_root / "pyproject.toml"
+        if not pyproject_path.exists():
+            pytest.skip("pyproject.toml not found - likely installed from distribution")
+        if not (_get_resources_dir() / "skills-vendor" / "skills").is_dir():
+            pytest.skip("skills-vendor submodule not initialised in this checkout")
+
+        find = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))["tool"][
+            "setuptools"
+        ]["packages"]["find"]
+        discovered = find_namespace_packages(
+            where=str(project_root / "src"),
+            include=find["include"],
+            exclude=find.get("exclude", ()),
         )
+
+        vendored = [name for name in discovered if "skills-vendor" in name]
+        assert not vendored, vendored
 
     def test_settings_assets_are_packaged(self):
         """settings.js and settings.css must be declared for both the wheel
