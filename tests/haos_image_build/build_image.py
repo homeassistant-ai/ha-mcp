@@ -1290,6 +1290,20 @@ def _check_core_auth(base_url: str, token: str) -> None:
         ) from e
 
 
+# Repo files the dev addon's Dockerfile copies, besides start.py and src/.
+# Supervisor builds with the addon dir as the context, so they are staged
+# into it. haos_runtime.DEV_ADDON_REPO_FILES must match (kept in sync by
+# hand like HA_MCP_TEST_SECRET_PATH; test_haos_dev_addon_context checks
+# both against the Dockerfile).
+DEV_ADDON_REPO_FILES = (
+    "pyproject.toml",
+    "uv.lock",
+    "README.md",
+    "LICENSE",
+    "tests/test-env/pyproject.toml",
+)
+
+
 def stage_dev_addon_source(qcow2: Path) -> None:
     """Bake the ha-mcp dev addon's source into the qcow2 under /supervisor/addons/local/.
 
@@ -1300,8 +1314,8 @@ def stage_dev_addon_source(qcow2: Path) -> None:
     of an ``addons/{slug}/update`` (Docker layer cache hit, ~20-30s) instead
     of a full first-install (~5 min).
 
-    The dev addon's Dockerfile expects ``start.py``, ``pyproject.toml``,
-    ``uv.lock``, and ``src/`` at the build-context root — same shape as the
+    The dev addon's Dockerfile expects ``start.py``, ``src/`` and the
+    ``DEV_ADDON_REPO_FILES`` at the build-context root — same shape as the
     addon-repo-branch flow used for manual fork testing (see
     ``~/ha-mcp-fork/FORK-DEV.md``). We mirror that prep here so the
     in-HAOS build succeeds without any additional setup at install time.
@@ -1327,8 +1341,9 @@ def stage_dev_addon_source(qcow2: Path) -> None:
         shutil.copy(
             repo_root / "homeassistant-addon" / "start.py", staging / "start.py"
         )
-        shutil.copy(repo_root / "pyproject.toml", staging / "pyproject.toml")
-        shutil.copy(repo_root / "uv.lock", staging / "uv.lock")
+        for name in DEV_ADDON_REPO_FILES:
+            (staging / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(repo_root / name, staging / name)
         # src/ha_mcp: nuke + copy fresh so a stale tree (e.g. left over from
         # a prior local run) doesn't shadow the current version.
         addon_src_dir = staging / "src"

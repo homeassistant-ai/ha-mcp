@@ -17,7 +17,9 @@ pre-commit:
               - "src/ha_mcp/tools/**/*.py"
             run: uv run ast-grep scan {staged_files}
           - name: uv-lock
-            glob: "pyproject.toml"
+            glob:
+              - "pyproject.toml"
+              - "tests/test-env/pyproject.toml"
             run: uv lock
 
     - group:
