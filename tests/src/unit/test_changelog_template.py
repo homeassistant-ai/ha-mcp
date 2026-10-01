@@ -31,10 +31,8 @@ def _commit(repo: Path, env: dict[str, str], subject: str, *paths: str) -> None:
 
 
 @pytest.fixture(scope="module")
-def release_notes(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> dict[str, dict[str, str]]:
-    """Rendered v1.0.0 notes as {"visible" | "internal": {heading: entries}}."""
+def changelog(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """CHANGELOG.md rendered for v1.0.0 (mixed commits) and v1.0.1 (CI fix only)."""
     home = tmp_path_factory.mktemp("home")
     repo = tmp_path_factory.mktemp("repo")
     env = {
@@ -73,6 +71,8 @@ def release_notes(
     _commit(repo, env, "docs: explain OAuth setup", "docs/OAUTH.md")
     _commit(repo, env, "chore(addon): publish dev addon version 1.0.0.dev1 [skip ci]")
     _git(repo, env, "tag", "-a", "v1.0.0", "-m", "v1.0.0")
+    _commit(repo, env, "fix: retry the flaky CI job", ".github/workflows/pr.yml")
+    _git(repo, env, "tag", "-a", "v1.0.1", "-m", "v1.0.1")
 
     subprocess.run(
         [sys.executable, "-m", "semantic_release", "changelog"],
@@ -81,8 +81,20 @@ def release_notes(
         check=True,
         capture_output=True,
     )
+    return (repo / "CHANGELOG.md").read_text()
 
-    visible, _, internal = (repo / "CHANGELOG.md").read_text().partition("<details>")
+
+def _release(changelog: str, version: str) -> tuple[str, str]:
+    """Split one release's notes into (shown to users, collapsed)."""
+    body = changelog.split(f"## {version} ", 1)[1].split("\n## v", 1)[0]
+    visible, _, internal = body.partition("<details>")
+    return visible, internal
+
+
+@pytest.fixture(scope="module")
+def release_notes(changelog: str) -> dict[str, dict[str, str]]:
+    """v1.0.0 notes as {"visible" | "internal": {heading: entries}}."""
+    visible, internal = _release(changelog, "v1.0.0")
     return {"visible": _by_heading(visible), "internal": _by_heading(internal)}
 
 
@@ -136,3 +148,16 @@ def test_dev_build_bookkeeping_is_left_out(
         section for part in release_notes.values() for section in part.values()
     )
     assert "Publish dev addon version" not in rendered
+
+
+def test_release_with_only_internal_changes_says_so(changelog: str) -> None:
+    """A release must not read as blank when every change in it is collapsed."""
+    visible, internal = _release(changelog, "v1.0.1")
+    assert "No user-facing changes." in visible
+    assert "Retry the flaky CI job" in internal
+
+
+def test_release_with_user_changes_carries_no_empty_notice(changelog: str) -> None:
+    """The empty-release notice must not appear beside real entries."""
+    visible, _ = _release(changelog, "v1.0.0")
+    assert "No user-facing changes." not in visible
