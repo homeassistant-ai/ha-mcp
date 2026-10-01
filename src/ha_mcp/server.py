@@ -986,10 +986,10 @@ class HomeAssistantSmartMCPServer:
     #       entry cannot quietly re-acquire a pointer to content that isn't
     #       vendored — which is what "self-contained" exists to prevent.
     _LITE_DOCSTRING_DESTINATIONS: ClassVar[dict[str, str]] = {
-        "ha_config_get_automation": "references/automation-patterns.md",
-        "ha_config_set_automation": "references/automation-patterns.md",
-        "ha_config_get_script": "references/automation-patterns.md",
-        "ha_config_set_script": "references/automation-patterns.md",
+        "ha_config_get_automation": "references/triggers-and-conditions.md",
+        "ha_config_set_automation": "references/triggers-and-conditions.md",
+        "ha_config_get_script": "references/automation-actions.md",
+        "ha_config_set_script": "references/automation-actions.md",
         "ha_config_get_scene": "references/scenes.md",
         "ha_config_set_scene": "references/scenes.md",
         "ha_config_list_helpers": "references/helper-selection.md",
@@ -1765,7 +1765,7 @@ class HomeAssistantSmartMCPServer:
                 Field(
                     description=(
                         "Path of the file to read, exactly as SKILL.md links "
-                        "it (e.g. 'references/automation-patterns.md'). "
+                        "it (e.g. 'references/triggers-and-conditions.md'). "
                         "Omit to read SKILL.md."
                     ),
                 ),
@@ -1907,8 +1907,8 @@ class HomeAssistantSmartMCPServer:
             response["how_to_use"] = (
                 f"Call {SKILL_TOOL_NAME}(file='<path>') for the reference "
                 "files the table above points to for your task, using the "
-                "path exactly as linked (e.g. 'references/automation-"
-                "patterns.md'). Read only those; do not load every file."
+                "path exactly as linked (e.g. 'references/triggers-and-"
+                "conditions.md'). Read only those; do not load every file."
             )
         return response
 

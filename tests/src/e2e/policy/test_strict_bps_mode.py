@@ -45,7 +45,7 @@ from ..utilities.entity_finders import find_test_light_entity
 # and every success-path write goes through ha_config_set_automation — so the
 # whole module runs on the no-tools lanes and pins the policy there as well.
 
-_AUTOMATION_PATTERNS_REF = "references/automation-patterns.md"
+_TRIGGERS_CONDITIONS_REF = "references/triggers-and-conditions.md"
 
 
 async def _build_strict_server(
@@ -197,7 +197,7 @@ async def test_keyless_write_blocked_with_structured_error(strict_bps_mcp):
     assert body.get("strict_mandatory_bps") is True
     suggestion = body["error"].get("suggestion", "")
     assert "ha_get_skill_guide" in suggestion
-    assert _AUTOMATION_PATTERNS_REF in suggestion
+    assert _TRIGGERS_CONDITIONS_REF in suggestion
 
 
 @pytest.mark.asyncio
@@ -206,7 +206,7 @@ async def test_write_with_key_from_skill_guide_succeeds(strict_bps_mcp):
     take the key published at its top, and repeat the write with it."""
     client, _server = strict_bps_mcp
     guide = parse_mcp_result(
-        await client.call_tool("ha_get_skill_guide", {"file": _AUTOMATION_PATTERNS_REF})
+        await client.call_tool("ha_get_skill_guide", {"file": _TRIGGERS_CONDITIONS_REF})
     )
     match = re.search(r"Acknowledgment key: (\S+)", guide.get("content", ""))
     assert match, "strict mode ON: the guide must publish the acknowledgment key"

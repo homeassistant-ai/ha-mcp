@@ -2245,7 +2245,7 @@ def build_skill_content(
     :func:`ha_mcp.utils.skill_loader.resolve_skill_files`.
 
     ``referenced_files`` may carry ``#anchor`` suffixes
-    (``"references/automation-patterns.md#native-conditions"``); those
+    (``"references/triggers-and-conditions.md#native-conditions"``); those
     resolve to just the matching markdown section. ``canonical_files``
     entries are bare paths and resolve to whole files.
 
@@ -2258,7 +2258,7 @@ def build_skill_content(
         MandatoryBPS: When True, attach the canonical files for this tool.
         canonical_files: Tool-specific default mapping. Paths are relative
             to the home-assistant-best-practices skill directory
-            (e.g. ``"references/automation-patterns.md"``).
+            (e.g. ``"references/triggers-and-conditions.md"``).
         referenced_files: Files (optionally with ``#anchor``) cited by
             best-practice warnings — always attached, regardless of
             ``MandatoryBPS``. Pass ``None`` for tools without

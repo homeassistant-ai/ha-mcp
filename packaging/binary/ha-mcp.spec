@@ -11,6 +11,8 @@ Build with: pyinstaller packaging/binary/ha-mcp.spec
 import os
 import sys
 import sysconfig
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_all
 
 # Get project root (spec file is in packaging/binary/)
@@ -86,10 +88,20 @@ def _not_mcp_cli(name):
     return not name.startswith('ha_mcp._vendor.mcp.cli')
 
 
+def _is_shipped_data(entry):
+    # Of the vendored skills submodule only skills/ and LICENSE ship; its
+    # evals, scripts and repo metadata are the skills repo's own tooling.
+    parts = Path(entry[0]).parts
+    if 'skills-vendor' not in parts:
+        return True
+    inside = parts[parts.index('skills-vendor') + 1:]
+    return inside[:1] in (('skills',), ('LICENSE',))
+
+
 for package in packages_to_collect:
     try:
         tmp_ret = collect_all(package, filter_submodules=_not_mcp_cli)
-        datas += tmp_ret[0]
+        datas += [entry for entry in tmp_ret[0] if _is_shipped_data(entry)]
         binaries += tmp_ret[1]
         hiddenimports += tmp_ret[2]
     except Exception as e:

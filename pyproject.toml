@@ -109,11 +109,15 @@ ha-mcp-oidc = "ha_mcp.__main__:main_oidc"
 # Explicit because publish-dev.yml renames the project to ha-mcp-dev, which
 # would otherwise make the module name ha_mcp_dev.
 module-name = "ha_mcp"
-# Every file under src/ha_mcp ships unless excluded here. The skills
-# submodule's git and CI files and the settings UI's agent guide are not
-# read at runtime.
+# Every file under src/ha_mcp ships unless excluded here. Of the skills
+# submodule only skills/ and LICENSE ship; its evals, scripts, docs, git and
+# CI files are not read at runtime, and neither is the settings UI's agent
+# guide.
 source-exclude = [
     "src/ha_mcp/resources/skills-vendor/.*",
+    "src/ha_mcp/resources/skills-vendor/*.md",
+    "src/ha_mcp/resources/skills-vendor/evals",
+    "src/ha_mcp/resources/skills-vendor/scripts",
     "src/ha_mcp/settings_ui/AGENTS.md",
     "src/ha_mcp/settings_ui/CLAUDE.md",
 ]

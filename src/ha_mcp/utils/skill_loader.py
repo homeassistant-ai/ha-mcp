@@ -285,8 +285,8 @@ def resolve_skill_files(
     Each entry in ``files`` is either a bare file path or a path with a
     ``#anchor`` suffix:
 
-    * ``"references/automation-patterns.md"`` → full file body.
-    * ``"references/automation-patterns.md#native-conditions"`` → only the
+    * ``"references/triggers-and-conditions.md"`` → full file body.
+    * ``"references/triggers-and-conditions.md#native-conditions"`` → only the
       markdown section whose heading slugifies to ``native-conditions``.
 
     The same file requested both bare AND anchored produces two entries
