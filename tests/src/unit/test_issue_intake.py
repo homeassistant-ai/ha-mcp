@@ -60,3 +60,27 @@ def test_issue_intake_event_and_credential_boundaries() -> None:
     assert model["with"]["web-search"] == "disabled"
     assert not model.get("env")
     assert not model["with"].get("passthrough-env")
+
+
+def test_report_gate_runs_trusted_code_and_mints_write_access_only_to_act() -> None:
+    root = Path(__file__).resolve().parents[3]
+    workflow = yaml.safe_load((root / ".github/workflows/issue-intake.yml").read_text())
+    gate = workflow["jobs"]["gate"]
+    # Bot events (the gate's own close/reopen/comment) must not re-enter it.
+    assert "github.event.sender.type == 'User'" in gate["if"]
+    assert "!github.event.issue.pull_request" in gate["if"]
+    # A comment edited to add the report must be able to reopen the issue.
+    assert '"edited"' in gate["if"].split("github.event_name == 'issue_comment'")[1]
+    steps = gate["steps"]
+    checkout = steps[0]["with"]
+    assert checkout["ref"] == "${{ github.event.repository.default_branch }}"
+    assert checkout["persist-credentials"] is False
+    token = next(s for s in steps if s.get("id") == "app-token")
+    assert "steps.check.outputs.action" in token["if"]
+    check = next(s for s in steps if s.get("id") == "check")
+    assert steps.index(check) < steps.index(token)
+    assert check["env"]["GH_TOKEN"] == "${{ github.token }}"
+    admit = workflow["jobs"]["admit"]
+    # Admission waits for the gate but still runs when it is skipped or fails.
+    assert admit["needs"] == "gate"
+    assert admit["if"].startswith("!cancelled() &&")

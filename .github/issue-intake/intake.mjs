@@ -538,20 +538,41 @@ export function wantsReport(snapshot, result) {
 // field under the same heading.
 export const noReportHeading = "Why there is no ha_report_issue report";
 export const gateMarker = "<!-- ha-mcp-report-gate -->";
-const noReportSection = new RegExp(
-  `^ {0,3}#{2,4} +${noReportHeading}[ \\t]*$([\\s\\S]*?)(?=^ {0,3}#{1,6} |(?![\\s\\S]))`,
-  "imu",
+const noReportHeadingLine = new RegExp(
+  `^ {0,3}#{2,4} +${noReportHeading}[ \\t]*$`,
+  "iu",
 );
+const fenceLine = /^ {0,3}(`{3,}|~{3,})/;
+const headingLine = /^ {0,3}#{1,6}(?: |$)/;
+// Every section under the heading, each ending at the next heading outside a
+// code fence: logs and config pasted there carry "# " comment lines.
+function noReportSections(text) {
+  const sections = [];
+  let current = null;
+  let fence = null;
+  for (const line of (text || "").split(/\r?\n/)) {
+    const marker = fenceLine.exec(line)?.[1];
+    if (fence) {
+      if (marker?.[0] === fence[0] && marker.length >= fence.length)
+        fence = null;
+    } else if (marker) fence = marker;
+    else if (headingLine.test(line)) {
+      current = noReportHeadingLine.test(line) ? [] : null;
+      if (current) sections.push(current);
+      continue;
+    }
+    current?.push(line);
+  }
+  return sections.map((lines) => lines.join("\n"));
+}
 // A few words, so "N/A" or the "_No response_" an issue form writes for an
 // empty field is not an explanation.
 const minReasonWords = 5;
-const hasReason = (text) => {
-  const reason = noReportSection
-    .exec(text || "")?.[1]
-    .replace(/<!--[\s\S]*?-->/g, "")
-    .trim();
-  return !!reason && reason.split(/\s+/).length >= minReasonWords;
-};
+const hasReason = (text) =>
+  noReportSections(text).some((section) => {
+    const reason = section.replace(/<!--[\s\S]*?-->/g, "").trim();
+    return !!reason && reason.split(/\s+/).length >= minReasonWords;
+  });
 const gateExemptRoles = ["write", "maintain", "admin"];
 
 export function gateAction(snapshot, bot, event) {

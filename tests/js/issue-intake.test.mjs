@@ -834,6 +834,10 @@ test("only the reporter's report or an explanation of why there is none keeps a 
     [(s) => (s.issue.body += `\n\n${reason("ha-mcp exits at startup before connecting.")}`), null],
     [(s) => (s.issue.body += `\n\n${reason("This asks for a docs site page, not a tool.")}`), null],
     // What an issue form writes for an empty optional field.
+    // A form's empty field first, then the explanation the notice asked for.
+    [(s) => (s.issue.body += `\n\n${reason("_No response_")}\n\n${reason("ha-mcp exits at startup before connecting.")}`), null],
+    // Pasted config opens the explanation; its comment line is not a heading.
+    [(s) => (s.issue.body += `\n\n${reason("\`\`\`\n# uvx ha-mcp\n\`\`\`\nThe server exits before it binds the port.")}`), null],
     [(s) => (s.issue.body += `\n\n${reason("_No response_")}`), "close"],
     [(s) => (s.issue.body += `\n\n${reason("Not relevant.")}`), "close"],
     [(s) => (s.issue.body += ` The ${reportMarker} heading is missing.`), "close"],
@@ -892,7 +896,8 @@ test("every gated issue form asks for the report under the headings the gate rea
       new URL(`../../.github/ISSUE_TEMPLATE/${form}.yml`, import.meta.url),
       "utf8",
     );
-    assert.match(text, /id: report\n[\s\S]*?required: true/, form);
+    // The report field's own validations, not a later field's.
+    assert.match(text, /id: report\n(?:(?!\n {2}- )[\s\S])*?required: true/, form);
     // The form renders this field's label as the heading the gate looks for.
     assert.ok(text.includes(`label: "${noReportHeading}"`), form);
   }
