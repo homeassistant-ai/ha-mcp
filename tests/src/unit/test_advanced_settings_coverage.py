@@ -331,10 +331,10 @@ def _literal_env_reads() -> dict[str, set[str]]:
     found: dict[str, set[str]] = {}
     for py in pkg_dir.rglob("*.py"):
         rel = py.relative_to(pkg_dir).as_posix()
-        if rel.startswith("_vendor/"):
-            # Vendored third-party code (websockets): its env knobs
-            # (WEBSOCKETS_*) are upstream's interface, not ha-mcp settings
-            # to surface in the Settings UI.
+        if rel.startswith(("_vendor/", "resources/skills-vendor/")):
+            # Vendored code (websockets, the skills submodule): its env
+            # knobs (WEBSOCKETS_*, the skills eval scripts') are upstream's
+            # interface, not ha-mcp settings to surface in the Settings UI.
             continue
         tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
         for name in _env_reads_in_tree(tree):

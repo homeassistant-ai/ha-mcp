@@ -81,7 +81,8 @@ logger = logging.getLogger(__name__)
 # warning hits regardless of MandatoryBPS. Paths are relative to the
 # home-assistant-best-practices skill directory.
 _AUTOMATION_SKILL_FILES: tuple[str, ...] = (
-    "references/automation-patterns.md",
+    "references/triggers-and-conditions.md",
+    "references/automation-actions.md",
     "references/template-guidelines.md",
 )
 
@@ -781,8 +782,8 @@ class AutomationConfigTools:
         positions; templates belong only in `data.*`, notification text,
         `event_data` and `variables`. The best-practice checker reports
         violations under `best_practice_warnings` — fix them before
-        re-submitting. `automation-patterns.md` and `template-guidelines.md`
-        ship under `skill_content` by default. Test any unavoidable template
+        re-submitting. `triggers-and-conditions.md`, `automation-actions.md` and
+        `template-guidelines.md` ship under `skill_content` by default. Test any unavoidable template
         with ha_eval_template first.
 
         Consider a dedicated tool first: a state snapshot with no trigger ->

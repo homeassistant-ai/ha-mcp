@@ -66,11 +66,12 @@ from .util_helpers import (
 logger = logging.getLogger(__name__)
 
 
-# Scripts share the automation skill mapping — both use
-# action / condition / trigger templates and benefit from the same
-# native-vs-template guidance.
+# Scripts attach the same files as automations: a script sequence uses
+# actions, conditions and ``wait_for_trigger``. The actions file comes first
+# because the strict-mode block error names the first entry.
 _SCRIPT_SKILL_FILES: tuple[str, ...] = (
-    "references/automation-patterns.md",
+    "references/automation-actions.md",
+    "references/triggers-and-conditions.md",
     "references/template-guidelines.md",
 )
 
@@ -592,8 +593,8 @@ class ConfigScriptTools:
         `for:`) over templates in logic positions; templates belong only in
         `data.*`, notification text, `event_data` and `variables`. The
         best-practice checker reports violations under `best_practice_warnings`.
-        `automation-patterns.md` and `template-guidelines.md` ship under
-        `skill_content` by default.
+        `automation-actions.md`, `triggers-and-conditions.md` and
+        `template-guidelines.md` ship under `skill_content` by default.
 
         Scripts use 'sequence', NOT 'trigger' or 'action'; for trigger-based
         execution use ha_config_set_automation.

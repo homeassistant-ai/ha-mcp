@@ -142,8 +142,8 @@ BestPracticeKeyParam = Annotated[
 #   ha_config_set_dashboard  → _DASHBOARD_SKILL_FILES[0]
 #   ha_config_set_yaml       → _YAML_SKILL_FILES[0]
 STRICT_BPS_GATED_TOOLS: dict[str, str] = {
-    "ha_config_set_automation": "references/automation-patterns.md",
-    "ha_config_set_script": "references/automation-patterns.md",
+    "ha_config_set_automation": "references/triggers-and-conditions.md",
+    "ha_config_set_script": "references/automation-actions.md",
     "ha_config_set_scene": "SKILL.md",
     "ha_config_set_helper": "references/helper-selection.md",
     "ha_config_set_dashboard": "references/dashboard-guide.md",

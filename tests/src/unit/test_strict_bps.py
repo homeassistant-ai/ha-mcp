@@ -284,7 +284,7 @@ class TestStrictBpsMiddleware:
         # The suggestion names the exact recovery call for this tool.
         suggestion = body["error"]["suggestion"]
         assert "ha_get_skill_guide" in suggestion
-        assert "references/automation-patterns.md" in suggestion
+        assert "references/triggers-and-conditions.md" in suggestion
         assert STRICT_BPS_KEY_PARAM in suggestion
 
     async def test_gated_with_wrong_key_blocked(self, strict_on):
