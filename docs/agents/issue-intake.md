@@ -70,6 +70,9 @@ kinds of label; it does not execute instructions from the report.
 A bug-like issue (a `[BUG]`/`[AGENT]` title, a bug label, or a reported error)
 whose body and human replies carry no report gets a request for
 `ha_report_issue` output in the comment. The request never adds needs-info.
+It follows the labels present when the comment is published. Labels other
+than needs-info do not start a run, so a later label change keeps the comment
+as it is until the next run; `/triage refresh` requests one.
 The heading string is shared with `tools_bug_report.py`;
 `tests/js/issue-intake.test.mjs` fails when the two drift apart.
 
