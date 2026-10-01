@@ -489,7 +489,7 @@ const reportTypeLabels = {
 const bugLabels = ["bug", "runtime-bug", "startup-bug", "agent-behavior"];
 const nonBugLabels = ["enhancement", "documentation", "question"];
 const reportRequest =
-  "Please ask your AI agent to run `ha_report_issue` in the session where this happened and add its report here. It collects the versions, client, settings and tool calls that maintainers usually have to ask for. If ha-mcp cannot start or connect, or this report comes from reading the code rather than a live session, please say so instead.";
+  "Please ask your AI agent to run `ha_report_issue` in the session where this happened and add its report here. It collects the versions, client, settings and tool calls that maintainers usually have to ask for. Only if ha-mcp cannot start or connect, explain that under a `### Why there is no ha_report_issue report` heading instead.";
 
 // Type labels for an issue filed from an ha_report_issue report, chosen by its
 // title prefix. A label a human removed is never added back.
@@ -531,6 +531,109 @@ export function wantsReport(snapshot, result) {
     labels.some((name) => bugLabels.includes(name)) ||
     result.facts.some((fact) => fact.field === "error")
   );
+}
+
+// The report gate: an issue must carry an ha_report_issue report, or explain
+// under this heading why it has none. The issue forms render their fallback
+// field under the same heading.
+export const noReportHeading = "Why there is no ha_report_issue report";
+export const gateMarker = "<!-- ha-mcp-report-gate -->";
+const noReportSection = new RegExp(
+  `^ {0,3}#{2,4} +${noReportHeading}[ \\t]*$([\\s\\S]*?)(?=^ {0,3}#{1,6} |(?![\\s\\S]))`,
+  "imu",
+);
+// A few words, so "N/A" or the "_No response_" an issue form writes for an
+// empty field is not an explanation.
+const minReasonWords = 5;
+const hasReason = (text) => {
+  const reason = noReportSection
+    .exec(text || "")?.[1]
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .trim();
+  return !!reason && reason.split(/\s+/).length >= minReasonWords;
+};
+const gateExemptRoles = ["write", "maintain", "admin"];
+
+export function gateAction(snapshot, bot, event) {
+  const { issue, comments, events, roles } = snapshot;
+  const author = issue.user;
+  if (!isHuman(author) || gateExemptRoles.includes(roles[author.login]))
+    return null;
+  if (issue.labels.some((l) => l.name === "documentation")) return null;
+  const texts = [
+    issue.body || "",
+    ...comments
+      .filter((c) => c.user?.login === author.login)
+      .map((c) => c.body || ""),
+  ];
+  if (texts.some((t) => hasReport(t) || hasReason(t))) {
+    const closed = events.filter((e) => e.event === "closed").at(-1);
+    return issue.state === "closed" && closed?.actor?.login === bot
+      ? "reopen"
+      : null;
+  }
+  // Only a new or reopened issue is closed, so an edit never closes an
+  // issue that predates the gate. A maintainer's reopen overrides it.
+  if (
+    issue.state === "open" &&
+    (event.action === "opened" ||
+      (event.action === "reopened" &&
+        !gateExemptRoles.includes(event.senderRole)))
+  )
+    return "close";
+  return null;
+}
+
+export function gateComment(action, login) {
+  if (action === "reopen")
+    return `${gateMarker}\nReopened: the issue now includes an \`ha_report_issue\` report or explains why it has none.\n`;
+  return `${gateMarker}
+@${login}, this issue was closed automatically because it does not include an \`ha_report_issue\` report.
+
+Every bug report, agent-behavior report and feature request needs one. Ask your AI agent to run \`ha_report_issue\` in the session where the problem happened, or for a feature request, the session where it tried to do what you are asking for, and add the full output to the issue description or a comment, with secrets removed. It records the ha-mcp version, install type, client, settings and tool calls that maintainers otherwise have to ask for, and shows what the agent tried.
+
+Only if the tool cannot run because ha-mcp does not start or connect, or a report could not show anything relevant to a feature request, add a section headed \`### ${noReportHeading}\` that explains why. For a startup problem, include your startup logs and configuration there (tokens removed). Having found the problem by reading the code does not count.
+
+The issue reopens automatically once the report or that explanation is added.
+`;
+}
+
+export async function gate(api, repository, number, bot, event, write) {
+  const snapshot = await collect(api, repository, number);
+  const action = gateAction(snapshot, bot, event);
+  if (!action || !write) return action;
+  const base = `repos/${repository}/issues`;
+  const body = gateComment(action, snapshot.issue.user.login);
+  // A close always posts a new comment, so the mention notifies again; a
+  // reopen rewrites the notice that closed the issue.
+  const notice = snapshot.comments
+    .filter(
+      (c) =>
+        c.user?.login === bot &&
+        c.user.type === "Bot" &&
+        c.body.startsWith(gateMarker),
+    )
+    .at(-1);
+  if (action === "close") {
+    await api.request(`${base}/${number}/comments`, {
+      method: "POST",
+      data: { body },
+    });
+    await api.request(`${base}/${number}`, {
+      method: "PATCH",
+      data: { state: "closed", state_reason: "not_planned" },
+    });
+  } else {
+    await api.request(`${base}/${number}`, {
+      method: "PATCH",
+      data: { state: "open" },
+    });
+    await api.request(
+      notice ? `${base}/comments/${notice.id}` : `${base}/${number}/comments`,
+      { method: notice ? "PATCH" : "POST", data: { body } },
+    );
+  }
+  return action;
 }
 
 export function labelAction(snapshot, bot, result) {
@@ -646,7 +749,32 @@ export async function main(command, options = {}) {
   const bot = `${env.HA_MCP_APP_SLUG}[bot]`;
   if (!/^[a-z0-9-]+\[bot\]$/.test(bot) || bot.startsWith("undefined"))
     throw Error("HA_MCP_APP_SLUG is required");
-  if (command === "admit" || command === "collect") {
+  if (command === "gate-check" || command === "gate-apply") {
+    const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8"));
+    if (command === "gate-apply" && env.TOKEN_APP_SLUG !== env.HA_MCP_APP_SLUG)
+      throw Error("Installation token belongs to a different App");
+    let action = null;
+    if (!event.issue?.pull_request && isHuman(event.sender)) {
+      const senderRole = await roleFor(
+        api,
+        env.GITHUB_REPOSITORY,
+        event.sender.login,
+      );
+      // Both steps decide from current state: the apply step rereads it with
+      // the write token, so an edit between them is not overwritten.
+      action = await gate(
+        api,
+        env.GITHUB_REPOSITORY,
+        event.issue.number,
+        bot,
+        { action: event.action, senderRole },
+        command === "gate-apply",
+      );
+    }
+    if (command === "gate-check")
+      appendFileSync(env.GITHUB_OUTPUT, `action=${action ?? "none"}\n`);
+    console.log(`Report gate: ${action ?? "no action"}`);
+  } else if (command === "admit" || command === "collect") {
     const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8"));
     const number = Number(env.ISSUE_NUMBER || event.issue?.number);
     const skip = (reason) => {
@@ -698,7 +826,7 @@ export async function main(command, options = {}) {
       throw Error("Publication repository mismatch");
     const result = JSON.parse(readFileSync(env.OUTPUT_PATH, "utf8"));
     console.log(await publish(api, prepared, result, bot));
-  } else throw Error("Expected admit, collect or publish");
+  } else throw Error("Expected gate-check, gate-apply, admit, collect or publish");
 }
 
 if (

@@ -32,6 +32,32 @@ body:
       required: true
 
   - type: textarea
+    id: report
+    attributes:
+      label: "📋 ha_report_issue Report"
+      description: |
+        **Required.** Ask your AI agent: *"Report this with the ha_report_issue tool."* Run it in a session where your agent tried to do what you are asking for, so its tool calls show the feature does not exist yet or show the problem it should solve.
+        Paste its full output here, with tokens and passwords removed. It collects the versions,
+        install type, client, settings and tool calls we otherwise have to ask for.
+
+        Only if a report cannot show anything relevant to this request (for example, it is about
+        packaging or the docs site rather than something an agent can try), write `N/A` here and
+        explain why in the next field. Issues with neither are closed automatically.
+      placeholder: "Paste the full ha_report_issue output here"
+    validations:
+      required: true
+
+  - type: textarea
+    id: no_report_reason
+    attributes:
+      label: "Why there is no ha_report_issue report"
+      description: |
+        Explain why a report cannot show anything relevant to this request, or that ha-mcp does
+        not start or connect. Leaving it out or not wanting to run the tool does not count.
+    validations:
+      required: false
+
+  - type: textarea
     id: additional_context
     attributes:
       label: "Additional context"

@@ -120,28 +120,7 @@ class HomeAssistantSmartMCPServer:
             server_name = self.settings.mcp_server_name
             server_version = self.settings.mcp_server_version
 
-        # Build server instructions from bundled skills (if enabled)
-        instructions = self._build_skills_instructions()
-
-        # Surface Read Only Mode in the startup instructions so clients
-        # that show server instructions warn the model up front. Startup
-        # state only — live flips are covered by the structured
-        # READ_ONLY_MODE call errors and the ha_get_overview field.
-        if self.settings.read_only_mode:
-            read_only_note = (
-                "## Read Only Mode\n"
-                "This server is running in Read Only Mode: write-capable "
-                "tools are disabled and every write or destructive "
-                "operation is blocked with a READ_ONLY_MODE error. You can "
-                "search, read, and analyze freely. To allow changes, the "
-                "user must turn off Read Only Mode in the ha-mcp settings "
-                "UI (Tools tab) or the add-on configuration."
-            )
-            instructions = (
-                f"{instructions}\n\n{read_only_note}"
-                if instructions
-                else read_only_note
-            )
+        instructions = self._build_instructions()
 
         # Create FastMCP server with Home Assistant icons for client UI display
         self.mcp = FastMCP(
@@ -371,6 +350,42 @@ class HomeAssistantSmartMCPServer:
         except Exception:
             logger.debug("skill-tool visibility lookup failed", exc_info=True)
             return False
+
+    def _build_instructions(self) -> str:
+        """Compose the server instructions sent in the MCP initialize response."""
+        # Bundled skills first (if enabled)
+        instructions = self._build_skills_instructions()
+
+        # Surface Read Only Mode in the startup instructions so clients
+        # that show server instructions warn the model up front. Startup
+        # state only — live flips are covered by the structured
+        # READ_ONLY_MODE call errors and the ha_get_overview field.
+        if self.settings.read_only_mode:
+            read_only_note = (
+                "## Read Only Mode\n"
+                "This server is running in Read Only Mode: write-capable "
+                "tools are disabled and every write or destructive "
+                "operation is blocked with a READ_ONLY_MODE error. You can "
+                "search, read, and analyze freely. To allow changes, the "
+                "user must turn off Read Only Mode in the ha-mcp settings "
+                "UI (Tools tab) or the add-on configuration."
+            )
+            instructions = (
+                f"{instructions}\n\n{read_only_note}"
+                if instructions
+                else read_only_note
+            )
+
+        # ha_report_issue is a mandatory tool, so this always points at a
+        # tool the client has. The issue tracker closes issues without it.
+        issue_note = (
+            "## Filing ha-mcp issues\n"
+            "Before filing any GitHub issue about ha-mcp, feature requests "
+            "included, run ha_report_issue and include its full output. "
+            "Issues filed without it are closed automatically."
+        )
+        instructions = f"{instructions}\n\n{issue_note}" if instructions else issue_note
+        return instructions
 
     def _build_skills_instructions(self) -> str | None:
         """Build server instructions from bundled skill frontmatter.
@@ -949,7 +964,9 @@ class HomeAssistantSmartMCPServer:
             "two kinds of report: a runtime bug (ha-mcp errored or behaved "
             "unexpectedly) and agent-behaviour feedback (the AI used the wrong "
             "tool or worked inefficiently). Pass the report text in the call; "
-            "the server builds the issue title, body and a pre-filled link.\n\n"
+            "the server builds the issue title, body and a pre-filled link. "
+            "Every GitHub issue about ha-mcp, feature requests included, needs "
+            "this report: issues filed without it are closed automatically.\n\n"
             "The response carries the full workflow in its `instructions` "
             "field (duplicate check, the mandatory anonymisation step, and "
             "how to file the issue), plus "

@@ -63,33 +63,29 @@ body:
         - Timestamps and performance data
 
   - type: textarea
-    id: conversation_paste
+    id: report
     attributes:
-      label: "📋 Copy-Paste from Conversation"
+      label: "📋 ha_report_issue Report"
       description: |
-        **Paste the relevant part of your conversation here.**
+        **Required.** Ask your AI agent: *"Report this with the ha_report_issue tool."* Run it in the session where the problem happened.
+        Paste its full output here, with tokens and passwords removed. It collects the versions,
+        install type, client, settings and tool calls we otherwise have to ask for.
 
-        Include:
-        - Your original request to the agent
-        - The agent's tool calls and responses
-        - The ha_report_issue output (if you used it)
-
-        **Don't worry about formatting** - just copy and paste! We can read messy text, code blocks, JSON, whatever.
-      placeholder: |
-        User: Can you turn on the living room lights?
-
-        Agent: I'll search for the living room light entity.
-        [Tool: ha_search, query="living room light"]
-        Result: Found entity light.living_room
-
-        Agent: Now I'll search for it again to confirm...
-        [Tool: ha_search, query="living room"]
-        Result: ...
-
-        [Paste everything here, including ha_report_issue output if available]
-      render: markdown
+        Only if the tool cannot run because ha-mcp does not start or connect, write `N/A` here and
+        explain in the next field. Issues with neither are closed automatically.
+      placeholder: "Paste the full ha_report_issue output here"
     validations:
       required: true
+
+  - type: textarea
+    id: no_report_reason
+    attributes:
+      label: "Why there is no ha_report_issue report"
+      description: |
+        Only if ha-mcp does not start or connect. Not wanting to run the tool, or having found the
+        problem by reading the code, does not count.
+    validations:
+      required: false
 
   - type: markdown
     attributes:

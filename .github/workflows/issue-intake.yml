@@ -22,8 +22,60 @@ permissions:
   issues: read
 
 jobs:
-  admit:
+  # Closes a new issue that has neither an ha_report_issue report nor an
+  # explanation of why it has none, and reopens it once one is added. Admission
+  # waits for it so a closed issue is not documented and a reopened one is.
+  gate:
     if: >-
+      github.repository == 'homeassistant-ai/ha-mcp' &&
+      !github.event.issue.pull_request &&
+      github.event.sender.type == 'User' && github.actor != 'ghhamcp' &&
+      (contains(fromJSON('["opened","edited","reopened"]'), github.event.action) && github.event_name == 'issues' ||
+       github.event_name == 'issue_comment' && github.event.action == 'created')
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    concurrency:
+      group: issue-report-gate-${{ github.repository }}-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    env:
+      HA_MCP_APP_SLUG: ${{ vars.HA_MCP_APP_SLUG }}
+    steps:
+      - name: Checkout trusted gate code
+        timeout-minutes: 2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: .github
+      - name: Check the issue for an ha_report_issue report
+        id: check
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/issue-intake/intake.mjs gate-check
+      - name: Create scoped publication token
+        id: app-token
+        if: contains(fromJSON('["close","reopen"]'), steps.check.outputs.action)
+        timeout-minutes: 1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ vars.HA_MCP_APP_ID }}
+          private-key: ${{ secrets.HA_MCP_APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-contents: read
+      - name: Close or reopen the issue
+        if: steps.app-token.outcome == 'success'
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TOKEN_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: node .github/issue-intake/intake.mjs gate-apply
+
+  admit:
+    needs: gate
+    # !cancelled(): admission still runs when the gate is skipped or fails.
+    if: >-
+      !cancelled() &&
       github.repository == 'homeassistant-ai/ha-mcp' &&
       !github.event.issue.pull_request &&
       (!github.event.comment || github.event.comment.user.type != 'Bot') &&
@@ -62,7 +114,8 @@ jobs:
 
   document:
     needs: admit
-    if: needs.admit.outputs.run == 'true'
+    # A skipped gate would otherwise skip this job through admit.
+    if: "!cancelled() && needs.admit.outputs.run == 'true'"
     runs-on: ubuntu-latest
     timeout-minutes: 27
     # Never cancel an active OAuth consumer to coalesce issue events.

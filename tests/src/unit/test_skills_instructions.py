@@ -285,6 +285,21 @@ class TestBuildSkillsInstructions:
         assert result is None
 
 
+class TestBuildInstructions:
+    """Tests for _build_instructions(), the full initialize instructions."""
+
+    @pytest.mark.parametrize("skills", [None, "SKILLS"])
+    def test_agents_are_told_issues_need_a_report(self, server, skills):
+        """Agents that file issues without ha_report_issue output get them
+        closed; the instructions must say so with or without skills."""
+        server.settings.read_only_mode = False
+        with patch.object(server, "_build_skills_instructions", return_value=skills):
+            instructions = server._build_instructions()
+        assert "run ha_report_issue and include its full output" in instructions
+        if skills:
+            assert instructions.startswith(skills)
+
+
 class TestLogSkillRegistrationSummary:
     """Tests for _log_skill_registration_summary's branch logic.
 

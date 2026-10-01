@@ -67,6 +67,8 @@ Keep this file short enough to load on every task:
 
 Do not create, edit, label, close, or comment on an issue or pull request without user authorization for that write. Draft the exact proposed text first when approval has not already been given.
 
+Every bug, agent-behavior or feature issue filed here must contain the full `ha_report_issue` output, or a `### Why there is no ha_report_issue report` section explaining that ha-mcp cannot start or connect, or that a report cannot show anything relevant to a feature request; having read the code instead does not count. `issue-intake.yml` closes a new issue that has neither.
+
 The detailed label taxonomy, issue-analysis query, bot behavior, review commands, CI loop, and release automation live in the [GitHub workflow reference](docs/agents/github-workflow.md).
 
 Before changing automated issue documentation, read the [issue-intake policy and controls](docs/agents/issue-intake.md) for source handling, maintainer overrides, permissions, and bench validation.

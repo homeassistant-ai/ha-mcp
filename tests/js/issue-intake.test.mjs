@@ -13,6 +13,10 @@ import {
   validateResult,
   marker,
   reportMarker,
+  gate,
+  gateAction,
+  gateMarker,
+  noReportHeading,
 } from "../../.github/issue-intake/intake.mjs";
 
 const bot = "ha-mcp[bot]";
@@ -788,4 +792,108 @@ test("the report heading matches what ha_report_issue writes", () => {
   );
   for (const heading of ["## 🚨 ", "## 🤖 "])
     assert.ok(tool.includes(`${heading}${reportMarker}`), heading);
+});
+
+const opened = { action: "opened", senderRole: "read" };
+const report = `## 🚨 ${reportMarker}\n\n**Version:** 8.6.0`;
+const reason = (text) => `### ${noReportHeading}\n\n${text}\n\n### Additional context\n\nnone`;
+const closedByGate = () => {
+  const s = snapshot();
+  s.issue.state = "closed";
+  s.events.push({
+    id: 1,
+    event: "closed",
+    actor: { login: bot, type: "Bot" },
+    created_at: "2026-09-20T00:00:00Z",
+  });
+  s.comments.push(
+    comment(5, bot, `${gateMarker}\nclosed`, {
+      user: { login: bot, type: "Bot" },
+    }),
+  );
+  return s;
+};
+
+test("a new issue without an ha_report_issue report is closed with a notice that mentions the reporter", async () => {
+  const api = new FakeGitHub(snapshot());
+  assert.equal(await gate(api, "test/repo", 1, bot, opened, true), "close");
+  const [notice, close] = api.writes;
+  assert.equal(notice.method, "POST");
+  assert.match(notice.data.body, /^<!-- ha-mcp-report-gate -->\n@reporter,/);
+  assert.deepEqual(close.data, { state: "closed", state_reason: "not_planned" });
+});
+
+test("only the reporter's report or an explanation of why there is none keeps a new issue open", () => {
+  const cases = [
+    [(s) => (s.issue.body += `\n\n${report}`), null],
+    [(s) => (s.issue.body = report.replace("🚨", "🤖")), null],
+    // Pasted into an issue form field, or with the fence the tool shows it in.
+    [(s) => (s.issue.body = `### 📋 ha_report_issue Report\n\n${report}`), null],
+    [(s) => (s.issue.body = `\`\`\`\`markdown\n${report}\n\`\`\`\``), null],
+    [(s) => s.comments.push(comment(1, "reporter", report)), null],
+    [(s) => (s.issue.body += `\n\n${reason("ha-mcp exits at startup before connecting.")}`), null],
+    [(s) => (s.issue.body += `\n\n${reason("This asks for a docs site page, not a tool.")}`), null],
+    // What an issue form writes for an empty optional field.
+    [(s) => (s.issue.body += `\n\n${reason("_No response_")}`), "close"],
+    [(s) => (s.issue.body += `\n\n${reason("Not relevant.")}`), "close"],
+    [(s) => (s.issue.body += ` The ${reportMarker} heading is missing.`), "close"],
+    [(s) => s.comments.push(comment(1, "bystander", report)), "close"],
+  ];
+  for (const [edit, expected] of cases) {
+    const s = snapshot();
+    edit(s);
+    assert.equal(gateAction(s, bot, opened), expected, edit.toString());
+  }
+});
+
+test("adding the report reopens an issue the gate closed and rewrites its notice", async () => {
+  const s = closedByGate();
+  s.issue.body += `\n\n${report}`;
+  const api = new FakeGitHub(s);
+  const edited = { action: "edited", senderRole: "read" };
+  assert.equal(await gate(api, "test/repo", 1, bot, edited, true), "reopen");
+  assert.deepEqual(api.writes[0].data, { state: "open" });
+  assert.equal(api.writes[1].path, "repos/test/repo/issues/comments/5");
+  assert.match(api.writes[1].data.body, /^<!-- ha-mcp-report-gate -->\nReopened/);
+});
+
+test("the gate never reopens an issue a maintainer closed", () => {
+  const s = closedByGate();
+  s.events.push({
+    id: 2,
+    event: "closed",
+    actor: user("maintainer"),
+    created_at: "2026-09-21T00:00:00Z",
+  });
+  s.issue.body += `\n\n${report}`;
+  assert.equal(gateAction(s, bot, { action: "edited", senderRole: "read" }), null);
+});
+
+test("edits never close an existing issue, and only a maintainer's reopen overrides the gate", () => {
+  const s = snapshot();
+  assert.equal(gateAction(s, bot, { action: "edited", senderRole: "read" }), null);
+  assert.equal(gateAction(s, bot, { action: "reopened", senderRole: "maintain" }), null);
+  assert.equal(gateAction(s, bot, { action: "reopened", senderRole: "read" }), "close");
+});
+
+test("maintainer, bot and documentation issues are not gated", () => {
+  const writer = snapshot();
+  writer.issue.user = user("writer");
+  const app = snapshot();
+  app.issue.user = { login: "coderabbitai[bot]", type: "Bot" };
+  const docs = snapshot();
+  docs.issue.labels.push({ name: "documentation" });
+  for (const s of [writer, app, docs]) assert.equal(gateAction(s, bot, opened), null);
+});
+
+test("every gated issue form asks for the report under the headings the gate reads", () => {
+  for (const form of ["runtime_bug", "agent_behavior", "startup_bug", "feature_request"]) {
+    const text = readFileSync(
+      new URL(`../../.github/ISSUE_TEMPLATE/${form}.yml`, import.meta.url),
+      "utf8",
+    );
+    assert.match(text, /id: report\n[\s\S]*?required: true/, form);
+    // The form renders this field's label as the heading the gate looks for.
+    assert.ok(text.includes(`label: "${noReportHeading}"`), form);
+  }
 });

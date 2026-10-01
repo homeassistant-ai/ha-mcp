@@ -48,7 +48,7 @@ def test_issue_intake_event_and_credential_boundaries() -> None:
     assert admission["steps"][0]["if"] == "github.event_name != 'workflow_dispatch'"
     job = workflow["jobs"]["document"]
     assert job["needs"] == "admit"
-    assert job["if"] == "needs.admit.outputs.run == 'true'"
+    assert job["if"] == "!cancelled() && needs.admit.outputs.run == 'true'"
     assert job["concurrency"]["cancel-in-progress"] is False
     assert "codex-auth-" in job["concurrency"]["group"]
     steps = job["steps"]

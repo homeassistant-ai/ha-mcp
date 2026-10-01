@@ -77,33 +77,29 @@ body:
         - Relevant logs
 
   - type: textarea
-    id: conversation_paste
+    id: report
     attributes:
-      label: "📋 Copy-Paste from Conversation"
+      label: "📋 ha_report_issue Report"
       description: |
-        **Paste the relevant part of your conversation here.**
+        **Required.** Ask your AI agent: *"Report this with the ha_report_issue tool."* Run it in the session where the problem happened.
+        Paste its full output here, with tokens and passwords removed. It collects the versions,
+        install type, client, settings and tool calls we otherwise have to ask for.
 
-        Include:
-        - Your original request
-        - The error message or unexpected behavior
-        - The ha_report_issue output (if you used it)
-        - Any other relevant output from the agent
-
-        **Don't worry about formatting** - just copy and paste everything! We can read messy text, code blocks, JSON, logs, whatever.
-      placeholder: |
-        User: Create an automation to turn on lights at sunset
-
-        Agent: I'll create the automation for you.
-        [Tool: ha_config_set_automation, ...]
-        Error: Invalid service call: light.turn_on requires entity_id
-
-        Agent: Let me run ha_report_issue to collect diagnostic info...
-        [Paste ha_report_issue output here]
-
-        [Include everything - error messages, logs, ha_report_issue JSON, etc.]
-      render: markdown
+        Only if the tool cannot run because ha-mcp does not start or connect, write `N/A` here and
+        explain in the next field. Issues with neither are closed automatically.
+      placeholder: "Paste the full ha_report_issue output here"
     validations:
       required: true
+
+  - type: textarea
+    id: no_report_reason
+    attributes:
+      label: "Why there is no ha_report_issue report"
+      description: |
+        Only if ha-mcp does not start or connect. Not wanting to run the tool, or having found the
+        problem by reading the code, does not count.
+    validations:
+      required: false
 
   - type: markdown
     attributes:

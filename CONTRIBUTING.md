@@ -72,7 +72,7 @@ take over the PR (push to it or supersede it) or close it.
 
 ## 🏗️ Stuck?
 
-- Open an [Issue](../../issues).
+- Open an [Issue](../../issues). Bug reports and feature requests need the full output of the `ha_report_issue` tool, run in the session where the problem happened. Without it they are closed automatically unless they explain under `### Why there is no ha_report_issue report` that ha-mcp cannot start or connect, or that a report cannot show anything relevant to a feature request.
 - See **[AGENTS.md](AGENTS.md)** for additional tips.
 
 Thank you for contributing! 🎉

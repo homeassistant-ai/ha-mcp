@@ -1188,6 +1188,9 @@ class BugReportTools:
         unclear which, ask: "Are you reporting a bug in ha-mcp, or providing
         feedback on how I used the tools?"
 
+        Every GitHub issue about ha-mcp, feature requests included, needs this
+        report: issues filed without it are closed automatically.
+
         Pass the report text in the call: the server combines it with the
         diagnostics it collects into `issue_title`, `issue_body` (the full
         report with logs) and `issue_url` (a new-issue link with title and
