@@ -72,7 +72,9 @@ Triage-state labels:
 | `issue-analyzed` | Deep analysis is complete. |
 
 Bug and scope labels:
-Bug-class labels originate in issue-template form selection or manual triage.
+Bug-class labels originate in issue-template form selection, manual triage,
+or [issue intake](issue-intake.md) for an issue filed from an `ha_report_issue`
+report (`bug` or `agent-behavior` only).
 Scope labels are orthogonal: one issue may carry
 both a bug-class label and a scope label.
 

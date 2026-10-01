@@ -698,9 +698,12 @@ test("a filed ha_report_issue report gets the type label its form would have add
   }
 });
 
-test("type labels are not added without the report marker, or back after a human removed them", async () => {
+test("type labels are not added without the report heading, or back after a human removed them", async () => {
   const plain = snapshot();
   plain.issue.title = "[BUG] Dashboard call hangs";
+  const mention = snapshot();
+  mention.issue.title = "[BUG] Dashboard call hangs";
+  mention.issue.body += ` The ${reportMarker} heading is missing from my paste.`;
   const removed = reportSnapshot("[BUG] Dashboard call hangs");
   removed.events.push({
     id: 1,
@@ -711,6 +714,7 @@ test("type labels are not added without the report marker, or back after a human
   });
   for (const [s, expected] of [
     [plain, []],
+    [mention, []],
     [removed, []],
   ]) {
     const r = result();
@@ -722,21 +726,40 @@ test("type labels are not added without the report marker, or back after a human
 });
 
 test("a bug report without ha_report_issue output is asked for one, without needs-info", async () => {
+  const plain = snapshot();
+  plain.issue.title = "[BUG] Dashboard call hangs";
+  // Naming the heading in prose is not a report.
+  const mention = structuredClone(plain);
+  mention.issue.body += ` The ${reportMarker} heading is missing from my paste.`;
+  for (const s of [plain, mention]) {
+    const r = result();
+    r.missing_fields = [];
+    const api = new FakeGitHub(s);
+    await publish(api, prepare(s, bot), r, bot);
+    assert.match(api.data.comments[0].body, /### Diagnostic report/);
+    assert.deepEqual(labelWrites(api), []);
+  }
+});
+
+test("a label a maintainer adds while the model runs decides the report request", async () => {
+  // Label changes do not alter the fingerprint, so a comment rendered from
+  // the pre-inference snapshot would still ask a feature request for a report.
   const s = snapshot();
   s.issue.title = "[BUG] Dashboard call hangs";
+  const prepared = prepare(s, bot);
   const r = result();
   r.missing_fields = [];
   const api = new FakeGitHub(s);
-  await publish(api, prepare(s, bot), r, bot);
-  assert.match(api.data.comments[0].body, /### Diagnostic report/);
-  assert.deepEqual(labelWrites(api), []);
+  api.data.issue.labels.push({ name: "enhancement" });
+  await publish(api, prepared, r, bot);
+  assert.doesNotMatch(api.data.comments[0].body, /Diagnostic report/);
 });
 
 test("no report request when one is present or the issue is not a bug", () => {
   const withReport = reportSnapshot("[BUG] Dashboard call hangs");
   const replied = snapshot();
   replied.issue.title = "[BUG] Dashboard call hangs";
-  replied.comments.push(comment(2, "reporter", `${reportMarker}\n...`));
+  replied.comments.push(comment(2, "reporter", `## 🚨 ${reportMarker}\n...`));
   const feature = snapshot();
   feature.issue.title = "[FEATURE] Faster dashboards";
   const unclear = snapshot();
