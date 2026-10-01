@@ -1,4 +1,4 @@
-# E2E Test Infrastructure
+# Test Infrastructure and Rules
 
 ## Custom Component (ha_mcp_tools)
 
@@ -32,7 +32,7 @@ before adding a gate:
 
 Pick the marker by what the test *needs*, not by where it happens to pass:
 `external_only` is about needing an in-process server you can reconfigure,
-`inaddon_only` about needing the addon's supervisor context. Read the skip
+`inaddon_only` about needing the app (add-on) supervisor context. Read the skip
 expressions, not the summary docstring: `external_only` does not mean
 "HAOS external only".
 
@@ -231,7 +231,7 @@ Each pytest worker sends all its runs to one long-lived node process, and every 
 
 Astro `<script>` blocks without `define:vars` / `is:inline` are TypeScript by default — pass `language="ts"` to `run_script`. For Astro pages needing wizard data, use `extract_astro_frontmatter_vars` + `astro_vars_prelude` to inject production data.
 
-CI installs Node + jsdom in the `unit-tests` job. Local devs without `tests/js/node_modules/` get clean skips.
+CI installs Node + jsdom in the `unit-tests` job. Local devs without `tests/js/node_modules/` get clean skips. Each harness run has a 15s node timeout; set `HA_MCP_JS_HARNESS_TIMEOUT=<seconds>` to raise it on slower hardware.
 
 **Transient UI + the fake clock:** timed UI (e.g. the save toast, ~4s auto-dismiss) is gone from `result.dom` by capture time because the virtual clock fast-forwards. Stamp state into a `data-` attribute *inside* `invoke` to read it live. Avoid substring false-positives too — `"ha-toast" in result.dom` matches the always-present `#ha-toast-region`; assert the specific variant class.
 

@@ -86,6 +86,7 @@ docs/superpowers/
 local/
 worktree/
 /.claude/settings.local.json
+CLAUDE.local.md
 # Root-anchored so it doesn't ignore src/ha_mcp/_vendor/fastmcp.
 /fastmcp/
 
