@@ -170,8 +170,7 @@ def test_xdist_abort_retains_first_shared_fixture_failure(tmp_path):
 def test_controller_reports_first_fixture_failure_per_worker(monkeypatch, when):
     from tests.src.e2e import conftest as e2e
 
-    # The module the e2e session registered the hook from, whatever its import name.
-    doomed_run = sys.modules[e2e.pytest_runtest_logreport.__module__]
+    doomed_run = e2e.doomed_run
     monkeypatch.setattr(doomed_run, "_doomed_detector", DoomedRunDetector())
     monkeypatch.setattr(doomed_run, "_reported_failure_workers", set())
     terminal = Mock()

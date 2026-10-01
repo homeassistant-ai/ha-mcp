@@ -50,6 +50,7 @@ from . import _collection_data_dir  # noqa: F401
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent.parent))  # tests/src/ for haos_runtime
 
+import doomed_run
 from haos_runtime import (
     HA_MCP_DEV_ADDON_SLUG,
     HA_MCP_SERVER_DOMAIN,
@@ -523,11 +524,14 @@ def pytest_collection_modifyitems(config, items):
     _move_haos_tls_items_last(items)
 
 
-# Fail fast on a doomed run, on every e2e lane (this conftest is shared by the
-# testcontainer / external-HAOS / inaddon suites). The hook lives beside its
-# detector so tests can load it without this module's HA and container imports;
-# importing it here is what registers it for the e2e session.
-from doomed_run import pytest_runtest_logreport  # noqa: E402, F401
+def pytest_runtest_logreport(report):
+    """Fail fast on a doomed run, on every e2e lane.
+
+    This conftest is shared by the testcontainer / external-HAOS / inaddon
+    suites. The logic lives in ``doomed_run`` beside its detector, so tests can
+    load it without this module's HA and container imports.
+    """
+    doomed_run.pytest_runtest_logreport(report)
 
 
 def _container_log(container: DockerContainer, **log_kwargs: Any) -> str:
