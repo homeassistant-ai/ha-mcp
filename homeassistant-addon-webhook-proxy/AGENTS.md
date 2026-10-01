@@ -1,7 +1,7 @@
-# Webhook Proxy App (stable + dev)
+# Webhook Proxy App (add-on) (stable + dev)
 
 ## What it is
-A thin app (add-on) that does NOT run an MCP server. It discovers a running ha-mcp server
+A thin app that does NOT run an MCP server. It discovers a running ha-mcp server
 app (stable `ha_mcp`, then dev `ha_mcp_dev`), installs a custom component into HA
 Core, registers a webhook (`/api/webhook/<id>`) plus optional OAuth 2.1 views, and
 proxies remote MCP traffic to the server app's local port. Built locally by
