@@ -66,7 +66,11 @@ _ISSUE_URL_MAX_CHARS = 7500
 # example because a chat UI closed the code block early, is visibly short.
 REPORT_END_MARKER = "<!-- end of ha_report_issue report -->"
 
-_TITLE_PREFIXES = {"runtime_bug": "[BUG] ", "agent_behavior": "[AGENT] "}
+_TITLE_PREFIXES = {
+    "runtime_bug": "[BUG] ",
+    "agent_behavior": "[AGENT] ",
+    "feature_request": "[FEATURE] ",
+}
 
 # GitHub refuses a longer issue title.
 _ISSUE_TITLE_MAX_CHARS = 256
@@ -1068,13 +1072,14 @@ class BugReportTools:
     async def ha_report_issue(
         self,
         report_type: Annotated[
-            Literal["runtime_bug", "agent_behavior"],
+            Literal["runtime_bug", "agent_behavior", "feature_request"],
             Field(
                 default="runtime_bug",
                 description=(
                     "'runtime_bug' when ha-mcp errored or behaved wrongly; "
                     "'agent_behavior' when the user says you used the wrong "
-                    "tool or worked inefficiently."
+                    "tool or worked inefficiently; 'feature_request' when the "
+                    "user wants ha-mcp to do something it cannot do yet."
                 ),
             ),
         ] = "runtime_bug",
@@ -1082,7 +1087,10 @@ class BugReportTools:
             str | None,
             Field(
                 default=None,
-                description="One-line summary of what broke, for the issue title.",
+                description=(
+                    "One-line summary of what broke or what is requested, for "
+                    "the issue title."
+                ),
             ),
         ] = None,
         description: Annotated[
@@ -1092,7 +1100,8 @@ class BugReportTools:
                 description=(
                     "What went wrong in markdown: steps to reproduce, expected "
                     "and actual behavior. For agent_behavior: what you did and "
-                    "what you should have done."
+                    "what you should have done. For feature_request: what ha-mcp "
+                    "should do, why the user needs it, and what you tried."
                 ),
             ),
         ] = None,
@@ -1181,12 +1190,13 @@ class BugReportTools:
         ] = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        """Get diagnostics and a finished GitHub issue for a bug report or agent feedback.
+        """Get diagnostics and a finished GitHub issue for a bug, agent feedback or a feature request.
 
         Use it when the user reports an ha-mcp error, failure or wrong result,
-        or says you used the wrong tool or worked inefficiently. If it is
-        unclear which, ask: "Are you reporting a bug in ha-mcp, or providing
-        feedback on how I used the tools?"
+        says you used the wrong tool or worked inefficiently, or wants ha-mcp
+        to do something it cannot do yet. If it is unclear which, ask: "Are
+        you reporting a bug in ha-mcp, giving feedback on how I used the
+        tools, or requesting a feature?"
 
         Every GitHub issue about ha-mcp, feature requests included, needs this
         report: issues filed without it are closed automatically.
@@ -1338,26 +1348,26 @@ class BugReportTools:
 
         # Without the agent's title, the one generated from the last error
         # keeps reports from being filed as a bare "[BUG]".
-        suggested_title = _generate_bug_title(diagnostic_info, recent_logs)
+        suggested_title = _suggested_title(report_type, diagnostic_info, recent_logs)
         issue_title = _issue_title(report_type, text, suggested_title)
 
         def build_body(include_logs: bool, text_cap: int | None = None) -> str:
-            if report_type == "agent_behavior":
-                return _generate_agent_behavior_template(
+            if report_type == "runtime_bug":
+                return _generate_runtime_bug_template(
                     diagnostic_info,
                     log_summary,
+                    startup_log_summary,
+                    recent_logs,
+                    startup_logs,
+                    addon_logs=addon_logs,
+                    core_error_log=core_error_log,
                     text=text,
                     include_logs=include_logs,
                     text_cap=text_cap,
                 )
-            return _generate_runtime_bug_template(
+            return _AGENT_SIDE_TEMPLATES[report_type](
                 diagnostic_info,
                 log_summary,
-                startup_log_summary,
-                recent_logs,
-                startup_logs,
-                addon_logs=addon_logs,
-                core_error_log=core_error_log,
                 text=text,
                 include_logs=include_logs,
                 text_cap=text_cap,
@@ -1435,8 +1445,12 @@ class BugReportTools:
                 "   - report_type: 'runtime_bug' when ha-mcp errored or behaved "
                 "wrongly; 'agent_behavior' when the user says YOU used the wrong "
                 "tool, should have done something differently, or worked "
-                "inefficiently. If unclear, ASK: 'Are you reporting a bug in "
-                "ha-mcp, or providing feedback on how I used the tools?'\n"
+                "inefficiently; 'feature_request' when the user wants ha-mcp "
+                "to do something it cannot do yet. For a feature request, "
+                "first try to do it with the tools you have: the tool calls "
+                "show the feature is missing. If unclear, ASK: 'Are you "
+                "reporting a bug in ha-mcp, giving feedback on how I used the "
+                "tools, or requesting a feature?'\n"
                 "   - user_prompt and tool_calls: the EXACT user message and the "
                 "tool call(s) that produced the problem, copied verbatim. This "
                 "is the single most useful part for triage. Do not skip it.\n"
@@ -1627,6 +1641,17 @@ def _generate_bug_title(
         title = title[:57] + "..."
 
     return title
+
+
+def _suggested_title(
+    report_type: str,
+    diagnostic_info: dict[str, Any],
+    recent_logs: list[dict[str, Any]],
+) -> str:
+    """Return the fallback title; a feature request is not named after an error."""
+    if report_type == "feature_request":
+        return "Feature request"
+    return _generate_bug_title(diagnostic_info, recent_logs)
 
 
 def _generate_search_keywords(
@@ -2004,6 +2029,57 @@ from the running server:
 """
 
 
+def _agent_environment_sections(
+    diagnostic_info: dict[str, Any], text: _ReportText
+) -> str:
+    """Render the environment and configuration blocks of the agent-side reports."""
+    config_toggles = diagnostic_info.get("config_toggles") or {}
+    mcp_transport = diagnostic_info.get("mcp_transport", "unknown")
+    client_info = diagnostic_info.get("mcp_client_info") or {}
+    config_toggles_section = (
+        f"{_format_config_toggles_for_template(config_toggles)}\n"
+        f"- **tool_policy:** `{diagnostic_info.get('tool_policy', 'not probed')}`"
+    )
+    return f"""## 📊 Environment
+
+- **ha-mcp Version:** {_format_version_value(diagnostic_info)}
+- **Custom Component:** {diagnostic_info.get("component_version") or "not detected (not installed, or probe failed)"}
+- **File & YAML Tools entry:** {_format_tools_entry_value(diagnostic_info)}
+- **In-process Server entry:** {_format_server_entry_value(diagnostic_info)}
+- **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
+- **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
+- **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
+- **MCP Client Host:** {_format_client_host_line(diagnostic_info, text)}
+- **AI Model:** {text.ai_model or ""}
+- **Home Assistant Version:** {diagnostic_info.get("home_assistant_version", "Unknown")}
+- **Supervisor:** {_format_supervisor_value(diagnostic_info)}
+
+---
+
+## ⚙️ ha-mcp Configuration
+
+These settings shape which tools the agent sees and whether a call runs, so
+the same behavior may be expected or surprising depending on them:
+
+{config_toggles_section}
+"""
+
+
+def _tool_calls_made_section(log_summary: str, include_logs: bool) -> str:
+    """Render the auto-filled tool call sequence, or the left-out note."""
+    if not include_logs:
+        return _LOGS_LEFT_OUT
+    return f"""## 🔧 Tool Calls Made (Auto-Filled)
+
+<details>
+<summary>Click to expand tool call sequence</summary>
+
+{_fenced(log_summary)}
+
+</details>
+"""
+
+
 def _generate_agent_behavior_template(
     diagnostic_info: dict[str, Any],
     log_summary: str,
@@ -2018,13 +2094,6 @@ def _generate_agent_behavior_template(
     template.
     """
     text = _shorten_text(text, text_cap)
-    config_toggles = diagnostic_info.get("config_toggles") or {}
-    mcp_transport = diagnostic_info.get("mcp_transport", "unknown")
-    client_info = diagnostic_info.get("mcp_client_info") or {}
-    config_toggles_section = (
-        f"{_format_config_toggles_for_template(config_toggles)}\n"
-        f"- **tool_policy:** `{diagnostic_info.get('tool_policy', 'not probed')}`"
-    )
 
     if text.description:
         description_section = f"## 🤖 What Happened\n\n{text.description}\n"
@@ -2051,18 +2120,7 @@ def _generate_agent_behavior_template(
 <!-- Example: "I asked the agent to create an automation that..." -->
 """
 
-    if include_logs:
-        log_section = f"""## 🔧 Tool Calls Made (Auto-Filled)
-
-<details>
-<summary>Click to expand tool call sequence</summary>
-
-{_fenced(log_summary)}
-
-</details>
-"""
-    else:
-        log_section = _LOGS_LEFT_OUT
+    log_section = _tool_calls_made_section(log_summary, include_logs)
 
     return f"""## 🤖 Auto-Generated by `ha_report_issue` Tool
 
@@ -2097,29 +2155,7 @@ def _generate_agent_behavior_template(
 
 ---
 
-## 📊 Environment
-
-- **ha-mcp Version:** {_format_version_value(diagnostic_info)}
-- **Custom Component:** {diagnostic_info.get("component_version") or "not detected (not installed, or probe failed)"}
-- **File & YAML Tools entry:** {_format_tools_entry_value(diagnostic_info)}
-- **In-process Server entry:** {_format_server_entry_value(diagnostic_info)}
-- **Installation Method:** {diagnostic_info.get("installation_method", "Unknown")}
-- **MCP Transport:** {mcp_transport} _(auto-detected — correct if wrong)_
-- **MCP Client:** {_format_client_info_for_template(client_info)} _(auto-detected from the MCP `initialize` handshake)_
-- **MCP Client Host:** {_format_client_host_line(diagnostic_info, text)}
-- **AI Model:** {text.ai_model or ""}
-- **Home Assistant Version:** {diagnostic_info.get("home_assistant_version", "Unknown")}
-- **Supervisor:** {_format_supervisor_value(diagnostic_info)}
-
----
-
-## ⚙️ ha-mcp Configuration
-
-These settings shape which tools the agent sees and whether a call runs, so
-the same behavior may be expected or surprising depending on them:
-
-{config_toggles_section}
-
+{_agent_environment_sections(diagnostic_info, text)}
 ---
 
 ## 📎 Additional Context
@@ -2133,6 +2169,70 @@ the same behavior may be expected or surprising depending on them:
 
 {REPORT_END_MARKER}
 """
+
+
+def _generate_feature_request_template(
+    diagnostic_info: dict[str, Any],
+    log_summary: str,
+    *,
+    text: _ReportText = _ReportText(),
+    include_logs: bool = True,
+    text_cap: int | None = None,
+) -> str:
+    """Build a feature request as a GitHub issue body.
+
+    The tool calls show what the agent tried, which is the evidence that
+    ha-mcp cannot do it yet. ``text``, ``include_logs`` and ``text_cap`` work
+    as in the runtime bug template.
+    """
+    text = _shorten_text(text, text_cap)
+
+    if text.description:
+        description_section = f"## 💡 Requested Feature\n\n{text.description}\n"
+    else:
+        description_section = """## 💡 What Should ha-mcp Do?
+
+<!-- The capability the user is asking for -->
+
+
+## 🎯 Why Is It Needed?
+
+<!-- The problem it solves, in the user's setup -->
+
+
+## 🔍 What Did the Agent Try?
+
+<!-- The tools tried and why they could not do it -->
+"""
+
+    return f"""## 💡 Auto-Generated by `ha_report_issue` Tool
+
+> This report was generated by the ha_report_issue tool.
+> The tool calls below show what the agent tried with the current tools.
+
+---
+
+{_user_comment_section(text)}{description_section}
+---
+
+{_tool_call_section(text, "Tool call(s) the agent tried:")}
+---
+
+{_tool_calls_made_section(log_summary, include_logs)}
+---
+
+{_agent_environment_sections(diagnostic_info, text)}
+---
+
+{REPORT_END_MARKER}
+"""
+
+
+# Report types built from the tool calls alone, without startup or app logs.
+_AGENT_SIDE_TEMPLATES = {
+    "agent_behavior": _generate_agent_behavior_template,
+    "feature_request": _generate_feature_request_template,
+}
 
 
 def _issue_title(report_type: str, text: _ReportText, suggested_title: str) -> str:

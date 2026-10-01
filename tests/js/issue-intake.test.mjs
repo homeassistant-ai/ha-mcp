@@ -691,6 +691,7 @@ test("a filed ha_report_issue report gets the type label its form would have add
   for (const [title, expected] of [
     ["[BUG] Dashboard call hangs", ["bug"]],
     ["[AGENT] Searched three times", ["agent-behavior"]],
+    ["[FEATURE] Manage Thread datasets", ["enhancement"]],
   ]) {
     const s = reportSnapshot(title);
     const r = result();
@@ -790,7 +791,7 @@ test("the report heading matches what ha_report_issue writes", () => {
     new URL("../../src/ha_mcp/tools/tools_bug_report.py", import.meta.url),
     "utf8",
   );
-  for (const heading of ["## 🚨 ", "## 🤖 "])
+  for (const heading of ["## 🚨 ", "## 🤖 ", "## 💡 "])
     assert.ok(tool.includes(`${heading}${reportMarker}`), heading);
 });
 
@@ -840,6 +841,8 @@ test("only the reporter's report or an explanation of why there is none keeps a 
     [(s) => (s.issue.body += `\n\n${reason("\`\`\`\n# uvx ha-mcp\n\`\`\`\nThe server exits before it binds the port.")}`), null],
     [(s) => (s.issue.body += `\n\n${reason("_No response_")}`), "close"],
     [(s) => (s.issue.body += `\n\n${reason("Not relevant.")}`), "close"],
+    // A blank issue's template comment is not the reporter's explanation.
+    [(s) => (s.issue.body += `\n\n${reason("<!-- Explain why the report is missing here -->")}`), "close"],
     [(s) => (s.issue.body += ` The ${reportMarker} heading is missing.`), "close"],
     [(s) => s.comments.push(comment(1, "bystander", report)), "close"],
   ];
@@ -863,7 +866,8 @@ test("adding the report reopens an issue the gate closed and rewrites its notice
 
 test("the gate never reopens an issue a maintainer closed", () => {
   const s = closedByGate();
-  s.events.push({
+  // Listed first but newer: the latest close decides, not array order.
+  s.events.unshift({
     id: 2,
     event: "closed",
     actor: user("maintainer"),

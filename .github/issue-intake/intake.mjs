@@ -485,6 +485,7 @@ const hasReport = (text) => reportHeading.test(text || "");
 const reportTypeLabels = {
   "[BUG]": ["bug"],
   "[AGENT]": ["agent-behavior"],
+  "[FEATURE]": ["enhancement"],
 };
 const bugLabels = ["bug", "runtime-bug", "startup-bug", "agent-behavior"];
 const nonBugLabels = ["enhancement", "documentation", "question"];
@@ -570,8 +571,13 @@ function noReportSections(text) {
 const minReasonWords = 5;
 const hasReason = (text) =>
   noReportSections(text).some((section) => {
-    const reason = section.replace(/<!--[\s\S]*?-->/g, "").trim();
-    return !!reason && reason.split(/\s+/).length >= minReasonWords;
+    // Words outside template comments; the text is counted, never rendered.
+    const words = section
+      .split(/<!--[\s\S]*?-->/)
+      .join(" ")
+      .split(/\s+/)
+      .filter(Boolean);
+    return words.length >= minReasonWords;
   });
 const gateExemptRoles = ["write", "maintain", "admin"];
 
@@ -588,7 +594,10 @@ export function gateAction(snapshot, bot, event) {
       .map((c) => c.body || ""),
   ];
   if (texts.some((t) => hasReport(t) || hasReason(t))) {
-    const closed = events.filter((e) => e.event === "closed").at(-1);
+    const closed = events
+      .filter((e) => e.event === "closed")
+      .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id)
+      .at(-1);
     return issue.state === "closed" && closed?.actor?.login === bot
       ? "reopen"
       : null;

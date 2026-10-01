@@ -36,7 +36,7 @@ body:
     attributes:
       label: "📋 ha_report_issue Report"
       description: |
-        **Required.** Ask your AI agent: *"Report this with the ha_report_issue tool."* Run it in a session where your agent tried to do what you are asking for, so its tool calls show the feature does not exist yet or show the problem it should solve.
+        **Required.** Ask your AI agent: *"Request this feature with the ha_report_issue tool."* Run it in a session where your agent tried to do what you are asking for, so its tool calls show the feature does not exist yet or show the problem it should solve.
         Paste its full output here, with tokens and passwords removed. It collects the versions,
         install type, client, settings and tool calls we otherwise have to ask for.
 

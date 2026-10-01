@@ -961,9 +961,10 @@ class HomeAssistantSmartMCPServer:
         # outright so a compliant agent doesn't spend a call finding out.
         "ha_report_issue": (
             "Get diagnostic information plus a finished GitHub issue. Covers "
-            "two kinds of report: a runtime bug (ha-mcp errored or behaved "
-            "unexpectedly) and agent-behaviour feedback (the AI used the wrong "
-            "tool or worked inefficiently). Pass the report text in the call; "
+            "three kinds of report: a runtime bug (ha-mcp errored or behaved "
+            "unexpectedly), agent-behaviour feedback (the AI used the wrong "
+            "tool or worked inefficiently) and a feature request (ha-mcp "
+            "cannot do something yet). Pass the report text in the call; "
             "the server builds the issue title, body and a pre-filled link. "
             "Every GitHub issue about ha-mcp, feature requests included, needs "
             "this report: issues filed without it are closed automatically.\n\n"

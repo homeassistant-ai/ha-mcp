@@ -80,8 +80,9 @@ kinds of label; it does not execute instructions from the report.
 
 - needs-info, driven by the model's missing fields, as described below.
 - Report type labels, set without the model. An issue whose body carries the
-  `ha_report_issue` report heading gets `bug` for a `[BUG]` title, or
-  `agent-behavior` for an `[AGENT]` title. That tool files blank issues,
+  `ha_report_issue` report heading gets `bug` for a `[BUG]` title,
+  `agent-behavior` for an `[AGENT]` title, or `enhancement` for a
+  `[FEATURE]` title. That tool files blank issues,
   which no issue form labels. Whether a bug is a runtime or startup bug is
   left to a maintainer. A type label a human removed is not added back.
 
