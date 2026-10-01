@@ -273,16 +273,21 @@ Conventional commit effects:
 
 | Prefix | Version effect | Changelog |
 |---|---|---|
-| `fix:`, `perf:`, `refactor:` | Patch | User-facing |
-| `feat:` | Minor | User-facing |
-| `feat!:` or `BREAKING CHANGE:` | Major | User-facing |
-| `chore:`, `ci:`, `test:` | None | Internal |
-| `docs:` | None | User-facing |
+| `fix:`, `perf:`, `refactor:` | Patch | By files changed |
+| `feat:` | Minor | By files changed |
+| `feat!:` or `BREAKING CHANGE:` | Major | By files changed |
+| `chore:`, `ci:`, `test:`, `build:`, `style:` | None | Internal |
+| `docs:` | None | By files changed |
 | `*:(internal)` | Normal type effect | Internal |
 
 Releases use
 [python-semantic-release](https://python-semantic-release.readthedocs.io/).
-Use the `(internal)` scope when the change should not appear in user release
+Release notes show a commit to users only when it changes a file users
+install or read; every other commit goes into the collapsed "Internal
+Changes" block. `touches_user_files` in `templates/CHANGELOG.md.j2` owns the
+path list. A commit that changes only tests, CI, scripts or agent
+instructions is therefore internal whatever its type. Use the `(internal)`
+scope when a change to shipped files should still stay out of user release
 notes, for example:
 `feat(internal): Log package version on startup`.
 Every `master` commit updates the development channel; stable releases are
