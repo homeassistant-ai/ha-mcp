@@ -874,7 +874,7 @@
     },
     "ha_report_issue": {
       "title": "Signaler un problème ou envoyer un retour",
-      "description": "Fournit des informations de diagnostic et des modèles pour signaler un problème ou envoyer un retour."
+      "description": "Obtenez des diagnostics et une issue GitHub prête à l'emploi pour un rapport de bogue ou un retour d'agent."
     },
     "ha_restart": {
       "title": "Redémarrer Home Assistant",

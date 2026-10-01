@@ -843,7 +843,7 @@
     },
     "ha_report_issue": {
       "title": "Rapportera problem eller feedback",
-      "description": "Få diagnostisk information och mallar för att lämna problemrapporter eller feedback."
+      "description": "Hämta diagnostik och ett färdigt GitHub-ärende för felrapportering eller agentfeedback."
     },
     "ha_restart": {
       "title": "Starta om Home Assistant",

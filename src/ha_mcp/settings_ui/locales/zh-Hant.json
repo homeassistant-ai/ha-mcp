@@ -843,7 +843,7 @@
     },
     "ha_report_issue": {
       "title": "回報問題或意見回饋",
-      "description": "取得用於提交問題報告或意見回饋的診斷資訊與範本。"
+      "description": "取得用於錯誤報告或代理程式回饋的診斷資料與完整的 GitHub 問題。"
     },
     "ha_restart": {
       "title": "重新啟動 Home Assistant",

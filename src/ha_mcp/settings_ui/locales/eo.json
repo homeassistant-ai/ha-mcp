@@ -843,7 +843,7 @@
     },
     "ha_report_issue": {
       "title": "Raporti Problemom aŭ Reagon",
-      "description": "Akiri diagnozajn informojn kaj ŝablonojn por sendi problemraportojn aŭ reagojn."
+      "description": "Akiri diagnozon kaj pretan GitHub-problemon por raporto pri cimo aŭ retrosciigo de agento."
     },
     "ha_restart": {
       "title": "Restartigi Home Assistant",

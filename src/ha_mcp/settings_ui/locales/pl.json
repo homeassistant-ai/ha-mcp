@@ -843,7 +843,7 @@
     },
     "ha_report_issue": {
       "title": "Zgłoś problem lub opinię",
-      "description": "Uzyskaj informacje diagnostyczne i szablony do zgłaszania problemów lub opinii."
+      "description": "Uzyskaj dane diagnostyczne i gotowe zgłoszenie w serwisie GitHub dla raportu o błędzie lub opinii agenta."
     },
     "ha_restart": {
       "title": "Uruchom ponownie Home Assistant",

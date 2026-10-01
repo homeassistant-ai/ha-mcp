@@ -843,7 +843,7 @@
     },
     "ha_report_issue": {
       "title": "Probleem of Feedback Rapporteren",
-      "description": "Krijg diagnostische informatie en sjablonen voor het indienen van probleemrapporten of feedback."
+      "description": "Haal diagnostische gegevens en een kant-en-klaar GitHub-issue op voor een bugrapport of agent-feedback."
     },
     "ha_restart": {
       "title": "Home Assistant Herstarten",

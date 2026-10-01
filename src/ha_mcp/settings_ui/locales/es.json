@@ -874,7 +874,7 @@
     },
     "ha_report_issue": {
       "title": "Informar de un problema o enviar comentarios",
-      "description": "Reúne información de diagnóstico y plantillas para abrir informes de problemas o enviar comentarios."
+      "description": "Obtén diagnósticos y un informe de errores listo para GitHub para reportar un fallo o enviar comentarios del agente."
     },
     "ha_restart": {
       "title": "Reiniciar Home Assistant",

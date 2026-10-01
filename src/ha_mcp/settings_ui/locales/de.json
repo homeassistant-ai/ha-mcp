@@ -874,7 +874,7 @@
     },
     "ha_report_issue": {
       "title": "Problem melden oder Feedback geben",
-      "description": "Liefert Diagnoseinformationen und Vorlagen für Fehlerberichte oder Feedback."
+      "description": "Erhalte Diagnosen und ein fertiges GitHub-Issue für einen Bug-Report oder Agenten-Feedback."
     },
     "ha_restart": {
       "title": "Home Assistant neu starten",

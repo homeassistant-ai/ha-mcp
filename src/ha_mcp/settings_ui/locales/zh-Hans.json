@@ -874,7 +874,7 @@
     },
     "ha_report_issue": {
       "title": "报告问题或反馈",
-      "description": "获取诊断信息和用于提交问题报告或反馈的模板。"
+      "description": "获取诊断信息以及用于错误报告或代理反馈的已完成的 GitHub issue。"
     },
     "ha_restart": {
       "title": "重启 Home Assistant",

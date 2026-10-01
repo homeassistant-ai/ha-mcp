@@ -874,7 +874,7 @@
     },
     "ha_report_issue": {
       "title": "Problem və ya rəy bildir",
-      "description": "Problem hesabatları və ya rəy göndərmək üçün diaqnostika məlumatlarını və şablonları alın."
+      "description": "Diaqnostika və səhv hesabatı və ya agent rəyi üçün hazır GitHub məsələsi əldə edin."
     },
     "ha_restart": {
       "title": "Home Assistant-ı yenidən başlat",

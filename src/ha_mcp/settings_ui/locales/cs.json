@@ -843,7 +843,7 @@
     },
     "ha_report_issue": {
       "title": "Nahlásit problém nebo zpětnou vazbu",
-      "description": "Získat diagnostické informace a šablony pro podávání zpráv o problémech nebo zpětné vazby."
+      "description": "Získat diagnostiku a hotový GitHub issue pro hllášení chyby nebo zpětnou vazbu agenta."
     },
     "ha_restart": {
       "title": "Restartovat Home Assistant",

@@ -874,7 +874,7 @@
     },
     "ha_report_issue": {
       "title": "이슈 또는 피드백 보고",
-      "description": "이슈 보고나 피드백을 작성할 때 쓸 진단 정보와 템플릿을 가져옵니다."
+      "description": "버그 리포트 또는 에이전트 피드백을 위한 진단 정보와 작성된 GitHub 이슈를 가져옵니다."
     },
     "ha_restart": {
       "title": "Home Assistant 다시 시작",

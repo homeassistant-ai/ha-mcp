@@ -874,7 +874,7 @@
     },
     "ha_report_issue": {
       "title": "Segnala un problema o invia un riscontro",
-      "description": "Ottiene informazioni diagnostiche e modelli per aprire una segnalazione di problema o inviare un riscontro."
+      "description": "Ottieni diagnostica e una segnalazione GitHub pronta per una segnalazione di bug o feedback dell'agente."
     },
     "ha_restart": {
       "title": "Riavvia Home Assistant",
