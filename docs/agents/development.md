@@ -150,8 +150,7 @@ Concrete owners worth preserving in the map are
 `client/websocket_listener.py`, `tools/best_practice_checker.py`,
 `utils/fuzzy_search.py`, `utils/operation_manager.py`,
 `utils/skill_loader.py`, `utils/python_sandbox.py`, and
-`utils/kill_signal_diagnostics.py`. Bundled UI knowledge lives in
-`resources/card_types.json` and `resources/dashboard_guide.md`.
+`utils/kill_signal_diagnostics.py`.
 `utils/config_hash.py` is the shared optimistic-locking implementation for
 automation, script, scene, dashboard, and energy configuration.
 

@@ -12,12 +12,16 @@ WORKDIR /app
 # Compile bytecode for faster startup; copy mode required with cache mounts
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
-# Install dependencies first (cached separately from source changes)
+# Install dependencies first (cached separately from source changes). The
+# dev-only test-env pyproject is copied because --locked reads every
+# package in the lock file, including dev ones that are not installed.
 COPY pyproject.toml uv.lock ./
+COPY tests/test-env/pyproject.toml ./tests/test-env/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-project --no-dev
 
 # Copy source and install the project itself
+COPY README.md LICENSE ./
 COPY src/ ./src/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable

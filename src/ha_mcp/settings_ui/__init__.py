@@ -98,8 +98,8 @@ try:
 except OSError as exc:  # pragma: no cover - packaging guard
     raise ImportError(
         f"settings.js missing at {_SETTINGS_JS_PATH}. It must ship in "
-        "package-data (wheel), MANIFEST.in (sdist), and the PyInstaller datas "
-        "(binary) -- this is a packaging bug, not a usage error."
+        "the wheel, the sdist and the PyInstaller datas (binary) -- this is a "
+        "packaging bug, not a usage error."
     ) from exc
 # str.replace() silently no-ops on an absent token, and a *renamed* sentinel
 # (e.g. PINNED_DEFAULTS) slips past both the "__HA_MCP_" not-in test and the
@@ -134,8 +134,8 @@ try:
 except OSError as exc:  # pragma: no cover - packaging guard
     raise ImportError(
         f"settings.css missing at {_SETTINGS_CSS_PATH}. It must ship in "
-        "package-data (wheel), MANIFEST.in (sdist), and the PyInstaller datas "
-        "(binary) -- this is a packaging bug, not a usage error."
+        "the wheel, the sdist and the PyInstaller datas (binary) -- this is a "
+        "packaging bug, not a usage error."
     ) from exc
 
 
@@ -149,8 +149,8 @@ except OSError as exc:  # pragma: no cover - packaging guard
 #   __HA_MCP_I18N__        -> selected merged translation catalog JSON
 #   __HA_MCP_LANG__        -> selected locale code for the html lang attribute
 #   __HA_MCP_DIR__         -> selected catalog text direction (ltr / rtl)
-# Same import-time packaging dependency as settings.js/css (wheel package-data,
-# MANIFEST.in, PyInstaller datas) and the same OSError guard -- but this loader
+# Same import-time packaging dependency as settings.js/css (wheel, sdist,
+# PyInstaller datas) and the same OSError guard -- but this loader
 # raises RuntimeError, not the ImportError that settings.js/css raise.
 _SETTINGS_HTML_PATH = Path(__file__).parent / "settings.html"
 try:
@@ -158,8 +158,8 @@ try:
 except OSError as exc:  # pragma: no cover - packaging guard
     raise RuntimeError(
         f"settings.html missing at {_SETTINGS_HTML_PATH}. It must ship in "
-        "package-data (wheel), MANIFEST.in (sdist), and the PyInstaller datas "
-        "(binary) -- this is a packaging bug, not a usage error."
+        "the wheel, the sdist and the PyInstaller datas (binary) -- this is a "
+        "packaging bug, not a usage error."
     ) from exc
 
 # Fail fast if a marker was renamed in settings.html but not here (or vice

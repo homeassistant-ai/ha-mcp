@@ -27,7 +27,7 @@ const remoteOnlyClients = [..]// cannot use a local endpoint, need public HTTPS
 
 These feed the picker tiles in the markup section AND the wizard `<script>` block (`state.client`, `state.scope`, etc.).
 
-**Instruction templates** are JS template literals inside the `<script>` block, keyed off `state.client.id` / `state.client.configFormat` / `platformId` / `state.method` / `state.remotePath`. Cross-cutting troubleshooting and restart-related help lives in `site/src/pages/faq.astro`; OS-specific install walkthroughs live in `guide-macos.astro` / `guide-windows.astro`.
+**Instruction templates** are JS template literals inside the `<script>` block, keyed off `state.client.id` / `state.client.configFormat` / `platformId` / `state.method` / `state.remotePath`. Cross-cutting troubleshooting and restart-related help lives in `site/src/pages/faq.astro`; install walkthroughs live in `guide-macos.astro` / `guide-windows.astro` / `guide-linux.astro` / `guide-addon.astro`.
 
 **Adding a new client / platform / scope / server method / remote path:**
 

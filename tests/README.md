@@ -64,6 +64,7 @@ tests/
 │   ├── workflows/              # Complex scenarios
 │   └── error_handling/         # Error scenarios
 ├── initial_test_state/         # Clean HA config baseline
+├── test-env/                   # Dev-only package for the hamcp-test-env command
 └── test_env_manager.py         # Interactive test runner
 ```
 

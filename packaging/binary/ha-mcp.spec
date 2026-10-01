@@ -41,7 +41,7 @@ for dir_name in stdlib_dirs:
 
 # settings_ui/__init__.py reads settings.html, settings.js and settings.css via
 # Path(__file__).parent at import, so a missing file would build a working-looking
-# but broken binary. collect_all('ha_mcp') below also picks them up via package-data,
+# but broken binary. collect_all('ha_mcp') below also picks them up from the package,
 # but add them explicitly and WITHOUT an existence guard: all three are mandatory, so
 # let the build fail loudly if any is absent rather than ship a broken binary
 # (PyInstaller dedups the duplicate datas entries).

@@ -5,9 +5,15 @@ accessible within the package. Dashboard guide, card types, and domain
 docs content has moved to skill reference files (skills repo v1.2.0).
 """
 
+import os
+import shutil
+import subprocess
+import zipfile
 from pathlib import Path
 
 import pytest
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _get_resources_dir() -> Path:
@@ -98,132 +104,87 @@ class TestResourcesAccessibility:
         assert len(content) > 0, "domain-docs.md is empty"
 
 
-class TestPyprojectPackageData:
-    """Test that pyproject.toml correctly specifies package data."""
+@pytest.fixture(scope="module")
+def wheel_files(tmp_path_factory: pytest.TempPathFactory) -> set[str]:
+    """Build a wheel from this checkout and list the files it holds."""
+    out = tmp_path_factory.mktemp("wheel")
+    result = subprocess.run(
+        [
+            shutil.which("uv") or "uv",
+            "build",
+            "--wheel",
+            "--offline",
+            "--out-dir",
+            str(out),
+            str(_REPO_ROOT),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        env={
+            **os.environ,
+            "UV_CACHE_DIR": str(tmp_path_factory.mktemp("uv-cache")),
+            "UV_NO_CONFIG": "1",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    (wheel,) = out.glob("*.whl")
+    with zipfile.ZipFile(wheel) as archive:
+        return set(archive.namelist())
 
-    def test_wheel_ships_the_skills_and_nothing_else_from_the_submodule(self):
-        """The wheel must carry every skill file, or ha_get_skill_guide and the
-        skill_content attach serve nothing on an installed server. It must not
-        carry the rest of the skills repo: its eval scripts would land inside
-        the ha_mcp package and be scanned as ha-mcp code."""
-        import tomllib
 
-        import ha_mcp
+class TestWheelContents:
+    """The published wheel is what PyPI users and the HA app install."""
 
-        package_dir = Path(ha_mcp.__file__).parent
-        pyproject_path = package_dir.parent.parent / "pyproject.toml"
-        vendor_dir = package_dir / "resources" / "skills-vendor"
-        if not pyproject_path.exists():
-            pytest.skip("pyproject.toml not found - likely installed from distribution")
-        if not (vendor_dir / "skills").is_dir():
-            pytest.skip("skills-vendor submodule not initialised in this checkout")
+    def test_the_wheel_installs_only_the_ha_mcp_package(
+        self, wheel_files: set[str]
+    ) -> None:
+        """Any other top-level package lands in every user's site-packages,
+        where it can shadow a package of the same name from another project."""
+        tops = {name.split("/")[0] for name in wheel_files}
+        assert {top for top in tops if not top.endswith(".dist-info")} == {"ha_mcp"}
 
-        patterns = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))["tool"][
-            "setuptools"
-        ]["package-data"]["ha_mcp"]
-        packaged = {
-            path.relative_to(vendor_dir).as_posix()
-            for pattern in patterns
-            for path in package_dir.glob(pattern)
-            if path.is_file() and vendor_dir in path.parents
-        }
-        skill_files = {
-            path.relative_to(vendor_dir).as_posix()
-            for path in (vendor_dir / "skills").rglob("*")
+    def test_the_wheel_carries_every_file_installs_need(
+        self, wheel_files: set[str]
+    ) -> None:
+        """The settings UI and the skill guides are read from files beside
+        the code. A file missing from the wheel breaks every install, while
+        a checkout still has it on disk. The vendored licenses must ship
+        with the vendored code (BSD-3 for websockets)."""
+        package = _REPO_ROOT / "src" / "ha_mcp"
+        assets = [
+            package / "settings_ui" / name
+            for name in ("settings.html", "settings.js", "settings.css")
+        ]
+        assets += (package / "settings_ui" / "locales").glob("*.json")
+        # Bug reports detect a PyPI install by this marker.
+        assets.append(package / "_pypi_marker")
+        assets += (package / "_vendor").glob("*/LICENSE")
+        assets += (
+            path
+            for path in (package / "resources" / "skills-vendor" / "skills").rglob("*")
             if path.is_file()
+        )
+        expected = {path.relative_to(package.parent).as_posix() for path in assets}
+        assert len(expected) > 3, "found no locale or skill files to check"
+
+        assert sorted(expected - wheel_files) == []
+
+    def test_the_wheel_carries_only_the_skills_from_the_skills_submodule(
+        self, wheel_files: set[str]
+    ) -> None:
+        """The skills repo's eval scripts and repo files are its own tooling.
+        Shipped, its .py files install as ha_mcp modules on every server."""
+        vendor = "ha_mcp/resources/skills-vendor/"
+        shipped = {
+            name[len(vendor) :]
+            for name in wheel_files
+            if name.startswith(vendor) and not name.endswith("/")
         }
-
-        assert skill_files <= packaged, sorted(skill_files - packaged)
-        assert packaged - skill_files == {"LICENSE"}, sorted(packaged - skill_files)
-
-    def test_no_skills_submodule_folder_is_packaged_as_python(self):
-        """Package discovery must not pick up the skills submodule. If it does,
-        the skills repo's own scripts ship inside the wheel as ha_mcp modules."""
-        import tomllib
-
-        from setuptools import find_namespace_packages
-
-        import ha_mcp
-
-        project_root = Path(ha_mcp.__file__).parent.parent.parent
-        pyproject_path = project_root / "pyproject.toml"
-        if not pyproject_path.exists():
-            pytest.skip("pyproject.toml not found - likely installed from distribution")
-        if not (_get_resources_dir() / "skills-vendor" / "skills").is_dir():
-            pytest.skip("skills-vendor submodule not initialised in this checkout")
-
-        find = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))["tool"][
-            "setuptools"
-        ]["packages"]["find"]
-        discovered = find_namespace_packages(
-            where=str(project_root / "src"),
-            include=find["include"],
-            exclude=find.get("exclude", ()),
-        )
-
-        vendored = [name for name in discovered if "skills-vendor" in name]
-        assert not vendored, vendored
-
-    def test_settings_assets_are_packaged(self):
-        """settings.js and settings.css must be declared for both the wheel
-        (pyproject package-data) and the sdist (MANIFEST.in).
-
-        settings_ui/__init__.py reads both files at import time, and the HA add-on's
-        Dockerfile copies only the installed .venv -- so the files reach the
-        add-on solely via wheel package-data. A future edit dropping either
-        entry would break 100% of installs at import, invisible to the unit
-        suite (the dev tree always has the files on disk). Lock the packaging
-        declarations here so that regression fails a test instead.
-        """
-        import ha_mcp
-
-        package_dir = Path(ha_mcp.__file__).parent
-        project_root = package_dir.parent.parent  # src/ha_mcp -> project root
-
-        candidate_roots = [project_root, project_root.parent]
-        pyproject_path = next(
-            (
-                root / "pyproject.toml"
-                for root in candidate_roots
-                if (root / "pyproject.toml").exists()
-            ),
-            None,
-        )
-        manifest_path = next(
-            (
-                root / "MANIFEST.in"
-                for root in candidate_roots
-                if (root / "MANIFEST.in").exists()
-            ),
-            None,
-        )
-        if pyproject_path is None or manifest_path is None:
-            pytest.skip(
-                "pyproject.toml / MANIFEST.in not found - likely installed from distribution"
-            )
-
-        pyproject = pyproject_path.read_text()
-        manifest = manifest_path.read_text()
-
-        for asset in (
-            "settings_ui/settings.html",
-            "settings_ui/settings.js",
-            "settings_ui/settings.css",
-        ):
-            assert f'"{asset}"' in pyproject, (
-                f"pyproject.toml package-data must list {asset} (wheel + add-on rely on it)"
-            )
-            assert f"src/ha_mcp/{asset}" in manifest, (
-                f"MANIFEST.in must include src/ha_mcp/{asset} (sdist relies on it)"
-            )
-
-        assert '"settings_ui/locales/*.json"' in pyproject, (
-            "pyproject.toml package-data must include settings UI locale catalogs"
-        )
-        assert "src/ha_mcp/settings_ui/locales" in manifest, (
-            "MANIFEST.in must include settings UI locale catalogs"
-        )
-
-        locales = package_dir / "settings_ui" / "locales"
-        assert (locales / "en.json").is_file()
-        assert (locales / "ru.json").is_file()
+        extra = {
+            name
+            for name in shipped
+            if name != "LICENSE" and not name.startswith("skills/")
+        }
+        assert sorted(extra) == []

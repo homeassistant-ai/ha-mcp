@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.12.17,<0.13"]
+build-backend = "uv_build"
 
 [project]
 name = "ha-mcp"
@@ -11,7 +11,8 @@ readme = "README.md"
 # interpreter when run in-process by the ha_mcp_tools component (HA
 # core-2026.7 ships Python 3.14). src/ stays 3.13-compatible.
 requires-python = ">=3.13,<3.15"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     {name = "Julien", email = "github@qc-h.net"}
 ]
@@ -19,7 +20,6 @@ keywords = ["mcp", "home-assistant", "ai", "automation", "smart-home"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
@@ -101,28 +101,26 @@ dependencies = [
 [project.scripts]
 ha-mcp = "ha_mcp.__main__:main"
 ha-mcp-smoke-test = "ha_mcp.smoke_test:main"
-hamcp-test-env = "tests.test_env_manager:main"
 ha-mcp-web = "ha_mcp.__main__:main_web"
 ha-mcp-oauth = "ha_mcp.__main__:main_oauth"
 ha-mcp-oidc = "ha_mcp.__main__:main_oidc"
 
-[tool.setuptools]
-package-dir = {"" = "src", "tests" = "tests"}
-# `find` here discovers namespace packages, so without the exclude every
-# folder of the skills submodule becomes a package and its .py files ship as
-# ha_mcp modules. The skill files ship as package-data below.
-packages = { find = { where = ["src", "."], include = ["ha_mcp*", "tests"], exclude = ["ha_mcp.resources*"] } }
-
-[tool.setuptools.package-data]
-ha_mcp = ["py.typed", "_pypi_marker", "settings_ui/settings.html", "settings_ui/settings.js", "settings_ui/settings.css", "settings_ui/locales/*.json", "settings_ui/locales/README.md", "resources/skills-vendor/skills/**/*", "resources/skills-vendor/LICENSE"]
-# The vendored websockets tree's non-Python files: the upstream LICENSE
-# (BSD-3 requires shipping it), the VENDORED provenance marker, and the
-# renovate-managed pin file the drift test reads.
-"ha_mcp._vendor" = ["requirements.txt"]
-"ha_mcp._vendor.websockets" = ["LICENSE", "VENDORED", "MANIFEST.sha256", "py.typed"]
-"ha_mcp._vendor.fastmcp" = ["LICENSE", "VENDORED", "REQUIRES.txt", "MANIFEST.sha256", "py.typed", "**/*.json", "**/*.md"]
-"ha_mcp._vendor.mcp" = ["LICENSE", "VENDORED", "REQUIRES.txt", "MANIFEST.sha256", "py.typed"]
-"ha_mcp._vendor.mcp_types" = ["LICENSE", "VENDORED", "REQUIRES.txt", "MANIFEST.sha256", "py.typed"]
+[tool.uv.build-backend]
+# Explicit because publish-dev.yml renames the project to ha-mcp-dev, which
+# would otherwise make the module name ha_mcp_dev.
+module-name = "ha_mcp"
+# Every file under src/ha_mcp ships unless excluded here. Of the skills
+# submodule only skills/ and LICENSE ship; its evals, scripts, docs, git and
+# CI files are not read at runtime, and neither is the settings UI's agent
+# guide.
+source-exclude = [
+    "src/ha_mcp/resources/skills-vendor/.*",
+    "src/ha_mcp/resources/skills-vendor/*.md",
+    "src/ha_mcp/resources/skills-vendor/evals",
+    "src/ha_mcp/resources/skills-vendor/scripts",
+    "src/ha_mcp/settings_ui/AGENTS.md",
+    "src/ha_mcp/settings_ui/CLAUDE.md",
+]
 
 [tool.mypy]
 python_version = "3.13"
@@ -460,7 +458,12 @@ dev = [
     # version equal to the action pinned in .github/workflows/semver-release.yml,
     # so the test renders with the release that writes the real notes.
     "python-semantic-release==10.6.2",
+    # Provides `uv run hamcp-test-env` without shipping it in the ha-mcp wheel.
+    "hamcp-test-env",
 ]
+
+[tool.uv.sources]
+hamcp-test-env = { path = "tests/test-env", editable = true }
 
 # Semantic versioning configuration
 [tool.semantic_release]

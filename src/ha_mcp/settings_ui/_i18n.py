@@ -429,8 +429,8 @@ def _known_panels(settings_html: Path = _SETTINGS_HTML) -> set[str]:
     except OSError as exc:  # pragma: no cover - packaging guard
         raise ImportError(
             f"settings.html missing at {settings_html}. It must ship in "
-            "package-data (wheel), MANIFEST.in (sdist), and the PyInstaller "
-            "datas (binary) -- this is a packaging bug, not a usage error."
+            "the wheel, the sdist and the PyInstaller datas (binary) -- this is "
+            "a packaging bug, not a usage error."
         ) from exc
     return {
         panel

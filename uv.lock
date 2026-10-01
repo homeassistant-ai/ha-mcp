@@ -773,6 +773,7 @@ dev = [
     { name = "ast-grep-cli" },
     { name = "build" },
     { name = "docker" },
+    { name = "hamcp-test-env" },
     { name = "jsonschema" },
     { name = "lefthook" },
     { name = "mcp" },
@@ -847,6 +848,7 @@ dev = [
     { name = "ast-grep-cli", specifier = ">=0.42.0" },
     { name = "build", specifier = ">=1.2.2" },
     { name = "docker", specifier = ">=7.1.0" },
+    { name = "hamcp-test-env", editable = "tests/test-env" },
     { name = "jsonschema", specifier = ">=4.25.1" },
     { name = "lefthook", specifier = ">=1.10.0" },
     { name = "mcp", specifier = ">=1.26.0,<2" },
@@ -872,6 +874,11 @@ dev = [
     { name = "voluptuous-openapi", specifier = ">=0.4.1" },
     { name = "websockets", specifier = ">=15.0.1" },
 ]
+
+[[package]]
+name = "hamcp-test-env"
+version = "0.1.0"
+source = { editable = "tests/test-env" }
 
 [[package]]
 name = "httpcore"
