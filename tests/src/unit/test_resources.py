@@ -105,7 +105,7 @@ class TestResourcesAccessibility:
 
 
 @pytest.fixture(scope="module")
-def wheel_files(tmp_path_factory) -> set[str]:
+def wheel_files(tmp_path_factory: pytest.TempPathFactory) -> set[str]:
     """Build a wheel from this checkout and list the files it holds."""
     out = tmp_path_factory.mktemp("wheel")
     result = subprocess.run(
@@ -137,13 +137,17 @@ def wheel_files(tmp_path_factory) -> set[str]:
 class TestWheelContents:
     """The published wheel is what PyPI users and the HA app install."""
 
-    def test_the_wheel_installs_only_the_ha_mcp_package(self, wheel_files):
+    def test_the_wheel_installs_only_the_ha_mcp_package(
+        self, wheel_files: set[str]
+    ) -> None:
         """Any other top-level package lands in every user's site-packages,
         where it can shadow a package of the same name from another project."""
         tops = {name.split("/")[0] for name in wheel_files}
         assert {top for top in tops if not top.endswith(".dist-info")} == {"ha_mcp"}
 
-    def test_the_wheel_carries_every_file_installs_need(self, wheel_files):
+    def test_the_wheel_carries_every_file_installs_need(
+        self, wheel_files: set[str]
+    ) -> None:
         """The settings UI and the skill guides are read from files beside
         the code. A file missing from the wheel breaks every install, while
         a checkout still has it on disk. The vendored licenses must ship

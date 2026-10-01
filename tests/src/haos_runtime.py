@@ -1648,6 +1648,18 @@ def _resolve_local_store_dir(image_path: Path) -> str:
     return "/supervisor/apps/local"
 
 
+# Repo files the dev addon's Dockerfile copies, besides start.py and src/.
+# Must match build_image.DEV_ADDON_REPO_FILES (kept in sync by hand like
+# HA_MCP_TEST_SECRET_PATH; test_haos_dev_addon_context checks both).
+DEV_ADDON_REPO_FILES = (
+    "pyproject.toml",
+    "uv.lock",
+    "README.md",
+    "LICENSE",
+    "tests/test-env/pyproject.toml",
+)
+
+
 def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
     """Overwrite the staged ha-mcp dev addon source with the PR's current source.
 
@@ -1657,7 +1669,7 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
 
     1. Walks the working tree for the addon-build-context files
        (homeassistant-addon-dev/* + start.py from homeassistant-addon/ +
-       pyproject.toml + uv.lock + src/ha_mcp/).
+       ``DEV_ADDON_REPO_FILES`` + src/ha_mcp/).
     2. Bumps the addon's config.yaml ``version:`` so Supervisor's
        local-store scanner reports an update-available on next boot.
        Bump format: ``<base>-pr-<GITHUB_SHA[:7] or "local">`` so every
@@ -1697,8 +1709,9 @@ def refresh_dev_addon_source_in_qcow2(image_path: Path) -> None:
             repo_root / "homeassistant-addon" / "start.py",
             staging / "start.py",
         )
-        _shutil.copy(repo_root / "pyproject.toml", staging / "pyproject.toml")
-        _shutil.copy(repo_root / "uv.lock", staging / "uv.lock")
+        for name in DEV_ADDON_REPO_FILES:
+            (staging / name).parent.mkdir(parents=True, exist_ok=True)
+            _shutil.copy(repo_root / name, staging / name)
         addon_src_dir = staging / "src"
         if addon_src_dir.exists():
             _shutil.rmtree(addon_src_dir)
