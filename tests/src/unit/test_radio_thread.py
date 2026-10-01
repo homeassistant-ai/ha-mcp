@@ -95,6 +95,68 @@ class TestThreadHandler:
         assert out["datasets"] == datasets
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("action", ["set_preferred_dataset", "delete_dataset"])
+    async def test_dataset_write_without_otbr(self, action: str) -> None:
+        record: list = []
+        client = _client(
+            {f"thread/{action}": {"success": True, "result": None}},
+            record=record,
+        )
+        out = await _radio(client)(
+            radio="thread",
+            action=action,
+            params={"dataset_id": "d1"},
+            confirm=action == "delete_dataset",
+        )
+        assert out == {
+            "success": True,
+            "radio": "thread",
+            "action": action,
+            "result": None,
+        }
+        assert record == [{"type": f"thread/{action}", "dataset_id": "d1"}]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("action", ["set_preferred_dataset", "delete_dataset"])
+    async def test_dataset_write_requires_dataset_id(self, action: str) -> None:
+        record: list = []
+        client = _client({}, record=record)
+        with pytest.raises(ToolError, match="requires: dataset_id"):
+            await _radio(client)(radio="thread", action=action, confirm=True)
+        assert record == []
+
+    @pytest.mark.asyncio
+    async def test_delete_dataset_requires_confirm(self) -> None:
+        record: list = []
+        client = _client({}, record=record)
+        with pytest.raises(ToolError, match="confirm=True"):
+            await _radio(client)(
+                radio="thread", action="delete_dataset", params={"dataset_id": "d1"}
+            )
+        assert record == []
+
+    @pytest.mark.asyncio
+    async def test_delete_preferred_dataset_surfaces_ha_error(self) -> None:
+        client = _client(
+            {
+                "thread/delete_dataset": {
+                    "success": False,
+                    "error": {
+                        "code": "not_allowed",
+                        "message": "attempt to remove preferred dataset",
+                    },
+                }
+            }
+        )
+        with pytest.raises(ToolError, match="attempt to remove preferred dataset"):
+            await _radio(client)(
+                radio="thread",
+                action="delete_dataset",
+                params={"dataset_id": "d1"},
+                confirm=True,
+            )
+
+    @pytest.mark.asyncio
     async def test_discover_routers_started(self):
         record: list = []
         client = _client(
