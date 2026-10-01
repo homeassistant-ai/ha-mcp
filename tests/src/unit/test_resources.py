@@ -5,6 +5,7 @@ accessible within the package. Dashboard guide, card types, and domain
 docs content has moved to skill reference files (skills repo v1.2.0).
 """
 
+import os
 import shutil
 import subprocess
 import zipfile
@@ -107,7 +108,7 @@ class TestResourcesAccessibility:
 def wheel_files(tmp_path_factory) -> set[str]:
     """Build a wheel from this checkout and list the files it holds."""
     out = tmp_path_factory.mktemp("wheel")
-    subprocess.run(
+    result = subprocess.run(
         [
             shutil.which("uv") or "uv",
             "build",
@@ -117,10 +118,17 @@ def wheel_files(tmp_path_factory) -> set[str]:
             str(out),
             str(_REPO_ROOT),
         ],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
+        timeout=300,
+        env={
+            **os.environ,
+            "UV_CACHE_DIR": str(tmp_path_factory.mktemp("uv-cache")),
+            "UV_NO_CONFIG": "1",
+        },
     )
+    assert result.returncode == 0, result.stderr
     (wheel,) = out.glob("*.whl")
     with zipfile.ZipFile(wheel) as archive:
         return set(archive.namelist())
@@ -135,10 +143,11 @@ class TestWheelContents:
         tops = {name.split("/")[0] for name in wheel_files}
         assert {top for top in tops if not top.endswith(".dist-info")} == {"ha_mcp"}
 
-    def test_the_wheel_carries_every_asset_the_server_reads(self, wheel_files):
+    def test_the_wheel_carries_every_file_installs_need(self, wheel_files):
         """The settings UI and the skill guides are read from files beside
         the code. A file missing from the wheel breaks every install, while
-        a checkout still has it on disk."""
+        a checkout still has it on disk. The vendored licenses must ship
+        with the vendored code (BSD-3 for websockets)."""
         package = _REPO_ROOT / "src" / "ha_mcp"
         assets = [
             package / "settings_ui" / name
@@ -147,6 +156,7 @@ class TestWheelContents:
         assets += (package / "settings_ui" / "locales").glob("*.json")
         # Bug reports detect a PyPI install by this marker.
         assets.append(package / "_pypi_marker")
+        assets += (package / "_vendor").glob("*/LICENSE")
         assets += (
             path
             for path in (package / "resources" / "skills-vendor" / "skills").rglob("*")
