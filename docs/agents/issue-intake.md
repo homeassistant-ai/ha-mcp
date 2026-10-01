@@ -2,7 +2,8 @@
 
 `issue-intake.yml` documents reports, translates non-English reports, and asks
 for essential missing information. The model must not diagnose, propose fixes,
-assign blame or priority, promise a PR, or close an issue. CodeRabbit issue
+assign blame or priority, promise a PR, or close an issue; only the
+deterministic [report gate](#report-gate) closes issues. CodeRabbit issue
 enrichment is disabled so this workflow owns the consolidated issue comment.
 CodeRabbit and Codex PR reviews retain their existing responsibilities.
 
@@ -52,6 +53,23 @@ Do not transfer Codex OAuth credentials between product and bench. All Codex
 callers share the repository's auth concurrency group. Step timeouts reserve
 room for auth persistence on failure. No Administration, organization membership,
 workflow/PR write permission, or ruleset bypass is needed for issue documentation.
+
+## Report gate
+
+The `gate` job runs before admission on issue opens, edits, reopenings and new
+comments, without the model. An issue passes when its reporter's body or own
+comments carry the `ha_report_issue` report heading, or a
+`### Why there is no ha_report_issue report` section of at least a few words.
+The issue forms render their fallback field under that heading; blank and
+API-filed issues must write it themselves. Maintainers (write role or above),
+bots and `documentation` issues are exempt.
+
+A failing issue is closed as not planned only when it is opened, or reopened by
+someone below the write role, so an edit never closes an issue that predates the
+gate. Each close posts a new App comment that mentions the reporter. When the
+report or explanation is added, the gate reopens an issue it closed itself and
+rewrites that comment; it never reopens an issue a human closed. Admission waits
+for the gate, so a closed issue is not documented and a reopened one is.
 
 ## Conversation, control and lifecycle
 
