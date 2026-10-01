@@ -1,6 +1,8 @@
 """Unit tests for the bug report tool (ha_report_issue)."""
 
+from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -2637,8 +2639,8 @@ class TestFinishedIssue:
 
     @pytest.mark.asyncio
     async def test_untitled_feature_request_is_not_named_after_a_failed_call(
-        self, ha_report_issue_func
-    ):
+        self, ha_report_issue_func: Callable[..., Awaitable[dict[str, Any]]]
+    ) -> None:
         """The fallback title for a bug comes from the last error; a feature
         request named after an unrelated failure misleads triage."""
         with patch(
