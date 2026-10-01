@@ -57,8 +57,24 @@ workflow/PR write permission, or ruleset bypass is needed for issue documentatio
 
 One App-owned comment contains the summary, optional English translation,
 agreed scope, reported details and targeted questions. Prior bot theories are
-excluded from model input. The publisher owns question wording and can only
-manage needs-info; it does not execute instructions from the report.
+excluded from model input. The publisher owns question wording and manages two
+kinds of label; it does not execute instructions from the report.
+
+- needs-info, driven by the model's missing fields, as described below.
+- Report type labels, set without the model. An issue whose body carries the
+  `ha_report_issue` report heading gets `bug` for a `[BUG]` title, or
+  `agent-behavior` for an `[AGENT]` title. That tool files blank issues,
+  which no issue form labels. Whether a bug is a runtime or startup bug is
+  left to a maintainer. A type label a human removed is not added back.
+
+A bug-like issue (a `[BUG]`/`[AGENT]` title, a bug label, or a reported error)
+whose body and human replies carry no report gets a request for
+`ha_report_issue` output in the comment. The request never adds needs-info.
+It follows the labels present when the comment is published. Labels other
+than needs-info do not start a run, so a later label change keeps the comment
+as it is until the next run; `/triage refresh` requests one.
+The heading string is shared with `tools_bug_report.py`;
+`tests/js/issue-intake.test.mjs` fails when the two drift apart.
 
 Maintainers with the actual maintain/admin role can post exact commands:
 
