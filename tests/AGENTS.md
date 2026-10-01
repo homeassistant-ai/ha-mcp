@@ -227,6 +227,8 @@ assert result.broadcasts_of_type("restart-required")
 
 The harness fakes `setTimeout` / `setInterval` / `Date.now` on a virtual clock, stubs `fetch` from a URL map, captures `location.reload` via JSDOM's `jsdomError` channel, and provides a `BroadcastChannel` shim. `new Date()` / `performance.now()` continue to report wall time — only the three sources above are faked.
 
+Each pytest worker sends all its runs to one long-lived node process, and every run gets a fresh JSDOM window. A run that times out, crashes node or garbles its reply ends that process; the next run starts a new one. `tests/src/unit/test_js_harness_worker.py` covers this.
+
 Astro `<script>` blocks without `define:vars` / `is:inline` are TypeScript by default — pass `language="ts"` to `run_script`. For Astro pages needing wizard data, use `extract_astro_frontmatter_vars` + `astro_vars_prelude` to inject production data.
 
 CI installs Node + jsdom in the `unit-tests` job. Local devs without `tests/js/node_modules/` get clean skips.
