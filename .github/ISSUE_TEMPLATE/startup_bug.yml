@@ -57,7 +57,8 @@ body:
         Paste its full output here, with tokens and passwords removed. It collects the versions,
         install type, client, settings and tool calls we otherwise have to ask for.
 
-        Only if the tool cannot run because ha-mcp does not start or connect, write `N/A` here and
+        Only if no report can exist, because ha-mcp does not start or connect or the problem was
+        found by reading the code and never happened in a live session, write `N/A` here and
         explain in the next field. Include your startup logs and configuration there instead (remove tokens). Issues with neither are closed automatically.
       placeholder: "Paste the full ha_report_issue output here"
     validations:
@@ -68,8 +69,9 @@ body:
     attributes:
       label: "Why there is no ha_report_issue report"
       description: |
-        Only if ha-mcp does not start or connect. Not wanting to run the tool, or having found the
-        problem by reading the code, does not count.
+        Only if no report can exist: ha-mcp does not start or connect, or the problem was found by
+        reading the code and never happened in a live session. Say which, and why. Not wanting to
+        run the tool does not count.
     validations:
       required: false
 

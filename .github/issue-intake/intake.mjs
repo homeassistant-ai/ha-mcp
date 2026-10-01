@@ -490,7 +490,7 @@ const reportTypeLabels = {
 const bugLabels = ["bug", "runtime-bug", "startup-bug", "agent-behavior"];
 const nonBugLabels = ["enhancement", "documentation", "question"];
 const reportRequest =
-  "Please ask your AI agent to run `ha_report_issue` in the session where this happened and add its report here. It collects the versions, client, settings and tool calls that maintainers usually have to ask for. Only if ha-mcp cannot start or connect, explain that under a `### Why there is no ha_report_issue report` heading instead.";
+  "Please ask your AI agent to run `ha_report_issue` in the session where this happened and add its report here. It collects the versions, client, settings and tool calls that maintainers usually have to ask for. Only if no report can exist, because ha-mcp cannot start or connect or the problem was found by reading the code and never happened in a live session, explain that under a `### Why there is no ha_report_issue report` heading instead.";
 
 // Type labels for an issue filed from an ha_report_issue report, chosen by its
 // title prefix. A label a human removed is never added back.
@@ -622,7 +622,7 @@ export function gateComment(action, login) {
 
 Every bug report, agent-behavior report and feature request needs one. Ask your AI agent to run \`ha_report_issue\` in the session where the problem happened, or for a feature request, the session where it tried to do what you are asking for, and add the full output to the issue description or a comment, with secrets removed. It records the ha-mcp version, install type, client, settings and tool calls that maintainers otherwise have to ask for, and shows what the agent tried.
 
-Only if the tool cannot run because ha-mcp does not start or connect, or a report could not show anything relevant to a feature request, add a section headed \`### ${noReportHeading}\` that explains why. For a startup problem, include your startup logs and configuration there (tokens removed). Having found the problem by reading the code does not count.
+Only if no report can exist, add a section headed \`### ${noReportHeading}\` that explains why: ha-mcp does not start or connect, the problem was found by reading the code and never happened in a live session, or a report could not show anything relevant to a feature request. For a startup problem, include your startup logs and configuration there (tokens removed). Not wanting to run the tool does not count.
 
 The issue reopens automatically once the report or that explanation is added.
 `;
