@@ -453,6 +453,10 @@ dev = [
     "testcontainers>=4.13.0",
     "ast-grep-cli>=0.42.0",
     "pyyaml>=6.0",
+    # Renders templates/CHANGELOG.md.j2 in test_changelog_template.py. Keep the
+    # version equal to the action pinned in .github/workflows/semver-release.yml,
+    # so the test renders with the release that writes the real notes.
+    "python-semantic-release==10.6.2",
 ]
 
 # Semantic versioning configuration
@@ -477,6 +481,7 @@ template_dir = "templates"
 exclude_commit_patterns = [
     "^.*\\(site\\).*$",           # Commits with (site) scope
     '''chore\(addon\): [Ss]ync changelog.*''',  # Changelog sync commits
+    '''chore\(addon\): [Pp]ublish dev addon version.*''',  # One per master merge
 ]
 
 [tool.semantic_release.changelog.default_templates]
