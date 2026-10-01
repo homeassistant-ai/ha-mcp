@@ -39,6 +39,19 @@ from ha_mcp.tools.tools_integrations import IntegrationTools
 
 
 @pytest.fixture(autouse=True)
+def _immediate_read_back_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retry the post-commit read-back without the production backoff.
+
+    The client doubles answer at once, so the waits between attempts only
+    add wall time; a read-back that never settles would otherwise wait out
+    the whole backoff.
+    """
+    monkeypatch.setattr(
+        config_entry_reconfigure, "_VERIFICATION_BACKOFF_SECONDS", (0, 0, 0, 0)
+    )
+
+
+@pytest.fixture(autouse=True)
 def _legacy_registry_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     """Force the legacy whole-registry reads for this module.
 

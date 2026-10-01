@@ -15,22 +15,28 @@ def test_tests_tree_has_no_nested_pytest_configuration() -> None:
         "pytest.ini",
         ".pytest.ini",
     )
+    section_configs = {
+        "tox.ini": "[pytest]",
+        "setup.cfg": "[tool:pytest]",
+    }
+    candidates: dict[str, list[Path]] = {}
+    for path in TESTS_ROOT.rglob("*"):
+        candidates.setdefault(path.name, []).append(path)
+
     nested_configs = [
-        path for filename in always_config_names for path in TESTS_ROOT.rglob(filename)
+        path
+        for filename in always_config_names
+        for path in candidates.get(filename, [])
     ]
 
-    for path in TESTS_ROOT.rglob("pyproject.toml"):
+    for path in candidates.get("pyproject.toml", []):
         config = tomllib.loads(path.read_text(encoding="utf-8"))
         tool_config = config.get("tool", {})
         if isinstance(tool_config, dict) and "pytest" in tool_config:
             nested_configs.append(path)
 
-    section_configs = {
-        "tox.ini": "[pytest]",
-        "setup.cfg": "[tool:pytest]",
-    }
     for filename, section in section_configs.items():
-        for path in TESTS_ROOT.rglob(filename):
+        for path in candidates.get(filename, []):
             lines = path.read_text(encoding="utf-8").splitlines()
             headers = {line.split("#", 1)[0].split(";", 1)[0].strip() for line in lines}
             if section in headers:

@@ -86,7 +86,7 @@ def test_xdist_abort_retains_first_shared_fixture_failure(tmp_path):
     (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
     # Register the actual E2E hook, without registering its HA/container fixtures.
     (tmp_path / "conftest.py").write_text(
-        "from tests.src.e2e.conftest import pytest_runtest_logreport\n",
+        "from tests.src.doomed_run import pytest_runtest_logreport\n",
         encoding="utf-8",
     )
     (tmp_path / "test_broken.py").write_text(
@@ -170,8 +170,10 @@ def test_xdist_abort_retains_first_shared_fixture_failure(tmp_path):
 def test_controller_reports_first_fixture_failure_per_worker(monkeypatch, when):
     from tests.src.e2e import conftest as e2e
 
-    monkeypatch.setattr(e2e, "_doomed_detector", DoomedRunDetector())
-    monkeypatch.setattr(e2e, "_reported_failure_workers", set())
+    # The module the e2e session registered the hook from, whatever its import name.
+    doomed_run = sys.modules[e2e.pytest_runtest_logreport.__module__]
+    monkeypatch.setattr(doomed_run, "_doomed_detector", DoomedRunDetector())
+    monkeypatch.setattr(doomed_run, "_reported_failure_workers", set())
     terminal = Mock()
     config = SimpleNamespace(pluginmanager=Mock())
     config.pluginmanager.get_plugin.return_value = terminal
@@ -197,4 +199,4 @@ def test_controller_reports_first_fixture_failure_per_worker(monkeypatch, when):
         (("original failure",),),
         (("other worker failure",),),
     ]
-    assert e2e._doomed_detector.streak == 3
+    assert doomed_run._doomed_detector.streak == 3
