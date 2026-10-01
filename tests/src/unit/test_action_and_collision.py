@@ -392,6 +392,9 @@ class TestBug12NameCollisionFlowHelper:
                     "next_step_id": "sensor",
                     "state": "{{ states('sensor.x')|float }}",
                 },
+                # The fake registry never lists the new entry's entities, so
+                # waiting would poll to the deadline without changing the result.
+                wait=False,
             )
         assert result["success"] is True
         assert result["action"] == "create"

@@ -359,9 +359,8 @@ async def _settings_info(
     # (the value flips across processes).
     addon = False if is_sidecar else is_running_in_addon()
     try:
-        # Executor: get_version's distribution-ownership scan reads
-        # metadata for every installed package — too heavy for the
-        # event loop on an endpoint the restart cycle polls.
+        # Executor: get_version reads package metadata from disk, and the
+        # restart cycle polls this endpoint.
         version = await asyncio.to_thread(get_version)
     except Exception:  # pragma: no cover — defensive only
         logger.warning("get_version() raised; omitting version from info")

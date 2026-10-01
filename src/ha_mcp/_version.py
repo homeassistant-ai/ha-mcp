@@ -12,6 +12,9 @@ import os
 
 logger = logging.getLogger(__name__)
 
+# The two distributions ha-mcp ships as (stable and dev channel).
+_CHANNEL_DISTS = ("ha-mcp", "ha-mcp-dev")
+
 
 def get_version() -> str:
     """Return the installed ha-mcp version.
@@ -36,13 +39,12 @@ def get_version() -> str:
     # fixed name order then reports the leftover dist's version instead of the
     # one whose files are really installed.
     try:
-        owners = importlib.metadata.packages_distributions().get("ha_mcp", [])
-        unique = sorted(set(owners))
-        if len(unique) == 1:
-            return importlib.metadata.version(unique[0])
+        owners = [name for name in _CHANNEL_DISTS if _owns_ha_mcp(name)]
+        if len(owners) == 1:
+            return importlib.metadata.version(owners[0])
     except Exception as exc:
-        logger.debug("packages_distributions probe failed: %s", exc)
-    for pkg_name in ("ha-mcp", "ha-mcp-dev"):
+        logger.debug("distribution ownership probe failed: %s", exc)
+    for pkg_name in _CHANNEL_DISTS:
         try:
             return importlib.metadata.version(pkg_name)
         except importlib.metadata.PackageNotFoundError:
@@ -53,6 +55,26 @@ def get_version() -> str:
         "HA_MCP_BUILD_VERSION if this is an intentional source-tree run."
     )
     return "unknown"
+
+
+def _owns_ha_mcp(dist_name: str) -> bool:
+    """Whether the installed ``dist_name`` distribution provides ``ha_mcp``.
+
+    Reads only that distribution's metadata. ``packages_distributions()``
+    would answer the same question, but reads the metadata of every
+    installed package, which costs seconds where many packages are
+    installed or file access is slow. This runs at every ``ha_mcp`` import.
+    A declared ``top_level.txt`` wins, as it does there; otherwise the
+    file list decides.
+    """
+    try:
+        dist = importlib.metadata.distribution(dist_name)
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    declared = (dist.read_text("top_level.txt") or "").split()
+    if declared:
+        return "ha_mcp" in declared
+    return any(path.parts[:1] == ("ha_mcp",) for path in dist.files or ())
 
 
 def is_dev_version(version: str) -> bool:

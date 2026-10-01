@@ -72,6 +72,9 @@ from .util_helpers import (
 
 logger = logging.getLogger(__name__)
 
+# First wait between helper registry lookups; each later retry doubles it.
+_REGISTRY_RETRY_BASE_DELAY = 0.5
+
 
 async def _resolve_config_entry_backup_domain(
     client: Any, kwargs: dict[str, Any], domain: str, entry_id: str
@@ -2970,7 +2973,7 @@ class IntegrationTools:
                         logger.info(f"Found unique_id: {unique_id} for {entity_id}")
                         break
                 if attempt < max_retries - 1:
-                    wait_time = 0.5 * (2**attempt)
+                    wait_time = _REGISTRY_RETRY_BASE_DELAY * (2**attempt)
                     logger.debug(
                         f"Registry lookup failed for {entity_id}, "
                         f"waiting {wait_time}s before retry..."
@@ -2982,7 +2985,7 @@ class IntegrationTools:
                 # re-reported as ENTITY_NOT_FOUND in the fallback below.
                 logger.warning(f"Registry lookup attempt {attempt + 1} failed: {e}")
                 if attempt < max_retries - 1:
-                    wait_time = 0.5 * (2**attempt)
+                    wait_time = _REGISTRY_RETRY_BASE_DELAY * (2**attempt)
                     await asyncio.sleep(wait_time)
         return unique_id, registry_result
 

@@ -140,6 +140,13 @@ class TestRemoveHelpersIntegrations:
     confirm gate and wait flag.
     """
 
+    @pytest.fixture(autouse=True)
+    def _immediate_registry_retries(self, monkeypatch):
+        """The client doubles answer at once; the retry backoff only adds time."""
+        monkeypatch.setattr(
+            "ha_mcp.tools.tools_integrations._REGISTRY_RETRY_BASE_DELAY", 0
+        )
+
     @pytest.fixture
     def mock_client(self):
         """Mock Home Assistant client with all methods used by the tool."""

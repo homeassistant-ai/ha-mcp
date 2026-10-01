@@ -52,6 +52,13 @@ from ha_mcp.tools.auto_backup import with_auto_backup
 # ---------------------------------------------------------------- fixtures
 
 
+@pytest.fixture
+def ticking_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each snapshot filename gets the next second, as if captures were apart."""
+    seconds = iter(range(60))
+    monkeypatch.setattr(bm, "_now_ts", lambda: f"20260903_1200{next(seconds):02d}")
+
+
 @dataclass
 class _StubSettings:
     enable_auto_backup: bool = True
@@ -1119,25 +1126,26 @@ class TestCapture:
         assert data["tool"] == "ha_config_set_automation"
         assert data["config"] == {"alias": "Kitchen", "trigger": []}
 
-    async def test_throttle_blocks_second_capture(self, tmp_path: Path) -> None:
+    async def test_throttle_blocks_second_capture(
+        self, tmp_path: Path, ticking_clock: None
+    ) -> None:
         mgr = _mk_manager(tmp_path, auto_backup_throttle_minutes=10)
         mgr.register(_mk_handler(fetched={"v": 1}))
         first = await mgr.maybe_snapshot("automation", "x")
-        # Need a sleep > 1s so the second snapshot's filename timestamp
-        # would differ if it were written — guarantees the "throttled"
-        # assertion is about throttle, not just filename collision.
-        await asyncio.sleep(1.1)
+        # The second capture would get its own filename timestamp, so only
+        # the throttle can stop it.
         second = await mgr.maybe_snapshot("automation", "x")
         assert first is not None
         assert second is None
         # Only one file landed.
         assert len(list(tmp_path.glob("automation.x.*.yaml"))) == 1
 
-    async def test_throttle_zero_captures_every_time(self, tmp_path: Path) -> None:
+    async def test_throttle_zero_captures_every_time(
+        self, tmp_path: Path, ticking_clock: None
+    ) -> None:
         mgr = _mk_manager(tmp_path, auto_backup_throttle_minutes=0)
         mgr.register(_mk_handler(fetched={"v": 1}))
         first = await mgr.maybe_snapshot("automation", "x")
-        await asyncio.sleep(1.1)
         second = await mgr.maybe_snapshot("automation", "x")
         assert first is not None
         assert second is not None
@@ -1284,22 +1292,23 @@ def _colliding_blueprint_snapshots(tmp_path: Path) -> dict[str, Path]:
 
 
 class TestRetention:
-    async def test_rotation_removes_oldest(self, tmp_path: Path) -> None:
+    async def test_rotation_removes_oldest(
+        self, tmp_path: Path, ticking_clock: None
+    ) -> None:
         mgr = _mk_manager(tmp_path, auto_backup_retain_per_entity=3)
         mgr.register(_mk_handler(fetched={"v": 1}))
-        # Force distinct timestamps with sleeps.
         for _ in range(5):
             await mgr.maybe_snapshot("automation", "x")
-            await asyncio.sleep(1.1)
         remaining = sorted(tmp_path.glob("automation.x.*.yaml"))
         assert len(remaining) == 3
 
-    async def test_rotation_does_not_touch_other_entities(self, tmp_path: Path) -> None:
+    async def test_rotation_does_not_touch_other_entities(
+        self, tmp_path: Path, ticking_clock: None
+    ) -> None:
         mgr = _mk_manager(tmp_path, auto_backup_retain_per_entity=2)
         mgr.register(_mk_handler(fetched={"v": 1}))
         for _ in range(3):
             await mgr.maybe_snapshot("automation", "alpha")
-            await asyncio.sleep(1.1)
         await mgr.maybe_snapshot("automation", "beta")
         # alpha rotated to 2, beta kept its single file.
         assert len(list(tmp_path.glob("automation.alpha.*.yaml"))) == 2
@@ -1355,7 +1364,6 @@ class TestListReadDelete:
         mgr.register(_mk_handler("automation", fetched={"a": 1}))
         mgr.register(_mk_handler("script", fetched={"s": 1}))
         await mgr.maybe_snapshot("automation", "a")
-        await asyncio.sleep(1.1)
         await mgr.maybe_snapshot("script", "s")
         all_entries = mgr.list_snapshots()
         autos = mgr.list_snapshots(domain="automation")
@@ -1369,7 +1377,6 @@ class TestListReadDelete:
         mgr = _mk_manager(tmp_path)
         mgr.register(_mk_handler(fetched={"v": 1}))
         await mgr.maybe_snapshot("automation", "alpha")
-        await asyncio.sleep(1.1)
         await mgr.maybe_snapshot("automation", "beta")
         only_alpha = mgr.list_snapshots(entity_id="alpha")
         assert len(only_alpha) == 1
@@ -1543,7 +1550,9 @@ class TestListReadDelete:
         mgr.delete_snapshot(path.name)
         assert not path.exists()
 
-    async def test_delete_bulk_by_age(self, tmp_path: Path) -> None:
+    async def test_delete_bulk_by_age(
+        self, tmp_path: Path, ticking_clock: None
+    ) -> None:
         mgr = _mk_manager(tmp_path)
         mgr.register(_mk_handler(fetched={"v": 1}))
         # Write a snapshot, then backdate its mtime to look 30 days old.
@@ -1553,7 +1562,6 @@ class TestListReadDelete:
         import os as _os
 
         _os.utime(path, (old, old))
-        await asyncio.sleep(1.1)
         recent = await mgr.maybe_snapshot("automation", "x")
         assert recent is not None
         bulk = mgr.delete_bulk(older_than_days=30)
