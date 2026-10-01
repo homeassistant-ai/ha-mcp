@@ -126,13 +126,17 @@ async def handle(client: Any, action: str, args: dict[str, Any]) -> dict[str, An
         return ok("thread", "add_dataset", result=result)
 
     if action in ("set_preferred_dataset", "delete_dataset"):
-        result = await ws_call(client, f"thread/{action}", dataset_id=args.get("dataset_id"))
+        result = await ws_call(
+            client, f"thread/{action}", dataset_id=args.get("dataset_id")
+        )
         return ok("thread", action, result=result)
 
     return await _handle_otbr(client, action, args)
 
 
-async def _handle_otbr(client: Any, action: str, args: dict[str, Any]) -> dict[str, Any]:
+async def _handle_otbr(
+    client: Any, action: str, args: dict[str, Any]
+) -> dict[str, Any]:
     """Execute a border-router write, requiring a configured OTBR."""
     extended_address = await _resolve_extended_address(client, args)
     if not extended_address:
