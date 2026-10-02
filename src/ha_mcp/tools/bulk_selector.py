@@ -654,7 +654,34 @@ async def _load_hidden_entities(
     return visibility_hidden | registry_hidden, warnings
 
 
-async def resolve_bulk_selector(  # noqa: PLR0915
+def _build_operation_common(
+    action: str,
+    parameters: dict[str, Any] | None,
+    timeout_seconds: float | None,
+    validate_first: bool,
+) -> dict[str, Any]:
+    """Build the fields every resolved operation row shares."""
+    operation_common: dict[str, Any] = {
+        "action": action,
+        "validate_first": validate_first,
+    }
+    if parameters is not None:
+        # Deep copy, not the caller's own object by reference (and not a
+        # shallow `dict(...)`, which stops only top-level rebinding and
+        # still shares nested values like an `rgb_color` list): the
+        # per-row copy in BulkSelectorResolution.operations protects each
+        # DISPATCH row from cross-row mutation, but does nothing about the
+        # resolution's own stored copy -- without this, a caller that
+        # still holds `parameters` and mutates it (at any depth) after
+        # this call returns would silently rewrite the "frozen"
+        # resolution's own payload too.
+        operation_common["parameters"] = copy.deepcopy(parameters)
+    if timeout_seconds is not None:
+        operation_common["timeout_seconds"] = timeout_seconds
+    return operation_common
+
+
+async def resolve_bulk_selector(
     client: HomeAssistantClient,
     selector: Mapping[str, Any],
     *,
@@ -825,23 +852,9 @@ async def resolve_bulk_selector(  # noqa: PLR0915
             f"The selector resolved to {len(resolved_entity_ids)} entities; "
             f"the maximum is {MAX_SELECTOR_ENTITIES}"
         )
-    operation_common: dict[str, Any] = {
-        "action": action,
-        "validate_first": validate_first,
-    }
-    if parameters is not None:
-        # Deep copy, not the caller's own object by reference (and not a
-        # shallow `dict(...)`, which stops only top-level rebinding and
-        # still shares nested values like an `rgb_color` list): the
-        # per-row copy in BulkSelectorResolution.operations protects each
-        # DISPATCH row from cross-row mutation, but does nothing about the
-        # resolution's own stored copy -- without this, a caller that
-        # still holds `parameters` and mutates it (at any depth) after
-        # this call returns would silently rewrite the "frozen"
-        # resolution's own payload too.
-        operation_common["parameters"] = copy.deepcopy(parameters)
-    if timeout_seconds is not None:
-        operation_common["timeout_seconds"] = timeout_seconds
+    operation_common = _build_operation_common(
+        action, parameters, timeout_seconds, validate_first
+    )
     excluded_and_hidden = effective_excluded & hidden
     hidden_count = len(directly_hidden | hidden_selected | excluded_and_hidden)
     warnings: list[str] = list(visibility_warnings)

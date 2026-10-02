@@ -1054,6 +1054,33 @@ class BugReportTools:
             "host_os": str(info.get("operating_system") or "unknown"),
         }
 
+    async def _add_home_assistant_info(self, diagnostic_info: dict[str, Any]) -> None:
+        """Fill in connection status, HA config and entity count; never raises."""
+        try:
+            config = await self._client.get_config()
+            diagnostic_info["connection_status"] = "Connected"
+            diagnostic_info["home_assistant_version"] = config.get("version", "Unknown")
+            diagnostic_info["location_name"] = config.get("location_name", "Unknown")
+            diagnostic_info["time_zone"] = config.get("time_zone", "Unknown")
+            # Only a supervised install loads the hassio integration. Probing
+            # without it only produces an "Unknown command" error.
+            if "hassio" in config.get("components", []):
+                diagnostic_info["supervisor"] = await self._detect_supervisor_info()
+            else:
+                diagnostic_info["supervisor"] = {"none": "true"}
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Failed to get Home Assistant config: {e}")
+            diagnostic_info["connection_status"] = (
+                f"Connection Error: {_sanitize_log_text(str(e))}"
+            )
+
+        try:
+            states = await self._client.get_states()
+            if states:
+                diagnostic_info["entity_count"] = len(states)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Failed to get entity count: {e}")
+
     @tool(
         name="ha_report_issue",
         tags={"Utilities"},
@@ -1065,7 +1092,7 @@ class BugReportTools:
         },
     )
     @log_tool_usage
-    async def ha_report_issue(  # noqa: PLR0915
+    async def ha_report_issue(
         self,
         report_type: Annotated[
             Literal["runtime_bug", "agent_behavior"],
@@ -1268,32 +1295,7 @@ class BugReportTools:
             "entity_count": 0,
         }
 
-        # Try to get Home Assistant config and connection status
-        try:
-            config = await self._client.get_config()
-            diagnostic_info["connection_status"] = "Connected"
-            diagnostic_info["home_assistant_version"] = config.get("version", "Unknown")
-            diagnostic_info["location_name"] = config.get("location_name", "Unknown")
-            diagnostic_info["time_zone"] = config.get("time_zone", "Unknown")
-            # Only a supervised install loads the hassio integration. Probing
-            # without it only produces an "Unknown command" error.
-            if "hassio" in config.get("components", []):
-                diagnostic_info["supervisor"] = await self._detect_supervisor_info()
-            else:
-                diagnostic_info["supervisor"] = {"none": "true"}
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"Failed to get Home Assistant config: {e}")
-            diagnostic_info["connection_status"] = (
-                f"Connection Error: {_sanitize_log_text(str(e))}"
-            )
-
-        # Try to get entity count
-        try:
-            states = await self._client.get_states()
-            if states:
-                diagnostic_info["entity_count"] = len(states)
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"Failed to get entity count: {e}")
+        await self._add_home_assistant_info(diagnostic_info)
 
         # Calculate how many log entries to retrieve
         # Formula: AVG_LOG_ENTRIES_PER_TOOL * 4 * tool_call_count (doubled from 2x to 4x)
@@ -1365,9 +1367,6 @@ class BugReportTools:
             issue_title, lambda cap: build_body(include_logs=False, text_cap=cap)
         )
 
-        # Anonymization instructions
-        anonymization_guide = _generate_anonymization_guide()
-
         # Generate search keywords and URLs for duplicate check
         search_keywords = _generate_search_keywords(diagnostic_info, recent_logs)
         duplicate_check_urls = [
@@ -1400,7 +1399,7 @@ class BugReportTools:
             "issue_title": issue_title,
             "issue_body": issue_body,
             "issue_url": issue_url,
-            "anonymization_guide": anonymization_guide,
+            "anonymization_guide": _generate_anonymization_guide(),
             "duplicate_check_urls": duplicate_check_urls,
             "missing_tool_hint": MISSING_TOOL_HINT,
             "known_client_issues_hint": KNOWN_CLIENT_ISSUES_HINT,

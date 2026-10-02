@@ -1025,8 +1025,8 @@ class TestLegacyBackupServiceWiring:
         assert "SERVICE_LIST_LEGACY_BACKUPS" in setup_src
         assert "SERVICE_READ_LEGACY_BACKUP" in setup_src
         # Both handlers must token-gate before any FS access.
-        assert "handle_list_legacy_backups" in setup_src
-        assert "handle_read_legacy_backup" in setup_src
+        assert "_build_list_legacy_backups_handler" in setup_src
+        assert "_build_read_legacy_backup_handler" in setup_src
         handler_src = inspect.getsource(
             _build_list_legacy_backups_handler
         ) + inspect.getsource(_build_read_legacy_backup_handler)
