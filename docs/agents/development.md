@@ -97,7 +97,8 @@ python scripts/module_size_ratchet.py
 git add tests/src/unit/module_size_baseline.json
 ```
 
-The lefthook pre-commit hook runs both steps.
+The lefthook pre-commit hook runs both steps against the staged content, so
+a shrink that is not staged does not lower its entry.
 
 The command lowers or drops entries and never raises or adds one, so a file
 that grew has to be split. Vendored trees, test fixtures and the stable

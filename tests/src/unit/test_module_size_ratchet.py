@@ -14,9 +14,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "module_size_ratchet.py"
@@ -126,6 +129,34 @@ def test_last_line_without_a_newline_is_counted() -> None:
     """Otherwise a 1,001-line file with no final newline passes as 1,000."""
     assert ratchet.count_lines(b"a\nb\nc") == 3
     assert ratchet.count_lines(b"a\nb\nc\n") == 3
+
+
+def test_staged_measurement_ignores_an_unstaged_shrink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The commit hook stages a baseline lowered to the measured sizes. If it
+    measured the working tree, a shrink left out of the commit would lower the
+    entry, and the committed file would no longer match it in CI."""
+    # Inside a git hook these point every git call at the real repository.
+    for name in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_PREFIX",
+        "GIT_COMMON_DIR",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.ruff]\nextend-exclude = []\n", encoding="utf-8"
+    )
+    big = tmp_path / "big.py"
+    big.write_text("x = 1\n" * (LIMIT + 2), encoding="utf-8")
+    subprocess.run(["git", "add", "big.py"], cwd=tmp_path, check=True)
+    big.write_text("x = 1\n" * (LIMIT + 1), encoding="utf-8")
+
+    assert ratchet.measure(tmp_path, staged=True) == {"big.py": LIMIT + 2}
+    assert ratchet.measure(tmp_path) == {"big.py": LIMIT + 1}
 
 
 def test_repository_matches_the_baseline() -> None:

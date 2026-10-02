@@ -6,7 +6,9 @@ this after shrinking or deleting a listed file:
 
     python scripts/module_size_ratchet.py
 
-and commit the changed baseline. The lefthook pre-commit hook does both.
+and commit the changed baseline. The lefthook pre-commit hook does both. It
+passes ``--staged`` to measure the staged content, so the baseline it stages
+matches the files in the commit and ignores unstaged changes.
 
 The command lowers or drops entries. It never raises an entry and never adds a
 file, so it cannot accept growth: split the file instead.
@@ -14,6 +16,7 @@ file, so it cannot accept growth: split the file instead.
 
 from __future__ import annotations
 
+import argparse
 import json
 import subprocess
 import tomllib
@@ -51,25 +54,67 @@ def count_lines(content: bytes) -> int:
     return content.count(b"\n") + unterminated
 
 
-def measure(repo_root: Path) -> dict[str, int]:
-    """Return the line count of every tracked source file in scope."""
-    tracked = subprocess.run(
+def _git(repo_root: Path, *args: str, stdin: bytes | None = None) -> bytes:
+    return subprocess.run(
         # The unit-test job runs as a different user than the checkout owner,
         # which git refuses without this.
-        ["git", "-c", "safe.directory=*", "ls-files", "-z"],
+        ["git", "-c", "safe.directory=*", *args],
         cwd=repo_root,
         check=True,
         capture_output=True,
-    ).stdout.decode("utf-8")
-    excluded = excluded_prefixes(repo_root)
-    sizes: dict[str, int] = {}
-    for path in tracked.split("\0"):
+        input=stdin,
+    ).stdout
+
+
+def _working_tree_contents(
+    repo_root: Path, excluded: tuple[str, ...]
+) -> dict[str, bytes]:
+    contents: dict[str, bytes] = {}
+    for path in _git(repo_root, "ls-files", "-z").decode("utf-8").split("\0"):
         file = repo_root / path
         # A tracked path can be missing from the working tree before its
         # deletion is committed, and a submodule is a directory.
         if in_scope(path, excluded) and file.is_file():
-            sizes[path] = count_lines(file.read_bytes())
-    return sizes
+            contents[path] = file.read_bytes()
+    return contents
+
+
+def _staged_contents(repo_root: Path, excluded: tuple[str, ...]) -> dict[str, bytes]:
+    blobs: dict[str, str] = {}
+    entries = _git(repo_root, "ls-files", "-s", "-z").decode("utf-8")
+    for entry in entries.split("\0"):
+        # Each entry is "<mode> <object> <stage>\t<path>".
+        meta, _, path = entry.partition("\t")
+        # Regular files only: a submodule or a symlink has another mode.
+        if in_scope(path, excluded) and meta.startswith("100"):
+            blobs[path] = meta.split()[1]
+    # One git process for every blob. Each reply is a "<object> blob <size>"
+    # line, then that many bytes, then a newline.
+    replies = _git(
+        repo_root, "cat-file", "--batch", stdin="\n".join(blobs.values()).encode()
+    )
+    contents: dict[str, bytes] = {}
+    offset = 0
+    for path in blobs:
+        header_end = replies.index(b"\n", offset)
+        size = int(replies[offset:header_end].split()[2])
+        contents[path] = replies[header_end + 1 : header_end + 1 + size]
+        offset = header_end + 1 + size + 1
+    return contents
+
+
+def measure(repo_root: Path, staged: bool = False) -> dict[str, int]:
+    """Return the line count of every tracked source file in scope.
+
+    Counts the working tree, or with ``staged`` the index: the content the
+    next commit holds, which differs when a change is left unstaged.
+    """
+    excluded = excluded_prefixes(repo_root)
+    read = _staged_contents if staged else _working_tree_contents
+    return {
+        path: count_lines(content)
+        for path, content in read(repo_root, excluded).items()
+    }
 
 
 def find_violations(
@@ -116,8 +161,16 @@ def lowered_baseline(
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--staged",
+        action="store_true",
+        help="measure the staged content instead of the working tree",
+    )
+    args = parser.parse_args()
     baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
-    lowered = lowered_baseline(measure(REPO_ROOT), baseline, LINE_LIMIT)
+    sizes = measure(REPO_ROOT, staged=args.staged)
+    lowered = lowered_baseline(sizes, baseline, LINE_LIMIT)
     BASELINE_PATH.write_text(
         json.dumps(lowered, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
