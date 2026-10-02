@@ -1,12 +1,14 @@
-"""Unit tests for the ``order`` parameter of ``ha_get_logs`` across sources.
+"""Unit tests for ``ha_get_logs`` ordering and system-log message capping.
 
 Covers newest-first (default) vs oldest-first ordering for every time-ordered
 source, plus the warning emitted when ``order`` is supplied to the non
 time-ordered ``logger`` source. The logbook windowing mirrors the traces
-newest-first fix (#1178).
+newest-first fix (#1178). ``TestSystemMessageCap`` covers how ``compact``
+caps oversized ``system`` message strings.
 """
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -396,87 +398,113 @@ class TestLoggerOrderWarning:
         assert "warnings" not in result
 
 
+def _blocking_call_message() -> str:
+    """A system_log blocking-call warning in Home Assistant's own field order.
+
+    ``raise_for_blocking_call`` formats the call's args (here a large bytes
+    repr) before the integration and a ``format_stack()`` of the whole stack,
+    so the frames that identify the offender come last.
+    """
+    frames = "".join(
+        f'  File "/usr/src/homeassistant/homeassistant/core.py", line {n}, '
+        f"in _run\n    self._loop.run_forever()\n"
+        for n in range(60)
+    )
+    return (
+        "Detected blocking call to write_bytes with args "
+        "(PosixPath('/config/www/snap.jpg'), b'" + "\\xff" * 50_000 + "') "
+        "inside the event loop by custom integration 'pyscript' at "
+        "custom_components/pyscript/eval.py, line 1915: return func(*args)\n"
+        "Traceback (most recent call last):\n"
+        + frames
+        + '  File "/config/custom_components/pyscript/eval.py", line 1915, '
+        "in call_func\n    return func(*args, **kwargs)\n"
+    )
+
+
 class TestSystemMessageCap:
     """source='system' — compact caps oversized messages; compact=False lifts it."""
 
+    _LAST_FRAME = '  File "/config/custom_components/pyscript/eval.py", line 1915'
+
     @staticmethod
-    def _client(message: str) -> AsyncMock:
+    def _client(*records: Any) -> AsyncMock:
         client = AsyncMock()
         client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    {
-                        "name": "homeassistant.util.loop",
-                        "message": [message, "short"],
-                        "level": "WARNING",
-                        "timestamp": 100.0,
-                        "exception": "Traceback (most recent call last):\n" * 3,
-                    }
-                ],
-            }
+            return_value={"success": True, "result": list(records)}
         )
         return client
 
     @pytest.mark.asyncio
-    async def test_compact_caps_an_oversized_message_and_marks_it(self) -> None:
-        # A blocking-call warning can carry a whole binary payload in its
-        # args repr; one such entry must not flood the response.
-        huge = "Detected blocking call to write_bytes " + "x" * 200_000
-        tools = LogTools(self._client(huge))
+    async def test_compact_keeps_both_ends_of_an_oversized_message(self) -> None:
+        # The lead names the call and the stack's innermost frames name the
+        # offender; the bytes repr between them is what has to go.
+        message = _blocking_call_message()
+        tools = LogTools(
+            self._client(
+                {"name": "homeassistant.util.loop", "message": [message, "short"]}
+            )
+        )
         result = await tools.get_logs(**_call_kwargs(source="system"))
         capped, short = result["entries"][0]["message"]
         assert len(capped) <= _SYSTEM_LOG_MESSAGE_CAP
-        assert capped.startswith("Detected blocking call to write_bytes ")
-        assert "compact=False" in capped
+        assert capped.startswith("Detected blocking call to write_bytes")
+        assert self._LAST_FRAME in capped
+        cut = (
+            len(message)
+            - len(capped.split("…[", 1)[0])
+            - len(capped.rsplit("]…", 1)[1])
+        )
+        assert f"{cut:,} chars cut" in capped
+        assert "limit=1" in capped
         assert short == "short"
         assert result["truncated_messages"] == 1
 
     @pytest.mark.asyncio
     async def test_compact_false_returns_the_full_message(self) -> None:
-        huge = "y" * 200_000
-        tools = LogTools(self._client(huge))
+        message = _blocking_call_message()
+        tools = LogTools(self._client({"name": "a", "message": [message]}))
         result = await tools.get_logs(**_call_kwargs(source="system", compact=False))
-        assert result["entries"][0]["message"][0] == huge
+        assert result["entries"][0]["message"] == [message]
         assert "truncated_messages" not in result
 
     @pytest.mark.asyncio
-    async def test_compact_leaves_tracebacks_and_short_messages_untouched(self) -> None:
-        tools = LogTools(self._client("fits"))
+    async def test_compact_never_caps_the_traceback(self) -> None:
+        traceback = "Traceback (most recent call last):\n" + "  frame\n" * 1_000
+        assert len(traceback) > _SYSTEM_LOG_MESSAGE_CAP
+        tools = LogTools(
+            self._client({"name": "a", "message": ["m"], "exception": traceback})
+        )
         result = await tools.get_logs(**_call_kwargs(source="system"))
-        entry = result["entries"][0]
-        assert entry["message"] == ["fits", "short"]
-        assert entry["exception"] == "Traceback (most recent call last):\n" * 3
-        assert "truncated_messages" not in result
+        assert result["entries"][0]["exception"] == traceback
+
+    @pytest.mark.asyncio
+    async def test_search_matches_text_inside_the_cut(self) -> None:
+        # The filter reads the full message before the cap, so an entry whose
+        # only match falls inside the cut is still returned, without the match.
+        message = "lead " + "a" * 50_000 + "needle" + "a" * 50_000 + " tail"
+        tools = LogTools(self._client({"name": "a", "message": [message]}))
+        result = await tools.get_logs(**_call_kwargs(source="system", search="needle"))
+        assert result["returned_entries"] == 1
+        assert "needle" not in result["entries"][0]["message"][0]
 
     @pytest.mark.asyncio
     async def test_compact_handles_every_message_shape_and_malformed_record(
         self,
     ) -> None:
-        client = AsyncMock()
-        client.send_websocket_message = AsyncMock(
-            return_value={
-                "success": True,
-                "result": [
-                    {"name": "s", "message": "z" * 200_000, "timestamp": 3.0},
-                    {
-                        "name": "mixed",
-                        "message": [123, "w" * 200_000],
-                        "timestamp": 2.0,
-                    },
-                    {"name": "none", "timestamp": 1.0},
-                    "not-a-dict",
-                ],
-            }
+        tools = LogTools(
+            self._client(
+                {"name": "s", "message": _blocking_call_message(), "timestamp": 3.0},
+                {"name": "mixed", "message": [123], "timestamp": 2.0},
+                {"name": "none", "timestamp": 1.0},
+                "not-a-dict",
+            )
         )
-        tools = LogTools(client)
         result = await tools.get_logs(**_call_kwargs(source="system"))
-        capped, mixed, absent, bogus = result["entries"]
-        assert len(capped["message"]) <= _SYSTEM_LOG_MESSAGE_CAP
-        assert capped["message"].startswith("zzz")
-        assert "compact=False" in capped["message"]
-        assert mixed["message"][0] == 123
-        assert len(mixed["message"][1]) <= _SYSTEM_LOG_MESSAGE_CAP
+        as_str, mixed, absent, bogus = result["entries"]
+        assert isinstance(as_str["message"], str)
+        assert len(as_str["message"]) <= _SYSTEM_LOG_MESSAGE_CAP
+        assert mixed["message"] == [123]
         assert "message" not in absent
         assert bogus == "not-a-dict"
-        assert result["truncated_messages"] == 2
+        assert result["truncated_messages"] == 1
