@@ -89,9 +89,10 @@ the hook may strip it without a separate Ruff invocation.
 its traceback) is enabled. Each handler that existed before carries
 `# noqa: BLE001`. Do not add that comment to a new handler: catch the specific
 exception, re-raise, or log with `logger.exception(...)` or `exc_info=True`.
-One case may add it: a tool-boundary handler that passes the exception to
-`exception_to_structured_error()` or `raise_tool_error()`. Those helpers
-raise a `ToolError` for the agent, which ruff cannot see.
+One case may add it: a tool-boundary handler that ends in
+`exception_to_structured_error(exc, ...)` or
+`raise_tool_error(create_error_response(...))`. Those helpers raise a
+`ToolError` for the agent, which ruff cannot see.
 Logging only the message does not satisfy the rule. `RUF100` fails a `noqa`
 that is no longer needed. The two webhook-proxy `start.py` files are exempt
 through `per-file-ignores` in `pyproject.toml` and carry no `noqa`.
