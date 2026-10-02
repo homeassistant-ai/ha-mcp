@@ -894,14 +894,22 @@ test("edits never close an existing issue, and only a maintainer's reopen overri
   assert.equal(gateAction(s, bot, { action: "reopened", senderRole: "read" }), "close");
 });
 
-test("maintainer, bot and documentation issues are not gated", () => {
+test("maintainer, bot, documentation and transferred issues are not gated", () => {
   const writer = snapshot();
   writer.issue.user = user("writer");
   const app = snapshot();
   app.issue.user = { login: "coderabbitai[bot]", type: "Bot" };
   const docs = snapshot();
   docs.issue.labels.push({ name: "documentation" });
-  for (const s of [writer, app, docs]) assert.equal(gateAction(s, bot, opened), null);
+  const transferred = snapshot();
+  transferred.events.push({
+    id: 1,
+    event: "transferred",
+    actor: user("maintainer"),
+    created_at: "2026-09-20T00:00:00Z",
+  });
+  for (const s of [writer, app, docs, transferred])
+    assert.equal(gateAction(s, bot, opened), null);
 });
 
 test("every gated issue form asks for the report under the headings the gate reads", () => {

@@ -613,6 +613,8 @@ export function gateAction(snapshot, bot, event) {
   if (!isHuman(author) || gateExemptRoles.includes(roles[author.login]))
     return null;
   if (issue.labels.some((l) => l.name === "documentation")) return null;
+  // Issues moved in from the HACS mirror were filed against its own forms.
+  if (events.some((e) => e.event === "transferred")) return null;
   if (reporterTexts(snapshot).some((t) => hasReport(t) || hasReason(t))) {
     const closed = latestEvent(events, (e) => e.event === "closed");
     return issue.state === "closed" && closed?.actor?.login === bot

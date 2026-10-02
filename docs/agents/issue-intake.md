@@ -65,8 +65,8 @@ with the report's `ha-mcp Version:` line, or a
 `### Why there is no ha_report_issue report` section of at least five words.
 The issue forms render their fallback field under that heading; blank and
 API-filed issues must write it themselves. Maintainers (write role or above),
-bots and `documentation` issues are exempt. An issue transferred in from another
-repository arrives as `opened` and is gated like any other.
+bots, `documentation` issues and issues transferred in from another repository
+(the HACS mirror files against its own forms) are exempt.
 
 A failing issue is closed as not planned only when it is opened, or reopened by
 someone below the write role, so an edit never closes an issue that predates the
