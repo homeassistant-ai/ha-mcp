@@ -42,6 +42,33 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action,params",
+    [
+        ("get_config_params", {}),
+        ("get_config_param", {"property": 3}),
+        ("get_config_param", {"property": 3, "refresh": True}),
+    ],
+)
+async def test_zwave_parameter_reads_surface_real_ha_errors_without_radio(
+    mcp_client: Client, action: str, params: dict
+) -> None:
+    """Read actions reach HA rather than being rejected as unknown MCP actions."""
+    async with MCPAssertions(mcp_client) as mcp:
+        data = await mcp.call_tool_failure(
+            "ha_manage_radio",
+            {
+                "radio": "zwave",
+                "action": action,
+                "device_id": "00000000000000000000000000000000",
+                "params": params,
+            },
+        )
+    assert "Unknown action" not in json.dumps(data)
+    assert "zwave_js/get_config_parameters" in json.dumps(data)
+
+
+@pytest.mark.asyncio
 async def test_ha_manage_radio_is_registered(mcp_client):
     """ha_manage_radio is auto-discovered and exposed by the MCP server."""
     tools = await mcp_client.list_tools()
