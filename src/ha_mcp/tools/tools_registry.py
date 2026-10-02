@@ -790,7 +790,7 @@ class RegistryTools:
             updates_made = []
 
             if name is not None:
-                name = clearable_value(name, "name", reject_quote_only=True)
+                name = clearable_value(name, "name")
                 message["name_by_user"] = name
                 updates_made.append(f"name='{name}'" if name else "name cleared")
 
@@ -802,7 +802,12 @@ class RegistryTools:
                 )
 
             if disabled_by is not None:
-                disabled_by = clearable_value(disabled_by, "disabled_by")
+                disabled_by = clearable_value(
+                    disabled_by,
+                    "disabled_by",
+                    hint="Pass 'user' to disable the device, or '' (a single space "
+                    "' ' if your client cannot send an empty string) to enable it",
+                )
                 message["disabled_by"] = disabled_by
                 updates_made.append(
                     f"disabled_by='{disabled_by}'" if disabled_by else "enabled"

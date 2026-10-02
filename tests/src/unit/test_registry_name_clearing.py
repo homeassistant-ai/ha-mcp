@@ -28,7 +28,7 @@ def _sent_of_type(client: MagicMock, msg_type: str) -> list[dict[str, Any]]:
     return [msg for msg in _sent(client) if msg["type"] == msg_type]
 
 
-def _assert_quote_only_rejected(exc_info: pytest.ExceptionInfo[ToolError]) -> None:
+def _assert_rejected_with_clear_hint(exc_info: pytest.ExceptionInfo[ToolError]) -> None:
     error = json.loads(str(exc_info.value))["error"]
     assert error["code"] == "VALIDATION_INVALID_PARAMETER"
     hints = " ".join([error.get("suggestion", ""), *error.get("suggestions", [])])
@@ -50,8 +50,12 @@ def registry_tools(client: MagicMock) -> RegistryTools:
 @pytest.fixture
 def set_entity(client: MagicMock) -> Any:
     tools: dict[str, Any] = {}
+
+    def capture_add_tool(method: Any) -> None:
+        tools[method.__fastmcp__.name] = method
+
     mcp = MagicMock()
-    mcp.add_tool = lambda method: tools.__setitem__(method.__fastmcp__.name, method)
+    mcp.add_tool = capture_add_tool
     register_entity_tools(mcp, client)
     return tools["ha_set_entity"]
 
@@ -88,8 +92,27 @@ class TestSetDeviceNameClearing:
         with pytest.raises(ToolError) as exc_info:
             await registry_tools.ha_set_device(device_id="dev1", name=name)
 
-        _assert_quote_only_rejected(exc_info)
+        _assert_rejected_with_clear_hint(exc_info)
         assert _sent(client) == []
+
+    async def test_quote_only_disabled_by_is_rejected(
+        self, registry_tools: RegistryTools, client: MagicMock
+    ) -> None:
+        with pytest.raises(ToolError) as exc_info:
+            await registry_tools.ha_set_device(device_id="dev1", disabled_by='""')
+
+        _assert_rejected_with_clear_hint(exc_info)
+        assert _sent(client) == []
+
+    @pytest.mark.parametrize("name", ["Bob's Lamp", '12" Monitor'])
+    async def test_name_containing_quotes_is_stored(
+        self, registry_tools: RegistryTools, client: MagicMock, name: str
+    ) -> None:
+        client.send_websocket_message.return_value = {"success": True, "result": {}}
+
+        await registry_tools.ha_set_device(device_id="dev1", name=name)
+
+        assert _sent(client)[0]["name_by_user"] == name
 
     @pytest.mark.parametrize(
         ("field", "value", "sent_key", "echo"),
@@ -121,15 +144,16 @@ class TestSetDeviceNameClearing:
 
 
 class TestSetEntityNameClearing:
-    async def test_quote_only_name_is_not_stored_as_entity_name(
-        self, set_entity: Any, client: MagicMock
+    @pytest.mark.parametrize("field", ["name", "icon", "device_class"])
+    async def test_quote_only_value_is_not_stored(
+        self, set_entity: Any, client: MagicMock, field: str
     ) -> None:
         client.send_websocket_message.side_effect = _entity_ws_handler()
 
         with pytest.raises(ToolError) as exc_info:
-            await set_entity(entity_id="light.test", name='""')
+            await set_entity(entity_id="light.test", **{field: '""'})
 
-        _assert_quote_only_rejected(exc_info)
+        _assert_rejected_with_clear_hint(exc_info)
         assert _sent(client) == []
 
     async def test_quote_only_device_name_rejected_before_entity_write(
@@ -142,7 +166,7 @@ class TestSetEntityNameClearing:
                 entity_id="light.test", icon="mdi:lamp", new_device_name='""'
             )
 
-        _assert_quote_only_rejected(exc_info)
+        _assert_rejected_with_clear_hint(exc_info)
         assert _sent(client) == []
 
     @pytest.mark.parametrize(
@@ -178,6 +202,20 @@ class TestSetEntityDeviceNameEcho:
 
         assert _sent_of_type(client, "config/device_registry/update") == []
         assert result["updates"] == ["icon='mdi:lamp'"]
+        assert result["device_rename"]["warnings"]
+        assert "partial" not in result
+
+    @pytest.mark.parametrize("new_device_name", ["", " "])
+    async def test_blank_device_name_alone_is_an_error(
+        self, set_entity: Any, client: MagicMock, new_device_name: str
+    ) -> None:
+        client.send_websocket_message.side_effect = _entity_ws_handler()
+
+        with pytest.raises(ToolError) as exc_info:
+            await set_entity(entity_id="light.test", new_device_name=new_device_name)
+
+        _assert_rejected_with_clear_hint(exc_info)
+        assert _sent(client) == []
 
     async def test_deviceless_entity_rename_not_echoed(
         self, set_entity: Any, client: MagicMock

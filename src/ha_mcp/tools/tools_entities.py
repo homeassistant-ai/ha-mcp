@@ -274,14 +274,10 @@ def _build_name_visibility_fields(
         message["icon"] = icon
         updates_made.append(f"icon='{icon}'" if icon else "icon cleared")
     if device_class is not None:
-        # Treat whitespace-only as the documented "clear" sentinel so
-        # accidental spaces don't reach HA as a literal validation error.
-        normalized_device_class = device_class.strip() or None
-        message["device_class"] = normalized_device_class
+        device_class = clearable_value(device_class, "device_class")
+        message["device_class"] = device_class
         updates_made.append(
-            f"device_class='{normalized_device_class}'"
-            if normalized_device_class
-            else "device_class cleared"
+            f"device_class='{device_class}'" if device_class else "device_class cleared"
         )
 
 
@@ -869,11 +865,8 @@ class EntityTools:
     ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         """Rename the associated device. Returns (device_rename_result, entity_entry).
 
-        Handle new_device_name — rename the associated device.
-        Normalize empty string to None (no-op, don't clear device name).
+        ``new_device_name`` is already normalized: None means no rename.
         """
-        if new_device_name is not None and not new_device_name.strip():
-            new_device_name = None
         device_rename_result: dict[str, Any] | None = None
         if new_device_name is None:
             return device_rename_result, entity_entry
@@ -918,7 +911,7 @@ class EntityTools:
         device_msg: dict[str, Any] = {
             "type": "config/device_registry/update",
             "device_id": device_id,
-            "name_by_user": new_device_name if new_device_name else None,
+            "name_by_user": new_device_name,
         }
         device_result = await self._client.send_websocket_message(device_msg)
         if device_result.get("success"):
@@ -1140,6 +1133,12 @@ class EntityTools:
         use_entity_name_alias: bool | None = None,
     ) -> dict[str, Any]:
         """Update a single entity. Orchestrates the phase pipeline."""
+        # Normalized before Phase 3: a quote-only value must be rejected before the
+        # entity registry write, and a blank one must not count as deferred work.
+        device_name_blank = new_device_name is not None and not new_device_name.strip()
+        new_device_name = clearable_value(
+            new_device_name, "new_device_name", hint=_CLEAR_DEVICE_NAME_HINT
+        )
         async with registry_update_lock("entity", entity_id):
             # Phase 1: For add/remove label operations, fetch current labels first
             final_labels = await self._resolve_final_labels(
@@ -1182,6 +1181,15 @@ class EntityTools:
                 parsed_expose_to is not None or new_device_name is not None
             )
             if not updates_made and not parsed_options and not has_deferred_work:
+                if device_name_blank:
+                    raise_tool_error(
+                        create_error_response(
+                            ErrorCode.VALIDATION_INVALID_PARAMETER,
+                            "new_device_name is blank and no other update was given",
+                            suggestions=[_CLEAR_DEVICE_NAME_HINT],
+                            context={"entity_id": entity_id},
+                        )
+                    )
                 raise_tool_error(
                     create_error_response(
                         ErrorCode.VALIDATION_INVALID_PARAMETER,
@@ -1204,7 +1212,7 @@ class EntityTools:
             # cleanup path (label_operation="remove") must stay open.
             await validate_registry_ids(
                 self._client,
-                clearable_value(area_id, "area_id"),
+                message.get("area_id"),  # normalized by _build_name_visibility_fields
                 parsed_labels if label_operation in ("set", "add") else None,
                 parsed_categories,
                 fail_closed=True,
@@ -1225,9 +1233,13 @@ class EntityTools:
         )
 
         # Phase 5: Device rename
-        device_rename_result, entity_entry = await self._apply_device_rename(
-            entity_id, entity_entry, new_device_name
-        )
+        device_rename_result: dict[str, Any] | None
+        if device_name_blank:
+            device_rename_result = {"warnings": [_CLEAR_DEVICE_NAME_HINT]}
+        else:
+            device_rename_result, entity_entry = await self._apply_device_rename(
+                entity_id, entity_entry, new_device_name
+            )
         if device_rename_result and device_rename_result.get("success"):
             updates_made.append(f"device_name -> {new_device_name}")
 
@@ -1925,14 +1937,6 @@ class EntityTools:
                 )
 
             _validate_enabled_constraint(enabled, entity_ids)
-            # Checked up front: the entity registry write runs before the device rename.
-            clearable_value(name, "name", reject_quote_only=True)
-            clearable_value(
-                new_device_name,
-                "new_device_name",
-                reject_quote_only=True,
-                clear_hint=_CLEAR_DEVICE_NAME_HINT,
-            )
 
             parsed_aliases = _parse_aliases_param(aliases)
             parsed_categories = _parse_categories_param(categories)

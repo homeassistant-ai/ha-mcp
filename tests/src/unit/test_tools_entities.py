@@ -1179,6 +1179,7 @@ class TestHaSetEntityCombined:
 
         assert result["success"] is True
         assert result.get("partial") is True
+        assert not any(u.startswith("device_name") for u in result["updates"])
         device_rename = result["device_rename"]
         assert device_rename.get("lookup_failed") is True
         assert any(

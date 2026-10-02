@@ -254,33 +254,35 @@ WHITESPACE_CLEARS_NOTE = (
     "A whitespace-only value acts like '', for clients that cannot send an "
     "empty string."
 )
-_QUOTE_ONLY = re.compile(r"[\s\"']+")
-_CLEAR_NAME_HINT = (
-    "To clear the name, pass an empty string '', or a single space ' ' "
-    "if your client cannot send an empty string"
-)
+_QUOTE_ONLY = re.compile(r"[\s\"'‘’“”]+")
+
+
+def clear_hint(param_name: str) -> str:
+    return (
+        f"To clear {param_name}, pass an empty string '', or a single space ' ' "
+        "if your client cannot send an empty string"
+    )
 
 
 def clearable_value(
     value: str | None,
     param_name: str,
     *,
-    reject_quote_only: bool = False,
-    clear_hint: str = _CLEAR_NAME_HINT,
+    hint: str | None = None,
 ) -> str | None:
     """Map an empty or whitespace-only value to None, the registry's clear value.
 
-    Clients that cannot send ``''`` deliver ``'""'`` instead (#2585), so
-    ``reject_quote_only`` refuses a value made only of quotes and whitespace.
+    A model whose client cannot send ``''`` falls back to ``'""'`` (#2585); a
+    value made only of quotes and whitespace is never a real value, so reject it.
     """
     if value is None or not value.strip():
         return None
-    if reject_quote_only and _QUOTE_ONLY.fullmatch(value):
+    if _QUOTE_ONLY.fullmatch(value):
         raise_tool_error(
             create_error_response(
                 ErrorCode.VALIDATION_INVALID_PARAMETER,
-                f"{param_name} {value!r} contains only quote characters",
-                suggestions=[clear_hint],
+                f"{param_name} {value!r} contains only quote characters and whitespace",
+                suggestions=[hint or clear_hint(param_name)],
                 context={"parameter": param_name, "value": value},
             )
         )
