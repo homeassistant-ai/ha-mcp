@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -35,10 +36,14 @@ REPIN_COMMAND = "python scripts/module_size_ratchet.py"
 BASELINE_NAME = BASELINE_PATH.relative_to(REPO_ROOT).as_posix()
 
 
-def excluded_prefixes(repo_root: Path) -> tuple[str, ...]:
+def excluded_prefixes(repo_root: Path, staged: bool = False) -> tuple[str, ...]:
     """Return the path prefixes left out: ruff's ``extend-exclude`` trees
     (vendored code and fixtures) and the stable proxy copy."""
-    pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text("utf-8"))
+    if staged:
+        text = _git(repo_root, "show", ":pyproject.toml").decode("utf-8")
+    else:
+        text = (repo_root / "pyproject.toml").read_text("utf-8")
+    pyproject = tomllib.loads(text)
     ruff_excluded = pyproject["tool"]["ruff"]["extend-exclude"]
     prefixes = [f"{entry.rstrip('/')}/" for entry in ruff_excluded if "*" not in entry]
     return (*prefixes, STABLE_PROXY_COPY)
@@ -109,7 +114,7 @@ def measure(repo_root: Path, staged: bool = False) -> dict[str, int]:
     Counts the working tree, or with ``staged`` the index: the content the
     next commit holds, which differs when a change is left unstaged.
     """
-    excluded = excluded_prefixes(repo_root)
+    excluded = excluded_prefixes(repo_root, staged)
     read = _staged_contents if staged else _working_tree_contents
     return {
         path: count_lines(content)
@@ -160,22 +165,30 @@ def lowered_baseline(
     return lowered
 
 
-def main() -> None:
+def main(argv: list[str] | None = None, repo_root: Path = REPO_ROOT) -> int:
+    """Lower the baseline, then return 1 if a file is still over its limit."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--staged",
         action="store_true",
         help="measure the staged content instead of the working tree",
     )
-    args = parser.parse_args()
-    baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
-    sizes = measure(REPO_ROOT, staged=args.staged)
+    args = parser.parse_args(argv)
+    baseline_path = repo_root / BASELINE_NAME
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    sizes = measure(repo_root, staged=args.staged)
     lowered = lowered_baseline(sizes, baseline, LINE_LIMIT)
-    BASELINE_PATH.write_text(
+    baseline_path.write_text(
         json.dumps(lowered, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     print(f"{len(baseline) - len(lowered)} entries dropped, {len(lowered)} remain")
+    # A commit that stages no Python file runs no unit tests, so this command
+    # is the only check on it.
+    violations = find_violations(sizes, lowered, LINE_LIMIT)
+    for violation in violations:
+        print(violation, file=sys.stderr)
+    return 1 if violations else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

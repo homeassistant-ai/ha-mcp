@@ -131,12 +131,9 @@ def test_last_line_without_a_newline_is_counted() -> None:
     assert ratchet.count_lines(b"a\nb\nc\n") == 3
 
 
-def test_staged_measurement_ignores_an_unstaged_shrink(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The commit hook stages a baseline lowered to the measured sizes. If it
-    measured the working tree, a shrink left out of the commit would lower the
-    entry, and the committed file would no longer match it in CI."""
+@pytest.fixture
+def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """An empty git repository with no exclusions and an empty baseline."""
     # Inside a git hook these point every git call at the real repository.
     for name in (
         "GIT_DIR",
@@ -150,13 +147,47 @@ def test_staged_measurement_ignores_an_unstaged_shrink(
     (tmp_path / "pyproject.toml").write_text(
         "[tool.ruff]\nextend-exclude = []\n", encoding="utf-8"
     )
-    big = tmp_path / "big.py"
-    big.write_text("x = 1\n" * (LIMIT + 2), encoding="utf-8")
-    subprocess.run(["git", "add", "big.py"], cwd=tmp_path, check=True)
-    big.write_text("x = 1\n" * (LIMIT + 1), encoding="utf-8")
+    subprocess.run(["git", "add", "pyproject.toml"], cwd=tmp_path, check=True)
+    baseline = tmp_path / ratchet.BASELINE_NAME
+    baseline.parent.mkdir(parents=True)
+    baseline.write_text("{}\n", encoding="utf-8")
+    return tmp_path
 
-    assert ratchet.measure(tmp_path, staged=True) == {"big.py": LIMIT + 2}
-    assert ratchet.measure(tmp_path) == {"big.py": LIMIT + 1}
+
+def _stage(repo: Path, path: str, lines: int) -> None:
+    file = repo / path
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_text("x = 1\n" * lines, encoding="utf-8")
+    subprocess.run(["git", "add", path], cwd=repo, check=True)
+
+
+def test_staged_measurement_ignores_an_unstaged_shrink(temp_repo: Path) -> None:
+    """The commit hook stages a baseline lowered to the measured sizes. If it
+    measured the working tree, a shrink left out of the commit would lower the
+    entry, and the committed file would no longer match it in CI."""
+    _stage(temp_repo, "big.py", LIMIT + 2)
+    (temp_repo / "big.py").write_text("x = 1\n" * (LIMIT + 1), encoding="utf-8")
+
+    assert ratchet.measure(temp_repo, staged=True) == {"big.py": LIMIT + 2}
+    assert ratchet.measure(temp_repo) == {"big.py": LIMIT + 1}
+
+
+def test_staged_measurement_uses_the_staged_exclusions(temp_repo: Path) -> None:
+    """An exclusion left unstaged must not hide a file the commit contains."""
+    _stage(temp_repo, "vendor/big.py", LIMIT + 1)
+    (temp_repo / "pyproject.toml").write_text(
+        '[tool.ruff]\nextend-exclude = ["vendor"]\n', encoding="utf-8"
+    )
+
+    assert ratchet.measure(temp_repo, staged=True) == {"vendor/big.py": LIMIT + 1}
+
+
+def test_hook_rejects_a_staged_oversized_file(temp_repo: Path) -> None:
+    """A commit that stages only a .js or .astro file runs no unit tests, so
+    the hook command itself must fail on a new file over the limit."""
+    _stage(temp_repo, "page.astro", LIMIT + 1)
+
+    assert ratchet.main(["--staged"], repo_root=temp_repo) == 1
 
 
 def test_repository_matches_the_baseline() -> None:
