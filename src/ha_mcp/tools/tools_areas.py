@@ -274,6 +274,7 @@ class AreaTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "List Floors and Areas",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -723,6 +724,8 @@ class AreaTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Create or Update Area or Floor",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @with_auto_backup(
@@ -953,6 +956,7 @@ class AreaTools:
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Area or Floor",
+            "readOnlyHint": False,
         },
     )
     @with_auto_backup(

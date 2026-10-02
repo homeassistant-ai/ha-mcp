@@ -1062,6 +1062,7 @@ class BugReportTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Report Issue or Feedback",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage

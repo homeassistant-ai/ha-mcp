@@ -214,6 +214,7 @@ class HistoryTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Entity History or Statistics",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage

@@ -1683,6 +1683,8 @@ survives an agent's own mistakes.
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Manage Backups",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @log_tool_usage

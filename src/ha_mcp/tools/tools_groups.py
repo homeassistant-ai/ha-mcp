@@ -142,6 +142,7 @@ class GroupTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "List Groups",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -238,6 +239,8 @@ class GroupTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Create or Update Group",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @with_auto_backup(domain="group", id_param="object_id")
@@ -417,6 +420,7 @@ class GroupTools:
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Group",
+            "readOnlyHint": False,
         },
     )
     @with_auto_backup(domain="group", id_param="object_id")

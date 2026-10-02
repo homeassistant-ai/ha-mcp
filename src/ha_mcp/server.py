@@ -1787,6 +1787,7 @@ class HomeAssistantSmartMCPServer:
                 "readOnlyHint": True,
                 "idempotentHint": True,
                 "title": "Get Home Assistant Best Practices Skill Guide",
+                "destructiveHint": False,
             },
             tags={"System"},
         )(ha_get_skill_guide)

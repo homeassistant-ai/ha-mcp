@@ -2131,6 +2131,7 @@ class SearchTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Search",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -3989,6 +3990,7 @@ class SearchTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get System Overview",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -4765,6 +4767,7 @@ class SearchTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Entity State",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage

@@ -1816,6 +1816,7 @@ class ServiceTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Call Service",
+            "idempotentHint": False,
         },
     )
     @log_tool_usage
@@ -2131,6 +2132,8 @@ class ServiceTools:
             "openWorldHint": False,
             "readOnlyHint": True,
             "title": "Get Operation Status",
+            "destructiveHint": False,
+            "idempotentHint": True,
         },
     )
     @log_tool_usage
@@ -2155,7 +2158,8 @@ class ServiceTools:
                     "returning its status. 0 returns the current status at once."
                 ),
             ),
-        ] = 10,
+            # Home Assistant's MCP client abandons any call after 10 seconds.
+        ] = 8,
     ) -> dict[str, Any]:
         """
         Get the status of one or more device operations with real-time WebSocket verification.
@@ -2200,6 +2204,8 @@ class ServiceTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Bulk Control",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @log_tool_usage
@@ -2489,6 +2495,7 @@ class ServiceTools:
             "destructiveHint": True,
             "idempotentHint": False,
             "title": "Call Event",
+            "readOnlyHint": False,
         },
     )
     @log_tool_usage

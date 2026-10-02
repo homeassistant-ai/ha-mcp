@@ -981,6 +981,8 @@ class UpdateTools:
             "destructiveHint": True,
             "openWorldHint": True,
             "title": "Manage Updates",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @log_tool_usage

@@ -1631,6 +1631,7 @@ class EntityTools:
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Set Entity",
+            "readOnlyHint": False,
         },
     )
     @with_auto_backup(
@@ -1967,6 +1968,7 @@ class EntityTools:
             "readOnlyHint": True,
             "idempotentHint": True,
             "title": "Get Entity",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -2268,6 +2270,7 @@ class EntityTools:
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Entity",
+            "readOnlyHint": False,
         },
     )
     # Single-entity removal is snapshotted via id_param. A bulk (list) call

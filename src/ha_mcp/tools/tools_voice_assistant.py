@@ -204,6 +204,7 @@ class VoiceAssistantTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Entity Exposure",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage

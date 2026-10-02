@@ -357,6 +357,7 @@ class ResourceTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "List Dashboard Resources",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -474,6 +475,8 @@ class ResourceTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Set Dashboard Resource",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @with_auto_backup(domain="dashboard_resource", id_param="resource_id")
@@ -930,6 +933,8 @@ class ResourceTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Delete Dashboard Resource",
+            "readOnlyHint": False,
+            "idempotentHint": True,
         },
     )
     @with_auto_backup(domain="dashboard_resource", id_param="resource_id")

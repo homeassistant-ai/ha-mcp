@@ -884,6 +884,7 @@ class RegistryTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Device (incl. Zigbee/ZHA/Z2M, Z-Wave and Matter)",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -1025,6 +1026,8 @@ class RegistryTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Set Device",
+            "readOnlyHint": False,
+            "idempotentHint": True,
         },
     )
     @with_auto_backup(domain="device", id_param="device_id")
@@ -1123,6 +1126,7 @@ class RegistryTools:
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Device",
+            "readOnlyHint": False,
         },
     )
     @with_auto_backup(domain="device", id_param="device_id")

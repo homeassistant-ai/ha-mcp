@@ -133,6 +133,7 @@ class ZoneTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Zone",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -395,6 +396,8 @@ class ZoneTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Set Zone",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @with_auto_backup(
@@ -546,6 +549,7 @@ class ZoneTools:
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Zone",
+            "readOnlyHint": False,
         },
     )
     @with_auto_backup(domain="zone", id_param="zone_id")

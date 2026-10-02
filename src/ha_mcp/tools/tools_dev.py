@@ -820,6 +820,8 @@ class DevTools:
             "openWorldHint": False,
             "title": "Manage Server Settings (dev)",
             "destructiveHint": True,
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @log_tool_usage
@@ -1827,6 +1829,8 @@ class DevTools:
             "openWorldHint": True,
             "title": "Manage MCP Server (dev)",
             "destructiveHint": True,
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @log_tool_usage

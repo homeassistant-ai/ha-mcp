@@ -165,6 +165,7 @@ class CalendarTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Calendar Events",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -519,6 +520,8 @@ class CalendarTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Create or Update Calendar Event",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @with_auto_backup(
@@ -775,6 +778,7 @@ class CalendarTools:
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Calendar Event",
+            "readOnlyHint": False,
         },
     )
     @with_auto_backup(

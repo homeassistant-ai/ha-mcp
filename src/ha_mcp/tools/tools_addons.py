@@ -3753,6 +3753,7 @@ def register_addon_tools(mcp: Any, client: HomeAssistantClient, **kwargs: Any) -
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Apps (add-ons)",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage

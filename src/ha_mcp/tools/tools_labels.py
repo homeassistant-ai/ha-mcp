@@ -593,6 +593,7 @@ class LabelTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Label",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -692,6 +693,8 @@ class LabelTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Create or Update Label",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @with_auto_backup(domain="label", id_param="label_id")
@@ -793,6 +796,7 @@ class LabelTools:
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Label",
+            "readOnlyHint": False,
         },
     )
     @with_auto_backup(domain="label", id_param="label_id")

@@ -486,6 +486,7 @@ class IntegrationTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Integration",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -2192,6 +2193,7 @@ class IntegrationTools:
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Helper or Integration",
+            "readOnlyHint": False,
         },
     )
     @with_auto_backup(

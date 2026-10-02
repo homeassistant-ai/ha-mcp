@@ -547,6 +547,7 @@ class AutomationConfigTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Automation Config",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -663,6 +664,8 @@ class AutomationConfigTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Create or Update Automation",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @with_auto_backup(
@@ -1925,6 +1928,7 @@ class AutomationConfigTools:
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Automation",
+            "readOnlyHint": False,
         },
     )
     @with_auto_backup(domain="automation", id_param="identifier")

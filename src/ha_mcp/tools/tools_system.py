@@ -169,6 +169,8 @@ class SystemTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Restart Home Assistant",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @log_tool_usage
@@ -278,6 +280,8 @@ class SystemTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Reload Core Components",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @log_tool_usage
@@ -545,6 +549,7 @@ class SystemTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get System Health (incl. ZHA/Z-Wave/integration diagnostics)",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage

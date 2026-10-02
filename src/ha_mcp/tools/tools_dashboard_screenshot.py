@@ -113,6 +113,8 @@ class DashboardScreenshotTools:
             "openWorldHint": False,
             "readOnlyHint": True,
             "title": "Get Dashboard Screenshot",
+            "destructiveHint": False,
+            "idempotentHint": True,
         },
     )
     @log_tool_usage

@@ -64,6 +64,7 @@ class ServiceDiscoveryTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "List Available Services",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage

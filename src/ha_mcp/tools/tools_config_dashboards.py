@@ -1794,6 +1794,7 @@ class DashboardConfigTools:
             "readOnlyHint": True,
             "idempotentHint": True,
             "title": "Get Dashboard",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -2731,6 +2732,8 @@ class DashboardConfigTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Create or Update Dashboard",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @with_auto_backup(domain="dashboard", id_param="url_path")
@@ -3982,6 +3985,8 @@ class DashboardConfigTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Delete Dashboard",
+            "readOnlyHint": False,
+            "idempotentHint": True,
         },
     )
     @with_auto_backup(domain="dashboard", id_param="url_path")

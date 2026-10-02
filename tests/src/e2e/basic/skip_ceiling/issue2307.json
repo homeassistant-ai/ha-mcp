@@ -1,0 +1,13 @@
+{
+  "reason": "#2307 adds one inaddon_only Model Context Protocol discovery scenario (tests/src/e2e/haos_only/test_mcp_discovery.py). It runs only in the HAOS in-app phase, including the no-tools variant, and skips on every other lane.",
+  "deltas": {
+    "container": 1,
+    "haos": 1,
+    "haos_stdio": 1,
+    "embedded": 1,
+    "haos_embedded": 1,
+    "container_no_tools": 1,
+    "embedded_no_tools": 1,
+    "haos_embedded_no_tools": 1
+  }
+}

@@ -136,6 +136,7 @@ class HacsTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get HACS Info",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -236,6 +237,8 @@ class HacsTools:
             "openWorldHint": True,
             "destructiveHint": True,
             "title": "Manage HACS",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @log_tool_usage

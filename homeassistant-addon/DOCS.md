@@ -235,6 +235,26 @@ See [Cloudflared app documentation](https://github.com/brenner-tobias/addon-clou
 
 ---
 
+## Use from Home Assistant's own AI (Home Assistant 2026.10+)
+
+On Home Assistant 2026.10 or newer, the app announces itself to the
+**Model Context Protocol** integration. **Settings → Devices & services**
+shows it as discovered; select **Add** and confirm. Its tools then become an
+API that Home Assistant conversation agents can select under
+**Control Home Assistant**. Select **Ignore** if you do not want that.
+
+- On an older Home Assistant the app announces nothing. After updating Home
+  Assistant, restart the app to be discovered.
+- Turn on [`enable_tool_search`](#enable_tool_search) for this use. A
+  conversation agent receives every tool description with every message, and
+  the full catalog is far larger than the search tools.
+- Home Assistant stops a tool call after 10 seconds, so long operations
+  (backups, restarts, large searches) can report a timeout while they still
+  finish.
+- If you added the app's URL to the integration by hand before, that entry
+  keeps working. Remove it and add the discovered one instead to get an API
+  name that stays the same when the app is reinstalled.
+
 ## Configuration Options
 
 The app has minimal configuration - most settings are automatic.

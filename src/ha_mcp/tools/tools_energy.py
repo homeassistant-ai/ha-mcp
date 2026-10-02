@@ -375,6 +375,7 @@ class EnergyTools:
             "destructiveHint": True,
             "idempotentHint": False,
             "title": "Manage Energy Dashboard Preferences",
+            "readOnlyHint": False,
         },
     )
     @log_tool_usage

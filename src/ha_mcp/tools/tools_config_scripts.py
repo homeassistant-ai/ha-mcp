@@ -118,6 +118,7 @@ class ConfigScriptTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Script Config",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -481,6 +482,8 @@ class ConfigScriptTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Create or Update Script",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @with_auto_backup(
@@ -1111,6 +1114,7 @@ class ConfigScriptTools:
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Script",
+            "readOnlyHint": False,
         },
     )
     @with_auto_backup(domain="script", id_param="script_id")

@@ -95,6 +95,7 @@ class RadioTools:
             "destructiveHint": True,
             "idempotentHint": False,
             "title": "Manage Radios (Z-Wave / Zigbee / Matter / Thread)",
+            "readOnlyHint": False,
         },
     )
     @log_tool_usage

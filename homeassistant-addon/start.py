@@ -162,6 +162,81 @@ def persist_addon_options(options: dict[str, Any], supervisor_token: str) -> Non
         resp.read()
 
 
+# First Core release whose Model Context Protocol integration handles app
+# discovery (home-assistant/core#180378). Older cores turn the message into a
+# discovery card that drops the URL and asks for one by hand.
+MCP_DISCOVERY_MIN_CORE = (2026, 10)
+
+
+def supervisor_get(path: str, supervisor_token: str) -> dict[str, Any]:
+    """GET a Supervisor endpoint and return its ``data`` object."""
+    req = urllib.request.Request(
+        f"http://supervisor{path}",
+        headers={"Authorization": f"Bearer {supervisor_token}"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read()).get("data")
+    return data if isinstance(data, dict) else {}
+
+
+def core_supports_mcp_discovery(version: str) -> bool:
+    """Whether a Core version string (``2026.10.0``, ``2026.10.0b1``) is new enough."""
+    try:
+        year, month = (int(part) for part in version.split(".")[:2])
+    except ValueError:
+        return False
+    return (year, month) >= MCP_DISCOVERY_MIN_CORE
+
+
+def announce_mcp_discovery(secret_path: str, port: int, supervisor_token: str) -> None:
+    """Offer this server to Home Assistant's Model Context Protocol integration.
+
+    The Supervisor keys the message by (app, service), so re-announcing on every
+    start replaces the URL in place. It is never withdrawn on stop: Core removes
+    the discovered entry when the message disappears. Failures never block
+    startup.
+    """
+    try:
+        version = str(supervisor_get("/core/info", supervisor_token).get("version"))
+        if not core_supports_mcp_discovery(version):
+            log_info(
+                f"Home Assistant {version} cannot discover MCP apps (needs "
+                "2026.10+); restart this app after updating Home Assistant."
+            )
+            return
+        hostname = supervisor_get("/addons/self/info", supervisor_token).get("hostname")
+        if not hostname:
+            log_warning("Supervisor reported no app hostname; MCP discovery skipped.")
+            return
+        # Starlette redirects a trailing slash, and Core's client does not
+        # follow redirects.
+        url = f"http://{hostname}:{port}{secret_path.rstrip('/')}"
+        req = urllib.request.Request(
+            "http://supervisor/discovery",
+            data=json.dumps({"service": "mcp", "config": {"url": url}}).encode(),
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {supervisor_token}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+    except (
+        urllib.error.HTTPError,
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+        ValueError,
+    ) as e:
+        log_warning(f"Could not announce this server to Home Assistant: {e!r}")
+        return
+    log_info(
+        "Announced to Home Assistant: Settings > Devices & services offers to "
+        "add this server to the Model Context Protocol integration."
+    )
+
+
 def maybe_persist_secret_path(
     config: dict[str, Any], secret_path: str, supervisor_token: str
 ) -> None:
@@ -920,6 +995,8 @@ def main() -> int:
     log_info("   💡 This path is auto-generated and persisted to /data/secret_path.txt")
     log_info("=" * 80)
     log_info("")
+
+    announce_mcp_discovery(secret_path, port, supervisor_token)
 
     # Configure logging before server start (v3 removed log_level from run())
     import logging

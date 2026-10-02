@@ -43,6 +43,7 @@ class TodoTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Todo",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -190,6 +191,8 @@ class TodoTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Set Todo Item",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @with_auto_backup(
@@ -503,6 +506,7 @@ class TodoTools:
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Todo Item",
+            "readOnlyHint": False,
         },
     )
     @with_auto_backup(

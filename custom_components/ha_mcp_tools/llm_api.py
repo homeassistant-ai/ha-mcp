@@ -642,6 +642,50 @@ def _partition_tools(tools: Iterable[Any]) -> tuple[list[Any], set[str], bool]:
     return exposed, pinned, stamped
 
 
+# MCP hint -> llm.ToolAnnotations field. Home Assistant 2026.10 added both
+# llm.ToolAnnotations and llm.ToolResult; older cores have neither.
+_HINT_FIELDS = (
+    ("readOnlyHint", "read_only"),
+    ("destructiveHint", "destructive"),
+    ("idempotentHint", "idempotent"),
+    ("openWorldHint", "open_world"),
+)
+
+
+def _declare_metadata(
+    tool: llm.Tool, *, title: str | None, hints: dict[str, Any] | None
+) -> None:
+    """Set the 2026.10 tool metadata; a hint left out keeps Core's safe default."""
+    tool.integration = DOMAIN
+    tool.title = title
+    annotations_cls = getattr(llm, "ToolAnnotations", None)
+    if annotations_cls is not None and hints:
+        tool.annotations = annotations_cls(
+            **{field: hints[hint] for hint, field in _HINT_FIELDS if hint in hints}
+        )
+
+
+def _tool_result(data: JsonObjectType, *, error: bool) -> Any:
+    """Wrap a result in ``llm.ToolResult`` where Core has it, else return it bare."""
+    result_cls = getattr(llm, "ToolResult", None)
+    return data if result_cls is None else result_cls(data=data, error=error)
+
+
+def _tool_hints(tool: Any) -> dict[str, Any] | None:
+    """The tool's MCP annotations by wire name, on either SDK line."""
+    annotations = getattr(tool, "annotations", None)
+    if annotations is None:
+        return None
+    return cast(
+        "dict[str, Any]", annotations.model_dump(by_alias=True, exclude_none=True)
+    )
+
+
+def _tool_title(tool: Any) -> str | None:
+    """The server's display title: ``title``, else ``annotations.title``."""
+    return getattr(tool, "title", None) or (_tool_hints(tool) or {}).get("title")
+
+
 class HaMcpTool(llm.Tool):
     """One ha-mcp tool, called over loopback MCP."""
 
@@ -651,23 +695,28 @@ class HaMcpTool(llm.Tool):
         description: str | None,
         parameters: vol.Schema,
         server_url: str,
+        *,
+        title: str | None = None,
+        hints: dict[str, Any] | None = None,
     ) -> None:
-        """Store the converted schema and the loopback endpoint."""
+        """Store the converted schema, the server's metadata and the endpoint."""
         self.name = name
         self.description = description
         self.parameters = parameters
         self._server_url = server_url
+        _declare_metadata(self, title=title, hints=hints)
 
     async def async_call(
         self,
         hass: HomeAssistant,
         tool_input: llm.ToolInput,
         llm_context: llm.LLMContext,
-    ) -> JsonObjectType:
+    ) -> Any:
         """Call the tool on the in-process server and return its result."""
-        return await _forward_tool_call(
+        dumped = await _forward_tool_call(
             hass, self._server_url, self.name, tool_input.tool_args
         )
+        return _tool_result(dumped, error=dumped.get("isError") is True)
 
 
 async def _forward_tool_call(
@@ -746,6 +795,16 @@ class HaMcpSearchTool(llm.Tool):
     def __init__(self, catalog: list[dict[str, Any]]) -> None:
         """Hold the exposed-catalog snapshot (name/description/schema dicts)."""
         self._catalog = catalog
+        _declare_metadata(
+            self,
+            title="Search HA-MCP Tools",
+            hints={
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            },
+        )
 
     async def async_call(
         self,
@@ -767,14 +826,17 @@ class HaMcpSearchTool(llm.Tool):
         )
         results = [t for score, t in scored[:_SEARCH_RESULT_LIMIT] if score > 0]
         if not results:
-            return {
-                "results": [],
-                "message": (
-                    "No matching tools. Try different task words (e.g. "
-                    "'automation', 'light', 'history', 'dashboard')."
-                ),
-            }
-        return {"results": results}
+            return _tool_result(
+                {
+                    "results": [],
+                    "message": (
+                        "No matching tools. Try different task words (e.g. "
+                        "'automation', 'light', 'history', 'dashboard')."
+                    ),
+                },
+                error=False,
+            )
+        return _tool_result({"results": results}, error=False)
 
 
 class HaMcpCallTool(llm.Tool):
@@ -803,6 +865,8 @@ class HaMcpCallTool(llm.Tool):
         """Hold the loopback endpoint and the exposed-name allowlist."""
         self._server_url = server_url
         self._exposed_names = exposed_names
+        # Dispatches any exposed tool, so no hints: Core's least-safe defaults.
+        _declare_metadata(self, title="Call HA-MCP Tool", hints=None)
 
     async def async_call(
         self,
@@ -814,11 +878,17 @@ class HaMcpCallTool(llm.Tool):
         name = str(tool_input.tool_args.get("name", ""))
         arguments = tool_input.tool_args.get("arguments") or {}
         if name not in self._exposed_names:
-            return {
-                "error": f"Unknown tool '{name}'.",
-                "suggestion": (f"Use {_SEARCH_TOOL_NAME} to discover available tools."),
-            }
-        return await _forward_tool_call(hass, self._server_url, name, arguments)
+            return _tool_result(
+                {
+                    "error": f"Unknown tool '{name}'.",
+                    "suggestion": (
+                        f"Use {_SEARCH_TOOL_NAME} to discover available tools."
+                    ),
+                },
+                error=True,
+            )
+        dumped = await _forward_tool_call(hass, self._server_url, name, arguments)
+        return _tool_result(dumped, error=dumped.get("isError") is True)
 
 
 @dataclass(kw_only=True)
@@ -902,6 +972,17 @@ class HaMcpLlmApi(llm.API):
             )
             return None
 
+    def _mirror(self, tool: Any, parameters: vol.Schema) -> HaMcpTool:
+        """Mirror one server tool with its title and safety hints."""
+        return HaMcpTool(
+            tool.name,
+            tool.description,
+            parameters,
+            self.server_url,
+            title=_tool_title(tool),
+            hints=_tool_hints(tool),
+        )
+
     def _build_full_tools(self, exposed: list[Any]) -> list[llm.Tool]:
         """Mirror every exposed tool directly (full-catalog mode)."""
         tools: list[llm.Tool] = []
@@ -910,9 +991,7 @@ class HaMcpLlmApi(llm.API):
             parameters = self._convert_parameters(tool, schema)
             if parameters is None:
                 continue
-            tools.append(
-                HaMcpTool(tool.name, tool.description, parameters, self.server_url)
-            )
+            tools.append(self._mirror(tool, parameters))
         return tools
 
     def _build_tool_search_tools(
@@ -945,11 +1024,7 @@ class HaMcpLlmApi(llm.API):
             if tool.name in pinned:
                 parameters = self._convert_parameters(tool, schema)
                 if parameters is not None:
-                    tools.append(
-                        HaMcpTool(
-                            tool.name, tool.description, parameters, self.server_url
-                        )
-                    )
+                    tools.append(self._mirror(tool, parameters))
         tools.append(HaMcpSearchTool(catalog))
         tools.append(HaMcpCallTool(self.server_url, exposed_names))
         return tools

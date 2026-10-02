@@ -68,6 +68,7 @@ class CameraTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Camera Image",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage

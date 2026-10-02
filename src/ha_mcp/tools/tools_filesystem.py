@@ -546,6 +546,8 @@ class FilesystemTools:
             "openWorldHint": False,
             "readOnlyHint": True,
             "title": "List Files",
+            "destructiveHint": False,
+            "idempotentHint": True,
         },
     )
     @log_tool_usage
@@ -640,6 +642,8 @@ class FilesystemTools:
             "openWorldHint": False,
             "readOnlyHint": True,
             "title": "Read File",
+            "destructiveHint": False,
+            "idempotentHint": True,
         },
     )
     @log_tool_usage
@@ -759,6 +763,8 @@ class FilesystemTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Write File",
+            "readOnlyHint": False,
+            "idempotentHint": True,
         },
     )
     @with_auto_backup(domain="file", id_param="path", mandatory=True)
@@ -870,6 +876,8 @@ class FilesystemTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Delete File",
+            "readOnlyHint": False,
+            "idempotentHint": True,
         },
     )
     @with_auto_backup(domain="file", id_param="path", mandatory=True)

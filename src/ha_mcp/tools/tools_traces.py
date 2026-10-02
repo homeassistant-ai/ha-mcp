@@ -42,6 +42,7 @@ class TraceTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Automation Traces",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage

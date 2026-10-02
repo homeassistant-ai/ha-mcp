@@ -328,6 +328,7 @@ def register_utility_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Evaluate Template",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage

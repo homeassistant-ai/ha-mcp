@@ -306,6 +306,7 @@ class ConfigSceneTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get or Find Scenes",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -606,6 +607,8 @@ class ConfigSceneTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Create or Update Scene",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @with_auto_backup(
@@ -1359,6 +1362,7 @@ class ConfigSceneTools:
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Scene",
+            "readOnlyHint": False,
         },
     )
     @with_auto_backup(domain="scene", id_param="scene_id")

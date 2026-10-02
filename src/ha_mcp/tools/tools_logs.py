@@ -165,6 +165,7 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Logs",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage

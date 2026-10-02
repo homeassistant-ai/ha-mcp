@@ -304,6 +304,7 @@ class YamlConfigTools:
             "destructiveHint": True,
             "idempotentHint": False,
             "title": "Raw YAML Config Edit",
+            "readOnlyHint": False,
         },
     )
     @with_auto_backup(

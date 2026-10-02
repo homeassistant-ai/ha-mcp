@@ -369,6 +369,8 @@ class YamlReadTools:
             "readOnlyHint": True,
             "openWorldHint": False,
             "title": "Read YAML Config Fragment",
+            "destructiveHint": False,
+            "idempotentHint": True,
         },
     )
     @log_tool_usage

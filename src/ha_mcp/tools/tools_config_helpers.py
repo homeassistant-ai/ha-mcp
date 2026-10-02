@@ -3888,6 +3888,7 @@ class HelperConfigTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "List Helpers",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -4368,6 +4369,8 @@ class HelperConfigTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Create or Update Helper",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @with_auto_backup(

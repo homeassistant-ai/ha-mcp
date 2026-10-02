@@ -91,8 +91,12 @@ FastMCP omits a hint that is not set, and the MCP `ToolAnnotations` schema
 then defines the value clients assume: `readOnlyHint=false`,
 `destructiveHint=true`, `idempotentHint=false`, and `openWorldHint=true`.
 
-Set `openWorldHint` explicitly on every tool because an omitted hint means
-`true`, which otherwise silently misclassifies local Home Assistant tools.
+Set all four hints and a `title` explicitly on every tool. Home Assistant
+2026.10+ copies them into its LLM tool metadata and fills each omitted hint
+with that least-safe default even when another hint makes it irrelevant, so a
+read-only tool without `destructiveHint: False` reaches Home Assistant as
+destructive, and a local tool without `openWorldHint: False` as open-world.
+`tests/src/unit/test_tool_annotations_complete.py` enforces this.
 Annotations describe behavior against current supported upstream versions. A
 side effect present only in an outdated external build does not demote a tool
 from `readOnlyHint`; document the required upstream update instead (the old
@@ -168,7 +172,13 @@ class DomainTools:
     @tool(
         name="ha_<verb>_<noun>",
         tags={"Category Name"},
-        annotations={"readOnlyHint": True, "openWorldHint": False},
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+            "title": "<Verb> <Noun>",
+        },
     )
     @log_tool_usage
     async def ha_<verb>_<noun>(self, param: str) -> dict[str, Any]:

@@ -43,6 +43,7 @@ class CategoryTools:
             "idempotentHint": True,
             "readOnlyHint": True,
             "title": "Get Category",
+            "destructiveHint": False,
         },
     )
     @log_tool_usage
@@ -169,6 +170,8 @@ class CategoryTools:
             "openWorldHint": False,
             "destructiveHint": True,
             "title": "Create or Update Category",
+            "readOnlyHint": False,
+            "idempotentHint": False,
         },
     )
     @with_auto_backup(
@@ -316,6 +319,7 @@ class CategoryTools:
             "destructiveHint": True,
             "idempotentHint": True,
             "title": "Remove Category",
+            "readOnlyHint": False,
         },
     )
     @with_auto_backup(
