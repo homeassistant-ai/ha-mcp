@@ -1077,6 +1077,7 @@ class EntityTools:
         new_entity_id: str | None,
         exposure_result: dict[str, bool] | None,
         device_rename_result: dict[str, Any] | None,
+        device_name_warning: str | None = None,
     ) -> dict[str, Any]:
         """Build the final response dict for a single-entity update."""
         response_data: dict[str, Any] = {
@@ -1098,8 +1099,16 @@ class EntityTools:
         if exposure_result is not None:
             response_data["exposure"] = exposure_result
 
+        if device_name_warning is not None:
+            response_data.setdefault("warnings", []).append(device_name_warning)
+
         if device_rename_result is not None:
             response_data["device_rename"] = device_rename_result
+            # Return-shape contract: warnings are a top-level list as well.
+            if device_rename_result.get("warnings"):
+                response_data.setdefault("warnings", []).extend(
+                    device_rename_result["warnings"]
+                )
             # Mark partial when a device rename was requested but didn't complete
             # for an operational reason: WS-call failure (device_id present + warnings)
             # or upstream registry lookup failure (lookup_failed marker). Not partial
@@ -1233,10 +1242,11 @@ class EntityTools:
         )
 
         # Phase 5: Device rename
-        device_rename_result: dict[str, Any] | None
+        device_rename_result: dict[str, Any] | None = None
         if device_name_blank:
-            device_rename_result = {"warnings": [_CLEAR_DEVICE_NAME_HINT]}
+            device_name_warning: str | None = _CLEAR_DEVICE_NAME_HINT
         else:
+            device_name_warning = None
             device_rename_result, entity_entry = await self._apply_device_rename(
                 entity_id, entity_entry, new_device_name
             )
@@ -1264,6 +1274,7 @@ class EntityTools:
             new_entity_id,
             exposure_result,
             device_rename_result,
+            device_name_warning,
         )
 
     async def _bulk_apply_expose(

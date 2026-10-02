@@ -212,7 +212,8 @@ class TestSetEntityDeviceNameEcho:
 
         assert _sent_of_type(client, "config/device_registry/update") == []
         assert result["updates"] == ["icon='mdi:lamp'"]
-        assert result["device_rename"]["warnings"]
+        assert any("ha_set_device(name='')" in w for w in result["warnings"])
+        assert "device_rename" not in result
         assert "partial" not in result
 
     @pytest.mark.parametrize("new_device_name", ["", " "])
@@ -236,6 +237,7 @@ class TestSetEntityDeviceNameEcho:
 
         assert not any(u.startswith("device_name") for u in result["updates"])
         assert result["device_rename"]["warnings"]
+        assert result["warnings"] == result["device_rename"]["warnings"]
 
     async def test_failed_device_rename_not_echoed(
         self, set_entity: Any, client: MagicMock
