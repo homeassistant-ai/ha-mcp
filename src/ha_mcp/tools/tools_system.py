@@ -243,7 +243,7 @@ class SystemTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             error_msg = str(e)
             # Connection errors after restart initiated are expected
             # (HA closes connections during restart)
@@ -268,8 +268,7 @@ class SystemTools:
                     "warnings": ["Wait 1-5 minutes for Home Assistant to restart."],
                 }
 
-            exception_to_structured_error(e)
-            return None  # unreachable: exception_to_structured_error always raises
+            raise exception_to_structured_error(e) from e
 
     @tool(
         name="ha_reload_core",
@@ -392,16 +391,15 @@ class SystemTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
-            exception_to_structured_error(
+        except Exception as e:
+            raise exception_to_structured_error(
                 e,
                 context={"target": target},
                 suggestions=[
                     f"Ensure the {target} integration is loaded",
                     "Check Home Assistant logs for details",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+            ) from e
 
     async def _reload_all_targets(self) -> dict[str, Any]:
         """Reload every reloadable subsystem concurrently, capped by a semaphore.
@@ -471,7 +469,7 @@ class SystemTools:
             )
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # Local import mirrors ``_reraise_if_fatal``: rest_client imports
             # from the tool helpers transitively, so a module-level import
             # would risk a circular import in the tools package.
@@ -504,14 +502,14 @@ class SystemTools:
                         ],
                     )
                 )
-            exception_to_structured_error(
+            raise exception_to_structured_error(
                 e,
                 context={"entry_id": entry_id},
                 suggestions=[
                     "Verify the entry_id via ha_get_integration",
                     "Check Home Assistant logs for details",
                 ],
-            )
+            ) from e
 
         # Core reports require_restart=True when the entry could not be
         # hot-reloaded (its state is not recoverable) — a success response
@@ -824,15 +822,14 @@ class SystemTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
-            exception_to_structured_error(
+        except Exception as e:
+            raise exception_to_structured_error(
                 e,
                 suggestions=[
                     "System health may not be available in all HA installations",
                     "Try ha_get_overview() for basic system information",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+            ) from e
         finally:
             await self._safe_disconnect(ws_client)
 
@@ -1181,14 +1178,14 @@ class SystemTools:
                     "Timeout waiting for system health data",
                 )
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             await self._safe_disconnect(ws_client)
-            raise_tool_error(
+            raise raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
                     str(e),
                 )
-            )
+            ) from e
 
         health_info = event_response.get("event", {})
         component_count = len(health_info) if isinstance(health_info, dict) else 0

@@ -188,8 +188,8 @@ class ConfigScriptTools:
             return await self._legacy_get_script(script_id)
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
-            exception_to_structured_error(
+        except Exception as e:
+            raise exception_to_structured_error(
                 e,
                 context={"script_id": script_id},
                 suggestions=[
@@ -197,8 +197,7 @@ class ConfigScriptTools:
                     "Check Home Assistant connection",
                     "Use ha_get_skill_guide for help",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+            ) from e
 
     async def _legacy_get_script(self, script_id: str) -> dict[str, Any]:
         """Assemble the script-get response from the REST/WS pipeline.
@@ -772,7 +771,7 @@ class ConfigScriptTools:
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings) from None
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             suggestions = [
                 "Ensure config includes either 'sequence' field (regular scripts) or 'use_blueprint' field (blueprint-based scripts)",
                 "For blueprint scripts, use ha_manage_blueprints(action='list', domain='script') to list available blueprints",
@@ -798,7 +797,7 @@ class ConfigScriptTools:
                 raise_error=False,
             )
             augment_error_dict_with_skill_content(error, bp_warnings)
-            raise_tool_error(error)
+            raise raise_tool_error(error) from e
 
     async def _run_script_control(
         self,
@@ -1179,10 +1178,10 @@ class ConfigScriptTools:
             return {"success": True, "action": "delete", **result}
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
                 await self._raise_script_not_found(script_id)
-            exception_to_structured_error(
+            raise exception_to_structured_error(
                 e,
                 context={"script_id": script_id},
                 suggestions=[
@@ -1190,8 +1189,7 @@ class ConfigScriptTools:
                     "Check if script is being used by automations",
                     "Use ha_get_skill_guide for help",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+            ) from e
 
 
 def register_config_script_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

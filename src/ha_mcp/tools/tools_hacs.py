@@ -217,8 +217,8 @@ class HacsTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
-            exception_to_structured_error(
+        except Exception as e:
+            raise exception_to_structured_error(
                 e,
                 context={"tool": "ha_get_hacs_info", "action": action},
                 suggestions=[
@@ -226,8 +226,7 @@ class HacsTools:
                     "For action='search', try a simpler query or a valid category",
                     "For action='info', pass a valid repository_id (numeric ID or 'owner/repo')",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error raises
+            ) from e
 
     @tool(
         name="ha_manage_hacs",
@@ -350,8 +349,8 @@ class HacsTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
-            exception_to_structured_error(
+        except Exception as e:
+            raise exception_to_structured_error(
                 e,
                 context={"tool": "ha_manage_hacs", "action": action},
                 suggestions=[
@@ -359,8 +358,7 @@ class HacsTools:
                     "For action='download', 'remove', or 'update_information', pass a valid repository_id (use ha_get_hacs_info(action='search') to find it)",
                     "For action='add_repository', use 'owner/repo' format and a matching category",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error raises
+            ) from e
 
     # --- Private action handlers ------------------------------------------
     # The public tools above are thin dispatchers; each handler raises a

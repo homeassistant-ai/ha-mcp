@@ -654,17 +654,16 @@ class EnergyTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error getting energy prefs: {e}")
-            exception_to_structured_error(
+            raise exception_to_structured_error(
                 e,
                 context={"mode": "get"},
                 suggestions=[
                     "Check Home Assistant connection",
                     "Verify WebSocket connection is active",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+            ) from e
 
     async def _dry_run(self, config: dict[str, Any]) -> dict[str, Any]:
         """Shape-check the proposed config and fetch current-state validate.
@@ -721,17 +720,16 @@ class EnergyTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error in energy prefs dry_run: {e}")
-            exception_to_structured_error(
+            raise exception_to_structured_error(
                 e,
                 context={"mode": "set", "dry_run": True},
                 suggestions=[
                     "Check Home Assistant connection",
                     "Verify config shape matches energy/get_prefs response",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+            ) from e
 
     async def _set_prefs(
         self,
@@ -852,9 +850,9 @@ class EnergyTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error setting energy prefs: {e}")
-            exception_to_structured_error(
+            raise exception_to_structured_error(
                 e,
                 context={"mode": "set"},
                 suggestions=[
@@ -862,8 +860,7 @@ class EnergyTools:
                     "Verify token has admin privileges",
                     "Re-read prefs and retry with a fresh config_hash",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+            ) from e
 
     async def _resolve_current_prefs(
         self, current_prefs: dict[str, Any] | None
@@ -1526,17 +1523,16 @@ class EnergyTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error in {mode} on {target_key}: {e}")
-            exception_to_structured_error(
+            raise exception_to_structured_error(
                 e,
                 context={"mode": mode, "target_key": target_key},
                 suggestions=[
                     "Check Home Assistant connection",
                     "Verify WebSocket connection is active",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+            ) from e
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 

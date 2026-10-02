@@ -499,7 +499,7 @@ class YamlConfigTools:
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             error = exception_to_structured_error(
                 e,
                 context={
@@ -511,7 +511,7 @@ class YamlConfigTools:
                 raise_error=False,
             )
             augment_error_dict_with_skill_content(error, bp_warnings=None)
-            raise_tool_error(error)
+            raise raise_tool_error(error) from e
             return None  # raise_tool_error always raises; explicit for CodeQL
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 

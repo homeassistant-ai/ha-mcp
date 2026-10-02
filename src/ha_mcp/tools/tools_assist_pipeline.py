@@ -775,8 +775,8 @@ class AssistPipelineTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
-            exception_to_structured_error(
+        except Exception as e:
+            raise exception_to_structured_error(
                 e,
                 context={"action": action, "pipeline_id": pipeline_id},
                 suggestions=[
@@ -784,8 +784,7 @@ class AssistPipelineTools:
                     "Use ha_manage_pipeline(action='list') to inspect existing pipeline values",
                     "Use ha_search(domain_filter='conversation') to find conversation agent IDs",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+            ) from e
 
 
 def register_assist_pipeline_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

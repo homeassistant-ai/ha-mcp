@@ -976,13 +976,12 @@ class DevTools:
             return await self._apply_set_backup_config(backup)
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
-            exception_to_structured_error(
+        except Exception as e:
+            raise exception_to_structured_error(
                 e,
                 context={"action": action, "setting": setting, "tool": tool},
                 suggestions=["Check server logs for details"],
-            )
-            return None  # unreachable; explicit for CodeQL
+            ) from e
 
     async def _manage_server_setting(
         self,
@@ -1419,21 +1418,20 @@ class DevTools:
             return self._commit_gate(plan, data)
         except ToolError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             suffix = (
                 " The state/LLM-API change WAS already saved — re-run set_tool "
                 "with only gated= to finish the gate."
                 if partial
                 else ""
             )
-            raise_tool_error(
+            raise raise_tool_error(
                 create_error_response(
                     ErrorCode.INTERNAL_ERROR,
                     f"The security-gate policy write failed: {exc}.{suffix}",
                     context={"partial_commit": partial, "persisted": data},
                 )
-            )
-            return []  # unreachable; explicit for CodeQL
+            ) from exc
 
     def _commit_gate(self, plan: dict[str, Any], data: dict[str, Any]) -> list[str]:
         """Persist the gate portion of a set_tool plan; returns any warnings."""
@@ -1931,13 +1929,12 @@ class DevTools:
             return await self._decide_approval(token, approve=action == "approve")
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
-            exception_to_structured_error(
+        except Exception as e:
+            raise exception_to_structured_error(
                 e,
                 context={"action": action, "channel": channel, "pip_spec": pip_spec},
                 suggestions=["Check server and Home Assistant logs for details"],
-            )
-            return None  # unreachable; explicit for CodeQL
+            ) from e
 
     async def _server_info(self) -> dict[str, Any]:
         from ..utils.data_paths import get_data_dir

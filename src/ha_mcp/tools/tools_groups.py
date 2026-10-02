@@ -219,17 +219,16 @@ class GroupTools:
                 "message": f"Found {total_count} group(s)",
             }
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error listing groups: {e}")
-            exception_to_structured_error(
+            raise exception_to_structured_error(
                 e,
                 context={"operation": "list_groups"},
                 suggestions=[
                     "Check Home Assistant connection",
                     "Verify REST API is accessible",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+            ) from e
 
     @tool(
         name="ha_config_set_group",
@@ -395,9 +394,9 @@ class GroupTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error setting group {object_id!r}: {e}")
-            exception_to_structured_error(
+            raise exception_to_structured_error(
                 e,
                 context={"object_id": object_id},
                 suggestions=[
@@ -406,8 +405,7 @@ class GroupTools:
                     "Ensure object_id is valid (no dots, no 'group.' prefix)",
                     "Use ha_config_list_groups() to see existing groups",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+            ) from e
 
     @tool(
         name="ha_config_remove_group",
@@ -512,9 +510,9 @@ class GroupTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error removing group {object_id!r}: {e}")
-            exception_to_structured_error(
+            raise exception_to_structured_error(
                 e,
                 context={"object_id": object_id},
                 suggestions=[
@@ -522,8 +520,7 @@ class GroupTools:
                     "Verify the group exists using ha_config_list_groups()",
                     "Groups defined in YAML cannot be permanently removed",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+            ) from e
 
 
 def register_group_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

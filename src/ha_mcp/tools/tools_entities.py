@@ -1954,10 +1954,11 @@ class EntityTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error updating entity: {e}")
-            exception_to_structured_error(e, context={"entity_id": entity_id})
-            return None  # unreachable: exception_to_structured_error always raises
+            raise exception_to_structured_error(
+                e, context={"entity_id": entity_id}
+            ) from e
 
     @tool(
         name="ha_get_entity",
@@ -2088,13 +2089,12 @@ class EntityTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error getting entity: {e}")
-            exception_to_structured_error(
+            raise exception_to_structured_error(
                 e,
                 context={"entity_id": entity_id},
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+            ) from e
 
     async def _get_single_entity(self, eid: str) -> dict[str, Any]:
         """Look up one entity registry entry, with additive enrichment."""
@@ -2361,13 +2361,12 @@ class EntityTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error removing entity '{entity_id}': {e}")
-            exception_to_structured_error(
+            raise exception_to_structured_error(
                 e,
                 context={"entity_id": entity_id},
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+            ) from e
 
 
 def register_entity_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

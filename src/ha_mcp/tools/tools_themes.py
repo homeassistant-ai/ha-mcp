@@ -379,16 +379,15 @@ class ThemesTools:
             }
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
-            exception_to_structured_error(
+        except Exception as e:
+            raise exception_to_structured_error(
                 e,
                 context={"action": action, "theme_name": theme_name, "mode": mode},
                 suggestions=[
                     "Call ha_manage_theme(action='list') to see installed themes",
                     "Verify the Home Assistant connection",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+            ) from e
 
 
 def register_themes_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

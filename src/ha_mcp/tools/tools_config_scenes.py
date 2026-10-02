@@ -816,7 +816,7 @@ class ConfigSceneTools:
             # config (Hue/vendor or raw-YAML). Same CONFIG_NOT_FOUND
             # classification as get/delete (#1971), not a generic write failure.
             _raise_scene_not_storage_error(e.scene_id, e.platform)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             error = exception_to_structured_error(
                 e,
                 context={"scene_id": scene_id},
@@ -829,7 +829,7 @@ class ConfigSceneTools:
                 raise_error=False,
             )
             augment_error_dict_with_skill_content(error, bp_warnings=None)
-            raise_tool_error(error)
+            raise raise_tool_error(error) from e
 
     async def _activate_scene_only(
         self, scene_id: str, category: str | None, MandatoryBPS: bool

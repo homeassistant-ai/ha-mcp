@@ -336,8 +336,8 @@ class BlueprintTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
-            exception_to_structured_error(
+        except Exception as e:
+            raise exception_to_structured_error(
                 e,
                 context={"action": action, "path": path, "domain": domain, "url": url},
                 suggestions=[
@@ -345,8 +345,7 @@ class BlueprintTools:
                     "Verify the blueprint path or import URL is correct",
                     "Check Home Assistant connection",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error always raises
+            ) from e
 
     # --- Shared validation / lookups --------------------------------------
 

@@ -850,17 +850,16 @@ class IntegrationTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Failed to get integrations: {e}")
-            exception_to_structured_error(
+            raise exception_to_structured_error(
                 e,
                 suggestions=[
                     "Verify Home Assistant connection is working",
                     "Check that the API is accessible",
                     "Ensure your token has sufficient permissions",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error raises
+            ) from e
 
     async def _get_entry_detail_response(
         self,
@@ -1051,16 +1050,15 @@ class IntegrationTools:
             return resp
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
-            exception_to_structured_error(
+        except Exception as e:
+            raise exception_to_structured_error(
                 e,
                 context={"entry_id": entry_id},
                 suggestions=[
                     "Use ha_get_integration() without entry_id to see all "
                     "config entries",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error raises
+            ) from e
 
     async def _probe_legacy_entry_options(
         self,
@@ -2055,10 +2053,10 @@ class IntegrationTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Failed to set integration: {e}")
             error_context = self._set_integration_error_context(entry_id, domain)
-            exception_to_structured_error(
+            raise exception_to_structured_error(
                 e,
                 context=error_context,
                 suggestions=[
@@ -2070,8 +2068,7 @@ class IntegrationTools:
                 else [
                     "Use ha_get_integration() to find valid config entry IDs",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error raises
+            ) from e
 
     @staticmethod
     def _set_integration_error_context(
@@ -2462,16 +2459,15 @@ class IntegrationTools:
                     "see all config entries",
                 ],
             )
-        except Exception as e:  # noqa: BLE001
-            exception_to_structured_error(
+        except Exception as e:
+            raise exception_to_structured_error(
                 e,
                 context={"entry_id": entry_id},
                 suggestions=[
                     "Use ha_get_integration() without entry_id to "
                     "see all config entries",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error raises
+            ) from e
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     # === Path 2: FLOW helper delete via entity_id → entry_id lookup ===
@@ -2508,8 +2504,8 @@ class IntegrationTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
-            exception_to_structured_error(
+        except Exception as e:
+            raise exception_to_structured_error(
                 e,
                 context={
                     "helper_type": helper_type,
@@ -2520,8 +2516,7 @@ class IntegrationTools:
                     "Verify the target exists using ha_search() "
                     + "or ha_get_integration()",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error raises
+            ) from e
 
     @with_auto_backup(
         domain="helper_template",
@@ -2749,15 +2744,15 @@ class IntegrationTools:
                     "helper_type": helper_type,
                 },
             )
-        except Exception as e:  # noqa: BLE001
-            exception_to_structured_error(
+        except Exception as e:
+            raise exception_to_structured_error(
                 e,
                 context={
                     "entry_id": entry_id,
                     "target": target,
                     "helper_type": helper_type,
                 },
-            )
+            ) from e
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     async def _delete_config_subentry(
@@ -2867,8 +2862,8 @@ class IntegrationTools:
 
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
-            exception_to_structured_error(
+        except Exception as e:
+            raise exception_to_structured_error(
                 e,
                 context={"helper_type": helper_type, "target": target},
                 suggestions=[
@@ -2876,8 +2871,7 @@ class IntegrationTools:
                     "Verify target exists using ha_search()",
                     "Ensure helper is not used by automations or scripts",
                 ],
-            )
-            return None  # unreachable: exception_to_structured_error raises
+            ) from e
 
     async def _resolve_helper_unique_id(
         self, entity_id: str

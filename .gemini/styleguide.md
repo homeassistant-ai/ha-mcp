@@ -200,12 +200,15 @@ try:
 except ToolError:
     raise
 except Exception as exc:
-    exception_to_structured_error(
+    raise exception_to_structured_error(
         exc,
         context={"entity_id": entity_id},
         suggestions=["Verify the entity exists"],
-    )
+    ) from exc
 ```
+
+The helper raises before it returns. The `raise ... from exc` around it shows
+ruff's `BLE001` that the broad handler does not swallow the exception.
 
 The explicit `except ToolError: raise` guard is required when the `try`
 body may call `raise_tool_error()` or a validation helper; otherwise a broad
