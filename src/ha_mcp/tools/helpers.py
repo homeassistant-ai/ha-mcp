@@ -250,6 +250,43 @@ def validate_identifier_not_empty(
     )
 
 
+WHITESPACE_CLEARS_NOTE = (
+    "A whitespace-only value acts like '', for clients that cannot send an "
+    "empty string."
+)
+_QUOTE_ONLY = re.compile(r"[\s\"']+")
+_CLEAR_NAME_HINT = (
+    "To clear the name, pass an empty string '', or a single space ' ' "
+    "if your client cannot send an empty string"
+)
+
+
+def clearable_value(
+    value: str | None,
+    param_name: str,
+    *,
+    reject_quote_only: bool = False,
+    clear_hint: str = _CLEAR_NAME_HINT,
+) -> str | None:
+    """Map an empty or whitespace-only value to None, the registry's clear value.
+
+    Clients that cannot send ``''`` deliver ``'""'`` instead (#2585), so
+    ``reject_quote_only`` refuses a value made only of quotes and whitespace.
+    """
+    if value is None or not value.strip():
+        return None
+    if reject_quote_only and _QUOTE_ONLY.fullmatch(value):
+        raise_tool_error(
+            create_error_response(
+                ErrorCode.VALIDATION_INVALID_PARAMETER,
+                f"{param_name} {value!r} contains only quote characters",
+                suggestions=[clear_hint],
+                context={"parameter": param_name, "value": value},
+            )
+        )
+    return value
+
+
 async def get_connected_ws_client(
     base_url: str, token: str, verify_ssl: bool | None = None
 ) -> tuple[HomeAssistantWebSocketClient | None, dict[str, Any] | None]:

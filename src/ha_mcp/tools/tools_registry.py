@@ -27,6 +27,8 @@ from .component_devices import (
     fetch_device_via_component,
 )
 from .helpers import (
+    WHITESPACE_CLEARS_NOTE,
+    clearable_value,
     exception_to_structured_error,
     log_tool_usage,
     raise_tool_error,
@@ -788,17 +790,20 @@ class RegistryTools:
             updates_made = []
 
             if name is not None:
-                message["name_by_user"] = name if name else None
+                name = clearable_value(name, "name", reject_quote_only=True)
+                message["name_by_user"] = name
                 updates_made.append(f"name='{name}'" if name else "name cleared")
 
             if area_id is not None:
-                message["area_id"] = area_id if area_id else None
+                area_id = clearable_value(area_id, "area_id")
+                message["area_id"] = area_id
                 updates_made.append(
                     f"area_id='{area_id}'" if area_id else "area cleared"
                 )
 
             if disabled_by is not None:
-                message["disabled_by"] = disabled_by if disabled_by else None
+                disabled_by = clearable_value(disabled_by, "disabled_by")
+                message["disabled_by"] = disabled_by
                 updates_made.append(
                     f"disabled_by='{disabled_by}'" if disabled_by else "enabled"
                 )
@@ -1038,14 +1043,21 @@ class RegistryTools:
         name: Annotated[
             str | None,
             Field(
-                description="New display name for the device (sets name_by_user)",
+                description=(
+                    "New display name for the device (sets name_by_user). '' clears "
+                    "name_by_user and reverts to the integration-provided name. "
+                    + WHITESPACE_CLEARS_NOTE
+                ),
                 default=None,
             ),
         ] = None,
         area_id: Annotated[
             str | None,
             Field(
-                description="Area/room ID to assign the device to. Use empty string '' to unassign.",
+                description=(
+                    "Area/room ID to assign the device to. Use empty string '' to "
+                    "unassign. " + WHITESPACE_CLEARS_NOTE
+                ),
                 default=None,
             ),
         ] = None,
@@ -1054,7 +1066,8 @@ class RegistryTools:
             Field(
                 description=(
                     "Set to 'user' to disable the device, or '' (empty string) "
-                    "to enable it. Omit to leave the disabled state unchanged."
+                    "to enable it. Omit to leave the disabled state unchanged. "
+                    + WHITESPACE_CLEARS_NOTE
                 ),
                 default=None,
             ),
