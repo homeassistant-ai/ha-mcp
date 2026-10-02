@@ -42,10 +42,18 @@ def in_scope(path: str, excluded: tuple[str, ...]) -> bool:
     return path.endswith(SOURCE_SUFFIXES) and not path.startswith(excluded)
 
 
+def count_lines(content: bytes) -> int:
+    """Count lines, including a last line that has no newline."""
+    unterminated = bool(content) and not content.endswith(b"\n")
+    return content.count(b"\n") + unterminated
+
+
 def measure(repo_root: Path) -> dict[str, int]:
     """Return the line count of every tracked source file in scope."""
     tracked = subprocess.run(
-        ["git", "ls-files", "-z"],
+        # The unit-test job runs as a different user than the checkout owner,
+        # which git refuses without this.
+        ["git", "-c", "safe.directory=*", "ls-files", "-z"],
         cwd=repo_root,
         check=True,
         capture_output=True,
@@ -57,7 +65,7 @@ def measure(repo_root: Path) -> dict[str, int]:
         # A tracked path can be missing from the working tree before its
         # deletion is committed, and a submodule is a directory.
         if in_scope(path, excluded) and file.is_file():
-            sizes[path] = file.read_bytes().count(b"\n")
+            sizes[path] = count_lines(file.read_bytes())
     return sizes
 
 

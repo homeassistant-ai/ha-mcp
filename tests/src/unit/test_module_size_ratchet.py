@@ -122,6 +122,12 @@ def test_vendored_code_is_not_counted() -> None:
     assert not ratchet.in_scope("src/ha_mcp/_vendor/fastmcp/server.py", excluded)
 
 
+def test_last_line_without_a_newline_is_counted() -> None:
+    """Otherwise a 1,001-line file with no final newline passes as 1,000."""
+    assert ratchet.count_lines(b"a\nb\nc") == 3
+    assert ratchet.count_lines(b"a\nb\nc\n") == 3
+
+
 def test_repository_matches_the_baseline() -> None:
     """Fails when a source file crosses the limit or a listed file changes size."""
     baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
