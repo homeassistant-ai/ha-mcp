@@ -1975,7 +1975,13 @@ class _FakeCallServices:
         return (domain, service) in self._known
 
     async def async_call(
-        self, domain, service, service_data, blocking=True, return_response=False
+        self,
+        domain,
+        service,
+        service_data,
+        blocking=True,
+        return_response=False,
+        context=None,
     ):
         self.calls.append(
             {
@@ -1984,6 +1990,7 @@ class _FakeCallServices:
                 "service_data": service_data,
                 "blocking": blocking,
                 "return_response": return_response,
+                "context": context,
             }
         )
         if self._raises is not None:
@@ -2697,7 +2704,13 @@ class _FakeBulkServices:
         return (domain, service) in self._known
 
     async def async_call(
-        self, domain, service, service_data, blocking=True, return_response=False
+        self,
+        domain,
+        service,
+        service_data,
+        blocking=True,
+        return_response=False,
+        context=None,
     ):
         self.calls.append(
             {
@@ -2706,6 +2719,7 @@ class _FakeBulkServices:
                 "service_data": service_data,
                 "blocking": blocking,
                 "return_response": return_response,
+                "context": context,
             }
         )
         behavior = self._behaviors.get((domain, service), {})

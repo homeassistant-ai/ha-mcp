@@ -686,6 +686,7 @@ def _build_handler(schema: dict[Any, Any], do_fn: Any, prep: Any = None) -> Any:
     async def _handler(
         hass: HomeAssistant, connection: Any, msg: dict[str, Any]
     ) -> None:
+        msg["ha_mcp_context"] = connection.context(msg)
         extra = await prep(hass, msg) if prep is not None else {}
         connection.send_result(msg["id"], do_fn(hass, msg, **extra))
 
@@ -6186,6 +6187,7 @@ async def _call_service_prep(
             dict(service_data),
             blocking=True,
             return_response=return_response,
+            context=msg.get("ha_mcp_context"),
         )
         dispatched = True
         # ``evt`` is None when nothing was worth waiting on (should_confirm was
@@ -6602,6 +6604,8 @@ async def _bulk_call_service_prep(
 
     # 2. Normalize + pre-state capture (synchronous in-memory reads) per op.
     ops = [_bulk_op_record(hass, op, wait=wait) for op in operations]
+    for record in ops:
+        record["context"] = msg.get("ha_mcp_context")
 
     # 3. Register-before-fire (D5): every confirmable op's listener is registered in
     #    one synchronous pass BEFORE any dispatch; ALL unsubs torn down in finally.
@@ -6694,6 +6698,7 @@ async def _bulk_dispatch_one(hass: HomeAssistant, op: dict[str, Any]) -> None:
         dict(op["service_data"]),
         blocking=True,
         return_response=False,
+        context=op.get("context"),
     )
     op["dispatched"] = True
 
