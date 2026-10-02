@@ -141,6 +141,8 @@ def temp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "GIT_INDEX_FILE",
         "GIT_PREFIX",
         "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     ):
         monkeypatch.delenv(name, raising=False)
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
