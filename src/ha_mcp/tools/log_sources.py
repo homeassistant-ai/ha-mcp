@@ -44,6 +44,42 @@ from .util_helpers import add_timezone_metadata, normalize_log_level
 logger = logging.getLogger(__name__)
 
 
+# system_log keeps a message verbatim, so one warning that reprs a binary
+# payload (a blocking-call report on write_bytes, say) can run to hundreds of
+# kilobytes. compact caps each message string; compact=False returns it whole.
+_SYSTEM_LOG_MESSAGE_CAP = 2000
+_SYSTEM_LOG_TRUNCATION_MARK = "…[truncated; compact=False returns the full message]"
+
+
+def _cap_message(message: str) -> tuple[str, bool]:
+    if len(message) <= _SYSTEM_LOG_MESSAGE_CAP:
+        return message, False
+    return message[:_SYSTEM_LOG_MESSAGE_CAP] + _SYSTEM_LOG_TRUNCATION_MARK, True
+
+
+def _cap_system_log_messages(entries: list[Any]) -> int:
+    """Cap oversized system_log message strings in place; return how many."""
+    capped = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        message = entry.get("message")
+        if isinstance(message, str):
+            entry["message"], cut = _cap_message(message)
+            capped += cut
+        elif isinstance(message, list):
+            parts = []
+            for part in message:
+                if isinstance(part, str):
+                    kept, cut = _cap_message(part)
+                    capped += cut
+                    parts.append(kept)
+                else:
+                    parts.append(part)
+            entry["message"] = parts
+    return capped
+
+
 class CoreLogSourcesMixin:
     """The log sources HA Core serves directly.
 
@@ -302,6 +338,7 @@ class CoreLogSourcesMixin:
         search: str | None = None,
         level: str | None = None,
         order: Literal["newest", "oldest"] = "newest",
+        compact: bool = True,
     ) -> dict[str, Any]:
         """Fetch structured system log entries via system_log/list."""
         effective_limit = _coerce_limit(limit)
@@ -366,6 +403,7 @@ class CoreLogSourcesMixin:
 
             total_entries = len(entries)
             entries = entries[:effective_limit]
+            truncated_messages = _cap_system_log_messages(entries) if compact else 0
 
             data: dict[str, Any] = {
                 "success": True,
@@ -378,6 +416,8 @@ class CoreLogSourcesMixin:
             }
             if filters_applied:
                 data["filters_applied"] = filters_applied
+            if truncated_messages:
+                data["truncated_messages"] = truncated_messages
 
             return data
 

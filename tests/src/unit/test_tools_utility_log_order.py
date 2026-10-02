@@ -393,3 +393,87 @@ class TestLoggerOrderWarning:
         tools = LogTools(self._client())
         result = await tools.get_logs(**_call_kwargs(source="logger"))
         assert "warnings" not in result
+
+
+class TestSystemMessageCap:
+    """source='system' — compact caps oversized messages; compact=False lifts it."""
+
+    @staticmethod
+    def _client(message):
+        client = AsyncMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {
+                        "name": "homeassistant.util.loop",
+                        "message": [message, "short"],
+                        "level": "WARNING",
+                        "timestamp": 100.0,
+                        "exception": "Traceback (most recent call last):\n" * 3,
+                    }
+                ],
+            }
+        )
+        return client
+
+    @pytest.mark.asyncio
+    async def test_compact_caps_an_oversized_message_and_marks_it(self):
+        # A blocking-call warning can carry a whole binary payload in its
+        # args repr; one such entry must not flood the response.
+        huge = "Detected blocking call to write_bytes " + "x" * 200_000
+        tools = LogTools(self._client(huge))
+        result = await tools.get_logs(**_call_kwargs(source="system"))
+        capped, short = result["entries"][0]["message"]
+        assert len(capped) < 3_000
+        assert capped.startswith("Detected blocking call to write_bytes ")
+        assert "compact=False" in capped
+        assert short == "short"
+        assert result["truncated_messages"] == 1
+
+    @pytest.mark.asyncio
+    async def test_compact_false_returns_the_full_message(self):
+        huge = "y" * 200_000
+        tools = LogTools(self._client(huge))
+        result = await tools.get_logs(**_call_kwargs(source="system", compact=False))
+        assert result["entries"][0]["message"][0] == huge
+        assert "truncated_messages" not in result
+
+    @pytest.mark.asyncio
+    async def test_compact_leaves_tracebacks_and_short_messages_untouched(self):
+        tools = LogTools(self._client("fits"))
+        result = await tools.get_logs(**_call_kwargs(source="system"))
+        entry = result["entries"][0]
+        assert entry["message"] == ["fits", "short"]
+        assert entry["exception"] == "Traceback (most recent call last):\n" * 3
+        assert "truncated_messages" not in result
+
+    @pytest.mark.asyncio
+    async def test_compact_handles_every_message_shape_and_malformed_record(self):
+        client = AsyncMock()
+        client.send_websocket_message = AsyncMock(
+            return_value={
+                "success": True,
+                "result": [
+                    {"name": "s", "message": "z" * 200_000, "timestamp": 3.0},
+                    {
+                        "name": "mixed",
+                        "message": [123, "w" * 200_000],
+                        "timestamp": 2.0,
+                    },
+                    {"name": "none", "timestamp": 1.0},
+                    "not-a-dict",
+                ],
+            }
+        )
+        tools = LogTools(client)
+        result = await tools.get_logs(**_call_kwargs(source="system"))
+        capped, mixed, absent, bogus = result["entries"]
+        assert len(capped["message"]) < 3_000
+        assert capped["message"].startswith("zzz")
+        assert "compact=False" in capped["message"]
+        assert mixed["message"][0] == 123
+        assert len(mixed["message"][1]) < 3_000
+        assert "message" not in absent
+        assert bogus == "not-a-dict"
+        assert result["truncated_messages"] == 2

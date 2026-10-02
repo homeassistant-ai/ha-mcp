@@ -61,7 +61,7 @@ class LogTools(CoreLogSourcesMixin, SupervisorLogSourcesMixin, FaultLogSourceMix
             )
         if source == "system":
             return await self._get_system_log(
-                limit=limit, search=search, level=level, order=order
+                limit=limit, search=search, level=level, order=order, compact=compact
             )
         if source == "error_log":
             return await self._get_error_log(
@@ -260,7 +260,14 @@ def register_logs_tools(mcp: Any, client: Any, **kwargs: Any) -> None:
         ] = 0,
         compact: Annotated[
             bool,
-            Field(description="Logbook only: strip attribute dicts to save context."),
+            Field(
+                description=(
+                    "logbook / system only: save context. Logbook strips "
+                    "attribute dicts; system caps each message string at 2,000 "
+                    "characters (counted in 'truncated_messages'); a 'search' "
+                    "match past the cut is then hidden. False returns entries whole."
+                )
+            ),
         ] = True,
         # System/error_log-specific
         level: Annotated[
