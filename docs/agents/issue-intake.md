@@ -65,8 +65,11 @@ with the report's `ha-mcp Version:` line, or a
 `### Why there is no ha_report_issue report` section of at least five words.
 The issue forms render their fallback field under that heading; blank and
 API-filed issues must write it themselves. Maintainers (write role or above),
-bots, `documentation` issues and issues transferred in from another repository
-(the HACS mirror files against its own forms) are exempt.
+bots and `documentation` issues are exempt. An issue transferred in from another
+repository (the HACS mirror files against its own forms) is never closed: if it
+arrives without a report or explanation, the gate posts one notice asking for it
+and mentioning the reporter, so they continue here instead of refiling on the
+mirror.
 
 A failing issue is closed as not planned only when it is opened, or reopened by
 someone below the write role, so an edit never closes an issue that predates the

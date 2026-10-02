@@ -894,22 +894,14 @@ test("edits never close an existing issue, and only a maintainer's reopen overri
   assert.equal(gateAction(s, bot, { action: "reopened", senderRole: "read" }), "close");
 });
 
-test("maintainer, bot, documentation and transferred issues are not gated", () => {
+test("maintainer, bot and documentation issues are not gated", () => {
   const writer = snapshot();
   writer.issue.user = user("writer");
   const app = snapshot();
   app.issue.user = { login: "coderabbitai[bot]", type: "Bot" };
   const docs = snapshot();
   docs.issue.labels.push({ name: "documentation" });
-  const transferred = snapshot();
-  transferred.events.push({
-    id: 1,
-    event: "transferred",
-    actor: user("maintainer"),
-    created_at: "2026-09-20T00:00:00Z",
-  });
-  for (const s of [writer, app, docs, transferred])
-    assert.equal(gateAction(s, bot, opened), null);
+  for (const s of [writer, app, docs]) assert.equal(gateAction(s, bot, opened), null);
 });
 
 test("every gated issue form asks for the report under the headings the gate reads", () => {
@@ -1028,4 +1020,40 @@ test("the apply step refuses another App's token before writing", async () => {
     ),
     /different App/,
   );
+});
+
+const transferredIn = () => {
+  const s = snapshot();
+  s.events.push({
+    id: 1,
+    event: "transferred",
+    actor: user("maintainer"),
+    created_at: "2026-09-20T00:00:00Z",
+  });
+  return s;
+};
+
+test("an issue moved in without a report is asked once and never closed", async () => {
+  const api = new FakeGitHub(transferredIn());
+  assert.equal(await gate(api, "test/repo", 1, bot, opened, true), "request");
+  assert.deepEqual(
+    api.writes.map((w) => [w.method, w.path]),
+    [["POST", "repos/test/repo/issues/1/comments"]],
+  );
+  assert.match(api.writes[0].data.body, /^<!-- ha-mcp-report-gate -->\n@reporter,/);
+  assert.doesNotMatch(api.writes[0].data.body, /closed automatically/);
+
+  const asked = transferredIn();
+  asked.comments.push(
+    comment(5, bot, `${gateMarker}\nasked`, { user: { login: bot, type: "Bot" } }),
+  );
+  const withReport = transferredIn();
+  withReport.issue.body += `\n\n${report}`;
+  const reopened = transferredIn();
+  for (const [s, event] of [
+    [asked, opened],
+    [withReport, opened],
+    [reopened, { action: "reopened", senderRole: "read" }],
+  ])
+    assert.equal(gateAction(s, bot, event), null);
 });

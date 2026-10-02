@@ -607,15 +607,35 @@ const reporterTexts = ({ issue, comments }) => [
     .map((c) => c.body || ""),
 ];
 
+const gateNotice = (snapshot, bot) =>
+  snapshot.comments
+    .filter(
+      (c) =>
+        c.user?.login === bot &&
+        c.user.type === "Bot" &&
+        c.body.startsWith(gateMarker),
+    )
+    .at(-1);
+
 export function gateAction(snapshot, bot, event) {
   const { issue, events, roles } = snapshot;
   const author = issue.user;
   if (!isHuman(author) || gateExemptRoles.includes(roles[author.login]))
     return null;
   if (issue.labels.some((l) => l.name === "documentation")) return null;
-  // Issues moved in from the HACS mirror were filed against its own forms.
-  if (events.some((e) => e.event === "transferred")) return null;
-  if (reporterTexts(snapshot).some((t) => hasReport(t) || hasReason(t))) {
+  const satisfied = reporterTexts(snapshot).some(
+    (t) => hasReport(t) || hasReason(t),
+  );
+  // An issue moved in from the HACS mirror is asked once, never closed: a
+  // reporter whose issue was closed would refile it on the mirror.
+  if (events.some((e) => e.event === "transferred"))
+    return !satisfied &&
+      issue.state === "open" &&
+      event.action === "opened" &&
+      !gateNotice(snapshot, bot)
+      ? "request"
+      : null;
+  if (satisfied) {
     const closed = latestEvent(events, (e) => e.event === "closed");
     return issue.state === "closed" && closed?.actor?.login === bot
       ? "reopen"
@@ -646,14 +666,22 @@ function gateHint(texts) {
 export function gateComment(action, login, hint = "") {
   if (action === "reopen")
     return `${gateMarker}\nReopened: the issue now includes an \`ha_report_issue\` report or explains why it has none.\n`;
+  const opening =
+    action === "request"
+      ? `@${login}, this issue was moved to this repository and does not include an \`ha_report_issue\` report. Please add it here rather than in the repository you filed it in.`
+      : `@${login}, this issue was closed automatically because it does not include an \`ha_report_issue\` report.`;
+  const closing =
+    action === "request"
+      ? "Without one of them, maintainers may not have what they need to act on this issue."
+      : "The issue reopens automatically once the report or that explanation is added.";
   return `${gateMarker}
-@${login}, this issue was closed automatically because it does not include an \`ha_report_issue\` report.${hint ? ` ${hint}` : ""}
+${opening}${hint ? ` ${hint}` : ""}
 
 Every bug report, agent-behavior report and feature request needs one. Ask your AI agent to run \`ha_report_issue\` in the session where the problem happened, or for a feature request, the session where it tried to do what you are asking for, and add the report it generates (its \`issue_body\`, starting with the Auto-Generated heading) to the issue description or a comment, with secrets removed. It records the ha-mcp version, install type, client, settings and tool calls that maintainers otherwise have to ask for, and shows what the agent tried.
 
 Only if no report can exist, add a section headed \`### ${noReportHeading}\` that explains why: ha-mcp does not start or connect, the problem was found by reading the code and never happened in a live session, or a report could not show anything relevant to a feature request. For a startup problem, include your startup logs and configuration there (tokens removed). Not wanting to run the tool does not count.
 
-The issue reopens automatically once the report or that explanation is added.
+${closing}
 `;
 }
 
@@ -685,26 +713,20 @@ export async function gate(api, repository, number, bot, event, write) {
     retrying(api, () =>
       api.request(`${base}/${number}`, { method: "PATCH", data }),
     );
-  if (action === "close") {
+  if (action === "close" || action === "request") {
     // A new comment on every close, so the mention notifies again. It is not
     // retried: a POST that failed late may still have been created.
     await api.request(`${base}/${number}/comments`, {
       method: "POST",
       data: { body },
     });
-    await setState({ state: "closed", state_reason: "not_planned" });
+    if (action === "close")
+      await setState({ state: "closed", state_reason: "not_planned" });
     return action;
   }
   await setState({ state: "open" });
   // A reopen rewrites the notice that closed the issue.
-  const notice = snapshot.comments
-    .filter(
-      (c) =>
-        c.user?.login === bot &&
-        c.user.type === "Bot" &&
-        c.body.startsWith(gateMarker),
-    )
-    .at(-1);
+  const notice = gateNotice(snapshot, bot);
   if (notice)
     await retrying(api, () =>
       api.request(`${base}/comments/${notice.id}`, {
