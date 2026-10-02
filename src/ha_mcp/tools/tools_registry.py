@@ -867,7 +867,7 @@ class RegistryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error updating device: {e}")
             exception_to_structured_error(
                 e,
@@ -1013,7 +1013,7 @@ class RegistryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error getting device: {e}")
             exception_to_structured_error(e)
             return None  # unreachable: exception_to_structured_error always raises
@@ -1215,7 +1215,7 @@ class RegistryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing device: {e}")
             exception_to_structured_error(
                 e,

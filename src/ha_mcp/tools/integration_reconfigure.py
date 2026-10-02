@@ -289,7 +289,7 @@ class ReconfigureRunner:
             )
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error("Failed to reconfigure integration: %s", e)
             exception_to_structured_error(
                 e,

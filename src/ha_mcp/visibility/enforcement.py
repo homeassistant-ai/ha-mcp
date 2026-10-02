@@ -900,7 +900,7 @@ async def active_hidden_regex(client: Any) -> re.Pattern[str] | None:
         ):
             return None
         matcher = await _hidden_cache.get(config, client)
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
     return matcher.regex
 

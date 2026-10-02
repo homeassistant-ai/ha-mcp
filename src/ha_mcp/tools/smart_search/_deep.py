@@ -415,7 +415,7 @@ class DeepSearchMixin(SceneSearchMixin):
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error in deep_search: {e}")
             exception_to_structured_error(
                 e,
@@ -557,7 +557,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     f"out after {INDIVIDUAL_CONFIG_TIMEOUT}s."
                 )
                 return (uid, None, "timeout")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 if is_timeout_error(e):
                     # The REST client's own httpx timeout (HA_TIMEOUT)
                     # fired first and arrived wrapped in a
@@ -697,7 +697,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     f"after {INDIVIDUAL_CONFIG_TIMEOUT}s."
                 )
                 return (sid, None, "timeout")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 if is_timeout_error(e):
                     # Client-side HTTP timeout arrived wrapped; still a
                     # timeout. See _fetch_automation_config.
@@ -896,7 +896,7 @@ class DeepSearchMixin(SceneSearchMixin):
                             }
                         )
                 return matches, False
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.debug(f"Could not list {helper_type}: {e}")
                 return [], True
 
@@ -1170,7 +1170,7 @@ class DeepSearchMixin(SceneSearchMixin):
                         }
                     ], False
                 return [], False
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.debug(f"Dashboard search failed ({url_path}): {e}")
                 return [], True
 
@@ -1592,7 +1592,7 @@ class DeepSearchMixin(SceneSearchMixin):
         """
         try:
             response = await self.client._request("GET", "/config/config_entries/entry")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.debug(f"flow-helper search: list_entries failed: {exc}")
             return [], 1
 

@@ -154,7 +154,7 @@ async def fetch_entity_enrichment_via_component(
         else:
             logger.warning("%s failed; skipped enrichment: %r", WS_ENTITY_ENRICH, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # HomeAssistantConnectionError / plain establish Exception → skip
         # enrichment (strictly additive; no legacy fetch dies here).
         logger.warning(
@@ -1954,7 +1954,7 @@ class EntityTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error updating entity: {e}")
             exception_to_structured_error(e, context={"entity_id": entity_id})
             return None  # unreachable: exception_to_structured_error always raises
@@ -2088,7 +2088,7 @@ class EntityTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error getting entity: {e}")
             exception_to_structured_error(
                 e,
@@ -2361,7 +2361,7 @@ class EntityTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing entity '{entity_id}': {e}")
             exception_to_structured_error(
                 e,

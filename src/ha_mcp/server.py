@@ -1928,7 +1928,7 @@ class HomeAssistantSmartMCPServer:
                 )
             else:
                 logger.warning(f"⚠️ Failed to connect to Home Assistant: {error}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"❌ Error testing connection: {e}")
 
         # Log successful server initialization

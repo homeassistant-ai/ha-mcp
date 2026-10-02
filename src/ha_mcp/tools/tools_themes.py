@@ -379,7 +379,7 @@ class ThemesTools:
             }
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"action": action, "theme_name": theme_name, "mode": mode},

@@ -132,7 +132,7 @@ async def fetch_registries_via_component(
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_REGISTRIES, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # HomeAssistantConnectionError: a pooled-WS drop or a failed
         # (re)connect. The capture
         # fetchers use a dedicated one-shot socket and forbid a blocked write, so

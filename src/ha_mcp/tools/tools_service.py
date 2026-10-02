@@ -982,7 +982,7 @@ class ServiceTools:
                 f"Could not fetch initial state for {entity_id}: {e} — state verification may be degraded"
             )
             return None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug(
                 f"Could not fetch initial state for {entity_id}: {e} — state verification may be degraded"
             )
@@ -1031,7 +1031,7 @@ class ServiceTools:
             )
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             response.setdefault("warnings", []).append(
                 f"Service executed but state verification failed: {e}"
             )
@@ -1064,7 +1064,7 @@ class ServiceTools:
                 f"Post-timeout unavailable re-check for {entity_id} failed: {e} — treating as inconclusive"
             )
             return False
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(
                 f"Post-timeout unavailable re-check for {entity_id} failed: {e} — treating as inconclusive"
             )
@@ -1454,7 +1454,7 @@ class ServiceTools:
                 token=self._client.token,
                 verify_ssl=getattr(self._client, "verify_ssl", None),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "%s establishment failed; falling back to legacy: %r",
                 WS_CALL_SERVICE,
@@ -1512,7 +1512,7 @@ class ServiceTools:
                     exc,
                 )
             return None
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # HomeAssistantCommandTimeout (response-wait expired — the frame WAS sent)
             # or any post-send transport drop (e.g. a pooled-WS drop after send). The
             # component may still be lawfully mid-write, so this is ambiguous-
@@ -2116,7 +2116,7 @@ class ServiceTools:
             )
         except ToolError:
             raise
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             self._raise_unexpected_call_service_error(
                 error, domain=domain, service=service, entity_id=entity_id
             )
@@ -2181,7 +2181,7 @@ class ServiceTools:
             return cast(dict[str, Any], result)
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             op_context: dict[str, Any] = {"operation_id": operation_id}
             exception_to_structured_error(
                 e,
@@ -2567,7 +2567,7 @@ class ServiceTools:
             )
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"event_type": event_type},

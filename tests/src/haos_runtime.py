@@ -265,7 +265,7 @@ def _container_miss_diagnostics(ssh_cmd: list[str], env: dict[str, str]) -> str:
                 check=False,
             )
             captured.append(f"{label}={probe.stdout.strip()!r}")
-        except Exception as probe_err:  # pragma: no cover - diagnostics best-effort
+        except Exception as probe_err:  # noqa: BLE001  # pragma: no cover - diagnostics best-effort
             captured.append(f"{label}_error={probe_err!r}")
     return " | " + " | ".join(captured)
 

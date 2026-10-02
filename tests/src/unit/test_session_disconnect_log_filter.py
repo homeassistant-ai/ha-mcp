@@ -46,7 +46,7 @@ async def _run_in_task_group(*coro_funcs) -> Exception:
         async with anyio.create_task_group() as tg:
             for coro_func in coro_funcs:
                 tg.start_soon(coro_func)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return exc
     raise AssertionError("task group did not raise")
 

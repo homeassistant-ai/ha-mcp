@@ -1751,7 +1751,7 @@ async def apply_entity_category(
                     "not applied."
                 )
                 return
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.debug(f"Category recheck failed for {entity_id}: {e}")
 
     try:
@@ -1775,7 +1775,7 @@ async def apply_entity_category(
             result_dict.setdefault("warnings", []).append(
                 f"{entity_type.capitalize()} saved but failed to set category: {error_msg}"
             )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"Failed to set category for {entity_id}: {e}")
         result_dict.setdefault("warnings", []).append(
             f"{entity_type.capitalize()} saved but failed to set category: {e}"
@@ -1922,7 +1922,7 @@ async def _fetch_raw_diagnostics(
         else:
             result["error"] = f"Diagnostics fetch connection failed: {e}"
         logger.warning("Diagnostics fetch connection error: %s", e)
-    except Exception as e:  # pragma: no cover - defensive last-resort guard
+    except Exception as e:  # noqa: BLE001  # pragma: no cover - defensive last-resort guard
         logger.warning(
             "Diagnostics fetch unexpected error: %s: %s", type(e).__name__, e
         )

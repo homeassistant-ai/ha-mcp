@@ -737,7 +737,7 @@ async def _flow_helper_error_context(
         info = await fetch_helper_flow_info(
             client, helper_type, menu_choice=menu_choice
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # Mirror the breadcrumb in ``abort_config_flow``'s own swallow
         # (config_entry_flow_walker), so a fetch failure here doesn't
         # disappear silently — this PR raises the call rate by 5 sites
@@ -1187,7 +1187,7 @@ async def _ws_registry_lookup(
     """
     try:
         result = await client.send_websocket_message(message)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.debug("_ws_registry_lookup: failed for %r: %s", message.get("type"), e)
         return False, [], e, None
     if isinstance(result, list):
@@ -1671,7 +1671,7 @@ async def _enrich_helpers_with_current_registry(
             item["name"] = (
                 entry.get("name") or entry.get("original_name") or item.get("name")
             )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.debug(f"list_helpers registry enrichment failed: {e}")
         return [_REGISTRY_JOIN_STALE_WARNING]
     return []
@@ -1767,7 +1767,7 @@ async def _get_entities_for_config_entry(
     """
     try:
         rows = await fetch_entities_for_config_entry_via_component(client, entry_id)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         if warnings is not None:
             warnings.append(
                 f"registry_lookup failed for config_entry_id={entry_id}: {e}"
@@ -1780,7 +1780,7 @@ async def _get_entities_for_config_entry(
         result = await client.send_websocket_message(
             {"type": "config/entity_registry/list"}
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         if warnings is not None:
             warnings.append(
                 f"entity_registry/list failed for config_entry_id={entry_id}: {e}"
@@ -2728,7 +2728,7 @@ async def _execute_create_simple_helper(
                 warnings.append(
                     f"Helper created but {entity_id} not yet queryable. It may take a moment to become available."
                 )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             warnings.append(f"Helper created but verification failed: {e}")
 
     if entity_id:
@@ -3450,7 +3450,7 @@ async def _execute_update_simple_helper(
             registered = await wait_for_entity_registered(client, entity_id)
             if not registered:
                 warnings.append(f"Update applied but {entity_id} not yet queryable.")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             warnings.append(f"Update applied but verification failed: {e}")
 
     update_response = _helper_response(
@@ -4040,7 +4040,7 @@ class HelperConfigTools:
             )
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error listing helpers: {e}")
             exception_to_structured_error(
                 e,
@@ -4229,7 +4229,7 @@ class HelperConfigTools:
                 response = await self._all_helpers_via_component()
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"helper_type": "all"},
@@ -4970,7 +4970,7 @@ class HelperConfigTools:
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             error = exception_to_structured_error(
                 e,
                 context={"action": action, "helper_type": helper_type},

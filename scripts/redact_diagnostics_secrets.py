@@ -93,7 +93,7 @@ def main(argv: list[str]) -> int:
         try:
             n = redact_storage_tar(tar_path)
             print(f"redact: {tar_path} — {n} value(s) redacted")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # Could not guarantee redaction — drop the tar so the artifact
             # cannot carry an unredacted credential. Diagnostics loss beats
             # credential persistence.

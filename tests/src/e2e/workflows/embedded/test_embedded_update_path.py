@@ -173,7 +173,7 @@ def _docker_probe_error() -> str | None:
         import docker as docker_sdk
 
         docker_sdk.from_env().ping()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return f"{type(exc).__name__}: {exc}"
     return None
 

@@ -85,6 +85,11 @@ adding a `C901` per-file ignore. Lefthook runs `ruff --fix` on commit with
 non-`__init__` modules. Add an import and its first use in the same change or
 the hook may strip it without a separate Ruff invocation.
 
+`BLE001` (a handler that catches `Exception` and neither re-raises nor logs
+it) is enabled. Each handler that existed before carries `# noqa: BLE001`.
+Do not add that comment to a new handler: catch the specific exception, log
+it, or re-raise. `RUF100` fails a `noqa` that is no longer needed.
+
 ## Docker
 
 Stdio mode is local to the process and does not expose a network port:

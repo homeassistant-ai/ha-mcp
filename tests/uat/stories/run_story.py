@@ -210,7 +210,7 @@ def _extract_tokens(session_file: str | None, agent: str) -> dict | None:
                         "cache_read_input_tokens", 0
                     ) + usage.get("cache_creation_input_tokens", 0)
             return totals
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning(f"  Token extraction failed: {exc}")
         return None
 
@@ -236,7 +236,7 @@ def _extract_model(session_file: str | None, agent: str) -> str | None:
                     model = entry.get("message", {}).get("model")
                     if model:
                         return model
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning(f"  Model extraction failed: {exc}")
         return None
 
@@ -291,7 +291,7 @@ def _extract_tool_sequence(session_file: str | None, agent: str) -> list[str] | 
 
         if agent == "claude":
             return _claude_tool_sequence(session_file)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning(f"  Tool sequence extraction failed: {exc}")
         return None
 
@@ -683,7 +683,7 @@ def get_git_info() -> tuple[str, str]:
             check=True,
         )
         sha = result.stdout.strip()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # Best-effort git lookup; keep the "unknown" default if git is
         # unavailable or fails. Say so — otherwise every result row records
         # "unknown" with no trace of why the commit identity was lost. The
@@ -703,7 +703,7 @@ def get_git_info() -> tuple[str, str]:
             check=True,
         )
         describe = result.stdout.strip()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # Best-effort git lookup; keep the "unknown" default if git is
         # unavailable or fails. Say so — otherwise every result row records
         # "unknown" with no trace of why the commit identity was lost. The
@@ -1061,7 +1061,7 @@ async def _setup_inline_agent(
             model=args.model,
         )
         agent_stack.push_async_callback(openai_client.close)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         error_msg = f"Failed to initialise OpenAI client: {type(e).__name__}: {e}"
         logger.error(f"[{agent}] {error_msg}")
         _record_setup_failure(
@@ -1083,7 +1083,7 @@ async def _setup_inline_agent(
             inline_mcp_client, max_tools=args.max_tools
         )
         logger.info(f"[{agent}] MCP server ready ({len(openai_tools)} tools)")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         error_msg = f"Failed to start MCP server: {type(e).__name__}: {e}"
         logger.error(f"[{agent}] {error_msg}")
         _record_setup_failure(

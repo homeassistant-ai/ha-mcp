@@ -92,7 +92,7 @@ class StartupLogCollector(logging.Handler):
         self._formatting.active = True
         try:
             message = record.getMessage()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # Mirrors logging's own contract: a handler never propagates. Only
             # attributes the logging machinery itself set are interpolated —
             # ``exc``'s repr or ``record.msg`` could run the code that just
@@ -355,7 +355,7 @@ class UsageLogger:
                 else:
                     # Sleep briefly to avoid busy waiting
                     threading.Event().wait(0.1)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 # Silent error handling to avoid disrupting MCP server
                 print(f"Usage logger error: {e}")
 
@@ -365,7 +365,7 @@ class UsageLogger:
             with open(self.log_file_path, "a", encoding="utf-8") as f:
                 json.dump(asdict(log_entry), f, ensure_ascii=False)
                 f.write("\n")
-        except Exception:
+        except Exception:  # noqa: BLE001
             # Silent error handling
             pass
 
@@ -405,7 +405,7 @@ class UsageLogger:
 
             # Queue for disk write
             self._log_queue.put(log_entry)
-        except Exception:
+        except Exception:  # noqa: BLE001
             # Silent error handling to never break MCP server
             pass
 

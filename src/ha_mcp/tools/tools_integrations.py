@@ -290,7 +290,7 @@ async def fetch_entry_options_with_status(
             )
             return {}, False
         return options_from_form_flow(flow), True
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         log_probe_failure(
             f"Failed to fetch options for {entry_id}: {type(exc).__name__}: {exc}"
         )
@@ -299,7 +299,7 @@ async def fetch_entry_options_with_status(
         if flow_id:
             try:
                 await client.abort_options_flow(flow_id)
-            except Exception as abort_err:
+            except Exception as abort_err:  # noqa: BLE001
                 log_probe_failure(
                     f"Failed to abort options flow {flow_id}: "
                     f"{type(abort_err).__name__}: {abort_err}"
@@ -364,7 +364,7 @@ async def _fetch_entries_via_component(
         else:
             logger.warning("%s failed; fell back to legacy: %r", WS_CONFIG_ENTRIES, exc)
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # DEVIATION (see docstring): the legacy path is pure REST / the REST-client
         # WS bridge, NOT the shared pooled WS. A pooled-WS drop
         # (HomeAssistantConnectionError) OR get_websocket_client() raising a plain
@@ -850,7 +850,7 @@ class IntegrationTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to get integrations: {e}")
             exception_to_structured_error(
                 e,
@@ -1051,7 +1051,7 @@ class IntegrationTools:
             return resp
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"entry_id": entry_id},
@@ -1333,7 +1333,7 @@ class IntegrationTools:
                         self._client.abort_config_subentry_flow(flow_id),
                         timeout=5.0,
                     )
-                except Exception as abort_err:
+                except Exception as abort_err:  # noqa: BLE001
                     logger.warning(
                         "Failed to abort config subentry introspection flow %s: %s",
                         flow_id,
@@ -1379,7 +1379,7 @@ class IntegrationTools:
                 candidate = flow.get("data_schema")
                 if isinstance(candidate, list) and candidate:
                     data_schema = candidate
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "redact_secrets: options-flow probe failed for %s: %r", entry_id, exc
             )
@@ -1387,7 +1387,7 @@ class IntegrationTools:
             if flow_id:
                 try:
                     await self._client.abort_options_flow(flow_id)
-                except Exception as abort_err:
+                except Exception as abort_err:  # noqa: BLE001
                     logger.warning(
                         "redact_secrets: failed to abort probe flow %s: %r",
                         flow_id,
@@ -1456,7 +1456,7 @@ class IntegrationTools:
                     "step_id": flow_result.get("step_id"),
                     "menu_options": flow_result.get("menu_options", []),
                 }
-        except Exception as schema_err:
+        except Exception as schema_err:  # noqa: BLE001
             logger.warning(
                 f"Failed to fetch options schema for {entry_id}: "
                 f"{type(schema_err).__name__}: {schema_err}"
@@ -1471,7 +1471,7 @@ class IntegrationTools:
             if flow_id:
                 try:
                     await self._client.abort_options_flow(flow_id)
-                except Exception as abort_err:
+                except Exception as abort_err:  # noqa: BLE001
                     logger.warning(
                         f"Failed to abort options flow {flow_id}: "
                         f"{type(abort_err).__name__}: {abort_err}"
@@ -2055,7 +2055,7 @@ class IntegrationTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to set integration: {e}")
             error_context = self._set_integration_error_context(entry_id, domain)
             exception_to_structured_error(
@@ -2462,7 +2462,7 @@ class IntegrationTools:
                     "see all config entries",
                 ],
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"entry_id": entry_id},
@@ -2508,7 +2508,7 @@ class IntegrationTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={
@@ -2749,7 +2749,7 @@ class IntegrationTools:
                     "helper_type": helper_type,
                 },
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={
@@ -2867,7 +2867,7 @@ class IntegrationTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             exception_to_structured_error(
                 e,
                 context={"helper_type": helper_type, "target": target},

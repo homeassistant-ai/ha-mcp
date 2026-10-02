@@ -464,7 +464,7 @@ class TestAddonStructure:
                         "`description` (Supervisor renders it as the help tooltip "
                         "under the toggle)"
                     )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 _report_translation_issues(tf, [str(exc)])
 
     def test_addon_names_are_backup_filename_safe(self):

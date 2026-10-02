@@ -487,7 +487,7 @@ def stop_qemu(proc: subprocess.Popen[bytes], ws: HAWebSocket | None) -> None:
     if ws is not None:
         try:
             ws.supervisor_api("/host/shutdown", method="post", timeout=10.0)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # %r so the exception type is visible — bare %s loses it for
             # most exception subclasses and a future maintainer reading
             # this in CI logs needs to know whether it was a timeout, a
@@ -820,7 +820,7 @@ class HAWebSocket:
                     _remaining_deadline_budget(deadline, operation)
                     send_state["started"] = True
                 connection.send(message)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 send_errors.append(exc)
 
         worker = threading.Thread(target=send, name="haos-ws-send", daemon=True)

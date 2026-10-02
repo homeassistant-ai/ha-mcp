@@ -184,7 +184,7 @@ def _detect_installation_method() -> str:
         project_root = Path(__file__).parent.parent.parent.parent
         if (project_root / ".git").exists():
             return "git"
-    except Exception:
+    except Exception:  # noqa: BLE001
         # Best-effort probe: path resolution may fail in unusual layouts;
         # fall through to the next detection heuristic.
         pass
@@ -194,7 +194,7 @@ def _detect_installation_method() -> str:
         marker_path = Path(__file__).parent.parent / "_pypi_marker"
         if marker_path.exists():
             return "pypi"
-    except Exception:
+    except Exception:  # noqa: BLE001
         # Best-effort probe: marker lookup may fail in unusual layouts;
         # fall through to the default "unknown" result.
         pass
@@ -215,7 +215,7 @@ def _detect_installed_version() -> str | None:
     try:
         importlib.invalidate_caches()
         return get_version()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.info("Installed-version probe failed: %s", e)
         return None
 
@@ -312,7 +312,7 @@ def _websockets_dependency_state() -> dict[str, Any]:
         importlib.import_module("ha_mcp._vendor.websockets.asyncio.client")
         state["vendored_version"] = getattr(vendored, "__version__", "Unknown")
         state["vendored_import_ok"] = True
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         state["vendored_version"] = None
         state["vendored_import_ok"] = False
         state["vendored_import_error"] = f"{type(e).__name__}: {e}"
@@ -333,7 +333,7 @@ def _websockets_dependency_state() -> dict[str, Any]:
         state["shared_metadata_version"] = importlib.metadata.version("websockets")
     except importlib.metadata.PackageNotFoundError:
         state["shared_metadata_version"] = None
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         state["shared_metadata_version"] = None
         state["shared_metadata_error"] = f"{type(e).__name__}: {e}"
     return state
@@ -395,7 +395,7 @@ def _get_config_toggles(settings: Settings | None = None) -> dict[str, Any]:
             toggles[f"{list_field}_count"] = count
 
         return toggles
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(
             "Failed to read settings for bug report toggles: %s (%s)",
             e,
@@ -415,7 +415,7 @@ def _tool_policy_summary() -> str:
         from ..utils.data_paths import get_data_dir
 
         policy = load_policy(get_data_dir())
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning("Tool policy probe failed: %s (%s)", e, type(e).__name__)
         # load_policy's message can quote rule contents, so only its kind
         # reaches the report.
@@ -472,7 +472,7 @@ def _extract_client_info(ctx: Context | None) -> dict[str, str]:
             "version": getattr(client, "version", None) or "unknown",
             "title": getattr(client, "title", None) or "",
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.info(
             "Failed to read MCP client info from context: %s (%s)",
             e,
@@ -795,7 +795,7 @@ async def _fetch_core_error_log(client: Any) -> str:
     """
     try:
         page = await client.get_error_log(lines=_CORE_LOG_WINDOW_LINES)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # Broad by design — the bug-report path must stay robust whatever the
         # client raises (auth, role, connection, transport). Logged at INFO so
         # a missing error log is visible without alarming on a routine 403.
@@ -961,7 +961,7 @@ class BugReportTools:
             )
             version = payload.get("version") if isinstance(payload, dict) else None
             return str(version) if version else None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.info("Component version probe failed: %s", e)
             return None
 
@@ -980,7 +980,7 @@ class BugReportTools:
             domain_registered, bootstrap_registered = await _bootstrap_service_state(
                 self._client
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.info("Tools-entry status probe failed: %s", e)
             return None
         if not domain_registered:
@@ -1015,7 +1015,7 @@ class BugReportTools:
             result = response.get("result")
             if not isinstance(result, list):
                 return None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.info("Server-entry status probe failed: %s", e)
             return None
         server, unrecognized = _classify_component_entries(result)
@@ -1043,7 +1043,7 @@ class BugReportTools:
                 _supervisor_api_call(self._client, "/info"),
                 timeout=_SUPERVISOR_PROBE_TIMEOUT,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.info("Supervisor info probe failed: %s (%s)", e, type(e).__name__)
             return {"error": type(e).__name__}
         info = response.get("result")
@@ -1281,7 +1281,7 @@ class BugReportTools:
                 diagnostic_info["supervisor"] = await self._detect_supervisor_info()
             else:
                 diagnostic_info["supervisor"] = {"none": "true"}
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"Failed to get Home Assistant config: {e}")
             diagnostic_info["connection_status"] = (
                 f"Connection Error: {_sanitize_log_text(str(e))}"
@@ -1292,7 +1292,7 @@ class BugReportTools:
             states = await self._client.get_states()
             if states:
                 diagnostic_info["entity_count"] = len(states)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"Failed to get entity count: {e}")
 
         # Calculate how many log entries to retrieve

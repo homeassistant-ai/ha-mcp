@@ -1274,7 +1274,7 @@ def _mask_secrets_content(content: str) -> str:
         return "\n".join(f'{key}: "[MASKED]"' for key in parsed)
     except YAMLError:
         return "# secrets.yaml could not be parsed — content withheld to avoid leaking secrets"
-    except Exception:
+    except Exception:  # noqa: BLE001
         return "# secrets.yaml could not be masked — content withheld to avoid leaking secrets"
 
 
@@ -1572,7 +1572,7 @@ async def _run_config_check(hass: HomeAssistant, rel_path: str) -> dict[str, Any
     """
     try:
         errors = await async_check_ha_config_file(hass)
-    except Exception as check_err:
+    except Exception as check_err:  # noqa: BLE001
         _LOGGER.warning(
             "Config check unavailable after editing %s: %s", rel_path, check_err
         )
@@ -2149,7 +2149,7 @@ async def _resolve_post_action(
                 "post_action": "reload_performed",
                 "reload_service": "frontend.reload_themes",
             }
-        except Exception as reload_err:
+        except Exception as reload_err:  # noqa: BLE001
             post_info = {
                 "post_action": "reload_available",
                 "reload_service": "frontend.reload_themes",
@@ -3170,7 +3170,7 @@ def _build_get_caller_token_handler(
                 # an absent one deserve the same answer.
                 raise ValueError("the manifest carries no version")
             version = str(integration.version)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             _LOGGER.warning(
                 "Could not read ha_mcp_tools manifest version for "
                 "get_caller_token response: %s",
@@ -3463,7 +3463,7 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         moved, failed = await hass.async_add_executor_job(
             _migrate_legacy_backup_dir, config_dir
         )
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         # Defensive: a migration failure must not block setup_entry, since
         # the integration's normal value (file ops, edit_yaml_config) is
         # unaffected by whether old backups got relocated.
@@ -3506,7 +3506,7 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
                 title="HA MCP Tools — credential exposure (GHSA-g39v-cvjh-8fpf)",
                 notification_id="ha_mcp_tools_ghsa_g39v_cvjh_8fpf",
             )
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             # Defensive: log line above is the source of truth; the
             # notification is best-effort UX and must not block setup.
             _LOGGER.warning(
@@ -3660,7 +3660,7 @@ async def _async_setup_tools_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
             # and ``str()`` would put the literal "None" on the device.
             raise ValueError("the manifest carries no version")
         component_version = str(integration.version)
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         _LOGGER.debug(
             "Could not read the component version for the tools device, using "
             "the compiled-in %s: %s",

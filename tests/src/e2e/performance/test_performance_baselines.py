@@ -378,7 +378,7 @@ async def test_performance_report_generation(mcp_client):
             # Verify the operation succeeded
             assert_mcp_success(result, tool_name)
             metrics.add_result(perf)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to measure {tool_name}: {e}")
 
     # Generate and log report

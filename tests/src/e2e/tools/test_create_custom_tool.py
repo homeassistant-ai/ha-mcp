@@ -78,7 +78,7 @@ async def _check_tool_available(mcp_client) -> tuple[bool, str | None]:
         if TOOL_NAME not in tool_names:
             return False, f"Tool {TOOL_NAME} not registered"
         return True, None
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return False, f"Error checking tools: {e}"
 
 
