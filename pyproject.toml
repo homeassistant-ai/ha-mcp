@@ -203,7 +203,7 @@ select = [
     "LOG",   # logging best practices
     "SIM",   # simplify
     "PLE",   # pylint errors (real bugs: bad logging args, await outside async)
-    "BLE001", # blind except: a handler that catches Exception and neither re-raises nor logs it
+    "BLE001", # blind except: catches Exception without re-raising or logging the traceback
     # Targeted pylint conventions/refactors/warnings. The PL family is NOT
     # selected wholesale: PLC0415 (import-outside-top-level) fights the
     # deliberate lazy-init architecture, and PLR2004 (magic values),
