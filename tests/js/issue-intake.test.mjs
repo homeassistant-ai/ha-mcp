@@ -13,6 +13,7 @@ import {
   validateResult,
   marker,
   reportMarker,
+  reportVersionLine,
   gate,
   gateAction,
   gateMarker,
@@ -679,7 +680,7 @@ test("real close workflow ages needs-info regardless of who applied it", async (
 function reportSnapshot(title) {
   const s = snapshot();
   s.issue.title = title;
-  s.issue.body = `## 🚨 ${reportMarker}\n\n${s.issue.body}`;
+  s.issue.body = `## 🚨 ${reportMarker}\n\n${s.issue.body}\n\n${reportVersionLine} 8.6.0`;
   return s;
 }
 const labelWrites = (api) =>
@@ -764,7 +765,9 @@ test("no report request when one is present or the issue is not a bug", () => {
   const withReport = reportSnapshot("[BUG] Dashboard call hangs");
   const replied = snapshot();
   replied.issue.title = "[BUG] Dashboard call hangs";
-  replied.comments.push(comment(2, "reporter", `## 🚨 ${reportMarker}\n...`));
+  replied.comments.push(
+    comment(2, "reporter", `## 🚨 ${reportMarker}\n...\n${reportVersionLine} 8.6.0`),
+  );
   const feature = snapshot();
   feature.issue.title = "[FEATURE] Faster dashboards";
   const unclear = snapshot();
@@ -793,10 +796,12 @@ test("the report heading matches what ha_report_issue writes", () => {
   );
   for (const heading of ["## 🚨 ", "## 🤖 ", "## 💡 "])
     assert.ok(tool.includes(`${heading}${reportMarker}`), heading);
+  // Runtime and shared agent/feature environment blocks both carry it.
+  assert.equal(tool.split(`\n${reportVersionLine} `).length - 1, 2);
 });
 
 const opened = { action: "opened", senderRole: "read" };
-const report = `## 🚨 ${reportMarker}\n\n**Version:** 8.6.0`;
+const report = `## 🚨 ${reportMarker}\n\n${reportVersionLine} 8.6.0`;
 const reason = (text) => `### ${noReportHeading}\n\n${text}\n\n### Additional context\n\nnone`;
 const closedByGate = () => {
   const s = snapshot();
@@ -844,6 +849,8 @@ test("only the reporter's report or an explanation of why there is none keeps a 
     // A blank issue's template comment is not the reporter's explanation.
     [(s) => (s.issue.body += `\n\n${reason("<!-- Explain why the report is missing here -->")}`), "close"],
     [(s) => (s.issue.body += ` The ${reportMarker} heading is missing.`), "close"],
+    // The heading over a summary, or a paste cut off before the environment.
+    [(s) => (s.issue.body = `## 🚨 ${reportMarker}\n\nThe dashboard call hangs.`), "close"],
     [(s) => s.comments.push(comment(1, "bystander", report)), "close"],
   ];
   for (const [edit, expected] of cases) {

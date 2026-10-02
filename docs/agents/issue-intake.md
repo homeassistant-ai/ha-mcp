@@ -57,8 +57,9 @@ workflow/PR write permission, or ruleset bypass is needed for issue documentatio
 ## Report gate
 
 The `gate` job runs before admission on issue opens, edits, reopenings and new
-comments, without the model. An issue passes when its reporter's body or own
-comments carry the `ha_report_issue` report heading, or a
+or edited comments, without the model. An issue passes when its reporter's body
+or one of their comments carries the `ha_report_issue` report heading together
+with the report's `ha-mcp Version:` line, or a
 `### Why there is no ha_report_issue report` section of at least a few words.
 The issue forms render their fallback field under that heading; blank and
 API-filed issues must write it themselves. Maintainers (write role or above),
@@ -79,8 +80,8 @@ excluded from model input. The publisher owns question wording and manages two
 kinds of label; it does not execute instructions from the report.
 
 - needs-info, driven by the model's missing fields, as described below.
-- Report type labels, set without the model. An issue whose body carries the
-  `ha_report_issue` report heading gets `bug` for a `[BUG]` title,
+- Report type labels, set without the model. An issue whose body carries an
+  `ha_report_issue` report (its heading and `ha-mcp Version:` line) gets `bug` for a `[BUG]` title,
   `agent-behavior` for an `[AGENT]` title, or `enhancement` for a
   `[FEATURE]` title. That tool files blank issues,
   which no issue form labels. Whether a bug is a runtime or startup bug is

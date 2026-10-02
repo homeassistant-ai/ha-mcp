@@ -481,7 +481,13 @@ const reportHeading = new RegExp(
   `^ {0,3}## \\S+ ${reportMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`,
   "mu",
 );
-const hasReport = (text) => reportHeading.test(text || "");
+// The environment block's version line. The new-issue link keeps it when it
+// cuts a long report, so a report without it was pasted only in part or
+// replaced by a summary under the heading.
+export const reportVersionLine = "- **ha-mcp Version:**";
+const reportVersion = /^ {0,3}- \*\*ha-mcp Version:\*\*/mu;
+const hasReport = (text) =>
+  reportHeading.test(text || "") && reportVersion.test(text || "");
 const reportTypeLabels = {
   "[BUG]": ["bug"],
   "[AGENT]": ["agent-behavior"],
