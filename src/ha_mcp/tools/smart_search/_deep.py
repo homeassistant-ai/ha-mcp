@@ -364,7 +364,7 @@ class DeepSearchMixin(SceneSearchMixin):
                     semaphore,
                     include_config=include_config,
                 )
-                phase_done = await _phase_finished(
+                await _phase_finished(
                     ctx,
                     phase_done,
                     total_phases,
