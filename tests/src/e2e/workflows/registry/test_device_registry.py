@@ -16,6 +16,7 @@ Key test scenarios:
 """
 
 import logging
+from typing import Any
 
 import pytest
 
@@ -719,7 +720,7 @@ class TestDeviceSet:
         )
 
 
-async def _device_for_entity(mcp_client, entity_id: str) -> dict:
+async def _device_for_entity(mcp_client: Any, entity_id: str) -> dict[str, Any]:
     data = parse_mcp_result(
         await mcp_client.call_tool("ha_get_device", {"entity_id": entity_id})
     )
@@ -735,7 +736,7 @@ class TestDeviceSetBlankAndQuoteOnlyValues:
     Each test uses a demo device no other e2e test touches and restores it.
     """
 
-    async def test_quote_only_name_is_not_stored(self, mcp_client):
+    async def test_quote_only_name_is_not_stored(self, mcp_client: Any) -> None:
         name = '""'
         device = await _device_for_entity(mcp_client, "sensor.total_gas_ft3")
         device_id = device["device_id"]
@@ -756,7 +757,7 @@ class TestDeviceSetBlankAndQuoteOnlyValues:
                 {"device_id": device_id, "name": original or ""},
             )
 
-    async def test_whitespace_name_clears_custom_name(self, mcp_client):
+    async def test_whitespace_name_clears_custom_name(self, mcp_client: Any) -> None:
         device = await _device_for_entity(mcp_client, "number.small_range")
         device_id = device["device_id"]
         original = device.get("name_by_user")

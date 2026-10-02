@@ -272,10 +272,14 @@ def clearable_value(
 ) -> str | None:
     """Map an empty or whitespace-only value to None, the registry's clear value.
 
-    A model whose client cannot send ``''`` falls back to ``'""'`` (#2585); a
-    value made only of quotes and whitespace is never a real value, so reject it.
+    Other values are returned stripped. A model whose client cannot send ``''``
+    falls back to ``'""'`` (#2585); a value made only of quotes and whitespace
+    is never a real value, so reject it.
     """
-    if value is None or not value.strip():
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
         return None
     if _QUOTE_ONLY.fullmatch(value):
         raise_tool_error(

@@ -144,6 +144,16 @@ class TestSetDeviceNameClearing:
 
 
 class TestSetEntityNameClearing:
+    async def test_padded_device_class_is_stripped(
+        self, set_entity: Any, client: MagicMock
+    ) -> None:
+        client.send_websocket_message.side_effect = _entity_ws_handler()
+
+        await set_entity(entity_id="binary_sensor.test", device_class=" window ")
+
+        (update,) = _sent_of_type(client, "config/entity_registry/update")
+        assert update["device_class"] == "window"
+
     @pytest.mark.parametrize("field", ["name", "icon", "device_class"])
     async def test_quote_only_value_is_not_stored(
         self, set_entity: Any, client: MagicMock, field: str
