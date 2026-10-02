@@ -2,8 +2,9 @@
 
 `issue-intake.yml` documents reports, translates non-English reports, and asks
 for essential missing information. The model must not diagnose, propose fixes,
-assign blame or priority, promise a PR, or close an issue; only the
-deterministic [report gate](#report-gate) closes issues. CodeRabbit issue
+assign blame or priority, promise a PR, or close an issue. Within this workflow only the deterministic
+[report gate](#report-gate) closes issues; `close-needs-info.yml` separately
+closes unanswered needs-info issues, as described below. CodeRabbit issue
 enrichment is disabled so this workflow owns the consolidated issue comment.
 CodeRabbit and Codex PR reviews retain their existing responsibilities.
 
@@ -60,7 +61,7 @@ The `gate` job runs before admission on issue opens, edits, reopenings and new
 or edited comments, without the model. An issue passes when its reporter's body
 or one of their comments carries the `ha_report_issue` report heading together
 with the report's `ha-mcp Version:` line, or a
-`### Why there is no ha_report_issue report` section of at least a few words.
+`### Why there is no ha_report_issue report` section of at least five words.
 The issue forms render their fallback field under that heading; blank and
 API-filed issues must write it themselves. Maintainers (write role or above),
 bots and `documentation` issues are exempt.
