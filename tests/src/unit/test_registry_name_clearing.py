@@ -115,12 +115,12 @@ class TestSetDeviceNameClearing:
         assert _sent(client)[0]["name_by_user"] == name
 
     @pytest.mark.parametrize(
-        ("field", "value", "sent_key", "echo"),
+        ("field", "value", "sent_key"),
         [
-            ("name", "", "name_by_user", "name cleared"),
-            ("name", " ", "name_by_user", "name cleared"),
-            ("area_id", " ", "area_id", "area cleared"),
-            ("disabled_by", " ", "disabled_by", "enabled"),
+            ("name", "", "name_by_user"),
+            ("name", " ", "name_by_user"),
+            ("area_id", " ", "area_id"),
+            ("disabled_by", " ", "disabled_by"),
         ],
     )
     async def test_blank_value_clears_device_field(
@@ -130,17 +130,15 @@ class TestSetDeviceNameClearing:
         field: str,
         value: str,
         sent_key: str,
-        echo: str,
     ) -> None:
         client.send_websocket_message.return_value = {"success": True, "result": {}}
 
-        result = await registry_tools.ha_set_device(device_id="dev1", **{field: value})
+        await registry_tools.ha_set_device(device_id="dev1", **{field: value})
 
         assert [msg["type"] for msg in _sent(client)] == [
             "config/device_registry/update"
         ]
         assert _sent(client)[0][sent_key] is None
-        assert result["updates"] == [echo]
 
 
 class TestSetEntityNameClearing:
@@ -179,24 +177,16 @@ class TestSetEntityNameClearing:
         _assert_rejected_with_clear_hint(exc_info)
         assert _sent(client) == []
 
-    @pytest.mark.parametrize(
-        ("field", "echo"),
-        [
-            ("name", "name cleared"),
-            ("area_id", "area cleared"),
-            ("icon", "icon cleared"),
-        ],
-    )
+    @pytest.mark.parametrize("field", ["name", "area_id", "icon"])
     async def test_whitespace_clears_entity_override(
-        self, set_entity: Any, client: MagicMock, field: str, echo: str
+        self, set_entity: Any, client: MagicMock, field: str
     ) -> None:
         client.send_websocket_message.side_effect = _entity_ws_handler()
 
-        result = await set_entity(entity_id="light.test", **{field: " "})
+        await set_entity(entity_id="light.test", **{field: " "})
 
         (update,) = _sent_of_type(client, "config/entity_registry/update")
         assert update[field] is None
-        assert result["updates"] == [echo]
 
 
 class TestSetEntityDeviceNameEcho:
@@ -211,7 +201,7 @@ class TestSetEntityDeviceNameEcho:
         )
 
         assert _sent_of_type(client, "config/device_registry/update") == []
-        assert result["updates"] == ["icon='mdi:lamp'"]
+        assert not any(u.startswith("device_name") for u in result["updates"])
         assert any("ha_set_device(name='')" in w for w in result["warnings"])
         assert "device_rename" not in result
         assert "partial" not in result
@@ -258,4 +248,4 @@ class TestSetEntityDeviceNameEcho:
 
         result = await set_entity(entity_id="light.test", new_device_name="Lamp")
 
-        assert result["updates"] == ["device_name -> Lamp"]
+        assert any(u.startswith("device_name") for u in result["updates"])

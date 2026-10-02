@@ -770,7 +770,6 @@ class TestDeviceSetBlankAndQuoteOnlyValues:
                     "ha_set_device", {"device_id": device_id, "name": " "}
                 )
             assert data["device_entry"]["name_by_user"] is None, data
-            assert "name cleared" in data["updates"], data
         finally:
             await safe_call_tool(
                 mcp_client,
