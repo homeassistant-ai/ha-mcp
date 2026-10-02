@@ -2815,7 +2815,7 @@ def in_process_data_dir(
 
 
 @pytest.fixture(scope="session")
-def ha_container_with_fresh_config(request, in_process_data_dir):
+def ha_container_with_fresh_config(request, in_process_data_dir):  # noqa: PLR0915
     """Create Home Assistant test environment with fresh config.
 
     Default backend: testcontainer (HA Core Docker image). When the

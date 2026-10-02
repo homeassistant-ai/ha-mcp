@@ -93,6 +93,11 @@ Logging only the message does not satisfy the rule. `RUF100` fails a `noqa`
 that is no longer needed. The two webhook-proxy `start.py` files are exempt
 through `per-file-ignores` in `pyproject.toml` and carry no `noqa`.
 
+`PLR0915` caps a function at 50 statements. Functions that were already longer
+carry `# noqa: PLR0915` on their `def` line. Do not add that comment to a new
+function: extract helpers. `RUF100` fails the `noqa` once the function is short
+enough.
+
 ## Docker
 
 Stdio mode is local to the process and does not expose a network port:

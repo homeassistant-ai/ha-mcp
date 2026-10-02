@@ -1646,7 +1646,7 @@ async def test_reconfigure_rejects_stale_confirmation_token(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backup_capture_fails", [False, True])
-async def test_confirmed_reconfigure_uses_normal_auto_backup_policy(
+async def test_confirmed_reconfigure_uses_normal_auto_backup_policy(  # noqa: PLR0915
     reconfig_entry: dict[str, object],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,

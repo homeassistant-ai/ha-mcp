@@ -151,7 +151,7 @@ class TestAutomationLifecycle:
         test_light = await self._find_test_light_entity(mcp_client)
         return [test_light, test_light]
 
-    async def test_basic_automation_lifecycle(
+    async def test_basic_automation_lifecycle(  # noqa: PLR0915
         self, mcp_client, cleanup_tracker, test_data_factory
     ):
         """

@@ -215,6 +215,7 @@ select = [
     "PLC0206", # dict-index-missing-items
     "PLC0207", # missing-maxsplit-arg
     "PLR0402", # manual-from-import
+    "PLR0915", # too-many-statements (default limit 50)
     "PLR1711", # useless-return
     "PLR1714", # repeated-equality-comparison
     "PLR1730", # if-stmt-min-max

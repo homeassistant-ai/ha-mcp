@@ -1643,7 +1643,7 @@ class EmbeddedServerManager:
                 _IMPORTING_WORKERS.discard(threading.current_thread())
             _teardown_worker_loop(loop)
 
-    async def _serve(self, access_token: str, stop_event: asyncio.Event) -> None:
+    async def _serve(self, access_token: str, stop_event: asyncio.Event) -> None:  # noqa: PLR0915
         """Build the ha-mcp server and run it until a stop is signaled.
 
         Mirrors the CLI HTTP runner in ``ha_mcp.__main__`` without importing it

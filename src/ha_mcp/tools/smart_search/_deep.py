@@ -119,7 +119,7 @@ class DeepSearchMixin(SceneSearchMixin):
             return None
         return await fetch_related_buckets(self.client, query_lower)
 
-    async def deep_search(
+    async def deep_search(  # noqa: PLR0915
         self,
         query: str,
         search_types: list[str] | None = None,

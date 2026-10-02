@@ -21,7 +21,7 @@ async def _cancel_tasks(*tasks):
 
 @pytest.mark.parametrize("stage", ["create_reply", "rename", "verification"])
 @pytest.mark.parametrize("mutation", ["edit", "delete"])
-async def test_new_entry_writes_wait_until_recreation_finishes(
+async def test_new_entry_writes_wait_until_recreation_finishes(  # noqa: PLR0915
     recovery, monkeypatch, stage, mutation
 ):
     reached = asyncio.Event()
