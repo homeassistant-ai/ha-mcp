@@ -54,7 +54,8 @@ _SYSTEM_LOG_TRUNCATION_MARK = "…[truncated; compact=False returns the full mes
 def _cap_message(message: str) -> tuple[str, bool]:
     if len(message) <= _SYSTEM_LOG_MESSAGE_CAP:
         return message, False
-    return message[:_SYSTEM_LOG_MESSAGE_CAP] + _SYSTEM_LOG_TRUNCATION_MARK, True
+    kept = _SYSTEM_LOG_MESSAGE_CAP - len(_SYSTEM_LOG_TRUNCATION_MARK)
+    return message[:kept] + _SYSTEM_LOG_TRUNCATION_MARK, True
 
 
 def _cap_system_log_messages(entries: list[Any]) -> int:
