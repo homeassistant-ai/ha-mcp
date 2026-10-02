@@ -164,8 +164,8 @@ Notes:
   prompts can tell a lookup from a change.
 - With Home Assistant 2026.10+'s own Model Context Protocol server turned
   on, **Settings → System → AI** also lists this API's own URL
-  (`/api/mcp/<api id>`), which external MCP clients signed in as an
-  administrator can use whichever APIs the server itself is set to serve.
+  (`/api/mcp/<api id>`). External MCP clients signed in as an administrator
+  can use it, whichever APIs the server entry itself selects.
 
 **Security:** the toolset runs with the server's admin access. Selecting it
 on an agent hands that power to everyone who can talk to that agent,
