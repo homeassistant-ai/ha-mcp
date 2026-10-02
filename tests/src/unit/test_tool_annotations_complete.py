@@ -5,6 +5,8 @@ omitted hint with its least-safe default, so a read-only tool that leaves out
 ``destructiveHint`` is shown to Home Assistant as destructive.
 """
 
+from typing import Any
+
 import pytest
 
 from ha_mcp._vendor.fastmcp import Client
@@ -23,7 +25,9 @@ _ALL_FLAGS = (
 )
 
 
-async def _list_tools(monkeypatch, flags: tuple[str, ...]):
+async def _list_tools(
+    monkeypatch: pytest.MonkeyPatch, flags: tuple[str, ...]
+) -> list[Any]:
     monkeypatch.setenv("HOMEASSISTANT_URL", "http://127.0.0.1:9")
     monkeypatch.setenv("HOMEASSISTANT_TOKEN", "unused")
     for flag in flags:
@@ -40,7 +44,9 @@ async def _list_tools(monkeypatch, flags: tuple[str, ...]):
     [(), _ALL_FLAGS, ("ENABLE_TOOL_SEARCH",)],
     ids=["defaults", "all-flags", "tool-search"],
 )
-async def test_every_tool_declares_all_hints_and_a_title(monkeypatch, flags):
+async def test_every_tool_declares_all_hints_and_a_title(
+    monkeypatch: pytest.MonkeyPatch, flags: tuple[str, ...]
+) -> None:
     tools = await _list_tools(monkeypatch, flags)
     assert tools
     missing = {}
@@ -59,7 +65,9 @@ async def test_every_tool_declares_all_hints_and_a_title(monkeypatch, flags):
 
 
 @pytest.mark.anyio
-async def test_read_only_tools_are_not_advertised_as_destructive(monkeypatch):
+async def test_read_only_tools_are_not_advertised_as_destructive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     tools = await _list_tools(monkeypatch, _ALL_FLAGS)
     contradictory = [
         tool.name

@@ -1727,7 +1727,7 @@ class TestCoreToolMetadata:
     """Home Assistant 2026.10 reads tool titles, safety hints and ToolResult."""
 
     @pytest.fixture
-    def core_2026_10(self, monkeypatch):
+    def core_2026_10(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             llm_api.llm, "ToolAnnotations", _CoreToolAnnotations, raising=False
         )
@@ -1735,8 +1735,8 @@ class TestCoreToolMetadata:
 
     @pytest.mark.parametrize("sdk", ["v1", "v2"])
     async def test_mirrored_tool_carries_the_servers_metadata(
-        self, monkeypatch, core_2026_10, sdk
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, core_2026_10: None, sdk: str
+    ) -> None:
         hints = {
             "readOnlyHint": True,
             "destructiveHint": False,
@@ -1757,8 +1757,8 @@ class TestCoreToolMetadata:
         )
 
     async def test_an_undeclared_hint_keeps_cores_default(
-        self, monkeypatch, core_2026_10
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, core_2026_10: None
+    ) -> None:
         _fake_session(monkeypatch, tools=[_annotated_entry("v2", readOnlyHint=True)])
 
         instance = await _make_api(_make_hass()).async_get_api_instance(
@@ -1769,8 +1769,8 @@ class TestCoreToolMetadata:
 
     @pytest.mark.parametrize("is_error", [True, False])
     async def test_call_returns_a_tool_result_flagging_errors(
-        self, monkeypatch, core_2026_10, is_error
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, core_2026_10: None, is_error: bool
+    ) -> None:
         from ha_mcp._vendor.mcp.types import CallToolResult, TextContent
 
         _fake_session(
@@ -1793,7 +1793,9 @@ class TestCoreToolMetadata:
         assert result.error is is_error
         assert result.data["isError"] is is_error
 
-    async def test_meta_tools_declare_their_own_safety(self, monkeypatch, core_2026_10):
+    async def test_meta_tools_declare_their_own_safety(
+        self, monkeypatch: pytest.MonkeyPatch, core_2026_10: None
+    ) -> None:
         _fake_session(monkeypatch, tools=[_tool_entry("ha_get_state")])
         instance = await _make_api(
             _make_hass(), mode=EXPOSURE_TOOL_SEARCH
@@ -1814,8 +1816,11 @@ class TestCoreToolMetadata:
         )
         assert unknown.error is True
 
-    async def test_older_core_gets_plain_results_and_no_annotations(self, monkeypatch):
-        assert not hasattr(llm_api.llm, "ToolResult")
+    async def test_older_core_gets_plain_results_and_no_annotations(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delattr(llm_api.llm, "ToolResult", raising=False)
+        monkeypatch.delattr(llm_api.llm, "ToolAnnotations", raising=False)
         _fake_session(monkeypatch, tools=[_annotated_entry("v2", readOnlyHint=True)])
 
         instance = await _make_api(_make_hass()).async_get_api_instance(

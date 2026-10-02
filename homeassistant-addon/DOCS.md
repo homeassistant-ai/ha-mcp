@@ -252,8 +252,10 @@ API that Home Assistant conversation agents can select under
   (backups, restarts, large searches) can report a timeout while they still
   finish.
 - If you added the app's URL to the integration by hand before, that entry
-  keeps working. Remove it and add the discovered one instead to get an API
-  name that stays the same when the app is reinstalled.
+  keeps working, and Home Assistant does not offer the discovered one while
+  it exists. To get an API name that stays the same when the app is
+  reinstalled, remove the manual entry, restart Home Assistant, and add the
+  discovered one.
 
 ## Configuration Options
 

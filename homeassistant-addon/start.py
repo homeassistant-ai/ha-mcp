@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 import sys
+import threading
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -996,7 +997,13 @@ def main() -> int:
     log_info("=" * 80)
     log_info("")
 
-    announce_mcp_discovery(secret_path, port, supervisor_token)
+    # Off the startup path: each Supervisor call may wait its full timeout.
+    threading.Thread(
+        target=announce_mcp_discovery,
+        args=(secret_path, port, supervisor_token),
+        name="mcp-discovery",
+        daemon=True,
+    ).start()
 
     # Configure logging before server start (v3 removed log_level from run())
     import logging
