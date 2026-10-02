@@ -2181,16 +2181,17 @@ class ServiceTools:
             return cast(dict[str, Any], result)
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             op_context: dict[str, Any] = {"operation_id": operation_id}
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context=op_context,
                 suggestions=[
                     "Verify the operation ID(s) are valid",
                     "Use ha_get_state() to check current entity states instead",
                 ],
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
         name="ha_bulk_control",
@@ -2566,15 +2567,15 @@ class ServiceTools:
             )
         except ToolError:
             raise
-        except Exception as e:
-            raise exception_to_structured_error(
+        except Exception as e:  # noqa: BLE001
+            exception_to_structured_error(
                 e,
                 context={"event_type": event_type},
                 suggestions=[
                     "Check Home Assistant connection",
                     "Verify event_type is a valid identifier",
                 ],
-            ) from e
+            )
 
         return {
             "success": True,

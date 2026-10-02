@@ -1643,7 +1643,7 @@ async def _capture_dashboard_screenshot_result(
         )
     except ToolError:
         raise
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         error_payload = create_error_response(
             ErrorCode.IMAGE_SERIALIZATION_FAILED,
             "Rendered dashboard images could not be packaged into the MCP response.",
@@ -1654,7 +1654,7 @@ async def _capture_dashboard_screenshot_result(
             # The render already happened, so a theme-guard warning (e.g. a
             # failed restore) must stay visible even when packaging fails.
             error_payload["warnings"] = list(guard_warnings)
-        raise raise_tool_error(error_payload) from exc
+        raise_tool_error(error_payload)
     # raise_tool_error is typed -> NoReturn, but CodeQL cannot see that, so it
     # reports py/mixed-returns for the implicit None fall-through past the
     # except block. Keep this terminal statement to suppress the false positive.
@@ -2011,7 +2011,7 @@ class DashboardConfigTools:
             )
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             effective_url_path = resolved_url_path[0]
             if mode == "search":
                 suggestions = [
@@ -2044,11 +2044,12 @@ class DashboardConfigTools:
                     "action": "get" if not list_only else "list",
                     "url_path": effective_url_path,
                 }
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context=context,
                 suggestions=suggestions,
-            ) from e
+            )
+            return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     async def _get_dashboard_list_mode(
         self,
@@ -2980,7 +2981,7 @@ class DashboardConfigTools:
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             error = exception_to_structured_error(
                 e,
                 context={"action": action, "url_path": url_path},
@@ -2993,7 +2994,7 @@ class DashboardConfigTools:
                 raise_error=False,
             )
             augment_error_dict_with_skill_content(error, bp_warnings=None)
-            raise raise_tool_error(error) from e
+            raise_tool_error(error)
             return None
 
     async def _resolve_set_dashboard_url_path(
@@ -3712,8 +3713,8 @@ class DashboardConfigTools:
             raise_dashboard_edit_error(
                 url_path, "write_not_sent", str(exc), False, action
             )
-        except Exception as exc:
-            raise exception_to_structured_error(
+        except Exception as exc:  # noqa: BLE001
+            exception_to_structured_error(
                 exc,
                 context={
                     "action": action,
@@ -3725,7 +3726,7 @@ class DashboardConfigTools:
                 suggestions=[
                     "Read the dashboard before retrying to check whether the save applied",
                 ],
-            ) from exc
+            )
 
         if isinstance(save_result, dict) and not save_result.get("success", True):
             raise_known_dashboard_save_rejection(save_result, url_path, action)
@@ -4100,8 +4101,8 @@ class DashboardConfigTools:
             return result
         except ToolError:
             raise
-        except Exception as e:
-            raise exception_to_structured_error(
+        except Exception as e:  # noqa: BLE001
+            exception_to_structured_error(
                 e,
                 context={"action": "delete", "url_path": url_path},
                 suggestions=[
@@ -4110,7 +4111,7 @@ class DashboardConfigTools:
                     "Use ha_config_get_dashboard(list_only=True) to see available dashboards",
                     "Cannot delete YAML-mode or default dashboard",
                 ],
-            ) from e
+            )
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 

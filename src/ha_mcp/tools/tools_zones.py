@@ -194,9 +194,9 @@ class ZoneTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error getting zone(s) (zone_id={zone_id}): {e}")
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"zone_id": zone_id},
                 suggestions=[
@@ -204,7 +204,8 @@ class ZoneTools:
                     "Verify WebSocket connection is active",
                     "Use ha_get_zone() without zone_id to see all available zones",
                 ],
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error always raises
 
     async def _get_zone_via_component(
         self, zone_id: str | None
@@ -520,11 +521,11 @@ class ZoneTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(
                 f"Error in ha_set_zone ({operation}, zone_id={zone_id}, name={name}): {e}"
             )
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"zone_id": zone_id, "operation": operation},
                 suggestions=[
@@ -533,7 +534,8 @@ class ZoneTools:
                     if operation == "create"
                     else "Verify zone_id exists using ha_get_zone()",
                 ],
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error always raises
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
@@ -610,9 +612,9 @@ class ZoneTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing zone (zone_id={zone_id}): {e}")
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"zone_id": zone_id},
                 suggestions=[
@@ -620,7 +622,8 @@ class ZoneTools:
                     "Verify zone_id exists using ha_get_zone()",
                     "Ensure zone is not the 'home' zone (YAML-defined)",
                 ],
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error always raises
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 

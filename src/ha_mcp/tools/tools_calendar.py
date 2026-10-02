@@ -257,7 +257,7 @@ class CalendarTools:
 
         except ToolError:
             raise
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             logger.error(f"Failed to get calendar events for {entity_id}: {error}")
 
             # Provide helpful error messages
@@ -271,9 +271,10 @@ class CalendarTools:
             if "404" in error_str or "not found" in error_str.lower():
                 suggestions.insert(0, f"Calendar entity '{entity_id}' not found")
 
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 error, context={"entity_id": entity_id}, suggestions=suggestions
-            ) from error
+            )
+            return None  # unreachable: exception_to_structured_error always raises
 
     async def _create_recurring_calendar_event(
         self,
@@ -749,7 +750,7 @@ class CalendarTools:
 
         except ToolError:
             raise
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             action = "update" if uid is not None else "create"
             logger.error(f"Failed to {action} calendar event in {entity_id}: {error}")
 
@@ -761,9 +762,10 @@ class CalendarTools:
             if uid is not None:
                 context["uid"] = uid
 
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 error, context=context, suggestions=suggestions
-            ) from error
+            )
+            return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
         name="ha_config_remove_calendar_event",
@@ -884,16 +886,17 @@ class CalendarTools:
 
         except ToolError:
             raise
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             logger.error(f"Failed to delete calendar event from {entity_id}: {error}")
 
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 error,
                 context={"entity_id": entity_id, "uid": uid},
                 suggestions=self._build_remove_calendar_event_error_suggestions(
                     entity_id, uid, error
                 ),
-            ) from error
+            )
+            return None  # unreachable: exception_to_structured_error always raises
 
     def _build_remove_calendar_event_error_suggestions(
         self, entity_id: str, uid: str, error: Exception

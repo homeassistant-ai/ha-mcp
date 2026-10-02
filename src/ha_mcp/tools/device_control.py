@@ -227,9 +227,9 @@ class DeviceControlTools:
             except ToolError:
                 fail_pending_operation(operation_id, "Service dispatch failed")
                 raise
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 fail_pending_operation(operation_id, f"Service dispatch failed: {e}")
-                raise exception_to_structured_error(
+                exception_to_structured_error(
                     e,
                     context={"entity_id": entity_id, "action": action},
                     suggestions=[
@@ -237,7 +237,7 @@ class DeviceControlTools:
                         "Verify Home Assistant connection",
                         "Check Home Assistant logs for details",
                     ],
-                ) from e
+                )
 
         except ToolError:
             raise

@@ -148,9 +148,9 @@ class CategoryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error getting categories: {e}")
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"scope": scope, "category_id": category_id},
                 suggestions=[
@@ -158,7 +158,8 @@ class CategoryTools:
                     "Verify WebSocket connection is active",
                     "Ensure scope is valid (e.g., 'automation', 'script', 'scene', 'helpers')",
                 ],
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error always raises
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
@@ -293,9 +294,9 @@ class CategoryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error setting category {name!r}: {e}")
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"name": name, "scope": scope, "category_id": category_id},
                 suggestions=[
@@ -303,7 +304,8 @@ class CategoryTools:
                     "Verify the category name is valid",
                     "For updates, verify the category_id exists using ha_config_get_category()",
                 ],
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error always raises
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
@@ -403,16 +405,17 @@ class CategoryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing category {category_id!r}: {e}")
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"category_id": category_id, "scope": scope},
                 suggestions=[
                     "Check Home Assistant connection",
                     "Verify the category_id exists using ha_config_get_category()",
                 ],
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error always raises
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 

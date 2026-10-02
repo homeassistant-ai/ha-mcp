@@ -474,7 +474,7 @@ class HistoryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             if source == "statistics":
                 suggestions = [
                     "Check Home Assistant connection",
@@ -487,7 +487,7 @@ class HistoryTools:
                     "Verify entity IDs are correct",
                     "Ensure recorder component is enabled",
                 ]
-            raise exception_to_structured_error(e, suggestions=suggestions) from e
+            exception_to_structured_error(e, suggestions=suggestions)
             return (
                 None  # exception_to_structured_error always raises; explicit for CodeQL
             )

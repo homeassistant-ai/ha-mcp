@@ -23,8 +23,8 @@ def dashboard_image_content(
             image = Image(
                 data=capture.data, format=capture.image_format
             ).to_image_content(mime_type=capture.mime_type)
-        except Exception as exc:
-            raise raise_tool_error(
+        except Exception as exc:  # noqa: BLE001
+            raise_tool_error(
                 create_error_response(
                     ErrorCode.IMAGE_SERIALIZATION_FAILED,
                     "A rendered dashboard image could not be serialized as native "
@@ -39,7 +39,7 @@ def dashboard_image_content(
                         "size_bytes": capture.size_bytes,
                     },
                 )
-            ) from exc
+            )
         content.append(image)
     return content
 

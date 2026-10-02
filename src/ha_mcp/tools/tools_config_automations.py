@@ -608,8 +608,8 @@ class AutomationConfigTools:
             return await self._legacy_get_automation(identifier)
         except ToolError:
             raise
-        except Exception as e:
-            raise exception_to_structured_error(
+        except Exception as e:  # noqa: BLE001
+            exception_to_structured_error(
                 e,
                 context={"identifier": identifier, "action": "get"},
                 suggestions=[
@@ -617,7 +617,8 @@ class AutomationConfigTools:
                     "Check Home Assistant connection",
                     "Use ha_get_skill_guide for help",
                 ],
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error always raises
 
     async def _legacy_get_automation(self, identifier: str) -> dict[str, Any]:
         """Assemble the automation-get response from the REST/WS pipeline.
@@ -966,7 +967,7 @@ class AutomationConfigTools:
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings) from None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # 404 during update only — create (identifier=None) never hits this branch.
             if (
                 identifier
@@ -982,7 +983,7 @@ class AutomationConfigTools:
                 raise_error=False,
             )
             augment_error_dict_with_skill_content(error, bp_warnings)
-            raise raise_tool_error(error) from e
+            raise_tool_error(error)
 
     @staticmethod
     def _build_set_automation_suggestions(
@@ -2001,10 +2002,10 @@ class AutomationConfigTools:
             }
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             if isinstance(e, HomeAssistantAPIError) and e.status_code == 404:
                 await self._raise_automation_not_found(identifier)
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"identifier": identifier, "action": "delete"},
                 suggestions=[
@@ -2012,7 +2013,8 @@ class AutomationConfigTools:
                     "Use entity_id format: automation.morning_routine or unique_id",
                     "Check Home Assistant connection",
                 ],
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error always raises
 
 
 def register_config_automation_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

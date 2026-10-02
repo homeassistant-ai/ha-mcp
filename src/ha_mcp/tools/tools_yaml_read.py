@@ -499,15 +499,15 @@ class YamlReadTools:
 
         except ToolError:
             raise
-        except Exception as e:
-            raise exception_to_structured_error(
+        except Exception as e:  # noqa: BLE001
+            exception_to_structured_error(
                 e,
                 context={
                     "tool": "ha_config_get_yaml",
                     "file": file,
                     "yaml_path": yaml_path,
                 },
-            ) from e
+            )
             # Unreachable (the call is typed NoReturn) but explicit, because
             # CodeQL cannot see the NoReturn and would otherwise read this
             # handler as falling through to an implicit None (py/mixed-returns).

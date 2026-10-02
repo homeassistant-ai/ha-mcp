@@ -136,12 +136,13 @@ class SecurityPolicyTools:
             )
         except ToolError:
             raise
-        except Exception as e:
-            raise exception_to_structured_error(
+        except Exception as e:  # noqa: BLE001
+            exception_to_structured_error(
                 e,
                 context={"action": action},
                 suggestions=["Check server logs for details"],
-            ) from e
+            )
+            return None  # unreachable; explicit for CodeQL
 
 
 def register_security_policy_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

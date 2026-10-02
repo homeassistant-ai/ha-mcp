@@ -396,19 +396,20 @@ class AreaTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(
                 f"Error listing floors and areas in phase {progress['phase']!r}: {e} "
                 f"(progress={progress})"
             )
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context=progress,
                 suggestions=[
                     "Check Home Assistant connection",
                     "Verify WebSocket connection is active",
                 ],
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error always raises
 
     async def _fetch_area_floor_registries(
         self, progress: dict[str, Any]
@@ -615,10 +616,10 @@ class AreaTools:
             listed = await self._client.send_websocket_message(
                 {"type": "config/area_registry/list"}
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # Write already succeeded; a transport failure on re-read must
             # not look like a failed create (retry would duplicate the area).
-            raise raise_tool_error(
+            raise_tool_error(
                 create_error_response(
                     ErrorCode.SERVICE_CALL_FAILED,
                     "Area write succeeded, but label verification failed",
@@ -636,7 +637,7 @@ class AreaTools:
                         "Re-read with ha_list_floors_areas() before retrying labels.",
                     ],
                 )
-            ) from exc
+            )
         rows = listed.get("result") if listed.get("success") else None
         found: dict[str, Any] | None = None
         if isinstance(rows, list):
@@ -924,7 +925,7 @@ class AreaTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error {operation} {kind} {name!r}: {e}")
             suggestions = [
                 "Check Home Assistant connection",
@@ -936,11 +937,12 @@ class AreaTools:
                 suggestions.append(
                     "If assigning labels, verify label IDs with ha_config_get_label()"
                 )
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"operation": operation, "kind": kind, "name": name, "id": id},
                 suggestions=suggestions,
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error always raises
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
@@ -1022,16 +1024,17 @@ class AreaTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing {kind} {id!r}: {e}")
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"kind": kind, id_key: id},
                 suggestions=[
                     "Check Home Assistant connection",
                     f"Verify the {kind} id exists using ha_list_floors_areas()",
                 ],
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error always raises
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 

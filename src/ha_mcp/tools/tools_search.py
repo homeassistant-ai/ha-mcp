@@ -3113,8 +3113,8 @@ class SearchTools:
                 )
             )
             return None  # unreachable: raise_tool_error always raises
-        except Exception as e:
-            raise exception_to_structured_error(
+        except Exception as e:  # noqa: BLE001
+            exception_to_structured_error(
                 e,
                 context={
                     "query": query,
@@ -3127,7 +3127,8 @@ class SearchTools:
                     "Try simpler search terms",
                     "Check area/domain/state filter spelling",
                 ],
-            ) from e
+            )
+            return None  # unreachable: error helpers above always raise
 
     async def _fetch_entity_enrichment(
         self,
@@ -4894,8 +4895,8 @@ class SearchTools:
             return wrapped
         except ToolError:
             raise
-        except Exception as e:
-            raise exception_to_structured_error(
+        except Exception as e:  # noqa: BLE001
+            exception_to_structured_error(
                 e,
                 context={"entity_id": entity_id},
                 suggestions=[
@@ -4903,7 +4904,8 @@ class SearchTools:
                     "Check Home Assistant connection",
                     "Use ha_search() to find correct entity IDs",
                 ],
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error always raises
 
     async def _get_bulk_entity_states(
         self,

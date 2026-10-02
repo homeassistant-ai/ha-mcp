@@ -787,13 +787,14 @@ async def create_backup(
 
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error creating backup: {e}")
-        raise exception_to_structured_error(
+        exception_to_structured_error(
             e,
             context={"tool": "create_backup"},
             suggestions=["Check Home Assistant connection and backup configuration"],
-        ) from e
+        )
+        return None  # unreachable: exception_to_structured_error always raises
     finally:
         # Always disconnect WebSocket — narrow to transport errors; a
         # programming error during cleanup should still surface.
@@ -1161,13 +1162,14 @@ async def restore_backup(
 
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error restoring backup: {e}")
-        raise exception_to_structured_error(
+        exception_to_structured_error(
             e,
             context={"tool": "restore_backup", "backup_id": backup_id},
             suggestions=["Check Home Assistant connection and backup availability"],
-        ) from e
+        )
+        return None  # unreachable: exception_to_structured_error always raises
     finally:
         # Always disconnect WebSocket — narrow to transport errors; a
         # programming error during cleanup should still surface.
@@ -1269,13 +1271,14 @@ async def list_backups(client: HomeAssistantClient, limit: int = 200) -> dict[st
 
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error listing backups: {e}")
-        raise exception_to_structured_error(
+        exception_to_structured_error(
             e,
             context={"tool": "list_backups"},
             suggestions=["Check Home Assistant connection and the backup integration"],
-        ) from e
+        )
+        return None  # unreachable: exception_to_structured_error always raises
 
 
 def _refuse_snapshot_delete(message: str, **context: Any) -> NoReturn:
@@ -1393,13 +1396,14 @@ async def delete_backup(
 
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error deleting backup: {e}")
-        raise exception_to_structured_error(
+        exception_to_structured_error(
             e,
             context={"tool": "delete_backup", "backup_id": backup_id},
             suggestions=["Check Home Assistant connection and backup availability"],
-        ) from e
+        )
+        return None  # unreachable: exception_to_structured_error always raises
     finally:
         if ws_client:
             try:
@@ -2012,14 +2016,14 @@ async def _edits_diff(
         )
     except ToolError:
         raise
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         # Fetching the live config for diff goes through the
         # same domain handler ``restore`` uses, so the same
         # HA-side failure modes (4xx/5xx, WS errors, schema
         # drift) apply. Funnel through
         # ``exception_to_structured_error`` so the structured
         # response carries enough context to retry.
-        raise exception_to_structured_error(
+        exception_to_structured_error(
             err,
             context={"backup_name": bname, "action": "diff"},
             suggestions=[
@@ -2029,7 +2033,8 @@ async def _edits_diff(
                 + "ha_manage_backup(scope='edits', action='view', "
                 + "backup_name=...) to confirm it parses",
             ],
-        ) from err
+        )
+        return None  # unreachable: exception_to_structured_error always raises
     warnings: list[str] = []
     if diff.get("entity_missing"):
         # ``restore_snapshot`` outcome on a missing entity is
@@ -2134,7 +2139,7 @@ async def _edits_restore(
         )
     except ToolError:
         raise
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001
         # ``handler.restore`` is domain-specific and can surface
         # HA-side rejections (schema-validation failures, 4xx/5xx
         # responses, WS command errors). Without this catch those
@@ -2143,7 +2148,7 @@ async def _edits_restore(
         # to read the FastMCP traceback. Funnel through
         # ``exception_to_structured_error`` so the structured
         # response carries enough context to retry.
-        raise exception_to_structured_error(
+        exception_to_structured_error(
             err,
             context={"backup_name": bname, "action": "restore"},
             suggestions=[
@@ -2156,7 +2161,8 @@ async def _edits_restore(
                 + "ha_manage_backup(scope='edits', action='view', "
                 + "backup_name=...)",
             ],
-        ) from err
+        )
+        return None  # unreachable: exception_to_structured_error always raises
     # The manager also serves Settings, which consumes handler warnings in place.
     # Copy its result before moving warnings to the MCP response envelope.
     data = dict(result)

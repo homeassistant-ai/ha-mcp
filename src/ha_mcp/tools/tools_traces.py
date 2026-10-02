@@ -212,9 +212,9 @@ class TraceTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error getting traces for {automation_id}: {e}")
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"automation_id": automation_id},
                 suggestions=[
@@ -222,7 +222,7 @@ class TraceTools:
                     "Check if traces are available (automation must have run recently)",
                     "Ensure Home Assistant connection is working",
                 ],
-            ) from e
+            )
             return (
                 None  # exception_to_structured_error always raises; explicit for CodeQL
             )

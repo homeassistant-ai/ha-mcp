@@ -320,11 +320,10 @@ class VoiceAssistantTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error getting entity exposure: {e}")
-            raise exception_to_structured_error(
-                e, context={"entity_id": entity_id}
-            ) from e
+            exception_to_structured_error(e, context={"entity_id": entity_id})
+            return None  # unreachable: exception_to_structured_error always raises
 
 
 def register_voice_assistant_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

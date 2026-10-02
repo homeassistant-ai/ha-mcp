@@ -289,9 +289,9 @@ class ReconfigureRunner:
             )
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error("Failed to reconfigure integration: %s", e)
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={
                     "entry_id": entry_id,
@@ -301,7 +301,8 @@ class ReconfigureRunner:
                     "Verify the entry ID and that the integration supports its official "
                     "reconfigure flow.",
                 ],
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error raises
 
     async def handle_mode(
         self,

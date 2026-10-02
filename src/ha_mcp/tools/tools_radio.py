@@ -207,13 +207,12 @@ class RadioTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # exception_to_structured_error owns logging (it stays quiet for
             # classified errors and logs unclassified ones with a traceback);
             # a manual log here would double-log. Let the helper own it.
-            raise exception_to_structured_error(
-                e, context={"radio": radio, "action": action}
-            ) from e
+            exception_to_structured_error(e, context={"radio": radio, "action": action})
+            return None  # unreachable: exception_to_structured_error always raises
 
 
 def register_radio_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

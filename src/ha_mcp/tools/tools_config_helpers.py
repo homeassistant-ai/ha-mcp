@@ -4040,9 +4040,9 @@ class HelperConfigTools:
             )
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error listing helpers: {e}")
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"helper_type": helper_type},
                 suggestions=[
@@ -4050,7 +4050,7 @@ class HelperConfigTools:
                     "Verify WebSocket connection is active",
                     "Use ha_search(domain_filter='input_*') as alternative",
                 ],
-            ) from e
+            )
             return (
                 None  # exception_to_structured_error always raises; explicit for CodeQL
             )
@@ -4229,14 +4229,14 @@ class HelperConfigTools:
                 response = await self._all_helpers_via_component()
         except ToolError:
             raise
-        except Exception as e:
-            raise exception_to_structured_error(
+        except Exception as e:  # noqa: BLE001
+            exception_to_structured_error(
                 e,
                 context={"helper_type": "all"},
                 suggestions=[
                     "Home Assistant may be restarting or unreachable — retry shortly",
                 ],
-            ) from e
+            )
         if response is None:
             _raise_all_requires_component()
         return response
@@ -4970,7 +4970,7 @@ class HelperConfigTools:
 
         except ToolError as te:
             raise augment_tool_error_with_skill_content(te, bp_warnings=None) from None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             error = exception_to_structured_error(
                 e,
                 context={"action": action, "helper_type": helper_type},
@@ -4982,7 +4982,7 @@ class HelperConfigTools:
                 raise_error=False,
             )
             augment_error_dict_with_skill_content(error, bp_warnings=None)
-            raise raise_tool_error(error) from e
+            raise_tool_error(error)
 
 
 def register_config_helper_tools(mcp: Any, client: Any, **kwargs: Any) -> None:

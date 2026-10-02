@@ -867,12 +867,13 @@ class RegistryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error updating device: {e}")
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"device_id": device_id},
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error always raises
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
@@ -1012,9 +1013,10 @@ class RegistryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error getting device: {e}")
-            raise exception_to_structured_error(e) from e
+            exception_to_structured_error(e)
+            return None  # unreachable: exception_to_structured_error always raises
 
     @tool(
         name="ha_set_device",
@@ -1213,12 +1215,13 @@ class RegistryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing device: {e}")
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"device_id": device_id},
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error always raises
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 

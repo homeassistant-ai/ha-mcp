@@ -776,7 +776,7 @@ async def _supervisor_api_call(
 
     except ToolError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error calling Supervisor API {endpoint}: {e}")
         error_response = exception_to_structured_error(
             e,
@@ -795,7 +795,8 @@ async def _supervisor_api_call(
             *error_details.get("suggestions", []),
             "Check that this installation supports apps (add-ons).",
         ]
-        raise raise_tool_error(error_response) from e
+        raise_tool_error(error_response)
+        return None  # unreachable: raise_tool_error always raises
 
 
 def _addon_connection_failure_suggestions(

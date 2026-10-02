@@ -204,16 +204,16 @@ class ServiceDiscoveryTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to list services: {e}")
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 suggestions=[
                     "Check Home Assistant connection",
                     "Verify WebSocket API is available",
                     "Try with a specific domain filter",
                 ],
-            ) from e
+            )
             return (
                 None  # exception_to_structured_error always raises; explicit for CodeQL
             )

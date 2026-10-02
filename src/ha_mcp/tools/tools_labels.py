@@ -672,16 +672,17 @@ class LabelTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error getting labels: {e}")
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"label_id": label_id},
                 suggestions=[
                     "Check Home Assistant connection",
                     "Verify WebSocket connection is active",
                 ],
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error raises
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
@@ -770,9 +771,9 @@ class LabelTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error setting label {name!r}: {e}")
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"name": name, "label_id": label_id},
                 suggestions=[
@@ -780,7 +781,8 @@ class LabelTools:
                     "Verify the label name is valid",
                     "For updates, verify the label_id exists using ha_config_get_label()",
                 ],
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error raises
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
     @tool(
@@ -862,16 +864,17 @@ class LabelTools:
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error removing label {label_id!r}: {e}")
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 context={"label_id": label_id},
                 suggestions=[
                     "Check Home Assistant connection",
                     "Verify the label_id exists using ha_config_get_label()",
                 ],
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error raises
         return None  # py/mixed-returns: explicit terminal; error handlers above always raise (NoReturn), unreachable
 
 

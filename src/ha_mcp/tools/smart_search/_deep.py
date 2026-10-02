@@ -415,9 +415,9 @@ class DeepSearchMixin(SceneSearchMixin):
 
         except ToolError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error in deep_search: {e}")
-            raise exception_to_structured_error(
+            exception_to_structured_error(
                 e,
                 suggestions=[
                     "Check Home Assistant connection",
@@ -430,7 +430,8 @@ class DeepSearchMixin(SceneSearchMixin):
                     "scripts": [],
                     "helpers": [],
                 },
-            ) from e
+            )
+            return None  # unreachable: exception_to_structured_error raises
 
     @staticmethod
     def _build_automation_uid_map(

@@ -83,7 +83,7 @@ def _package_screenshot_result(
         )
     except ToolError:
         raise
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         error_payload = create_error_response(
             ErrorCode.IMAGE_SERIALIZATION_FAILED,
             "Rendered dashboard images could not be packaged into the MCP response.",
@@ -97,7 +97,7 @@ def _package_screenshot_result(
             # The render already happened, so a theme-guard warning (e.g. a
             # failed restore) must stay visible even when packaging fails.
             error_payload["warnings"] = list(capture_warnings)
-        raise raise_tool_error(error_payload) from exc
+        raise_tool_error(error_payload)
 
 
 class DashboardScreenshotTools:
@@ -280,15 +280,15 @@ class DashboardScreenshotTools:
             )
         except ToolError:
             raise
-        except Exception as exc:
-            raise raise_tool_error(
+        except Exception as exc:  # noqa: BLE001
+            raise_tool_error(
                 create_error_response(
                     ErrorCode.INTERNAL_ERROR,
                     "Dashboard screenshot failed unexpectedly.",
                     details=str(exc),
                     context={"dashboard_path": target.render_path},
                 )
-            ) from exc
+            )
         return _package_screenshot_result(
             captures=captures,
             target=target,
