@@ -89,11 +89,15 @@ Source files are capped at 1,000 lines by
 `tests/src/unit/test_module_size_ratchet.py`. Files that were already larger
 are listed with their exact line count in
 `tests/src/unit/module_size_baseline.json`; a listed file may shrink but not
-grow. After shrinking or deleting a listed file, lower its entry:
+grow. After shrinking or deleting a listed file, lower its entry and commit
+the changed baseline:
 
 ```bash
 python scripts/module_size_ratchet.py
+git add tests/src/unit/module_size_baseline.json
 ```
+
+The lefthook pre-commit hook runs both steps.
 
 The command lowers or drops entries and never raises or adds one, so a file
 that grew has to be split. Vendored trees, test fixtures and the stable

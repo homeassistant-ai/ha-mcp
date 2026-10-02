@@ -6,8 +6,10 @@ this after shrinking or deleting a listed file:
 
     python scripts/module_size_ratchet.py
 
-It lowers or drops entries. It never raises an entry and never adds a file, so
-it cannot accept growth: split the file instead.
+and commit the changed baseline. The lefthook pre-commit hook does both.
+
+The command lowers or drops entries. It never raises an entry and never adds a
+file, so it cannot accept growth: split the file instead.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ SOURCE_SUFFIXES = (".py", ".js", ".mjs", ".ts", ".astro")
 # the one a pull request edits and the one counted here.
 STABLE_PROXY_COPY = "homeassistant-addon-webhook-proxy/"
 REPIN_COMMAND = "python scripts/module_size_ratchet.py"
+BASELINE_NAME = BASELINE_PATH.relative_to(REPO_ROOT).as_posix()
 
 
 def excluded_prefixes(repo_root: Path) -> tuple[str, ...]:
@@ -90,11 +93,11 @@ def find_violations(
         elif lines < allowed:
             violations.append(
                 f"{path}: shrank from {allowed} to {lines} lines. "
-                f"Run `{REPIN_COMMAND}` to lower its baseline entry."
+                f"Run `{REPIN_COMMAND}` and commit {BASELINE_NAME}."
             )
     violations.extend(
         f"{path}: listed in the baseline but not a tracked source file. "
-        f"Run `{REPIN_COMMAND}` to drop the entry."
+        f"Run `{REPIN_COMMAND}` and commit {BASELINE_NAME}."
         for path in sorted(baseline.keys() - sizes.keys())
     )
     return violations
