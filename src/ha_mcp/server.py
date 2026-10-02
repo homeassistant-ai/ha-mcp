@@ -353,15 +353,17 @@ class HomeAssistantSmartMCPServer:
 
     def _build_instructions(self) -> str:
         """Compose the server instructions sent in the MCP initialize response."""
-        # Bundled skills first (if enabled)
-        instructions = self._build_skills_instructions()
+        sections: list[str] = []
+        skills = self._build_skills_instructions()
+        if skills:
+            sections.append(skills)
 
         # Surface Read Only Mode in the startup instructions so clients
         # that show server instructions warn the model up front. Startup
         # state only — live flips are covered by the structured
         # READ_ONLY_MODE call errors and the ha_get_overview field.
         if self.settings.read_only_mode:
-            read_only_note = (
+            sections.append(
                 "## Read Only Mode\n"
                 "This server is running in Read Only Mode: write-capable "
                 "tools are disabled and every write or destructive "
@@ -370,22 +372,17 @@ class HomeAssistantSmartMCPServer:
                 "user must turn off Read Only Mode in the ha-mcp settings "
                 "UI (Tools tab) or the add-on configuration."
             )
-            instructions = (
-                f"{instructions}\n\n{read_only_note}"
-                if instructions
-                else read_only_note
-            )
 
         # ha_report_issue is a mandatory tool, so this always points at a
         # tool the client has. The issue tracker closes issues without it.
-        issue_note = (
+        sections.append(
             "## Filing ha-mcp issues\n"
             "Before filing any GitHub issue about ha-mcp, feature requests "
-            "included, run ha_report_issue and include its full output. "
-            "Issues filed without it are closed automatically."
+            "included, run ha_report_issue and put the issue_body it returns "
+            "in the issue unchanged. Issues filed without it are closed "
+            "automatically."
         )
-        instructions = f"{instructions}\n\n{issue_note}" if instructions else issue_note
-        return instructions
+        return "\n\n".join(sections)
 
     def _build_skills_instructions(self) -> str | None:
         """Build server instructions from bundled skill frontmatter.
@@ -948,7 +945,7 @@ class HomeAssistantSmartMCPServer:
             "actually contains, and the encryption key a restore needs, see "
             "ha_get_skill_guide (`references/backups.md`)."
         ),
-        # ha_report_issue: the lite value is about two thirds of the full
+        # ha_report_issue: the lite value is about four fifths of the full
         # docstring. As for ha_manage_backup, no exact pair is quoted.
         #
         # Unlike every other entry here, the deferral target is the tool's
@@ -967,7 +964,8 @@ class HomeAssistantSmartMCPServer:
             "cannot do something yet). Pass the report text in the call; "
             "the server builds the issue title, body and a pre-filled link. "
             "Every GitHub issue about ha-mcp, feature requests included, needs "
-            "this report: issues filed without it are closed automatically.\n\n"
+            "this report as its body: issues filed without it are closed "
+            "automatically.\n\n"
             "The response carries the full workflow in its `instructions` "
             "field (duplicate check, the mandatory anonymisation step, and "
             "how to file the issue), plus "

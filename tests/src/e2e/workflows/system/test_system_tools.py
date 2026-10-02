@@ -985,15 +985,21 @@ class TestReportIssueE2E:
             f"(enable_beta_features={toggles['enable_beta_features']})"
         )
 
+    @pytest.mark.parametrize(
+        ("report_type", "prefix"),
+        [("agent_behavior", "[AGENT]"), ("feature_request", "[FEATURE]")],
+    )
     @pytest.mark.asyncio
-    async def test_report_text_reaches_the_finished_issue(self, mcp_client):
+    async def test_report_text_reaches_the_finished_issue(
+        self, mcp_client, report_type, prefix
+    ):
         """The agent's text passes the tool schema and lands in the finished
         issue."""
         description = "E2E: script created but never registered."
         result = await mcp_client.call_tool(
             "ha_report_issue",
             {
-                "report_type": "agent_behavior",
+                "report_type": report_type,
                 "title": "E2E report title",
                 "description": description,
                 "fields": "issue_title,issue_body,issue_url",
@@ -1002,7 +1008,7 @@ class TestReportIssueE2E:
         data = parse_mcp_result(result)
         assert data.get("success") is True, extract_error_message(data)
 
-        assert data["issue_title"] == "[AGENT] E2E report title"
+        assert data["issue_title"] == f"{prefix} E2E report title"
         assert description in data["issue_body"]
 
 

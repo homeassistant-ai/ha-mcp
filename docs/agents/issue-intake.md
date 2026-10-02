@@ -2,10 +2,11 @@
 
 `issue-intake.yml` documents reports, translates non-English reports, and asks
 for essential missing information. The model must not diagnose, propose fixes,
-assign blame or priority, promise a PR, or close an issue. Within this workflow only the deterministic
-[report gate](#report-gate) closes issues; `close-needs-info.yml` separately
-closes unanswered needs-info issues, as described below. CodeRabbit issue
-enrichment is disabled so this workflow owns the consolidated issue comment.
+assign blame or priority, promise a PR, or close an issue. Within this
+workflow only the deterministic [report gate](#report-gate) closes issues;
+`close-needs-info.yml` separately closes unanswered needs-info issues, as
+described below. CodeRabbit issue enrichment is disabled so this workflow owns
+the consolidated issue comment.
 CodeRabbit and Codex PR reviews retain their existing responsibilities.
 
 ## Execution and permissions
@@ -64,14 +65,21 @@ with the report's `ha-mcp Version:` line, or a
 `### Why there is no ha_report_issue report` section of at least five words.
 The issue forms render their fallback field under that heading; blank and
 API-filed issues must write it themselves. Maintainers (write role or above),
-bots and `documentation` issues are exempt.
+bots and `documentation` issues are exempt. An issue transferred in from another
+repository arrives as `opened` and is gated like any other.
 
 A failing issue is closed as not planned only when it is opened, or reopened by
 someone below the write role, so an edit never closes an issue that predates the
-gate. Each close posts a new App comment that mentions the reporter. When the
-report or explanation is added, the gate reopens an issue it closed itself and
-rewrites that comment; it never reopens an issue a human closed. Admission waits
-for the gate, so a closed issue is not documented and a reopened one is.
+gate. Each close posts a new App comment that mentions the reporter and, when
+the issue holds a report heading without the rest of the report or an
+explanation under five words, says which. When the report or explanation is
+added, the gate reopens an issue it closed itself and rewrites that comment; it
+never reopens an issue a human closed. Admission waits for the gate, so a closed
+issue is not documented and a reopened one is.
+
+Reads and idempotent writes retry twice after a rate limit or server error. The
+gate fails open: if it still fails, its run goes red and admission documents the
+issue anyway, so a gate outage never stops documentation.
 
 ## Conversation, control and lifecycle
 

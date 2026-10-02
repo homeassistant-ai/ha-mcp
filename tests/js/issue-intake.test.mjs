@@ -1,5 +1,7 @@
 import test from "node:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import { runCloseWorkflow } from "./issue-intake-helpers.mjs";
 import {
@@ -15,6 +17,7 @@ import {
   reportMarker,
   reportVersionLine,
   gate,
+  main,
   gateAction,
   gateMarker,
   noReportHeading,
@@ -796,8 +799,9 @@ test("the report heading matches what ha_report_issue writes", () => {
   );
   for (const heading of ["## 🚨 ", "## 🤖 ", "## 💡 "])
     assert.ok(tool.includes(`${heading}${reportMarker}`), heading);
-  // Runtime and shared agent/feature environment blocks both carry it.
-  assert.equal(tool.split(`\n${reportVersionLine} `).length - 1, 2);
+  // The gate also needs the environment block's version line; every report
+  // type carrying it is pinned on the Python side.
+  assert.ok(tool.includes(`\n${reportVersionLine} `));
 });
 
 const opened = { action: "opened", senderRole: "read" };
@@ -838,12 +842,11 @@ test("only the reporter's report or an explanation of why there is none keeps a 
     [(s) => (s.issue.body = `\`\`\`\`markdown\n${report}\n\`\`\`\``), null],
     [(s) => s.comments.push(comment(1, "reporter", report)), null],
     [(s) => (s.issue.body += `\n\n${reason("ha-mcp exits at startup before connecting.")}`), null],
-    [(s) => (s.issue.body += `\n\n${reason("This asks for a docs site page, not a tool.")}`), null],
-    // What an issue form writes for an empty optional field.
     // A form's empty field first, then the explanation the notice asked for.
     [(s) => (s.issue.body += `\n\n${reason("_No response_")}\n\n${reason("ha-mcp exits at startup before connecting.")}`), null],
     // Pasted config opens the explanation; its comment line is not a heading.
     [(s) => (s.issue.body += `\n\n${reason("\`\`\`\n# uvx ha-mcp\n\`\`\`\nThe server exits before it binds the port.")}`), null],
+    // What an issue form writes for an empty optional field.
     [(s) => (s.issue.body += `\n\n${reason("_No response_")}`), "close"],
     [(s) => (s.issue.body += `\n\n${reason("Not relevant.")}`), "close"],
     // A blank issue's template comment is not the reporter's explanation.
@@ -912,4 +915,109 @@ test("every gated issue form asks for the report under the headings the gate rea
     // The form renders this field's label as the heading the gate looks for.
     assert.ok(text.includes(`label: "${noReportHeading}"`), form);
   }
+});
+
+test("a close notice says why a partial report or a short explanation did not count", async () => {
+  for (const [body, hint] of [
+    [`## 🚨 ${reportMarker}\n\nThe dashboard call hangs.`, /heading but not the rest/],
+    [reason("Not relevant."), /at least 5 words/],
+  ]) {
+    const s = snapshot();
+    s.issue.body = body;
+    const api = new FakeGitHub(s);
+    await gate(api, "test/repo", 1, bot, opened, true);
+    assert.match(api.writes[0].data.body, hint);
+  }
+});
+
+test("the check step decides without writing", async () => {
+  const api = new FakeGitHub(snapshot());
+  assert.equal(await gate(api, "test/repo", 1, bot, opened, false), "close");
+  assert.deepEqual(api.writes, []);
+});
+
+test("a transient GitHub error does not leave a new issue ungated", async () => {
+  const api = new FakeGitHub(snapshot());
+  const request = api.request.bind(api);
+  let failures = 1;
+  api.request = (path, options = {}) => {
+    if (!options.method && failures-- > 0)
+      throw Object.assign(Error("Service Unavailable"), { status: 503 });
+    return request(path, options);
+  };
+  assert.equal(await gate(api, "test/repo", 1, bot, opened, true), "close");
+  assert.deepEqual(api.delays, [5000]);
+});
+
+test("a reopen posts a notice when the closing one is gone", async () => {
+  const s = closedByGate();
+  s.comments = [];
+  s.issue.body += `\n\n${report}`;
+  const api = new FakeGitHub(s);
+  await gate(api, "test/repo", 1, bot, { action: "edited", senderRole: "read" }, true);
+  assert.deepEqual(
+    api.writes.map((w) => [w.method, w.path]),
+    [
+      ["PATCH", "repos/test/repo/issues/1"],
+      ["POST", "repos/test/repo/issues/1/comments"],
+    ],
+  );
+});
+
+test("closing again posts a new notice so the reporter is notified again", async () => {
+  const s = closedByGate();
+  s.issue.state = "open";
+  const api = new FakeGitHub(s);
+  await gate(api, "test/repo", 1, bot, { action: "reopened", senderRole: "read" }, true);
+  assert.deepEqual(
+    api.writes.map((w) => [w.method, w.path]),
+    [
+      ["POST", "repos/test/repo/issues/1/comments"],
+      ["PATCH", "repos/test/repo/issues/1"],
+    ],
+  );
+});
+
+async function runGateCommand(command, event, s = snapshot(), slug = "ha-mcp") {
+  const dir = mkdtempSync(join(tmpdir(), "gate-"));
+  const eventPath = join(dir, "event.json");
+  const outputPath = join(dir, "output");
+  writeFileSync(eventPath, JSON.stringify(event));
+  writeFileSync(outputPath, "");
+  const api = new FakeGitHub(s);
+  await main(command, {
+    api,
+    env: {
+      HA_MCP_APP_SLUG: "ha-mcp",
+      TOKEN_APP_SLUG: slug,
+      GITHUB_REPOSITORY: "test/repo",
+      GITHUB_EVENT_PATH: eventPath,
+      GITHUB_OUTPUT: outputPath,
+    },
+  });
+  return { api, output: readFileSync(outputPath, "utf8") };
+}
+
+test("the gate judges a reopen by who reopened it, not who filed it", async () => {
+  const reopened = (login) => ({
+    action: "reopened",
+    issue: { number: 1 },
+    sender: user(login),
+  });
+  const byMaintainer = await runGateCommand("gate-check", reopened("maintainer"));
+  assert.equal(byMaintainer.output, "action=none\n");
+  const byReporter = await runGateCommand("gate-check", reopened("reporter"));
+  assert.equal(byReporter.output, "action=close\n");
+});
+
+test("the apply step refuses another App's token before writing", async () => {
+  await assert.rejects(
+    runGateCommand(
+      "gate-apply",
+      { action: "opened", issue: { number: 1 }, sender: user("reporter") },
+      snapshot(),
+      "other-app",
+    ),
+    /different App/,
+  );
 });

@@ -506,7 +506,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 💬 Community
 
 - **[GitHub Discussions](https://github.com/homeassistant-ai/ha-mcp/discussions)** — Ask questions, share ideas
-- **[Issue Tracker](https://github.com/homeassistant-ai/ha-mcp/issues)** — Report bugs, request features, or suggest tool behavior improvements. Bug reports and feature requests need the output of the `ha_report_issue` tool; without it they are closed automatically.
+- **[Issue Tracker](https://github.com/homeassistant-ai/ha-mcp/issues)** — Report bugs, request features, or suggest tool behavior improvements. Bug reports and feature requests need the report the `ha_report_issue` tool generates; without it, or an explanation of why none can exist, they are closed automatically.
 
 ---
 

@@ -80,6 +80,10 @@ def test_report_gate_runs_trusted_code_and_mints_write_access_only_to_act() -> N
     check = next(s for s in steps if s.get("id") == "check")
     assert steps.index(check) < steps.index(token)
     assert check["env"]["GH_TOKEN"] == "${{ github.token }}"
+    apply = steps[-1]
+    assert apply["env"]["GH_TOKEN"] == "${{ steps.app-token.outputs.token }}"
+    # Queued, not cancelled: two runs at once could each post a notice.
+    assert gate["concurrency"]["cancel-in-progress"] is False
     admit = workflow["jobs"]["admit"]
     # Admission waits for the gate but still runs when it is skipped or fails.
     assert admit["needs"] == "gate"

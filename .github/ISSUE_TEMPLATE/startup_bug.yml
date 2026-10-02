@@ -54,7 +54,7 @@ body:
       label: "📋 ha_report_issue Report"
       description: |
         **Required.** Ask your AI agent: *"Report this with the ha_report_issue tool."* Run it in the session where the problem happened.
-        Paste its full output here, with tokens and passwords removed. It collects the versions,
+        Paste the whole report it generates here (from its Auto-Generated heading to the end), with tokens and passwords removed. It collects the versions,
         install type, client, settings and tool calls we otherwise have to ask for.
 
         Only if no report can exist, because ha-mcp does not start or connect or the problem was

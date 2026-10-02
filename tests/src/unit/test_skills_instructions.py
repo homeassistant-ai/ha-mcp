@@ -295,9 +295,19 @@ class TestBuildInstructions:
         server.settings.read_only_mode = False
         with patch.object(server, "_build_skills_instructions", return_value=skills):
             instructions = server._build_instructions()
-        assert "run ha_report_issue and include its full output" in instructions
+        assert "run ha_report_issue and put the issue_body it returns" in instructions
         if skills:
             assert instructions.startswith(skills)
+
+    @pytest.mark.parametrize("skills", [None, "SKILLS"])
+    def test_read_only_mode_is_announced_alongside_the_issue_note(self, server, skills):
+        """A client started in Read Only Mode must be warned up front, without
+        losing the issue-filing rule."""
+        server.settings.read_only_mode = True
+        with patch.object(server, "_build_skills_instructions", return_value=skills):
+            instructions = server._build_instructions()
+        assert "## Read Only Mode" in instructions
+        assert "## Filing ha-mcp issues" in instructions
 
 
 class TestLogSkillRegistrationSummary:

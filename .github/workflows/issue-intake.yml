@@ -22,16 +22,17 @@ permissions:
   issues: read
 
 jobs:
-  # Closes a new issue that has neither an ha_report_issue report nor an
-  # explanation of why it has none, and reopens it once one is added. Admission
+  # Closes a new issue, or one a non-maintainer reopened, that has neither an
+  # ha_report_issue report nor an explanation of why it has none, and reopens
+  # it once one is added. Admission
   # waits for it so a closed issue is not documented and a reopened one is.
   gate:
     if: >-
       github.repository == 'homeassistant-ai/ha-mcp' &&
       !github.event.issue.pull_request &&
       github.event.sender.type == 'User' && github.actor != 'ghhamcp' &&
-      (contains(fromJSON('["opened","edited","reopened"]'), github.event.action) && github.event_name == 'issues' ||
-       github.event_name == 'issue_comment' && contains(fromJSON('["created","edited"]'), github.event.action))
+      ((github.event_name == 'issues' && contains(fromJSON('["opened","edited","reopened"]'), github.event.action)) ||
+       (github.event_name == 'issue_comment' && contains(fromJSON('["created","edited"]'), github.event.action)))
     runs-on: ubuntu-latest
     timeout-minutes: 4
     concurrency:
@@ -114,7 +115,7 @@ jobs:
 
   document:
     needs: admit
-    # A skipped gate would otherwise skip this job through admit.
+    # A skipped or failed gate would otherwise skip this job through admit.
     if: "!cancelled() && needs.admit.outputs.run == 'true'"
     runs-on: ubuntu-latest
     timeout-minutes: 27
