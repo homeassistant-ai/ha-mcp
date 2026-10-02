@@ -31,6 +31,7 @@ from test_constants import TEST_TOKEN
 
 from ha_mcp._vendor.fastmcp import Client
 from ha_mcp._vendor.fastmcp.exceptions import ToolError
+from ha_mcp._vendor.mcp_types import InputRequiredResult
 from ha_mcp.client.rest_client import HomeAssistantClient
 from ha_mcp.policy.handlers import build_policy_handlers
 from ha_mcp.server import HomeAssistantSmartMCPServer
@@ -198,6 +199,35 @@ async def _install_rule(handlers, rule: dict[str, Any]) -> None:
     }
     put_resp = await handlers["policy_put_config"](_make_request(body))
     assert put_resp.status_code == 200, put_resp.body
+
+
+@pytest.mark.asyncio
+async def test_mrtr_resumes_ui_approved_service_call(policy_enabled_mcp, monkeypatch):
+    """The production server keeps the UI row across MRTR and dispatches after approval."""
+    client, server, handlers = policy_enabled_mcp
+    monkeypatch.setattr("ha_mcp.policy.mrtr.ROUND_WAIT_SECONDS", 0.05)
+    await _install_rule(
+        handlers, {"tool_name": "ha_call_service", "when": [], "remember_minutes": 0}
+    )
+    args = {"domain": "light", "service": "turn_on", "entity_id": "light.bed_light"}
+    result = await client.session.call_tool(
+        "ha_call_service", args, allow_input_required=True
+    )
+    assert isinstance(result, InputRequiredResult), result
+    pending = server.approval_queue.list_pending()
+    assert len(pending) == 1
+    response = await handlers["policy_post_approve"](
+        _make_request({"token": pending[0].token})
+    )
+    assert response.status_code == 200, response.body
+    resumed = await client.session.call_tool(
+        "ha_call_service",
+        args,
+        request_state=result.request_state,
+        allow_input_required=True,
+    )
+    assert not resumed.is_error, resumed
+    assert server.approval_queue.get(pending[0].token) is None
 
 
 async def _install_rules(handlers, rules: list[dict[str, Any]]) -> None:
